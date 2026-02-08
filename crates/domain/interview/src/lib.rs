@@ -14,48 +14,35 @@
 
 //! # job-domain-interview
 //!
-//! Interview management for the Job Automation platform.
+//! Interview management and AI preparation plan generation for the Job
+//! Automation platform.
 //!
 //! This crate covers everything related to the interview stage:
 //!
-//! - Scheduling interviews (date, time, type).
-//! - Tracking interview rounds and interviewers.
-//! - Recording feedback and outcomes.
+//! - Creating and managing interview preparation plans.
+//! - AI-powered generation of prep checklists (knowledge points, project
+//!   reviews, behavioral questions, questions to ask).
+//! - Tracking interview task status through its lifecycle.
+//! - Filtering and querying interview plans by application, company, status, or
+//!   round.
 //!
 //! The crate depends on [`job_domain_core`] for shared types and traits.
+//! It does **not** depend on the AI crate directly; instead it defines the
+//! [`PrepGenerator`] trait that AI adapters can implement.
 
-use chrono::{DateTime, Utc};
-use job_domain_core::{ApplicationId, InterviewId, InterviewStatus};
-use serde::{Deserialize, Serialize};
+pub mod error;
+pub mod prep_generator;
+pub mod repository;
+pub mod service;
+pub mod types;
 
-/// Type of interview.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum InterviewKind {
-    /// Phone / video screening.
-    Screening,
-    /// Technical / coding interview.
-    Technical,
-    /// Behavioral / culture-fit interview.
-    Behavioral,
-    /// On-site / final round.
-    Onsite,
-    /// Other / unspecified.
-    Other,
-}
-
-/// An interview record.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Interview {
-    /// Unique identifier.
-    pub id: InterviewId,
-    /// The application this interview belongs to.
-    pub application_id: ApplicationId,
-    /// What kind of interview this is.
-    pub kind: InterviewKind,
-    /// Current status.
-    pub status: InterviewStatus,
-    /// Scheduled start time.
-    pub scheduled_at: DateTime<Utc>,
-    /// Optional notes / feedback.
-    pub notes: Option<String>,
-}
+// Re-exports for convenience.
+pub use error::InterviewError;
+pub use prep_generator::{MockPrepGenerator, PrepGenerator};
+pub use repository::InterviewPlanRepository;
+pub use service::InterviewService;
+pub use types::{
+    BehavioralQuestion, CreateInterviewPlanRequest, InterviewFilter, InterviewPlan, InterviewRound,
+    InterviewTaskStatus, PrepGenerationRequest, PrepMaterials, ProjectReview,
+    UpdateInterviewPlanRequest,
+};
