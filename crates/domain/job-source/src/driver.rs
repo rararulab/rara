@@ -12,36 +12,38 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Job source driver trait and supporting types.
+//! The [`JobSourceDriver`] trait that every concrete driver must
+//! implement.
+//!
+//! A driver is responsible for:
+//! 1. Fetching raw job listings from an external platform.
+//! 2. Normalizing the raw data into a canonical [`NormalizedJob`]
+//!    record.
 
-use job_domain_core::JobSourceId;
-use serde::{Deserialize, Serialize};
-
-/// A single job listing fetched from an external source.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JobListing {
-    /// Human-readable title of the position.
-    pub title: String,
-    /// Company offering the position.
-    pub company: String,
-    /// URL to the original listing.
-    pub url: String,
-    /// Optional location (remote / city).
-    pub location: Option<String>,
-}
+use crate::types::{DiscoveryCriteria, NormalizedJob, RawJob, SourceError};
 
 /// Trait that every job source driver must implement.
 ///
-/// Drivers are responsible for fetching job listings from a specific platform
-/// and converting them into the canonical [`JobListing`] type.
+/// Drivers are [`Send`] + [`Sync`] so they can be shared across async
+/// tasks and stored in an `Arc`.
 #[async_trait::async_trait]
 pub trait JobSourceDriver: Send + Sync {
-    /// Human-readable name of this source (e.g. "LinkedIn").
-    fn name(&self) -> &str;
+    /// Human-readable name of this source (e.g. "linkedin", "manual").
+    fn source_name(&self) -> &str;
 
-    /// Unique identifier for the configured source instance.
-    fn source_id(&self) -> JobSourceId;
+    /// Fetch raw job listings that match the given criteria.
+    ///
+    /// Implementations should translate the high-level
+    /// [`DiscoveryCriteria`] into whatever query the backing
+    /// platform supports and return the results as [`RawJob`]s.
+    async fn fetch_jobs(
+        &self,
+        query: &DiscoveryCriteria,
+    ) -> Result<Vec<RawJob>, SourceError>;
 
-    /// Fetch the latest batch of job listings from this source.
-    async fn fetch_listings(&self) -> Result<Vec<JobListing>, Box<dyn std::error::Error + Send + Sync>>;
+    /// Normalize a single [`RawJob`] into a [`NormalizedJob`].
+    ///
+    /// This step validates required fields and applies any
+    /// source-specific cleaning logic.
+    async fn normalize(&self, raw: RawJob) -> Result<NormalizedJob, SourceError>;
 }
