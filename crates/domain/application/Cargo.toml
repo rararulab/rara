@@ -18,6 +18,10 @@ job-domain-core = { workspace = true }
 serde.workspace = true
 snafu.workspace = true
 tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]
 workspace = true
