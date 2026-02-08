@@ -1,0 +1,82 @@
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+ignore = []
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Zlib",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "BSL-1.0",
+    "MPL-2.0",
+]
+confidence-threshold = 0.8
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "deny"
+wildcards = "allow"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+
+skip = [
+    # Transitive duplicates from ecosystem version fragmentation
+    # base64: hdrhistogram (v0.21) vs hyper-util/tonic (v0.22)
+    { crate = "base64@0.21.7", reason = "hdrhistogram depends on older version" },
+    # getrandom: dirs-sys/redox_users (v0.2) vs newer deps (v0.3)
+    { crate = "getrandom@0.2.17", reason = "dirs-sys -> redox_users uses older version" },
+    # darling: derive_builder (v0.20) vs bon (v0.23)
+    { crate = "darling@0.20.11", reason = "croner -> derive_builder uses older version" },
+    { crate = "darling_core@0.20.11", reason = "transitive from darling 0.20" },
+    { crate = "darling_macro@0.20.11", reason = "transitive from darling 0.20" },
+    # fixedbitset/petgraph: parking_lot_core (v0.4/v0.6) vs prost-build (v0.5/v0.8)
+    { crate = "fixedbitset@0.4.2", reason = "parking_lot_core -> petgraph uses older version" },
+    { crate = "petgraph@0.6.5", reason = "parking_lot_core uses older version" },
+    # hashbrown: petgraph 0.8 (v0.15) vs indexmap (v0.16)
+    { crate = "hashbrown@0.15.5", reason = "petgraph 0.8 uses older version" },
+    # linux-raw-sys/rustix: procfs (v0.38/v0.4) vs tempfile (v1.x/v0.11)
+    { crate = "linux-raw-sys@0.4.15", reason = "procfs -> rustix uses older version" },
+    { crate = "rustix@0.38.44", reason = "procfs uses older version" },
+    # windows-sys: rustix 0.38 uses older version (only affects Windows platform builds)
+    { crate = "windows-sys@0.52.0", reason = "procfs -> rustix 0.38 uses older version" },
+    { crate = "windows-sys@0.59.0", reason = "rustix 0.38 uses older version" },
+    { crate = "windows-sys@0.61.2", reason = "dirs-sys -> redox_users uses older version" },
+    # thiserror: various crates still on v1
+    { crate = "thiserror@1.0.69", reason = "ecosystem transition to v2 in progress" },
+    { crate = "thiserror-impl@1.0.69", reason = "transitive from thiserror 1.x" },
+    # windows-*: ecosystem version fragmentation (rustix 0.38 vs newer versions)
+    { crate = "windows_aarch64_gnullvm@0.52.6", reason = "windows-targets 0.52.6 uses older version" },
+    { crate = "windows_aarch64_msvc@0.52.6", reason = "windows-targets 0.52.6 uses older version" },
+    { crate = "windows_i686_gnu@0.52.6", reason = "windows-targets 0.52.6 uses older version" },
+    { crate = "windows_i686_gnullvm@0.52.6", reason = "windows-targets 0.52.6 uses older version" },
+    { crate = "windows_i686_msvc@0.52.6", reason = "windows-targets 0.52.6 uses older version" },
+    { crate = "windows_x86_64_gnu@0.52.6", reason = "windows-targets 0.52.6 uses older version" },
+    { crate = "windows_x86_64_gnullvm@0.52.6", reason = "windows-targets 0.52.6 uses older version" },
+    { crate = "windows_x86_64_msvc@0.52.6", reason = "windows-targets 0.52.6 uses older version" },
+    { crate = "windows-core@0.61.2", reason = "sysinfo uses older version" },
+    { crate = "windows-link@0.1.3", reason = "windows-core 0.61 uses older version" },
+    { crate = "windows-result@0.3.4", reason = "windows-core 0.61 uses older version" },
+    { crate = "windows-strings@0.4.2", reason = "windows-core 0.61 uses older version" },
+    { crate = "windows-sys@0.60.2", reason = "socket2 uses intermediate version" },
+    { crate = "windows-targets@0.52.6", reason = "windows-sys 0.52 uses older version" },
+]
+
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

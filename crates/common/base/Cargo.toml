@@ -1,0 +1,21 @@
+[package]
+name = "rsketch-base"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Base utilities and common types for rsketch"
+
+[dependencies]
+derive_more = { workspace = true }
+dotenvy = "0.15.7"
+serde.workspace = true
+snafu.workspace = true
+
+[lints]
+workspace = true

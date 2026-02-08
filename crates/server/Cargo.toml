@@ -1,0 +1,48 @@
+[package]
+name = "rsketch-server"
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "HTTP and gRPC server implementation for rsketch"
+
+[dependencies]
+async-trait = { workspace = true }
+axum = { workspace = true }
+bon = { workspace = true }
+chrono = { workspace = true }
+derive_more = { workspace = true }
+smart-default = { workspace = true }
+# fastrace = { workspace = true }
+axum-tracing-opentelemetry = { workspace = true }
+futures = { workspace = true }
+rsketch-api = { workspace = true }
+rsketch-base = { workspace = true }
+rsketch-error = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+snafu = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tonic = { workspace = true }
+tonic-health = { workspace = true }
+tonic-reflection = { workspace = true }
+tonic-tracing-opentelemetry = { workspace = true }
+tonic-web = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+reqwest = { version = "0.13", features = ["json"] }
+
+[lints]
+workspace = true

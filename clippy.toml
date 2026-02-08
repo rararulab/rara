@@ -1,0 +1,55 @@
+# https://doc.rust-lang.org/clippy/configuration.html
+
+allowed-wildcard-imports = ["prelude"]
+too-many-arguments-threshold = 10
+too-many-lines-threshold = 150
+type-complexity-threshold = 300
+
+doc-valid-idents = [
+    "gRPC",
+    "OpenTelemetry", 
+    "GitHub",
+    "WebSocket",
+    "PostgreSQL",
+    "MySQL",
+    "SQLite",
+    "Redis",
+    "Kafka",
+    "RabbitMQ",
+    "OAuth",
+    "JSON",
+    "YAML",
+    "TOML",
+    "UTF-8",
+    "ASCII",
+    "UUID",
+    "URI",
+    "URL",
+    "HTTP",
+    "HTTPS",
+    "TCP",
+    "UDP",
+    "TLS",
+    "SSL",
+    "API",
+    "REST",
+    "RPC",
+    "CLI",
+    "CPU",
+    "GPU",
+    "I/O",
+    "mmap",
+    "CRC",
+    "CRC32",
+    "CRC64",
+    "LRU",
+    "FIFO",
+    "LIFO",
+    "async/await",
+    "Tokio",
+    "Serde",
+    "Axum",
+    "Tonic",
+]
+
+msrv = "1.92"

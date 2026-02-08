@@ -1,0 +1,44 @@
+# Local Dependency Update Configuration
+# This file configures the local dependency update script
+
+[general]
+# Default behavior settings
+interactive = true
+dry_run = false
+create_commits = false
+branch_prefix = "deps"
+
+[rust]
+# Rust/Cargo specific settings
+enabled = true
+workspace_mode = true
+update_lockfile = true
+
+# Exclude specific packages from updates (optional)
+# exclude_packages = ["some-package"]
+
+# Include only specific packages (optional, overrides exclude)
+# include_packages = ["specific-package"]
+
+[go]
+# Go module specific settings  
+enabled = true
+run_tidy = true
+update_indirect = true
+
+# Directories containing Go modules to update
+module_dirs = [
+    "bindings/go",
+    "examples/goclient"
+]
+
+[github_actions]
+# GitHub Actions workflow dependencies
+enabled = false  # Set to true if you want to update GitHub Actions versions
+
+[reporting]
+# Output and reporting settings
+verbose = false
+show_diff = false
+save_report = false
+report_path = ".depupdate-report.json"

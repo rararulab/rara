@@ -1,0 +1,39 @@
+[package]
+name = "downloader"
+description = "HTTP downloader with chunked downloads, caching, and resume support"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+backon = { workspace = true }
+base64 = "0.22"
+bon = { workspace = true }
+dirs = { workspace = true }
+fd-lock = "4.0"
+futures = { workspace = true }
+jiff = { workspace = true }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+rsketch-base = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.10"
+smart-default = { workspace = true }
+snafu = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+axum = { workspace = true }
+axum-test = "18.7"
+tempfile = "3.0"
+
+[lints]
+workspace = true

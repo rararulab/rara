@@ -1,0 +1,27 @@
+[workspace]
+# path of the git-cliff configuration
+changelog_config = "cliff.toml"
+
+# enable changelog updates
+changelog_update = true
+
+# update dependencies with `cargo update`
+dependencies_update = true
+
+# disable git tags - managed by separate workflow
+git_tag_enable = false
+
+# disable GitHub releases (cargo-dist will handle this)
+git_release_enable = false
+
+# labels for the release PR
+pr_labels = ["release"]
+
+# disallow updating repositories with uncommitted changes
+allow_dirty = false
+
+# disallow packaging with uncommitted changes
+publish_allow_dirty = false
+
+# disable running `cargo-semver-checks`
+semver_check = false

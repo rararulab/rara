@@ -1,0 +1,18 @@
+[package]
+name = "rsketch-paths"
+version = "0.0.1"
+edition.workspace = true
+description = "Path utilities for RSketch"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+dirs = "6.0"

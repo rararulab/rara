@@ -1,0 +1,97 @@
+name: Test
+
+on:
+  workflow_call:
+
+concurrency:
+  group: test-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+  RUST_BACKTRACE: true
+  CARGO_INCREMENTAL: false
+  CARGO_NET_RETRY: 10
+  RUSTUP_MAX_RETRIES: 10
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+jobs:
+  rust-version:
+    name: Get Rust Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.rust-version.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        with:
+          persist-credentials: false
+
+      - name: Get Rust version from toolchain
+        id: rust-version
+        run: |
+          RUST_VERSION=$(grep 'channel = ' rust-toolchain.toml | cut -d '"' -f 2)
+          echo "version=$RUST_VERSION" >> $GITHUB_OUTPUT
+          echo "Rust version: $RUST_VERSION"
+
+  rust-test:
+    name: Rust Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: rust-version
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@f7ccc83f9ed1e5b9c81d8a67d7ad1a747e22a561 # master
+        with:
+          toolchain: ${{ needs.rust-version.outputs.version }}
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: '25.x'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@cd06cfcb315894ee98ffbc4582bcafbcbc260bdb # v2
+        with:
+          tool: cargo-nextest
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
+        with:
+          shared-key: "test-${{ matrix.os }}"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Run tests
+        run: cargo nextest run --workspace --all-features
+
+  test-success:
+    name: Test Success
+    runs-on: ubuntu-latest
+    needs: [rust-test]
+    if: always()
+    steps:
+      - name: Check all test jobs status
+        env:
+          RUST_TEST_RESULT: ${{ needs.rust-test.result }}
+        run: |
+          if [[ "$RUST_TEST_RESULT" != "success" ]]; then
+            echo "One or more test jobs failed"
+            exit true
+          fi
+          echo "All test jobs passed successfully"

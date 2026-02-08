@@ -1,0 +1,41 @@
+/*
+ * Copyright 2025 Crrow
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+syntax = "proto3";
+
+package rsketch.hello.v1;
+
+option go_package = "github.com/crrow/rsketch/pb/hello/v1;hellopb";
+option java_outer_classname = "HelloProto";
+option java_package = "com.rsketch.api.hello.v1";
+
+// HelloRequest represents a hello request message
+message HelloRequest {
+  // name is the name to greet
+  string name = 1;
+}
+
+// HelloResponse represents a hello response message
+message HelloResponse {
+  // message is the greeting message
+  string message = 1;
+}
+
+// HelloService provides greeting functionality
+service HelloService {
+  // Hello greets the caller with a personalized message
+  rpc Hello(HelloRequest) returns (HelloResponse);
+}

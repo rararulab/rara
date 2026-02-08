@@ -1,0 +1,33 @@
+[package]
+name = "rsketch-common-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Background worker and task scheduling utilities for rsketch"
+
+[dependencies]
+async-trait.workspace = true
+chrono = "0.4"
+croner = "3"
+derive_more = { workspace = true }
+lazy_static.workspace = true
+prometheus.workspace = true
+rsketch-common-runtime = { workspace = true }
+smart-default = "0.7"
+snafu.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tracing-subscriber = "0.3"
+
+[lints]
+workspace = true

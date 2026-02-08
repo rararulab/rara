@@ -1,0 +1,60 @@
+# Copyright 2025 Crrow
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed true an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+version: v2
+managed:
+  enabled: true
+  disable:
+    - file_option: java_package
+    - file_option: java_outer_classname
+    - file_option: java_multiple_files
+    - file_option: csharp_namespace
+plugins:
+  # Go client code generation (client only)
+  - remote: buf.build/protocolbuffers/go:v1.35.2
+    out: ../bindings/go/pb
+    opt:
+      - paths=source_relative
+  - remote: buf.build/grpc/go:v1.5.1
+    out: ../bindings/go/pb
+    opt:
+      - paths=source_relative
+
+  # Java client code generation (client only)
+  - remote: buf.build/protocolbuffers/java:v28.3
+    out: ../bindings/java/pb
+  - remote: buf.build/grpc/java:v1.68.1
+    out: ../bindings/java/pb
+
+  # C++ client code generation (client only)
+  - remote: buf.build/protocolbuffers/cpp:v28.3
+    out: ../bindings/cpp/pb
+  - remote: buf.build/grpc/cpp:v1.68.0
+    out: ../bindings/cpp/pb
+
+  # Note: C gRPC client generation requires local setup
+  # Use the gRPC-C library: https://github.com/grpc/grpc/tree/master/src/core
+  # Protobuf-C can be generated with local protoc + protobuf-c plugin
+
+  # TypeScript/JavaScript client code generation (web/mobile clients)
+  - remote: buf.build/connectrpc/es:v1.6.1
+    out: ../bindings/typescript/pb
+    opt:
+      - target=ts
+
+  # Python client code generation (client scripts and tooling)
+  - remote: buf.build/protocolbuffers/python:v32.0
+    out: ../bindings/python/pb
+  - remote: buf.build/grpc/python:v1.68.0
+    out: ../bindings/python/pb

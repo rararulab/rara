@@ -1,0 +1,41 @@
+[package]
+name = "rsketch-cmd"
+authors.workspace = true
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Command-line interface for rsketch"
+
+[package.metadata.wix]
+upgrade-guid = "3FAE8A69-CCE2-441B-81F1-C9E84D108D7C"
+path-guid = "802F55F4-8D88-4862-8DA2-F59A10E1BB35"
+license = false
+eula = false
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+# Binary definition for cargo-dist
+[[bin]]
+name = "rsketch"
+path = "src/main.rs"
+
+[dependencies]
+chrono = { workspace = true }
+clap = { version = "4.4.16", features = ["derive"] }
+ctrlc = "3.4.2"
+human-panic = "2.0.0"
+rsketch-app = { workspace = true }
+rsketch-common-runtime = { workspace = true }
+shadow-rs = "1.2.1"
+snafu.workspace = true
+
+[build-dependencies]
+shadow-rs = "1.2.1"
+
+[lints]
+workspace = true

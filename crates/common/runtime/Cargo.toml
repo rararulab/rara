@@ -1,0 +1,22 @@
+[package]
+name = "rsketch-common-runtime"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Tokio runtime configuration and management for rsketch"
+
+[dependencies]
+bon.workspace = true
+once_cell.workspace = true
+smart-default.workspace = true
+snafu.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true
