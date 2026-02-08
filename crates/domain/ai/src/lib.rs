@@ -16,18 +16,41 @@
 //!
 //! AI provider abstraction for the Job Automation platform.
 //!
-//! This crate encapsulates all interactions with large-language-model (LLM)
-//! providers (OpenAI, Anthropic, local models, etc.).  It provides:
+//! This crate encapsulates all interactions with large-language-model
+//! (LLM) providers (OpenAI, Anthropic, local models, etc.).  It
+//! provides:
 //!
 //! - The [`AiProvider`] trait that concrete backends must implement.
+//! - Typed request/response types ([`CompletionRequest`],
+//!   [`CompletionResponse`]).
+//! - Error types via [`AiError`].
+//! - AI task kinds ([`AiTaskKind`]) with default prompts and output schemas.
 //! - Prompt template management and rendering.
-//! - Model routing logic (cost/latency/capability-based selection).
-//! - Token budget helpers.
-//!
-//! No provider-specific HTTP clients live here yet -- they will be added as
-//! feature-gated modules during the migration phases.
+//! - Provider stubs for OpenAI and Anthropic.
+//! - An [`AiService`] orchestrator that routes tasks to the appropriate
+//!   provider.
 
-/// AI provider trait and supporting types.
+/// Error types for the AI domain.
+pub mod error;
+/// AI task kinds and their default configurations.
+pub mod kind;
+/// AI provider trait and provider discriminant.
 pub mod provider;
+/// Concrete provider implementations (OpenAI, Anthropic).
+pub mod providers;
+/// AI service orchestrator.
+pub mod service;
+/// Prompt template management and rendering.
+pub mod template;
+/// Core request/response types.
+pub mod types;
 
-pub use provider::AiProvider;
+// Re-exports for convenience.
+pub use error::AiError;
+pub use kind::{AiTaskConfig, AiTaskKind};
+pub use provider::{AiModelProvider, AiProvider};
+pub use service::{AiRunResult, AiService, RateLimiter};
+pub use template::{InMemoryTemplateManager, PromptTemplateManager};
+pub use types::{
+    CompletionRequest, CompletionResponse, FinishReason, Message, MessageRole, TokenUsage,
+};

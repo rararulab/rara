@@ -12,48 +12,61 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! AI provider trait and core request/response types.
+//! AI provider trait that every backend must implement.
 
-use serde::{Deserialize, Serialize};
+use crate::{
+    error::AiError,
+    types::{CompletionRequest, CompletionResponse},
+};
 
-/// A single message in a conversation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatMessage {
-    /// Role of the message author (system, user, assistant).
-    pub role: String,
-    /// Content of the message.
-    pub content: String,
+/// Enumeration of supported AI model providers.
+///
+/// This mirrors `AiModelProvider` in yunara-store but lives in the
+/// domain layer so that domain code does not depend on the store
+/// crate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiModelProvider {
+    /// OpenAI (GPT family).
+    Openai,
+    /// Anthropic (Claude family).
+    Anthropic,
+    /// A locally-hosted model (e.g. Ollama, vLLM).
+    Local,
+    /// Any other provider not explicitly listed.
+    Other,
 }
 
-/// Response from an AI provider.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AiResponse {
-    /// The generated text.
-    pub content: String,
-    /// Model identifier that produced the response.
-    pub model: String,
-    /// Token usage statistics.
-    pub usage: Option<TokenUsage>,
-}
-
-/// Token usage statistics.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TokenUsage {
-    /// Number of tokens in the prompt.
-    pub prompt_tokens: u32,
-    /// Number of tokens in the completion.
-    pub completion_tokens: u32,
+impl std::fmt::Display for AiModelProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Openai => write!(f, "openai"),
+            Self::Anthropic => write!(f, "anthropic"),
+            Self::Local => write!(f, "local"),
+            Self::Other => write!(f, "other"),
+        }
+    }
 }
 
 /// Trait that every AI provider backend must implement.
+///
+/// Implementations are expected to be cheaply cloneable (typically
+/// wrapping an `Arc` internally) so that they can be shared across
+/// tasks.
 #[async_trait::async_trait]
 pub trait AiProvider: Send + Sync {
-    /// Human-readable name of this provider (e.g. "OpenAI", "Anthropic").
-    fn name(&self) -> &str;
+    /// Return which provider this implementation represents.
+    fn provider_name(&self) -> AiModelProvider;
 
-    /// Send a chat completion request and return the response.
-    async fn chat(
-        &self,
-        messages: &[ChatMessage],
-    ) -> Result<AiResponse, Box<dyn std::error::Error + Send + Sync>>;
+    /// Return the default model identifier for this provider.
+    fn default_model(&self) -> &str;
+
+    /// Send a completion request and return the response.
+    async fn complete(&self, request: &CompletionRequest) -> Result<CompletionResponse, AiError>;
+
+    /// Perform a lightweight health check against the provider.
+    ///
+    /// Implementations should verify connectivity and authentication
+    /// without consuming significant quota.
+    async fn check_health(&self) -> Result<(), AiError>;
 }
