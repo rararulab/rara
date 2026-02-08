@@ -21,11 +21,12 @@ serde.workspace = true
 serde_json.workspace = true
 smart-default = "0.7"
 snafu.workspace = true
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "macros", "migrate"] }
+chrono = { workspace = true, features = ["serde"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "macros", "migrate", "chrono", "uuid"] }
 strum.workspace = true
 strum_macros.workspace = true
 tracing.workspace = true
-uuid = { version = "1.20.0", features = ["v4"] }
+uuid = { version = "1.20.0", features = ["v4", "serde"] }
 # uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
