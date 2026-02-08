@@ -19,29 +19,29 @@
 //! This crate models the full lifecycle of a job application from draft to
 //! offer (or rejection).  It provides:
 //!
-//! - The [`Application`] aggregate with a state-machine for status transitions.
-//! - Validation rules for legal status transitions.
-//! - Domain events emitted on state changes.
+//! - The [`Application`] aggregate with rich metadata (tags, priority,
+//!   channel).
+//! - A configurable [`StateMachine`] for validating status transitions.
+//! - [`StatusChangeRecord`] for auditing every transition with its source
+//!   (manual, system, email parse).
+//! - An [`ApplicationRepository`] trait for persistence.
+//! - An [`ApplicationService`] that orchestrates transitions, CRUD, and
+//!   statistics.
 //!
 //! The crate depends on [`job_domain_core`] for shared types and traits.
 
-use chrono::{DateTime, Utc};
-use job_domain_core::{ApplicationId, ApplicationStatus, JobSourceId, ResumeId};
-use serde::{Deserialize, Serialize};
+pub mod error;
+pub mod repository;
+pub mod service;
+pub mod state_machine;
+pub mod types;
 
-/// A job application aggregate.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Application {
-    /// Unique identifier.
-    pub id: ApplicationId,
-    /// The job source this application targets.
-    pub job_source_id: JobSourceId,
-    /// The resume version used for this application.
-    pub resume_id: ResumeId,
-    /// Current lifecycle status.
-    pub status: ApplicationStatus,
-    /// When the application was created.
-    pub created_at: DateTime<Utc>,
-    /// When the application was last updated.
-    pub updated_at: DateTime<Utc>,
-}
+// Re-exports for convenience.
+pub use error::ApplicationError;
+pub use repository::ApplicationRepository;
+pub use service::ApplicationService;
+pub use state_machine::{StateMachine, TransitionRule};
+pub use types::{
+    Application, ApplicationChannel, ApplicationFilter, ApplicationStatistics, ChangeSource,
+    CreateApplicationRequest, Priority, StatusChangeRecord, UpdateApplicationRequest,
+};
