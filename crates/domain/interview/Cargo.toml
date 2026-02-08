@@ -1,0 +1,23 @@
+[package]
+name = "job-domain-interview"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Interview scheduling, tracking, and feedback management"
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+job-domain-core = { workspace = true }
+serde.workspace = true
+snafu.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true
