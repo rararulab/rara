@@ -42,20 +42,29 @@ impl std::fmt::Display for ResumeSource {
 /// A versioned resume document.
 ///
 /// Each resume version is content-addressed via `content_hash` and can
-/// optionally be linked to a target job for tailored optimization.
+/// optionally be linked to a parent resume and/or a target job for
+/// tailored optimization.
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Resume {
     pub id: Uuid,
+    /// Human-readable title (e.g. "Backend Engineer v3").
+    pub title: String,
     /// Human-readable version tag (e.g. "v1.0", "swe-2026-02").
     pub version_tag: String,
-    /// SHA-256 (or similar) hash of the resume content for deduplication.
+    /// SHA-256 hash of the resume content for deduplication.
     pub content_hash: String,
     pub source: ResumeSource,
     /// Full resume content (plain text or markdown).
     pub content: Option<String>,
-    pub metadata: Option<serde_json::Value>,
+    /// Parent resume this version was derived from.
+    pub parent_resume_id: Option<Uuid>,
     /// If this resume was tailored for a specific job.
     pub target_job_id: Option<Uuid>,
+    /// Free-form notes describing how this version was customized.
+    pub customization_notes: Option<String>,
+    /// Searchable tags for organization.
+    pub tags: Vec<String>,
+    pub metadata: Option<serde_json::Value>,
     pub trace_id: Option<String>,
     pub is_deleted: bool,
     pub deleted_at: Option<DateTime<Utc>>,

@@ -19,26 +19,26 @@
 //! This crate is responsible for:
 //!
 //! - Storing and retrieving resume versions.
-//! - Tailoring a base resume to a specific job listing (with AI assistance).
+//! - Tailoring a base resume to a specific job listing (with AI
+//!   assistance).
 //! - Tracking which resume version was used for each application.
+//! - Content hashing for deduplication.
+//! - Version tree traversal and text diffing.
 //!
 //! The crate depends on [`job_domain_core`] for shared types and traits.
 
-use chrono::{DateTime, Utc};
-use job_domain_core::ResumeId;
-use serde::{Deserialize, Serialize};
+pub mod hash;
+pub mod repository;
+pub mod service;
+pub mod types;
+pub mod version;
 
-/// A versioned resume document.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Resume {
-    /// Unique identifier.
-    pub id: ResumeId,
-    /// Monotonically increasing version number.
-    pub version: u32,
-    /// Human-readable label (e.g. "Backend Engineer v3").
-    pub label: String,
-    /// Raw content of the resume (Markdown or plain text).
-    pub content: String,
-    /// When this version was created.
-    pub created_at: DateTime<Utc>,
-}
+// Re-exports for convenience.
+pub use hash::content_hash;
+pub use repository::ResumeRepository;
+pub use service::ResumeService;
+pub use types::{
+    CreateResumeRequest, Resume, ResumeDiff, ResumeError, ResumeFilter, ResumeId, ResumeSource,
+    UpdateResumeRequest,
+};
+pub use version::{ResumeVersion, ResumeVersionTree};
