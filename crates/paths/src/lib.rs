@@ -26,14 +26,14 @@ static CUSTOM_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 /// The resolved data directory, combining custom override or platform defaults.
 /// This is set once and cached for subsequent calls.
-/// On macOS, this is `~/Library/Application Support/rsketch`.
-/// On Linux/FreeBSD, this is `$XDG_DATA_HOME/rsketch`.
+/// On macOS, this is `~/Library/Application Support/job`.
+/// On Linux/FreeBSD, this is `$XDG_DATA_HOME/job`.
 static CURRENT_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 /// The resolved config directory, combining custom override or platform
 /// defaults. This is set once and cached for subsequent calls.
-/// On macOS, this is `~/.config/rsketch`.
-/// On Linux/FreeBSD, this is `$XDG_CONFIG_HOME/rsketch`.
+/// On macOS, this is `~/.config/job`.
+/// On Linux/FreeBSD, this is `$XDG_CONFIG_HOME/job`.
 static CONFIG_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 /// Returns the path to the user's home directory.
@@ -45,7 +45,7 @@ pub fn home_dir() -> &'static PathBuf {
     HOME_DIR.get_or_init(|| dirs::home_dir().expect("failed to determine home directory"))
 }
 
-/// Returns the path to the configuration directory used by rsketch.
+/// Returns the path to the configuration directory used by job.
 ///
 /// # Panics
 ///
@@ -57,7 +57,7 @@ pub fn config_dir() -> &'static PathBuf {
                 if cfg!(target_os = "windows") {
                     dirs::config_dir()
                         .expect("failed to determine RoamingAppData directory")
-                        .join("rsketch")
+                        .join("job")
                 } else if cfg!(any(target_os = "linux", target_os = "freebsd")) {
                     std::env::var("FLATPAK_XDG_CONFIG_HOME")
                         .map_or_else(
@@ -67,9 +67,9 @@ pub fn config_dir() -> &'static PathBuf {
                             },
                             PathBuf::from,
                         )
-                        .join("rsketch")
+                        .join("job")
                 } else {
-                    home_dir().join(".config").join("rsketch")
+                    home_dir().join(".config").join("job")
                 }
             },
             |custom_dir| custom_dir.join("config"),
@@ -77,7 +77,7 @@ pub fn config_dir() -> &'static PathBuf {
     })
 }
 
-/// Returns the path to the data directory used by rsketch.
+/// Returns the path to the data directory used by job.
 ///
 /// # Panics
 ///
@@ -95,11 +95,11 @@ pub fn data_dir() -> &'static PathBuf {
                             },
                             PathBuf::from,
                         )
-                        .join("rsketch")
+                        .join("job")
                 } else {
                     dirs::data_local_dir()
                         .expect("failed to determine LocalAppData directory")
-                        .join("rsketch")
+                        .join("job")
                 }
             },
             Clone::clone,
@@ -157,7 +157,7 @@ pub fn set_custom_data_dir<P: ?Sized + AsRef<Path>>(dir: &P) -> &'static PathBuf
     })
 }
 
-/// Returns the path to the temp directory used by rsketch.
+/// Returns the path to the temp directory used by job.
 ///
 /// # Panics
 ///
@@ -168,13 +168,13 @@ pub fn temp_dir() -> &'static PathBuf {
         if cfg!(target_os = "macos") {
             return dirs::cache_dir()
                 .expect("failed to determine cachesDirectory directory")
-                .join("rsketch");
+                .join("job");
         }
 
         if cfg!(target_os = "windows") {
             return dirs::cache_dir()
                 .expect("failed to determine LocalAppData directory")
-                .join("rsketch");
+                .join("job");
         }
 
         if cfg!(any(target_os = "linux", target_os = "freebsd")) {
@@ -183,10 +183,10 @@ pub fn temp_dir() -> &'static PathBuf {
                     |_| dirs::cache_dir().expect("failed to determine XDG_CACHE_HOME directory"),
                     PathBuf::from,
                 )
-                .join("rsketch");
+                .join("job");
         }
 
-        home_dir().join(".cache").join("rsketch")
+        home_dir().join(".cache").join("job")
     })
 }
 
@@ -201,17 +201,17 @@ pub fn logs_dir() -> &'static PathBuf {
     static LOGS_DIR: OnceLock<PathBuf> = OnceLock::new();
     LOGS_DIR.get_or_init(|| {
         if cfg!(target_os = "macos") {
-            home_dir().join("Library/Logs/rsketch")
+            home_dir().join("Library/Logs/job")
         } else {
             data_dir().join("logs")
         }
     })
 }
 
-/// Returns the path to the `rsketch.log` file.
+/// Returns the path to the `job.log` file.
 pub fn log_file() -> &'static PathBuf {
     static LOG_FILE: OnceLock<PathBuf> = OnceLock::new();
-    LOG_FILE.get_or_init(|| logs_dir().join("rsketch.log"))
+    LOG_FILE.get_or_init(|| logs_dir().join("job.log"))
 }
 
 /// Returns the path to the database directory.

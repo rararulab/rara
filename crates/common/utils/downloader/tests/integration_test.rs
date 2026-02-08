@@ -23,8 +23,8 @@ use axum::{
     routing::head,
 };
 use axum_test::TestServer;
-use downloader::{ChunkingConfig, DownloadError, DownloadRequest, Downloader, DownloaderConfig};
-use rsketch_base::readable_size::ReadableSize;
+use job_downloader::{ChunkingConfig, DownloadError, DownloadRequest, Downloader, DownloaderConfig};
+use job_base::readable_size::ReadableSize;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tokio::sync::{Mutex, Notify, oneshot};
@@ -341,7 +341,7 @@ async fn download_resumes_after_interruption() {
         output_path: output_path.clone(),
     };
 
-    use downloader::{ChunkState, ChunkStatus, DownloadState, calculate_chunk_boundaries};
+    use job_downloader::{ChunkState, ChunkStatus, DownloadState, calculate_chunk_boundaries};
 
     let boundaries = calculate_chunk_boundaries(content.len() as u64, 3);
     let temp_dir_path = temp_dir.path();

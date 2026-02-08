@@ -1,5 +1,5 @@
 [package]
-name = "rsketch-server"
+name = "job-server"
 authors.workspace = true
 version.workspace = true
 edition.workspace = true
@@ -9,7 +9,7 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "HTTP and gRPC server implementation for rsketch"
+description = "HTTP and gRPC server implementation for job"
 
 [dependencies]
 async-trait = { workspace = true }
@@ -21,9 +21,9 @@ smart-default = { workspace = true }
 # fastrace = { workspace = true }
 axum-tracing-opentelemetry = { workspace = true }
 futures = { workspace = true }
-rsketch-api = { workspace = true }
-rsketch-base = { workspace = true }
-rsketch-error = { workspace = true }
+job-api = { workspace = true }
+job-base = { workspace = true }
+job-error = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 snafu = { workspace = true }

@@ -486,7 +486,7 @@ pub fn init_global_logging(
         } else {
             let rolling_appender = RollingFileAppender::builder()
                 .rotation(Rotation::HOURLY)
-                .filename_prefix("rsketch")
+                .filename_prefix("job")
                 .max_log_files(opts.max_log_files)
                 .build(&opts.dir)
                 .unwrap_or_else(|e| {
@@ -523,7 +523,7 @@ pub fn init_global_logging(
         } else {
             let rolling_appender = RollingFileAppender::builder()
                 .rotation(Rotation::HOURLY)
-                .filename_prefix("rsketch-err")
+                .filename_prefix("job-err")
                 .max_log_files(opts.max_log_files)
                 .build(&opts.dir)
                 .unwrap_or_else(|e| {
@@ -634,7 +634,7 @@ pub fn init_global_logging(
                         .build(),
                 )
                 .build();
-            let tracer = provider.tracer("rsketch");
+            let tracer = provider.tracer("job");
 
             tracing::subscriber::set_global_default(
                 subscriber.with(tracing_opentelemetry::layer().with_tracer(tracer)),

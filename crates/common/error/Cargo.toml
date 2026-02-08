@@ -1,5 +1,5 @@
 [package]
-name = "rsketch-error"
+name = "job-error"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -9,7 +9,7 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Error types and handling utilities for rsketch"
+description = "Error types and handling utilities for job"
 
 [dependencies]
 http = { workspace = true }

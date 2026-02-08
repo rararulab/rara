@@ -16,8 +16,8 @@ use axum::{
     Router, extract::DefaultBodyLimit, http::StatusCode, response::IntoResponse, routing::get,
 };
 use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
-use rsketch_base::readable_size::ReadableSize;
-use rsketch_error::{ParseAddressSnafu, Result};
+use job_base::readable_size::ReadableSize;
+use job_error::{ParseAddressSnafu, Result};
 use serde::{Deserialize, Serialize};
 use smart_default::SmartDefault;
 use snafu::ResultExt;
@@ -69,7 +69,7 @@ pub struct RestServerConfig {
 ///
 /// ```rust,ignore
 /// use axum::{Router, routing::get};
-/// use rsketch_server::http::{RestServerConfig, start_rest_server};
+/// use job_server::http::{RestServerConfig, start_rest_server};
 ///
 /// fn my_routes(router: Router) -> Router {
 ///     router.route("/api/v1/hello", get(|| async { "Hello, World!" }))
@@ -174,7 +174,7 @@ async fn api_health_handler() -> axum::Json<serde_json::Value> {
     axum::Json(serde_json::json!({
         "status": "healthy",
         "timestamp": chrono::Utc::now().to_rfc3339(),
-        "service": "rsketch",
+        "service": "job",
         "version": env!("CARGO_PKG_VERSION")
     }))
 }

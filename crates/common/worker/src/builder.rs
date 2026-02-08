@@ -70,7 +70,7 @@ pub struct TriggerCronOrNotify;
 /// # Example
 ///
 /// ```rust,no_run
-/// # use rsketch_common_worker::{Manager, Worker, WorkerContext};
+/// # use job_common_worker::{Manager, Worker, WorkerContext};
 /// # use std::time::Duration;
 /// # struct MyWorker;
 /// # #[async_trait::async_trait]
@@ -119,7 +119,7 @@ where
     /// # Example
     ///
     /// ```rust,no_run
-    /// # use rsketch_common_worker::{Manager, Worker, WorkerContext};
+    /// # use job_common_worker::{Manager, Worker, WorkerContext};
     /// # struct InitWorker;
     /// # #[async_trait::async_trait]
     /// # impl Worker for InitWorker {
@@ -149,7 +149,7 @@ where
     /// # Example
     ///
     /// ```rust,no_run
-    /// # use rsketch_common_worker::{Manager, Worker, WorkerContext, Notifiable};
+    /// # use job_common_worker::{Manager, Worker, WorkerContext, Notifiable};
     /// # struct EventWorker;
     /// # #[async_trait::async_trait]
     /// # impl Worker for EventWorker {
@@ -181,7 +181,7 @@ where
     /// # Example
     ///
     /// ```rust,no_run
-    /// # use rsketch_common_worker::{Manager, Worker, WorkerContext, Pausable};
+    /// # use job_common_worker::{Manager, Worker, WorkerContext, Pausable};
     /// # use std::time::Duration;
     /// # struct PeriodicWorker;
     /// # #[async_trait::async_trait]
@@ -224,7 +224,7 @@ where
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # use rsketch_common_worker::{Manager, Worker, WorkerContext};
+    /// # use job_common_worker::{Manager, Worker, WorkerContext};
     /// # struct CronWorker;
     /// # #[async_trait::async_trait]
     /// # impl Worker for CronWorker {
@@ -285,7 +285,7 @@ where
     /// # Example
     ///
     /// ```rust,no_run
-    /// # use rsketch_common_worker::{Manager, Worker, WorkerContext, Notifiable, Pausable};
+    /// # use job_common_worker::{Manager, Worker, WorkerContext, Notifiable, Pausable};
     /// # use std::time::Duration;
     /// # struct HybridWorker;
     /// # #[async_trait::async_trait]
@@ -331,7 +331,7 @@ where
     /// # Example
     ///
     /// ```rust,no_run
-    /// # use rsketch_common_worker::{Manager, Worker, WorkerContext, Notifiable};
+    /// # use job_common_worker::{Manager, Worker, WorkerContext, Notifiable};
     /// # struct ReportWorker;
     /// # #[async_trait::async_trait]
     /// # impl Worker for ReportWorker {
@@ -386,7 +386,7 @@ where
     /// # Example
     ///
     /// ```rust,no_run
-    /// # use rsketch_common_worker::{Manager, Worker, WorkerContext};
+    /// # use job_common_worker::{Manager, Worker, WorkerContext};
     /// # use std::time::Duration;
     /// # struct MyWorker;
     /// # #[async_trait::async_trait]
@@ -415,7 +415,7 @@ where
     /// # Example
     ///
     /// ```rust,no_run
-    /// # use rsketch_common_worker::{Manager, Worker, WorkerContext};
+    /// # use job_common_worker::{Manager, Worker, WorkerContext};
     /// # use std::time::Duration;
     /// # struct HeavyWorker;
     /// # #[async_trait::async_trait]

@@ -17,8 +17,8 @@ pub mod hello;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rsketch_base::readable_size::ReadableSize;
-use rsketch_error::{ParseAddressSnafu, Result};
+use job_base::readable_size::ReadableSize;
+use job_error::{ParseAddressSnafu, Result};
 use serde::{Deserialize, Serialize};
 use smart_default::SmartDefault;
 use snafu::ResultExt;

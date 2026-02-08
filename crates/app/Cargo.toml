@@ -1,5 +1,5 @@
 [package]
-name = "rsketch-app"
+name = "job-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,13 +9,13 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Application orchestration and lifecycle management for rsketch"
+description = "Application orchestration and lifecycle management for job"
 
 [dependencies]
 bon = { workspace = true }
 derive_more = { workspace = true }
-rsketch-common-telemetry = { workspace = true }
-rsketch-server = { workspace = true }
+job-common-telemetry = { workspace = true }
+job-server = { workspace = true }
 smart-default = { workspace = true }
 snafu = { workspace = true }
 tokio = { workspace = true }

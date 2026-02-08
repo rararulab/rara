@@ -29,7 +29,7 @@
 //! ```rust,no_run
 //! use std::time::Duration;
 //!
-//! use rsketch_common_worker::{Handle, Manager, Pausable, Worker, WorkerContext};
+//! use job_common_worker::{Handle, Manager, Pausable, Worker, WorkerContext};
 //!
 //! struct MyWorker;
 //!

@@ -1,6 +1,6 @@
 # API Module
 
-This directory contains all Protocol Buffer definitions and generated gRPC stubs for the rsketch project.
+This directory contains all Protocol Buffer definitions and generated gRPC stubs for the job project.
 
 ## Architecture
 
@@ -90,16 +90,16 @@ just proto-deps-update
 Generated Go code is in `gen/go/` with proper go_package options:
 
 ```go
-import hellov1 "github.com/crrow/rsketch/gen/go/hello/v1"
+import hellov1 "github.com/crrow/job/gen/go/hello/v1"
 ```
 
 ### Java
 
-Generated Java code is in `gen/java/` with package `com.rsketch.api.hello.v1`:
+Generated Java code is in `gen/java/` with package `com.job.api.hello.v1`:
 
 ```java
-import com.rsketch.api.hello.v1.HelloProto;
-import com.rsketch.api.hello.v1.HelloGrpc;
+import com.job.api.hello.v1.HelloProto;
+import com.job.api.hello.v1.HelloGrpc;
 ```
 
 ### C++
@@ -116,7 +116,7 @@ Generated C++ code is in `gen/cpp/`:
 The Rust crate is built with tonic and prost, available as:
 
 ```rust
-use rsketch_api::pb::hello::v1::*;
+use job_api::pb::hello::v1::*;
 ```
 
 ## Adding New Services

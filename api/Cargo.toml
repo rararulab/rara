@@ -1,5 +1,5 @@
 [package]
-name = "rsketch-api"
+name = "job-api"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,7 +9,7 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "API definitions and gRPC stubs for rsketch"
+description = "API definitions and gRPC stubs for job"
 
 [dependencies]
 prost = { workspace = true }

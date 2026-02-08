@@ -17,7 +17,7 @@ pub mod grpc;
 pub mod http;
 
 use futures::future::join_all;
-use rsketch_error::Result;
+use job_error::Result;
 use tokio::{sync::oneshot::Receiver, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 

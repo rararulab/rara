@@ -1,7 +1,7 @@
 [book]
-title = "rsketch"
+title = "job"
 authors = ["crrow"]
-description = "Documentation for rsketch - A Rust project template with gRPC and multi-language code generation"
+description = "Documentation for job - A Rust project template with gRPC and multi-language code generation"
 src = "src"
 
 [build]
@@ -10,8 +10,8 @@ build-dir = "book"
 [output.html]
 default-theme = "ayu"
 preferred-dark-theme = "ayu"
-git-repository-url = "https://github.com/crrow/rsketch"
-edit-url-template = "https://github.com/crrow/rsketch/edit/main/docs/{path}"
+git-repository-url = "https://github.com/crrow/job"
+edit-url-template = "https://github.com/crrow/job/edit/main/docs/{path}"
 additional-js = ["mermaid.min.js", "mermaid-init.js"]
 
 [preprocessor]

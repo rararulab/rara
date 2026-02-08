@@ -26,7 +26,7 @@ use prometheus::{IntCounter, register_int_counter};
 
 /// Prometheus counter for tracking application panics.
 pub static PANIC_COUNTER: LazyLock<IntCounter> =
-    LazyLock::new(|| register_int_counter!("rsketch_panic_counter", "panic_counter").unwrap());
+    LazyLock::new(|| register_int_counter!("job_panic_counter", "panic_counter").unwrap());
 
 /// Set up enhanced panic handling with structured logging.
 ///

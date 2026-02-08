@@ -1,5 +1,5 @@
 [package]
-name = "rsketch-common-runtime"
+name = "job-common-runtime"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -9,7 +9,7 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Tokio runtime configuration and management for rsketch"
+description = "Tokio runtime configuration and management for job"
 
 [dependencies]
 bon.workspace = true

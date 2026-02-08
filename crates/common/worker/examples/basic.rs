@@ -28,7 +28,7 @@ use std::{
     time::Duration,
 };
 
-use rsketch_common_worker::{Manager, Notifiable, Pausable, Worker, WorkerContext};
+use job_common_worker::{Manager, Notifiable, Pausable, Worker, WorkerContext};
 
 // Example 1: Simple interval worker
 struct CounterWorker {

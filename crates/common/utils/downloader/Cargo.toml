@@ -1,5 +1,5 @@
 [package]
-name = "downloader"
+name = "job-downloader"
 description = "HTTP downloader with chunked downloads, caching, and resume support"
 version.workspace = true
 edition.workspace = true
@@ -20,7 +20,7 @@ fd-lock = "4.0"
 futures = { workspace = true }
 jiff = { workspace = true }
 reqwest = { version = "0.12", features = ["json", "stream"] }
-rsketch-base = { workspace = true }
+job-base = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.10"

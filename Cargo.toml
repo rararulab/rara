@@ -85,15 +85,15 @@ tracing-subscriber = "^0.3"
 validator = "0.20"
 
 # Internal workspace crates (use =version to keep in sync with workspace version)
-rsketch-api = { version = "=0.0.17", path = "api" }
-rsketch-app = { version = "=0.0.17", path = "crates/app" }
-rsketch-base = { version = "=0.0.17", path = "crates/common/base" }
-rsketch-cmd = { version = "=0.0.17", path = "crates/cmd" }
-rsketch-common-runtime = { version = "=0.0.17", path = "crates/common/runtime" }
-rsketch-common-telemetry = { version = "=0.0.17", path = "crates/common/telemetry" }
-rsketch-common-worker = { version = "=0.0.17", path = "crates/common/worker" }
-rsketch-error = { version = "=0.0.17", path = "crates/common/error" }
-rsketch-server = { version = "=0.0.17", path = "crates/server" }
+job-api = { version = "=0.0.17", path = "api" }
+job-app = { version = "=0.0.17", path = "crates/app" }
+job-base = { version = "=0.0.17", path = "crates/common/base" }
+job-cli = { version = "=0.0.17", path = "crates/cmd" }
+job-common-runtime = { version = "=0.0.17", path = "crates/common/runtime" }
+job-common-telemetry = { version = "=0.0.17", path = "crates/common/telemetry" }
+job-common-worker = { version = "=0.0.17", path = "crates/common/worker" }
+job-error = { version = "=0.0.17", path = "crates/common/error" }
+job-server = { version = "=0.0.17", path = "crates/server" }
 
 # Config for 'cargo dist'
 [workspace.metadata.dist]

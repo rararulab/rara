@@ -1,5 +1,5 @@
 [package]
-name = "rsketch-common-worker"
+name = "job-common-worker"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,7 +9,7 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Background worker and task scheduling utilities for rsketch"
+description = "Background worker and task scheduling utilities for job"
 
 [dependencies]
 async-trait.workspace = true
@@ -18,7 +18,7 @@ croner = "3"
 derive_more = { workspace = true }
 lazy_static.workspace = true
 prometheus.workspace = true
-rsketch-common-runtime = { workspace = true }
+job-common-runtime = { workspace = true }
 smart-default = "0.7"
 snafu.workspace = true
 tokio.workspace = true

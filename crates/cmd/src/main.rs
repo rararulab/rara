@@ -13,16 +13,16 @@
 // limitations under the License.
 
 use clap::{Args, Parser, Subcommand};
-use rsketch_common_runtime::{GlobalRuntimeOptions, block_on_background, init_global_runtimes};
+use job_common_runtime::{GlobalRuntimeOptions, block_on_background, init_global_runtimes};
 use snafu::Whatever;
 
 mod build_info;
-use rsketch_app::AppConfig;
+use job_app::AppConfig;
 
 #[derive(Debug, Parser)]
 #[clap(
-name = "rsketch",
-about= "rsketch-cmd",
+name = "job",
+about= "job-cli",
 author = build_info::AUTHOR,
 version = build_info::FULL_VERSION)]
 struct Cli {
@@ -39,7 +39,7 @@ enum Commands {
 #[derive(Debug, Clone, Args)]
 #[command(flatten_help = true)]
 #[command(about = "Print hello")]
-#[command(long_about = "Print hello.\n\nExamples:\n  rsketch hello")]
+#[command(long_about = "Print hello.\n\nExamples:\n  job hello")]
 struct HelloArgs {}
 
 impl HelloArgs {
@@ -50,8 +50,8 @@ impl HelloArgs {
 
 #[derive(Debug, Clone, Args)]
 #[command(flatten_help = true)]
-#[command(about = "Start the rsketch server")]
-#[command(long_about = "Start the rsketch server.\n\nExamples:\n  rsketch server")]
+#[command(about = "Start the job server")]
+#[command(long_about = "Start the job server.\n\nExamples:\n  job server")]
 struct ServerArgs {}
 
 impl ServerArgs {

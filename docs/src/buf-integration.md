@@ -140,7 +140,7 @@ import (
     "context"
     "log"
     
-    hellov1 "github.com/crrow/rsketch/gen/go/hello/v1"
+    hellov1 "github.com/crrow/job/gen/go/hello/v1"
     "google.golang.org/grpc"
     "google.golang.org/grpc/credentials/insecure"
     "google.golang.org/protobuf/types/known/emptypb"
@@ -168,7 +168,7 @@ func main() {
 ### Java Client Example
 
 ```java
-import com.rsketch.api.hello.v1.HelloGrpc;
+import com.job.api.hello.v1.HelloGrpc;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import com.google.protobuf.Empty;
@@ -203,7 +203,7 @@ public class HelloClient {
 using grpc::Channel;
 using grpc::ClientContext;
 using grpc::Status;
-using rsketch::hello::v1::Hello;
+using job::hello::v1::Hello;
 using google::protobuf::Empty;
 
 class HelloClient {

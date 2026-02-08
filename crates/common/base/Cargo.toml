@@ -1,5 +1,5 @@
 [package]
-name = "rsketch-base"
+name = "job-base"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -9,7 +9,7 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Base utilities and common types for rsketch"
+description = "Base utilities and common types for job"
 
 [dependencies]
 derive_more = { workspace = true }

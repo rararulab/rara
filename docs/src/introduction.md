@@ -1,6 +1,6 @@
 # Introduction
 
-Welcome to the rsketch documentation! This is a Rust project template that includes modern tooling for gRPC API development and multi-language code generation.
+Welcome to the job documentation! This is a Rust project template that includes modern tooling for gRPC API development and multi-language code generation.
 
 ## What's Included
 
@@ -16,7 +16,7 @@ Welcome to the rsketch documentation! This is a Rust project template that inclu
 1. **Clone and Setup**:
    ```bash
    git clone <your-repo>
-   cd rsketch
+   cd job
    ```
 
 2. **Install Dependencies**:
@@ -47,7 +47,7 @@ Welcome to the rsketch documentation! This is a Rust project template that inclu
 ## Project Structure
 
 ```
-rsketch/
+job/
 ├── api/                    # Protocol Buffer definitions and generated code
 ├── crates/                 # Rust workspace crates
 │   ├── cmd/               # Command-line interface

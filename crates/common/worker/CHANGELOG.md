@@ -36,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Chore
 
-- **deps**: Update croner requirement from 2 to 3 ([#112](https://github.com/crrow/rsketch/issues/112))
+- **deps**: Update croner requirement from 2 to 3 ([#112](https://github.com/crrow/job/issues/112))
 - Apply clippy lints and fix warnings across workspace
 - Make clippy happy
 - Release v0.0.11

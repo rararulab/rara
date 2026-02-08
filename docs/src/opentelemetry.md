@@ -1,20 +1,20 @@
 # OpenTelemetry Integration
 
-This document describes how to use the OpenTelemetry integration in `rsketch` to monitor the performance of the HTTP and gRPC servers.
+This document describes how to use the OpenTelemetry integration in `job` to monitor the performance of the HTTP and gRPC servers.
 
 ## Configuration
 
 The OpenTelemetry integration is configured through environment variables. The following variables are available:
 
 * `OTEL_EXPORTER_OTLP_ENDPOINT`: The endpoint of the OpenTelemetry collector. Defaults to `http://localhost:4317`.
-* `OTEL_SERVICE_NAME`: The name of the service. Defaults to `rsketch`.
+* `OTEL_SERVICE_NAME`: The name of the service. Defaults to `job`.
 
 ## Usage
 
-To enable the OpenTelemetry integration, simply start the `rsketch` server:
+To enable the OpenTelemetry integration, simply start the `job` server:
 
 ```bash
-cargo run --bin rsketch -- server
+cargo run --bin job -- server
 ```
 
 The server will automatically start exporting traces and metrics to the configured OpenTelemetry collector.
@@ -103,6 +103,6 @@ spec:
 
 This manifest creates a Deployment that runs the OpenTelemetry collector. The collector is configured to use the ConfigMap created in the previous step.
 
-Once the collector is deployed, you will need to configure the `rsketch` server to export data to the collector. You can do this by setting the `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable to the address of the collector's OTLP gRPC endpoint.
+Once the collector is deployed, you will need to configure the `job` server to export data to the collector. You can do this by setting the `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable to the address of the collector's OTLP gRPC endpoint.
 
 For example, if the collector is running in the `default` namespace, you can set the environment variable to `http://otel-collector.default:4317`.

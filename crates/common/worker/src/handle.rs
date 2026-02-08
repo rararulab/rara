@@ -46,7 +46,7 @@ pub trait Handle: Clone + Send + Sync {
 /// # Example
 ///
 /// ```rust,no_run
-/// # use rsketch_common_worker::{Manager, Worker, WorkerContext, Pausable};
+/// # use job_common_worker::{Manager, Worker, WorkerContext, Pausable};
 /// # use std::time::Duration;
 /// # struct MyWorker;
 /// # #[async_trait::async_trait]
@@ -91,7 +91,7 @@ pub trait Pausable: Handle {
 /// # Example
 ///
 /// ```rust,no_run
-/// # use rsketch_common_worker::{Manager, Worker, WorkerContext, Notifiable};
+/// # use job_common_worker::{Manager, Worker, WorkerContext, Notifiable};
 /// # struct MyWorker;
 /// # #[async_trait::async_trait]
 /// # impl Worker for MyWorker {

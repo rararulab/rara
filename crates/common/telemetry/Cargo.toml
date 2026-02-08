@@ -1,5 +1,5 @@
 [package]
-name = "rsketch-common-telemetry"
+name = "job-common-telemetry"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -9,7 +9,7 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Telemetry utilities for rsketch: logging, tracing, panic hooks"
+description = "Telemetry utilities for job: logging, tracing, panic hooks"
 
 [features]
 tokio-console = ["console-subscriber", "tokio/tracing"]

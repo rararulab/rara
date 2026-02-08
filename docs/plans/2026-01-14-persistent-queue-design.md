@@ -482,7 +482,7 @@ mmap-io = "0.9"
 crossbeam = "0.8"
 bytes = "1.0"
 # 使用现有的 worker 抽象（需要扩展支持 BlockingWorker）
-rsketch-common-worker = { path = "../worker" }
+job-common-worker = { path = "../worker" }
 ```
 
 ## 后续工作

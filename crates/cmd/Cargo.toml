@@ -1,5 +1,5 @@
 [package]
-name = "rsketch-cmd"
+name = "job-cli"
 authors.workspace = true
 version.workspace = true
 edition.workspace = true
@@ -9,7 +9,7 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Command-line interface for rsketch"
+description = "Command-line interface for job"
 
 [package.metadata.wix]
 upgrade-guid = "3FAE8A69-CCE2-441B-81F1-C9E84D108D7C"
@@ -21,7 +21,7 @@ eula = false
 
 # Binary definition for cargo-dist
 [[bin]]
-name = "rsketch"
+name = "job"
 path = "src/main.rs"
 
 [dependencies]
@@ -29,8 +29,8 @@ chrono = { workspace = true }
 clap = { version = "4.4.16", features = ["derive"] }
 ctrlc = "3.4.2"
 human-panic = "2.0.0"
-rsketch-app = { workspace = true }
-rsketch-common-runtime = { workspace = true }
+job-app = { workspace = true }
+job-common-runtime = { workspace = true }
 shadow-rs = "1.2.1"
 snafu.workspace = true
 

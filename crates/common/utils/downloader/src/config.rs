@@ -15,7 +15,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use bon::Builder;
-use rsketch_base::readable_size::ReadableSize;
+use job_base::readable_size::ReadableSize;
 use smart_default::SmartDefault;
 
 /// Configuration for chunk calculation

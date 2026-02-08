@@ -18,8 +18,8 @@ use std::sync::{
 };
 
 use bon::Builder;
-use rsketch_common_telemetry as telemetry;
-use rsketch_server::{
+use job_common_telemetry as telemetry;
+use job_server::{
     grpc::{GrpcServerConfig, hello::HelloService, start_grpc_server},
     http::{RestServerConfig, health_routes, start_rest_server},
 };
@@ -100,9 +100,9 @@ impl App {
     /// Start the application and return a handle for controlling it
     async fn start(&self) -> Result<AppHandle, Whatever> {
         // Initialize tracing subscriber
-        let _guards = telemetry::logging::init_tracing_subscriber("rsketch");
+        let _guards = telemetry::logging::init_tracing_subscriber("job");
 
-        info!("Starting rsketch application");
+        info!("Starting job application");
 
         // Set running flag
         self.running.store(true, Ordering::SeqCst);

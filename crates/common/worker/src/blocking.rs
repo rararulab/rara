@@ -26,7 +26,7 @@ use crate::context::WorkerContext;
 /// # Example
 ///
 /// ```rust
-/// use rsketch_common_worker::{BlockingWorker, WorkerContext};
+/// use job_common_worker::{BlockingWorker, WorkerContext};
 ///
 /// struct HeavyComputeWorker {
 ///     batch_size: usize,

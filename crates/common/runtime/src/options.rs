@@ -39,8 +39,8 @@ pub struct RuntimeOptions {
     #[default(None)]
     pub worker_threads: Option<usize>,
 
-    #[default("rsketch-rt".to_string())]
-    #[builder(default = "rsketch-rt".to_string())]
+    #[default("job-rt".to_string())]
+    #[builder(default = "job-rt".to_string())]
     pub thread_name: String,
 
     #[default(true)]
