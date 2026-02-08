@@ -12,17 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use sqlx::{
-    Sqlite, SqlitePool,
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
-};
+use sqlx::{PgPool, Postgres, postgres::PgPoolOptions};
 
 use crate::{config::DatabaseConfig, err::*, kv::KVStore};
 
-/// Database store that manages the SQLite connection pool
+/// Database store that manages the PostgreSQL connection pool
 #[derive(Clone)]
 pub struct DBStore {
-    pool: SqlitePool,
+    pool: PgPool,
 }
 
 impl DBStore {
@@ -30,13 +27,9 @@ impl DBStore {
     ///
     /// # Arguments
     /// * `config` - Database configuration
-    #[tracing::instrument(level = "trace", skip(config), fields(db_path = ?config.db_path), err)]
+    #[tracing::instrument(level = "trace", skip(config), fields(database_url = %config.database_url), err)]
     pub async fn new(config: DatabaseConfig) -> Result<Self> {
-        let options = SqliteConnectOptions::new()
-            .filename(&config.db_path)
-            .create_if_missing(true);
-
-        let mut pool_options = SqlitePoolOptions::new()
+        let mut pool_options = PgPoolOptions::new()
             .max_connections(config.max_connections)
             .min_connections(config.min_connections)
             .acquire_timeout(config.connect_timeout);
@@ -48,12 +41,9 @@ impl DBStore {
         if let Some(idle_timeout) = config.idle_timeout {
             pool_options = pool_options.idle_timeout(idle_timeout);
         }
-        let pool = pool_options.connect_with(options).await?;
+        let pool = pool_options.connect(&config.database_url).await?;
 
-        tracing::info!(
-            "Initialized DBStore with path: {}",
-            config.db_path.display()
-        );
+        tracing::info!("Initialized DBStore with database_url: {}", config.database_url);
 
         sqlx::migrate!("./migrations").run(&pool).await?;
 
@@ -63,29 +53,22 @@ impl DBStore {
     /// Get a KV store instance
     pub fn kv_store(&self) -> KVStore { KVStore::new(self.pool.clone()) }
 
-    /// Get the underlying SQLite pool
-    pub fn pool(&self) -> &SqlitePool { &self.pool }
+    /// Get the underlying PostgreSQL pool
+    pub fn pool(&self) -> &PgPool { &self.pool }
 
     /// Acquire a connection from the pool
-    pub async fn acquire(&self) -> Result<sqlx::pool::PoolConnection<Sqlite>> {
+    pub async fn acquire(&self) -> Result<sqlx::pool::PoolConnection<Postgres>> {
         Ok(self.pool.acquire().await?)
     }
 
-    /// Creates a DBStore backed by a lazily-connected in-memory pool.
+    /// Creates a DBStore backed by a lazily-connected pool.
     ///
-    /// Intended for testing scenarios where the database will not actually
-    /// be queried. No migrations are run and no connection is established
-    /// until a query is attempted.
+    /// Intended for tests where the DB might not be queried.
     #[doc(hidden)]
-    pub fn new_lazy_in_memory() -> Self {
-        let options = SqliteConnectOptions::new()
-            .filename(":memory:")
-            .create_if_missing(true);
-
-        let pool = SqlitePoolOptions::new()
+    pub fn new_lazy(database_url: &str) -> Result<Self> {
+        let pool = PgPoolOptions::new()
             .max_connections(1)
-            .connect_lazy_with(options);
-
-        Self { pool }
+            .connect_lazy(database_url)?;
+        Ok(Self { pool })
     }
 }

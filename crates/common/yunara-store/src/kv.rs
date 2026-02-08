@@ -17,23 +17,23 @@ use std::collections::HashMap;
 use bon::Builder;
 use serde::{Serialize, de::DeserializeOwned};
 use snafu::ResultExt;
-use sqlx::SqlitePool;
+use sqlx::{PgPool, Postgres, QueryBuilder};
 use tracing::info;
 use uuid::Uuid;
 
 use crate::err::*;
 
-/// Key-value store backed by SQLite
+/// Key-value store backed by PostgreSQL
 ///
 /// All values are serialized to JSON before storage
 #[derive(Clone)]
 pub struct KVStore {
-    pool: SqlitePool,
+    pool: PgPool,
 }
 
 impl KVStore {
-    /// Create a new KV store from a SQLite pool
-    pub(crate) fn new(pool: SqlitePool) -> Self { Self { pool } }
+    /// Create a new KV store from a PostgreSQL pool
+    pub(crate) fn new(pool: PgPool) -> Self { Self { pool } }
 
     /// Set a key-value pair
     ///
@@ -45,7 +45,10 @@ impl KVStore {
     pub async fn set<T: Serialize>(&self, key: &str, value: &T) -> Result<()> {
         let value_json = serde_json::to_string(value).context(CodecSnafu)?;
 
-        sqlx::query("INSERT OR REPLACE INTO kv_table (key, value) VALUES (?, ?)")
+        sqlx::query(
+            "INSERT INTO kv_table (key, value) VALUES ($1, $2) \
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        )
             .bind(key)
             .bind(value_json)
             .execute(&self.pool)
@@ -62,7 +65,7 @@ impl KVStore {
     /// # Arguments
     /// * `key` - The key to retrieve
     pub async fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
-        let row: Option<(String,)> = sqlx::query_as("SELECT value FROM kv_table WHERE key = ?")
+        let row: Option<(String,)> = sqlx::query_as("SELECT value FROM kv_table WHERE key = $1")
             .bind(key)
             .fetch_optional(&self.pool)
             .await?;
@@ -81,7 +84,7 @@ impl KVStore {
     /// # Arguments
     /// * `key` - The key to remove
     pub async fn remove(&self, key: &str) -> Result<()> {
-        sqlx::query("DELETE FROM kv_table WHERE key = ?")
+        sqlx::query("DELETE FROM kv_table WHERE key = $1")
             .bind(key)
             .execute(&self.pool)
             .await?;
@@ -131,26 +134,12 @@ impl KVStore {
         // Step 2: Execute batch insert in a single transaction
         let mut tx = self.pool.begin().await?;
 
-        // Build batch INSERT statement
-        // SQLite: INSERT OR REPLACE INTO kv_table (key, value) VALUES (?, ?), (?, ?),
-        // ...
-        let placeholders = serialized_pairs
-            .iter()
-            .map(|_| "(?, ?)")
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let query_str = format!(
-            "INSERT OR REPLACE INTO kv_table (key, value) VALUES {}",
-            placeholders
-        );
-
-        let mut query = sqlx::query(&query_str);
-        for (key, value_json) in &serialized_pairs {
-            query = query.bind(key).bind(value_json);
-        }
-
-        query.execute(&mut *tx).await?;
+        let mut builder = QueryBuilder::<Postgres>::new("INSERT INTO kv_table (key, value) ");
+        builder.push_values(serialized_pairs.iter(), |mut row, (key, value_json)| {
+            row.push_bind(key).push_bind(value_json);
+        });
+        builder.push(" ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value");
+        builder.build().execute(&mut *tx).await?;
         tx.commit().await?;
 
         Ok(())
@@ -180,19 +169,12 @@ impl KVStore {
             return Ok(HashMap::new());
         }
 
-        // Build IN clause placeholders
-        let placeholders = keys.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-        let query_str = format!(
-            "SELECT key, value FROM kv_table WHERE key IN ({})",
-            placeholders
-        );
-
-        let mut query = sqlx::query_as::<_, (String, String)>(&query_str);
-        for key in &keys {
-            query = query.bind(key);
-        }
-
-        let rows = query.fetch_all(&self.pool).await?;
+        let rows = sqlx::query_as::<_, (String, String)>(
+            "SELECT key, value FROM kv_table WHERE key = ANY($1)",
+        )
+        .bind(&keys[..])
+        .fetch_all(&self.pool)
+        .await?;
 
         let mut result = HashMap::new();
         for (key, value_json) in rows {
@@ -378,8 +360,9 @@ impl KVStoreExt for KVStore {
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+
     use serde::{Deserialize, Serialize};
-    use tempfile::TempDir;
 
     use crate::{DatabaseConfig, db::DBStore};
 
@@ -389,170 +372,180 @@ mod tests {
         age:  i32,
     }
 
+    fn test_database_url() -> Option<String> {
+        env::var("YUNARA_STORE_TEST_DATABASE_URL")
+            .ok()
+            .or_else(|| env::var("DATABASE_URL").ok())
+    }
+
     #[tokio::test]
     async fn kv_store_test() {
-        let tempdir = TempDir::new().unwrap();
-        let db_path = tempdir.path().join("test.db");
-
-        let config = DatabaseConfig {
-            db_path,
+        let Some(database_url) = test_database_url() else { return; };
+        let db = DBStore::new(DatabaseConfig {
+            database_url,
             ..Default::default()
-        };
-        let db = DBStore::new(config).await.unwrap();
+        })
+        .await
+        .unwrap();
         let kv = db.kv_store();
+        let prefix = Uuid::new_v4().to_string();
 
         // Test string
-        kv.set("str_key", &"hello".to_string()).await.unwrap();
-        assert_eq!(kv.get::<String>("str_key").await.unwrap().unwrap(), "hello");
+        let str_key = format!("{prefix}:str_key");
+        kv.set(&str_key, &"hello".to_string()).await.unwrap();
+        assert_eq!(
+            kv.get::<String>(&str_key).await.unwrap().unwrap(),
+            "hello"
+        );
         assert_eq!(kv.get::<String>("nonexistent").await.unwrap(), None);
 
         // Test bool
-        kv.set("bool_key", &true).await.unwrap();
-        assert_eq!(kv.get::<bool>("bool_key").await.unwrap().unwrap(), true);
+        let bool_key = format!("{prefix}:bool_key");
+        kv.set(&bool_key, &true).await.unwrap();
+        assert_eq!(kv.get::<bool>(&bool_key).await.unwrap().unwrap(), true);
 
         // Test i64
-        kv.set("i64_key", &42i64).await.unwrap();
-        assert_eq!(kv.get::<i64>("i64_key").await.unwrap().unwrap(), 42);
+        let i64_key = format!("{prefix}:i64_key");
+        kv.set(&i64_key, &42i64).await.unwrap();
+        assert_eq!(kv.get::<i64>(&i64_key).await.unwrap().unwrap(), 42);
 
         // Test object
         let person = Person {
             name: "nathan".to_string(),
             age:  30,
         };
-        kv.set("person_key", &person).await.unwrap();
+        let person_key = format!("{prefix}:person_key");
+        kv.set(&person_key, &person).await.unwrap();
         assert_eq!(
-            kv.get::<Person>("person_key").await.unwrap().unwrap(),
+            kv.get::<Person>(&person_key).await.unwrap().unwrap(),
             person
         );
 
         // Test remove
-        kv.remove("str_key").await.unwrap();
-        assert_eq!(kv.get::<String>("str_key").await.unwrap(), None);
+        kv.remove(&str_key).await.unwrap();
+        assert_eq!(kv.get::<String>(&str_key).await.unwrap(), None);
     }
 
     #[tokio::test]
     async fn kv_store_overwrite_test() {
-        let tempdir = TempDir::new().unwrap();
-        let db_path = tempdir.path().join("test.db");
-
-        let config = DatabaseConfig {
-            db_path,
+        let Some(database_url) = test_database_url() else { return; };
+        let db = DBStore::new(DatabaseConfig {
+            database_url,
             ..Default::default()
-        };
-        let db = DBStore::new(config).await.unwrap();
+        })
+        .await
+        .unwrap();
         let kv = db.kv_store();
 
-        // Run migrations
-        sqlx::migrate!("./migrations").run(db.pool()).await.unwrap();
+        let key = format!("{}:key", Uuid::new_v4());
+        kv.set(&key, &"first").await.unwrap();
+        assert_eq!(kv.get::<String>(&key).await.unwrap().unwrap(), "first");
 
-        kv.set("key", &"first").await.unwrap();
-        assert_eq!(kv.get::<String>("key").await.unwrap().unwrap(), "first");
-
-        kv.set("key", &"second").await.unwrap();
-        assert_eq!(kv.get::<String>("key").await.unwrap().unwrap(), "second");
+        kv.set(&key, &"second").await.unwrap();
+        assert_eq!(kv.get::<String>(&key).await.unwrap().unwrap(), "second");
     }
 
     #[tokio::test]
     async fn kv_store_batch_set_test() {
-        let tempdir = TempDir::new().unwrap();
-        let db_path = tempdir.path().join("test.db");
-
-        let config = DatabaseConfig {
-            db_path,
+        let Some(database_url) = test_database_url() else { return; };
+        let db = DBStore::new(DatabaseConfig {
+            database_url,
             ..Default::default()
-        };
-        let db = DBStore::new(config).await.unwrap();
+        })
+        .await
+        .unwrap();
         let kv = db.kv_store();
-
-        // Run migrations
-        sqlx::migrate!("./migrations").run(db.pool()).await.unwrap();
+        let prefix = Uuid::new_v4().to_string();
 
         // Batch set multiple key-value pairs
         let pairs = vec![
-            ("batch_key1".to_string(), "value1".to_string()),
-            ("batch_key2".to_string(), "value2".to_string()),
-            ("batch_key3".to_string(), "value3".to_string()),
+            (format!("{prefix}:batch_key1"), "value1".to_string()),
+            (format!("{prefix}:batch_key2"), "value2".to_string()),
+            (format!("{prefix}:batch_key3"), "value3".to_string()),
         ];
         kv.batch_set(pairs).await.unwrap();
 
         // Verify all values were set
         assert_eq!(
-            kv.get::<String>("batch_key1").await.unwrap().unwrap(),
+            kv.get::<String>(&format!("{prefix}:batch_key1"))
+                .await
+                .unwrap()
+                .unwrap(),
             "value1"
         );
         assert_eq!(
-            kv.get::<String>("batch_key2").await.unwrap().unwrap(),
+            kv.get::<String>(&format!("{prefix}:batch_key2"))
+                .await
+                .unwrap()
+                .unwrap(),
             "value2"
         );
         assert_eq!(
-            kv.get::<String>("batch_key3").await.unwrap().unwrap(),
+            kv.get::<String>(&format!("{prefix}:batch_key3"))
+                .await
+                .unwrap()
+                .unwrap(),
             "value3"
         );
     }
 
     #[tokio::test]
     async fn kv_store_batch_get_test() {
-        let tempdir = TempDir::new().unwrap();
-        let db_path = tempdir.path().join("test.db");
-
-        let config = DatabaseConfig {
-            db_path,
+        let Some(database_url) = test_database_url() else { return; };
+        let db = DBStore::new(DatabaseConfig {
+            database_url,
             ..Default::default()
-        };
-        let db = DBStore::new(config).await.unwrap();
+        })
+        .await
+        .unwrap();
         let kv = db.kv_store();
-
-        // Run migrations
-        sqlx::migrate!("./migrations").run(db.pool()).await.unwrap();
+        let prefix = Uuid::new_v4().to_string();
 
         // Set up test data
-        kv.set("get_key1", &"value1").await.unwrap();
-        kv.set("get_key2", &"value2").await.unwrap();
-        kv.set("get_key3", &"value3").await.unwrap();
+        kv.set(&format!("{prefix}:get_key1"), &"value1").await.unwrap();
+        kv.set(&format!("{prefix}:get_key2"), &"value2").await.unwrap();
+        kv.set(&format!("{prefix}:get_key3"), &"value3").await.unwrap();
 
         // Batch get values
         let keys = vec![
-            "get_key1".to_string(),
-            "get_key2".to_string(),
-            "get_key3".to_string(),
-            "nonexistent".to_string(),
+            format!("{prefix}:get_key1"),
+            format!("{prefix}:get_key2"),
+            format!("{prefix}:get_key3"),
+            format!("{prefix}:nonexistent"),
         ];
         let results = kv.batch_get::<String, _>(keys).await.unwrap();
 
         // Verify results
         assert_eq!(results.len(), 3); // Only 3 keys exist
-        assert_eq!(results.get("get_key1").unwrap(), "value1");
-        assert_eq!(results.get("get_key2").unwrap(), "value2");
-        assert_eq!(results.get("get_key3").unwrap(), "value3");
-        assert_eq!(results.get("nonexistent"), None);
+        assert_eq!(results.get(&format!("{prefix}:get_key1")).unwrap(), "value1");
+        assert_eq!(results.get(&format!("{prefix}:get_key2")).unwrap(), "value2");
+        assert_eq!(results.get(&format!("{prefix}:get_key3")).unwrap(), "value3");
+        assert_eq!(results.get(&format!("{prefix}:nonexistent")), None);
     }
 
     #[tokio::test]
     async fn kv_store_batch_get_ordered_test() {
-        let tempdir = TempDir::new().unwrap();
-        let db_path = tempdir.path().join("test.db");
-
-        let config = DatabaseConfig {
-            db_path,
+        let Some(database_url) = test_database_url() else { return; };
+        let db = DBStore::new(DatabaseConfig {
+            database_url,
             ..Default::default()
-        };
-        let db = DBStore::new(config).await.unwrap();
+        })
+        .await
+        .unwrap();
         let kv = db.kv_store();
-
-        // Run migrations
-        sqlx::migrate!("./migrations").run(db.pool()).await.unwrap();
+        let prefix = Uuid::new_v4().to_string();
 
         // Set up test data
-        kv.set("ordered_key1", &"value1").await.unwrap();
-        kv.set("ordered_key2", &"value2").await.unwrap();
-        kv.set("ordered_key3", &"value3").await.unwrap();
+        kv.set(&format!("{prefix}:ordered_key1"), &"value1").await.unwrap();
+        kv.set(&format!("{prefix}:ordered_key2"), &"value2").await.unwrap();
+        kv.set(&format!("{prefix}:ordered_key3"), &"value3").await.unwrap();
 
         // Batch get values in order
         let keys = vec![
-            "ordered_key1".to_string(),
-            "nonexistent".to_string(),
-            "ordered_key2".to_string(),
-            "ordered_key3".to_string(),
+            format!("{prefix}:ordered_key1"),
+            format!("{prefix}:nonexistent"),
+            format!("{prefix}:ordered_key2"),
+            format!("{prefix}:ordered_key3"),
         ];
         let results = kv.batch_get_ordered::<String, _>(keys).await.unwrap();
 
@@ -566,37 +559,34 @@ mod tests {
 
     #[tokio::test]
     async fn kv_store_batch_operations_with_objects_test() {
-        let tempdir = TempDir::new().unwrap();
-        let db_path = tempdir.path().join("test.db");
-
-        let config = DatabaseConfig {
-            db_path,
+        let Some(database_url) = test_database_url() else { return; };
+        let db = DBStore::new(DatabaseConfig {
+            database_url,
             ..Default::default()
-        };
-        let db = DBStore::new(config).await.unwrap();
+        })
+        .await
+        .unwrap();
         let kv = db.kv_store();
-
-        // Run migrations
-        sqlx::migrate!("./migrations").run(db.pool()).await.unwrap();
+        let prefix = Uuid::new_v4().to_string();
 
         // Batch set complex objects
         let people = vec![
             (
-                "person1".to_string(),
+                format!("{prefix}:person1"),
                 Person {
                     name: "Alice".to_string(),
                     age:  25,
                 },
             ),
             (
-                "person2".to_string(),
+                format!("{prefix}:person2"),
                 Person {
                     name: "Bob".to_string(),
                     age:  30,
                 },
             ),
             (
-                "person3".to_string(),
+                format!("{prefix}:person3"),
                 Person {
                     name: "Charlie".to_string(),
                     age:  35,
@@ -607,37 +597,34 @@ mod tests {
 
         // Batch get complex objects
         let keys = vec![
-            "person1".to_string(),
-            "person2".to_string(),
-            "person3".to_string(),
+            format!("{prefix}:person1"),
+            format!("{prefix}:person2"),
+            format!("{prefix}:person3"),
         ];
         let results = kv.batch_get::<Person, _>(keys).await.unwrap();
 
         assert_eq!(results.len(), 3);
-        assert_eq!(results.get("person1").unwrap().name, "Alice");
-        assert_eq!(results.get("person2").unwrap().name, "Bob");
-        assert_eq!(results.get("person3").unwrap().name, "Charlie");
+        assert_eq!(results.get(&format!("{prefix}:person1")).unwrap().name, "Alice");
+        assert_eq!(results.get(&format!("{prefix}:person2")).unwrap().name, "Bob");
+        assert_eq!(results.get(&format!("{prefix}:person3")).unwrap().name, "Charlie");
     }
 
     #[tokio::test]
     async fn kv_store_get_or_init_key_test() {
         use super::{IdType, KVStoreExt};
 
-        let tempdir = TempDir::new().unwrap();
-        let db_path = tempdir.path().join("test.db");
-
-        let config = DatabaseConfig {
-            db_path,
+        let Some(database_url) = test_database_url() else { return; };
+        let db = DBStore::new(DatabaseConfig {
+            database_url,
             ..Default::default()
-        };
-        let db = DBStore::new(config).await.unwrap();
+        })
+        .await
+        .unwrap();
         let kv = db.kv_store();
-
-        // Run migrations
-        sqlx::migrate!("./migrations").run(db.pool()).await.unwrap();
+        let key = format!("{}:test_id", Uuid::new_v4());
 
         // First call should create a new ID
-        let result1 = kv.get_or_init_key("test_id").await.unwrap();
+        let result1 = kv.get_or_init_key(&key).await.unwrap();
         assert!(matches!(result1, IdType::New(_)));
         let id1 = match result1 {
             IdType::New(id) => id,
@@ -645,7 +632,7 @@ mod tests {
         };
 
         // Second call should return existing ID
-        let result2 = kv.get_or_init_key("test_id").await.unwrap();
+        let result2 = kv.get_or_init_key(&key).await.unwrap();
         assert!(matches!(result2, IdType::Existing { .. }));
         let id2 = match result2 {
             IdType::Existing { new_value, .. } => new_value,
@@ -659,44 +646,44 @@ mod tests {
     async fn kv_store_batch_get_or_init_keys_test() {
         use super::{IdType, KVStoreExt, KeyRequest};
 
-        let tempdir = TempDir::new().unwrap();
-        let db_path = tempdir.path().join("test.db");
-
-        let config = DatabaseConfig {
-            db_path,
+        let Some(database_url) = test_database_url() else { return; };
+        let db = DBStore::new(DatabaseConfig {
+            database_url,
             ..Default::default()
-        };
-        let db = DBStore::new(config).await.unwrap();
+        })
+        .await
+        .unwrap();
         let kv = db.kv_store();
-
-        // Run migrations
-        sqlx::migrate!("./migrations").run(db.pool()).await.unwrap();
+        let prefix = Uuid::new_v4().to_string();
+        let existing_key = format!("{prefix}:existing_key");
+        let new_key1 = format!("{prefix}:new_key1");
+        let new_key2 = format!("{prefix}:new_key2");
 
         // Pre-set one key
-        kv.set("existing_key", &"existing_id").await.unwrap();
+        kv.set(&existing_key, &"existing_id").await.unwrap();
 
         // Batch get or init keys (mix of existing and new)
         let keys = vec![
-            KeyRequest::builder().key("existing_key").build(),
-            KeyRequest::builder().key("new_key1").build(),
-            KeyRequest::builder().key("new_key2").build(),
+            KeyRequest::builder().key(&existing_key).build(),
+            KeyRequest::builder().key(&new_key1).build(),
+            KeyRequest::builder().key(&new_key2).build(),
         ];
         let results = kv.batch_get_or_init_keys(keys).await.unwrap();
 
         assert_eq!(results.len(), 3);
 
         // Existing key should be Existing
-        match results.get("existing_key").unwrap() {
+        match results.get(&existing_key).unwrap() {
             IdType::Existing { previous_value, .. } => assert_eq!(previous_value, "existing_id"),
             _ => panic!("Expected Existing"),
         }
 
         // New keys should be New
-        assert!(matches!(results.get("new_key1").unwrap(), IdType::New(_)));
-        assert!(matches!(results.get("new_key2").unwrap(), IdType::New(_)));
+        assert!(matches!(results.get(&new_key1).unwrap(), IdType::New(_)));
+        assert!(matches!(results.get(&new_key2).unwrap(), IdType::New(_)));
 
         // Verify new keys were actually stored
-        let result = kv.get_or_init_key("new_key1").await.unwrap();
+        let result = kv.get_or_init_key(&new_key1).await.unwrap();
         assert!(matches!(result, IdType::Existing { .. }));
     }
 
@@ -704,36 +691,35 @@ mod tests {
     async fn kv_store_batch_get_or_init_keys_force_test() {
         use super::{IdType, KVStoreExt, KeyRequest};
 
-        let tempdir = TempDir::new().unwrap();
-        let db_path = tempdir.path().join("test.db");
-
-        let config = DatabaseConfig {
-            db_path,
+        let Some(database_url) = test_database_url() else { return; };
+        let db = DBStore::new(DatabaseConfig {
+            database_url,
             ..Default::default()
-        };
-        let db = DBStore::new(config).await.unwrap();
+        })
+        .await
+        .unwrap();
         let kv = db.kv_store();
-
-        // Run migrations
-        sqlx::migrate!("./migrations").run(db.pool()).await.unwrap();
+        let prefix = Uuid::new_v4().to_string();
+        let existing_key = format!("{prefix}:existing_key");
+        let new_key = format!("{prefix}:new_key");
 
         // Pre-set one key
-        kv.set("existing_key", &"existing_id").await.unwrap();
+        kv.set(&existing_key, &"existing_id").await.unwrap();
 
         // Batch get or init keys with force=true for existing key
         let keys = vec![
             KeyRequest::builder()
-                .key("existing_key")
+                .key(&existing_key)
                 .force(true)
                 .build(),
-            KeyRequest::builder().key("new_key").build(),
+            KeyRequest::builder().key(&new_key).build(),
         ];
         let results = kv.batch_get_or_init_keys(keys).await.unwrap();
 
         assert_eq!(results.len(), 2);
 
         // Existing key with force=true should have different previous and new values
-        match results.get("existing_key").unwrap() {
+        match results.get(&existing_key).unwrap() {
             IdType::Existing {
                 previous_value,
                 new_value,
@@ -745,11 +731,11 @@ mod tests {
         }
 
         // New key should be New
-        assert!(matches!(results.get("new_key").unwrap(), IdType::New(_)));
+        assert!(matches!(results.get(&new_key).unwrap(), IdType::New(_)));
 
         // Verify the force-updated key has the new value stored
-        let stored_value = kv.get::<String>("existing_key").await.unwrap().unwrap();
-        match results.get("existing_key").unwrap() {
+        let stored_value = kv.get::<String>(&existing_key).await.unwrap().unwrap();
+        match results.get(&existing_key).unwrap() {
             IdType::Existing { new_value, .. } => assert_eq!(&stored_value, new_value),
             _ => panic!("Expected Existing"),
         }

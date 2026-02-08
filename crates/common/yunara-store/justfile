@@ -1,7 +1,10 @@
 # Yunara Store Migration Tasks
+#
+# This crate uses `sqlx::migrate!` at runtime. These tasks are optional
+# helpers if you have `sqlx-cli` installed.
 
-# Database URL
-DATABASE_URL := env('DATABASE_URL', join(data_local_directory(), "Yunara", "db", "yunara.db"))
+# Database URL (PostgreSQL)
+DATABASE_URL := env('DATABASE_URL', 'postgres://postgres:postgres@localhost:5432/job')
 MIGRATION_DIRECTORY := env('MIGRATION_DIRECTORY', './migrations')
 
 [group("📒 Help")]
@@ -11,14 +14,14 @@ default:
 
 # Create a new migration
 migrate-create name:
-    DATABASE_URL={{DATABASE_URL}} MIGRATION_DIRECTORY={{MIGRATION_DIRECTORY}} diesel migration generate {{name}}
+    DATABASE_URL={{DATABASE_URL}} sqlx migrate add -r --source {{MIGRATION_DIRECTORY}} {{name}}
 
 alias mc := migrate-create
 
 # Run all pending migrations
 migrate:
-    DATABASE_URL={{DATABASE_URL}} diesel migration run
+    DATABASE_URL={{DATABASE_URL}} sqlx migrate run --source {{MIGRATION_DIRECTORY}}
 
 # Revert the most recent migration
 migrate-revert:
-    DATABASE_URL={{DATABASE_URL}} diesel migration revert
+    DATABASE_URL={{DATABASE_URL}} sqlx migrate revert --source {{MIGRATION_DIRECTORY}}

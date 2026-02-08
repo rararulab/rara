@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{path::PathBuf, time::Duration};
+use std::time::Duration;
 
 use smart_default::SmartDefault;
 
@@ -20,10 +20,10 @@ use smart_default::SmartDefault;
 #[derive(Debug, Clone, SmartDefault, bon::Builder)]
 #[builder(on(String, into), on(Duration, into))]
 pub struct DatabaseConfig {
-    /// Path to the SQLite database file
-    #[default(_code = "PathBuf::from(\"yunara.db\")")]
-    #[builder(default = "yunara.db", into, getter)]
-    pub db_path: PathBuf,
+    /// PostgreSQL database URL, e.g. `postgres://user:pass@host:5432/dbname`
+    #[default(_code = "\"postgres://postgres:postgres@localhost:5432/job\".to_string()")]
+    #[builder(default = "postgres://postgres:postgres@localhost:5432/job", getter)]
+    pub database_url: String,
 
     /// Maximum number of connections in the pool
     #[default = 10]
