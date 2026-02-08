@@ -24,7 +24,7 @@ fn main() {
 
     tonic_prost_build::configure()
         .file_descriptor_set_path(out_dir.join("job_grpc_desc.bin"))
-        // .type_attribute("rsketch.v1.hello.Message", EQ_ATTR)
+        // .type_attribute("job.v1.hello.Message", EQ_ATTR)
         .compile_protos(&[
             "proto/hello/v1/hello.proto",
         ], &["proto"])

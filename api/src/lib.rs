@@ -27,7 +27,7 @@ pub mod pb {
 
     pub mod hello {
         pub mod v1 {
-            tonic::include_proto!("rsketch.hello.v1");
+            tonic::include_proto!("job.hello.v1");
         }
     }
 }

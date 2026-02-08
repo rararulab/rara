@@ -1,4 +1,4 @@
-# git-cliff configuration for rsketch
+# git-cliff configuration for job
 # https://git-cliff.org/docs/configuration
 
 [changelog]
@@ -42,7 +42,7 @@ filter_unconventional = true
 split_commits = false
 # regex for preprocessing the commit messages
 commit_preprocessors = [
-    { pattern = '\((\w+\s)?#([0-9]+)\)', replace = "([#${2}](https://github.com/crrow/rsketch/issues/${2}))" },
+    { pattern = '\((\w+\s)?#([0-9]+)\)', replace = "([#${2}](https://github.com/crrow/job/issues/${2}))" },
 ]
 # regex for parsing and grouping commits
 commit_parsers = [
@@ -78,4 +78,4 @@ sort_commits = "oldest"
 
 [remote.github]
 owner = "crrow"
-repo = "rsketch"
+repo = "job"

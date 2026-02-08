@@ -108,18 +108,18 @@ After a release is published, users can install via:
 ### Shell (macOS/Linux)
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/crrow/rsketch/releases/latest/download/rsketch-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/crrow/job/releases/latest/download/job-installer.sh | sh
 ```
 
 ### PowerShell (Windows)
 
 ```powershell
-irm https://github.com/crrow/rsketch/releases/latest/download/rsketch-installer.ps1 | iex
+irm https://github.com/crrow/job/releases/latest/download/job-installer.ps1 | iex
 ```
 
 ### MSI Installer (Windows)
 
-Download the `.msi` file from the [releases page](https://github.com/crrow/rsketch/releases).
+Download the `.msi` file from the [releases page](https://github.com/crrow/job/releases).
 
 ## Testing Release Workflow
 
