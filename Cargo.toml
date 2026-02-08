@@ -3,11 +3,11 @@ version = "0.0.17"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["crrow"]
-repository = "https://github.com/crrow/rsketch"
-homepage = "https://github.com/crrow/rsketch"
+repository = "https://github.com/crrow/job"
+homepage = "https://github.com/crrow/job"
 readme = "README.md"
-keywords = ["rust", "template", "server"]
-categories = ["development-tools"]
+keywords = ["rust", "axum", "backend", "jobs", "automation"]
+categories = ["web-programming"]
 
 [workspace.lints.rust]
 unsafe_code = "deny"
@@ -36,10 +36,10 @@ members = [
     "crates/common/base",
     "crates/common/error",
     "crates/common/runtime",
-    "crates/common/storage/queue",
     "crates/common/telemetry",
     "crates/common/utils/downloader",
     "crates/common/worker",
+    "crates/common/yunara-store",
     "crates/server",
     "crates/paths",
 ]

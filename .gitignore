@@ -52,3 +52,6 @@ tmp-*/
 # Docs build outputs
 docs/book/
 public/
+
+# Local git worktrees (in-repo)
+.worktrees/

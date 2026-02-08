@@ -1,0 +1,24 @@
+# Yunara Store Migration Tasks
+
+# Database URL
+DATABASE_URL := env('DATABASE_URL', join(data_local_directory(), "Yunara", "db", "yunara.db"))
+MIGRATION_DIRECTORY := env('MIGRATION_DIRECTORY', './migrations')
+
+[group("📒 Help")]
+[private]
+default:
+    @just --list
+
+# Create a new migration
+migrate-create name:
+    DATABASE_URL={{DATABASE_URL}} MIGRATION_DIRECTORY={{MIGRATION_DIRECTORY}} diesel migration generate {{name}}
+
+alias mc := migrate-create
+
+# Run all pending migrations
+migrate:
+    DATABASE_URL={{DATABASE_URL}} diesel migration run
+
+# Revert the most recent migration
+migrate-revert:
+    DATABASE_URL={{DATABASE_URL}} diesel migration revert

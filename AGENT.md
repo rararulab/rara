@@ -483,3 +483,33 @@ for item in items {
   * 正确性与鲁棒性；
   * 可维护性与演进策略。
 * 在没有必要澄清的重要信息缺失时，尽量减少无谓往返和问题式对话，直接给出高质量思考后的结论与实现建议。
+
+---
+
+## 10 · 项目基线与协作工作流（强约束）
+
+### 10.1 技术基线（当前项目约定）
+
+* HTTP：使用 `axum`。
+* 数据库：使用 PostgreSQL；数据抽象基于 `crates/common/yunara-store`（后续会从 SQLite 迁移到 PG，见对应 issue）。
+* 后端项目重点：
+  * API 设计与分层要稳定、可演进；
+  * 基础设施（Docker/Compose/Env/Telemetry）要可维护。
+* 模块组织：尽量按业务域拆分为多个 workspace crate，以降低耦合并改善编译体验。
+
+### 10.2 Git 工作流（从初始化之后开始执行）
+
+* 除“仓库刚初始化、尚无协作历史”的特殊阶段外，不允许直接在 `main` 上开发业务改动。
+* 后续所有工作都走 worktree 流程：
+  * 由 subagent 创建 worktree；
+  * 在 worktree 中完成开发与验证；
+  * 提交 commit；
+  * 合并回 `main`；
+  * push 到 remote 的 `main`。
+
+建议命令（示例，按需调整 branch 名称）：
+
+```sh
+git worktree add ../job-wt-<topic> -b codex/<topic>
+cd ../job-wt-<topic>
+```
