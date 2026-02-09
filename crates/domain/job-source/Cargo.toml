@@ -16,6 +16,7 @@ async-trait.workspace = true
 chrono.workspace = true
 jiff.workspace = true
 job-domain-shared = { workspace = true }
+jobspy-sys = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true
@@ -24,6 +25,9 @@ uuid.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
+
+[features]
+jobspy = ["dep:jobspy-sys"]
 
 [lints]
 workspace = true

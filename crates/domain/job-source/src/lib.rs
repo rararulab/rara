@@ -18,6 +18,8 @@
 
 pub mod dedup;
 pub mod driver;
+#[cfg(feature = "jobspy")]
+pub mod jobspy;
 pub mod linkedin;
 pub mod manual;
 pub mod service;
