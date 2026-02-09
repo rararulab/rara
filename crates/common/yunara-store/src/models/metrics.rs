@@ -45,18 +45,18 @@ impl std::fmt::Display for MetricsPeriod {
 /// exactly one snapshot per period per date.
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct MetricsSnapshot {
-    pub id: Uuid,
-    pub period: MetricsPeriod,
-    pub snapshot_date: NaiveDate,
-    pub jobs_discovered: i32,
-    pub applications_sent: i32,
+    pub id:                   Uuid,
+    pub period:               MetricsPeriod,
+    pub snapshot_date:        NaiveDate,
+    pub jobs_discovered:      i32,
+    pub applications_sent:    i32,
     pub interviews_scheduled: i32,
-    pub offers_received: i32,
-    pub rejections: i32,
-    pub ai_runs_count: i32,
-    pub ai_total_cost_cents: i32,
+    pub offers_received:      i32,
+    pub rejections:           i32,
+    pub ai_runs_count:        i32,
+    pub ai_total_cost_cents:  i32,
     /// Additional metrics as flexible JSON.
-    pub extra: Option<serde_json::Value>,
-    pub trace_id: Option<String>,
-    pub created_at: DateTime<Utc>,
+    pub extra:                Option<serde_json::Value>,
+    pub trace_id:             Option<String>,
+    pub created_at:           DateTime<Utc>,
 }

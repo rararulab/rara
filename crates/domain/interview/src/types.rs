@@ -15,7 +15,7 @@
 //! Domain types for interview plan management.
 
 use chrono::{DateTime, Utc};
-use job_domain_core::{ApplicationId, InterviewId};
+use job_domain_core::id::{ApplicationId, InterviewId};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------

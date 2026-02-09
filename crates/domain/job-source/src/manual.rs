@@ -21,9 +21,9 @@
 
 use uuid::Uuid;
 
-use crate::driver::JobSourceDriver;
-use crate::types::{
-    DiscoveryCriteria, NormalizedJob, RawJob, SourceError,
+use crate::{
+    driver::JobSourceDriver,
+    types::{DiscoveryCriteria, NormalizedJob, RawJob, SourceError},
 };
 
 /// Source name constant for the manual driver.
@@ -54,10 +54,7 @@ impl JobSourceDriver for ManualSource {
     /// This method always returns an empty list. A future
     /// implementation may query the database for recently-added
     /// manual entries that have not yet been normalized.
-    async fn fetch_jobs(
-        &self,
-        _query: &DiscoveryCriteria,
-    ) -> Result<Vec<RawJob>, SourceError> {
+    async fn fetch_jobs(&self, _query: &DiscoveryCriteria) -> Result<Vec<RawJob>, SourceError> {
         tracing::debug!("ManualSource: fetch_jobs is a no-op; manual jobs are pushed via API");
         Ok(Vec::new())
     }

@@ -14,23 +14,7 @@
 
 //! # job-domain-job-source
 //!
-//! Job source driver abstraction layer for the Job Automation
-//! platform.
-//!
-//! This crate owns the concept of a *job source* -- an external
-//! platform (LinkedIn, Indeed, Glassdoor, ...) or a manual entry
-//! point that provides job listings.  It defines:
-//!
-//! - The [`JobSourceDriver`] trait that every concrete driver must
-//!   implement.
-//! - Data types for discovery criteria, raw and normalized jobs, and
-//!   source errors.
-//! - Deduplication logic (exact and fuzzy).
-//! - A [`JobSourceService`] that orchestrates multiple drivers.
-//!
-//! Concrete driver implementations live in sub-modules:
-//! - [`manual`] -- jobs entered via the API.
-//! - [`linkedin`] -- stub for LinkedIn scraping (WIP).
+//! Job source driver abstraction and discovery service.
 
 pub mod dedup;
 pub mod driver;
@@ -38,11 +22,3 @@ pub mod linkedin;
 pub mod manual;
 pub mod service;
 pub mod types;
-
-// Re-export key types for ergonomic imports.
-pub use dedup::{FuzzyKey, SourceKey};
-pub use driver::JobSourceDriver;
-pub use linkedin::LinkedInSource;
-pub use manual::ManualSource;
-pub use service::{DiscoveryResult, JobSourceService};
-pub use types::{DiscoveryCriteria, NormalizedJob, RawJob, SourceError};

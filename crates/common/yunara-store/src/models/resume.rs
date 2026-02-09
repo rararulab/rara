@@ -46,28 +46,28 @@ impl std::fmt::Display for ResumeSource {
 /// tailored optimization.
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Resume {
-    pub id: Uuid,
+    pub id:                  Uuid,
     /// Human-readable title (e.g. "Backend Engineer v3").
-    pub title: String,
+    pub title:               String,
     /// Human-readable version tag (e.g. "v1.0", "swe-2026-02").
-    pub version_tag: String,
+    pub version_tag:         String,
     /// SHA-256 hash of the resume content for deduplication.
-    pub content_hash: String,
-    pub source: ResumeSource,
+    pub content_hash:        String,
+    pub source:              ResumeSource,
     /// Full resume content (plain text or markdown).
-    pub content: Option<String>,
+    pub content:             Option<String>,
     /// Parent resume this version was derived from.
-    pub parent_resume_id: Option<Uuid>,
+    pub parent_resume_id:    Option<Uuid>,
     /// If this resume was tailored for a specific job.
-    pub target_job_id: Option<Uuid>,
+    pub target_job_id:       Option<Uuid>,
     /// Free-form notes describing how this version was customized.
     pub customization_notes: Option<String>,
     /// Searchable tags for organization.
-    pub tags: Vec<String>,
-    pub metadata: Option<serde_json::Value>,
-    pub trace_id: Option<String>,
-    pub is_deleted: bool,
-    pub deleted_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub tags:                Vec<String>,
+    pub metadata:            Option<serde_json::Value>,
+    pub trace_id:            Option<String>,
+    pub is_deleted:          bool,
+    pub deleted_at:          Option<DateTime<Utc>>,
+    pub created_at:          DateTime<Utc>,
+    pub updated_at:          DateTime<Utc>,
 }

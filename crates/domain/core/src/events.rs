@@ -22,18 +22,20 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::id::{ApplicationId, InterviewId, JobSourceId, ResumeId};
-use crate::status::{ApplicationStatus, InterviewStatus};
+use crate::{
+    id::{ApplicationId, InterviewId, JobSourceId, ResumeId},
+    status::{ApplicationStatus, InterviewStatus},
+};
 
 /// Envelope that wraps every domain event with common metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DomainEvent<T> {
     /// Unique event id (UUID v4).
-    pub event_id: uuid::Uuid,
+    pub event_id:  uuid::Uuid,
     /// Timestamp when the event was produced.
     pub timestamp: DateTime<Utc>,
     /// The actual event payload.
-    pub payload: T,
+    pub payload:   T,
 }
 
 impl<T> DomainEvent<T> {
@@ -56,8 +58,8 @@ impl<T> DomainEvent<T> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobDiscovered {
     pub source_id: JobSourceId,
-    pub title: String,
-    pub url: String,
+    pub title:     String,
+    pub url:       String,
 }
 
 // ---------------------------------------------------------------------------
@@ -68,8 +70,8 @@ pub struct JobDiscovered {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplicationStatusChanged {
     pub application_id: ApplicationId,
-    pub old_status: ApplicationStatus,
-    pub new_status: ApplicationStatus,
+    pub old_status:     ApplicationStatus,
+    pub new_status:     ApplicationStatus,
 }
 
 // ---------------------------------------------------------------------------
@@ -80,7 +82,7 @@ pub struct ApplicationStatusChanged {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResumeVersionCreated {
     pub resume_id: ResumeId,
-    pub version: u32,
+    pub version:   u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -91,6 +93,6 @@ pub struct ResumeVersionCreated {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterviewStatusChanged {
     pub interview_id: InterviewId,
-    pub old_status: InterviewStatus,
-    pub new_status: InterviewStatus,
+    pub old_status:   InterviewStatus,
+    pub new_status:   InterviewStatus,
 }

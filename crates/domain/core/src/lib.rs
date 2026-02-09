@@ -14,25 +14,9 @@
 
 //! # job-domain-core
 //!
-//! Shared domain interface crate for the Job Automation platform.
-//!
-//! This crate defines the canonical domain types, repository traits, and event
-//! types that form the contract between domain crates. It contains **no**
-//! implementation logic and has **no** dependencies on infrastructure crates.
-//!
-//! ## Design Rules
-//! - No concrete implementations -- only traits and types.
-//! - Domain crates depend on this crate, never the reverse.
-//! - Infrastructure crates (store, runtime, etc.) must not appear in the
-//!   dependency list.
+//! Shared domain types and traits.
 
 pub mod events;
 pub mod id;
 pub mod repository;
 pub mod status;
-
-// Re-exports for convenience.
-pub use id::{
-    ApplicationId, InterviewId, JobSourceId, NotificationId, ResumeId, SchedulerTaskId,
-};
-pub use status::{ApplicationStatus, InterviewStatus, JobSourceStatus};

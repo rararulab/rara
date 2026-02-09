@@ -37,12 +37,7 @@ pub fn content_hash(content: &str) -> String {
 }
 
 /// Normalize resume content for consistent hashing.
-fn normalize(content: &str) -> String {
-    content
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-}
+fn normalize(content: &str) -> String { content.split_whitespace().collect::<Vec<_>>().join(" ") }
 
 #[cfg(test)]
 mod tests {

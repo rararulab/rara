@@ -30,13 +30,13 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DiscoveryCriteria {
     /// Keyword terms to search for (e.g. "rust engineer").
-    pub keywords: Vec<String>,
+    pub keywords:     Vec<String>,
     /// Preferred location or "remote".
-    pub location: Option<String>,
+    pub location:     Option<String>,
     /// Job type filter (e.g. "full-time", "contract").
-    pub job_type: Option<String>,
+    pub job_type:     Option<String>,
     /// Maximum number of results to return per source.
-    pub max_results: Option<u32>,
+    pub max_results:  Option<u32>,
     /// Only return jobs posted after this timestamp.
     pub posted_after: Option<DateTime<Utc>>,
 }
@@ -53,31 +53,31 @@ pub struct DiscoveryCriteria {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RawJob {
     /// Opaque identifier assigned by the source platform.
-    pub source_job_id: String,
+    pub source_job_id:   String,
     /// Name of the source that produced this record (e.g. "linkedin").
-    pub source_name: String,
+    pub source_name:     String,
     /// Raw title string.
-    pub title: Option<String>,
+    pub title:           Option<String>,
     /// Raw company name.
-    pub company: Option<String>,
+    pub company:         Option<String>,
     /// Raw location string.
-    pub location: Option<String>,
+    pub location:        Option<String>,
     /// Raw description / body text.
-    pub description: Option<String>,
+    pub description:     Option<String>,
     /// URL to the original listing.
-    pub url: Option<String>,
+    pub url:             Option<String>,
     /// Minimum salary (if provided).
-    pub salary_min: Option<i32>,
+    pub salary_min:      Option<i32>,
     /// Maximum salary (if provided).
-    pub salary_max: Option<i32>,
+    pub salary_max:      Option<i32>,
     /// Salary currency code (e.g. "USD").
     pub salary_currency: Option<String>,
     /// Free-form tags / labels.
-    pub tags: Vec<String>,
+    pub tags:            Vec<String>,
     /// The full raw payload for archival purposes.
-    pub raw_data: Option<serde_json::Value>,
+    pub raw_data:        Option<serde_json::Value>,
     /// When the listing was originally posted.
-    pub posted_at: Option<DateTime<Utc>>,
+    pub posted_at:       Option<DateTime<Utc>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -139,20 +139,16 @@ pub enum SourceError {
     },
 
     /// A permanent failure that should not be retried.
-    #[snafu(display(
-        "Non-retryable error from source '{source_name}': {message}"
-    ))]
+    #[snafu(display("Non-retryable error from source '{source_name}': {message}"))]
     NonRetryable {
         source_name: String,
         message:     String,
     },
 
     /// The source has rate-limited us.
-    #[snafu(display(
-        "Rate limited by source '{source_name}', retry after {retry_after_secs}s"
-    ))]
+    #[snafu(display("Rate limited by source '{source_name}', retry after {retry_after_secs}s"))]
     RateLimited {
-        source_name:     String,
+        source_name:      String,
         retry_after_secs: u64,
     },
 

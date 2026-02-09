@@ -69,20 +69,20 @@ impl std::fmt::Display for NotificationStatus {
 /// notification sent through any channel.
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct NotificationLog {
-    pub id: Uuid,
-    pub channel: NotificationChannel,
-    pub recipient: String,
-    pub subject: Option<String>,
-    pub body: String,
-    pub status: NotificationStatus,
-    pub retry_count: i32,
-    pub error_message: Option<String>,
+    pub id:             Uuid,
+    pub channel:        NotificationChannel,
+    pub recipient:      String,
+    pub subject:        Option<String>,
+    pub body:           String,
+    pub status:         NotificationStatus,
+    pub retry_count:    i32,
+    pub error_message:  Option<String>,
     /// Polymorphic reference type (e.g. "application", "job").
     pub reference_type: Option<String>,
     /// ID of the referenced entity.
-    pub reference_id: Option<Uuid>,
-    pub metadata: Option<serde_json::Value>,
-    pub trace_id: Option<String>,
-    pub sent_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
+    pub reference_id:   Option<Uuid>,
+    pub metadata:       Option<serde_json::Value>,
+    pub trace_id:       Option<String>,
+    pub sent_at:        Option<DateTime<Utc>>,
+    pub created_at:     DateTime<Utc>,
 }

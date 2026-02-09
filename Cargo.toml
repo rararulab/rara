@@ -106,15 +106,15 @@ job-error = { version = "=0.0.17", path = "crates/common/error" }
 job-server = { version = "=0.0.17", path = "crates/server" }
 
 # Domain crates
-job-domain-core = { version = "=0.0.17", path = "crates/domain/core" }
-job-domain-job-source = { version = "=0.0.17", path = "crates/domain/job-source" }
 job-domain-ai = { version = "=0.0.17", path = "crates/domain/ai" }
-job-domain-resume = { version = "=0.0.17", path = "crates/domain/resume" }
-job-domain-application = { version = "=0.0.17", path = "crates/domain/application" }
-job-domain-interview = { version = "=0.0.17", path = "crates/domain/interview" }
-job-domain-scheduler = { version = "=0.0.17", path = "crates/domain/scheduler" }
-job-domain-notify = { version = "=0.0.17", path = "crates/domain/notify" }
 job-domain-analytics = { version = "=0.0.17", path = "crates/domain/analytics" }
+job-domain-application = { version = "=0.0.17", path = "crates/domain/application" }
+job-domain-core = { version = "=0.0.17", path = "crates/domain/core" }
+job-domain-interview = { version = "=0.0.17", path = "crates/domain/interview" }
+job-domain-job-source = { version = "=0.0.17", path = "crates/domain/job-source" }
+job-domain-notify = { version = "=0.0.17", path = "crates/domain/notify" }
+job-domain-resume = { version = "=0.0.17", path = "crates/domain/resume" }
+job-domain-scheduler = { version = "=0.0.17", path = "crates/domain/scheduler" }
 
 # Config for 'cargo dist'
 [workspace.metadata.dist]

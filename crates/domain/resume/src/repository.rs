@@ -59,8 +59,6 @@ pub trait ResumeRepository: Send + Sync {
     async fn get_version_history(&self, resume_id: Uuid) -> Result<Vec<Resume>, ResumeError>;
 
     /// Check whether a resume with the given content hash already exists.
-    async fn find_by_content_hash(
-        &self,
-        content_hash: &str,
-    ) -> Result<Option<Resume>, ResumeError>;
+    async fn find_by_content_hash(&self, content_hash: &str)
+    -> Result<Option<Resume>, ResumeError>;
 }

@@ -28,7 +28,7 @@ use uuid::Uuid;
 /// This is a domain-local alias that wraps [`job_domain_core::ResumeId`] so
 /// that callers of this crate do not need to depend on `job-domain-core`
 /// directly.
-pub type ResumeId = job_domain_core::ResumeId;
+pub type ResumeId = job_domain_core::id::ResumeId;
 
 // ---------------------------------------------------------------------------
 // Resume source
@@ -122,16 +122,16 @@ pub struct UpdateResumeRequest {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ResumeFilter {
     /// Only return resumes produced by this source.
-    pub source:        Option<ResumeSource>,
+    pub source:         Option<ResumeSource>,
     /// If `Some(true)`, return only derived resumes; if `Some(false)`, only
     /// root (baseline) resumes.
-    pub has_parent:    Option<bool>,
+    pub has_parent:     Option<bool>,
     /// Filter to resumes targeting a specific job.
-    pub target_job_id: Option<Uuid>,
+    pub target_job_id:  Option<Uuid>,
     /// Resumes must contain *all* of these tags.
-    pub tags:          Option<Vec<String>>,
+    pub tags:           Option<Vec<String>>,
     /// Created at or after this timestamp.
-    pub created_after: Option<DateTime<Utc>>,
+    pub created_after:  Option<DateTime<Utc>>,
     /// Created at or before this timestamp.
     pub created_before: Option<DateTime<Utc>>,
 }
@@ -148,7 +148,7 @@ pub struct ResumeDiff {
     /// ID of the second resume (the "after" side).
     pub resume_b_id: Uuid,
     /// Individual hunks describing the changes.
-    pub hunks: Vec<DiffHunk>,
+    pub hunks:       Vec<DiffHunk>,
 }
 
 /// A single contiguous range of changed lines.
@@ -163,7 +163,7 @@ pub struct DiffHunk {
     /// Number of lines added in the new text.
     pub new_count: usize,
     /// The actual diff lines (prefixed with ' ', '+', or '-').
-    pub lines: Vec<DiffLine>,
+    pub lines:     Vec<DiffLine>,
 }
 
 /// A single line within a [`DiffHunk`].

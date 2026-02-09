@@ -14,31 +14,10 @@
 
 //! # job-domain-resume
 //!
-//! Resume version management for the Job Automation platform.
-//!
-//! This crate is responsible for:
-//!
-//! - Storing and retrieving resume versions.
-//! - Tailoring a base resume to a specific job listing (with AI
-//!   assistance).
-//! - Tracking which resume version was used for each application.
-//! - Content hashing for deduplication.
-//! - Version tree traversal and text diffing.
-//!
-//! The crate depends on [`job_domain_core`] for shared types and traits.
+//! Resume version management and content diffing.
 
 pub mod hash;
 pub mod repository;
 pub mod service;
 pub mod types;
 pub mod version;
-
-// Re-exports for convenience.
-pub use hash::content_hash;
-pub use repository::ResumeRepository;
-pub use service::ResumeService;
-pub use types::{
-    CreateResumeRequest, Resume, ResumeDiff, ResumeError, ResumeFilter, ResumeId, ResumeSource,
-    UpdateResumeRequest,
-};
-pub use version::{ResumeVersion, ResumeVersionTree};

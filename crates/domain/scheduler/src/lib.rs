@@ -26,20 +26,20 @@
 //! The existing `job-common-worker` crate provides low-level worker
 //! primitives; this crate adds the domain-aware orchestration layer on top.
 
-use job_domain_core::SchedulerTaskId;
+use job_domain_core::id::SchedulerTaskId;
 use serde::{Deserialize, Serialize};
 
 /// Metadata for a scheduled task.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduledTask {
     /// Unique identifier.
-    pub id: SchedulerTaskId,
+    pub id:        SchedulerTaskId,
     /// Human-readable name.
-    pub name: String,
+    pub name:      String,
     /// Cron expression (e.g. "0 */5 * * * *").
     pub cron_expr: String,
     /// Whether the task is currently enabled.
-    pub enabled: bool,
+    pub enabled:   bool,
 }
 
 /// Trait for tasks that can be executed by the scheduler.

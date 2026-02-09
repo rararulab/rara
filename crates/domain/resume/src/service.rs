@@ -23,13 +23,15 @@ use std::sync::Arc;
 use tracing::instrument;
 use uuid::Uuid;
 
-use crate::hash::content_hash;
-use crate::repository::ResumeRepository;
-use crate::types::{
-    CreateResumeRequest, InvalidContentSnafu, NotFoundSnafu, Resume, ResumeDiff, ResumeError,
-    ResumeFilter, ResumeSource, UpdateResumeRequest,
+use crate::{
+    hash::content_hash,
+    repository::ResumeRepository,
+    types::{
+        CreateResumeRequest, InvalidContentSnafu, NotFoundSnafu, Resume, ResumeDiff, ResumeError,
+        ResumeFilter, ResumeSource, UpdateResumeRequest,
+    },
+    version::{ResumeVersionTree, compute_diff},
 };
-use crate::version::{ResumeVersionTree, compute_diff};
 
 // ---------------------------------------------------------------------------
 // Service
@@ -131,11 +133,7 @@ impl<R: ResumeRepository> ResumeService<R> {
 
     /// Update a resume.
     #[instrument(skip(self, req))]
-    pub async fn update(
-        &self,
-        id: Uuid,
-        req: UpdateResumeRequest,
-    ) -> Result<Resume, ResumeError> {
+    pub async fn update(&self, id: Uuid, req: UpdateResumeRequest) -> Result<Resume, ResumeError> {
         if let Some(ref content) = req.content {
             Self::validate_content(content)?;
             self.check_duplicate(content).await?;
@@ -223,10 +221,7 @@ impl<R: ResumeRepository> ResumeService<R> {
     async fn check_duplicate(&self, content: &str) -> Result<(), ResumeError> {
         let hash = content_hash(content);
         if self.repo.find_by_content_hash(&hash).await?.is_some() {
-            return Err(crate::types::DuplicateContentSnafu {
-                content_hash: hash,
-            }
-            .build());
+            return Err(crate::types::DuplicateContentSnafu { content_hash: hash }.build());
         }
         Ok(())
     }

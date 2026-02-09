@@ -15,12 +15,16 @@
 //! [`JobSourceService`] orchestrates multiple [`JobSourceDriver`]s
 //! and applies deduplication.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
-use crate::dedup::{self, FuzzyKey, SourceKey};
-use crate::driver::JobSourceDriver;
-use crate::types::{DiscoveryCriteria, NormalizedJob, SourceError};
+use crate::{
+    dedup::{self, FuzzyKey, SourceKey},
+    driver::JobSourceDriver,
+    types::{DiscoveryCriteria, NormalizedJob, SourceError},
+};
 
 /// Orchestrator that manages a registry of [`JobSourceDriver`]s and
 /// provides high-level discovery operations.
@@ -68,10 +72,7 @@ impl JobSourceService {
         let mut errors: Vec<DiscoveryResult> = Vec::new();
 
         for (name, driver) in &self.drivers {
-            match self
-                .run_driver(driver.as_ref(), criteria)
-                .await
-            {
+            match self.run_driver(driver.as_ref(), criteria).await {
                 Ok(jobs) => {
                     tracing::info!(
                         source_name = %name,
@@ -95,15 +96,10 @@ impl JobSourceService {
             }
         }
 
-        let deduped = dedup::deduplicate(
-            all_normalized,
-            existing_source_keys,
-            existing_fuzzy_keys,
-        );
+        let deduped = dedup::deduplicate(all_normalized, existing_source_keys, existing_fuzzy_keys);
 
         // Group the deduplicated jobs back by source name.
-        let mut by_source: HashMap<String, Vec<NormalizedJob>> =
-            HashMap::new();
+        let mut by_source: HashMap<String, Vec<NormalizedJob>> = HashMap::new();
         for job in deduped {
             by_source
                 .entry(job.source_name.clone())
@@ -136,16 +132,9 @@ impl JobSourceService {
     ) -> Option<DiscoveryResult> {
         let driver = self.drivers.get(source_name)?;
 
-        let result = match self
-            .run_driver(driver.as_ref(), criteria)
-            .await
-        {
+        let result = match self.run_driver(driver.as_ref(), criteria).await {
             Ok(jobs) => {
-                let deduped = dedup::deduplicate(
-                    jobs,
-                    existing_source_keys,
-                    existing_fuzzy_keys,
-                );
+                let deduped = dedup::deduplicate(jobs, existing_source_keys, existing_fuzzy_keys);
                 DiscoveryResult {
                     source_name: source_name.to_owned(),
                     jobs:        deduped,
@@ -200,10 +189,7 @@ impl Default for JobSourceService {
 impl std::fmt::Debug for JobSourceService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("JobSourceService")
-            .field(
-                "drivers",
-                &self.drivers.keys().collect::<Vec<_>>(),
-            )
+            .field("drivers", &self.drivers.keys().collect::<Vec<_>>())
             .finish()
     }
 }
@@ -218,20 +204,18 @@ pub struct DiscoveryResult {
     /// Which source produced (or failed to produce) these results.
     pub source_name: String,
     /// Successfully normalized and deduplicated jobs.
-    pub jobs: Vec<NormalizedJob>,
+    pub jobs:        Vec<NormalizedJob>,
     /// If the driver encountered an unrecoverable error, it is
     /// captured here.
-    pub error: Option<SourceError>,
+    pub error:       Option<SourceError>,
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-    use std::sync::Arc;
+    use std::{collections::HashSet, sync::Arc};
 
     use super::*;
-    use crate::linkedin::LinkedInSource;
-    use crate::manual::ManualSource;
+    use crate::{linkedin::LinkedInSource, manual::ManualSource};
 
     #[tokio::test]
     async fn service_registers_and_lists_sources() {
@@ -252,11 +236,7 @@ mod tests {
 
         let criteria = DiscoveryCriteria::default();
         let results = svc
-            .discover_all(
-                &criteria,
-                &HashSet::new(),
-                &HashSet::new(),
-            )
+            .discover_all(&criteria, &HashSet::new(), &HashSet::new())
             .await;
 
         // Both drivers return empty lists, so we expect no errors
@@ -272,12 +252,7 @@ mod tests {
         let svc = JobSourceService::new();
         let criteria = DiscoveryCriteria::default();
         let result = svc
-            .discover_from(
-                "nonexistent",
-                &criteria,
-                &HashSet::new(),
-                &HashSet::new(),
-            )
+            .discover_from("nonexistent", &criteria, &HashSet::new(), &HashSet::new())
             .await;
         assert!(result.is_none());
     }

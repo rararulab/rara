@@ -73,19 +73,19 @@ impl std::fmt::Display for AiModelProvider {
 /// evolution can be tracked alongside AI run results.
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct PromptTemplate {
-    pub id: Uuid,
-    pub name: String,
-    pub kind: PromptKind,
-    pub version: i32,
-    pub content: String,
+    pub id:          Uuid,
+    pub name:        String,
+    pub kind:        PromptKind,
+    pub version:     i32,
+    pub content:     String,
     pub description: Option<String>,
-    pub is_active: bool,
-    pub metadata: Option<serde_json::Value>,
-    pub trace_id: Option<String>,
-    pub is_deleted: bool,
-    pub deleted_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub is_active:   bool,
+    pub metadata:    Option<serde_json::Value>,
+    pub trace_id:    Option<String>,
+    pub is_deleted:  bool,
+    pub deleted_at:  Option<DateTime<Utc>>,
+    pub created_at:  DateTime<Utc>,
+    pub updated_at:  DateTime<Utc>,
 }
 
 /// A record of a single AI model invocation.
@@ -94,22 +94,22 @@ pub struct PromptTemplate {
 /// for observability and cost tracking.
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct AiRun {
-    pub id: Uuid,
-    pub template_id: Option<Uuid>,
-    pub model_name: String,
-    pub provider: AiModelProvider,
-    pub input_summary: Option<String>,
+    pub id:             Uuid,
+    pub template_id:    Option<Uuid>,
+    pub model_name:     String,
+    pub provider:       AiModelProvider,
+    pub input_summary:  Option<String>,
     pub output_summary: Option<String>,
-    pub input_tokens: i32,
-    pub output_tokens: i32,
-    pub total_tokens: i32,
+    pub input_tokens:   i32,
+    pub output_tokens:  i32,
+    pub total_tokens:   i32,
     /// Cost in cents (integer to avoid floating-point issues).
-    pub cost_cents: i32,
+    pub cost_cents:     i32,
     /// Wall-clock duration of the model call in milliseconds.
-    pub duration_ms: i32,
-    pub is_success: bool,
-    pub error_message: Option<String>,
-    pub metadata: Option<serde_json::Value>,
-    pub trace_id: Option<String>,
-    pub created_at: DateTime<Utc>,
+    pub duration_ms:    i32,
+    pub is_success:     bool,
+    pub error_message:  Option<String>,
+    pub metadata:       Option<serde_json::Value>,
+    pub trace_id:       Option<String>,
+    pub created_at:     DateTime<Utc>,
 }

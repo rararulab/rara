@@ -43,7 +43,10 @@ impl DBStore {
         }
         let pool = pool_options.connect(&config.database_url).await?;
 
-        tracing::info!("Initialized DBStore with database_url: {}", config.database_url);
+        tracing::info!(
+            "Initialized DBStore with database_url: {}",
+            config.database_url
+        );
 
         sqlx::migrate!("./migrations").run(&pool).await?;
 

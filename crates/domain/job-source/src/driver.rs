@@ -17,8 +17,7 @@
 //!
 //! A driver is responsible for:
 //! 1. Fetching raw job listings from an external platform.
-//! 2. Normalizing the raw data into a canonical [`NormalizedJob`]
-//!    record.
+//! 2. Normalizing the raw data into a canonical [`NormalizedJob`] record.
 
 use crate::types::{DiscoveryCriteria, NormalizedJob, RawJob, SourceError};
 
@@ -36,10 +35,7 @@ pub trait JobSourceDriver: Send + Sync {
     /// Implementations should translate the high-level
     /// [`DiscoveryCriteria`] into whatever query the backing
     /// platform supports and return the results as [`RawJob`]s.
-    async fn fetch_jobs(
-        &self,
-        query: &DiscoveryCriteria,
-    ) -> Result<Vec<RawJob>, SourceError>;
+    async fn fetch_jobs(&self, query: &DiscoveryCriteria) -> Result<Vec<RawJob>, SourceError>;
 
     /// Normalize a single [`RawJob`] into a [`NormalizedJob`].
     ///

@@ -20,9 +20,9 @@
 
 use uuid::Uuid;
 
-use crate::driver::JobSourceDriver;
-use crate::types::{
-    DiscoveryCriteria, NormalizedJob, RawJob, SourceError,
+use crate::{
+    driver::JobSourceDriver,
+    types::{DiscoveryCriteria, NormalizedJob, RawJob, SourceError},
 };
 
 /// Source name constant for the LinkedIn driver.
@@ -46,10 +46,7 @@ impl JobSourceDriver for LinkedInSource {
     fn source_name(&self) -> &str { LINKEDIN_SOURCE_NAME }
 
     /// Stub implementation -- returns an empty list.
-    async fn fetch_jobs(
-        &self,
-        _query: &DiscoveryCriteria,
-    ) -> Result<Vec<RawJob>, SourceError> {
+    async fn fetch_jobs(&self, _query: &DiscoveryCriteria) -> Result<Vec<RawJob>, SourceError> {
         tracing::warn!(
             "LinkedInSource: fetch_jobs is not yet implemented; returning empty results"
         );

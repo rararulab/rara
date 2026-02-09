@@ -23,8 +23,10 @@ use axum::{
     routing::head,
 };
 use axum_test::TestServer;
-use job_downloader::{ChunkingConfig, DownloadError, DownloadRequest, Downloader, DownloaderConfig};
 use job_base::readable_size::ReadableSize;
+use job_downloader::{
+    ChunkingConfig, DownloadError, DownloadRequest, Downloader, DownloaderConfig,
+};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tokio::sync::{Mutex, Notify, oneshot};

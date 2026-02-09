@@ -16,14 +16,12 @@
 //!
 //! Two levels of dedup are provided:
 //!
-//! 1. **Exact dedup** -- based on the idempotent key
-//!    `(source_job_id, source_name)`.
-//! 2. **Fuzzy cross-source dedup** -- based on a normalized
-//!    `(title, company)` pair to detect the same position posted
-//!    on multiple platforms.
+//! 1. **Exact dedup** -- based on the idempotent key `(source_job_id,
+//!    source_name)`.
+//! 2. **Fuzzy cross-source dedup** -- based on a normalized `(title, company)`
+//!    pair to detect the same position posted on multiple platforms.
 
-use std::collections::HashSet;
-use std::hash::BuildHasher;
+use std::{collections::HashSet, hash::BuildHasher};
 
 use crate::types::NormalizedJob;
 
@@ -96,10 +94,10 @@ pub fn is_fuzzy_duplicate<S: BuildHasher>(
 /// Remove duplicates from a list of normalized jobs.
 ///
 /// Jobs are deduplicated in two passes:
-/// 1. **Exact**: only the first occurrence per
-///    `(source_job_id, source_name)` is kept.
-/// 2. **Fuzzy**: only the first occurrence per
-///    `(lowered_title, lowered_company)` is kept.
+/// 1. **Exact**: only the first occurrence per `(source_job_id, source_name)`
+///    is kept.
+/// 2. **Fuzzy**: only the first occurrence per `(lowered_title,
+///    lowered_company)` is kept.
 ///
 /// The `existing_source_keys` and `existing_fuzzy_keys` sets
 /// represent jobs that are already known (e.g. persisted in the
@@ -115,14 +113,8 @@ where
     S1: BuildHasher,
     S2: BuildHasher,
 {
-    let mut seen_source: HashSet<SourceKey> = existing_source_keys
-        .iter()
-        .cloned()
-        .collect();
-    let mut seen_fuzzy: HashSet<FuzzyKey> = existing_fuzzy_keys
-        .iter()
-        .cloned()
-        .collect();
+    let mut seen_source: HashSet<SourceKey> = existing_source_keys.iter().cloned().collect();
+    let mut seen_fuzzy: HashSet<FuzzyKey> = existing_fuzzy_keys.iter().cloned().collect();
     let mut result = Vec::with_capacity(jobs.len());
 
     for job in jobs {
@@ -196,8 +188,7 @@ mod tests {
             make_job("2", "linkedin", "Go Dev", "Acme"),
         ];
 
-        let result =
-            deduplicate(jobs, &HashSet::new(), &HashSet::new());
+        let result = deduplicate(jobs, &HashSet::new(), &HashSet::new());
         assert_eq!(result.len(), 2);
     }
 
@@ -208,8 +199,7 @@ mod tests {
             make_job("42", "indeed", "rust dev", "acme corp"), // fuzzy dup
         ];
 
-        let result =
-            deduplicate(jobs, &HashSet::new(), &HashSet::new());
+        let result = deduplicate(jobs, &HashSet::new(), &HashSet::new());
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].source_name, "linkedin");
     }
@@ -230,8 +220,7 @@ mod tests {
             make_job("2", "linkedin", "Go Dev", "Beta Inc"),
         ];
 
-        let result =
-            deduplicate(jobs, &existing, &HashSet::new());
+        let result = deduplicate(jobs, &existing, &HashSet::new());
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].source_job_id, "2");
     }

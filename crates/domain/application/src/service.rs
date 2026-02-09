@@ -21,7 +21,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use job_domain_core::{ApplicationId, ApplicationStatus};
+use job_domain_core::{id::ApplicationId, status::ApplicationStatus};
 use tracing::instrument;
 use uuid::Uuid;
 
@@ -291,7 +291,10 @@ impl std::fmt::Debug for ApplicationService {
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use job_domain_core::{ApplicationId, ApplicationStatus, JobSourceId, ResumeId};
+    use job_domain_core::{
+        id::{ApplicationId, JobSourceId, ResumeId},
+        status::ApplicationStatus,
+    };
 
     use super::*;
     use crate::{

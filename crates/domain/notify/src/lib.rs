@@ -46,12 +46,15 @@ pub struct Notification {
     /// Subject / title.
     pub subject: String,
     /// Body text (Markdown-safe).
-    pub body: String,
+    pub body:    String,
 }
 
 /// Trait for notification backends.
 #[async_trait::async_trait]
 pub trait NotificationSender: Send + Sync {
     /// Send a notification through this backend.
-    async fn send(&self, notification: &Notification) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+    async fn send(
+        &self,
+        notification: &Notification,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
 }

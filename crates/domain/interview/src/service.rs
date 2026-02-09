@@ -21,7 +21,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use job_domain_core::{ApplicationId, InterviewId};
+use job_domain_core::id::{ApplicationId, InterviewId};
 use tracing::instrument;
 
 use crate::{

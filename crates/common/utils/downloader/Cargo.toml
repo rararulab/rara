@@ -19,8 +19,8 @@ dirs = { workspace = true }
 fd-lock = "4.0"
 futures = { workspace = true }
 jiff = { workspace = true }
-reqwest = { version = "0.12", features = ["json", "stream"] }
 job-base = { workspace = true }
+reqwest = { version = "0.12", features = ["json", "stream"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.10"

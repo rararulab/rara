@@ -15,7 +15,10 @@
 //! Domain types for application lifecycle management.
 
 use chrono::{DateTime, Utc};
-use job_domain_core::{ApplicationId, ApplicationStatus, JobSourceId, ResumeId};
+use job_domain_core::{
+    id::{ApplicationId, JobSourceId, ResumeId},
+    status::ApplicationStatus,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

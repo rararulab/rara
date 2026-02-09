@@ -76,19 +76,19 @@ impl std::fmt::Display for ApplicationStatus {
 /// A job application record linking a job to a resume submission.
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Application {
-    pub id: Uuid,
-    pub job_id: Uuid,
-    pub resume_id: Option<Uuid>,
-    pub channel: ApplicationChannel,
-    pub status: ApplicationStatus,
+    pub id:           Uuid,
+    pub job_id:       Uuid,
+    pub resume_id:    Option<Uuid>,
+    pub channel:      ApplicationChannel,
+    pub status:       ApplicationStatus,
     pub cover_letter: Option<String>,
-    pub notes: Option<String>,
-    pub trace_id: Option<String>,
-    pub is_deleted: bool,
-    pub deleted_at: Option<DateTime<Utc>>,
+    pub notes:        Option<String>,
+    pub trace_id:     Option<String>,
+    pub is_deleted:   bool,
+    pub deleted_at:   Option<DateTime<Utc>>,
     pub submitted_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub created_at:   DateTime<Utc>,
+    pub updated_at:   DateTime<Utc>,
 }
 
 /// An immutable record of an application status transition.
@@ -96,13 +96,13 @@ pub struct Application {
 /// Forms an append-only audit trail for the full lifecycle of an application.
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct ApplicationStatusHistory {
-    pub id: Uuid,
+    pub id:             Uuid,
     pub application_id: Uuid,
-    pub from_status: Option<ApplicationStatus>,
-    pub to_status: ApplicationStatus,
+    pub from_status:    Option<ApplicationStatus>,
+    pub to_status:      ApplicationStatus,
     /// Who or what triggered the status change (e.g. "user", "system", "ai").
-    pub changed_by: Option<String>,
-    pub note: Option<String>,
-    pub trace_id: Option<String>,
-    pub created_at: DateTime<Utc>,
+    pub changed_by:     Option<String>,
+    pub note:           Option<String>,
+    pub trace_id:       Option<String>,
+    pub created_at:     DateTime<Utc>,
 }

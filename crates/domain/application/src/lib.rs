@@ -14,34 +14,10 @@
 
 //! # job-domain-application
 //!
-//! Application lifecycle management for the Job Automation platform.
-//!
-//! This crate models the full lifecycle of a job application from draft to
-//! offer (or rejection).  It provides:
-//!
-//! - The [`Application`] aggregate with rich metadata (tags, priority,
-//!   channel).
-//! - A configurable [`StateMachine`] for validating status transitions.
-//! - [`StatusChangeRecord`] for auditing every transition with its source
-//!   (manual, system, email parse).
-//! - An [`ApplicationRepository`] trait for persistence.
-//! - An [`ApplicationService`] that orchestrates transitions, CRUD, and
-//!   statistics.
-//!
-//! The crate depends on [`job_domain_core`] for shared types and traits.
+//! Application lifecycle management with state machine.
 
 pub mod error;
 pub mod repository;
 pub mod service;
 pub mod state_machine;
 pub mod types;
-
-// Re-exports for convenience.
-pub use error::ApplicationError;
-pub use repository::ApplicationRepository;
-pub use service::ApplicationService;
-pub use state_machine::{StateMachine, TransitionRule};
-pub use types::{
-    Application, ApplicationChannel, ApplicationFilter, ApplicationStatistics, ChangeSource,
-    CreateApplicationRequest, Priority, StatusChangeRecord, UpdateApplicationRequest,
-};

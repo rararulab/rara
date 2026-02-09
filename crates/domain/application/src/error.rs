@@ -14,7 +14,7 @@
 
 //! Error types for the application domain.
 
-use job_domain_core::{ApplicationId, ApplicationStatus};
+use job_domain_core::{id::ApplicationId, status::ApplicationStatus};
 use snafu::Snafu;
 
 /// Errors that can occur in the application domain.

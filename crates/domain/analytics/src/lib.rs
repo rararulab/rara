@@ -32,11 +32,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricSnapshot {
     /// Name of the metric.
-    pub name: String,
+    pub name:        String,
     /// Numeric value.
-    pub value: f64,
+    pub value:       f64,
     /// When the snapshot was taken.
     pub recorded_at: DateTime<Utc>,
     /// Optional key-value labels for dimensionality.
-    pub labels: Vec<(String, String)>,
+    pub labels:      Vec<(String, String)>,
 }
