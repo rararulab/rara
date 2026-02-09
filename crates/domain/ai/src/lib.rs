@@ -18,8 +18,5 @@
 
 pub mod error;
 pub mod kind;
-pub mod provider;
-pub mod providers;
 pub mod service;
 pub mod template;
-pub mod types;

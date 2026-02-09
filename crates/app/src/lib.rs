@@ -189,6 +189,23 @@ impl App {
             analytics_repo,
         ));
 
+        // Create AI service (optional, needs OPENAI_API_KEY)
+        let ai_service = std::env::var("OPENAI_API_KEY").ok().map(|key| {
+            let model =
+                std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
+            let tmpl_mgr =
+                Arc::new(job_domain_ai::template::InMemoryTemplateManager::new());
+            Arc::new(job_domain_ai::service::AiService::new(
+                &key, model, tmpl_mgr, None,
+            ))
+        });
+        if ai_service.is_some() {
+            info!("AI service configured (OpenAI)");
+        } else {
+            info!("AI service not configured (OPENAI_API_KEY not set)");
+        }
+        let _ai_service = ai_service;
+
         // Job Source domain — discovery service with registered drivers
         let mut job_source_service = job_domain_job_source::service::JobSourceService::new();
 
