@@ -20,7 +20,9 @@ use axum::{
 };
 use job_domain_application::error::ApplicationError;
 use job_domain_interview::error::InterviewError;
+use job_domain_notify::error::NotifyError;
 use job_domain_resume::types::ResumeError;
+use job_domain_scheduler::error::SchedulerError;
 
 /// A structured API error returned as a JSON body with the appropriate
 /// HTTP status code.
@@ -83,6 +85,39 @@ impl From<ResumeError> for ApiError {
             ResumeError::ParentNotFound { .. } => StatusCode::BAD_REQUEST,
             ResumeError::DuplicateContent { .. } => StatusCode::CONFLICT,
             ResumeError::Storage { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        Self {
+            status,
+            message: err.to_string(),
+        }
+    }
+}
+
+impl From<NotifyError> for ApiError {
+    fn from(err: NotifyError) -> Self {
+        let status = match &err {
+            NotifyError::NotFound { .. } => StatusCode::NOT_FOUND,
+            NotifyError::ValidationError { .. } => StatusCode::BAD_REQUEST,
+            NotifyError::RetryExhausted { .. } => StatusCode::CONFLICT,
+            NotifyError::SendFailed { .. } => StatusCode::BAD_GATEWAY,
+            NotifyError::RepositoryError { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        Self {
+            status,
+            message: err.to_string(),
+        }
+    }
+}
+
+impl From<SchedulerError> for ApiError {
+    fn from(err: SchedulerError) -> Self {
+        let status = match &err {
+            SchedulerError::NotFound { .. } => StatusCode::NOT_FOUND,
+            SchedulerError::NotFoundByName { .. } => StatusCode::NOT_FOUND,
+            SchedulerError::InvalidCronExpression { .. } => StatusCode::BAD_REQUEST,
+            SchedulerError::TaskDisabled { .. } => StatusCode::BAD_REQUEST,
+            SchedulerError::TaskExecutionFailed { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            SchedulerError::RepositoryError { .. } => StatusCode::INTERNAL_SERVER_ERROR,
         };
         Self {
             status,

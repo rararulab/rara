@@ -12,22 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # job-domain-notify
-//!
-//! Notification dispatch for the Job Automation platform.
-//!
-//! This crate is responsible for delivering notifications to the user through
-//! various channels:
-//!
-//! - Telegram bot messages.
-//! - Email (SMTP or provider API).
-//! - Webhooks.
-//!
-//! It listens to domain events (via the types from [`job_domain_core::events`])
-//! and translates them into human-readable messages dispatched through the
-//! configured channel(s).
+//! Background worker definitions for the application.
 
-pub mod error;
-pub mod repository;
-pub mod service;
-pub mod types;
+pub mod notification_processor;

@@ -21,7 +21,9 @@ futures.workspace = true
 job-domain-core = { workspace = true }
 job-domain-application = { workspace = true }
 job-domain-interview = { workspace = true }
+job-domain-notify = { workspace = true }
 job-domain-resume = { workspace = true }
+job-domain-scheduler = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 smart-default = "0.7"

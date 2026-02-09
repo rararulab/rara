@@ -18,7 +18,9 @@ use std::sync::Arc;
 
 use job_domain_application::service::ApplicationService;
 use job_domain_interview::service::InterviewService;
+use job_domain_notify::service::NotificationService;
 use job_domain_resume::{repository::ResumeRepository, service::ResumeService};
+use job_domain_scheduler::service::SchedulerService;
 
 /// Shared state passed to all API route handlers via axum's
 /// `State` extractor.
@@ -29,4 +31,8 @@ pub struct AppState<R: ResumeRepository> {
     pub interview_service: Arc<InterviewService>,
     /// Resume version management service.
     pub resume_service: Arc<ResumeService<R>>,
+    /// Notification dispatch service.
+    pub notification_service: Arc<NotificationService>,
+    /// Scheduler task management service.
+    pub scheduler_service: Arc<SchedulerService>,
 }

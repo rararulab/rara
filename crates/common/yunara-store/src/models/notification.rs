@@ -63,6 +63,28 @@ impl std::fmt::Display for NotificationStatus {
     }
 }
 
+/// Priority level for notifications.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "notification_priority", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationPriority {
+    Low,
+    Normal,
+    High,
+    Urgent,
+}
+
+impl std::fmt::Display for NotificationPriority {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Low => write!(f, "low"),
+            Self::Normal => write!(f, "normal"),
+            Self::High => write!(f, "high"),
+            Self::Urgent => write!(f, "urgent"),
+        }
+    }
+}
+
 /// A log entry for an outbound notification.
 ///
 /// Tracks delivery attempts, retries, and final status for each
@@ -75,7 +97,9 @@ pub struct NotificationLog {
     pub subject:        Option<String>,
     pub body:           String,
     pub status:         NotificationStatus,
+    pub priority:       NotificationPriority,
     pub retry_count:    i32,
+    pub max_retries:    i32,
     pub error_message:  Option<String>,
     /// Polymorphic reference type (e.g. "application", "job").
     pub reference_type: Option<String>,

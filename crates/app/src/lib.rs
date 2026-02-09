@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod workers;
+
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -134,7 +136,23 @@ impl App {
             yunara_store::repos::application::PgApplicationRepository::new(pool.clone()),
         );
         let interview_repo = Arc::new(
-            yunara_store::repos::interview::PgInterviewPlanRepository::new(pool),
+            yunara_store::repos::interview::PgInterviewPlanRepository::new(pool.clone()),
+        );
+
+        // Create notification repository and service
+        let notification_repo = Arc::new(
+            yunara_store::repos::notification::PgNotificationRepository::new(pool.clone()),
+        );
+        let notification_service = Arc::new(
+            job_domain_notify::service::NotificationService::new(notification_repo),
+        );
+
+        // Create scheduler repository and service
+        let scheduler_repo = Arc::new(
+            yunara_store::repos::scheduler::PgSchedulerRepository::new(pool),
+        );
+        let scheduler_service = Arc::new(
+            job_domain_scheduler::service::SchedulerService::new(scheduler_repo),
         );
 
         // Create domain services
@@ -153,6 +171,8 @@ impl App {
             application_service,
             interview_service,
             resume_service,
+            notification_service: notification_service.clone(),
+            scheduler_service,
         });
 
         // Start servers
@@ -169,6 +189,24 @@ impl App {
         let http_handle = start_rest_server(self.config.http_config.clone(), vec![all_routes])
             .await
             .whatever_context("Failed to start REST server")?;
+
+        // Set up background worker manager
+        let worker_state = crate::workers::notification_processor::WorkerState {
+            notification_service,
+        };
+
+        let mut worker_manager =
+            job_common_worker::Manager::with_state(worker_state);
+
+        let _notification_handle = worker_manager
+            .fallible_worker(
+                crate::workers::notification_processor::NotificationProcessorWorker::new(50),
+            )
+            .name("notification-processor")
+            .interval(std::time::Duration::from_secs(30))
+            .spawn();
+
+        info!("Background workers started");
 
         info!("Application started successfully");
 
@@ -187,6 +225,10 @@ impl App {
 
             running.store(false, Ordering::SeqCst);
             cancellation_token.cancel();
+
+            // Shutdown background workers
+            info!("Shutting down background workers");
+            worker_manager.shutdown().await;
 
             // Shutdown servers
             info!("Shutting down servers");

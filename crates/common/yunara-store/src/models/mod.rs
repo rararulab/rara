@@ -24,6 +24,7 @@ pub mod job;
 pub mod metrics;
 pub mod notification;
 pub mod resume;
+pub mod scheduler;
 
 pub use ai::{AiModelProvider, AiRun, PromptKind, PromptTemplate};
 pub use application::{

@@ -461,6 +461,241 @@ impl From<job_domain_interview::types::InterviewPlan> for models::interview::Int
 }
 
 // ===========================================================================
+// Notification conversions
+// ===========================================================================
+
+/// Store `NotificationChannel` -> Domain `NotificationChannel`.
+impl From<models::notification::NotificationChannel>
+    for job_domain_notify::types::NotificationChannel
+{
+    fn from(value: models::notification::NotificationChannel) -> Self {
+        match value {
+            models::notification::NotificationChannel::Telegram => Self::Telegram,
+            models::notification::NotificationChannel::Email => Self::Email,
+            models::notification::NotificationChannel::Webhook => Self::Webhook,
+            models::notification::NotificationChannel::Other => Self::Webhook,
+        }
+    }
+}
+
+/// Domain `NotificationChannel` -> Store `NotificationChannel`.
+impl From<job_domain_notify::types::NotificationChannel>
+    for models::notification::NotificationChannel
+{
+    fn from(value: job_domain_notify::types::NotificationChannel) -> Self {
+        match value {
+            job_domain_notify::types::NotificationChannel::Telegram => Self::Telegram,
+            job_domain_notify::types::NotificationChannel::Email => Self::Email,
+            job_domain_notify::types::NotificationChannel::Webhook => Self::Webhook,
+        }
+    }
+}
+
+/// Store `NotificationStatus` -> Domain `NotificationStatus`.
+impl From<models::notification::NotificationStatus>
+    for job_domain_notify::types::NotificationStatus
+{
+    fn from(value: models::notification::NotificationStatus) -> Self {
+        match value {
+            models::notification::NotificationStatus::Pending => Self::Pending,
+            models::notification::NotificationStatus::Sent => Self::Sent,
+            models::notification::NotificationStatus::Failed => Self::Failed,
+            models::notification::NotificationStatus::Retrying => Self::Retrying,
+        }
+    }
+}
+
+/// Domain `NotificationStatus` -> Store `NotificationStatus`.
+impl From<job_domain_notify::types::NotificationStatus>
+    for models::notification::NotificationStatus
+{
+    fn from(value: job_domain_notify::types::NotificationStatus) -> Self {
+        match value {
+            job_domain_notify::types::NotificationStatus::Pending => Self::Pending,
+            job_domain_notify::types::NotificationStatus::Sent => Self::Sent,
+            job_domain_notify::types::NotificationStatus::Failed => Self::Failed,
+            job_domain_notify::types::NotificationStatus::Retrying => Self::Retrying,
+        }
+    }
+}
+
+/// Store `NotificationPriority` -> Domain `NotificationPriority`.
+impl From<models::notification::NotificationPriority>
+    for job_domain_notify::types::NotificationPriority
+{
+    fn from(value: models::notification::NotificationPriority) -> Self {
+        match value {
+            models::notification::NotificationPriority::Low => Self::Low,
+            models::notification::NotificationPriority::Normal => Self::Normal,
+            models::notification::NotificationPriority::High => Self::High,
+            models::notification::NotificationPriority::Urgent => Self::Urgent,
+        }
+    }
+}
+
+/// Domain `NotificationPriority` -> Store `NotificationPriority`.
+impl From<job_domain_notify::types::NotificationPriority>
+    for models::notification::NotificationPriority
+{
+    fn from(value: job_domain_notify::types::NotificationPriority) -> Self {
+        match value {
+            job_domain_notify::types::NotificationPriority::Low => Self::Low,
+            job_domain_notify::types::NotificationPriority::Normal => Self::Normal,
+            job_domain_notify::types::NotificationPriority::High => Self::High,
+            job_domain_notify::types::NotificationPriority::Urgent => Self::Urgent,
+        }
+    }
+}
+
+/// Store `NotificationLog` -> Domain `Notification`.
+impl From<models::notification::NotificationLog> for job_domain_notify::types::Notification {
+    fn from(n: models::notification::NotificationLog) -> Self {
+        Self {
+            id:             n.id,
+            channel:        n.channel.into(),
+            recipient:      n.recipient,
+            subject:        n.subject,
+            body:           n.body,
+            status:         n.status.into(),
+            priority:       n.priority.into(),
+            retry_count:    n.retry_count,
+            max_retries:    n.max_retries,
+            error_message:  n.error_message,
+            reference_type: n.reference_type,
+            reference_id:   n.reference_id,
+            metadata:       n.metadata,
+            trace_id:       n.trace_id,
+            sent_at:        n.sent_at,
+            created_at:     n.created_at,
+        }
+    }
+}
+
+/// Domain `Notification` -> Store `NotificationLog`.
+impl From<job_domain_notify::types::Notification> for models::notification::NotificationLog {
+    fn from(n: job_domain_notify::types::Notification) -> Self {
+        Self {
+            id:             n.id,
+            channel:        n.channel.into(),
+            recipient:      n.recipient,
+            subject:        n.subject,
+            body:           n.body,
+            status:         n.status.into(),
+            priority:       n.priority.into(),
+            retry_count:    n.retry_count,
+            max_retries:    n.max_retries,
+            error_message:  n.error_message,
+            reference_type: n.reference_type,
+            reference_id:   n.reference_id,
+            metadata:       n.metadata,
+            trace_id:       n.trace_id,
+            sent_at:        n.sent_at,
+            created_at:     n.created_at,
+        }
+    }
+}
+
+// ===========================================================================
+// Scheduler conversions
+// ===========================================================================
+
+/// Store `TaskRunStatus` -> Domain `TaskRunStatus`.
+impl From<models::scheduler::TaskRunStatus> for job_domain_scheduler::types::TaskRunStatus {
+    fn from(value: models::scheduler::TaskRunStatus) -> Self {
+        match value {
+            models::scheduler::TaskRunStatus::Success => Self::Success,
+            models::scheduler::TaskRunStatus::Failed => Self::Failed,
+            models::scheduler::TaskRunStatus::Running => Self::Running,
+        }
+    }
+}
+
+/// Domain `TaskRunStatus` -> Store `TaskRunStatus`.
+impl From<job_domain_scheduler::types::TaskRunStatus> for models::scheduler::TaskRunStatus {
+    fn from(value: job_domain_scheduler::types::TaskRunStatus) -> Self {
+        match value {
+            job_domain_scheduler::types::TaskRunStatus::Success => Self::Success,
+            job_domain_scheduler::types::TaskRunStatus::Failed => Self::Failed,
+            job_domain_scheduler::types::TaskRunStatus::Running => Self::Running,
+        }
+    }
+}
+
+/// Store `SchedulerTask` -> Domain `ScheduledTask`.
+impl From<models::scheduler::SchedulerTask> for job_domain_scheduler::types::ScheduledTask {
+    fn from(t: models::scheduler::SchedulerTask) -> Self {
+        Self {
+            id:            job_domain_core::id::SchedulerTaskId::from(t.id),
+            name:          t.name,
+            cron_expr:     t.cron_expr,
+            enabled:       t.enabled,
+            last_run_at:   t.last_run_at,
+            last_status:   t.last_status.map(Into::into),
+            last_error:    t.last_error,
+            run_count:     t.run_count,
+            failure_count: t.failure_count,
+            created_at:    t.created_at,
+            updated_at:    t.updated_at,
+        }
+    }
+}
+
+/// Domain `ScheduledTask` -> Store `SchedulerTask`.
+impl From<job_domain_scheduler::types::ScheduledTask> for models::scheduler::SchedulerTask {
+    fn from(t: job_domain_scheduler::types::ScheduledTask) -> Self {
+        Self {
+            id:            t.id.into_inner(),
+            name:          t.name,
+            cron_expr:     t.cron_expr,
+            enabled:       t.enabled,
+            last_run_at:   t.last_run_at,
+            last_status:   t.last_status.map(Into::into),
+            last_error:    t.last_error,
+            run_count:     t.run_count,
+            failure_count: t.failure_count,
+            is_deleted:    false,
+            deleted_at:    None,
+            created_at:    t.created_at,
+            updated_at:    t.updated_at,
+        }
+    }
+}
+
+/// Store `TaskRunHistory` -> Domain `TaskRunRecord`.
+impl From<models::scheduler::TaskRunHistory> for job_domain_scheduler::types::TaskRunRecord {
+    fn from(r: models::scheduler::TaskRunHistory) -> Self {
+        Self {
+            id:          r.id,
+            task_id:     job_domain_core::id::SchedulerTaskId::from(r.task_id),
+            status:      r.status.into(),
+            started_at:  r.started_at,
+            finished_at: r.finished_at,
+            duration_ms: r.duration_ms,
+            error:       r.error,
+            output:      r.output,
+            created_at:  r.created_at,
+        }
+    }
+}
+
+/// Domain `TaskRunRecord` -> Store `TaskRunHistory`.
+impl From<job_domain_scheduler::types::TaskRunRecord> for models::scheduler::TaskRunHistory {
+    fn from(r: job_domain_scheduler::types::TaskRunRecord) -> Self {
+        Self {
+            id:          r.id,
+            task_id:     r.task_id.into_inner(),
+            status:      r.status.into(),
+            started_at:  r.started_at,
+            finished_at: r.finished_at,
+            duration_ms: r.duration_ms,
+            error:       r.error,
+            output:      r.output,
+            created_at:  r.created_at,
+        }
+    }
+}
+
+// ===========================================================================
 // Tests
 // ===========================================================================
 
@@ -954,5 +1189,189 @@ mod tests {
 
         let domain: job_domain_interview::types::InterviewPlan = store.into();
         assert!(domain.prep_materials.knowledge_points.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Notification conversions
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn notification_channel_roundtrip() {
+        use job_domain_notify::types::NotificationChannel as D;
+        use models::notification::NotificationChannel as S;
+
+        let pairs = [
+            (S::Telegram, D::Telegram),
+            (S::Email, D::Email),
+            (S::Webhook, D::Webhook),
+        ];
+        for (store, domain) in &pairs {
+            assert_eq!(D::from(*store), *domain);
+            assert_eq!(S::from(*domain), *store);
+        }
+    }
+
+    #[test]
+    fn notification_channel_other_maps_to_webhook() {
+        use job_domain_notify::types::NotificationChannel as D;
+        use models::notification::NotificationChannel as S;
+
+        assert_eq!(D::from(S::Other), D::Webhook);
+    }
+
+    #[test]
+    fn notification_status_roundtrip() {
+        use job_domain_notify::types::NotificationStatus as D;
+        use models::notification::NotificationStatus as S;
+
+        let pairs = [
+            (S::Pending, D::Pending),
+            (S::Sent, D::Sent),
+            (S::Failed, D::Failed),
+            (S::Retrying, D::Retrying),
+        ];
+        for (store, domain) in &pairs {
+            assert_eq!(D::from(*store), *domain);
+            assert_eq!(S::from(*domain), *store);
+        }
+    }
+
+    #[test]
+    fn notification_priority_roundtrip() {
+        use job_domain_notify::types::NotificationPriority as D;
+        use models::notification::NotificationPriority as S;
+
+        let pairs = [
+            (S::Low, D::Low),
+            (S::Normal, D::Normal),
+            (S::High, D::High),
+            (S::Urgent, D::Urgent),
+        ];
+        for (store, domain) in &pairs {
+            assert_eq!(D::from(*store), *domain);
+            assert_eq!(S::from(*domain), *store);
+        }
+    }
+
+    #[test]
+    fn notification_log_store_to_domain_roundtrip() {
+        let now = Utc::now();
+        let id = Uuid::new_v4();
+        let ref_id = Uuid::new_v4();
+        let store_log = models::notification::NotificationLog {
+            id,
+            channel: models::notification::NotificationChannel::Telegram,
+            recipient: "user123".into(),
+            subject: Some("Test subject".into()),
+            body: "Test body".into(),
+            status: models::notification::NotificationStatus::Pending,
+            priority: models::notification::NotificationPriority::High,
+            retry_count: 0,
+            max_retries: 3,
+            error_message: None,
+            reference_type: Some("application".into()),
+            reference_id: Some(ref_id),
+            metadata: None,
+            trace_id: None,
+            sent_at: None,
+            created_at: now,
+        };
+
+        let domain: job_domain_notify::types::Notification = store_log.into();
+        assert_eq!(domain.id, id);
+        assert_eq!(domain.channel, job_domain_notify::types::NotificationChannel::Telegram);
+        assert_eq!(domain.recipient, "user123");
+        assert_eq!(domain.priority, job_domain_notify::types::NotificationPriority::High);
+        assert_eq!(domain.max_retries, 3);
+        assert_eq!(domain.reference_id, Some(ref_id));
+
+        let back: models::notification::NotificationLog = domain.into();
+        assert_eq!(back.id, id);
+        assert_eq!(back.channel, models::notification::NotificationChannel::Telegram);
+        assert_eq!(back.recipient, "user123");
+    }
+
+    // -----------------------------------------------------------------------
+    // Scheduler conversions
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn scheduler_task_run_status_roundtrip() {
+        use job_domain_scheduler::types::TaskRunStatus as D;
+        use models::scheduler::TaskRunStatus as S;
+
+        let pairs = [
+            (S::Success, D::Success),
+            (S::Failed, D::Failed),
+            (S::Running, D::Running),
+        ];
+        for (store, domain) in &pairs {
+            assert_eq!(D::from(*store), *domain);
+            assert_eq!(S::from(*domain), *store);
+        }
+    }
+
+    #[test]
+    fn scheduler_task_store_to_domain_roundtrip() {
+        let now = Utc::now();
+        let id = Uuid::new_v4();
+        let store_task = models::scheduler::SchedulerTask {
+            id,
+            name: "job-discovery".into(),
+            cron_expr: "0 */30 * * * *".into(),
+            enabled: true,
+            last_run_at: Some(now),
+            last_status: Some(models::scheduler::TaskRunStatus::Success),
+            last_error: None,
+            run_count: 5,
+            failure_count: 1,
+            is_deleted: false,
+            deleted_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        let domain: job_domain_scheduler::types::ScheduledTask = store_task.into();
+        assert_eq!(domain.id.into_inner(), id);
+        assert_eq!(domain.name, "job-discovery");
+        assert_eq!(domain.run_count, 5);
+        assert_eq!(
+            domain.last_status,
+            Some(job_domain_scheduler::types::TaskRunStatus::Success)
+        );
+
+        let back: models::scheduler::SchedulerTask = domain.into();
+        assert_eq!(back.id, id);
+        assert_eq!(back.name, "job-discovery");
+        assert!(!back.is_deleted);
+    }
+
+    #[test]
+    fn task_run_history_store_to_domain_roundtrip() {
+        let now = Utc::now();
+        let id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+        let store_run = models::scheduler::TaskRunHistory {
+            id,
+            task_id,
+            status: models::scheduler::TaskRunStatus::Failed,
+            started_at: now,
+            finished_at: Some(now),
+            duration_ms: Some(1500),
+            error: Some("connection refused".into()),
+            output: None,
+            created_at: now,
+        };
+
+        let domain: job_domain_scheduler::types::TaskRunRecord = store_run.into();
+        assert_eq!(domain.id, id);
+        assert_eq!(domain.task_id.into_inner(), task_id);
+        assert_eq!(domain.status, job_domain_scheduler::types::TaskRunStatus::Failed);
+        assert_eq!(domain.duration_ms, Some(1500));
+
+        let back: models::scheduler::TaskRunHistory = domain.into();
+        assert_eq!(back.id, id);
+        assert_eq!(back.task_id, task_id);
+        assert_eq!(back.error, Some("connection refused".to_owned()));
     }
 }

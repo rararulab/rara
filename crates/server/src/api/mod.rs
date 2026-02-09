@@ -17,7 +17,9 @@
 pub mod application;
 pub mod error;
 pub mod interview;
+pub mod notification;
 pub mod resume;
+pub mod scheduler;
 
 use std::sync::Arc;
 
@@ -31,5 +33,7 @@ pub fn api_routes<R: ResumeRepository + 'static>(state: Arc<AppState<R>>) -> Rou
     Router::new()
         .merge(resume::resume_routes(state.clone()))
         .merge(application::application_routes(state.clone()))
-        .merge(interview::interview_routes(state))
+        .merge(interview::interview_routes(state.clone()))
+        .merge(notification::notification_routes(state.clone()))
+        .merge(scheduler::scheduler_routes(state))
 }
