@@ -27,7 +27,10 @@
 //! and translates them into human-readable messages dispatched through the
 //! configured channel(s).
 
+pub mod convert;
+pub mod db_models;
 pub mod error;
+pub mod pg_repository;
 pub mod repository;
 pub mod service;
 pub mod types;

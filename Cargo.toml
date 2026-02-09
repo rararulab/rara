@@ -98,7 +98,7 @@ validator = "0.20"
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "macros", "migrate", "chrono", "uuid"] }
 
 # Testing
-testcontainers = "0.27"
+testcontainers = "0.26"
 testcontainers-modules = { version = "0.14", features = ["postgres"] }
 
 # Internal workspace crates (use =version to keep in sync with workspace version)
