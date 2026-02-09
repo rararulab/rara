@@ -145,11 +145,24 @@ impl App {
         let mut notification_service = job_domain_notify::service::NotificationService::new(
             notification_repo,
         );
-        // Register noop senders for all channels (dev/testing)
+        // Register Telegram sender (real if configured, noop otherwise)
+        let telegram_sender: Arc<dyn job_domain_notify::service::NotificationSender> =
+            match (std::env::var("TELEGRAM_BOT_TOKEN"), std::env::var("TELEGRAM_CHAT_ID")) {
+                (Ok(token), Ok(chat_id)) => {
+                    let chat_id: i64 = chat_id.parse().expect("TELEGRAM_CHAT_ID must be an integer");
+                    info!("Telegram sender configured");
+                    Arc::new(job_domain_notify::sender::TelegramSender::new(&token, chat_id))
+                }
+                _ => {
+                    info!("Telegram not configured, using noop sender");
+                    Arc::new(job_domain_notify::sender::NoopSender)
+                }
+            };
         notification_service.register_sender(
             job_domain_notify::types::NotificationChannel::Telegram,
-            Arc::new(job_domain_notify::sender::NoopSender),
+            telegram_sender,
         );
+        // Register noop senders for channels not yet implemented
         notification_service.register_sender(
             job_domain_notify::types::NotificationChannel::Email,
             Arc::new(job_domain_notify::sender::NoopSender),
