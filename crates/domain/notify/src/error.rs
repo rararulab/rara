@@ -15,31 +15,23 @@
 //! Error types for the notification domain.
 
 use serde::{Deserialize, Serialize};
+use snafu::Snafu;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Snafu, Serialize, Deserialize)]
 pub enum NotifyError {
+    #[snafu(display("notification not found: {id}"))]
     NotFound { id: Uuid },
+
+    #[snafu(display("send failed on {channel}: {message}"))]
     SendFailed { channel: String, message: String },
+
+    #[snafu(display("repository error: {message}"))]
     RepositoryError { message: String },
+
+    #[snafu(display("validation error: {message}"))]
     ValidationError { message: String },
+
+    #[snafu(display("retry exhausted for {id} after {attempts} attempts"))]
     RetryExhausted { id: Uuid, attempts: i32 },
 }
-
-impl std::fmt::Display for NotifyError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotFound { id } => write!(f, "notification not found: {id}"),
-            Self::SendFailed { channel, message } => {
-                write!(f, "send failed on {channel}: {message}")
-            }
-            Self::RepositoryError { message } => write!(f, "repository error: {message}"),
-            Self::ValidationError { message } => write!(f, "validation error: {message}"),
-            Self::RetryExhausted { id, attempts } => {
-                write!(f, "retry exhausted for {id} after {attempts} attempts")
-            }
-        }
-    }
-}
-
-impl std::error::Error for NotifyError {}

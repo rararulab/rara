@@ -15,40 +15,33 @@
 //! Error types for the scheduler domain.
 
 use serde::{Deserialize, Serialize};
+use snafu::Snafu;
 use uuid::Uuid;
 
 /// Errors that can occur in the scheduler domain.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Snafu, Serialize, Deserialize)]
 pub enum SchedulerError {
     /// The requested scheduler task was not found.
+    #[snafu(display("scheduler task not found: {id}"))]
     NotFound { id: Uuid },
+
     /// The requested scheduler task was not found by name.
+    #[snafu(display("scheduler task not found: {name}"))]
     NotFoundByName { name: String },
+
     /// A storage/infrastructure error occurred.
+    #[snafu(display("repository error: {message}"))]
     RepositoryError { message: String },
+
     /// Task execution failed.
+    #[snafu(display("task '{task_name}' execution failed: {message}"))]
     TaskExecutionFailed { task_name: String, message: String },
+
     /// Invalid cron expression.
+    #[snafu(display("invalid cron expression '{expr}': {message}"))]
     InvalidCronExpression { expr: String, message: String },
+
     /// Task is disabled.
+    #[snafu(display("task is disabled: {id}"))]
     TaskDisabled { id: Uuid },
 }
-
-impl std::fmt::Display for SchedulerError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotFound { id } => write!(f, "scheduler task not found: {id}"),
-            Self::NotFoundByName { name } => write!(f, "scheduler task not found: {name}"),
-            Self::RepositoryError { message } => write!(f, "repository error: {message}"),
-            Self::TaskExecutionFailed { task_name, message } => {
-                write!(f, "task '{task_name}' execution failed: {message}")
-            }
-            Self::InvalidCronExpression { expr, message } => {
-                write!(f, "invalid cron expression '{expr}': {message}")
-            }
-            Self::TaskDisabled { id } => write!(f, "task is disabled: {id}"),
-        }
-    }
-}
-
-impl std::error::Error for SchedulerError {}
