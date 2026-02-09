@@ -18,6 +18,7 @@ bon = { workspace = true }
 derive_more = { workspace = true }
 job-common-telemetry = { workspace = true }
 job-common-worker = { workspace = true }
+job-domain-ai = { workspace = true }
 job-domain-analytics = { workspace = true }
 job-domain-application = { workspace = true }
 job-domain-interview = { workspace = true }

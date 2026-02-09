@@ -74,29 +74,6 @@ impl AiTaskKind {
         }
     }
 
-    /// Return an optional JSON schema describing the expected
-    /// structured output for this task kind.
-    ///
-    /// Returns `None` for tasks that produce free-form text.
-    #[must_use]
-    pub fn default_output_schema(&self) -> Option<serde_json::Value> {
-        match self {
-            Self::JobFit => Some(serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "fit_score": { "type": "number", "minimum": 0, "maximum": 100 },
-                    "strengths": { "type": "array", "items": { "type": "string" } },
-                    "gaps": { "type": "array", "items": { "type": "string" } },
-                    "summary": { "type": "string" }
-                },
-                "required": ["fit_score", "strengths", "gaps", "summary"]
-            })),
-            Self::ResumeOptimize
-            | Self::InterviewPrep
-            | Self::FollowUpDraft
-            | Self::CoverLetter => None,
-        }
-    }
 }
 
 /// Configuration for a specific AI task invocation.
@@ -112,8 +89,6 @@ pub struct AiTaskConfig {
     pub model_override: Option<String>,
     /// Override the sampling temperature.
     pub temperature:    Option<f32>,
-    /// Override the maximum number of tokens to generate.
-    pub max_tokens:     Option<u32>,
     /// Free-form key-value variables that will be substituted into the
     /// prompt template.
     pub variables:      HashMap<String, String>,
@@ -127,7 +102,6 @@ impl AiTaskConfig {
             kind,
             model_override: None,
             temperature: None,
-            max_tokens: None,
             variables,
         }
     }

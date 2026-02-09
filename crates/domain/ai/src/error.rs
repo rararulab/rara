@@ -16,33 +16,16 @@
 
 use snafu::Snafu;
 
-/// Errors that can occur during AI provider operations.
+/// Errors that can occur during AI operations.
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub))]
 pub enum AiError {
-    /// The provider returned a rate-limit (HTTP 429) response.
+    /// The rate limiter rejected the request.
     #[snafu(display("Rate limited by {provider}: retry after {retry_after_secs}s"))]
     RateLimited {
         provider:         String,
         retry_after_secs: u64,
     },
-
-    /// Authentication with the provider failed (invalid or expired API
-    /// key).
-    #[snafu(display("Authentication failed for provider {provider}: {message}"))]
-    AuthFailed { provider: String, message: String },
-
-    /// The requested model is not available or does not exist.
-    #[snafu(display("Model unavailable: {model} on {provider}"))]
-    ModelUnavailable { provider: String, model: String },
-
-    /// The provider returned a response that could not be parsed.
-    #[snafu(display("Invalid response from {provider}: {message}"))]
-    InvalidResponse { provider: String, message: String },
-
-    /// The request exceeded the model's context window.
-    #[snafu(display("Context length exceeded for model {model}: {message}"))]
-    ContextLengthExceeded { model: String, message: String },
 
     /// A prompt template variable was missing during rendering.
     #[snafu(display("Missing template variable: {variable}"))]
@@ -52,16 +35,11 @@ pub enum AiError {
     #[snafu(display("Prompt template not found: {name}"))]
     TemplateNotFound { name: String },
 
-    /// No provider is configured for the requested task.
-    #[snafu(display("No provider configured for task kind: {kind}"))]
-    NoProviderConfigured { kind: String },
+    /// No AI provider is configured.
+    #[snafu(display("AI provider not configured"))]
+    NotConfigured,
 
-    /// A network or transport error occurred while calling the
-    /// provider.
-    #[snafu(display("Provider request failed: {message}"))]
+    /// An AI provider request failed.
+    #[snafu(display("AI request failed: {message}"))]
     RequestFailed { message: String },
-
-    /// Catch-all for unexpected internal errors.
-    #[snafu(display("Internal AI error: {message}"))]
-    Internal { message: String },
 }
