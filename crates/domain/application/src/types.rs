@@ -257,3 +257,140 @@ pub struct ApplicationStatistics {
     /// Number of applications in each status.
     pub by_status: Vec<(ApplicationStatus, usize)>,
 }
+
+// ---------------------------------------------------------------------------
+// DB model conversions
+// ---------------------------------------------------------------------------
+
+use job_domain_shared::convert::{
+    chrono_opt_to_timestamp, chrono_to_timestamp, timestamp_opt_to_chrono, timestamp_to_chrono,
+    u8_from_i16,
+};
+use job_model::application::{Application as StoreApplication, ApplicationStatusHistory};
+
+fn application_status_from_i16(value: i16) -> ApplicationStatus {
+    let repr = u8_from_i16(value, "application.status");
+    ApplicationStatus::from_repr(repr)
+        .unwrap_or_else(|| panic!("invalid application.status: {value}"))
+}
+
+fn application_channel_from_i16(value: i16) -> ApplicationChannel {
+    let repr = u8_from_i16(value, "application.channel");
+    ApplicationChannel::from_repr(repr)
+        .unwrap_or_else(|| panic!("invalid application.channel: {value}"))
+}
+
+fn application_priority_from_i16(value: i16) -> Priority {
+    let repr = u8_from_i16(value, "application.priority");
+    Priority::from_repr(repr).unwrap_or_else(|| panic!("invalid application.priority: {value}"))
+}
+
+/// Store `Application` -> Domain `Application`.
+///
+/// `resume_id` in the store is `Option<Uuid>`, but in the domain it is
+/// a `ResumeId` (mandatory). We fall back to `Uuid::nil()` when the
+/// store row has no resume linked.
+impl From<StoreApplication> for Application {
+    fn from(a: StoreApplication) -> Self {
+        Self {
+            id:           ApplicationId::from(a.id),
+            job_id:       JobSourceId::from(a.job_id),
+            resume_id:    ResumeId::from(a.resume_id.unwrap_or(Uuid::nil())),
+            channel:      application_channel_from_i16(a.channel),
+            status:       application_status_from_i16(a.status),
+            cover_letter: a.cover_letter,
+            notes:        a.notes,
+            tags:         a.tags,
+            priority:     application_priority_from_i16(a.priority),
+            trace_id:     a.trace_id,
+            is_deleted:   a.is_deleted,
+            submitted_at: chrono_opt_to_timestamp(a.submitted_at),
+            created_at:   chrono_to_timestamp(a.created_at),
+            updated_at:   chrono_to_timestamp(a.updated_at),
+        }
+    }
+}
+
+/// Domain `Application` -> Store `Application`.
+///
+/// `resume_id` is stored as `Option<Uuid>`; if the domain id is nil we
+/// store `None`.
+impl From<Application> for StoreApplication {
+    fn from(a: Application) -> Self {
+        let resume_uuid = a.resume_id.into_inner();
+        Self {
+            id:           a.id.into_inner(),
+            job_id:       a.job_id.into_inner(),
+            resume_id:    if resume_uuid.is_nil() {
+                None
+            } else {
+                Some(resume_uuid)
+            },
+            channel:      a.channel as u8 as i16,
+            status:       a.status as u8 as i16,
+            cover_letter: a.cover_letter,
+            notes:        a.notes,
+            tags:         a.tags,
+            priority:     a.priority as u8 as i16,
+            trace_id:     a.trace_id,
+            is_deleted:   a.is_deleted,
+            deleted_at:   None,
+            submitted_at: timestamp_opt_to_chrono(a.submitted_at),
+            created_at:   timestamp_to_chrono(a.created_at),
+            updated_at:   timestamp_to_chrono(a.updated_at),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ApplicationStatusHistory / StatusChangeRecord conversions
+// ---------------------------------------------------------------------------
+
+/// Parse a `changed_by` string into a domain `ChangeSource`.
+///
+/// Known values: `"manual"`, `"system"`, `"email_parse"`.
+/// Anything else (or `None`) defaults to `System`.
+fn parse_change_source(s: Option<&str>) -> ChangeSource {
+    match s {
+        Some("manual") => ChangeSource::Manual,
+        Some("system") => ChangeSource::System,
+        Some("email_parse") => ChangeSource::EmailParse,
+        _ => ChangeSource::System,
+    }
+}
+
+/// Store `ApplicationStatusHistory` -> Domain `StatusChangeRecord`.
+///
+/// `from_status` in the store is `Option`; if absent we default to `Draft`.
+impl From<ApplicationStatusHistory> for StatusChangeRecord {
+    fn from(h: ApplicationStatusHistory) -> Self {
+        Self {
+            id:             h.id,
+            application_id: ApplicationId::from(h.application_id),
+            from_status:    h
+                .from_status
+                .map(application_status_from_i16)
+                .unwrap_or(ApplicationStatus::Draft),
+            to_status:      application_status_from_i16(h.to_status),
+            changed_by:     parse_change_source(h.changed_by.as_deref()),
+            note:           h.note,
+            created_at:     chrono_to_timestamp(h.created_at),
+        }
+    }
+}
+
+/// Domain `StatusChangeRecord` -> Store `ApplicationStatusHistory`.
+impl From<StatusChangeRecord> for ApplicationStatusHistory {
+    fn from(r: StatusChangeRecord) -> Self {
+        Self {
+            id:             r.id,
+            application_id: r.application_id.into_inner(),
+            from_status:    Some(r.from_status as u8 as i16),
+            to_status:      r.to_status as u8 as i16,
+            changed_by:     Some(r.changed_by.to_string()),
+            note:           r.note,
+            trace_id:       None,
+            created_at:     timestamp_to_chrono(r.created_at),
+        }
+    }
+}

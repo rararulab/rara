@@ -199,6 +199,69 @@ pub enum ResumeError {
     Storage { message: String },
 }
 
+// ---------------------------------------------------------------------------
+// DB model conversions
+// ---------------------------------------------------------------------------
+
+use job_domain_shared::convert::{
+    chrono_opt_to_timestamp, chrono_to_timestamp, timestamp_opt_to_chrono, timestamp_to_chrono,
+    u8_from_i16,
+};
+use job_model::resume::Resume as StoreResume;
+
+fn resume_source_from_i16(value: i16) -> ResumeSource {
+    let repr = u8_from_i16(value, "resume.source");
+    ResumeSource::from_repr(repr).unwrap_or_else(|| panic!("invalid resume.source: {value}"))
+}
+
+/// Store `Resume` -> Domain `Resume`.
+impl From<StoreResume> for Resume {
+    fn from(r: StoreResume) -> Self {
+        Self {
+            id:                  r.id,
+            title:               r.title,
+            version_tag:         r.version_tag,
+            content_hash:        r.content_hash,
+            source:              resume_source_from_i16(r.source),
+            content:             r.content,
+            parent_resume_id:    r.parent_resume_id,
+            target_job_id:       r.target_job_id,
+            customization_notes: r.customization_notes,
+            tags:                r.tags,
+            metadata:            r.metadata,
+            trace_id:            r.trace_id,
+            is_deleted:          r.is_deleted,
+            deleted_at:          chrono_opt_to_timestamp(r.deleted_at),
+            created_at:          chrono_to_timestamp(r.created_at),
+            updated_at:          chrono_to_timestamp(r.updated_at),
+        }
+    }
+}
+
+/// Domain `Resume` -> Store `Resume`.
+impl From<Resume> for StoreResume {
+    fn from(r: Resume) -> Self {
+        Self {
+            id:                  r.id,
+            title:               r.title,
+            version_tag:         r.version_tag,
+            content_hash:        r.content_hash,
+            source:              r.source as u8 as i16,
+            content:             r.content,
+            parent_resume_id:    r.parent_resume_id,
+            target_job_id:       r.target_job_id,
+            customization_notes: r.customization_notes,
+            tags:                r.tags,
+            metadata:            r.metadata,
+            trace_id:            r.trace_id,
+            is_deleted:          r.is_deleted,
+            deleted_at:          timestamp_opt_to_chrono(r.deleted_at),
+            created_at:          timestamp_to_chrono(r.created_at),
+            updated_at:          timestamp_to_chrono(r.updated_at),
+        }
+    }
+}
+
 impl axum::response::IntoResponse for ResumeError {
     fn into_response(self) -> axum::response::Response {
         let status = match &self {

@@ -88,3 +88,59 @@ pub struct SnapshotFilter {
     pub date_to:   Option<Date>,
     pub limit:     Option<i64>,
 }
+
+// ---------------------------------------------------------------------------
+// DB model conversions
+// ---------------------------------------------------------------------------
+
+use job_domain_shared::convert::{
+    chrono_to_timestamp, civil_to_naive_date, naive_date_to_civil, timestamp_to_chrono, u8_from_i16,
+};
+use job_model::metrics::MetricsSnapshot as StoreMetricsSnapshot;
+
+fn period_from_i16(value: i16) -> MetricsPeriod {
+    let repr = u8_from_i16(value, "metrics.period");
+    MetricsPeriod::from_repr(repr).unwrap_or_else(|| panic!("invalid metrics.period: {value}"))
+}
+
+/// Store `MetricsSnapshot` -> Domain `MetricsSnapshot`.
+impl From<StoreMetricsSnapshot> for MetricsSnapshot {
+    fn from(r: StoreMetricsSnapshot) -> Self {
+        Self {
+            id:                   r.id,
+            period:               period_from_i16(r.period),
+            snapshot_date:        naive_date_to_civil(r.snapshot_date),
+            jobs_discovered:      r.jobs_discovered,
+            applications_sent:    r.applications_sent,
+            interviews_scheduled: r.interviews_scheduled,
+            offers_received:      r.offers_received,
+            rejections:           r.rejections,
+            ai_runs_count:        r.ai_runs_count,
+            ai_total_cost_cents:  r.ai_total_cost_cents,
+            extra:                r.extra,
+            trace_id:             r.trace_id,
+            created_at:           chrono_to_timestamp(r.created_at),
+        }
+    }
+}
+
+/// Domain `MetricsSnapshot` -> Store `MetricsSnapshot`.
+impl From<MetricsSnapshot> for StoreMetricsSnapshot {
+    fn from(r: MetricsSnapshot) -> Self {
+        Self {
+            id:                   r.id,
+            period:               r.period as u8 as i16,
+            snapshot_date:        civil_to_naive_date(r.snapshot_date),
+            jobs_discovered:      r.jobs_discovered,
+            applications_sent:    r.applications_sent,
+            interviews_scheduled: r.interviews_scheduled,
+            offers_received:      r.offers_received,
+            rejections:           r.rejections,
+            ai_runs_count:        r.ai_runs_count,
+            ai_total_cost_cents:  r.ai_total_cost_cents,
+            extra:                r.extra,
+            trace_id:             r.trace_id,
+            created_at:           timestamp_to_chrono(r.created_at),
+        }
+    }
+}

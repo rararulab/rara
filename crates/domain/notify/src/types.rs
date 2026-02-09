@@ -110,3 +110,79 @@ pub struct ProcessResult {
     pub succeeded: i64,
     pub failed:    i64,
 }
+
+// ---------------------------------------------------------------------------
+// DB model conversions
+// ---------------------------------------------------------------------------
+
+use job_domain_shared::convert::{
+    chrono_opt_to_timestamp, chrono_to_timestamp, timestamp_opt_to_chrono, timestamp_to_chrono,
+    u8_from_i16,
+};
+use job_model::notify::NotificationLog;
+
+fn notification_channel_from_i16(value: i16) -> NotificationChannel {
+    let repr = u8_from_i16(value, "notification.channel");
+    NotificationChannel::from_repr(repr)
+        .unwrap_or_else(|| panic!("invalid notification.channel: {value}"))
+}
+
+fn notification_status_from_i16(value: i16) -> NotificationStatus {
+    let repr = u8_from_i16(value, "notification.status");
+    NotificationStatus::from_repr(repr)
+        .unwrap_or_else(|| panic!("invalid notification.status: {value}"))
+}
+
+fn notification_priority_from_i16(value: i16) -> NotificationPriority {
+    let repr = u8_from_i16(value, "notification.priority");
+    NotificationPriority::from_repr(repr)
+        .unwrap_or_else(|| panic!("invalid notification.priority: {value}"))
+}
+
+/// Store `NotificationLog` -> Domain `Notification`.
+impl From<NotificationLog> for Notification {
+    fn from(n: NotificationLog) -> Self {
+        Self {
+            id:             n.id,
+            channel:        notification_channel_from_i16(n.channel),
+            recipient:      n.recipient,
+            subject:        n.subject,
+            body:           n.body,
+            status:         notification_status_from_i16(n.status),
+            priority:       notification_priority_from_i16(n.priority),
+            retry_count:    n.retry_count,
+            max_retries:    n.max_retries,
+            error_message:  n.error_message,
+            reference_type: n.reference_type,
+            reference_id:   n.reference_id,
+            metadata:       n.metadata,
+            trace_id:       n.trace_id,
+            sent_at:        chrono_opt_to_timestamp(n.sent_at),
+            created_at:     chrono_to_timestamp(n.created_at),
+        }
+    }
+}
+
+/// Domain `Notification` -> Store `NotificationLog`.
+impl From<Notification> for NotificationLog {
+    fn from(n: Notification) -> Self {
+        Self {
+            id:             n.id,
+            channel:        n.channel as u8 as i16,
+            recipient:      n.recipient,
+            subject:        n.subject,
+            body:           n.body,
+            status:         n.status as u8 as i16,
+            priority:       n.priority as u8 as i16,
+            retry_count:    n.retry_count,
+            max_retries:    n.max_retries,
+            error_message:  n.error_message,
+            reference_type: n.reference_type,
+            reference_id:   n.reference_id,
+            metadata:       n.metadata,
+            trace_id:       n.trace_id,
+            sent_at:        timestamp_opt_to_chrono(n.sent_at),
+            created_at:     timestamp_to_chrono(n.created_at),
+        }
+    }
+}
