@@ -17,22 +17,15 @@ workspace = true
 async-trait.workspace = true
 bon.workspace = true
 chrono = { workspace = true, features = ["serde"] }
-futures.workspace = true
-job-domain-core = { workspace = true }
-job-domain-application = { workspace = true }
-job-domain-interview = { workspace = true }
-job-domain-notify = { workspace = true }
-job-domain-resume = { workspace = true }
-job-domain-scheduler = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 smart-default = "0.7"
 snafu.workspace = true
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "macros", "migrate", "chrono", "uuid"] }
+sqlx = { workspace = true }
 strum.workspace = true
 strum_macros.workspace = true
 tracing.workspace = true
-uuid = { version = "1.20.0", features = ["v4", "serde"] }
+uuid = { workspace = true }
 
 [dev-dependencies]
 tokio.workspace = true

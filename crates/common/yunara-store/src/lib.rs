@@ -13,12 +13,10 @@
 // limitations under the License.
 
 pub mod config;
-pub mod convert;
 pub mod db;
 pub mod err;
 pub mod kv;
 pub mod models;
-pub mod repos;
 
 pub use config::DatabaseConfig;
 pub use db::DBStore;

@@ -18,21 +18,9 @@
 //! that map directly to the PostgreSQL schema.
 
 pub mod ai;
-pub mod application;
-pub mod interview;
 pub mod job;
 pub mod metrics;
-pub mod notification;
-pub mod resume;
-pub mod scheduler;
 
 pub use ai::{AiModelProvider, AiRun, PromptKind, PromptTemplate};
-pub use application::{
-    Application, ApplicationChannel, ApplicationPriority, ApplicationStatus,
-    ApplicationStatusHistory,
-};
-pub use interview::{InterviewPlan, InterviewTaskStatus};
 pub use job::{Job, JobStatus};
 pub use metrics::{MetricsPeriod, MetricsSnapshot};
-pub use notification::{NotificationChannel, NotificationLog, NotificationStatus};
-pub use resume::{Resume, ResumeSource};

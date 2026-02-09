@@ -128,20 +128,20 @@ impl App {
             .whatever_context("Failed to initialize database")?;
         let pool = db_store.pool().clone();
 
-        // Create repository implementations
+        // Create repository implementations (from domain crates)
         let resume_repo = Arc::new(
-            yunara_store::repos::resume::PgResumeRepository::new(pool.clone()),
+            job_domain_resume::pg_repository::PgResumeRepository::new(pool.clone()),
         );
         let application_repo = Arc::new(
-            yunara_store::repos::application::PgApplicationRepository::new(pool.clone()),
+            job_domain_application::pg_repository::PgApplicationRepository::new(pool.clone()),
         );
         let interview_repo = Arc::new(
-            yunara_store::repos::interview::PgInterviewPlanRepository::new(pool.clone()),
+            job_domain_interview::pg_repository::PgInterviewPlanRepository::new(pool.clone()),
         );
 
         // Create notification repository and service
         let notification_repo = Arc::new(
-            yunara_store::repos::notification::PgNotificationRepository::new(pool.clone()),
+            job_domain_notify::pg_repository::PgNotificationRepository::new(pool.clone()),
         );
         let notification_service = Arc::new(
             job_domain_notify::service::NotificationService::new(notification_repo),
@@ -149,7 +149,7 @@ impl App {
 
         // Create scheduler repository and service
         let scheduler_repo = Arc::new(
-            yunara_store::repos::scheduler::PgSchedulerRepository::new(pool),
+            job_domain_scheduler::pg_repository::PgSchedulerRepository::new(pool),
         );
         let scheduler_service = Arc::new(
             job_domain_scheduler::service::SchedulerService::new(scheduler_repo),
