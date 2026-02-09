@@ -52,6 +52,7 @@ members = [
     "crates/domain/analytics",
     "crates/server",
     "crates/paths",
+    "crates/jobspy-sys",
 ]
 
 [workspace.dependencies]
@@ -125,6 +126,7 @@ job-domain-job-source = { version = "=0.0.17", path = "crates/domain/job-source"
 job-domain-notify = { version = "=0.0.17", path = "crates/domain/notify" }
 job-domain-resume = { version = "=0.0.17", path = "crates/domain/resume" }
 job-domain-scheduler = { version = "=0.0.17", path = "crates/domain/scheduler" }
+jobspy-sys = { version = "=0.0.17", path = "crates/jobspy-sys" }
 
 # Config for 'cargo dist'
 [workspace.metadata.dist]
