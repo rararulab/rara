@@ -32,5 +32,6 @@ pub mod error;
 pub mod pg_repository;
 pub mod repository;
 pub mod routes;
+pub mod sender;
 pub mod service;
 pub mod types;

@@ -142,9 +142,23 @@ impl App {
         // Create notification repository and service
         let notification_repo =
             Arc::new(job_domain_notify::pg_repository::PgNotificationRepository::new(pool.clone()));
-        let notification_service = Arc::new(job_domain_notify::service::NotificationService::new(
+        let mut notification_service = job_domain_notify::service::NotificationService::new(
             notification_repo,
-        ));
+        );
+        // Register noop senders for all channels (dev/testing)
+        notification_service.register_sender(
+            job_domain_notify::types::NotificationChannel::Telegram,
+            Arc::new(job_domain_notify::sender::NoopSender),
+        );
+        notification_service.register_sender(
+            job_domain_notify::types::NotificationChannel::Email,
+            Arc::new(job_domain_notify::sender::NoopSender),
+        );
+        notification_service.register_sender(
+            job_domain_notify::types::NotificationChannel::Webhook,
+            Arc::new(job_domain_notify::sender::NoopSender),
+        );
+        let notification_service = Arc::new(notification_service);
 
         // Create scheduler repository and service
         let scheduler_repo = Arc::new(
