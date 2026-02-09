@@ -172,25 +172,27 @@ impl App {
             None,
         ));
 
-        // Build AppState
-        let app_state = Arc::new(job_server::state::AppState {
-            analytics_service,
-            application_service,
-            interview_service,
-            resume_service,
-            notification_service: notification_service.clone(),
-            scheduler_service,
-        });
-
         // Start servers
         let grpc_handle = start_grpc_server(&self.config.grpc_config, &[Arc::new(HelloService)])
             .whatever_context("Failed to start gRPC server")?;
 
-        // Build all routes as a single closure
-        let state = app_state.clone();
+        // Build all routes by composing domain routers directly
+        let resume_svc = resume_service.clone();
+        let app_svc = application_service.clone();
+        let interview_svc = interview_service.clone();
+        let notify_svc = notification_service.clone();
+        let scheduler_svc = scheduler_service.clone();
+        let analytics_svc = analytics_service.clone();
+
         let all_routes = move |router: axum::Router| {
             let router = health_routes(router);
-            router.merge(job_server::api::api_routes(state.clone()))
+            router
+                .merge(job_domain_resume::routes::routes(resume_svc.clone()))
+                .merge(job_domain_application::routes::routes(app_svc.clone()))
+                .merge(job_domain_interview::routes::routes(interview_svc.clone()))
+                .merge(job_domain_notify::routes::routes(notify_svc.clone()))
+                .merge(job_domain_scheduler::routes::routes(scheduler_svc.clone()))
+                .merge(job_domain_analytics::routes::routes(analytics_svc.clone()))
         };
 
         let http_handle = start_rest_server(self.config.http_config.clone(), vec![all_routes])

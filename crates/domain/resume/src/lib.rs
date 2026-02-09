@@ -21,6 +21,7 @@ pub mod db_models;
 pub mod hash;
 pub mod pg_repository;
 pub mod repository;
+pub mod routes;
 pub mod service;
 pub mod types;
 pub mod version;

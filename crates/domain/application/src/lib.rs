@@ -21,6 +21,7 @@ pub mod db_models;
 pub mod error;
 pub mod pg_repository;
 pub mod repository;
+pub mod routes;
 pub mod service;
 pub mod state_machine;
 pub mod types;

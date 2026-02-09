@@ -13,6 +13,7 @@ description = "Application lifecycle management and state machine"
 
 [dependencies]
 async-trait.workspace = true
+axum = { workspace = true }
 chrono.workspace = true
 jiff.workspace = true
 job-domain-shared = { workspace = true }

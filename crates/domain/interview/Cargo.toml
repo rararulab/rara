@@ -13,6 +13,7 @@ description = "Interview scheduling, tracking, and feedback management"
 
 [dependencies]
 async-trait.workspace = true
+axum = { workspace = true }
 chrono.workspace = true
 jiff.workspace = true
 job-domain-shared = { workspace = true }

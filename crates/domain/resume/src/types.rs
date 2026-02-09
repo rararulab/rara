@@ -198,3 +198,19 @@ pub enum ResumeError {
     #[snafu(display("storage error: {message}"))]
     Storage { message: String },
 }
+
+impl axum::response::IntoResponse for ResumeError {
+    fn into_response(self) -> axum::response::Response {
+        let status = match &self {
+            ResumeError::NotFound { .. } => axum::http::StatusCode::NOT_FOUND,
+            ResumeError::InvalidContent { .. } => axum::http::StatusCode::BAD_REQUEST,
+            ResumeError::ParentNotFound { .. } => axum::http::StatusCode::BAD_REQUEST,
+            ResumeError::DuplicateContent { .. } => axum::http::StatusCode::CONFLICT,
+            ResumeError::Storage { .. } => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        let body = serde_json::json!({
+            "error": { "status": status.as_u16(), "message": self.to_string() }
+        });
+        (status, axum::Json(body)).into_response()
+    }
+}

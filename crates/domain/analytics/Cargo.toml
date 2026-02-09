@@ -13,6 +13,7 @@ description = "Metrics, analytics, and reporting for the job automation pipeline
 
 [dependencies]
 async-trait.workspace = true
+axum = { workspace = true }
 chrono.workspace = true
 jiff.workspace = true
 job-domain-shared = { workspace = true }

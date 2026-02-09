@@ -58,3 +58,19 @@ pub enum InterviewError {
         to:   String,
     },
 }
+
+impl axum::response::IntoResponse for InterviewError {
+    fn into_response(self) -> axum::response::Response {
+        let status = match &self {
+            InterviewError::NotFound { .. } => axum::http::StatusCode::NOT_FOUND,
+            InterviewError::ValidationError { .. } => axum::http::StatusCode::BAD_REQUEST,
+            InterviewError::InvalidStatusTransition { .. } => axum::http::StatusCode::CONFLICT,
+            InterviewError::RepositoryError { .. } => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            InterviewError::PrepGenerationFailed { .. } => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        let body = serde_json::json!({
+            "error": { "status": status.as_u16(), "message": self.to_string() }
+        });
+        (status, axum::Json(body)).into_response()
+    }
+}

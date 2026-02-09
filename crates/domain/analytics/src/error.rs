@@ -32,3 +32,17 @@ pub enum AnalyticsError {
     #[snafu(display("duplicate snapshot for period {period} on date {date}"))]
     DuplicateSnapshot { period: String, date: String },
 }
+
+impl axum::response::IntoResponse for AnalyticsError {
+    fn into_response(self) -> axum::response::Response {
+        let status = match &self {
+            AnalyticsError::NotFound { .. } => axum::http::StatusCode::NOT_FOUND,
+            AnalyticsError::Repository { .. } => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            AnalyticsError::DuplicateSnapshot { .. } => axum::http::StatusCode::CONFLICT,
+        };
+        let body = serde_json::json!({
+            "error": { "status": status.as_u16(), "message": self.to_string() }
+        });
+        (status, axum::Json(body)).into_response()
+    }
+}

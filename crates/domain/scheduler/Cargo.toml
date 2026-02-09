@@ -13,6 +13,7 @@ description = "Cron and task scheduling orchestration for recurring jobs"
 
 [dependencies]
 async-trait.workspace = true
+axum = { workspace = true }
 chrono.workspace = true
 jiff.workspace = true
 job-domain-shared = { workspace = true }

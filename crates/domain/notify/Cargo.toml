@@ -13,6 +13,7 @@ description = "Notification dispatch (Telegram, email) for domain events"
 
 [dependencies]
 async-trait.workspace = true
+axum = { workspace = true }
 chrono.workspace = true
 jiff.workspace = true
 job-model.workspace = true

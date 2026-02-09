@@ -15,7 +15,6 @@ description = "HTTP and gRPC server implementation for job"
 async-trait = { workspace = true }
 axum = { workspace = true }
 bon = { workspace = true }
-chrono = { workspace = true }
 derive_more = { workspace = true }
 jiff = { workspace = true }
 smart-default = { workspace = true }
@@ -24,13 +23,6 @@ axum-tracing-opentelemetry = { workspace = true }
 futures = { workspace = true }
 job-api = { workspace = true }
 job-base = { workspace = true }
-job-domain-analytics = { workspace = true }
-job-domain-application = { workspace = true }
-job-domain-shared = { workspace = true }
-job-domain-interview = { workspace = true }
-job-domain-notify = { workspace = true }
-job-domain-resume = { workspace = true }
-job-domain-scheduler = { workspace = true }
 job-error = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -48,7 +40,6 @@ tower = { workspace = true }
 tower-http = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-uuid = { workspace = true }
 
 [dev-dependencies]
 reqwest = { version = "0.13", features = ["json"] }

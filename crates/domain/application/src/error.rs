@@ -46,3 +46,19 @@ pub enum ApplicationError {
     #[snafu(display("validation error: {message}"))]
     ValidationError { message: String },
 }
+
+impl axum::response::IntoResponse for ApplicationError {
+    fn into_response(self) -> axum::response::Response {
+        let status = match &self {
+            ApplicationError::NotFound { .. } => axum::http::StatusCode::NOT_FOUND,
+            ApplicationError::ValidationError { .. } => axum::http::StatusCode::BAD_REQUEST,
+            ApplicationError::InvalidTransition { .. } => axum::http::StatusCode::CONFLICT,
+            ApplicationError::DuplicateApplication { .. } => axum::http::StatusCode::CONFLICT,
+            ApplicationError::RepositoryError { .. } => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        let body = serde_json::json!({
+            "error": { "status": status.as_u16(), "message": self.to_string() }
+        });
+        (status, axum::Json(body)).into_response()
+    }
+}
