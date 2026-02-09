@@ -32,6 +32,29 @@ export interface Application {
   updated_at: string;
 }
 
+export interface StatusChangeRecord {
+  id: string;
+  application_id: string;
+  from_status: string | null;
+  to_status: string;
+  source: string | null;
+  note: string | null;
+  changed_at: string;
+}
+
+export const APPLICATION_STATUSES = [
+  "draft",
+  "applied",
+  "screening",
+  "interviewing",
+  "offer",
+  "accepted",
+  "rejected",
+  "withdrawn",
+] as const;
+
+export type ApplicationStatus = (typeof APPLICATION_STATUSES)[number];
+
 // Resumes
 export interface Resume {
   id: string;
