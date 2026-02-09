@@ -12,23 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # job-domain-analytics
+//! Database (store) models for the analytics domain.
 //!
-//! Metrics, analytics, and reporting for the Job Automation platform.
-//!
-//! This crate aggregates data across all domains to provide insights such as:
-//!
-//! - Application funnel metrics (applied -> interview -> offer rates).
-//! - Source effectiveness ranking.
-//! - Time-to-hire statistics.
-//! - AI cost and token usage tracking.
-//!
-//! It stores periodic snapshots and exposes query interfaces for dashboards.
+//! These are shared across crates via the `job-model` crate.
 
-pub mod convert;
-pub mod db_models;
-pub mod error;
-pub mod pg_repository;
-pub mod repository;
-pub mod service;
-pub mod types;
+pub use job_model::metrics::MetricsSnapshot;
