@@ -189,6 +189,35 @@ impl App {
             analytics_repo,
         ));
 
+        // Job Source domain — discovery service with registered drivers
+        let mut job_source_service = job_domain_job_source::service::JobSourceService::new();
+
+        // Always register the manual source driver
+        job_source_service.register(Arc::new(job_domain_job_source::manual::ManualSource::new()));
+
+        // Register JobSpy driver if available (env-based config)
+        // JOBSPY_SITES: comma-separated list of sites (default: "indeed,linkedin,glassdoor")
+        // If JOBSPY_DISABLED is set, skip JobSpy registration
+        if std::env::var("JOBSPY_DISABLED").is_err() {
+            let sites = parse_jobspy_sites(
+                &std::env::var("JOBSPY_SITES")
+                    .unwrap_or_else(|_| "indeed,linkedin,glassdoor".to_owned()),
+            );
+            match job_domain_job_source::jobspy::JobSpyDriver::new(sites) {
+                Ok(driver) => {
+                    info!("JobSpy driver registered");
+                    job_source_service.register(Arc::new(driver));
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to initialize JobSpy driver (continuing without it): {e}"
+                    );
+                }
+            }
+        }
+
+        let _job_source_service = Arc::new(job_source_service);
+
         // Create domain services
         let resume_service = Arc::new(job_domain_resume::service::ResumeService::new(resume_repo));
         let application_service = Arc::new(
@@ -307,6 +336,26 @@ async fn shutdown_signal(shutdown_rx: oneshot::Receiver<()>) {
         () = terminate => { info!("Received terminate signal"); },
         _ = shutdown_rx => { info!("Received shutdown signal"); },
     }
+}
+
+fn parse_jobspy_sites(sites_str: &str) -> Vec<jobspy_sys::types::SiteName> {
+    sites_str
+        .split(',')
+        .filter_map(|s| match s.trim().to_lowercase().as_str() {
+            "linkedin" => Some(jobspy_sys::types::SiteName::LinkedIn),
+            "indeed" => Some(jobspy_sys::types::SiteName::Indeed),
+            "glassdoor" => Some(jobspy_sys::types::SiteName::Glassdoor),
+            "google" => Some(jobspy_sys::types::SiteName::Google),
+            "zip_recruiter" | "ziprecruiter" => Some(jobspy_sys::types::SiteName::ZipRecruiter),
+            "bayt" => Some(jobspy_sys::types::SiteName::Bayt),
+            "naukri" => Some(jobspy_sys::types::SiteName::Naukri),
+            "bdjobs" => Some(jobspy_sys::types::SiteName::BDJobs),
+            _ => {
+                tracing::warn!("Unknown job site: {}", s.trim());
+                None
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
