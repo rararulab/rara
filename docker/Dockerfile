@@ -77,3 +77,5 @@ RUN adduser -D -s /bin/sh appuser
 USER appuser
 
 WORKDIR /app
+
+CMD ["job", "server"]

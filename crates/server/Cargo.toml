@@ -24,6 +24,7 @@ axum-tracing-opentelemetry = { workspace = true }
 futures = { workspace = true }
 job-api = { workspace = true }
 job-base = { workspace = true }
+job-domain-analytics = { workspace = true }
 job-domain-application = { workspace = true }
 job-domain-core = { workspace = true }
 job-domain-interview = { workspace = true }

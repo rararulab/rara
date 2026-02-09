@@ -147,10 +147,19 @@ impl App {
         ));
 
         // Create scheduler repository and service
-        let scheduler_repo =
-            Arc::new(job_domain_scheduler::pg_repository::PgSchedulerRepository::new(pool));
+        let scheduler_repo = Arc::new(
+            job_domain_scheduler::pg_repository::PgSchedulerRepository::new(pool.clone()),
+        );
         let scheduler_service = Arc::new(job_domain_scheduler::service::SchedulerService::new(
             scheduler_repo,
+        ));
+
+        // Create analytics repository and service
+        let analytics_repo = Arc::new(
+            job_domain_analytics::pg_repository::PgAnalyticsRepository::new(pool),
+        );
+        let analytics_service = Arc::new(job_domain_analytics::service::AnalyticsService::new(
+            analytics_repo,
         ));
 
         // Create domain services
@@ -165,6 +174,7 @@ impl App {
 
         // Build AppState
         let app_state = Arc::new(job_server::state::AppState {
+            analytics_service,
             application_service,
             interview_service,
             resume_service,

@@ -14,6 +14,7 @@
 
 //! HTTP API route modules for the job server.
 
+pub mod analytics;
 pub mod application;
 pub mod error;
 pub mod interview;
@@ -35,5 +36,6 @@ pub fn api_routes<R: ResumeRepository + 'static>(state: Arc<AppState<R>>) -> Rou
         .merge(application::application_routes(state.clone()))
         .merge(interview::interview_routes(state.clone()))
         .merge(notification::notification_routes(state.clone()))
-        .merge(scheduler::scheduler_routes(state))
+        .merge(scheduler::scheduler_routes(state.clone()))
+        .merge(analytics::analytics_routes(state))
 }

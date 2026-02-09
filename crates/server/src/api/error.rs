@@ -18,6 +18,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use job_domain_analytics::error::AnalyticsError;
 use job_domain_application::error::ApplicationError;
 use job_domain_interview::error::InterviewError;
 use job_domain_notify::error::NotifyError;
@@ -42,6 +43,20 @@ impl IntoResponse for ApiError {
             }
         });
         (self.status, axum::Json(body)).into_response()
+    }
+}
+
+impl From<AnalyticsError> for ApiError {
+    fn from(err: AnalyticsError) -> Self {
+        let status = match &err {
+            AnalyticsError::NotFound { .. } => StatusCode::NOT_FOUND,
+            AnalyticsError::Repository { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            AnalyticsError::DuplicateSnapshot { .. } => StatusCode::CONFLICT,
+        };
+        Self {
+            status,
+            message: err.to_string(),
+        }
     }
 }
 
