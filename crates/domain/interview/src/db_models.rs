@@ -12,31 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Database (sqlx) model types for the interview_plan table.
+//! Database (store) models for the interview domain.
+//!
+//! These are shared across crates via the `job-model` crate.
 
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
-use uuid::Uuid;
-
-/// An interview preparation plan (DB row).
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct InterviewPlan {
-    pub id:              Uuid,
-    pub application_id:  Uuid,
-    pub title:           String,
-    pub company:         String,
-    pub position:        String,
-    pub job_description: Option<String>,
-    pub round:           String,
-    pub description:     Option<String>,
-    pub scheduled_at:    Option<DateTime<Utc>>,
-    pub task_status:     i16,
-    pub materials:       Option<serde_json::Value>,
-    pub notes:           Option<String>,
-    pub trace_id:        Option<String>,
-    pub is_deleted:      bool,
-    pub deleted_at:      Option<DateTime<Utc>>,
-    pub created_at:      DateTime<Utc>,
-    pub updated_at:      DateTime<Utc>,
-}
+pub use job_model::interview::InterviewPlan;

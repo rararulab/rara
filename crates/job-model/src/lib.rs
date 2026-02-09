@@ -12,8 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Database (store) models for the resume domain.
+//! Database-layer models and SQL migrations.
 //!
-//! These are shared across crates via the `job-model` crate.
+//! This crate owns the "store" models used by repositories (`sqlx::FromRow`)
+//! and the SQL migrations that define and evolve those tables.
 
-pub use job_model::resume::Resume;
+#![deny(unsafe_code)]
+
+pub mod application;
+pub mod interview;
+pub mod notify;
+pub mod resume;
+pub mod scheduler;

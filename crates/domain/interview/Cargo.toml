@@ -16,6 +16,7 @@ async-trait.workspace = true
 chrono.workspace = true
 jiff.workspace = true
 job-domain-core = { workspace = true }
+job-model.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true

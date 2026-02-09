@@ -256,19 +256,11 @@ mod tests {
 
         // Run migrations in order
         let migrations: &[&str] = &[
-            include_str!("../../../common/yunara-store/migrations/20260127000000_init.sql"),
-            include_str!(
-                "../../../common/yunara-store/migrations/20260208000000_domain_models.sql"
-            ),
-            include_str!(
-                "../../../common/yunara-store/migrations/20260209000000_resume_version_mgmt.sql"
-            ),
-            include_str!(
-                "../../../common/yunara-store/migrations/20260210000000_schema_alignment.sql"
-            ),
-            include_str!(
-                "../../../common/yunara-store/migrations/20260211000000_notify_priority.sql"
-            ),
+            include_str!("../../../job-model/migrations/20260127000000_init.sql"),
+            include_str!("../../../job-model/migrations/20260208000000_domain_models.sql"),
+            include_str!("../../../job-model/migrations/20260209000000_resume_version_mgmt.sql"),
+            include_str!("../../../job-model/migrations/20260210000000_schema_alignment.sql"),
+            include_str!("../../../job-model/migrations/20260211000000_notify_priority.sql"),
         ];
 
         for sql in migrations {
@@ -278,32 +270,21 @@ mod tests {
         // The scheduler migration references set_updated_at() but the
         // function was created as trigger_set_updated_at() in the domain
         // migration. Fix the reference before executing.
-        let scheduler_sql = include_str!(
-            "../../../common/yunara-store/migrations/20260211000001_scheduler_tables.sql"
-        )
-        .replace(
-            "FUNCTION set_updated_at()",
-            "FUNCTION trigger_set_updated_at()",
-        );
+        let scheduler_sql =
+            include_str!("../../../job-model/migrations/20260211000001_scheduler_tables.sql")
+                .replace(
+                    "FUNCTION set_updated_at()",
+                    "FUNCTION trigger_set_updated_at()",
+                );
         sqlx::raw_sql(&scheduler_sql).execute(&pool).await.unwrap();
 
         // Convert domain enum columns to SMALLINT codes.
         let domain_int_migrations: &[&str] = &[
-            include_str!(
-                "../../../common/yunara-store/migrations/20260212000000_application_int_enums.sql"
-            ),
-            include_str!(
-                "../../../common/yunara-store/migrations/20260212000001_interview_int_enums.sql"
-            ),
-            include_str!(
-                "../../../common/yunara-store/migrations/20260212000002_notify_int_enums.sql"
-            ),
-            include_str!(
-                "../../../common/yunara-store/migrations/20260212000003_resume_int_enums.sql"
-            ),
-            include_str!(
-                "../../../common/yunara-store/migrations/20260212000004_scheduler_int_enums.sql"
-            ),
+            include_str!("../../../job-model/migrations/20260212000000_application_int_enums.sql"),
+            include_str!("../../../job-model/migrations/20260212000001_interview_int_enums.sql"),
+            include_str!("../../../job-model/migrations/20260212000002_notify_int_enums.sql"),
+            include_str!("../../../job-model/migrations/20260212000003_resume_int_enums.sql"),
+            include_str!("../../../job-model/migrations/20260212000004_scheduler_int_enums.sql"),
         ];
         for sql in domain_int_migrations {
             sqlx::raw_sql(sql).execute(&pool).await.unwrap();

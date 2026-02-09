@@ -1,0 +1,22 @@
+[package]
+name = "job-model"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Database-layer models and SQL migrations shared across domains"
+
+[dependencies]
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx = { workspace = true }
+uuid = { workspace = true }
+
+[lints]
+workspace = true

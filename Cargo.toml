@@ -40,6 +40,7 @@ members = [
     "crates/common/utils/downloader",
     "crates/common/worker",
     "crates/common/yunara-store",
+    "crates/job-model",
     "crates/domain/core",
     "crates/domain/job-source",
     "crates/domain/ai",
@@ -110,6 +111,7 @@ job-common-runtime = { version = "=0.0.17", path = "crates/common/runtime" }
 job-common-telemetry = { version = "=0.0.17", path = "crates/common/telemetry" }
 job-common-worker = { version = "=0.0.17", path = "crates/common/worker" }
 job-error = { version = "=0.0.17", path = "crates/common/error" }
+job-model = { version = "=0.0.17", path = "crates/job-model" }
 job-server = { version = "=0.0.17", path = "crates/server" }
 yunara-store = { version = "0.1.0", path = "crates/common/yunara-store" }
 

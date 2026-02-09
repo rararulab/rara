@@ -48,7 +48,9 @@ impl DBStore {
             config.database_url
         );
 
-        sqlx::migrate!("./migrations").run(&pool).await?;
+        sqlx::migrate!("../../job-model/migrations")
+            .run(&pool)
+            .await?;
 
         Ok(Self { pool })
     }
