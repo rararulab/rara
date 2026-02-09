@@ -100,3 +100,93 @@ pub struct TaskFilter {
     /// Filter by tasks whose name contains this string.
     pub name_contains: Option<String>,
 }
+
+// ---------------------------------------------------------------------------
+// DB model conversions
+// ---------------------------------------------------------------------------
+
+use job_domain_shared::convert::{
+    chrono_opt_to_timestamp, chrono_to_timestamp, timestamp_opt_to_chrono, timestamp_to_chrono,
+    u8_from_i16,
+};
+use job_model::scheduler::{SchedulerTask, TaskRunHistory};
+
+fn task_run_status_from_i16(value: i16) -> TaskRunStatus {
+    let repr = u8_from_i16(value, "scheduler_task.last_status/task_run_history.status");
+    TaskRunStatus::from_repr(repr)
+        .unwrap_or_else(|| panic!("invalid task run status: {value}"))
+}
+
+/// Store `SchedulerTask` -> Domain `ScheduledTask`.
+impl From<SchedulerTask> for ScheduledTask {
+    fn from(t: SchedulerTask) -> Self {
+        Self {
+            id:            SchedulerTaskId::from(t.id),
+            name:          t.name,
+            cron_expr:     t.cron_expr,
+            enabled:       t.enabled,
+            last_run_at:   chrono_opt_to_timestamp(t.last_run_at),
+            last_status:   t.last_status.map(task_run_status_from_i16),
+            last_error:    t.last_error,
+            run_count:     t.run_count,
+            failure_count: t.failure_count,
+            created_at:    chrono_to_timestamp(t.created_at),
+            updated_at:    chrono_to_timestamp(t.updated_at),
+        }
+    }
+}
+
+/// Domain `ScheduledTask` -> Store `SchedulerTask`.
+impl From<ScheduledTask> for SchedulerTask {
+    fn from(t: ScheduledTask) -> Self {
+        Self {
+            id:            t.id.into_inner(),
+            name:          t.name,
+            cron_expr:     t.cron_expr,
+            enabled:       t.enabled,
+            last_run_at:   timestamp_opt_to_chrono(t.last_run_at),
+            last_status:   t.last_status.map(|s| s as u8 as i16),
+            last_error:    t.last_error,
+            run_count:     t.run_count,
+            failure_count: t.failure_count,
+            is_deleted:    false,
+            deleted_at:    None,
+            created_at:    timestamp_to_chrono(t.created_at),
+            updated_at:    timestamp_to_chrono(t.updated_at),
+        }
+    }
+}
+
+/// Store `TaskRunHistory` -> Domain `TaskRunRecord`.
+impl From<TaskRunHistory> for TaskRunRecord {
+    fn from(r: TaskRunHistory) -> Self {
+        Self {
+            id:          r.id,
+            task_id:     SchedulerTaskId::from(r.task_id),
+            status:      task_run_status_from_i16(r.status),
+            started_at:  chrono_to_timestamp(r.started_at),
+            finished_at: chrono_opt_to_timestamp(r.finished_at),
+            duration_ms: r.duration_ms,
+            error:       r.error,
+            output:      r.output,
+            created_at:  chrono_to_timestamp(r.created_at),
+        }
+    }
+}
+
+/// Domain `TaskRunRecord` -> Store `TaskRunHistory`.
+impl From<TaskRunRecord> for TaskRunHistory {
+    fn from(r: TaskRunRecord) -> Self {
+        Self {
+            id:          r.id,
+            task_id:     r.task_id.into_inner(),
+            status:      r.status as u8 as i16,
+            started_at:  timestamp_to_chrono(r.started_at),
+            finished_at: timestamp_opt_to_chrono(r.finished_at),
+            duration_ms: r.duration_ms,
+            error:       r.error,
+            output:      r.output,
+            created_at:  timestamp_to_chrono(r.created_at),
+        }
+    }
+}

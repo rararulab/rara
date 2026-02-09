@@ -16,7 +16,6 @@
 //!
 //! Interview management and AI preparation plan generation.
 
-pub mod convert;
 pub mod error;
 pub mod pg_repository;
 pub mod prep_generator;

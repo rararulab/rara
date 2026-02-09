@@ -253,6 +253,112 @@ pub struct PrepGenerationRequest {
 }
 
 // ---------------------------------------------------------------------------
+// DB model conversions
+// ---------------------------------------------------------------------------
+
+use job_domain_shared::convert::{
+    chrono_opt_to_timestamp, chrono_to_timestamp, timestamp_opt_to_chrono, timestamp_to_chrono,
+    u8_from_i16,
+};
+use job_model::interview::InterviewPlan as StoreInterviewPlan;
+
+/// Parse a round string from the DB into a domain `InterviewRound`.
+pub fn parse_interview_round(s: &str) -> InterviewRound {
+    match s {
+        "phone_screen" => InterviewRound::PhoneScreen,
+        "technical" => InterviewRound::Technical,
+        "system_design" => InterviewRound::SystemDesign,
+        "behavioral" => InterviewRound::Behavioral,
+        "culture_fit" => InterviewRound::CultureFit,
+        "manager_round" => InterviewRound::ManagerRound,
+        "final_round" => InterviewRound::FinalRound,
+        other => InterviewRound::Other(other.to_owned()),
+    }
+}
+
+/// Serialise a domain `InterviewRound` to its DB string representation.
+pub fn interview_round_to_string(r: &InterviewRound) -> String {
+    match r {
+        InterviewRound::PhoneScreen => "phone_screen".to_owned(),
+        InterviewRound::Technical => "technical".to_owned(),
+        InterviewRound::SystemDesign => "system_design".to_owned(),
+        InterviewRound::Behavioral => "behavioral".to_owned(),
+        InterviewRound::CultureFit => "culture_fit".to_owned(),
+        InterviewRound::ManagerRound => "manager_round".to_owned(),
+        InterviewRound::FinalRound => "final_round".to_owned(),
+        InterviewRound::Other(s) => s.clone(),
+    }
+}
+
+fn interview_task_status_from_i16(value: i16) -> InterviewTaskStatus {
+    let repr = u8_from_i16(value, "interview_plan.task_status");
+    InterviewTaskStatus::from_repr(repr)
+        .unwrap_or_else(|| panic!("invalid interview_plan.task_status: {value}"))
+}
+
+/// Store `InterviewPlan` -> Domain `InterviewPlan`.
+///
+/// `materials` (JSONB) is deserialized into `PrepMaterials`; on failure
+/// we fall back to `PrepMaterials::default()`.
+impl From<StoreInterviewPlan> for InterviewPlan {
+    fn from(p: StoreInterviewPlan) -> Self {
+        let prep_materials: PrepMaterials = p
+            .materials
+            .as_ref()
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+
+        Self {
+            id: job_domain_shared::id::InterviewId::from(p.id),
+            application_id: job_domain_shared::id::ApplicationId::from(p.application_id),
+            title: p.title,
+            company: p.company,
+            position: p.position,
+            job_description: p.job_description,
+            round: parse_interview_round(&p.round),
+            scheduled_at: chrono_opt_to_timestamp(p.scheduled_at),
+            task_status: interview_task_status_from_i16(p.task_status),
+            prep_materials,
+            notes: p.notes,
+            trace_id: p.trace_id,
+            is_deleted: p.is_deleted,
+            deleted_at: chrono_opt_to_timestamp(p.deleted_at),
+            created_at: chrono_to_timestamp(p.created_at),
+            updated_at: chrono_to_timestamp(p.updated_at),
+        }
+    }
+}
+
+/// Domain `InterviewPlan` -> Store `InterviewPlan`.
+///
+/// `prep_materials` is serialised to JSONB.
+impl From<InterviewPlan> for StoreInterviewPlan {
+    fn from(p: InterviewPlan) -> Self {
+        let materials = serde_json::to_value(&p.prep_materials).ok();
+
+        Self {
+            id: p.id.into_inner(),
+            application_id: p.application_id.into_inner(),
+            title: p.title,
+            company: p.company,
+            position: p.position,
+            job_description: p.job_description,
+            round: interview_round_to_string(&p.round),
+            description: None,
+            scheduled_at: timestamp_opt_to_chrono(p.scheduled_at),
+            task_status: p.task_status as u8 as i16,
+            materials,
+            notes: p.notes,
+            trace_id: p.trace_id,
+            is_deleted: p.is_deleted,
+            deleted_at: timestamp_opt_to_chrono(p.deleted_at),
+            created_at: timestamp_to_chrono(p.created_at),
+            updated_at: timestamp_to_chrono(p.updated_at),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
