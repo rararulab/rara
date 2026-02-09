@@ -31,7 +31,7 @@
 
 use std::collections::HashMap;
 
-use job_domain_core::status::ApplicationStatus;
+use crate::types::ApplicationStatus;
 
 use crate::error::{ApplicationError, InvalidTransitionSnafu};
 
@@ -156,7 +156,7 @@ impl Default for StateMachine {
 
 #[cfg(test)]
 mod tests {
-    use job_domain_core::status::ApplicationStatus;
+    use crate::types::ApplicationStatus;
 
     use super::*;
 

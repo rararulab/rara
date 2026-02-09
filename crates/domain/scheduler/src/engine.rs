@@ -176,7 +176,7 @@ mod tests {
     use std::sync::Mutex;
 
     use jiff::Timestamp;
-    use job_domain_core::id::SchedulerTaskId;
+    use job_domain_shared::id::SchedulerTaskId;
 
     use crate::repository::SchedulerRepository;
     use crate::types::{CreateTaskRequest, TaskRunRecord};

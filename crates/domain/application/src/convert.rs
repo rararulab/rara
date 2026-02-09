@@ -50,9 +50,9 @@ fn u8_from_i16(value: i16, field: &'static str) -> u8 {
     u8::try_from(value).unwrap_or_else(|_| panic!("invalid {field}: {value}"))
 }
 
-fn application_status_from_i16(value: i16) -> job_domain_core::status::ApplicationStatus {
+fn application_status_from_i16(value: i16) -> crate::types::ApplicationStatus {
     let repr = u8_from_i16(value, "application.status");
-    job_domain_core::status::ApplicationStatus::from_repr(repr)
+    crate::types::ApplicationStatus::from_repr(repr)
         .unwrap_or_else(|| panic!("invalid application.status: {value}"))
 }
 
@@ -80,9 +80,9 @@ fn application_priority_from_i16(value: i16) -> types::Priority {
 impl From<db_models::Application> for types::Application {
     fn from(a: db_models::Application) -> Self {
         Self {
-            id:           job_domain_core::id::ApplicationId::from(a.id),
-            job_id:       job_domain_core::id::JobSourceId::from(a.job_id),
-            resume_id:    job_domain_core::id::ResumeId::from(a.resume_id.unwrap_or(Uuid::nil())),
+            id:           job_domain_shared::id::ApplicationId::from(a.id),
+            job_id:       job_domain_shared::id::JobSourceId::from(a.job_id),
+            resume_id:    job_domain_shared::id::ResumeId::from(a.resume_id.unwrap_or(Uuid::nil())),
             channel:      application_channel_from_i16(a.channel),
             status:       application_status_from_i16(a.status),
             cover_letter: a.cover_letter,
@@ -153,11 +153,11 @@ impl From<db_models::ApplicationStatusHistory> for types::StatusChangeRecord {
     fn from(h: db_models::ApplicationStatusHistory) -> Self {
         Self {
             id:             h.id,
-            application_id: job_domain_core::id::ApplicationId::from(h.application_id),
+            application_id: job_domain_shared::id::ApplicationId::from(h.application_id),
             from_status:    h
                 .from_status
                 .map(application_status_from_i16)
-                .unwrap_or(job_domain_core::status::ApplicationStatus::Draft),
+                .unwrap_or(crate::types::ApplicationStatus::Draft),
             to_status:      application_status_from_i16(h.to_status),
             changed_by:     parse_change_source(h.changed_by.as_deref()),
             note:           h.note,
@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn application_status_from_i16_works() {
-        use job_domain_core::status::ApplicationStatus as D;
+        use crate::types::ApplicationStatus as D;
 
         assert_eq!(application_status_from_i16(0), D::Draft);
         assert_eq!(application_status_from_i16(1), D::Submitted);

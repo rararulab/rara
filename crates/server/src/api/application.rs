@@ -26,7 +26,8 @@ use job_domain_application::types::{
     Application, ApplicationFilter, ChangeSource, CreateApplicationRequest, StatusChangeRecord,
     UpdateApplicationRequest,
 };
-use job_domain_core::{id::ApplicationId, status::ApplicationStatus};
+use job_domain_application::types::ApplicationStatus;
+use job_domain_shared::id::ApplicationId;
 use job_domain_resume::repository::ResumeRepository;
 use serde::Deserialize;
 use uuid::Uuid;

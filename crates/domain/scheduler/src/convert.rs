@@ -16,7 +16,7 @@
 
 use chrono::{DateTime, TimeZone as _, Utc};
 use jiff::Timestamp;
-use job_domain_core::id::SchedulerTaskId;
+use job_domain_shared::id::SchedulerTaskId;
 
 use crate::{db_models, types};
 

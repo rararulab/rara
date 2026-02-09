@@ -21,7 +21,7 @@ use axum::{
     extract::{Path, Query, State},
     routing::{get, post},
 };
-use job_domain_core::id::SchedulerTaskId;
+use job_domain_shared::id::SchedulerTaskId;
 use job_domain_resume::repository::ResumeRepository;
 use job_domain_scheduler::types::{ScheduledTask, TaskFilter, TaskRunRecord};
 use serde::Deserialize;

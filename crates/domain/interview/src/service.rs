@@ -21,7 +21,7 @@
 use std::sync::Arc;
 
 use jiff::Timestamp;
-use job_domain_core::id::{ApplicationId, InterviewId};
+use job_domain_shared::id::{ApplicationId, InterviewId};
 use tracing::instrument;
 
 use crate::{

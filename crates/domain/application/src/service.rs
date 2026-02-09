@@ -21,7 +21,9 @@
 use std::sync::Arc;
 
 use jiff::Timestamp;
-use job_domain_core::{id::ApplicationId, status::ApplicationStatus};
+use job_domain_shared::id::ApplicationId;
+
+use crate::types::ApplicationStatus;
 use tracing::instrument;
 use uuid::Uuid;
 
@@ -291,10 +293,9 @@ impl std::fmt::Debug for ApplicationService {
 mod tests {
     use std::{sync::Arc, time::Duration};
 
-    use job_domain_core::{
-        id::{ApplicationId, JobSourceId, ResumeId},
-        status::ApplicationStatus,
-    };
+    use job_domain_shared::id::{ApplicationId, JobSourceId, ResumeId};
+
+    use crate::types::ApplicationStatus;
     use sqlx::postgres::PgPoolOptions;
     use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::postgres::Postgres;

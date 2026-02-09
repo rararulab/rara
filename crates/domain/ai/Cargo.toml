@@ -15,7 +15,7 @@ description = "AI provider abstraction, prompt templates, and model routing"
 async-trait.workspace = true
 chrono.workspace = true
 jiff.workspace = true
-job-domain-core = { workspace = true }
+job-domain-shared = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true

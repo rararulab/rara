@@ -12,11 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # job-domain-core
+//! # job-domain-shared
 //!
-//! Shared domain types and traits.
+//! Shared cross-domain ID definitions.
 
-pub mod events;
 pub mod id;
-pub mod repository;
-pub mod status;

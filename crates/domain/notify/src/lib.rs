@@ -23,7 +23,7 @@
 //! - Email (SMTP or provider API).
 //! - Webhooks.
 //!
-//! It listens to domain events (via the types from [`job_domain_core::events`])
+//! It listens to domain events (via the types from `job_domain_shared`)
 //! and translates them into human-readable messages dispatched through the
 //! configured channel(s).
 

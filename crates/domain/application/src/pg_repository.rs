@@ -18,7 +18,7 @@
 use std::fmt::Write;
 
 use async_trait::async_trait;
-use job_domain_core::id::ApplicationId;
+use job_domain_shared::id::ApplicationId;
 use sqlx::PgPool;
 
 use crate::{
@@ -238,10 +238,9 @@ impl crate::repository::ApplicationRepository for PgApplicationRepository {
 mod tests {
     use std::time::Duration;
 
-    use job_domain_core::{
-        id::{JobSourceId, ResumeId},
-        status::ApplicationStatus,
-    };
+    use job_domain_shared::id::{JobSourceId, ResumeId};
+
+    use crate::types::ApplicationStatus;
     use sqlx::postgres::PgPoolOptions;
     use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::postgres::Postgres;

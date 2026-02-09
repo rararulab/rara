@@ -104,8 +104,8 @@ impl From<db_models::InterviewPlan> for types::InterviewPlan {
             .unwrap_or_default();
 
         Self {
-            id: job_domain_core::id::InterviewId::from(p.id),
-            application_id: job_domain_core::id::ApplicationId::from(p.application_id),
+            id: job_domain_shared::id::InterviewId::from(p.id),
+            application_id: job_domain_shared::id::ApplicationId::from(p.application_id),
             title: p.title,
             company: p.company,
             position: p.position,
@@ -233,8 +233,8 @@ mod tests {
     fn interview_plan_domain_to_store() {
         let now = jiff::Timestamp::now();
         let domain = types::InterviewPlan {
-            id:              job_domain_core::id::InterviewId::from(Uuid::new_v4()),
-            application_id:  job_domain_core::id::ApplicationId::from(Uuid::new_v4()),
+            id:              job_domain_shared::id::InterviewId::from(Uuid::new_v4()),
+            application_id:  job_domain_shared::id::ApplicationId::from(Uuid::new_v4()),
             title:           "Final".into(),
             company:         "BigCo".into(),
             position:        "Staff".into(),

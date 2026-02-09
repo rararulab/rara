@@ -26,7 +26,7 @@ job-api = { workspace = true }
 job-base = { workspace = true }
 job-domain-analytics = { workspace = true }
 job-domain-application = { workspace = true }
-job-domain-core = { workspace = true }
+job-domain-shared = { workspace = true }
 job-domain-interview = { workspace = true }
 job-domain-notify = { workspace = true }
 job-domain-resume = { workspace = true }

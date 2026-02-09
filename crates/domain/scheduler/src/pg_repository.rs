@@ -18,7 +18,7 @@
 use std::fmt::Write;
 
 use async_trait::async_trait;
-use job_domain_core::id::SchedulerTaskId;
+use job_domain_shared::id::SchedulerTaskId;
 use sqlx::PgPool;
 
 use crate::{
@@ -258,7 +258,7 @@ mod tests {
     use std::time::Duration;
 
     use jiff::Timestamp;
-    use job_domain_core::id::SchedulerTaskId;
+    use job_domain_shared::id::SchedulerTaskId;
     use sqlx::postgres::PgPoolOptions;
     use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::postgres::Postgres;

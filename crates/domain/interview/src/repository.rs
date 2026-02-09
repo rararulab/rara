@@ -20,7 +20,7 @@
 //! layer.
 
 use async_trait::async_trait;
-use job_domain_core::id::{ApplicationId, InterviewId};
+use job_domain_shared::id::{ApplicationId, InterviewId};
 
 use crate::{
     error::InterviewError,

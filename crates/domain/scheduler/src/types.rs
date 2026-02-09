@@ -15,7 +15,7 @@
 //! Domain types for scheduler task management.
 
 use jiff::Timestamp;
-use job_domain_core::id::SchedulerTaskId;
+use job_domain_shared::id::SchedulerTaskId;
 use serde::{Deserialize, Serialize};
 use strum_macros::FromRepr;
 use uuid::Uuid;

@@ -41,7 +41,7 @@ members = [
     "crates/common/worker",
     "crates/common/yunara-store",
     "crates/job-model",
-    "crates/domain/core",
+    "crates/domain/shared",
     "crates/domain/job-source",
     "crates/domain/ai",
     "crates/domain/resume",
@@ -119,7 +119,7 @@ yunara-store = { version = "0.1.0", path = "crates/common/yunara-store" }
 job-domain-ai = { version = "=0.0.17", path = "crates/domain/ai" }
 job-domain-analytics = { version = "=0.0.17", path = "crates/domain/analytics" }
 job-domain-application = { version = "=0.0.17", path = "crates/domain/application" }
-job-domain-core = { version = "=0.0.17", path = "crates/domain/core" }
+job-domain-shared = { version = "=0.0.17", path = "crates/domain/shared" }
 job-domain-interview = { version = "=0.0.17", path = "crates/domain/interview" }
 job-domain-job-source = { version = "=0.0.17", path = "crates/domain/job-source" }
 job-domain-notify = { version = "=0.0.17", path = "crates/domain/notify" }

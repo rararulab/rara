@@ -26,10 +26,10 @@ use uuid::Uuid;
 
 /// Strongly-typed resume identifier.
 ///
-/// This is a domain-local alias that wraps [`job_domain_core::ResumeId`] so
-/// that callers of this crate do not need to depend on `job-domain-core`
+/// This is a domain-local alias that wraps [`job_domain_shared::ResumeId`] so
+/// that callers of this crate do not need to depend on `job-domain-shared`
 /// directly.
-pub type ResumeId = job_domain_core::id::ResumeId;
+pub type ResumeId = job_domain_shared::id::ResumeId;
 
 // ---------------------------------------------------------------------------
 // Resume source

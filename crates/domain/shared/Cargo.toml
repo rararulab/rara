@@ -1,5 +1,5 @@
 [package]
-name = "job-domain-core"
+name = "job-domain-shared"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -12,13 +12,8 @@ categories.workspace = true
 description = "Shared domain interfaces, traits, and types for cross-crate contracts"
 
 [dependencies]
-async-trait.workspace = true
 derive_more.workspace = true
-jiff.workspace = true
 serde.workspace = true
-snafu.workspace = true
-strum.workspace = true
-strum_macros.workspace = true
 uuid = { version = "1", features = ["v4", "serde"] }
 
 [lints]

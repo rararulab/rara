@@ -22,7 +22,7 @@ use axum::{
     http::StatusCode,
     routing::{delete, get, post, put},
 };
-use job_domain_core::id::InterviewId;
+use job_domain_shared::id::InterviewId;
 use job_domain_interview::types::{
     CreateInterviewPlanRequest, InterviewFilter, InterviewPlan, InterviewTaskStatus,
     PrepGenerationRequest, UpdateInterviewPlanRequest,

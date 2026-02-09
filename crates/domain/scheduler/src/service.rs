@@ -17,7 +17,7 @@
 use std::sync::Arc;
 
 use jiff::Timestamp;
-use job_domain_core::id::SchedulerTaskId;
+use job_domain_shared::id::SchedulerTaskId;
 use tracing::info;
 use uuid::Uuid;
 

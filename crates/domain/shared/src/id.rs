@@ -81,11 +81,6 @@ define_id!(
 );
 
 define_id!(
-    /// Unique identifier for a notification.
-    NotificationId
-);
-
-define_id!(
     /// Unique identifier for a scheduler task.
     SchedulerTaskId
 );

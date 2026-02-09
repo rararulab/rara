@@ -15,7 +15,7 @@
 //! Domain types for interview plan management.
 
 use jiff::Timestamp;
-use job_domain_core::id::{ApplicationId, InterviewId};
+use job_domain_shared::id::{ApplicationId, InterviewId};
 use serde::{Deserialize, Serialize};
 use strum_macros::{Display, FromRepr};
 

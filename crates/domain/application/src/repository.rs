@@ -19,7 +19,7 @@
 //! Implementations are expected to live in the infrastructure/store
 //! layer.
 
-use job_domain_core::id::ApplicationId;
+use job_domain_shared::id::ApplicationId;
 
 use crate::{
     error::ApplicationError,

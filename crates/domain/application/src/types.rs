@@ -15,13 +15,39 @@
 //! Domain types for application lifecycle management.
 
 use jiff::Timestamp;
-use job_domain_core::{
-    id::{ApplicationId, JobSourceId, ResumeId},
-    status::ApplicationStatus,
-};
+use job_domain_shared::id::{ApplicationId, JobSourceId, ResumeId};
 use serde::{Deserialize, Serialize};
-use strum_macros::{Display, FromRepr};
+use strum_macros::{Display, EnumString, FromRepr};
 use uuid::Uuid;
+
+// ---------------------------------------------------------------------------
+// ApplicationStatus
+// ---------------------------------------------------------------------------
+
+/// Lifecycle status of a job application.
+#[repr(u8)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString, FromRepr,
+)]
+#[strum(serialize_all = "snake_case")]
+pub enum ApplicationStatus {
+    /// Application is in draft / being prepared.
+    Draft = 0,
+    /// Application has been submitted.
+    Submitted = 1,
+    /// Employer acknowledged receipt.
+    UnderReview = 2,
+    /// Candidate advanced to interview stage.
+    Interview = 3,
+    /// An offer was extended.
+    Offered = 4,
+    /// Application was rejected.
+    Rejected = 5,
+    /// Offer accepted.
+    Accepted = 6,
+    /// Application was withdrawn by the candidate.
+    Withdrawn = 7,
+}
 
 // ---------------------------------------------------------------------------
 // ApplicationChannel
