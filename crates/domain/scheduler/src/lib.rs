@@ -26,7 +26,10 @@
 //! The existing `job-common-worker` crate provides low-level worker
 //! primitives; this crate adds the domain-aware orchestration layer on top.
 
+pub mod convert;
+pub mod db_models;
 pub mod error;
+pub mod pg_repository;
 pub mod repository;
 pub mod service;
 pub mod types;
