@@ -67,7 +67,7 @@ async fn list_tasks<R: ResumeRepository + 'static>(
     Query(query): Query<TaskListQuery>,
 ) -> Result<Json<Vec<ScheduledTask>>, ApiError> {
     let filter = TaskFilter {
-        enabled: query.enabled,
+        enabled:       query.enabled,
         name_contains: None,
     };
     let tasks = state.scheduler_service.list_tasks(&filter).await?;

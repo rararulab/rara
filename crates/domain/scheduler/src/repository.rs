@@ -21,8 +21,10 @@
 
 use job_domain_core::id::SchedulerTaskId;
 
-use crate::error::SchedulerError;
-use crate::types::{ScheduledTask, TaskFilter, TaskRunRecord, TaskRunStatus};
+use crate::{
+    error::SchedulerError,
+    types::{ScheduledTask, TaskFilter, TaskRunRecord, TaskRunStatus},
+};
 
 /// Persistence contract for scheduler tasks.
 #[async_trait::async_trait]
@@ -37,16 +39,10 @@ pub trait SchedulerRepository: Send + Sync {
     ) -> Result<Option<ScheduledTask>, SchedulerError>;
 
     /// Retrieve a single task by its unique name.
-    async fn find_task_by_name(
-        &self,
-        name: &str,
-    ) -> Result<Option<ScheduledTask>, SchedulerError>;
+    async fn find_task_by_name(&self, name: &str) -> Result<Option<ScheduledTask>, SchedulerError>;
 
     /// List tasks matching the given filter criteria.
-    async fn list_tasks(
-        &self,
-        filter: &TaskFilter,
-    ) -> Result<Vec<ScheduledTask>, SchedulerError>;
+    async fn list_tasks(&self, filter: &TaskFilter) -> Result<Vec<ScheduledTask>, SchedulerError>;
 
     /// Apply updates to an existing task.
     async fn update_task(&self, task: &ScheduledTask) -> Result<ScheduledTask, SchedulerError>;

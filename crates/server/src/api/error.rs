@@ -28,7 +28,7 @@ use job_domain_scheduler::error::SchedulerError;
 /// HTTP status code.
 pub struct ApiError {
     /// The HTTP status code to return.
-    pub status: StatusCode,
+    pub status:  StatusCode,
     /// A human-readable error message.
     pub message: String,
 }

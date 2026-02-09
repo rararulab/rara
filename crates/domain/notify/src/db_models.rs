@@ -22,82 +22,16 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-/// Delivery channel for notifications (DB enum).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "notification_channel", rename_all = "snake_case")]
-#[serde(rename_all = "snake_case")]
-pub enum NotificationChannel {
-    Telegram,
-    Email,
-    Webhook,
-    Other,
-}
-
-impl std::fmt::Display for NotificationChannel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Telegram => write!(f, "telegram"),
-            Self::Email => write!(f, "email"),
-            Self::Webhook => write!(f, "webhook"),
-            Self::Other => write!(f, "other"),
-        }
-    }
-}
-
-/// Delivery status of a notification (DB enum).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "notification_status", rename_all = "snake_case")]
-#[serde(rename_all = "snake_case")]
-pub enum NotificationStatus {
-    Pending,
-    Sent,
-    Failed,
-    Retrying,
-}
-
-impl std::fmt::Display for NotificationStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Pending => write!(f, "pending"),
-            Self::Sent => write!(f, "sent"),
-            Self::Failed => write!(f, "failed"),
-            Self::Retrying => write!(f, "retrying"),
-        }
-    }
-}
-
-/// Priority level for notifications (DB enum).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "notification_priority", rename_all = "snake_case")]
-#[serde(rename_all = "snake_case")]
-pub enum NotificationPriority {
-    Low,
-    Normal,
-    High,
-    Urgent,
-}
-
-impl std::fmt::Display for NotificationPriority {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Low => write!(f, "low"),
-            Self::Normal => write!(f, "normal"),
-            Self::High => write!(f, "high"),
-            Self::Urgent => write!(f, "urgent"),
-        }
-    }
-}
-
 /// A log entry for an outbound notification (DB row).
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct NotificationLog {
     pub id:             Uuid,
-    pub channel:        NotificationChannel,
+    pub channel:        i16,
     pub recipient:      String,
     pub subject:        Option<String>,
     pub body:           String,
-    pub status:         NotificationStatus,
-    pub priority:       NotificationPriority,
+    pub status:         i16,
+    pub priority:       i16,
     pub retry_count:    i32,
     pub max_retries:    i32,
     pub error_message:  Option<String>,

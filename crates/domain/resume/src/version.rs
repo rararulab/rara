@@ -19,7 +19,7 @@
 //! the [`ResumeVersionTree`] type for inspecting that tree as well as a
 //! simple line-level diff function.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -36,7 +36,7 @@ pub struct ResumeVersion {
     pub parent_id:  Option<Uuid>,
     pub title:      String,
     pub source:     ResumeSource,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
 }
 
 impl From<&Resume> for ResumeVersion {
@@ -255,6 +255,8 @@ fn build_hunks(ops: &[EditOp]) -> Vec<DiffHunk> {
 
 #[cfg(test)]
 mod tests {
+    use jiff::Timestamp;
+
     use super::*;
 
     #[test]
@@ -295,7 +297,7 @@ mod tests {
 
     #[test]
     fn version_tree_from_history() {
-        let now = Utc::now();
+        let now = Timestamp::now();
         let root_id = Uuid::new_v4();
         let child_id = Uuid::new_v4();
         let resumes = vec![

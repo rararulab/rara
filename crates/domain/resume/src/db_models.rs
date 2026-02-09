@@ -19,26 +19,6 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-/// How the resume was produced (DB enum).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "resume_source", rename_all = "snake_case")]
-#[serde(rename_all = "snake_case")]
-pub enum ResumeSource {
-    Manual,
-    AiGenerated,
-    Optimized,
-}
-
-impl std::fmt::Display for ResumeSource {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Manual => write!(f, "manual"),
-            Self::AiGenerated => write!(f, "ai_generated"),
-            Self::Optimized => write!(f, "optimized"),
-        }
-    }
-}
-
 /// A versioned resume document (DB row).
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Resume {
@@ -46,7 +26,7 @@ pub struct Resume {
     pub title:               String,
     pub version_tag:         String,
     pub content_hash:        String,
-    pub source:              ResumeSource,
+    pub source:              i16,
     pub content:             Option<String>,
     pub parent_resume_id:    Option<Uuid>,
     pub target_job_id:       Option<Uuid>,

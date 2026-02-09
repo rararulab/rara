@@ -20,7 +20,7 @@
 
 use std::sync::Arc;
 
-use chrono::Utc;
+use jiff::Timestamp;
 use job_domain_core::{id::ApplicationId, status::ApplicationStatus};
 use tracing::instrument;
 use uuid::Uuid;
@@ -77,7 +77,7 @@ impl ApplicationService {
         &self,
         req: CreateApplicationRequest,
     ) -> Result<Application, ApplicationError> {
-        let now = Utc::now();
+        let now = Timestamp::now();
 
         let app = Application {
             id:           ApplicationId::new(),
@@ -130,7 +130,7 @@ impl ApplicationService {
             .validate_transition(old_status, new_status)?;
 
         app.status = new_status;
-        app.updated_at = Utc::now();
+        app.updated_at = Timestamp::now();
 
         // Set submitted_at when first transitioning to Submitted.
         if new_status == ApplicationStatus::Submitted && app.submitted_at.is_none() {
@@ -206,7 +206,7 @@ impl ApplicationService {
             app.channel = channel;
         }
 
-        app.updated_at = Utc::now();
+        app.updated_at = Timestamp::now();
 
         tracing::info!(application_id = %id, "Updating application fields");
 
@@ -289,112 +289,140 @@ impl std::fmt::Debug for ApplicationService {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::{sync::Arc, time::Duration};
 
     use job_domain_core::{
         id::{ApplicationId, JobSourceId, ResumeId},
         status::ApplicationStatus,
     };
+    use sqlx::postgres::PgPoolOptions;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers_modules::postgres::Postgres;
 
     use super::*;
     use crate::{
         error::ApplicationError,
-        repository::ApplicationRepository,
-        types::{
-            Application, ApplicationChannel, ApplicationFilter, ChangeSource, Priority,
-            StatusChangeRecord,
-        },
+        pg_repository::PgApplicationRepository,
+        types::{ApplicationChannel, ApplicationFilter, ChangeSource, Priority},
     };
-
-    // -----------------------------------------------------------------------
-    // Mock repository
-    // -----------------------------------------------------------------------
-
-    #[derive(Debug, Default)]
-    struct MockRepo {
-        applications: Mutex<Vec<Application>>,
-        history:      Mutex<Vec<StatusChangeRecord>>,
-    }
-
-    #[async_trait::async_trait]
-    impl ApplicationRepository for MockRepo {
-        async fn save(&self, app: &Application) -> Result<Application, ApplicationError> {
-            let mut apps = self.applications.lock().unwrap();
-            apps.push(app.clone());
-            Ok(app.clone())
-        }
-
-        async fn find_by_id(
-            &self,
-            id: ApplicationId,
-        ) -> Result<Option<Application>, ApplicationError> {
-            let apps = self.applications.lock().unwrap();
-            Ok(apps.iter().find(|a| a.id == id).cloned())
-        }
-
-        async fn find_all(
-            &self,
-            filter: &ApplicationFilter,
-        ) -> Result<Vec<Application>, ApplicationError> {
-            let apps = self.applications.lock().unwrap();
-            let result = apps
-                .iter()
-                .filter(|a| filter.status.as_ref().map_or(true, |s| &a.status == s))
-                .cloned()
-                .collect();
-            Ok(result)
-        }
-
-        async fn update(&self, app: &Application) -> Result<Application, ApplicationError> {
-            let mut apps = self.applications.lock().unwrap();
-            if let Some(existing) = apps.iter_mut().find(|a| a.id == app.id) {
-                *existing = app.clone();
-            }
-            Ok(app.clone())
-        }
-
-        async fn delete(&self, id: ApplicationId) -> Result<(), ApplicationError> {
-            let mut apps = self.applications.lock().unwrap();
-            apps.retain(|a| a.id != id);
-            Ok(())
-        }
-
-        async fn save_status_change(
-            &self,
-            record: &StatusChangeRecord,
-        ) -> Result<(), ApplicationError> {
-            let mut history = self.history.lock().unwrap();
-            history.push(record.clone());
-            Ok(())
-        }
-
-        async fn get_status_history(
-            &self,
-            application_id: ApplicationId,
-        ) -> Result<Vec<StatusChangeRecord>, ApplicationError> {
-            let history = self.history.lock().unwrap();
-            Ok(history
-                .iter()
-                .filter(|r| r.application_id == application_id)
-                .cloned()
-                .collect())
-        }
-    }
 
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
 
-    fn make_service() -> (ApplicationService, Arc<MockRepo>) {
-        let repo = Arc::new(MockRepo::default());
-        let svc = ApplicationService::new(repo.clone());
-        (svc, repo)
+    const TEST_JOB_ID: &str = "00000000-0000-0000-0000-000000000001";
+
+    async fn connect_pool(url: &str) -> sqlx::PgPool {
+        let mut last_err: Option<sqlx::Error> = None;
+        for _ in 0..30 {
+            match PgPoolOptions::new()
+                .max_connections(5)
+                .acquire_timeout(Duration::from_secs(10))
+                .connect(url)
+                .await
+            {
+                Ok(pool) => return pool,
+                Err(e) => {
+                    last_err = Some(e);
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            }
+        }
+        panic!("failed to connect to postgres: {last_err:?}");
+    }
+
+    async fn setup_pool() -> (sqlx::PgPool, testcontainers::ContainerAsync<Postgres>) {
+        let container = Postgres::default().start().await.unwrap();
+        let host = container.get_host().await.unwrap();
+        let port = container.get_host_port_ipv4(5432).await.unwrap();
+        let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
+        let pool = connect_pool(&url).await;
+
+        // Ensure gen_random_uuid() is available (older PG images need pgcrypto).
+        sqlx::raw_sql("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\"")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Run migrations in order.
+        let migrations: &[&str] = &[
+            include_str!("../../../common/yunara-store/migrations/20260127000000_init.sql"),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260208000000_domain_models.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260209000000_resume_version_mgmt.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260210000000_schema_alignment.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260211000000_notify_priority.sql"
+            ),
+        ];
+
+        for sql in migrations {
+            sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+        }
+
+        // The scheduler migration references set_updated_at() but the
+        // function was created as trigger_set_updated_at() in the domain
+        // migration. Fix the reference before executing.
+        let scheduler_sql = include_str!(
+            "../../../common/yunara-store/migrations/20260211000001_scheduler_tables.sql"
+        )
+        .replace(
+            "FUNCTION set_updated_at()",
+            "FUNCTION trigger_set_updated_at()",
+        );
+        sqlx::raw_sql(&scheduler_sql).execute(&pool).await.unwrap();
+
+        // Convert domain enum columns to SMALLINT codes.
+        let domain_int_migrations: &[&str] = &[
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000000_application_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000001_interview_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000002_notify_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000003_resume_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000004_scheduler_int_enums.sql"
+            ),
+        ];
+        for sql in domain_int_migrations {
+            sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+        }
+
+        // Insert a job row to satisfy FK constraints.
+        sqlx::query(
+            r#"INSERT INTO job (id, source_job_id, source_name, title, company)
+               VALUES ($1, 'test-1', 'manual', 'SWE', 'TestCo')"#,
+        )
+        .bind(TEST_JOB_ID.parse::<uuid::Uuid>().unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        (pool, container)
+    }
+
+    async fn make_service() -> (ApplicationService, testcontainers::ContainerAsync<Postgres>) {
+        let (pool, container) = setup_pool().await;
+        let repo = Arc::new(PgApplicationRepository::new(pool));
+        let svc = ApplicationService::new(repo);
+        (svc, container)
     }
 
     fn make_create_request() -> CreateApplicationRequest {
         CreateApplicationRequest {
-            job_id:       JobSourceId::new(),
-            resume_id:    ResumeId::new(),
+            job_id:       JobSourceId::from(TEST_JOB_ID.parse::<uuid::Uuid>().unwrap()),
+            resume_id:    ResumeId::from(uuid::Uuid::nil()),
             channel:      ApplicationChannel::Direct,
             cover_letter: Some("Hello, I'd like to apply.".to_owned()),
             notes:        None,
@@ -409,7 +437,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_application_starts_in_draft() {
-        let (svc, _repo) = make_service();
+        let (svc, _container) = make_service().await;
         let req = make_create_request();
 
         let app = svc.create_application(req).await.unwrap();
@@ -419,7 +447,7 @@ mod tests {
 
     #[tokio::test]
     async fn transition_draft_to_submitted() {
-        let (svc, _repo) = make_service();
+        let (svc, _container) = make_service().await;
         let req = make_create_request();
         let app = svc.create_application(req).await.unwrap();
 
@@ -439,7 +467,7 @@ mod tests {
 
     #[tokio::test]
     async fn full_happy_path_draft_to_accepted() {
-        let (svc, _repo) = make_service();
+        let (svc, _container) = make_service().await;
         let app = svc.create_application(make_create_request()).await.unwrap();
         let id = app.id;
 
@@ -489,7 +517,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_transition_returns_error() {
-        let (svc, _repo) = make_service();
+        let (svc, _container) = make_service().await;
         let app = svc.create_application(make_create_request()).await.unwrap();
 
         let result = svc
@@ -510,7 +538,7 @@ mod tests {
 
     #[tokio::test]
     async fn terminal_state_rejects_further_transitions() {
-        let (svc, _repo) = make_service();
+        let (svc, _container) = make_service().await;
         let app = svc.create_application(make_create_request()).await.unwrap();
         let id = app.id;
 
@@ -529,7 +557,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_application_fields() {
-        let (svc, _repo) = make_service();
+        let (svc, _container) = make_service().await;
         let app = svc.create_application(make_create_request()).await.unwrap();
 
         let update_req = UpdateApplicationRequest {
@@ -546,7 +574,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_and_get_returns_not_found() {
-        let (svc, _repo) = make_service();
+        let (svc, _container) = make_service().await;
         let app = svc.create_application(make_create_request()).await.unwrap();
 
         svc.delete_application(app.id).await.unwrap();
@@ -561,7 +589,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_statistics_counts_by_status() {
-        let (svc, _repo) = make_service();
+        let (svc, _container) = make_service().await;
 
         // Create two applications.
         let app1 = svc.create_application(make_create_request()).await.unwrap();
@@ -595,7 +623,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_nonexistent_application_returns_not_found() {
-        let (svc, _repo) = make_service();
+        let (svc, _container) = make_service().await;
         let result = svc.get_application(ApplicationId::new()).await;
         assert!(result.is_err());
         assert!(matches!(
@@ -606,7 +634,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_applications_with_status_filter() {
-        let (svc, _repo) = make_service();
+        let (svc, _container) = make_service().await;
 
         let app1 = svc.create_application(make_create_request()).await.unwrap();
         let _app2 = svc.create_application(make_create_request()).await.unwrap();

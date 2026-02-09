@@ -21,9 +21,11 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::db_models;
-use crate::error::NotifyError;
-use crate::types::{Notification, NotificationFilter, NotificationStatistics};
+use crate::{
+    db_models,
+    error::NotifyError,
+    types::{Notification, NotificationFilter, NotificationStatistics},
+};
 
 /// PostgreSQL implementation of the notification repository.
 pub struct PgNotificationRepository {
@@ -33,9 +35,7 @@ pub struct PgNotificationRepository {
 impl PgNotificationRepository {
     /// Create a new repository backed by the given connection pool.
     #[must_use]
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
+    pub fn new(pool: PgPool) -> Self { Self { pool } }
 }
 
 /// Map a `sqlx::Error` into a `NotifyError::RepositoryError`.
@@ -57,8 +57,7 @@ impl crate::repository::NotificationRepository for PgNotificationRepository {
                     reference_type, reference_id, metadata, trace_id,
                     sent_at, created_at)
                VALUES
-                   ($1, $2::notification_channel, $3, $4, $5,
-                    $6::notification_status, $7::notification_priority,
+                   ($1, $2, $3, $4, $5, $6, $7,
                     $8, $9, $10, $11, $12, $13, $14, $15, $16)
                RETURNING *"#,
         )
@@ -104,19 +103,13 @@ impl crate::repository::NotificationRepository for PgNotificationRepository {
         let mut sql = String::from("SELECT * FROM notification_log WHERE 1=1");
 
         if let Some(ref channel) = filter.channel {
-            let store_channel: db_models::NotificationChannel = (*channel).into();
-            let _ = write!(
-                sql,
-                " AND channel = '{store_channel}'::notification_channel"
-            );
+            let channel_code = *channel as u8 as i16;
+            let _ = write!(sql, " AND channel = {channel_code}");
         }
 
         if let Some(ref status) = filter.status {
-            let store_status: db_models::NotificationStatus = (*status).into();
-            let _ = write!(
-                sql,
-                " AND status = '{store_status}'::notification_status"
-            );
+            let status_code = *status as u8 as i16;
+            let _ = write!(sql, " AND status = {status_code}");
         }
 
         if let Some(ref recipient) = filter.recipient {
@@ -154,12 +147,12 @@ impl crate::repository::NotificationRepository for PgNotificationRepository {
 
         let row = sqlx::query_as::<_, db_models::NotificationLog>(
             r#"UPDATE notification_log
-               SET channel = $2::notification_channel,
+               SET channel = $2,
                    recipient = $3,
                    subject = $4,
                    body = $5,
-                   status = $6::notification_status,
-                   priority = $7::notification_priority,
+                   status = $6,
+                   priority = $7,
                    retry_count = $8,
                    max_retries = $9,
                    error_message = $10,
@@ -194,19 +187,17 @@ impl crate::repository::NotificationRepository for PgNotificationRepository {
     }
 
     async fn find_pending(&self, limit: i64) -> Result<Vec<Notification>, NotifyError> {
+        let pending_status = crate::types::NotificationStatus::Pending as u8 as i16;
+        let retrying_status = crate::types::NotificationStatus::Retrying as u8 as i16;
+
         let rows = sqlx::query_as::<_, db_models::NotificationLog>(
             r#"SELECT * FROM notification_log
-               WHERE status IN ('pending'::notification_status, 'retrying'::notification_status)
-               ORDER BY
-                   CASE priority
-                       WHEN 'urgent' THEN 0
-                       WHEN 'high' THEN 1
-                       WHEN 'normal' THEN 2
-                       WHEN 'low' THEN 3
-                   END ASC,
-                   created_at ASC
-               LIMIT $1"#,
+               WHERE status IN ($1, $2)
+               ORDER BY priority DESC, created_at ASC
+               LIMIT $3"#,
         )
+        .bind(pending_status)
+        .bind(retrying_status)
         .bind(limit)
         .fetch_all(&self.pool)
         .await
@@ -216,12 +207,14 @@ impl crate::repository::NotificationRepository for PgNotificationRepository {
     }
 
     async fn mark_sent(&self, id: Uuid) -> Result<(), NotifyError> {
+        let sent_status = crate::types::NotificationStatus::Sent as u8 as i16;
         let result = sqlx::query(
             r#"UPDATE notification_log
-               SET status = 'sent'::notification_status, sent_at = now()
+               SET status = $2, sent_at = now()
                WHERE id = $1"#,
         )
         .bind(id)
+        .bind(sent_status)
         .execute(&self.pool)
         .await
         .map_err(map_err)?;
@@ -233,13 +226,15 @@ impl crate::repository::NotificationRepository for PgNotificationRepository {
     }
 
     async fn mark_failed(&self, id: Uuid, error: &str) -> Result<(), NotifyError> {
+        let failed_status = crate::types::NotificationStatus::Failed as u8 as i16;
         let result = sqlx::query(
             r#"UPDATE notification_log
-               SET status = 'failed'::notification_status, error_message = $2
+               SET status = $3, error_message = $2
                WHERE id = $1"#,
         )
         .bind(id)
         .bind(error)
+        .bind(failed_status)
         .execute(&self.pool)
         .await
         .map_err(map_err)?;
@@ -251,14 +246,16 @@ impl crate::repository::NotificationRepository for PgNotificationRepository {
     }
 
     async fn increment_retry(&self, id: Uuid) -> Result<Notification, NotifyError> {
+        let retrying_status = crate::types::NotificationStatus::Retrying as u8 as i16;
         let row = sqlx::query_as::<_, db_models::NotificationLog>(
             r#"UPDATE notification_log
                SET retry_count = retry_count + 1,
-                   status = 'retrying'::notification_status
+                   status = $2
                WHERE id = $1
                RETURNING *"#,
         )
         .bind(id)
+        .bind(retrying_status)
         .fetch_optional(&self.pool)
         .await
         .map_err(map_err)?;
@@ -270,15 +267,24 @@ impl crate::repository::NotificationRepository for PgNotificationRepository {
     }
 
     async fn get_statistics(&self) -> Result<NotificationStatistics, NotifyError> {
+        let pending_status = crate::types::NotificationStatus::Pending as u8 as i16;
+        let sent_status = crate::types::NotificationStatus::Sent as u8 as i16;
+        let failed_status = crate::types::NotificationStatus::Failed as u8 as i16;
+        let retrying_status = crate::types::NotificationStatus::Retrying as u8 as i16;
+
         let row: (i64, i64, i64, i64, i64) = sqlx::query_as(
             r#"SELECT
                    COUNT(*) AS total,
-                   COUNT(*) FILTER (WHERE status = 'pending') AS pending,
-                   COUNT(*) FILTER (WHERE status = 'sent') AS sent,
-                   COUNT(*) FILTER (WHERE status = 'failed') AS failed,
-                   COUNT(*) FILTER (WHERE status = 'retrying') AS retrying
+                   COUNT(*) FILTER (WHERE status = $1) AS pending,
+                   COUNT(*) FILTER (WHERE status = $2) AS sent,
+                   COUNT(*) FILTER (WHERE status = $3) AS failed,
+                   COUNT(*) FILTER (WHERE status = $4) AS retrying
                FROM notification_log"#,
         )
+        .bind(pending_status)
+        .bind(sent_status)
+        .bind(failed_status)
+        .bind(retrying_status)
         .fetch_one(&self.pool)
         .await
         .map_err(map_err)?;
@@ -295,23 +301,45 @@ impl crate::repository::NotificationRepository for PgNotificationRepository {
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
+    use std::time::Duration;
+
+    use jiff::Timestamp;
+    use sqlx::postgres::PgPoolOptions;
     use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::postgres::Postgres;
     use uuid::Uuid;
 
     use super::*;
-    use crate::repository::NotificationRepository;
-    use crate::types::{
-        NotificationChannel, NotificationPriority, NotificationStatus,
+    use crate::{
+        repository::NotificationRepository,
+        types::{NotificationChannel, NotificationPriority, NotificationStatus},
     };
+
+    async fn connect_pool(url: &str) -> sqlx::PgPool {
+        let mut last_err: Option<sqlx::Error> = None;
+        for _ in 0..30 {
+            match PgPoolOptions::new()
+                .max_connections(5)
+                .acquire_timeout(Duration::from_secs(10))
+                .connect(url)
+                .await
+            {
+                Ok(pool) => return pool,
+                Err(e) => {
+                    last_err = Some(e);
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            }
+        }
+        panic!("failed to connect to postgres: {last_err:?}");
+    }
 
     async fn setup_pool() -> (sqlx::PgPool, testcontainers::ContainerAsync<Postgres>) {
         let container = Postgres::default().start().await.unwrap();
         let host = container.get_host().await.unwrap();
         let port = container.get_host_port_ipv4(5432).await.unwrap();
         let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
-        let pool = sqlx::PgPool::connect(&url).await.unwrap();
+        let pool = connect_pool(&url).await;
 
         // Ensure gen_random_uuid() is available (older PG images need pgcrypto).
         sqlx::raw_sql("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\"")
@@ -323,10 +351,18 @@ mod tests {
         // which supports multi-statement execution.
         let migrations: &[&str] = &[
             include_str!("../../../common/yunara-store/migrations/20260127000000_init.sql"),
-            include_str!("../../../common/yunara-store/migrations/20260208000000_domain_models.sql"),
-            include_str!("../../../common/yunara-store/migrations/20260209000000_resume_version_mgmt.sql"),
-            include_str!("../../../common/yunara-store/migrations/20260210000000_schema_alignment.sql"),
-            include_str!("../../../common/yunara-store/migrations/20260211000000_notify_priority.sql"),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260208000000_domain_models.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260209000000_resume_version_mgmt.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260210000000_schema_alignment.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260211000000_notify_priority.sql"
+            ),
         ];
 
         for sql in migrations {
@@ -336,32 +372,58 @@ mod tests {
         // The scheduler migration references set_updated_at() but the
         // function was created as trigger_set_updated_at() in the domain
         // migration. Fix the reference before executing.
-        let scheduler_sql =
-            include_str!("../../../common/yunara-store/migrations/20260211000001_scheduler_tables.sql")
-                .replace("FUNCTION set_updated_at()", "FUNCTION trigger_set_updated_at()");
+        let scheduler_sql = include_str!(
+            "../../../common/yunara-store/migrations/20260211000001_scheduler_tables.sql"
+        )
+        .replace(
+            "FUNCTION set_updated_at()",
+            "FUNCTION trigger_set_updated_at()",
+        );
         sqlx::raw_sql(&scheduler_sql).execute(&pool).await.unwrap();
+
+        // Convert domain enum columns to SMALLINT codes.
+        let domain_int_migrations: &[&str] = &[
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000000_application_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000001_interview_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000002_notify_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000003_resume_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000004_scheduler_int_enums.sql"
+            ),
+        ];
+        for sql in domain_int_migrations {
+            sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+        }
 
         (pool, container)
     }
 
     fn make_notification() -> Notification {
         Notification {
-            id: Uuid::new_v4(),
-            channel: NotificationChannel::Telegram,
-            recipient: "user123".into(),
-            subject: Some("Test Subject".into()),
-            body: "Hello, this is a test notification.".into(),
-            status: NotificationStatus::Pending,
-            priority: NotificationPriority::Normal,
-            retry_count: 0,
-            max_retries: 3,
-            error_message: None,
+            id:             Uuid::new_v4(),
+            channel:        NotificationChannel::Telegram,
+            recipient:      "user123".into(),
+            subject:        Some("Test Subject".into()),
+            body:           "Hello, this is a test notification.".into(),
+            status:         NotificationStatus::Pending,
+            priority:       NotificationPriority::Normal,
+            retry_count:    0,
+            max_retries:    3,
+            error_message:  None,
             reference_type: Some("application".into()),
-            reference_id: Some(Uuid::new_v4()),
-            metadata: None,
-            trace_id: None,
-            sent_at: None,
-            created_at: Utc::now(),
+            reference_id:   Some(Uuid::new_v4()),
+            metadata:       None,
+            trace_id:       None,
+            sent_at:        None,
+            created_at:     Timestamp::now(),
         }
     }
 
@@ -479,7 +541,9 @@ mod tests {
         let notification = make_notification();
         let saved = repo.save(&notification).await.unwrap();
 
-        repo.mark_failed(saved.id, "connection refused").await.unwrap();
+        repo.mark_failed(saved.id, "connection refused")
+            .await
+            .unwrap();
 
         let found = repo.find_by_id(saved.id).await.unwrap().unwrap();
         assert_eq!(found.status, NotificationStatus::Failed);

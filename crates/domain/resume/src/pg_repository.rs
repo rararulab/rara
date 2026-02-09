@@ -17,6 +17,8 @@
 use std::fmt::Write;
 
 use async_trait::async_trait;
+use chrono::{DateTime, TimeZone as _, Utc};
+use jiff::{Zoned, tz::TimeZone};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -46,25 +48,43 @@ fn map_err(e: sqlx::Error) -> ResumeError {
     }
 }
 
+fn timestamp_to_chrono(ts: jiff::Timestamp) -> DateTime<Utc> {
+    let mut second = ts.as_second();
+    let mut nanosecond = ts.subsec_nanosecond();
+    if nanosecond < 0 {
+        second = second.saturating_sub(1);
+        nanosecond = nanosecond.saturating_add(1_000_000_000);
+    }
+
+    Utc.timestamp_opt(second, nanosecond as u32)
+        .single()
+        .expect("jiff Timestamp fits in chrono DateTime<Utc>")
+}
+
 #[async_trait]
 impl crate::repository::ResumeRepository for PgResumeRepository {
     async fn create(&self, req: CreateResumeRequest) -> Result<Resume, ResumeError> {
         let id = Uuid::new_v4();
         let hash = content_hash(&req.content);
-        let version_tag = format!("v{}", chrono::Utc::now().format("%Y%m%d%H%M%S"));
-        let source_store: db_models::ResumeSource = req.source.into();
+        let version_tag = format!(
+            "v{}",
+            Zoned::now()
+                .with_time_zone(TimeZone::UTC)
+                .strftime("%Y%m%d%H%M%S")
+        );
+        let source_code = req.source as u8 as i16;
 
         let row = sqlx::query_as::<_, db_models::Resume>(
             r#"INSERT INTO resume (id, title, version_tag, content_hash, source, content,
                    parent_resume_id, target_job_id, customization_notes, tags)
-               VALUES ($1, $2, $3, $4, $5::resume_source, $6, $7, $8, $9, $10)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                RETURNING *"#,
         )
         .bind(id)
         .bind(&req.title)
         .bind(&version_tag)
         .bind(&hash)
-        .bind(&source_store)
+        .bind(source_code)
         .bind(&req.content)
         .bind(req.parent_resume_id)
         .bind(req.target_job_id)
@@ -102,8 +122,7 @@ impl crate::repository::ResumeRepository for PgResumeRepository {
 
         let title = req.title.unwrap_or(current.title);
         let content = req.content.or(current.content.clone());
-        let source: db_models::ResumeSource =
-            req.source.map(Into::into).unwrap_or(current.source);
+        let source = req.source.map(|s| s as u8 as i16).unwrap_or(current.source);
         let target_job_id = match req.target_job_id {
             Some(v) => v,
             None => current.target_job_id,
@@ -122,7 +141,7 @@ impl crate::repository::ResumeRepository for PgResumeRepository {
 
         let row = sqlx::query_as::<_, db_models::Resume>(
             r#"UPDATE resume
-               SET title = $2, content = $3, content_hash = $4, source = $5::resume_source,
+               SET title = $2, content = $3, content_hash = $4, source = $5,
                    target_job_id = $6, customization_notes = $7, tags = $8
                WHERE id = $1 AND is_deleted = FALSE
                RETURNING *"#,
@@ -144,7 +163,8 @@ impl crate::repository::ResumeRepository for PgResumeRepository {
 
     async fn soft_delete(&self, id: Uuid) -> Result<(), ResumeError> {
         let result = sqlx::query(
-            "UPDATE resume SET is_deleted = TRUE, deleted_at = now() WHERE id = $1 AND is_deleted = FALSE",
+            "UPDATE resume SET is_deleted = TRUE, deleted_at = now() WHERE id = $1 AND is_deleted \
+             = FALSE",
         )
         .bind(id)
         .execute(&self.pool)
@@ -162,12 +182,8 @@ impl crate::repository::ResumeRepository for PgResumeRepository {
         let mut param_idx = 1u32;
 
         if let Some(ref source) = filter.source {
-            let source_str = match source {
-                ResumeSource::Manual => "manual",
-                ResumeSource::AiGenerated => "ai_generated",
-                ResumeSource::Optimized => "optimized",
-            };
-            let _ = write!(sql, " AND source = '{source_str}'::resume_source");
+            let source_code = *source as u8 as i16;
+            let _ = write!(sql, " AND source = {source_code}");
         }
 
         if let Some(has_parent) = filter.has_parent {
@@ -202,11 +218,11 @@ impl crate::repository::ResumeRepository for PgResumeRepository {
         }
 
         if let Some(created_after) = filter.created_after {
-            query = query.bind(created_after);
+            query = query.bind(timestamp_to_chrono(created_after));
         }
 
         if let Some(created_before) = filter.created_before {
-            query = query.bind(created_before);
+            query = query.bind(timestamp_to_chrono(created_before));
         }
 
         let rows = query.fetch_all(&self.pool).await.map_err(map_err)?;
@@ -221,14 +237,16 @@ impl crate::repository::ResumeRepository for PgResumeRepository {
     }
 
     async fn get_baseline(&self) -> Result<Option<Resume>, ResumeError> {
+        let manual_source = ResumeSource::Manual as u8 as i16;
         let row = sqlx::query_as::<_, db_models::Resume>(
             r#"SELECT * FROM resume
-               WHERE source = 'manual'::resume_source
+               WHERE source = $1
                  AND parent_resume_id IS NULL
                  AND is_deleted = FALSE
                ORDER BY created_at DESC
                LIMIT 1"#,
         )
+        .bind(manual_source)
         .fetch_optional(&self.pool)
         .await
         .map_err(map_err)?;
@@ -238,7 +256,8 @@ impl crate::repository::ResumeRepository for PgResumeRepository {
 
     async fn get_children(&self, parent_id: Uuid) -> Result<Vec<Resume>, ResumeError> {
         let rows = sqlx::query_as::<_, db_models::Resume>(
-            "SELECT * FROM resume WHERE parent_resume_id = $1 AND is_deleted = FALSE ORDER BY created_at",
+            "SELECT * FROM resume WHERE parent_resume_id = $1 AND is_deleted = FALSE ORDER BY \
+             created_at",
         )
         .bind(parent_id)
         .fetch_all(&self.pool)
@@ -285,22 +304,53 @@ impl crate::repository::ResumeRepository for PgResumeRepository {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::repository::ResumeRepository;
+    use std::time::Duration;
+
+    use sqlx::postgres::PgPoolOptions;
     use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::postgres::Postgres;
+
+    use super::*;
+    use crate::repository::ResumeRepository;
+
+    async fn connect_pool(url: &str) -> sqlx::PgPool {
+        let mut last_err: Option<sqlx::Error> = None;
+        for _ in 0..30 {
+            match PgPoolOptions::new()
+                .max_connections(5)
+                .acquire_timeout(Duration::from_secs(10))
+                .connect(url)
+                .await
+            {
+                Ok(pool) => return pool,
+                Err(e) => {
+                    last_err = Some(e);
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            }
+        }
+        panic!("failed to connect to postgres: {last_err:?}");
+    }
 
     async fn setup_pool() -> (sqlx::PgPool, testcontainers::ContainerAsync<Postgres>) {
         let container = Postgres::default().start().await.unwrap();
         let host = container.get_host().await.unwrap();
         let port = container.get_host_port_ipv4(5432).await.unwrap();
         let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
-        let pool = sqlx::PgPool::connect(&url).await.unwrap();
+        let pool = connect_pool(&url).await;
+
+        // Ensure gen_random_uuid() is available (older PG images need pgcrypto).
+        sqlx::raw_sql("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\"")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         // Run migrations in order
         let migrations: &[&str] = &[
             include_str!("../../../common/yunara-store/migrations/20260127000000_init.sql"),
-            include_str!("../../../common/yunara-store/migrations/20260208000000_domain_models.sql"),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260208000000_domain_models.sql"
+            ),
             include_str!(
                 "../../../common/yunara-store/migrations/20260209000000_resume_version_mgmt.sql"
             ),
@@ -310,12 +360,43 @@ mod tests {
             include_str!(
                 "../../../common/yunara-store/migrations/20260211000000_notify_priority.sql"
             ),
-            include_str!(
-                "../../../common/yunara-store/migrations/20260211000001_scheduler_tables.sql"
-            ),
         ];
 
         for sql in migrations {
+            sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+        }
+
+        // The scheduler migration references set_updated_at() but the
+        // function was created as trigger_set_updated_at() in the domain
+        // migration. Fix the reference before executing.
+        let scheduler_sql = include_str!(
+            "../../../common/yunara-store/migrations/20260211000001_scheduler_tables.sql"
+        )
+        .replace(
+            "FUNCTION set_updated_at()",
+            "FUNCTION trigger_set_updated_at()",
+        );
+        sqlx::raw_sql(&scheduler_sql).execute(&pool).await.unwrap();
+
+        // Convert domain enum columns to SMALLINT codes.
+        let domain_int_migrations: &[&str] = &[
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000000_application_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000001_interview_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000002_notify_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000003_resume_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000004_scheduler_int_enums.sql"
+            ),
+        ];
+        for sql in domain_int_migrations {
             sqlx::raw_sql(sql).execute(&pool).await.unwrap();
         }
 
@@ -328,13 +409,13 @@ mod tests {
         let repo = PgResumeRepository::new(pool);
 
         let req = CreateResumeRequest {
-            title: "Backend Engineer v1".into(),
-            content: "My resume content".into(),
-            source: ResumeSource::Manual,
-            parent_resume_id: None,
-            target_job_id: None,
+            title:               "Backend Engineer v1".into(),
+            content:             "My resume content".into(),
+            source:              ResumeSource::Manual,
+            parent_resume_id:    None,
+            target_job_id:       None,
             customization_notes: None,
-            tags: vec!["rust".into(), "backend".into()],
+            tags:                vec!["rust".into(), "backend".into()],
         };
 
         let created = repo.create(req).await.unwrap();
@@ -354,13 +435,13 @@ mod tests {
         let repo = PgResumeRepository::new(pool);
 
         let req = CreateResumeRequest {
-            title: "Original Title".into(),
-            content: "Original content".into(),
-            source: ResumeSource::Manual,
-            parent_resume_id: None,
-            target_job_id: None,
+            title:               "Original Title".into(),
+            content:             "Original content".into(),
+            source:              ResumeSource::Manual,
+            parent_resume_id:    None,
+            target_job_id:       None,
             customization_notes: None,
-            tags: vec![],
+            tags:                vec![],
         };
 
         let created = repo.create(req).await.unwrap();
@@ -384,13 +465,13 @@ mod tests {
         let repo = PgResumeRepository::new(pool);
 
         let req = CreateResumeRequest {
-            title: "To Delete".into(),
-            content: "content".into(),
-            source: ResumeSource::Manual,
-            parent_resume_id: None,
-            target_job_id: None,
+            title:               "To Delete".into(),
+            content:             "content".into(),
+            source:              ResumeSource::Manual,
+            parent_resume_id:    None,
+            target_job_id:       None,
             customization_notes: None,
-            tags: vec![],
+            tags:                vec![],
         };
 
         let created = repo.create(req).await.unwrap();
@@ -416,26 +497,26 @@ mod tests {
 
         // Create manual resume
         repo.create(CreateResumeRequest {
-            title: "Manual".into(),
-            content: "manual content".into(),
-            source: ResumeSource::Manual,
-            parent_resume_id: None,
-            target_job_id: None,
+            title:               "Manual".into(),
+            content:             "manual content".into(),
+            source:              ResumeSource::Manual,
+            parent_resume_id:    None,
+            target_job_id:       None,
             customization_notes: None,
-            tags: vec![],
+            tags:                vec![],
         })
         .await
         .unwrap();
 
         // Create AI resume
         repo.create(CreateResumeRequest {
-            title: "AI".into(),
-            content: "ai content".into(),
-            source: ResumeSource::AiGenerated,
-            parent_resume_id: None,
-            target_job_id: None,
+            title:               "AI".into(),
+            content:             "ai content".into(),
+            source:              ResumeSource::AiGenerated,
+            parent_resume_id:    None,
+            target_job_id:       None,
             customization_notes: None,
-            tags: vec![],
+            tags:                vec![],
         })
         .await
         .unwrap();
@@ -455,25 +536,25 @@ mod tests {
         let repo = PgResumeRepository::new(pool);
 
         repo.create(CreateResumeRequest {
-            title: "Tagged".into(),
-            content: "tagged content".into(),
-            source: ResumeSource::Manual,
-            parent_resume_id: None,
-            target_job_id: None,
+            title:               "Tagged".into(),
+            content:             "tagged content".into(),
+            source:              ResumeSource::Manual,
+            parent_resume_id:    None,
+            target_job_id:       None,
             customization_notes: None,
-            tags: vec!["rust".into(), "backend".into()],
+            tags:                vec!["rust".into(), "backend".into()],
         })
         .await
         .unwrap();
 
         repo.create(CreateResumeRequest {
-            title: "Untagged".into(),
-            content: "untagged content".into(),
-            source: ResumeSource::Manual,
-            parent_resume_id: None,
-            target_job_id: None,
+            title:               "Untagged".into(),
+            content:             "untagged content".into(),
+            source:              ResumeSource::Manual,
+            parent_resume_id:    None,
+            target_job_id:       None,
             customization_notes: None,
-            tags: vec!["python".into()],
+            tags:                vec!["python".into()],
         })
         .await
         .unwrap();
@@ -499,13 +580,13 @@ mod tests {
         // Create a baseline (manual, no parent)
         let created = repo
             .create(CreateResumeRequest {
-                title: "Baseline".into(),
-                content: "baseline content".into(),
-                source: ResumeSource::Manual,
-                parent_resume_id: None,
-                target_job_id: None,
+                title:               "Baseline".into(),
+                content:             "baseline content".into(),
+                source:              ResumeSource::Manual,
+                parent_resume_id:    None,
+                target_job_id:       None,
                 customization_notes: None,
-                tags: vec![],
+                tags:                vec![],
             })
             .await
             .unwrap();
@@ -521,26 +602,26 @@ mod tests {
 
         let parent = repo
             .create(CreateResumeRequest {
-                title: "Parent".into(),
-                content: "parent content".into(),
-                source: ResumeSource::Manual,
-                parent_resume_id: None,
-                target_job_id: None,
+                title:               "Parent".into(),
+                content:             "parent content".into(),
+                source:              ResumeSource::Manual,
+                parent_resume_id:    None,
+                target_job_id:       None,
                 customization_notes: None,
-                tags: vec![],
+                tags:                vec![],
             })
             .await
             .unwrap();
 
         let child = repo
             .create(CreateResumeRequest {
-                title: "Child".into(),
-                content: "child content".into(),
-                source: ResumeSource::AiGenerated,
-                parent_resume_id: Some(parent.id),
-                target_job_id: None,
+                title:               "Child".into(),
+                content:             "child content".into(),
+                source:              ResumeSource::AiGenerated,
+                parent_resume_id:    Some(parent.id),
+                target_job_id:       None,
                 customization_notes: Some("Tailored for SWE role".into()),
-                tags: vec![],
+                tags:                vec![],
             })
             .await
             .unwrap();
@@ -562,13 +643,13 @@ mod tests {
 
         let created = repo
             .create(CreateResumeRequest {
-                title: "Hashable".into(),
-                content: "unique content".into(),
-                source: ResumeSource::Manual,
-                parent_resume_id: None,
-                target_job_id: None,
+                title:               "Hashable".into(),
+                content:             "unique content".into(),
+                source:              ResumeSource::Manual,
+                parent_resume_id:    None,
+                target_job_id:       None,
                 customization_notes: None,
-                tags: vec![],
+                tags:                vec![],
             })
             .await
             .unwrap();
@@ -580,10 +661,7 @@ mod tests {
             .unwrap();
         assert_eq!(found.id, created.id);
 
-        let not_found = repo
-            .find_by_content_hash("nonexistent_hash")
-            .await
-            .unwrap();
+        let not_found = repo.find_by_content_hash("nonexistent_hash").await.unwrap();
         assert!(not_found.is_none());
     }
 }

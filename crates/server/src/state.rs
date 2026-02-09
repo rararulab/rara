@@ -26,13 +26,13 @@ use job_domain_scheduler::service::SchedulerService;
 /// `State` extractor.
 pub struct AppState<R: ResumeRepository> {
     /// Application lifecycle service.
-    pub application_service: Arc<ApplicationService>,
+    pub application_service:  Arc<ApplicationService>,
     /// Interview plan management service.
-    pub interview_service: Arc<InterviewService>,
+    pub interview_service:    Arc<InterviewService>,
     /// Resume version management service.
-    pub resume_service: Arc<ResumeService<R>>,
+    pub resume_service:       Arc<ResumeService<R>>,
     /// Notification dispatch service.
     pub notification_service: Arc<NotificationService>,
     /// Scheduler task management service.
-    pub scheduler_service: Arc<SchedulerService>,
+    pub scheduler_service:    Arc<SchedulerService>,
 }

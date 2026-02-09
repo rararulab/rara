@@ -22,8 +22,7 @@ use job_domain_core::id::{ApplicationId, InterviewId};
 use sqlx::PgPool;
 
 use crate::{
-    convert,
-    db_models,
+    convert, db_models,
     error::InterviewError,
     types::{InterviewFilter, InterviewPlan},
 };
@@ -58,7 +57,7 @@ impl crate::repository::InterviewPlanRepository for PgInterviewPlanRepository {
                     is_deleted, created_at, updated_at)
                VALUES
                    ($1, $2, $3, $4, $5, $6, $7,
-                    $8, $9, $10::interview_task_status, $11, $12, $13,
+                    $8, $9, $10, $11, $12, $13,
                     $14, $15, $16)
                RETURNING *"#,
         )
@@ -85,10 +84,7 @@ impl crate::repository::InterviewPlanRepository for PgInterviewPlanRepository {
         Ok(row.into())
     }
 
-    async fn find_by_id(
-        &self,
-        id: InterviewId,
-    ) -> Result<Option<InterviewPlan>, InterviewError> {
+    async fn find_by_id(&self, id: InterviewId) -> Result<Option<InterviewPlan>, InterviewError> {
         let row = sqlx::query_as::<_, db_models::InterviewPlan>(
             "SELECT * FROM interview_plan WHERE id = $1 AND is_deleted = FALSE",
         )
@@ -134,11 +130,8 @@ impl crate::repository::InterviewPlanRepository for PgInterviewPlanRepository {
         }
 
         if let Some(ref task_status) = filter.task_status {
-            let store_status: db_models::InterviewTaskStatus = (*task_status).into();
-            let _ = write!(
-                sql,
-                " AND task_status = '{store_status}'::interview_task_status"
-            );
+            let status_code = *task_status as u8 as i16;
+            let _ = write!(sql, " AND task_status = {status_code}");
         }
 
         if let Some(ref round) = filter.round {
@@ -172,7 +165,7 @@ impl crate::repository::InterviewPlanRepository for PgInterviewPlanRepository {
             r#"UPDATE interview_plan
                SET title = $2, company = $3, position = $4, job_description = $5,
                    round = $6, description = $7, scheduled_at = $8,
-                   task_status = $9::interview_task_status, materials = $10,
+                   task_status = $9, materials = $10,
                    notes = $11, trace_id = $12
                WHERE id = $1 AND is_deleted = FALSE
                RETURNING *"#,
@@ -198,7 +191,8 @@ impl crate::repository::InterviewPlanRepository for PgInterviewPlanRepository {
 
     async fn delete(&self, id: InterviewId) -> Result<(), InterviewError> {
         let result = sqlx::query(
-            "UPDATE interview_plan SET is_deleted = TRUE, deleted_at = now() WHERE id = $1 AND is_deleted = FALSE",
+            "UPDATE interview_plan SET is_deleted = TRUE, deleted_at = now() WHERE id = $1 AND \
+             is_deleted = FALSE",
         )
         .bind(id.into_inner())
         .execute(&self.pool)
@@ -216,23 +210,56 @@ impl crate::repository::InterviewPlanRepository for PgInterviewPlanRepository {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::repository::InterviewPlanRepository;
-    use crate::types::{InterviewRound, InterviewTaskStatus, PrepMaterials};
+    use std::time::Duration;
+
+    use sqlx::postgres::PgPoolOptions;
     use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::postgres::Postgres;
+
+    use super::*;
+    use crate::{
+        repository::InterviewPlanRepository,
+        types::{InterviewRound, InterviewTaskStatus, PrepMaterials},
+    };
+
+    async fn connect_pool(url: &str) -> sqlx::PgPool {
+        let mut last_err: Option<sqlx::Error> = None;
+        for _ in 0..30 {
+            match PgPoolOptions::new()
+                .max_connections(5)
+                .acquire_timeout(Duration::from_secs(10))
+                .connect(url)
+                .await
+            {
+                Ok(pool) => return pool,
+                Err(e) => {
+                    last_err = Some(e);
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            }
+        }
+        panic!("failed to connect to postgres: {last_err:?}");
+    }
 
     async fn setup_pool() -> (sqlx::PgPool, testcontainers::ContainerAsync<Postgres>) {
         let container = Postgres::default().start().await.unwrap();
         let host = container.get_host().await.unwrap();
         let port = container.get_host_port_ipv4(5432).await.unwrap();
         let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
-        let pool = sqlx::PgPool::connect(&url).await.unwrap();
+        let pool = connect_pool(&url).await;
+
+        // Ensure gen_random_uuid() is available (older PG images need pgcrypto).
+        sqlx::raw_sql("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\"")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         // Run migrations in order
         let migrations: &[&str] = &[
             include_str!("../../../common/yunara-store/migrations/20260127000000_init.sql"),
-            include_str!("../../../common/yunara-store/migrations/20260208000000_domain_models.sql"),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260208000000_domain_models.sql"
+            ),
             include_str!(
                 "../../../common/yunara-store/migrations/20260209000000_resume_version_mgmt.sql"
             ),
@@ -242,12 +269,43 @@ mod tests {
             include_str!(
                 "../../../common/yunara-store/migrations/20260211000000_notify_priority.sql"
             ),
-            include_str!(
-                "../../../common/yunara-store/migrations/20260211000001_scheduler_tables.sql"
-            ),
         ];
 
         for sql in migrations {
+            sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+        }
+
+        // The scheduler migration references set_updated_at() but the
+        // function was created as trigger_set_updated_at() in the domain
+        // migration. Fix the reference before executing.
+        let scheduler_sql = include_str!(
+            "../../../common/yunara-store/migrations/20260211000001_scheduler_tables.sql"
+        )
+        .replace(
+            "FUNCTION set_updated_at()",
+            "FUNCTION trigger_set_updated_at()",
+        );
+        sqlx::raw_sql(&scheduler_sql).execute(&pool).await.unwrap();
+
+        // Convert domain enum columns to SMALLINT codes.
+        let domain_int_migrations: &[&str] = &[
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000000_application_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000001_interview_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000002_notify_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000003_resume_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000004_scheduler_int_enums.sql"
+            ),
+        ];
+        for sql in domain_int_migrations {
             sqlx::raw_sql(sql).execute(&pool).await.unwrap();
         }
 
@@ -264,8 +322,8 @@ mod tests {
             r#"INSERT INTO application (id, job_id, channel, status)
                VALUES ('00000000-0000-0000-0000-000000000002',
                        '00000000-0000-0000-0000-000000000001',
-                       'direct'::application_channel,
-                       'draft'::application_status)"#,
+                       0,
+                       0)"#,
         )
         .execute(&pool)
         .await
@@ -275,11 +333,15 @@ mod tests {
     }
 
     fn app_id() -> ApplicationId {
-        ApplicationId::from("00000000-0000-0000-0000-000000000002".parse::<uuid::Uuid>().unwrap())
+        ApplicationId::from(
+            "00000000-0000-0000-0000-000000000002"
+                .parse::<uuid::Uuid>()
+                .unwrap(),
+        )
     }
 
     fn make_plan(application_id: ApplicationId) -> InterviewPlan {
-        let now = chrono::Utc::now();
+        let now = jiff::Timestamp::now();
         InterviewPlan {
             id: InterviewId::new(),
             application_id,

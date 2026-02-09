@@ -14,9 +14,10 @@
 
 //! Domain types for interview plan management.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use job_domain_core::id::{ApplicationId, InterviewId};
 use serde::{Deserialize, Serialize};
+use strum_macros::{Display, FromRepr};
 
 // ---------------------------------------------------------------------------
 // Interview round
@@ -65,28 +66,19 @@ impl std::fmt::Display for InterviewRound {
 
 /// Task-level status of an interview plan (maps to the DB enum
 /// `interview_task_status`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, FromRepr)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum InterviewTaskStatus {
     /// Plan created but not yet started.
-    Pending,
+    Pending = 0,
     /// Actively working on the prep.
-    InProgress,
+    InProgress = 1,
     /// Preparation completed.
-    Completed,
+    Completed = 2,
     /// Skipped (e.g. interview cancelled before prep finished).
-    Skipped,
-}
-
-impl std::fmt::Display for InterviewTaskStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Pending => write!(f, "pending"),
-            Self::InProgress => write!(f, "in_progress"),
-            Self::Completed => write!(f, "completed"),
-            Self::Skipped => write!(f, "skipped"),
-        }
-    }
+    Skipped = 3,
 }
 
 // ---------------------------------------------------------------------------
@@ -157,7 +149,7 @@ pub struct InterviewPlan {
     /// Which interview round this plan covers.
     pub round:           InterviewRound,
     /// Scheduled date/time of the interview.
-    pub scheduled_at:    Option<DateTime<Utc>>,
+    pub scheduled_at:    Option<Timestamp>,
     /// Current task status.
     pub task_status:     InterviewTaskStatus,
     /// AI-generated or manually curated prep materials.
@@ -169,11 +161,11 @@ pub struct InterviewPlan {
     /// Soft-delete flag.
     pub is_deleted:      bool,
     /// When the record was soft-deleted.
-    pub deleted_at:      Option<DateTime<Utc>>,
+    pub deleted_at:      Option<Timestamp>,
     /// When the record was created.
-    pub created_at:      DateTime<Utc>,
+    pub created_at:      Timestamp,
     /// When the record was last updated.
-    pub updated_at:      DateTime<Utc>,
+    pub updated_at:      Timestamp,
 }
 
 // ---------------------------------------------------------------------------
@@ -196,7 +188,7 @@ pub struct CreateInterviewPlanRequest {
     /// Interview round.
     pub round:           InterviewRound,
     /// Scheduled date/time.
-    pub scheduled_at:    Option<DateTime<Utc>>,
+    pub scheduled_at:    Option<Timestamp>,
     /// Optional free-form notes.
     pub notes:           Option<String>,
 }
@@ -217,7 +209,7 @@ pub struct UpdateInterviewPlanRequest {
     /// New round.
     pub round:           Option<InterviewRound>,
     /// New scheduled time.
-    pub scheduled_at:    Option<Option<DateTime<Utc>>>,
+    pub scheduled_at:    Option<Option<Timestamp>>,
     /// Replace prep materials entirely.
     pub prep_materials:  Option<PrepMaterials>,
     /// New notes.
@@ -236,9 +228,9 @@ pub struct InterviewFilter {
     /// Filter by interview round.
     pub round:            Option<InterviewRound>,
     /// Scheduled at or after this timestamp.
-    pub scheduled_after:  Option<DateTime<Utc>>,
+    pub scheduled_after:  Option<Timestamp>,
     /// Scheduled at or before this timestamp.
-    pub scheduled_before: Option<DateTime<Utc>>,
+    pub scheduled_before: Option<Timestamp>,
 }
 
 /// Input for AI prep-material generation.

@@ -14,7 +14,7 @@
 
 //! Domain types for job source discovery and normalization.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 use uuid::Uuid;
@@ -38,7 +38,7 @@ pub struct DiscoveryCriteria {
     /// Maximum number of results to return per source.
     pub max_results:  Option<u32>,
     /// Only return jobs posted after this timestamp.
-    pub posted_after: Option<DateTime<Utc>>,
+    pub posted_after: Option<Timestamp>,
 }
 
 // ---------------------------------------------------------------------------
@@ -77,7 +77,7 @@ pub struct RawJob {
     /// The full raw payload for archival purposes.
     pub raw_data:        Option<serde_json::Value>,
     /// When the listing was originally posted.
-    pub posted_at:       Option<DateTime<Utc>>,
+    pub posted_at:       Option<Timestamp>,
 }
 
 // ---------------------------------------------------------------------------
@@ -117,7 +117,7 @@ pub struct NormalizedJob {
     /// The original raw payload, kept for debugging.
     pub raw_data:        Option<serde_json::Value>,
     /// When the listing was originally posted.
-    pub posted_at:       Option<DateTime<Utc>>,
+    pub posted_at:       Option<Timestamp>,
 }
 
 // ---------------------------------------------------------------------------

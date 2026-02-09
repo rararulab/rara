@@ -19,7 +19,7 @@
 //! than calling into the other crate directly.  This keeps the dependency graph
 //! acyclic.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -33,7 +33,7 @@ pub struct DomainEvent<T> {
     /// Unique event id (UUID v4).
     pub event_id:  uuid::Uuid,
     /// Timestamp when the event was produced.
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: Timestamp,
     /// The actual event payload.
     pub payload:   T,
 }
@@ -44,7 +44,7 @@ impl<T> DomainEvent<T> {
     pub fn new(payload: T) -> Self {
         Self {
             event_id: uuid::Uuid::new_v4(),
-            timestamp: Utc::now(),
+            timestamp: Timestamp::now(),
             payload,
         }
     }

@@ -129,9 +129,9 @@ impl App {
         let pool = db_store.pool().clone();
 
         // Create repository implementations (from domain crates)
-        let resume_repo = Arc::new(
-            job_domain_resume::pg_repository::PgResumeRepository::new(pool.clone()),
-        );
+        let resume_repo = Arc::new(job_domain_resume::pg_repository::PgResumeRepository::new(
+            pool.clone(),
+        ));
         let application_repo = Arc::new(
             job_domain_application::pg_repository::PgApplicationRepository::new(pool.clone()),
         );
@@ -140,31 +140,28 @@ impl App {
         );
 
         // Create notification repository and service
-        let notification_repo = Arc::new(
-            job_domain_notify::pg_repository::PgNotificationRepository::new(pool.clone()),
-        );
-        let notification_service = Arc::new(
-            job_domain_notify::service::NotificationService::new(notification_repo),
-        );
+        let notification_repo =
+            Arc::new(job_domain_notify::pg_repository::PgNotificationRepository::new(pool.clone()));
+        let notification_service = Arc::new(job_domain_notify::service::NotificationService::new(
+            notification_repo,
+        ));
 
         // Create scheduler repository and service
-        let scheduler_repo = Arc::new(
-            job_domain_scheduler::pg_repository::PgSchedulerRepository::new(pool),
-        );
-        let scheduler_service = Arc::new(
-            job_domain_scheduler::service::SchedulerService::new(scheduler_repo),
-        );
+        let scheduler_repo =
+            Arc::new(job_domain_scheduler::pg_repository::PgSchedulerRepository::new(pool));
+        let scheduler_service = Arc::new(job_domain_scheduler::service::SchedulerService::new(
+            scheduler_repo,
+        ));
 
         // Create domain services
-        let resume_service = Arc::new(
-            job_domain_resume::service::ResumeService::new(resume_repo),
-        );
+        let resume_service = Arc::new(job_domain_resume::service::ResumeService::new(resume_repo));
         let application_service = Arc::new(
             job_domain_application::service::ApplicationService::new(application_repo),
         );
-        let interview_service = Arc::new(
-            job_domain_interview::service::InterviewService::new(interview_repo, None),
-        );
+        let interview_service = Arc::new(job_domain_interview::service::InterviewService::new(
+            interview_repo,
+            None,
+        ));
 
         // Build AppState
         let app_state = Arc::new(job_server::state::AppState {
@@ -195,8 +192,7 @@ impl App {
             notification_service,
         };
 
-        let mut worker_manager =
-            job_common_worker::Manager::with_state(worker_state);
+        let mut worker_manager = job_common_worker::Manager::with_state(worker_state);
 
         let _notification_handle = worker_manager
             .fallible_worker(

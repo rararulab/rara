@@ -19,28 +19,6 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-/// Progress status of an interview prep task (DB enum).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "interview_task_status", rename_all = "snake_case")]
-#[serde(rename_all = "snake_case")]
-pub enum InterviewTaskStatus {
-    Pending,
-    InProgress,
-    Completed,
-    Skipped,
-}
-
-impl std::fmt::Display for InterviewTaskStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Pending => write!(f, "pending"),
-            Self::InProgress => write!(f, "in_progress"),
-            Self::Completed => write!(f, "completed"),
-            Self::Skipped => write!(f, "skipped"),
-        }
-    }
-}
-
 /// An interview preparation plan (DB row).
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct InterviewPlan {
@@ -53,7 +31,7 @@ pub struct InterviewPlan {
     pub round:           String,
     pub description:     Option<String>,
     pub scheduled_at:    Option<DateTime<Utc>>,
-    pub task_status:     InterviewTaskStatus,
+    pub task_status:     i16,
     pub materials:       Option<serde_json::Value>,
     pub notes:           Option<String>,
     pub trace_id:        Option<String>,

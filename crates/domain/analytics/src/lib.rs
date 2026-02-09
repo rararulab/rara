@@ -25,7 +25,7 @@
 //!
 //! It consumes domain events and exposes query interfaces for dashboards.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 /// A point-in-time metric snapshot.
@@ -36,7 +36,7 @@ pub struct MetricSnapshot {
     /// Numeric value.
     pub value:       f64,
     /// When the snapshot was taken.
-    pub recorded_at: DateTime<Utc>,
+    pub recorded_at: Timestamp,
     /// Optional key-value labels for dimensionality.
     pub labels:      Vec<(String, String)>,
 }

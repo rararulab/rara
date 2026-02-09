@@ -14,111 +14,58 @@
 
 //! Conversion layer between DB models and domain types for application.
 
+use chrono::{DateTime, TimeZone as _, Utc};
+use jiff::Timestamp;
 use uuid::Uuid;
 
-use crate::db_models;
-use crate::types;
+use crate::{db_models, types};
 
-// ---------------------------------------------------------------------------
-// ApplicationStatus conversions
-// ---------------------------------------------------------------------------
-
-/// Store `ApplicationStatus` -> Domain `ApplicationStatus`.
-///
-/// Key mappings:
-/// - `InProgress` -> `UnderReview`
-/// - `Interviewing` -> `Interview`
-impl From<db_models::ApplicationStatus> for job_domain_core::status::ApplicationStatus {
-    fn from(s: db_models::ApplicationStatus) -> Self {
-        match s {
-            db_models::ApplicationStatus::Draft => Self::Draft,
-            db_models::ApplicationStatus::Submitted => Self::Submitted,
-            db_models::ApplicationStatus::InProgress => Self::UnderReview,
-            db_models::ApplicationStatus::Interviewing => Self::Interview,
-            db_models::ApplicationStatus::Offered => Self::Offered,
-            db_models::ApplicationStatus::Rejected => Self::Rejected,
-            db_models::ApplicationStatus::Withdrawn => Self::Withdrawn,
-            db_models::ApplicationStatus::Accepted => Self::Accepted,
-        }
-    }
+fn chrono_to_timestamp(dt: DateTime<Utc>) -> Timestamp {
+    Timestamp::new(dt.timestamp(), dt.timestamp_subsec_nanos() as i32)
+        .expect("chrono DateTime<Utc> fits in jiff Timestamp")
 }
 
-/// Domain `ApplicationStatus` -> Store `ApplicationStatus`.
-///
-/// Reverse of the above:
-/// - `UnderReview` -> `InProgress`
-/// - `Interview` -> `Interviewing`
-impl From<job_domain_core::status::ApplicationStatus> for db_models::ApplicationStatus {
-    fn from(s: job_domain_core::status::ApplicationStatus) -> Self {
-        match s {
-            job_domain_core::status::ApplicationStatus::Draft => Self::Draft,
-            job_domain_core::status::ApplicationStatus::Submitted => Self::Submitted,
-            job_domain_core::status::ApplicationStatus::UnderReview => Self::InProgress,
-            job_domain_core::status::ApplicationStatus::Interview => Self::Interviewing,
-            job_domain_core::status::ApplicationStatus::Offered => Self::Offered,
-            job_domain_core::status::ApplicationStatus::Rejected => Self::Rejected,
-            job_domain_core::status::ApplicationStatus::Withdrawn => Self::Withdrawn,
-            job_domain_core::status::ApplicationStatus::Accepted => Self::Accepted,
-        }
-    }
+fn chrono_opt_to_timestamp(dt: Option<DateTime<Utc>>) -> Option<Timestamp> {
+    dt.map(chrono_to_timestamp)
 }
 
-// ---------------------------------------------------------------------------
-// ApplicationChannel conversions
-// ---------------------------------------------------------------------------
-
-/// Store `ApplicationChannel` -> Domain `ApplicationChannel`.
-impl From<db_models::ApplicationChannel> for types::ApplicationChannel {
-    fn from(c: db_models::ApplicationChannel) -> Self {
-        match c {
-            db_models::ApplicationChannel::Direct => Self::Direct,
-            db_models::ApplicationChannel::Referral => Self::Referral,
-            db_models::ApplicationChannel::Linkedin => Self::LinkedIn,
-            db_models::ApplicationChannel::Email => Self::Email,
-            db_models::ApplicationChannel::Other => Self::Other,
-        }
+fn timestamp_to_chrono(ts: Timestamp) -> DateTime<Utc> {
+    let mut second = ts.as_second();
+    let mut nanosecond = ts.subsec_nanosecond();
+    if nanosecond < 0 {
+        second = second.saturating_sub(1);
+        nanosecond = nanosecond.saturating_add(1_000_000_000);
     }
+
+    Utc.timestamp_opt(second, nanosecond as u32)
+        .single()
+        .expect("jiff Timestamp fits in chrono DateTime<Utc>")
 }
 
-/// Domain `ApplicationChannel` -> Store `ApplicationChannel`.
-impl From<types::ApplicationChannel> for db_models::ApplicationChannel {
-    fn from(c: types::ApplicationChannel) -> Self {
-        match c {
-            types::ApplicationChannel::Direct => Self::Direct,
-            types::ApplicationChannel::Referral => Self::Referral,
-            types::ApplicationChannel::LinkedIn => Self::Linkedin,
-            types::ApplicationChannel::Email => Self::Email,
-            types::ApplicationChannel::Other => Self::Other,
-        }
-    }
+fn timestamp_opt_to_chrono(ts: Option<Timestamp>) -> Option<DateTime<Utc>> {
+    ts.map(timestamp_to_chrono)
 }
 
-// ---------------------------------------------------------------------------
-// ApplicationPriority conversions
-// ---------------------------------------------------------------------------
-
-/// Store `ApplicationPriority` -> Domain `Priority`.
-impl From<db_models::ApplicationPriority> for types::Priority {
-    fn from(p: db_models::ApplicationPriority) -> Self {
-        match p {
-            db_models::ApplicationPriority::Low => Self::Low,
-            db_models::ApplicationPriority::Medium => Self::Medium,
-            db_models::ApplicationPriority::High => Self::High,
-            db_models::ApplicationPriority::Critical => Self::Critical,
-        }
-    }
+fn u8_from_i16(value: i16, field: &'static str) -> u8 {
+    u8::try_from(value).unwrap_or_else(|_| panic!("invalid {field}: {value}"))
 }
 
-/// Domain `Priority` -> Store `ApplicationPriority`.
-impl From<types::Priority> for db_models::ApplicationPriority {
-    fn from(p: types::Priority) -> Self {
-        match p {
-            types::Priority::Low => Self::Low,
-            types::Priority::Medium => Self::Medium,
-            types::Priority::High => Self::High,
-            types::Priority::Critical => Self::Critical,
-        }
-    }
+fn application_status_from_i16(value: i16) -> job_domain_core::status::ApplicationStatus {
+    let repr = u8_from_i16(value, "application.status");
+    job_domain_core::status::ApplicationStatus::from_repr(repr)
+        .unwrap_or_else(|| panic!("invalid application.status: {value}"))
+}
+
+fn application_channel_from_i16(value: i16) -> types::ApplicationChannel {
+    let repr = u8_from_i16(value, "application.channel");
+    types::ApplicationChannel::from_repr(repr)
+        .unwrap_or_else(|| panic!("invalid application.channel: {value}"))
+}
+
+fn application_priority_from_i16(value: i16) -> types::Priority {
+    let repr = u8_from_i16(value, "application.priority");
+    types::Priority::from_repr(repr)
+        .unwrap_or_else(|| panic!("invalid application.priority: {value}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -135,20 +82,18 @@ impl From<db_models::Application> for types::Application {
         Self {
             id:           job_domain_core::id::ApplicationId::from(a.id),
             job_id:       job_domain_core::id::JobSourceId::from(a.job_id),
-            resume_id:    job_domain_core::id::ResumeId::from(
-                a.resume_id.unwrap_or(Uuid::nil()),
-            ),
-            channel:      a.channel.into(),
-            status:       a.status.into(),
+            resume_id:    job_domain_core::id::ResumeId::from(a.resume_id.unwrap_or(Uuid::nil())),
+            channel:      application_channel_from_i16(a.channel),
+            status:       application_status_from_i16(a.status),
             cover_letter: a.cover_letter,
             notes:        a.notes,
             tags:         a.tags,
-            priority:     a.priority.into(),
+            priority:     application_priority_from_i16(a.priority),
             trace_id:     a.trace_id,
             is_deleted:   a.is_deleted,
-            submitted_at: a.submitted_at,
-            created_at:   a.created_at,
-            updated_at:   a.updated_at,
+            submitted_at: chrono_opt_to_timestamp(a.submitted_at),
+            created_at:   chrono_to_timestamp(a.created_at),
+            updated_at:   chrono_to_timestamp(a.updated_at),
         }
     }
 }
@@ -168,18 +113,18 @@ impl From<types::Application> for db_models::Application {
             } else {
                 Some(resume_uuid)
             },
-            channel:      a.channel.into(),
-            status:       a.status.into(),
+            channel:      a.channel as u8 as i16,
+            status:       a.status as u8 as i16,
             cover_letter: a.cover_letter,
             notes:        a.notes,
             tags:         a.tags,
-            priority:     a.priority.into(),
+            priority:     a.priority as u8 as i16,
             trace_id:     a.trace_id,
             is_deleted:   a.is_deleted,
             deleted_at:   None,
-            submitted_at: a.submitted_at,
-            created_at:   a.created_at,
-            updated_at:   a.updated_at,
+            submitted_at: timestamp_opt_to_chrono(a.submitted_at),
+            created_at:   timestamp_to_chrono(a.created_at),
+            updated_at:   timestamp_to_chrono(a.updated_at),
         }
     }
 }
@@ -211,12 +156,12 @@ impl From<db_models::ApplicationStatusHistory> for types::StatusChangeRecord {
             application_id: job_domain_core::id::ApplicationId::from(h.application_id),
             from_status:    h
                 .from_status
-                .map(Into::into)
+                .map(application_status_from_i16)
                 .unwrap_or(job_domain_core::status::ApplicationStatus::Draft),
-            to_status:      h.to_status.into(),
+            to_status:      application_status_from_i16(h.to_status),
             changed_by:     parse_change_source(h.changed_by.as_deref()),
             note:           h.note,
-            created_at:     h.created_at,
+            created_at:     chrono_to_timestamp(h.created_at),
         }
     }
 }
@@ -227,90 +172,73 @@ impl From<types::StatusChangeRecord> for db_models::ApplicationStatusHistory {
         Self {
             id:             r.id,
             application_id: r.application_id.into_inner(),
-            from_status:    Some(r.from_status.into()),
-            to_status:      r.to_status.into(),
+            from_status:    Some(r.from_status as u8 as i16),
+            to_status:      r.to_status as u8 as i16,
             changed_by:     Some(r.changed_by.to_string()),
             note:           r.note,
             trace_id:       None,
-            created_at:     r.created_at,
+            created_at:     timestamp_to_chrono(r.created_at),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
     use uuid::Uuid;
 
     use super::*;
 
     #[test]
-    fn application_status_roundtrip() {
-        use db_models::ApplicationStatus as S;
+    fn application_status_from_i16_works() {
         use job_domain_core::status::ApplicationStatus as D;
 
-        assert_eq!(D::from(S::Draft), D::Draft);
-        assert_eq!(D::from(S::Submitted), D::Submitted);
-        assert_eq!(D::from(S::InProgress), D::UnderReview);
-        assert_eq!(D::from(S::Interviewing), D::Interview);
-        assert_eq!(S::from(D::UnderReview), S::InProgress);
-        assert_eq!(S::from(D::Interview), S::Interviewing);
+        assert_eq!(application_status_from_i16(0), D::Draft);
+        assert_eq!(application_status_from_i16(1), D::Submitted);
+        assert_eq!(application_status_from_i16(2), D::UnderReview);
+        assert_eq!(application_status_from_i16(3), D::Interview);
+        assert_eq!(application_status_from_i16(4), D::Offered);
     }
 
     #[test]
-    fn application_channel_roundtrip() {
-        use db_models::ApplicationChannel as S;
+    fn application_channel_from_i16_works() {
         use types::ApplicationChannel as D;
 
-        let pairs = [
-            (S::Direct, D::Direct),
-            (S::Referral, D::Referral),
-            (S::Linkedin, D::LinkedIn),
-            (S::Email, D::Email),
-            (S::Other, D::Other),
-        ];
-        for (store, domain) in &pairs {
-            assert_eq!(D::from(*store), *domain);
-            assert_eq!(S::from(*domain), *store);
-        }
+        assert_eq!(application_channel_from_i16(0), D::Direct);
+        assert_eq!(application_channel_from_i16(1), D::Referral);
+        assert_eq!(application_channel_from_i16(2), D::LinkedIn);
+        assert_eq!(application_channel_from_i16(3), D::Email);
+        assert_eq!(application_channel_from_i16(4), D::Other);
     }
 
     #[test]
-    fn application_priority_roundtrip() {
-        use db_models::ApplicationPriority as S;
+    fn application_priority_from_i16_works() {
         use types::Priority as D;
 
-        let pairs = [
-            (S::Low, D::Low),
-            (S::Medium, D::Medium),
-            (S::High, D::High),
-            (S::Critical, D::Critical),
-        ];
-        for (store, domain) in &pairs {
-            assert_eq!(D::from(*store), *domain);
-            assert_eq!(S::from(*domain), *store);
-        }
+        assert_eq!(application_priority_from_i16(0), D::Low);
+        assert_eq!(application_priority_from_i16(1), D::Medium);
+        assert_eq!(application_priority_from_i16(2), D::High);
+        assert_eq!(application_priority_from_i16(3), D::Critical);
     }
 
     #[test]
     fn application_store_to_domain_nil_resume() {
-        let now = Utc::now();
+        let now = chrono::Utc::now();
         let store = db_models::Application {
-            id: Uuid::new_v4(),
-            job_id: Uuid::new_v4(),
-            resume_id: None,
-            channel: db_models::ApplicationChannel::Direct,
-            status: db_models::ApplicationStatus::Draft,
+            id:           Uuid::new_v4(),
+            job_id:       Uuid::new_v4(),
+            resume_id:    None,
+            channel:      0,
+            status:       0,
             cover_letter: None,
-            notes: None,
-            tags: vec![],
-            priority: db_models::ApplicationPriority::Medium,
-            trace_id: None,
-            is_deleted: false,
-            deleted_at: None,
+            notes:        None,
+            tags:         vec![],
+            priority:     1,
+            trace_id:     None,
+            is_deleted:   false,
+            deleted_at:   None,
             submitted_at: None,
-            created_at: now,
-            updated_at: now,
+            created_at:   now,
+            updated_at:   now,
         };
 
         let domain: types::Application = store.into();
@@ -319,13 +247,22 @@ mod tests {
 
     #[test]
     fn change_source_parsing() {
-        assert_eq!(parse_change_source(Some("manual")), types::ChangeSource::Manual);
-        assert_eq!(parse_change_source(Some("system")), types::ChangeSource::System);
+        assert_eq!(
+            parse_change_source(Some("manual")),
+            types::ChangeSource::Manual
+        );
+        assert_eq!(
+            parse_change_source(Some("system")),
+            types::ChangeSource::System
+        );
         assert_eq!(
             parse_change_source(Some("email_parse")),
             types::ChangeSource::EmailParse
         );
-        assert_eq!(parse_change_source(Some("unknown")), types::ChangeSource::System);
+        assert_eq!(
+            parse_change_source(Some("unknown")),
+            types::ChangeSource::System
+        );
         assert_eq!(parse_change_source(None), types::ChangeSource::System);
     }
 }

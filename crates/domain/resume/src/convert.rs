@@ -14,33 +14,44 @@
 
 //! Conversion layer between DB models and domain types for resume.
 
-use crate::db_models;
-use crate::types;
+use chrono::{DateTime, TimeZone as _, Utc};
+use jiff::Timestamp;
 
-// ---------------------------------------------------------------------------
-// ResumeSource conversions
-// ---------------------------------------------------------------------------
+use crate::{db_models, types};
 
-/// Store `ResumeSource` -> Domain `ResumeSource`.
-impl From<db_models::ResumeSource> for types::ResumeSource {
-    fn from(s: db_models::ResumeSource) -> Self {
-        match s {
-            db_models::ResumeSource::Manual => Self::Manual,
-            db_models::ResumeSource::AiGenerated => Self::AiGenerated,
-            db_models::ResumeSource::Optimized => Self::Optimized,
-        }
-    }
+fn chrono_to_timestamp(dt: DateTime<Utc>) -> Timestamp {
+    Timestamp::new(dt.timestamp(), dt.timestamp_subsec_nanos() as i32)
+        .expect("chrono DateTime<Utc> fits in jiff Timestamp")
 }
 
-/// Domain `ResumeSource` -> Store `ResumeSource`.
-impl From<types::ResumeSource> for db_models::ResumeSource {
-    fn from(s: types::ResumeSource) -> Self {
-        match s {
-            types::ResumeSource::Manual => Self::Manual,
-            types::ResumeSource::AiGenerated => Self::AiGenerated,
-            types::ResumeSource::Optimized => Self::Optimized,
-        }
+fn chrono_opt_to_timestamp(dt: Option<DateTime<Utc>>) -> Option<Timestamp> {
+    dt.map(chrono_to_timestamp)
+}
+
+fn timestamp_to_chrono(ts: Timestamp) -> DateTime<Utc> {
+    let mut second = ts.as_second();
+    let mut nanosecond = ts.subsec_nanosecond();
+    if nanosecond < 0 {
+        second = second.saturating_sub(1);
+        nanosecond = nanosecond.saturating_add(1_000_000_000);
     }
+
+    Utc.timestamp_opt(second, nanosecond as u32)
+        .single()
+        .expect("jiff Timestamp fits in chrono DateTime<Utc>")
+}
+
+fn timestamp_opt_to_chrono(ts: Option<Timestamp>) -> Option<DateTime<Utc>> {
+    ts.map(timestamp_to_chrono)
+}
+
+fn u8_from_i16(value: i16, field: &'static str) -> u8 {
+    u8::try_from(value).unwrap_or_else(|_| panic!("invalid {field}: {value}"))
+}
+
+fn resume_source_from_i16(value: i16) -> types::ResumeSource {
+    let repr = u8_from_i16(value, "resume.source");
+    types::ResumeSource::from_repr(repr).unwrap_or_else(|| panic!("invalid resume.source: {value}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -55,7 +66,7 @@ impl From<db_models::Resume> for types::Resume {
             title:               r.title,
             version_tag:         r.version_tag,
             content_hash:        r.content_hash,
-            source:              r.source.into(),
+            source:              resume_source_from_i16(r.source),
             content:             r.content,
             parent_resume_id:    r.parent_resume_id,
             target_job_id:       r.target_job_id,
@@ -64,9 +75,9 @@ impl From<db_models::Resume> for types::Resume {
             metadata:            r.metadata,
             trace_id:            r.trace_id,
             is_deleted:          r.is_deleted,
-            deleted_at:          r.deleted_at,
-            created_at:          r.created_at,
-            updated_at:          r.updated_at,
+            deleted_at:          chrono_opt_to_timestamp(r.deleted_at),
+            created_at:          chrono_to_timestamp(r.created_at),
+            updated_at:          chrono_to_timestamp(r.updated_at),
         }
     }
 }
@@ -79,7 +90,7 @@ impl From<types::Resume> for db_models::Resume {
             title:               r.title,
             version_tag:         r.version_tag,
             content_hash:        r.content_hash,
-            source:              r.source.into(),
+            source:              r.source as u8 as i16,
             content:             r.content,
             parent_resume_id:    r.parent_resume_id,
             target_job_id:       r.target_job_id,
@@ -88,49 +99,38 @@ impl From<types::Resume> for db_models::Resume {
             metadata:            r.metadata,
             trace_id:            r.trace_id,
             is_deleted:          r.is_deleted,
-            deleted_at:          r.deleted_at,
-            created_at:          r.created_at,
-            updated_at:          r.updated_at,
+            deleted_at:          timestamp_opt_to_chrono(r.deleted_at),
+            created_at:          timestamp_to_chrono(r.created_at),
+            updated_at:          timestamp_to_chrono(r.updated_at),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
     use uuid::Uuid;
 
     use super::*;
 
     #[test]
-    fn resume_source_roundtrip() {
-        let pairs = [
-            (db_models::ResumeSource::Manual, types::ResumeSource::Manual),
-            (
-                db_models::ResumeSource::AiGenerated,
-                types::ResumeSource::AiGenerated,
-            ),
-            (
-                db_models::ResumeSource::Optimized,
-                types::ResumeSource::Optimized,
-            ),
-        ];
-        for (store, domain) in &pairs {
-            assert_eq!(types::ResumeSource::from(*store), *domain);
-            assert_eq!(db_models::ResumeSource::from(*domain), *store);
-        }
+    fn resume_source_from_i16_works() {
+        use types::ResumeSource as D;
+
+        assert_eq!(resume_source_from_i16(0), D::Manual);
+        assert_eq!(resume_source_from_i16(1), D::AiGenerated);
+        assert_eq!(resume_source_from_i16(2), D::Optimized);
     }
 
     #[test]
     fn resume_store_to_domain_roundtrip() {
-        let now = Utc::now();
+        let now = chrono::Utc::now();
         let id = Uuid::new_v4();
         let store_resume = db_models::Resume {
             id,
             title: "Backend v1".into(),
             version_tag: "v1.0".into(),
             content_hash: "abc123".into(),
-            source: db_models::ResumeSource::Manual,
+            source: 0,
             content: Some("Resume content".into()),
             parent_resume_id: None,
             target_job_id: None,

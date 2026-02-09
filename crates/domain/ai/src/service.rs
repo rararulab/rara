@@ -27,7 +27,7 @@ use std::{
     time::Instant,
 };
 
-use chrono::Utc;
+use jiff::Timestamp;
 use uuid::Uuid;
 
 use crate::{
@@ -55,7 +55,7 @@ pub struct AiRunResult {
     /// issues).
     pub cost_cents:  i32,
     /// Timestamp when the run started.
-    pub created_at:  chrono::DateTime<Utc>,
+    pub created_at:  Timestamp,
 }
 
 /// Simple rate limiter based on a token counter.
@@ -218,7 +218,7 @@ impl AiService {
 
         // 5. Call provider.
         let start = Instant::now();
-        let created_at = Utc::now();
+        let created_at = Timestamp::now();
         let run_id = Uuid::new_v4();
 
         let response = provider.complete(&request).await?;

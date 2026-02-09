@@ -14,78 +14,80 @@
 
 //! Domain types for scheduler task management.
 
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-
+use jiff::Timestamp;
 use job_domain_core::id::SchedulerTaskId;
+use serde::{Deserialize, Serialize};
+use strum_macros::FromRepr;
+use uuid::Uuid;
 
 /// Status of a task run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+#[derive(FromRepr)]
 pub enum TaskRunStatus {
     /// The run completed successfully.
-    Success,
+    Success = 0,
     /// The run failed.
-    Failed,
+    Failed = 1,
     /// The run is currently in progress.
-    Running,
+    Running = 2,
 }
 
 /// A scheduled task registered in the system.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduledTask {
     /// Unique identifier.
-    pub id: SchedulerTaskId,
+    pub id:            SchedulerTaskId,
     /// Human-readable name.
-    pub name: String,
+    pub name:          String,
     /// Cron expression (e.g. "0 */5 * * * *").
-    pub cron_expr: String,
+    pub cron_expr:     String,
     /// Whether the task is currently enabled.
-    pub enabled: bool,
+    pub enabled:       bool,
     /// When the task was last run.
-    pub last_run_at: Option<DateTime<Utc>>,
+    pub last_run_at:   Option<Timestamp>,
     /// Status of the last run.
-    pub last_status: Option<TaskRunStatus>,
+    pub last_status:   Option<TaskRunStatus>,
     /// Error message from the last run (if failed).
-    pub last_error: Option<String>,
+    pub last_error:    Option<String>,
     /// Total number of runs.
-    pub run_count: i64,
+    pub run_count:     i64,
     /// Total number of failed runs.
     pub failure_count: i64,
     /// When the record was created.
-    pub created_at: DateTime<Utc>,
+    pub created_at:    Timestamp,
     /// When the record was last updated.
-    pub updated_at: DateTime<Utc>,
+    pub updated_at:    Timestamp,
 }
 
 /// A record of a single task execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskRunRecord {
     /// Unique identifier for this run.
-    pub id: Uuid,
+    pub id:          Uuid,
     /// The task that was executed.
-    pub task_id: SchedulerTaskId,
+    pub task_id:     SchedulerTaskId,
     /// Outcome of the run.
-    pub status: TaskRunStatus,
+    pub status:      TaskRunStatus,
     /// When the run started.
-    pub started_at: DateTime<Utc>,
+    pub started_at:  Timestamp,
     /// When the run finished.
-    pub finished_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<Timestamp>,
     /// Duration in milliseconds.
     pub duration_ms: Option<i64>,
     /// Error message (if failed).
-    pub error: Option<String>,
+    pub error:       Option<String>,
     /// Structured output from the run.
-    pub output: Option<serde_json::Value>,
+    pub output:      Option<serde_json::Value>,
     /// When this record was created.
-    pub created_at: DateTime<Utc>,
+    pub created_at:  Timestamp,
 }
 
 /// Parameters for creating (registering) a new scheduler task.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateTaskRequest {
     /// Human-readable name for the task.
-    pub name: String,
+    pub name:      String,
     /// Cron expression for scheduling.
     pub cron_expr: String,
 }
@@ -94,7 +96,7 @@ pub struct CreateTaskRequest {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TaskFilter {
     /// Filter by enabled/disabled status.
-    pub enabled: Option<bool>,
+    pub enabled:       Option<bool>,
     /// Filter by tasks whose name contains this string.
     pub name_contains: Option<String>,
 }

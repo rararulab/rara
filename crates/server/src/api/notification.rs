@@ -36,10 +36,7 @@ pub fn notification_routes<R: ResumeRepository + 'static>(state: Arc<AppState<R>
     Router::new()
         .route("/api/v1/notifications", get(list_notifications::<R>))
         .route("/api/v1/notifications/stats", get(get_statistics::<R>))
-        .route(
-            "/api/v1/notifications/{id}",
-            get(get_notification::<R>),
-        )
+        .route("/api/v1/notifications/{id}", get(get_notification::<R>))
         .route(
             "/api/v1/notifications/{id}/retry",
             post(retry_notification::<R>),
@@ -50,9 +47,9 @@ pub fn notification_routes<R: ResumeRepository + 'static>(state: Arc<AppState<R>
 /// Query parameters for listing notifications.
 #[derive(Debug, Deserialize)]
 pub struct NotificationListQuery {
-    pub channel: Option<String>,
-    pub status: Option<String>,
-    pub created_after: Option<String>,
+    pub channel:        Option<String>,
+    pub status:         Option<String>,
+    pub created_after:  Option<String>,
     pub created_before: Option<String>,
 }
 
@@ -65,12 +62,10 @@ async fn list_notifications<R: ResumeRepository + 'static>(
     let status = query.status.and_then(|s| parse_status(&s));
     let created_after = query
         .created_after
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
-        .map(|dt| dt.with_timezone(&chrono::Utc));
+        .and_then(|s| s.parse::<jiff::Timestamp>().ok());
     let created_before = query
         .created_before
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
-        .map(|dt| dt.with_timezone(&chrono::Utc));
+        .and_then(|s| s.parse::<jiff::Timestamp>().ok());
 
     let filter = NotificationFilter {
         channel,

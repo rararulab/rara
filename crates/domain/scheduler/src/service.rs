@@ -16,15 +16,16 @@
 
 use std::sync::Arc;
 
-use chrono::Utc;
+use jiff::Timestamp;
+use job_domain_core::id::SchedulerTaskId;
 use tracing::info;
 use uuid::Uuid;
 
-use job_domain_core::id::SchedulerTaskId;
-
-use crate::error::SchedulerError;
-use crate::repository::SchedulerRepository;
-use crate::types::{CreateTaskRequest, ScheduledTask, TaskFilter, TaskRunRecord, TaskRunStatus};
+use crate::{
+    error::SchedulerError,
+    repository::SchedulerRepository,
+    types::{CreateTaskRequest, ScheduledTask, TaskFilter, TaskRunRecord, TaskRunStatus},
+};
 
 /// Application service for managing scheduled tasks.
 pub struct SchedulerService {
@@ -33,9 +34,7 @@ pub struct SchedulerService {
 
 impl SchedulerService {
     /// Create a new scheduler service backed by the given repository.
-    pub fn new(repo: Arc<dyn SchedulerRepository>) -> Self {
-        Self { repo }
-    }
+    pub fn new(repo: Arc<dyn SchedulerRepository>) -> Self { Self { repo } }
 
     /// Register a new scheduler task.
     pub async fn register_task(
@@ -44,7 +43,7 @@ impl SchedulerService {
     ) -> Result<ScheduledTask, SchedulerError> {
         if req.name.is_empty() {
             return Err(SchedulerError::InvalidCronExpression {
-                expr: req.cron_expr.clone(),
+                expr:    req.cron_expr.clone(),
                 message: "task name must not be empty".to_string(),
             });
         }
@@ -52,7 +51,7 @@ impl SchedulerService {
         // Validate cron expression (basic check)
         if req.cron_expr.is_empty() {
             return Err(SchedulerError::InvalidCronExpression {
-                expr: req.cron_expr,
+                expr:    req.cron_expr,
                 message: "cron expression must not be empty".to_string(),
             });
         }
@@ -64,19 +63,19 @@ impl SchedulerService {
             });
         }
 
-        let now = Utc::now();
+        let now = Timestamp::now();
         let task = ScheduledTask {
-            id: SchedulerTaskId::new(),
-            name: req.name,
-            cron_expr: req.cron_expr,
-            enabled: true,
-            last_run_at: None,
-            last_status: None,
-            last_error: None,
-            run_count: 0,
+            id:            SchedulerTaskId::new(),
+            name:          req.name,
+            cron_expr:     req.cron_expr,
+            enabled:       true,
+            last_run_at:   None,
+            last_status:   None,
+            last_error:    None,
+            run_count:     0,
             failure_count: 0,
-            created_at: now,
-            updated_at: now,
+            created_at:    now,
+            updated_at:    now,
         };
 
         let saved = self.repo.save_task(&task).await?;
@@ -95,20 +94,14 @@ impl SchedulerService {
     }
 
     /// Enable a previously disabled task.
-    pub async fn enable_task(
-        &self,
-        id: SchedulerTaskId,
-    ) -> Result<ScheduledTask, SchedulerError> {
+    pub async fn enable_task(&self, id: SchedulerTaskId) -> Result<ScheduledTask, SchedulerError> {
         let mut task = self.get_task(id).await?;
         task.enabled = true;
         self.repo.update_task(&task).await
     }
 
     /// Disable a task so it will not be scheduled.
-    pub async fn disable_task(
-        &self,
-        id: SchedulerTaskId,
-    ) -> Result<ScheduledTask, SchedulerError> {
+    pub async fn disable_task(&self, id: SchedulerTaskId) -> Result<ScheduledTask, SchedulerError> {
         let mut task = self.get_task(id).await?;
         task.enabled = false;
         self.repo.update_task(&task).await
@@ -130,7 +123,7 @@ impl SchedulerService {
         duration_ms: i64,
         error: Option<String>,
     ) -> Result<(), SchedulerError> {
-        let now = Utc::now();
+        let now = Timestamp::now();
         let record = TaskRunRecord {
             id: Uuid::new_v4(),
             task_id,
@@ -168,145 +161,118 @@ impl SchedulerService {
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::Arc, time::Duration};
+
+    use sqlx::postgres::PgPoolOptions;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers_modules::postgres::Postgres;
+
     use super::*;
-    use std::sync::Mutex;
+    use crate::pg_repository::PgSchedulerRepository;
 
-    struct MockSchedulerRepo {
-        tasks: Mutex<Vec<ScheduledTask>>,
-        runs: Mutex<Vec<TaskRunRecord>>,
-    }
-
-    impl MockSchedulerRepo {
-        fn new() -> Self {
-            Self {
-                tasks: Mutex::new(Vec::new()),
-                runs: Mutex::new(Vec::new()),
-            }
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl SchedulerRepository for MockSchedulerRepo {
-        async fn save_task(
-            &self,
-            task: &ScheduledTask,
-        ) -> Result<ScheduledTask, SchedulerError> {
-            let mut store = self.tasks.lock().unwrap();
-            store.push(task.clone());
-            Ok(task.clone())
-        }
-
-        async fn find_task_by_id(
-            &self,
-            id: SchedulerTaskId,
-        ) -> Result<Option<ScheduledTask>, SchedulerError> {
-            let store = self.tasks.lock().unwrap();
-            Ok(store.iter().find(|t| t.id == id).cloned())
-        }
-
-        async fn find_task_by_name(
-            &self,
-            name: &str,
-        ) -> Result<Option<ScheduledTask>, SchedulerError> {
-            let store = self.tasks.lock().unwrap();
-            Ok(store.iter().find(|t| t.name == name).cloned())
-        }
-
-        async fn list_tasks(
-            &self,
-            filter: &TaskFilter,
-        ) -> Result<Vec<ScheduledTask>, SchedulerError> {
-            let store = self.tasks.lock().unwrap();
-            let mut results: Vec<ScheduledTask> = store.clone();
-            if let Some(enabled) = filter.enabled {
-                results.retain(|t| t.enabled == enabled);
-            }
-            if let Some(ref name_contains) = filter.name_contains {
-                results.retain(|t| t.name.contains(name_contains.as_str()));
-            }
-            Ok(results)
-        }
-
-        async fn update_task(
-            &self,
-            task: &ScheduledTask,
-        ) -> Result<ScheduledTask, SchedulerError> {
-            let mut store = self.tasks.lock().unwrap();
-            if let Some(existing) = store.iter_mut().find(|t| t.id == task.id) {
-                *existing = task.clone();
-                Ok(task.clone())
-            } else {
-                Err(SchedulerError::NotFound {
-                    id: task.id.into_inner(),
-                })
-            }
-        }
-
-        async fn delete_task(&self, id: SchedulerTaskId) -> Result<(), SchedulerError> {
-            let mut store = self.tasks.lock().unwrap();
-            let len_before = store.len();
-            store.retain(|t| t.id != id);
-            if store.len() == len_before {
-                Err(SchedulerError::NotFound {
-                    id: id.into_inner(),
-                })
-            } else {
-                Ok(())
-            }
-        }
-
-        async fn record_run(&self, record: &TaskRunRecord) -> Result<(), SchedulerError> {
-            let mut store = self.runs.lock().unwrap();
-            store.push(record.clone());
-            Ok(())
-        }
-
-        async fn get_run_history(
-            &self,
-            task_id: SchedulerTaskId,
-            limit: i64,
-        ) -> Result<Vec<TaskRunRecord>, SchedulerError> {
-            let store = self.runs.lock().unwrap();
-            Ok(store
-                .iter()
-                .filter(|r| r.task_id == task_id)
-                .take(limit as usize)
-                .cloned()
-                .collect())
-        }
-
-        async fn update_task_last_run(
-            &self,
-            id: SchedulerTaskId,
-            status: TaskRunStatus,
-            error: Option<&str>,
-        ) -> Result<(), SchedulerError> {
-            let mut store = self.tasks.lock().unwrap();
-            if let Some(task) = store.iter_mut().find(|t| t.id == id) {
-                task.last_run_at = Some(Utc::now());
-                task.last_status = Some(status);
-                task.last_error = error.map(String::from);
-                task.run_count += 1;
-                if status == TaskRunStatus::Failed {
-                    task.failure_count += 1;
+    async fn connect_pool(url: &str) -> sqlx::PgPool {
+        let mut last_err: Option<sqlx::Error> = None;
+        for _ in 0..30 {
+            match PgPoolOptions::new()
+                .max_connections(5)
+                .acquire_timeout(Duration::from_secs(10))
+                .connect(url)
+                .await
+            {
+                Ok(pool) => return pool,
+                Err(e) => {
+                    last_err = Some(e);
+                    tokio::time::sleep(Duration::from_millis(200)).await;
                 }
-                Ok(())
-            } else {
-                Err(SchedulerError::NotFound {
-                    id: id.into_inner(),
-                })
             }
         }
+        panic!("failed to connect to postgres: {last_err:?}");
+    }
+
+    async fn setup_pool() -> (sqlx::PgPool, testcontainers::ContainerAsync<Postgres>) {
+        let container = Postgres::default().start().await.unwrap();
+        let host = container.get_host().await.unwrap();
+        let port = container.get_host_port_ipv4(5432).await.unwrap();
+        let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
+        let pool = connect_pool(&url).await;
+
+        // Ensure gen_random_uuid() is available (older PG images need pgcrypto).
+        sqlx::raw_sql("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\"")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Run migrations in order.
+        let migrations: &[&str] = &[
+            include_str!("../../../common/yunara-store/migrations/20260127000000_init.sql"),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260208000000_domain_models.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260209000000_resume_version_mgmt.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260210000000_schema_alignment.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260211000000_notify_priority.sql"
+            ),
+        ];
+
+        for sql in migrations {
+            sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+        }
+
+        // The scheduler migration references set_updated_at() but the
+        // function was created as trigger_set_updated_at() in the domain
+        // migration. Fix the reference before executing.
+        let scheduler_sql = include_str!(
+            "../../../common/yunara-store/migrations/20260211000001_scheduler_tables.sql"
+        )
+        .replace(
+            "FUNCTION set_updated_at()",
+            "FUNCTION trigger_set_updated_at()",
+        );
+        sqlx::raw_sql(&scheduler_sql).execute(&pool).await.unwrap();
+
+        // Convert domain enum columns to SMALLINT codes.
+        let domain_int_migrations: &[&str] = &[
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000000_application_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000001_interview_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000002_notify_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000003_resume_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000004_scheduler_int_enums.sql"
+            ),
+        ];
+        for sql in domain_int_migrations {
+            sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+        }
+
+        (pool, container)
+    }
+
+    async fn make_service() -> (SchedulerService, testcontainers::ContainerAsync<Postgres>) {
+        let (pool, container) = setup_pool().await;
+        let repo = Arc::new(PgSchedulerRepository::new(pool));
+        (SchedulerService::new(repo), container)
     }
 
     #[tokio::test]
     async fn test_register_task() {
-        let repo = Arc::new(MockSchedulerRepo::new());
-        let service = SchedulerService::new(repo);
+        let (service, _container) = make_service().await;
 
         let task = service
             .register_task(CreateTaskRequest {
-                name: "job-discovery".to_string(),
+                name:      "job-discovery".to_string(),
                 cron_expr: "0 */30 * * * *".to_string(),
             })
             .await
@@ -319,12 +285,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_duplicate_name_fails() {
-        let repo = Arc::new(MockSchedulerRepo::new());
-        let service = SchedulerService::new(repo);
+        let (service, _container) = make_service().await;
 
         service
             .register_task(CreateTaskRequest {
-                name: "job-discovery".to_string(),
+                name:      "job-discovery".to_string(),
                 cron_expr: "0 */30 * * * *".to_string(),
             })
             .await
@@ -332,7 +297,7 @@ mod tests {
 
         let result = service
             .register_task(CreateTaskRequest {
-                name: "job-discovery".to_string(),
+                name:      "job-discovery".to_string(),
                 cron_expr: "0 */15 * * * *".to_string(),
             })
             .await;
@@ -341,12 +306,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_enable_disable_task() {
-        let repo = Arc::new(MockSchedulerRepo::new());
-        let service = SchedulerService::new(repo);
+        let (service, _container) = make_service().await;
 
         let task = service
             .register_task(CreateTaskRequest {
-                name: "test-task".to_string(),
+                name:      "test-task".to_string(),
                 cron_expr: "0 0 * * * *".to_string(),
             })
             .await
@@ -361,12 +325,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_record_execution() {
-        let repo = Arc::new(MockSchedulerRepo::new());
-        let service = SchedulerService::new(repo);
+        let (service, _container) = make_service().await;
 
         let task = service
             .register_task(CreateTaskRequest {
-                name: "test-task".to_string(),
+                name:      "test-task".to_string(),
                 cron_expr: "0 0 * * * *".to_string(),
             })
             .await
@@ -385,12 +348,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_record_failed_execution_increments_failure_count() {
-        let repo = Arc::new(MockSchedulerRepo::new());
-        let service = SchedulerService::new(repo);
+        let (service, _container) = make_service().await;
 
         let task = service
             .register_task(CreateTaskRequest {
-                name: "test-task".to_string(),
+                name:      "test-task".to_string(),
                 cron_expr: "0 0 * * * *".to_string(),
             })
             .await
@@ -413,12 +375,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_run_history() {
-        let repo = Arc::new(MockSchedulerRepo::new());
-        let service = SchedulerService::new(repo);
+        let (service, _container) = make_service().await;
 
         let task = service
             .register_task(CreateTaskRequest {
-                name: "test-task".to_string(),
+                name:      "test-task".to_string(),
                 cron_expr: "0 0 * * * *".to_string(),
             })
             .await
@@ -444,12 +405,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_tasks_with_filter() {
-        let repo = Arc::new(MockSchedulerRepo::new());
-        let service = SchedulerService::new(repo);
+        let (service, _container) = make_service().await;
 
         service
             .register_task(CreateTaskRequest {
-                name: "job-discovery".to_string(),
+                name:      "job-discovery".to_string(),
                 cron_expr: "0 */30 * * * *".to_string(),
             })
             .await
@@ -457,7 +417,7 @@ mod tests {
 
         let task2 = service
             .register_task(CreateTaskRequest {
-                name: "metrics-snapshot".to_string(),
+                name:      "metrics-snapshot".to_string(),
                 cron_expr: "0 0 1 * * *".to_string(),
             })
             .await
@@ -478,12 +438,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_task() {
-        let repo = Arc::new(MockSchedulerRepo::new());
-        let service = SchedulerService::new(repo);
+        let (service, _container) = make_service().await;
 
         let task = service
             .register_task(CreateTaskRequest {
-                name: "temp-task".to_string(),
+                name:      "temp-task".to_string(),
                 cron_expr: "0 0 * * * *".to_string(),
             })
             .await

@@ -14,8 +14,40 @@
 
 //! Conversion layer between DB models and domain types for interview.
 
-use crate::db_models;
-use crate::types;
+use chrono::{DateTime, TimeZone as _, Utc};
+use jiff::Timestamp;
+
+use crate::{db_models, types};
+
+fn chrono_to_timestamp(dt: DateTime<Utc>) -> Timestamp {
+    Timestamp::new(dt.timestamp(), dt.timestamp_subsec_nanos() as i32)
+        .expect("chrono DateTime<Utc> fits in jiff Timestamp")
+}
+
+fn chrono_opt_to_timestamp(dt: Option<DateTime<Utc>>) -> Option<Timestamp> {
+    dt.map(chrono_to_timestamp)
+}
+
+fn timestamp_to_chrono(ts: Timestamp) -> DateTime<Utc> {
+    let mut second = ts.as_second();
+    let mut nanosecond = ts.subsec_nanosecond();
+    if nanosecond < 0 {
+        second = second.saturating_sub(1);
+        nanosecond = nanosecond.saturating_add(1_000_000_000);
+    }
+
+    Utc.timestamp_opt(second, nanosecond as u32)
+        .single()
+        .expect("jiff Timestamp fits in chrono DateTime<Utc>")
+}
+
+fn timestamp_opt_to_chrono(ts: Option<Timestamp>) -> Option<DateTime<Utc>> {
+    ts.map(timestamp_to_chrono)
+}
+
+fn u8_from_i16(value: i16, field: &'static str) -> u8 {
+    u8::try_from(value).unwrap_or_else(|_| panic!("invalid {field}: {value}"))
+}
 
 // ---------------------------------------------------------------------------
 // Interview round conversions
@@ -49,32 +81,10 @@ pub fn interview_round_to_string(r: &types::InterviewRound) -> String {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Interview task status conversions
-// ---------------------------------------------------------------------------
-
-/// Store `InterviewTaskStatus` -> Domain `InterviewTaskStatus`.
-impl From<db_models::InterviewTaskStatus> for types::InterviewTaskStatus {
-    fn from(s: db_models::InterviewTaskStatus) -> Self {
-        match s {
-            db_models::InterviewTaskStatus::Pending => Self::Pending,
-            db_models::InterviewTaskStatus::InProgress => Self::InProgress,
-            db_models::InterviewTaskStatus::Completed => Self::Completed,
-            db_models::InterviewTaskStatus::Skipped => Self::Skipped,
-        }
-    }
-}
-
-/// Domain `InterviewTaskStatus` -> Store `InterviewTaskStatus`.
-impl From<types::InterviewTaskStatus> for db_models::InterviewTaskStatus {
-    fn from(s: types::InterviewTaskStatus) -> Self {
-        match s {
-            types::InterviewTaskStatus::Pending => Self::Pending,
-            types::InterviewTaskStatus::InProgress => Self::InProgress,
-            types::InterviewTaskStatus::Completed => Self::Completed,
-            types::InterviewTaskStatus::Skipped => Self::Skipped,
-        }
-    }
+fn interview_task_status_from_i16(value: i16) -> types::InterviewTaskStatus {
+    let repr = u8_from_i16(value, "interview_plan.task_status");
+    types::InterviewTaskStatus::from_repr(repr)
+        .unwrap_or_else(|| panic!("invalid interview_plan.task_status: {value}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -94,22 +104,22 @@ impl From<db_models::InterviewPlan> for types::InterviewPlan {
             .unwrap_or_default();
 
         Self {
-            id:              job_domain_core::id::InterviewId::from(p.id),
-            application_id:  job_domain_core::id::ApplicationId::from(p.application_id),
-            title:           p.title,
-            company:         p.company,
-            position:        p.position,
+            id: job_domain_core::id::InterviewId::from(p.id),
+            application_id: job_domain_core::id::ApplicationId::from(p.application_id),
+            title: p.title,
+            company: p.company,
+            position: p.position,
             job_description: p.job_description,
-            round:           parse_interview_round(&p.round),
-            scheduled_at:    p.scheduled_at,
-            task_status:     p.task_status.into(),
+            round: parse_interview_round(&p.round),
+            scheduled_at: chrono_opt_to_timestamp(p.scheduled_at),
+            task_status: interview_task_status_from_i16(p.task_status),
             prep_materials,
-            notes:           p.notes,
-            trace_id:        p.trace_id,
-            is_deleted:      p.is_deleted,
-            deleted_at:      p.deleted_at,
-            created_at:      p.created_at,
-            updated_at:      p.updated_at,
+            notes: p.notes,
+            trace_id: p.trace_id,
+            is_deleted: p.is_deleted,
+            deleted_at: chrono_opt_to_timestamp(p.deleted_at),
+            created_at: chrono_to_timestamp(p.created_at),
+            updated_at: chrono_to_timestamp(p.updated_at),
         }
     }
 }
@@ -122,32 +132,32 @@ impl From<types::InterviewPlan> for db_models::InterviewPlan {
         let materials = serde_json::to_value(&p.prep_materials).ok();
 
         Self {
-            id:              p.id.into_inner(),
-            application_id:  p.application_id.into_inner(),
-            title:           p.title,
-            company:         p.company,
-            position:        p.position,
+            id: p.id.into_inner(),
+            application_id: p.application_id.into_inner(),
+            title: p.title,
+            company: p.company,
+            position: p.position,
             job_description: p.job_description,
-            round:           interview_round_to_string(&p.round),
-            description:     None,
-            scheduled_at:    p.scheduled_at,
-            task_status:     p.task_status.into(),
+            round: interview_round_to_string(&p.round),
+            description: None,
+            scheduled_at: timestamp_opt_to_chrono(p.scheduled_at),
+            task_status: p.task_status as u8 as i16,
             materials,
-            notes:           p.notes,
-            trace_id:        p.trace_id,
-            is_deleted:      p.is_deleted,
-            deleted_at:      p.deleted_at,
-            created_at:      p.created_at,
-            updated_at:      p.updated_at,
+            notes: p.notes,
+            trace_id: p.trace_id,
+            is_deleted: p.is_deleted,
+            deleted_at: timestamp_opt_to_chrono(p.deleted_at),
+            created_at: timestamp_to_chrono(p.created_at),
+            updated_at: timestamp_to_chrono(p.updated_at),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use chrono::Utc;
     use uuid::Uuid;
+
+    use super::*;
 
     #[test]
     fn interview_round_parse_and_serialize() {
@@ -173,25 +183,18 @@ mod tests {
     }
 
     #[test]
-    fn interview_task_status_roundtrip() {
-        use db_models::InterviewTaskStatus as S;
+    fn interview_task_status_from_i16_works() {
         use types::InterviewTaskStatus as D;
 
-        let pairs = [
-            (S::Pending, D::Pending),
-            (S::InProgress, D::InProgress),
-            (S::Completed, D::Completed),
-            (S::Skipped, D::Skipped),
-        ];
-        for (store, domain) in &pairs {
-            assert_eq!(D::from(*store), *domain);
-            assert_eq!(S::from(*domain), *store);
-        }
+        assert_eq!(interview_task_status_from_i16(0), D::Pending);
+        assert_eq!(interview_task_status_from_i16(1), D::InProgress);
+        assert_eq!(interview_task_status_from_i16(2), D::Completed);
+        assert_eq!(interview_task_status_from_i16(3), D::Skipped);
     }
 
     #[test]
     fn interview_plan_store_to_domain() {
-        let now = Utc::now();
+        let now = chrono::Utc::now();
         let materials = serde_json::json!({
             "knowledge_points": ["Rust", "async"],
             "project_review_items": [],
@@ -201,23 +204,23 @@ mod tests {
         });
 
         let store = db_models::InterviewPlan {
-            id: Uuid::new_v4(),
-            application_id: Uuid::new_v4(),
-            title: "Tech Screen".into(),
-            company: "Acme".into(),
-            position: "SWE".into(),
+            id:              Uuid::new_v4(),
+            application_id:  Uuid::new_v4(),
+            title:           "Tech Screen".into(),
+            company:         "Acme".into(),
+            position:        "SWE".into(),
             job_description: Some("Build stuff".into()),
-            round: "technical".into(),
-            description: None,
-            scheduled_at: None,
-            task_status: db_models::InterviewTaskStatus::Pending,
-            materials: Some(materials),
-            notes: None,
-            trace_id: None,
-            is_deleted: false,
-            deleted_at: None,
-            created_at: now,
-            updated_at: now,
+            round:           "technical".into(),
+            description:     None,
+            scheduled_at:    None,
+            task_status:     0,
+            materials:       Some(materials),
+            notes:           None,
+            trace_id:        None,
+            is_deleted:      false,
+            deleted_at:      None,
+            created_at:      now,
+            updated_at:      now,
         };
 
         let domain: types::InterviewPlan = store.into();
@@ -228,54 +231,54 @@ mod tests {
 
     #[test]
     fn interview_plan_domain_to_store() {
-        let now = Utc::now();
+        let now = jiff::Timestamp::now();
         let domain = types::InterviewPlan {
-            id: job_domain_core::id::InterviewId::from(Uuid::new_v4()),
-            application_id: job_domain_core::id::ApplicationId::from(Uuid::new_v4()),
-            title: "Final".into(),
-            company: "BigCo".into(),
-            position: "Staff".into(),
+            id:              job_domain_core::id::InterviewId::from(Uuid::new_v4()),
+            application_id:  job_domain_core::id::ApplicationId::from(Uuid::new_v4()),
+            title:           "Final".into(),
+            company:         "BigCo".into(),
+            position:        "Staff".into(),
             job_description: None,
-            round: types::InterviewRound::FinalRound,
-            scheduled_at: None,
-            task_status: types::InterviewTaskStatus::Completed,
-            prep_materials: types::PrepMaterials::default(),
-            notes: Some("Went well".into()),
-            trace_id: None,
-            is_deleted: false,
-            deleted_at: None,
-            created_at: now,
-            updated_at: now,
+            round:           types::InterviewRound::FinalRound,
+            scheduled_at:    None,
+            task_status:     types::InterviewTaskStatus::Completed,
+            prep_materials:  types::PrepMaterials::default(),
+            notes:           Some("Went well".into()),
+            trace_id:        None,
+            is_deleted:      false,
+            deleted_at:      None,
+            created_at:      now,
+            updated_at:      now,
         };
 
         let store: db_models::InterviewPlan = domain.into();
         assert_eq!(store.company, "BigCo");
         assert_eq!(store.round, "final_round");
-        assert_eq!(store.task_status, db_models::InterviewTaskStatus::Completed);
+        assert_eq!(store.task_status, 2);
         assert!(store.materials.is_some());
     }
 
     #[test]
     fn interview_plan_null_materials_defaults() {
-        let now = Utc::now();
+        let now = chrono::Utc::now();
         let store = db_models::InterviewPlan {
-            id: Uuid::new_v4(),
-            application_id: Uuid::new_v4(),
-            title: "Screen".into(),
-            company: "".into(),
-            position: "".into(),
+            id:              Uuid::new_v4(),
+            application_id:  Uuid::new_v4(),
+            title:           "Screen".into(),
+            company:         "".into(),
+            position:        "".into(),
             job_description: None,
-            round: "phone_screen".into(),
-            description: None,
-            scheduled_at: None,
-            task_status: db_models::InterviewTaskStatus::Pending,
-            materials: None,
-            notes: None,
-            trace_id: None,
-            is_deleted: false,
-            deleted_at: None,
-            created_at: now,
-            updated_at: now,
+            round:           "phone_screen".into(),
+            description:     None,
+            scheduled_at:    None,
+            task_status:     0,
+            materials:       None,
+            notes:           None,
+            trace_id:        None,
+            is_deleted:      false,
+            deleted_at:      None,
+            created_at:      now,
+            updated_at:      now,
         };
 
         let domain: types::InterviewPlan = store.into();

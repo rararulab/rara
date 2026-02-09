@@ -57,13 +57,12 @@ struct ServerArgs {}
 
 impl ServerArgs {
     fn run() -> Result<(), Whatever> {
-        let db_config = DatabaseConfig::builder()
-            .database_url(
-                std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+        let db_config =
+            DatabaseConfig::builder()
+                .database_url(std::env::var("DATABASE_URL").unwrap_or_else(|_| {
                     "postgres://postgres:postgres@localhost:5432/job".to_string()
-                }),
-            )
-            .build();
+                }))
+                .build();
 
         let mut config = AppConfig::default();
         config.db_config = db_config;

@@ -14,10 +14,13 @@ description = "Notification dispatch (Telegram, email) for domain events"
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
+jiff.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true
 sqlx = { workspace = true }
+strum.workspace = true
+strum_macros.workspace = true
 tracing.workspace = true
 uuid = { workspace = true }
 

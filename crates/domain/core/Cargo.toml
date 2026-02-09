@@ -13,7 +13,8 @@ description = "Shared domain interfaces, traits, and types for cross-crate contr
 
 [dependencies]
 async-trait.workspace = true
-chrono.workspace = true
+derive_more.workspace = true
+jiff.workspace = true
 serde.workspace = true
 snafu.workspace = true
 strum.workspace = true

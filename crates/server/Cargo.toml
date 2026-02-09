@@ -17,6 +17,7 @@ axum = { workspace = true }
 bon = { workspace = true }
 chrono = { workspace = true }
 derive_more = { workspace = true }
+jiff = { workspace = true }
 smart-default = { workspace = true }
 # fastrace = { workspace = true }
 axum-tracing-opentelemetry = { workspace = true }

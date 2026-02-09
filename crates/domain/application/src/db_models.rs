@@ -19,98 +19,18 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-/// Channel through which the application was submitted (DB enum).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "application_channel", rename_all = "snake_case")]
-#[serde(rename_all = "snake_case")]
-pub enum ApplicationChannel {
-    Direct,
-    Referral,
-    Linkedin,
-    Email,
-    Other,
-}
-
-impl std::fmt::Display for ApplicationChannel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Direct => write!(f, "direct"),
-            Self::Referral => write!(f, "referral"),
-            Self::Linkedin => write!(f, "linkedin"),
-            Self::Email => write!(f, "email"),
-            Self::Other => write!(f, "other"),
-        }
-    }
-}
-
-/// Application processing status (DB enum).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "application_status", rename_all = "snake_case")]
-#[serde(rename_all = "snake_case")]
-pub enum ApplicationStatus {
-    Draft,
-    Submitted,
-    InProgress,
-    Interviewing,
-    Offered,
-    Rejected,
-    Withdrawn,
-    Accepted,
-}
-
-impl std::fmt::Display for ApplicationStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Draft => write!(f, "draft"),
-            Self::Submitted => write!(f, "submitted"),
-            Self::InProgress => write!(f, "in_progress"),
-            Self::Interviewing => write!(f, "interviewing"),
-            Self::Offered => write!(f, "offered"),
-            Self::Rejected => write!(f, "rejected"),
-            Self::Withdrawn => write!(f, "withdrawn"),
-            Self::Accepted => write!(f, "accepted"),
-        }
-    }
-}
-
-/// Priority level for an application (DB enum).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "application_priority", rename_all = "snake_case")]
-#[serde(rename_all = "snake_case")]
-pub enum ApplicationPriority {
-    Low,
-    Medium,
-    High,
-    Critical,
-}
-
-impl Default for ApplicationPriority {
-    fn default() -> Self { Self::Medium }
-}
-
-impl std::fmt::Display for ApplicationPriority {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Low => write!(f, "low"),
-            Self::Medium => write!(f, "medium"),
-            Self::High => write!(f, "high"),
-            Self::Critical => write!(f, "critical"),
-        }
-    }
-}
-
 /// A job application record (DB row).
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Application {
     pub id:           Uuid,
     pub job_id:       Uuid,
     pub resume_id:    Option<Uuid>,
-    pub channel:      ApplicationChannel,
-    pub status:       ApplicationStatus,
+    pub channel:      i16,
+    pub status:       i16,
     pub cover_letter: Option<String>,
     pub notes:        Option<String>,
     pub tags:         Vec<String>,
-    pub priority:     ApplicationPriority,
+    pub priority:     i16,
     pub trace_id:     Option<String>,
     pub is_deleted:   bool,
     pub deleted_at:   Option<DateTime<Utc>>,
@@ -124,8 +44,8 @@ pub struct Application {
 pub struct ApplicationStatusHistory {
     pub id:             Uuid,
     pub application_id: Uuid,
-    pub from_status:    Option<ApplicationStatus>,
-    pub to_status:      ApplicationStatus,
+    pub from_status:    Option<i16>,
+    pub to_status:      i16,
     pub changed_by:     Option<String>,
     pub note:           Option<String>,
     pub trace_id:       Option<String>,

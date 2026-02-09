@@ -14,88 +14,93 @@
 
 //! Domain types for the notification module.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
+use strum_macros::FromRepr;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(u8)]
+#[derive(FromRepr)]
 pub enum NotificationChannel {
-    Telegram,
-    Email,
-    Webhook,
+    Telegram = 0,
+    Email = 1,
+    Webhook = 2,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+#[derive(FromRepr)]
 pub enum NotificationStatus {
-    Pending,
-    Sent,
-    Failed,
-    Retrying,
+    Pending = 0,
+    Sent = 1,
+    Failed = 2,
+    Retrying = 3,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+#[derive(FromRepr)]
 pub enum NotificationPriority {
-    Low,
-    Normal,
-    High,
-    Urgent,
+    Low = 0,
+    Normal = 1,
+    High = 2,
+    Urgent = 3,
 }
 
 impl Default for NotificationPriority {
-    fn default() -> Self {
-        Self::Normal
-    }
+    fn default() -> Self { Self::Normal }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Notification {
-    pub id: Uuid,
-    pub channel: NotificationChannel,
-    pub recipient: String,
-    pub subject: Option<String>,
-    pub body: String,
-    pub status: NotificationStatus,
-    pub priority: NotificationPriority,
-    pub retry_count: i32,
-    pub max_retries: i32,
-    pub error_message: Option<String>,
+    pub id:             Uuid,
+    pub channel:        NotificationChannel,
+    pub recipient:      String,
+    pub subject:        Option<String>,
+    pub body:           String,
+    pub status:         NotificationStatus,
+    pub priority:       NotificationPriority,
+    pub retry_count:    i32,
+    pub max_retries:    i32,
+    pub error_message:  Option<String>,
     pub reference_type: Option<String>,
-    pub reference_id: Option<Uuid>,
-    pub metadata: Option<serde_json::Value>,
-    pub trace_id: Option<String>,
-    pub sent_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
+    pub reference_id:   Option<Uuid>,
+    pub metadata:       Option<serde_json::Value>,
+    pub trace_id:       Option<String>,
+    pub sent_at:        Option<Timestamp>,
+    pub created_at:     Timestamp,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendNotificationRequest {
-    pub channel: NotificationChannel,
-    pub recipient: String,
-    pub subject: Option<String>,
-    pub body: String,
-    pub priority: NotificationPriority,
+    pub channel:        NotificationChannel,
+    pub recipient:      String,
+    pub subject:        Option<String>,
+    pub body:           String,
+    pub priority:       NotificationPriority,
     pub reference_type: Option<String>,
-    pub reference_id: Option<Uuid>,
-    pub metadata: Option<serde_json::Value>,
+    pub reference_id:   Option<Uuid>,
+    pub metadata:       Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NotificationFilter {
-    pub channel: Option<NotificationChannel>,
-    pub status: Option<NotificationStatus>,
-    pub recipient: Option<String>,
+    pub channel:        Option<NotificationChannel>,
+    pub status:         Option<NotificationStatus>,
+    pub recipient:      Option<String>,
     pub reference_type: Option<String>,
-    pub reference_id: Option<Uuid>,
-    pub created_after: Option<DateTime<Utc>>,
-    pub created_before: Option<DateTime<Utc>>,
+    pub reference_id:   Option<Uuid>,
+    pub created_after:  Option<Timestamp>,
+    pub created_before: Option<Timestamp>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NotificationStatistics {
-    pub total: i64,
-    pub pending: i64,
-    pub sent: i64,
-    pub failed: i64,
+    pub total:    i64,
+    pub pending:  i64,
+    pub sent:     i64,
+    pub failed:   i64,
     pub retrying: i64,
 }
 
@@ -103,5 +108,5 @@ pub struct NotificationStatistics {
 pub struct ProcessResult {
     pub processed: i64,
     pub succeeded: i64,
-    pub failed: i64,
+    pub failed:    i64,
 }

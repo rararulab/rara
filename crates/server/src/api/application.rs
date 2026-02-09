@@ -48,10 +48,7 @@ pub fn application_routes<R: ResumeRepository + 'static>(state: Arc<AppState<R>>
             "/api/v1/applications/{id}/history",
             get(get_status_history::<R>),
         )
-        .route(
-            "/api/v1/applications/{id}",
-            delete(delete_application::<R>),
-        )
+        .route("/api/v1/applications/{id}", delete(delete_application::<R>))
         .with_state(state)
 }
 
@@ -63,7 +60,7 @@ struct TransitionRequest {
     /// Who or what is triggering the change.
     source: ChangeSource,
     /// Optional note describing the reason.
-    note: Option<String>,
+    note:   Option<String>,
 }
 
 /// POST /api/v1/applications

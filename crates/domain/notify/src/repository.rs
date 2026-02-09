@@ -16,17 +16,17 @@
 
 use uuid::Uuid;
 
-use crate::error::NotifyError;
-use crate::types::{Notification, NotificationFilter, NotificationStatistics};
+use crate::{
+    error::NotifyError,
+    types::{Notification, NotificationFilter, NotificationStatistics},
+};
 
 #[async_trait::async_trait]
 pub trait NotificationRepository: Send + Sync {
     async fn save(&self, notification: &Notification) -> Result<Notification, NotifyError>;
     async fn find_by_id(&self, id: Uuid) -> Result<Option<Notification>, NotifyError>;
-    async fn find_all(
-        &self,
-        filter: &NotificationFilter,
-    ) -> Result<Vec<Notification>, NotifyError>;
+    async fn find_all(&self, filter: &NotificationFilter)
+    -> Result<Vec<Notification>, NotifyError>;
     async fn update(&self, notification: &Notification) -> Result<Notification, NotifyError>;
     async fn find_pending(&self, limit: i64) -> Result<Vec<Notification>, NotifyError>;
     async fn mark_sent(&self, id: Uuid) -> Result<(), NotifyError>;

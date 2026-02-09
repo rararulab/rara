@@ -21,9 +21,11 @@ use async_trait::async_trait;
 use job_domain_core::id::SchedulerTaskId;
 use sqlx::PgPool;
 
-use crate::db_models;
-use crate::error::SchedulerError;
-use crate::types::{ScheduledTask, TaskFilter, TaskRunRecord, TaskRunStatus};
+use crate::{
+    db_models,
+    error::SchedulerError,
+    types::{ScheduledTask, TaskFilter, TaskRunRecord, TaskRunStatus},
+};
 
 /// PostgreSQL implementation of the scheduler repository.
 pub struct PgSchedulerRepository {
@@ -33,9 +35,7 @@ pub struct PgSchedulerRepository {
 impl PgSchedulerRepository {
     /// Create a new repository backed by the given connection pool.
     #[must_use]
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
+    pub fn new(pool: PgPool) -> Self { Self { pool } }
 }
 
 /// Map a `sqlx::Error` into a `SchedulerError::RepositoryError`.
@@ -55,7 +55,7 @@ impl crate::repository::SchedulerRepository for PgSchedulerRepository {
                    (id, name, cron_expr, enabled, last_run_at, last_status,
                     last_error, run_count, failure_count, is_deleted, created_at, updated_at)
                VALUES
-                   ($1, $2, $3, $4, $5, $6::task_run_status,
+                   ($1, $2, $3, $4, $5, $6,
                     $7, $8, $9, $10, $11, $12)
                RETURNING *"#,
         )
@@ -93,10 +93,7 @@ impl crate::repository::SchedulerRepository for PgSchedulerRepository {
         Ok(row.map(Into::into))
     }
 
-    async fn find_task_by_name(
-        &self,
-        name: &str,
-    ) -> Result<Option<ScheduledTask>, SchedulerError> {
+    async fn find_task_by_name(&self, name: &str) -> Result<Option<ScheduledTask>, SchedulerError> {
         let row = sqlx::query_as::<_, db_models::SchedulerTask>(
             "SELECT * FROM scheduler_task WHERE name = $1 AND is_deleted = FALSE",
         )
@@ -108,10 +105,7 @@ impl crate::repository::SchedulerRepository for PgSchedulerRepository {
         Ok(row.map(Into::into))
     }
 
-    async fn list_tasks(
-        &self,
-        filter: &TaskFilter,
-    ) -> Result<Vec<ScheduledTask>, SchedulerError> {
+    async fn list_tasks(&self, filter: &TaskFilter) -> Result<Vec<ScheduledTask>, SchedulerError> {
         let mut sql = String::from("SELECT * FROM scheduler_task WHERE is_deleted = FALSE");
 
         if let Some(enabled) = filter.enabled {
@@ -139,7 +133,7 @@ impl crate::repository::SchedulerRepository for PgSchedulerRepository {
         let row = sqlx::query_as::<_, db_models::SchedulerTask>(
             r#"UPDATE scheduler_task
                SET name = $2, cron_expr = $3, enabled = $4, last_run_at = $5,
-                   last_status = $6::task_run_status, last_error = $7,
+                   last_status = $6, last_error = $7,
                    run_count = $8, failure_count = $9
                WHERE id = $1 AND is_deleted = FALSE
                RETURNING *"#,
@@ -162,7 +156,8 @@ impl crate::repository::SchedulerRepository for PgSchedulerRepository {
 
     async fn delete_task(&self, id: SchedulerTaskId) -> Result<(), SchedulerError> {
         let result = sqlx::query(
-            "UPDATE scheduler_task SET is_deleted = TRUE, deleted_at = now() WHERE id = $1 AND is_deleted = FALSE",
+            "UPDATE scheduler_task SET is_deleted = TRUE, deleted_at = now() WHERE id = $1 AND \
+             is_deleted = FALSE",
         )
         .bind(id.into_inner())
         .execute(&self.pool)
@@ -183,7 +178,7 @@ impl crate::repository::SchedulerRepository for PgSchedulerRepository {
         sqlx::query(
             r#"INSERT INTO task_run_history
                    (id, task_id, status, started_at, finished_at, duration_ms, error, output, created_at)
-               VALUES ($1, $2, $3::task_run_status, $4, $5, $6, $7, $8, $9)"#,
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#,
         )
         .bind(store.id)
         .bind(store.task_id)
@@ -227,23 +222,23 @@ impl crate::repository::SchedulerRepository for PgSchedulerRepository {
         status: TaskRunStatus,
         error: Option<&str>,
     ) -> Result<(), SchedulerError> {
-        let store_status: db_models::TaskRunStatus = status.into();
+        let status_code = status as u8 as i16;
 
         let sql = if status == TaskRunStatus::Failed {
             r#"UPDATE scheduler_task
-               SET last_run_at = now(), last_status = $2::task_run_status, last_error = $3,
+               SET last_run_at = now(), last_status = $2, last_error = $3,
                    run_count = run_count + 1, failure_count = failure_count + 1
                WHERE id = $1 AND is_deleted = FALSE"#
         } else {
             r#"UPDATE scheduler_task
-               SET last_run_at = now(), last_status = $2::task_run_status, last_error = $3,
+               SET last_run_at = now(), last_status = $2, last_error = $3,
                    run_count = run_count + 1
                WHERE id = $1 AND is_deleted = FALSE"#
         };
 
         let result = sqlx::query(sql)
             .bind(id.into_inner())
-            .bind(&store_status)
+            .bind(status_code)
             .bind(error)
             .execute(&self.pool)
             .await
@@ -260,8 +255,11 @@ impl crate::repository::SchedulerRepository for PgSchedulerRepository {
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
+    use std::time::Duration;
+
+    use jiff::Timestamp;
     use job_domain_core::id::SchedulerTaskId;
+    use sqlx::postgres::PgPoolOptions;
     use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::postgres::Postgres;
     use uuid::Uuid;
@@ -269,12 +267,31 @@ mod tests {
     use super::*;
     use crate::repository::SchedulerRepository;
 
+    async fn connect_pool(url: &str) -> sqlx::PgPool {
+        let mut last_err: Option<sqlx::Error> = None;
+        for _ in 0..30 {
+            match PgPoolOptions::new()
+                .max_connections(5)
+                .acquire_timeout(Duration::from_secs(10))
+                .connect(url)
+                .await
+            {
+                Ok(pool) => return pool,
+                Err(e) => {
+                    last_err = Some(e);
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            }
+        }
+        panic!("failed to connect to postgres: {last_err:?}");
+    }
+
     async fn setup_pool() -> (sqlx::PgPool, testcontainers::ContainerAsync<Postgres>) {
         let container = Postgres::default().start().await.unwrap();
         let host = container.get_host().await.unwrap();
         let port = container.get_host_port_ipv4(5432).await.unwrap();
         let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
-        let pool = sqlx::PgPool::connect(&url).await.unwrap();
+        let pool = connect_pool(&url).await;
 
         // Ensure gen_random_uuid() is available (older PG images need pgcrypto).
         sqlx::raw_sql("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\"")
@@ -286,10 +303,18 @@ mod tests {
         // which supports multi-statement execution.
         let migrations: &[&str] = &[
             include_str!("../../../common/yunara-store/migrations/20260127000000_init.sql"),
-            include_str!("../../../common/yunara-store/migrations/20260208000000_domain_models.sql"),
-            include_str!("../../../common/yunara-store/migrations/20260209000000_resume_version_mgmt.sql"),
-            include_str!("../../../common/yunara-store/migrations/20260210000000_schema_alignment.sql"),
-            include_str!("../../../common/yunara-store/migrations/20260211000000_notify_priority.sql"),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260208000000_domain_models.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260209000000_resume_version_mgmt.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260210000000_schema_alignment.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260211000000_notify_priority.sql"
+            ),
         ];
 
         for sql in migrations {
@@ -299,33 +324,59 @@ mod tests {
         // The scheduler migration references set_updated_at() but the
         // function was created as trigger_set_updated_at() in the domain
         // migration. Fix the reference before executing.
-        let scheduler_sql =
-            include_str!("../../../common/yunara-store/migrations/20260211000001_scheduler_tables.sql")
-                .replace("FUNCTION set_updated_at()", "FUNCTION trigger_set_updated_at()");
+        let scheduler_sql = include_str!(
+            "../../../common/yunara-store/migrations/20260211000001_scheduler_tables.sql"
+        )
+        .replace(
+            "FUNCTION set_updated_at()",
+            "FUNCTION trigger_set_updated_at()",
+        );
         sqlx::raw_sql(&scheduler_sql).execute(&pool).await.unwrap();
+
+        // Convert domain enum columns to SMALLINT codes.
+        let domain_int_migrations: &[&str] = &[
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000000_application_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000001_interview_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000002_notify_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000003_resume_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000004_scheduler_int_enums.sql"
+            ),
+        ];
+        for sql in domain_int_migrations {
+            sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+        }
 
         (pool, container)
     }
 
     fn make_task() -> ScheduledTask {
-        let now = Utc::now();
+        let now = Timestamp::now();
         ScheduledTask {
-            id: SchedulerTaskId::new(),
-            name: format!("test-task-{}", Uuid::new_v4()),
-            cron_expr: "0 */30 * * * *".into(),
-            enabled: true,
-            last_run_at: None,
-            last_status: None,
-            last_error: None,
-            run_count: 0,
+            id:            SchedulerTaskId::new(),
+            name:          format!("test-task-{}", Uuid::new_v4()),
+            cron_expr:     "0 */30 * * * *".into(),
+            enabled:       true,
+            last_run_at:   None,
+            last_status:   None,
+            last_error:    None,
+            run_count:     0,
             failure_count: 0,
-            created_at: now,
-            updated_at: now,
+            created_at:    now,
+            updated_at:    now,
         }
     }
 
     fn make_run_record(task_id: SchedulerTaskId) -> TaskRunRecord {
-        let now = Utc::now();
+        let now = Timestamp::now();
         TaskRunRecord {
             id: Uuid::new_v4(),
             task_id,
@@ -362,10 +413,7 @@ mod tests {
         let (pool, _container) = setup_pool().await;
         let repo = PgSchedulerRepository::new(pool);
 
-        let found = repo
-            .find_task_by_id(SchedulerTaskId::new())
-            .await
-            .unwrap();
+        let found = repo.find_task_by_id(SchedulerTaskId::new()).await.unwrap();
         assert!(found.is_none());
     }
 
@@ -530,13 +578,9 @@ mod tests {
         let task = make_task();
         let saved = repo.save_task(&task).await.unwrap();
 
-        repo.update_task_last_run(
-            saved.id,
-            TaskRunStatus::Failed,
-            Some("connection refused"),
-        )
-        .await
-        .unwrap();
+        repo.update_task_last_run(saved.id, TaskRunStatus::Failed, Some("connection refused"))
+            .await
+            .unwrap();
 
         let updated = repo.find_task_by_id(saved.id).await.unwrap().unwrap();
         assert_eq!(updated.run_count, 1);

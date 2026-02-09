@@ -15,7 +15,7 @@
 //! Domain status enums shared across crates.
 
 use serde::{Deserialize, Serialize};
-use strum_macros::{Display, EnumString};
+use strum_macros::{Display, EnumString, FromRepr};
 
 /// Lifecycle status of a job source driver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString)]
@@ -32,25 +32,28 @@ pub enum JobSourceStatus {
 }
 
 /// Lifecycle status of a job application.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString)]
+#[repr(u8)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString, FromRepr,
+)]
 #[strum(serialize_all = "snake_case")]
 pub enum ApplicationStatus {
     /// Application is in draft / being prepared.
-    Draft,
+    Draft = 0,
     /// Application has been submitted.
-    Submitted,
+    Submitted = 1,
     /// Employer acknowledged receipt.
-    UnderReview,
-    /// Application was rejected.
-    Rejected,
+    UnderReview = 2,
     /// Candidate advanced to interview stage.
-    Interview,
+    Interview = 3,
     /// An offer was extended.
-    Offered,
+    Offered = 4,
+    /// Application was rejected.
+    Rejected = 5,
     /// Offer accepted.
-    Accepted,
+    Accepted = 6,
     /// Application was withdrawn by the candidate.
-    Withdrawn,
+    Withdrawn = 7,
 }
 
 /// Lifecycle status of an interview.

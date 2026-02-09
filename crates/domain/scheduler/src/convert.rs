@@ -14,35 +14,46 @@
 
 //! Conversion layer between DB (store) models and domain types for scheduler.
 
+use chrono::{DateTime, TimeZone as _, Utc};
+use jiff::Timestamp;
 use job_domain_core::id::SchedulerTaskId;
 
-use crate::db_models;
-use crate::types;
+use crate::{db_models, types};
 
-// ===========================================================================
-// TaskRunStatus conversions
-// ===========================================================================
-
-/// Store `TaskRunStatus` -> Domain `TaskRunStatus`.
-impl From<db_models::TaskRunStatus> for types::TaskRunStatus {
-    fn from(value: db_models::TaskRunStatus) -> Self {
-        match value {
-            db_models::TaskRunStatus::Success => Self::Success,
-            db_models::TaskRunStatus::Failed => Self::Failed,
-            db_models::TaskRunStatus::Running => Self::Running,
-        }
-    }
+fn chrono_to_timestamp(dt: DateTime<Utc>) -> Timestamp {
+    Timestamp::new(dt.timestamp(), dt.timestamp_subsec_nanos() as i32)
+        .expect("chrono DateTime<Utc> fits in jiff Timestamp")
 }
 
-/// Domain `TaskRunStatus` -> Store `TaskRunStatus`.
-impl From<types::TaskRunStatus> for db_models::TaskRunStatus {
-    fn from(value: types::TaskRunStatus) -> Self {
-        match value {
-            types::TaskRunStatus::Success => Self::Success,
-            types::TaskRunStatus::Failed => Self::Failed,
-            types::TaskRunStatus::Running => Self::Running,
-        }
+fn chrono_opt_to_timestamp(dt: Option<DateTime<Utc>>) -> Option<Timestamp> {
+    dt.map(chrono_to_timestamp)
+}
+
+fn timestamp_to_chrono(ts: Timestamp) -> DateTime<Utc> {
+    let mut second = ts.as_second();
+    let mut nanosecond = ts.subsec_nanosecond();
+    if nanosecond < 0 {
+        second = second.saturating_sub(1);
+        nanosecond = nanosecond.saturating_add(1_000_000_000);
     }
+
+    Utc.timestamp_opt(second, nanosecond as u32)
+        .single()
+        .expect("jiff Timestamp fits in chrono DateTime<Utc>")
+}
+
+fn timestamp_opt_to_chrono(ts: Option<Timestamp>) -> Option<DateTime<Utc>> {
+    ts.map(timestamp_to_chrono)
+}
+
+fn u8_from_i16(value: i16, field: &'static str) -> u8 {
+    u8::try_from(value).unwrap_or_else(|_| panic!("invalid {field}: {value}"))
+}
+
+fn task_run_status_from_i16(value: i16) -> types::TaskRunStatus {
+    let repr = u8_from_i16(value, "scheduler_task.last_status/task_run_history.status");
+    types::TaskRunStatus::from_repr(repr)
+        .unwrap_or_else(|| panic!("invalid task run status: {value}"))
 }
 
 // ===========================================================================
@@ -57,13 +68,13 @@ impl From<db_models::SchedulerTask> for types::ScheduledTask {
             name:          t.name,
             cron_expr:     t.cron_expr,
             enabled:       t.enabled,
-            last_run_at:   t.last_run_at,
-            last_status:   t.last_status.map(Into::into),
+            last_run_at:   chrono_opt_to_timestamp(t.last_run_at),
+            last_status:   t.last_status.map(task_run_status_from_i16),
             last_error:    t.last_error,
             run_count:     t.run_count,
             failure_count: t.failure_count,
-            created_at:    t.created_at,
-            updated_at:    t.updated_at,
+            created_at:    chrono_to_timestamp(t.created_at),
+            updated_at:    chrono_to_timestamp(t.updated_at),
         }
     }
 }
@@ -76,15 +87,15 @@ impl From<types::ScheduledTask> for db_models::SchedulerTask {
             name:          t.name,
             cron_expr:     t.cron_expr,
             enabled:       t.enabled,
-            last_run_at:   t.last_run_at,
-            last_status:   t.last_status.map(Into::into),
+            last_run_at:   timestamp_opt_to_chrono(t.last_run_at),
+            last_status:   t.last_status.map(|s| s as u8 as i16),
             last_error:    t.last_error,
             run_count:     t.run_count,
             failure_count: t.failure_count,
             is_deleted:    false,
             deleted_at:    None,
-            created_at:    t.created_at,
-            updated_at:    t.updated_at,
+            created_at:    timestamp_to_chrono(t.created_at),
+            updated_at:    timestamp_to_chrono(t.updated_at),
         }
     }
 }
@@ -99,13 +110,13 @@ impl From<db_models::TaskRunHistory> for types::TaskRunRecord {
         Self {
             id:          r.id,
             task_id:     SchedulerTaskId::from(r.task_id),
-            status:      r.status.into(),
-            started_at:  r.started_at,
-            finished_at: r.finished_at,
+            status:      task_run_status_from_i16(r.status),
+            started_at:  chrono_to_timestamp(r.started_at),
+            finished_at: chrono_opt_to_timestamp(r.finished_at),
             duration_ms: r.duration_ms,
             error:       r.error,
             output:      r.output,
-            created_at:  r.created_at,
+            created_at:  chrono_to_timestamp(r.created_at),
         }
     }
 }
@@ -116,43 +127,35 @@ impl From<types::TaskRunRecord> for db_models::TaskRunHistory {
         Self {
             id:          r.id,
             task_id:     r.task_id.into_inner(),
-            status:      r.status.into(),
-            started_at:  r.started_at,
-            finished_at: r.finished_at,
+            status:      r.status as u8 as i16,
+            started_at:  timestamp_to_chrono(r.started_at),
+            finished_at: timestamp_opt_to_chrono(r.finished_at),
             duration_ms: r.duration_ms,
             error:       r.error,
             output:      r.output,
-            created_at:  r.created_at,
+            created_at:  timestamp_to_chrono(r.created_at),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
     use uuid::Uuid;
 
     use super::*;
 
     #[test]
-    fn task_run_status_roundtrip() {
-        use db_models::TaskRunStatus as S;
+    fn task_run_status_from_i16_works() {
         use types::TaskRunStatus as D;
 
-        let pairs = [
-            (S::Success, D::Success),
-            (S::Failed, D::Failed),
-            (S::Running, D::Running),
-        ];
-        for (store, domain) in &pairs {
-            assert_eq!(D::from(*store), *domain);
-            assert_eq!(S::from(*domain), *store);
-        }
+        assert_eq!(task_run_status_from_i16(0), D::Success);
+        assert_eq!(task_run_status_from_i16(1), D::Failed);
+        assert_eq!(task_run_status_from_i16(2), D::Running);
     }
 
     #[test]
     fn scheduler_task_store_to_domain_roundtrip() {
-        let now = Utc::now();
+        let now = chrono::Utc::now();
         let id = Uuid::new_v4();
         let store_task = db_models::SchedulerTask {
             id,
@@ -160,7 +163,7 @@ mod tests {
             cron_expr: "0 */30 * * * *".into(),
             enabled: true,
             last_run_at: Some(now),
-            last_status: Some(db_models::TaskRunStatus::Success),
+            last_status: Some(0),
             last_error: None,
             run_count: 5,
             failure_count: 1,
@@ -184,13 +187,13 @@ mod tests {
 
     #[test]
     fn task_run_history_store_to_domain_roundtrip() {
-        let now = Utc::now();
+        let now = chrono::Utc::now();
         let id = Uuid::new_v4();
         let task_id = Uuid::new_v4();
         let store_run = db_models::TaskRunHistory {
             id,
             task_id,
-            status: db_models::TaskRunStatus::Failed,
+            status: 1,
             started_at: now,
             finished_at: Some(now),
             duration_ms: Some(1500),

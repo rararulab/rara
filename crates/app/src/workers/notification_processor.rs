@@ -28,9 +28,7 @@ pub struct NotificationProcessorWorker {
 
 impl NotificationProcessorWorker {
     /// Create a new notification processor with the given batch size.
-    pub fn new(batch_size: i64) -> Self {
-        Self { batch_size }
-    }
+    pub fn new(batch_size: i64) -> Self { Self { batch_size } }
 }
 
 /// Shared state for the notification processor worker.

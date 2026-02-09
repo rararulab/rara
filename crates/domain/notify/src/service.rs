@@ -14,18 +14,19 @@
 
 //! Notification service: queuing, sending, and retry logic.
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-use chrono::Utc;
+use jiff::Timestamp;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use crate::error::NotifyError;
-use crate::repository::NotificationRepository;
-use crate::types::{
-    Notification, NotificationChannel, NotificationFilter, NotificationStatistics,
-    NotificationStatus, ProcessResult, SendNotificationRequest,
+use crate::{
+    error::NotifyError,
+    repository::NotificationRepository,
+    types::{
+        Notification, NotificationChannel, NotificationFilter, NotificationStatistics,
+        NotificationStatus, ProcessResult, SendNotificationRequest,
+    },
 };
 
 /// Trait for notification channel backends (e.g. Telegram, Email).
@@ -35,7 +36,7 @@ pub trait NotificationSender: Send + Sync {
 }
 
 pub struct NotificationService {
-    repo: Arc<dyn NotificationRepository>,
+    repo:    Arc<dyn NotificationRepository>,
     senders: HashMap<NotificationChannel, Arc<dyn NotificationSender>>,
 }
 
@@ -55,10 +56,7 @@ impl NotificationService {
         self.senders.insert(channel, sender);
     }
 
-    pub async fn send(
-        &self,
-        req: SendNotificationRequest,
-    ) -> Result<Notification, NotifyError> {
+    pub async fn send(&self, req: SendNotificationRequest) -> Result<Notification, NotifyError> {
         if req.recipient.is_empty() {
             return Err(NotifyError::ValidationError {
                 message: "recipient must not be empty".to_string(),
@@ -71,22 +69,22 @@ impl NotificationService {
         }
 
         let notification = Notification {
-            id: Uuid::new_v4(),
-            channel: req.channel,
-            recipient: req.recipient,
-            subject: req.subject,
-            body: req.body,
-            status: NotificationStatus::Pending,
-            priority: req.priority,
-            retry_count: 0,
-            max_retries: 3,
-            error_message: None,
+            id:             Uuid::new_v4(),
+            channel:        req.channel,
+            recipient:      req.recipient,
+            subject:        req.subject,
+            body:           req.body,
+            status:         NotificationStatus::Pending,
+            priority:       req.priority,
+            retry_count:    0,
+            max_retries:    3,
+            error_message:  None,
             reference_type: req.reference_type,
-            reference_id: req.reference_id,
-            metadata: req.metadata,
-            trace_id: None,
-            sent_at: None,
-            created_at: Utc::now(),
+            reference_id:   req.reference_id,
+            metadata:       req.metadata,
+            trace_id:       None,
+            sent_at:        None,
+            created_at:     Timestamp::now(),
         };
 
         let saved = self.repo.save(&notification).await?;
@@ -94,10 +92,7 @@ impl NotificationService {
         Ok(saved)
     }
 
-    pub async fn process_pending(
-        &self,
-        batch_size: i64,
-    ) -> Result<ProcessResult, NotifyError> {
+    pub async fn process_pending(&self, batch_size: i64) -> Result<ProcessResult, NotifyError> {
         let pending = self.repo.find_pending(batch_size).await?;
         let mut result = ProcessResult::default();
 
@@ -181,123 +176,14 @@ impl NotificationService {
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::Arc, time::Duration};
+
+    use sqlx::postgres::PgPoolOptions;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers_modules::postgres::Postgres;
+
     use super::*;
-    use std::sync::Mutex;
-
-    // Mock repository for testing
-    struct MockNotificationRepo {
-        notifications: Mutex<Vec<Notification>>,
-    }
-
-    impl MockNotificationRepo {
-        fn new() -> Self {
-            Self {
-                notifications: Mutex::new(Vec::new()),
-            }
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl NotificationRepository for MockNotificationRepo {
-        async fn save(&self, notification: &Notification) -> Result<Notification, NotifyError> {
-            let mut store = self.notifications.lock().unwrap();
-            store.push(notification.clone());
-            Ok(notification.clone())
-        }
-
-        async fn find_by_id(&self, id: Uuid) -> Result<Option<Notification>, NotifyError> {
-            let store = self.notifications.lock().unwrap();
-            Ok(store.iter().find(|n| n.id == id).cloned())
-        }
-
-        async fn find_all(
-            &self,
-            filter: &NotificationFilter,
-        ) -> Result<Vec<Notification>, NotifyError> {
-            let store = self.notifications.lock().unwrap();
-            let mut results: Vec<Notification> = store.clone();
-            if let Some(ref channel) = filter.channel {
-                results.retain(|n| n.channel == *channel);
-            }
-            if let Some(ref status) = filter.status {
-                results.retain(|n| n.status == *status);
-            }
-            Ok(results)
-        }
-
-        async fn update(&self, notification: &Notification) -> Result<Notification, NotifyError> {
-            let mut store = self.notifications.lock().unwrap();
-            if let Some(existing) = store.iter_mut().find(|n| n.id == notification.id) {
-                *existing = notification.clone();
-                Ok(notification.clone())
-            } else {
-                Err(NotifyError::NotFound {
-                    id: notification.id,
-                })
-            }
-        }
-
-        async fn find_pending(&self, limit: i64) -> Result<Vec<Notification>, NotifyError> {
-            let store = self.notifications.lock().unwrap();
-            Ok(store
-                .iter()
-                .filter(|n| {
-                    n.status == NotificationStatus::Pending
-                        || n.status == NotificationStatus::Retrying
-                })
-                .take(limit as usize)
-                .cloned()
-                .collect())
-        }
-
-        async fn mark_sent(&self, id: Uuid) -> Result<(), NotifyError> {
-            let mut store = self.notifications.lock().unwrap();
-            if let Some(n) = store.iter_mut().find(|n| n.id == id) {
-                n.status = NotificationStatus::Sent;
-                n.sent_at = Some(Utc::now());
-                Ok(())
-            } else {
-                Err(NotifyError::NotFound { id })
-            }
-        }
-
-        async fn mark_failed(&self, id: Uuid, error: &str) -> Result<(), NotifyError> {
-            let mut store = self.notifications.lock().unwrap();
-            if let Some(n) = store.iter_mut().find(|n| n.id == id) {
-                n.status = NotificationStatus::Failed;
-                n.error_message = Some(error.to_string());
-                Ok(())
-            } else {
-                Err(NotifyError::NotFound { id })
-            }
-        }
-
-        async fn increment_retry(&self, id: Uuid) -> Result<Notification, NotifyError> {
-            let mut store = self.notifications.lock().unwrap();
-            if let Some(n) = store.iter_mut().find(|n| n.id == id) {
-                n.retry_count += 1;
-                n.status = NotificationStatus::Retrying;
-                Ok(n.clone())
-            } else {
-                Err(NotifyError::NotFound { id })
-            }
-        }
-
-        async fn get_statistics(&self) -> Result<NotificationStatistics, NotifyError> {
-            let store = self.notifications.lock().unwrap();
-            let mut stats = NotificationStatistics::default();
-            stats.total = store.len() as i64;
-            for n in store.iter() {
-                match n.status {
-                    NotificationStatus::Pending => stats.pending += 1,
-                    NotificationStatus::Sent => stats.sent += 1,
-                    NotificationStatus::Failed => stats.failed += 1,
-                    NotificationStatus::Retrying => stats.retrying += 1,
-                }
-            }
-            Ok(stats)
-        }
-    }
+    use crate::pg_repository::PgNotificationRepository;
 
     // Mock sender
     struct MockSender {
@@ -320,21 +206,119 @@ mod tests {
 
     fn make_request() -> SendNotificationRequest {
         SendNotificationRequest {
-            channel: NotificationChannel::Telegram,
-            recipient: "user123".to_string(),
-            subject: Some("Test".to_string()),
-            body: "Hello world".to_string(),
-            priority: crate::types::NotificationPriority::Normal,
+            channel:        NotificationChannel::Telegram,
+            recipient:      "user123".to_string(),
+            subject:        Some("Test".to_string()),
+            body:           "Hello world".to_string(),
+            priority:       crate::types::NotificationPriority::Normal,
             reference_type: None,
-            reference_id: None,
-            metadata: None,
+            reference_id:   None,
+            metadata:       None,
         }
+    }
+
+    async fn connect_pool(url: &str) -> sqlx::PgPool {
+        let mut last_err: Option<sqlx::Error> = None;
+        for _ in 0..30 {
+            match PgPoolOptions::new()
+                .max_connections(5)
+                .acquire_timeout(Duration::from_secs(10))
+                .connect(url)
+                .await
+            {
+                Ok(pool) => return pool,
+                Err(e) => {
+                    last_err = Some(e);
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            }
+        }
+        panic!("failed to connect to postgres: {last_err:?}");
+    }
+
+    async fn setup_pool() -> (sqlx::PgPool, testcontainers::ContainerAsync<Postgres>) {
+        let container = Postgres::default().start().await.unwrap();
+        let host = container.get_host().await.unwrap();
+        let port = container.get_host_port_ipv4(5432).await.unwrap();
+        let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
+        let pool = connect_pool(&url).await;
+
+        // Ensure gen_random_uuid() is available (older PG images need pgcrypto).
+        sqlx::raw_sql("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\"")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Run migrations in order.
+        let migrations: &[&str] = &[
+            include_str!("../../../common/yunara-store/migrations/20260127000000_init.sql"),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260208000000_domain_models.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260209000000_resume_version_mgmt.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260210000000_schema_alignment.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260211000000_notify_priority.sql"
+            ),
+        ];
+
+        for sql in migrations {
+            sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+        }
+
+        // The scheduler migration references set_updated_at() but the
+        // function was created as trigger_set_updated_at() in the domain
+        // migration. Fix the reference before executing.
+        let scheduler_sql = include_str!(
+            "../../../common/yunara-store/migrations/20260211000001_scheduler_tables.sql"
+        )
+        .replace(
+            "FUNCTION set_updated_at()",
+            "FUNCTION trigger_set_updated_at()",
+        );
+        sqlx::raw_sql(&scheduler_sql).execute(&pool).await.unwrap();
+
+        // Convert domain enum columns to SMALLINT codes.
+        let domain_int_migrations: &[&str] = &[
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000000_application_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000001_interview_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000002_notify_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000003_resume_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000004_scheduler_int_enums.sql"
+            ),
+        ];
+        for sql in domain_int_migrations {
+            sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+        }
+
+        (pool, container)
+    }
+
+    async fn make_service() -> (
+        NotificationService,
+        testcontainers::ContainerAsync<Postgres>,
+    ) {
+        let (pool, container) = setup_pool().await;
+        let repo = Arc::new(PgNotificationRepository::new(pool));
+        (NotificationService::new(repo), container)
     }
 
     #[tokio::test]
     async fn test_send_creates_pending_notification() {
-        let repo = Arc::new(MockNotificationRepo::new());
-        let service = NotificationService::new(repo);
+        let (service, _container) = make_service().await;
 
         let result = service.send(make_request()).await.unwrap();
         assert_eq!(result.status, NotificationStatus::Pending);
@@ -344,8 +328,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_validates_empty_recipient() {
-        let repo = Arc::new(MockNotificationRepo::new());
-        let service = NotificationService::new(repo);
+        let (service, _container) = make_service().await;
 
         let mut req = make_request();
         req.recipient = String::new();
@@ -355,8 +338,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_validates_empty_body() {
-        let repo = Arc::new(MockNotificationRepo::new());
-        let service = NotificationService::new(repo);
+        let (service, _container) = make_service().await;
 
         let mut req = make_request();
         req.body = String::new();
@@ -366,13 +348,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_pending_with_successful_sender() {
-        let repo = Arc::new(MockNotificationRepo::new());
-        let mut service = NotificationService::new(repo.clone());
+        let (mut service, _container) = make_service().await;
         service.register_sender(
             NotificationChannel::Telegram,
-            Arc::new(MockSender {
-                should_fail: false,
-            }),
+            Arc::new(MockSender { should_fail: false }),
         );
 
         service.send(make_request()).await.unwrap();
@@ -384,8 +363,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_pending_with_failing_sender() {
-        let repo = Arc::new(MockNotificationRepo::new());
-        let mut service = NotificationService::new(repo.clone());
+        let (mut service, _container) = make_service().await;
         service.register_sender(
             NotificationChannel::Telegram,
             Arc::new(MockSender { should_fail: true }),
@@ -400,8 +378,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_pending_no_sender_registered() {
-        let repo = Arc::new(MockNotificationRepo::new());
-        let service = NotificationService::new(repo.clone());
+        let (service, _container) = make_service().await;
 
         // Send via Email but no email sender registered
         let mut req = make_request();
@@ -414,8 +391,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_retry_only_failed_notifications() {
-        let repo = Arc::new(MockNotificationRepo::new());
-        let service = NotificationService::new(repo);
+        let (service, _container) = make_service().await;
 
         let notification = service.send(make_request()).await.unwrap();
         // Notification is Pending, not Failed — retry should fail
@@ -425,8 +401,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_statistics() {
-        let repo = Arc::new(MockNotificationRepo::new());
-        let service = NotificationService::new(repo);
+        let (service, _container) = make_service().await;
 
         service.send(make_request()).await.unwrap();
         service.send(make_request()).await.unwrap();

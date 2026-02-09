@@ -20,7 +20,7 @@
 
 use std::sync::Arc;
 
-use chrono::Utc;
+use jiff::Timestamp;
 use job_domain_core::id::{ApplicationId, InterviewId};
 use tracing::instrument;
 
@@ -76,7 +76,7 @@ impl InterviewService {
     ) -> Result<InterviewPlan, InterviewError> {
         Self::validate_create_request(&req)?;
 
-        let now = Utc::now();
+        let now = Timestamp::now();
         let plan = InterviewPlan {
             id:              InterviewId::new(),
             application_id:  req.application_id,
@@ -110,7 +110,7 @@ impl InterviewService {
 
         let materials = self.generate_materials(&prep_req).await?;
 
-        let now = Utc::now();
+        let now = Timestamp::now();
         let plan = InterviewPlan {
             id:              InterviewId::new(),
             application_id:  req.application_id,
@@ -200,7 +200,7 @@ impl InterviewService {
             plan.notes = notes;
         }
 
-        plan.updated_at = Utc::now();
+        plan.updated_at = Timestamp::now();
         self.repo.update(&plan).await
     }
 
@@ -216,7 +216,7 @@ impl InterviewService {
         Self::validate_status_transition(plan.task_status, new_status)?;
 
         plan.task_status = new_status;
-        plan.updated_at = Utc::now();
+        plan.updated_at = Timestamp::now();
 
         self.repo.update(&plan).await
     }
@@ -233,7 +233,7 @@ impl InterviewService {
         let materials = self.generate_materials(&prep_req).await?;
 
         plan.prep_materials = materials;
-        plan.updated_at = Utc::now();
+        plan.updated_at = Timestamp::now();
 
         self.repo.update(&plan).await
     }
@@ -327,131 +327,149 @@ impl InterviewService {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::{sync::Arc, time::Duration};
 
-    use async_trait::async_trait;
+    use sqlx::postgres::PgPoolOptions;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers_modules::postgres::Postgres;
 
     use super::*;
-    use crate::{prep_generator::MockPrepGenerator, types::InterviewRound};
-
-    // -- In-memory repository -----------------------------------------------
-
-    /// Simple in-memory repository for testing.
-    struct InMemoryRepo {
-        plans: Mutex<Vec<InterviewPlan>>,
-    }
-
-    impl InMemoryRepo {
-        fn new() -> Self {
-            Self {
-                plans: Mutex::new(Vec::new()),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl InterviewPlanRepository for InMemoryRepo {
-        async fn save(&self, plan: &InterviewPlan) -> Result<InterviewPlan, InterviewError> {
-            let mut plans = self.plans.lock().unwrap();
-            plans.push(plan.clone());
-            Ok(plan.clone())
-        }
-
-        async fn find_by_id(
-            &self,
-            id: InterviewId,
-        ) -> Result<Option<InterviewPlan>, InterviewError> {
-            let plans = self.plans.lock().unwrap();
-            Ok(plans.iter().find(|p| p.id == id && !p.is_deleted).cloned())
-        }
-
-        async fn find_by_application(
-            &self,
-            app_id: ApplicationId,
-        ) -> Result<Vec<InterviewPlan>, InterviewError> {
-            let plans = self.plans.lock().unwrap();
-            Ok(plans
-                .iter()
-                .filter(|p| p.application_id == app_id && !p.is_deleted)
-                .cloned()
-                .collect())
-        }
-
-        async fn find_all(
-            &self,
-            filter: &InterviewFilter,
-        ) -> Result<Vec<InterviewPlan>, InterviewError> {
-            let plans = self.plans.lock().unwrap();
-            Ok(plans
-                .iter()
-                .filter(|p| {
-                    if p.is_deleted {
-                        return false;
-                    }
-                    if let Some(ref app_id) = filter.application_id {
-                        if p.application_id != *app_id {
-                            return false;
-                        }
-                    }
-                    if let Some(ref company) = filter.company {
-                        if p.company != *company {
-                            return false;
-                        }
-                    }
-                    if let Some(status) = filter.task_status {
-                        if p.task_status != status {
-                            return false;
-                        }
-                    }
-                    true
-                })
-                .cloned()
-                .collect())
-        }
-
-        async fn update(&self, plan: &InterviewPlan) -> Result<InterviewPlan, InterviewError> {
-            let mut plans = self.plans.lock().unwrap();
-            if let Some(existing) = plans.iter_mut().find(|p| p.id == plan.id) {
-                *existing = plan.clone();
-                Ok(plan.clone())
-            } else {
-                Err(NotFoundSnafu {
-                    id: plan.id.into_inner(),
-                }
-                .build())
-            }
-        }
-
-        async fn delete(&self, id: InterviewId) -> Result<(), InterviewError> {
-            let mut plans = self.plans.lock().unwrap();
-            if let Some(plan) = plans.iter_mut().find(|p| p.id == id) {
-                plan.is_deleted = true;
-                plan.deleted_at = Some(Utc::now());
-                Ok(())
-            } else {
-                Err(NotFoundSnafu {
-                    id: id.into_inner(),
-                }
-                .build())
-            }
-        }
-    }
+    use crate::{
+        pg_repository::PgInterviewPlanRepository, prep_generator::MockPrepGenerator,
+        types::InterviewRound,
+    };
 
     // -- Helpers ------------------------------------------------------------
 
-    fn make_service(with_prep: bool) -> InterviewService {
-        let repo = Arc::new(InMemoryRepo::new());
+    const TEST_JOB_ID: &str = "00000000-0000-0000-0000-000000000001";
+    const TEST_APP_ID: &str = "00000000-0000-0000-0000-000000000002";
+
+    async fn connect_pool(url: &str) -> sqlx::PgPool {
+        let mut last_err: Option<sqlx::Error> = None;
+        for _ in 0..30 {
+            match PgPoolOptions::new()
+                .max_connections(5)
+                .acquire_timeout(Duration::from_secs(10))
+                .connect(url)
+                .await
+            {
+                Ok(pool) => return pool,
+                Err(e) => {
+                    last_err = Some(e);
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            }
+        }
+        panic!("failed to connect to postgres: {last_err:?}");
+    }
+
+    async fn setup_pool() -> (sqlx::PgPool, testcontainers::ContainerAsync<Postgres>) {
+        let container = Postgres::default().start().await.unwrap();
+        let host = container.get_host().await.unwrap();
+        let port = container.get_host_port_ipv4(5432).await.unwrap();
+        let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
+        let pool = connect_pool(&url).await;
+
+        // Ensure gen_random_uuid() is available (older PG images need pgcrypto).
+        sqlx::raw_sql("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\"")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Run migrations in order.
+        let migrations: &[&str] = &[
+            include_str!("../../../common/yunara-store/migrations/20260127000000_init.sql"),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260208000000_domain_models.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260209000000_resume_version_mgmt.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260210000000_schema_alignment.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260211000000_notify_priority.sql"
+            ),
+        ];
+
+        for sql in migrations {
+            sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+        }
+
+        // The scheduler migration references set_updated_at() but the
+        // function was created as trigger_set_updated_at() in the domain
+        // migration. Fix the reference before executing.
+        let scheduler_sql = include_str!(
+            "../../../common/yunara-store/migrations/20260211000001_scheduler_tables.sql"
+        )
+        .replace(
+            "FUNCTION set_updated_at()",
+            "FUNCTION trigger_set_updated_at()",
+        );
+        sqlx::raw_sql(&scheduler_sql).execute(&pool).await.unwrap();
+
+        // Convert domain enum columns to SMALLINT codes.
+        let domain_int_migrations: &[&str] = &[
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000000_application_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000001_interview_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000002_notify_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000003_resume_int_enums.sql"
+            ),
+            include_str!(
+                "../../../common/yunara-store/migrations/20260212000004_scheduler_int_enums.sql"
+            ),
+        ];
+        for sql in domain_int_migrations {
+            sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+        }
+
+        // Insert job and application rows to satisfy FK constraints.
+        sqlx::query(
+            r#"INSERT INTO job (id, source_job_id, source_name, title, company)
+               VALUES ($1, 'test-1', 'manual', 'SWE', 'TestCo')"#,
+        )
+        .bind(TEST_JOB_ID.parse::<uuid::Uuid>().unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            r#"INSERT INTO application (id, job_id, channel, status)
+               VALUES ($1, $2, 0, 0)"#,
+        )
+        .bind(TEST_APP_ID.parse::<uuid::Uuid>().unwrap())
+        .bind(TEST_JOB_ID.parse::<uuid::Uuid>().unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        (pool, container)
+    }
+
+    async fn make_service(
+        with_prep: bool,
+    ) -> (InterviewService, testcontainers::ContainerAsync<Postgres>) {
+        let (pool, container) = setup_pool().await;
+        let repo = Arc::new(PgInterviewPlanRepository::new(pool));
         let prep: Option<Arc<dyn PrepGenerator>> = if with_prep {
             Some(Arc::new(MockPrepGenerator::new()))
         } else {
             None
         };
-        InterviewService::new(repo, prep)
+        (InterviewService::new(repo, prep), container)
     }
 
     fn sample_create_request() -> CreateInterviewPlanRequest {
         CreateInterviewPlanRequest {
-            application_id:  ApplicationId::new(),
+            application_id:  ApplicationId::from(TEST_APP_ID.parse::<uuid::Uuid>().unwrap()),
             title:           "Technical Interview - Acme".into(),
             company:         "Acme Corp".into(),
             position:        "Senior Rust Engineer".into(),
@@ -478,7 +496,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_plan_succeeds() {
-        let svc = make_service(false);
+        let (svc, _container) = make_service(false).await;
         let req = sample_create_request();
         let plan = svc.create_plan(req).await.expect("create should succeed");
 
@@ -489,7 +507,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_plan_validates_empty_title() {
-        let svc = make_service(false);
+        let (svc, _container) = make_service(false).await;
         let mut req = sample_create_request();
         req.title = "  ".into();
 
@@ -500,7 +518,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_plan_with_prep_generates_materials() {
-        let svc = make_service(true);
+        let (svc, _container) = make_service(true).await;
         let req = sample_create_request();
         let prep_req = sample_prep_request();
         let plan = svc
@@ -520,7 +538,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_plan_with_prep_fails_without_generator() {
-        let svc = make_service(false);
+        let (svc, _container) = make_service(false).await;
         let req = sample_create_request();
         let prep_req = sample_prep_request();
         let err = svc.create_plan_with_prep(req, prep_req).await.unwrap_err();
@@ -533,7 +551,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_plan_returns_not_found() {
-        let svc = make_service(false);
+        let (svc, _container) = make_service(false).await;
         let err = svc.get_plan(InterviewId::new()).await.unwrap_err();
         let msg = err.to_string();
         assert!(
@@ -544,7 +562,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_plan_applies_changes() {
-        let svc = make_service(false);
+        let (svc, _container) = make_service(false).await;
         let plan = svc
             .create_plan(sample_create_request())
             .await
@@ -561,7 +579,7 @@ mod tests {
 
     #[tokio::test]
     async fn status_transition_valid() {
-        let svc = make_service(false);
+        let (svc, _container) = make_service(false).await;
         let plan = svc
             .create_plan(sample_create_request())
             .await
@@ -582,7 +600,7 @@ mod tests {
 
     #[tokio::test]
     async fn status_transition_invalid() {
-        let svc = make_service(false);
+        let (svc, _container) = make_service(false).await;
         let plan = svc
             .create_plan(sample_create_request())
             .await
@@ -602,7 +620,7 @@ mod tests {
 
     #[tokio::test]
     async fn regenerate_prep_updates_materials() {
-        let svc = make_service(true);
+        let (svc, _container) = make_service(true).await;
         let plan = svc
             .create_plan(sample_create_request())
             .await
@@ -626,7 +644,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_plan_soft_deletes() {
-        let svc = make_service(false);
+        let (svc, _container) = make_service(false).await;
         let plan = svc
             .create_plan(sample_create_request())
             .await
@@ -640,8 +658,8 @@ mod tests {
 
     #[tokio::test]
     async fn list_plans_for_application() {
-        let svc = make_service(false);
-        let app_id = ApplicationId::new();
+        let (svc, _container) = make_service(false).await;
+        let app_id = ApplicationId::from(TEST_APP_ID.parse::<uuid::Uuid>().unwrap());
 
         let mut req1 = sample_create_request();
         req1.application_id = app_id;

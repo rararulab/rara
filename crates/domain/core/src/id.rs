@@ -23,7 +23,19 @@ use uuid::Uuid;
 macro_rules! define_id {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[derive(
+            Debug,
+            Clone,
+            Copy,
+            PartialEq,
+            Eq,
+            Hash,
+            Serialize,
+            Deserialize,
+            derive_more::Display,
+            derive_more::From,
+        )]
+        #[display("{_0}")]
         pub struct $name(pub Uuid);
 
         impl $name {
@@ -43,18 +55,6 @@ macro_rules! define_id {
         impl Default for $name {
             fn default() -> Self {
                 Self::new()
-            }
-        }
-
-        impl std::fmt::Display for $name {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "{}", self.0)
-            }
-        }
-
-        impl From<Uuid> for $name {
-            fn from(id: Uuid) -> Self {
-                Self(id)
             }
         }
     };

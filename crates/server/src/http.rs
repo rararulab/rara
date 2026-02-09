@@ -173,7 +173,7 @@ async fn health_check() -> impl IntoResponse { (StatusCode::OK, "OK") }
 async fn api_health_handler() -> axum::Json<serde_json::Value> {
     axum::Json(serde_json::json!({
         "status": "healthy",
-        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "timestamp": jiff::Timestamp::now().to_string(),
         "service": "job",
         "version": env!("CARGO_PKG_VERSION")
     }))

@@ -40,14 +40,8 @@ pub fn interview_routes<R: ResumeRepository + 'static>(state: Arc<AppState<R>>) 
         .route("/api/v1/interviews", get(list_interviews::<R>))
         .route("/api/v1/interviews/{id}", get(get_interview::<R>))
         .route("/api/v1/interviews/{id}", put(update_interview::<R>))
-        .route(
-            "/api/v1/interviews/{id}/status",
-            post(update_status::<R>),
-        )
-        .route(
-            "/api/v1/interviews/{id}/prep",
-            post(regenerate_prep::<R>),
-        )
+        .route("/api/v1/interviews/{id}/status", post(update_status::<R>))
+        .route("/api/v1/interviews/{id}/prep", post(regenerate_prep::<R>))
         .route("/api/v1/interviews/{id}", delete(delete_interview::<R>))
         .with_state(state)
 }

@@ -14,12 +14,13 @@
 
 //! Domain types for application lifecycle management.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use job_domain_core::{
     id::{ApplicationId, JobSourceId, ResumeId},
     status::ApplicationStatus,
 };
 use serde::{Deserialize, Serialize};
+use strum_macros::{Display, FromRepr};
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -27,31 +28,25 @@ use uuid::Uuid;
 // ---------------------------------------------------------------------------
 
 /// The channel through which an application was submitted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, FromRepr)]
 #[serde(rename_all = "snake_case")]
 pub enum ApplicationChannel {
     /// Applied directly on the company website.
-    Direct,
+    #[strum(serialize = "direct")]
+    Direct = 0,
     /// Referred by an employee or contact.
-    Referral,
+    #[strum(serialize = "referral")]
+    Referral = 1,
     /// Applied via LinkedIn.
-    LinkedIn,
+    #[strum(serialize = "linkedin")]
+    LinkedIn = 2,
     /// Applied via email.
-    Email,
+    #[strum(serialize = "email")]
+    Email = 3,
     /// Any other channel.
-    Other,
-}
-
-impl std::fmt::Display for ApplicationChannel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Direct => write!(f, "direct"),
-            Self::Referral => write!(f, "referral"),
-            Self::LinkedIn => write!(f, "linkedin"),
-            Self::Email => write!(f, "email"),
-            Self::Other => write!(f, "other"),
-        }
-    }
+    #[strum(serialize = "other")]
+    Other = 4,
 }
 
 // ---------------------------------------------------------------------------
@@ -59,32 +54,23 @@ impl std::fmt::Display for ApplicationChannel {
 // ---------------------------------------------------------------------------
 
 /// Priority level assigned to an application.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, FromRepr)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum Priority {
     /// Low priority -- nice to have.
-    Low,
+    Low = 0,
     /// Medium priority -- worth pursuing.
-    Medium,
+    Medium = 1,
     /// High priority -- strong match.
-    High,
+    High = 2,
     /// Critical -- dream job or urgent deadline.
-    Critical,
+    Critical = 3,
 }
 
 impl Default for Priority {
     fn default() -> Self { Self::Medium }
-}
-
-impl std::fmt::Display for Priority {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Low => write!(f, "low"),
-            Self::Medium => write!(f, "medium"),
-            Self::High => write!(f, "high"),
-            Self::Critical => write!(f, "critical"),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -92,25 +78,17 @@ impl std::fmt::Display for Priority {
 // ---------------------------------------------------------------------------
 
 /// How a status change was triggered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, FromRepr)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum ChangeSource {
     /// Changed manually by the user.
-    Manual,
+    Manual = 0,
     /// Changed automatically by the system.
-    System,
+    System = 1,
     /// Inferred from a parsed email notification.
-    EmailParse,
-}
-
-impl std::fmt::Display for ChangeSource {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Manual => write!(f, "manual"),
-            Self::System => write!(f, "system"),
-            Self::EmailParse => write!(f, "email_parse"),
-        }
-    }
+    EmailParse = 2,
 }
 
 // ---------------------------------------------------------------------------
@@ -146,11 +124,11 @@ pub struct Application {
     /// Whether this application has been soft-deleted.
     pub is_deleted:   bool,
     /// When the application was submitted (if it has been).
-    pub submitted_at: Option<DateTime<Utc>>,
+    pub submitted_at: Option<Timestamp>,
     /// When the application was created.
-    pub created_at:   DateTime<Utc>,
+    pub created_at:   Timestamp,
     /// When the application was last updated.
-    pub updated_at:   DateTime<Utc>,
+    pub updated_at:   Timestamp,
 }
 
 // ---------------------------------------------------------------------------
@@ -173,7 +151,7 @@ pub struct StatusChangeRecord {
     /// Optional note describing why the transition occurred.
     pub note:           Option<String>,
     /// When the transition happened.
-    pub created_at:     DateTime<Utc>,
+    pub created_at:     Timestamp,
 }
 
 // ---------------------------------------------------------------------------
@@ -236,9 +214,9 @@ pub struct ApplicationFilter {
     /// Applications must contain *all* of these tags.
     pub tags:           Option<Vec<String>>,
     /// Created at or after this timestamp.
-    pub created_after:  Option<DateTime<Utc>>,
+    pub created_after:  Option<Timestamp>,
     /// Created at or before this timestamp.
-    pub created_before: Option<DateTime<Utc>>,
+    pub created_before: Option<Timestamp>,
 }
 
 // ---------------------------------------------------------------------------

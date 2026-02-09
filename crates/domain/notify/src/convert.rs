@@ -12,92 +12,60 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Conversion layer between DB (store) models and domain types for notifications.
+//! Conversion layer between DB (store) models and domain types for
+//! notifications.
 
-use crate::db_models;
-use crate::types;
+use chrono::{DateTime, TimeZone as _, Utc};
+use jiff::Timestamp;
 
-// ===========================================================================
-// NotificationChannel conversions
-// ===========================================================================
+use crate::{db_models, types};
 
-/// Store `NotificationChannel` -> Domain `NotificationChannel`.
-impl From<db_models::NotificationChannel> for types::NotificationChannel {
-    fn from(value: db_models::NotificationChannel) -> Self {
-        match value {
-            db_models::NotificationChannel::Telegram => Self::Telegram,
-            db_models::NotificationChannel::Email => Self::Email,
-            db_models::NotificationChannel::Webhook => Self::Webhook,
-            db_models::NotificationChannel::Other => Self::Webhook,
-        }
-    }
+fn chrono_to_timestamp(dt: DateTime<Utc>) -> Timestamp {
+    Timestamp::new(dt.timestamp(), dt.timestamp_subsec_nanos() as i32)
+        .expect("chrono DateTime<Utc> fits in jiff Timestamp")
 }
 
-/// Domain `NotificationChannel` -> Store `NotificationChannel`.
-impl From<types::NotificationChannel> for db_models::NotificationChannel {
-    fn from(value: types::NotificationChannel) -> Self {
-        match value {
-            types::NotificationChannel::Telegram => Self::Telegram,
-            types::NotificationChannel::Email => Self::Email,
-            types::NotificationChannel::Webhook => Self::Webhook,
-        }
-    }
+fn chrono_opt_to_timestamp(dt: Option<DateTime<Utc>>) -> Option<Timestamp> {
+    dt.map(chrono_to_timestamp)
 }
 
-// ===========================================================================
-// NotificationStatus conversions
-// ===========================================================================
-
-/// Store `NotificationStatus` -> Domain `NotificationStatus`.
-impl From<db_models::NotificationStatus> for types::NotificationStatus {
-    fn from(value: db_models::NotificationStatus) -> Self {
-        match value {
-            db_models::NotificationStatus::Pending => Self::Pending,
-            db_models::NotificationStatus::Sent => Self::Sent,
-            db_models::NotificationStatus::Failed => Self::Failed,
-            db_models::NotificationStatus::Retrying => Self::Retrying,
-        }
+fn timestamp_to_chrono(ts: Timestamp) -> DateTime<Utc> {
+    let mut second = ts.as_second();
+    let mut nanosecond = ts.subsec_nanosecond();
+    if nanosecond < 0 {
+        second = second.saturating_sub(1);
+        nanosecond = nanosecond.saturating_add(1_000_000_000);
     }
+
+    Utc.timestamp_opt(second, nanosecond as u32)
+        .single()
+        .expect("jiff Timestamp fits in chrono DateTime<Utc>")
 }
 
-/// Domain `NotificationStatus` -> Store `NotificationStatus`.
-impl From<types::NotificationStatus> for db_models::NotificationStatus {
-    fn from(value: types::NotificationStatus) -> Self {
-        match value {
-            types::NotificationStatus::Pending => Self::Pending,
-            types::NotificationStatus::Sent => Self::Sent,
-            types::NotificationStatus::Failed => Self::Failed,
-            types::NotificationStatus::Retrying => Self::Retrying,
-        }
-    }
+fn timestamp_opt_to_chrono(ts: Option<Timestamp>) -> Option<DateTime<Utc>> {
+    ts.map(timestamp_to_chrono)
 }
 
-// ===========================================================================
-// NotificationPriority conversions
-// ===========================================================================
-
-/// Store `NotificationPriority` -> Domain `NotificationPriority`.
-impl From<db_models::NotificationPriority> for types::NotificationPriority {
-    fn from(value: db_models::NotificationPriority) -> Self {
-        match value {
-            db_models::NotificationPriority::Low => Self::Low,
-            db_models::NotificationPriority::Normal => Self::Normal,
-            db_models::NotificationPriority::High => Self::High,
-            db_models::NotificationPriority::Urgent => Self::Urgent,
-        }
-    }
+fn u8_from_i16(value: i16, field: &'static str) -> u8 {
+    u8::try_from(value).unwrap_or_else(|_| panic!("invalid {field}: {value}"))
 }
 
-/// Domain `NotificationPriority` -> Store `NotificationPriority`.
-impl From<types::NotificationPriority> for db_models::NotificationPriority {
-    fn from(value: types::NotificationPriority) -> Self {
-        match value {
-            types::NotificationPriority::Low => Self::Low,
-            types::NotificationPriority::Normal => Self::Normal,
-            types::NotificationPriority::High => Self::High,
-            types::NotificationPriority::Urgent => Self::Urgent,
-        }
-    }
+fn notification_channel_from_i16(value: i16) -> types::NotificationChannel {
+    let repr = u8_from_i16(value, "notification.channel");
+    types::NotificationChannel::from_repr(repr)
+        .unwrap_or_else(|| panic!("invalid notification.channel: {value}"))
+}
+
+fn notification_status_from_i16(value: i16) -> types::NotificationStatus {
+    let repr = u8_from_i16(value, "notification.status");
+    types::NotificationStatus::from_repr(repr)
+        .unwrap_or_else(|| panic!("invalid notification.status: {value}"))
+}
+
+fn notification_priority_from_i16(value: i16) -> types::NotificationPriority {
+    let repr = u8_from_i16(value, "notification.priority");
+    types::NotificationPriority::from_repr(repr)
+        .unwrap_or_else(|| panic!("invalid notification.priority: {value}"))
 }
 
 // ===========================================================================
@@ -109,12 +77,12 @@ impl From<db_models::NotificationLog> for types::Notification {
     fn from(n: db_models::NotificationLog) -> Self {
         Self {
             id:             n.id,
-            channel:        n.channel.into(),
+            channel:        notification_channel_from_i16(n.channel),
             recipient:      n.recipient,
             subject:        n.subject,
             body:           n.body,
-            status:         n.status.into(),
-            priority:       n.priority.into(),
+            status:         notification_status_from_i16(n.status),
+            priority:       notification_priority_from_i16(n.priority),
             retry_count:    n.retry_count,
             max_retries:    n.max_retries,
             error_message:  n.error_message,
@@ -122,8 +90,8 @@ impl From<db_models::NotificationLog> for types::Notification {
             reference_id:   n.reference_id,
             metadata:       n.metadata,
             trace_id:       n.trace_id,
-            sent_at:        n.sent_at,
-            created_at:     n.created_at,
+            sent_at:        chrono_opt_to_timestamp(n.sent_at),
+            created_at:     chrono_to_timestamp(n.created_at),
         }
     }
 }
@@ -133,12 +101,12 @@ impl From<types::Notification> for db_models::NotificationLog {
     fn from(n: types::Notification) -> Self {
         Self {
             id:             n.id,
-            channel:        n.channel.into(),
+            channel:        n.channel as u8 as i16,
             recipient:      n.recipient,
             subject:        n.subject,
             body:           n.body,
-            status:         n.status.into(),
-            priority:       n.priority.into(),
+            status:         n.status as u8 as i16,
+            priority:       n.priority as u8 as i16,
             retry_count:    n.retry_count,
             max_retries:    n.max_retries,
             error_message:  n.error_message,
@@ -146,90 +114,60 @@ impl From<types::Notification> for db_models::NotificationLog {
             reference_id:   n.reference_id,
             metadata:       n.metadata,
             trace_id:       n.trace_id,
-            sent_at:        n.sent_at,
-            created_at:     n.created_at,
+            sent_at:        timestamp_opt_to_chrono(n.sent_at),
+            created_at:     timestamp_to_chrono(n.created_at),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
     use uuid::Uuid;
 
     use super::*;
 
     #[test]
-    fn notification_channel_roundtrip() {
-        use db_models::NotificationChannel as S;
+    fn notification_channel_from_i16_works() {
         use types::NotificationChannel as D;
 
-        let pairs = [
-            (S::Telegram, D::Telegram),
-            (S::Email, D::Email),
-            (S::Webhook, D::Webhook),
-        ];
-        for (store, domain) in &pairs {
-            assert_eq!(D::from(*store), *domain);
-            assert_eq!(S::from(*domain), *store);
-        }
+        assert_eq!(notification_channel_from_i16(0), D::Telegram);
+        assert_eq!(notification_channel_from_i16(1), D::Email);
+        assert_eq!(notification_channel_from_i16(2), D::Webhook);
     }
 
     #[test]
-    fn notification_channel_other_maps_to_webhook() {
-        use db_models::NotificationChannel as S;
-        use types::NotificationChannel as D;
-
-        assert_eq!(D::from(S::Other), D::Webhook);
-    }
-
-    #[test]
-    fn notification_status_roundtrip() {
-        use db_models::NotificationStatus as S;
+    fn notification_status_from_i16_works() {
         use types::NotificationStatus as D;
 
-        let pairs = [
-            (S::Pending, D::Pending),
-            (S::Sent, D::Sent),
-            (S::Failed, D::Failed),
-            (S::Retrying, D::Retrying),
-        ];
-        for (store, domain) in &pairs {
-            assert_eq!(D::from(*store), *domain);
-            assert_eq!(S::from(*domain), *store);
-        }
+        assert_eq!(notification_status_from_i16(0), D::Pending);
+        assert_eq!(notification_status_from_i16(1), D::Sent);
+        assert_eq!(notification_status_from_i16(2), D::Failed);
+        assert_eq!(notification_status_from_i16(3), D::Retrying);
     }
 
     #[test]
-    fn notification_priority_roundtrip() {
-        use db_models::NotificationPriority as S;
+    fn notification_priority_from_i16_works() {
         use types::NotificationPriority as D;
 
-        let pairs = [
-            (S::Low, D::Low),
-            (S::Normal, D::Normal),
-            (S::High, D::High),
-            (S::Urgent, D::Urgent),
-        ];
-        for (store, domain) in &pairs {
-            assert_eq!(D::from(*store), *domain);
-            assert_eq!(S::from(*domain), *store);
-        }
+        assert_eq!(notification_priority_from_i16(0), D::Low);
+        assert_eq!(notification_priority_from_i16(1), D::Normal);
+        assert_eq!(notification_priority_from_i16(2), D::High);
+        assert_eq!(notification_priority_from_i16(3), D::Urgent);
     }
 
     #[test]
     fn notification_log_store_to_domain_roundtrip() {
-        let now = Utc::now();
+        let now = chrono::Utc::now();
         let id = Uuid::new_v4();
         let ref_id = Uuid::new_v4();
         let store_log = db_models::NotificationLog {
             id,
-            channel: db_models::NotificationChannel::Telegram,
+            channel: 0,
             recipient: "user123".into(),
             subject: Some("Test subject".into()),
             body: "Test body".into(),
-            status: db_models::NotificationStatus::Pending,
-            priority: db_models::NotificationPriority::High,
+            status: 0,
+            priority: 2,
             retry_count: 0,
             max_retries: 3,
             error_message: None,
@@ -251,7 +189,7 @@ mod tests {
 
         let back: db_models::NotificationLog = domain.into();
         assert_eq!(back.id, id);
-        assert_eq!(back.channel, db_models::NotificationChannel::Telegram);
+        assert_eq!(back.channel, 0);
         assert_eq!(back.recipient, "user123");
     }
 }

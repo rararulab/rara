@@ -35,7 +35,10 @@ pub enum SchedulerError {
 
     /// Task execution failed.
     #[snafu(display("task '{task_name}' execution failed: {message}"))]
-    TaskExecutionFailed { task_name: String, message: String },
+    TaskExecutionFailed {
+        task_name: String,
+        message:   String,
+    },
 
     /// Invalid cron expression.
     #[snafu(display("invalid cron expression '{expr}': {message}"))]
