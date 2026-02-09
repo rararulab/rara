@@ -78,6 +78,7 @@ smart-default = "0.7"
 snafu = "^0.8"
 strum = "^0.27"
 strum_macros = "^0.27"
+teloxide = { version = "0.14", features = ["macros"] }
 tokio = { version = "^1.45", features = ["full", "tracing"] }
 tokio-util = "^0.7"
 tonic = "^0.14"
