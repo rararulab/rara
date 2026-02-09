@@ -18,7 +18,8 @@ use chrono::{DateTime, TimeZone as _, Utc};
 use jiff::Timestamp;
 use uuid::Uuid;
 
-use crate::{db_models, types};
+use crate::types;
+use job_model::application::{Application as StoreApplication, ApplicationStatusHistory};
 
 fn chrono_to_timestamp(dt: DateTime<Utc>) -> Timestamp {
     Timestamp::new(dt.timestamp(), dt.timestamp_subsec_nanos() as i32)
@@ -77,8 +78,8 @@ fn application_priority_from_i16(value: i16) -> types::Priority {
 /// `resume_id` in the store is `Option<Uuid>`, but in the domain it is
 /// a `ResumeId` (mandatory). We fall back to `Uuid::nil()` when the
 /// store row has no resume linked.
-impl From<db_models::Application> for types::Application {
-    fn from(a: db_models::Application) -> Self {
+impl From<StoreApplication> for types::Application {
+    fn from(a: StoreApplication) -> Self {
         Self {
             id:           job_domain_shared::id::ApplicationId::from(a.id),
             job_id:       job_domain_shared::id::JobSourceId::from(a.job_id),
@@ -102,7 +103,7 @@ impl From<db_models::Application> for types::Application {
 ///
 /// `resume_id` is stored as `Option<Uuid>`; if the domain id is nil we
 /// store `None`.
-impl From<types::Application> for db_models::Application {
+impl From<types::Application> for StoreApplication {
     fn from(a: types::Application) -> Self {
         let resume_uuid = a.resume_id.into_inner();
         Self {
@@ -149,8 +150,8 @@ fn parse_change_source(s: Option<&str>) -> types::ChangeSource {
 /// Store `ApplicationStatusHistory` -> Domain `StatusChangeRecord`.
 ///
 /// `from_status` in the store is `Option`; if absent we default to `Draft`.
-impl From<db_models::ApplicationStatusHistory> for types::StatusChangeRecord {
-    fn from(h: db_models::ApplicationStatusHistory) -> Self {
+impl From<ApplicationStatusHistory> for types::StatusChangeRecord {
+    fn from(h: ApplicationStatusHistory) -> Self {
         Self {
             id:             h.id,
             application_id: job_domain_shared::id::ApplicationId::from(h.application_id),
@@ -167,7 +168,7 @@ impl From<db_models::ApplicationStatusHistory> for types::StatusChangeRecord {
 }
 
 /// Domain `StatusChangeRecord` -> Store `ApplicationStatusHistory`.
-impl From<types::StatusChangeRecord> for db_models::ApplicationStatusHistory {
+impl From<types::StatusChangeRecord> for ApplicationStatusHistory {
     fn from(r: types::StatusChangeRecord) -> Self {
         Self {
             id:             r.id,
@@ -223,7 +224,7 @@ mod tests {
     #[test]
     fn application_store_to_domain_nil_resume() {
         let now = chrono::Utc::now();
-        let store = db_models::Application {
+        let store = StoreApplication {
             id:           Uuid::new_v4(),
             job_id:       Uuid::new_v4(),
             resume_id:    None,

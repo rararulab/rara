@@ -17,7 +17,6 @@
 //! Application lifecycle management with state machine.
 
 pub mod convert;
-pub mod db_models;
 pub mod error;
 pub mod pg_repository;
 pub mod repository;

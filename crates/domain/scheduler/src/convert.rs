@@ -18,7 +18,8 @@ use chrono::{DateTime, TimeZone as _, Utc};
 use jiff::Timestamp;
 use job_domain_shared::id::SchedulerTaskId;
 
-use crate::{db_models, types};
+use crate::types;
+use job_model::scheduler::{SchedulerTask, TaskRunHistory};
 
 fn chrono_to_timestamp(dt: DateTime<Utc>) -> Timestamp {
     Timestamp::new(dt.timestamp(), dt.timestamp_subsec_nanos() as i32)
@@ -61,8 +62,8 @@ fn task_run_status_from_i16(value: i16) -> types::TaskRunStatus {
 // ===========================================================================
 
 /// Store `SchedulerTask` -> Domain `ScheduledTask`.
-impl From<db_models::SchedulerTask> for types::ScheduledTask {
-    fn from(t: db_models::SchedulerTask) -> Self {
+impl From<SchedulerTask> for types::ScheduledTask {
+    fn from(t: SchedulerTask) -> Self {
         Self {
             id:            SchedulerTaskId::from(t.id),
             name:          t.name,
@@ -80,7 +81,7 @@ impl From<db_models::SchedulerTask> for types::ScheduledTask {
 }
 
 /// Domain `ScheduledTask` -> Store `SchedulerTask`.
-impl From<types::ScheduledTask> for db_models::SchedulerTask {
+impl From<types::ScheduledTask> for SchedulerTask {
     fn from(t: types::ScheduledTask) -> Self {
         Self {
             id:            t.id.into_inner(),
@@ -105,8 +106,8 @@ impl From<types::ScheduledTask> for db_models::SchedulerTask {
 // ===========================================================================
 
 /// Store `TaskRunHistory` -> Domain `TaskRunRecord`.
-impl From<db_models::TaskRunHistory> for types::TaskRunRecord {
-    fn from(r: db_models::TaskRunHistory) -> Self {
+impl From<TaskRunHistory> for types::TaskRunRecord {
+    fn from(r: TaskRunHistory) -> Self {
         Self {
             id:          r.id,
             task_id:     SchedulerTaskId::from(r.task_id),
@@ -122,7 +123,7 @@ impl From<db_models::TaskRunHistory> for types::TaskRunRecord {
 }
 
 /// Domain `TaskRunRecord` -> Store `TaskRunHistory`.
-impl From<types::TaskRunRecord> for db_models::TaskRunHistory {
+impl From<types::TaskRunRecord> for TaskRunHistory {
     fn from(r: types::TaskRunRecord) -> Self {
         Self {
             id:          r.id,
@@ -157,7 +158,7 @@ mod tests {
     fn scheduler_task_store_to_domain_roundtrip() {
         let now = chrono::Utc::now();
         let id = Uuid::new_v4();
-        let store_task = db_models::SchedulerTask {
+        let store_task = SchedulerTask {
             id,
             name: "job-discovery".into(),
             cron_expr: "0 */30 * * * *".into(),
@@ -179,7 +180,7 @@ mod tests {
         assert_eq!(domain.run_count, 5);
         assert_eq!(domain.last_status, Some(types::TaskRunStatus::Success));
 
-        let back: db_models::SchedulerTask = domain.into();
+        let back: SchedulerTask = domain.into();
         assert_eq!(back.id, id);
         assert_eq!(back.name, "job-discovery");
         assert!(!back.is_deleted);
@@ -190,7 +191,7 @@ mod tests {
         let now = chrono::Utc::now();
         let id = Uuid::new_v4();
         let task_id = Uuid::new_v4();
-        let store_run = db_models::TaskRunHistory {
+        let store_run = TaskRunHistory {
             id,
             task_id,
             status: 1,
@@ -208,7 +209,7 @@ mod tests {
         assert_eq!(domain.status, types::TaskRunStatus::Failed);
         assert_eq!(domain.duration_ms, Some(1500));
 
-        let back: db_models::TaskRunHistory = domain.into();
+        let back: TaskRunHistory = domain.into();
         assert_eq!(back.id, id);
         assert_eq!(back.task_id, task_id);
         assert_eq!(back.error, Some("connection refused".to_owned()));

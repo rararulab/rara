@@ -18,7 +18,8 @@
 use chrono::{DateTime, TimeZone as _, Utc};
 use jiff::Timestamp;
 
-use crate::{db_models, types};
+use crate::types;
+use job_model::notify::NotificationLog;
 
 fn chrono_to_timestamp(dt: DateTime<Utc>) -> Timestamp {
     Timestamp::new(dt.timestamp(), dt.timestamp_subsec_nanos() as i32)
@@ -73,8 +74,8 @@ fn notification_priority_from_i16(value: i16) -> types::NotificationPriority {
 // ===========================================================================
 
 /// Store `NotificationLog` -> Domain `Notification`.
-impl From<db_models::NotificationLog> for types::Notification {
-    fn from(n: db_models::NotificationLog) -> Self {
+impl From<NotificationLog> for types::Notification {
+    fn from(n: NotificationLog) -> Self {
         Self {
             id:             n.id,
             channel:        notification_channel_from_i16(n.channel),
@@ -97,7 +98,7 @@ impl From<db_models::NotificationLog> for types::Notification {
 }
 
 /// Domain `Notification` -> Store `NotificationLog`.
-impl From<types::Notification> for db_models::NotificationLog {
+impl From<types::Notification> for NotificationLog {
     fn from(n: types::Notification) -> Self {
         Self {
             id:             n.id,
@@ -160,7 +161,7 @@ mod tests {
         let now = chrono::Utc::now();
         let id = Uuid::new_v4();
         let ref_id = Uuid::new_v4();
-        let store_log = db_models::NotificationLog {
+        let store_log = NotificationLog {
             id,
             channel: 0,
             recipient: "user123".into(),
@@ -187,7 +188,7 @@ mod tests {
         assert_eq!(domain.max_retries, 3);
         assert_eq!(domain.reference_id, Some(ref_id));
 
-        let back: db_models::NotificationLog = domain.into();
+        let back: NotificationLog = domain.into();
         assert_eq!(back.id, id);
         assert_eq!(back.channel, 0);
         assert_eq!(back.recipient, "user123");

@@ -21,8 +21,9 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use job_model::notify::NotificationLog;
+
 use crate::{
-    db_models,
     error::NotifyError,
     types::{Notification, NotificationFilter, NotificationStatistics},
 };
@@ -48,9 +49,9 @@ fn map_err(e: sqlx::Error) -> NotifyError {
 #[async_trait]
 impl crate::repository::NotificationRepository for PgNotificationRepository {
     async fn save(&self, notification: &Notification) -> Result<Notification, NotifyError> {
-        let store: db_models::NotificationLog = notification.clone().into();
+        let store: NotificationLog = notification.clone().into();
 
-        let row = sqlx::query_as::<_, db_models::NotificationLog>(
+        let row = sqlx::query_as::<_, NotificationLog>(
             r#"INSERT INTO notification_log
                    (id, channel, recipient, subject, body, status,
                     priority, retry_count, max_retries, error_message,
@@ -85,7 +86,7 @@ impl crate::repository::NotificationRepository for PgNotificationRepository {
     }
 
     async fn find_by_id(&self, id: Uuid) -> Result<Option<Notification>, NotifyError> {
-        let row = sqlx::query_as::<_, db_models::NotificationLog>(
+        let row = sqlx::query_as::<_, NotificationLog>(
             "SELECT * FROM notification_log WHERE id = $1",
         )
         .bind(id)
@@ -134,7 +135,7 @@ impl crate::repository::NotificationRepository for PgNotificationRepository {
 
         sql.push_str(" ORDER BY created_at DESC");
 
-        let rows = sqlx::query_as::<_, db_models::NotificationLog>(&sql)
+        let rows = sqlx::query_as::<_, NotificationLog>(&sql)
             .fetch_all(&self.pool)
             .await
             .map_err(map_err)?;
@@ -143,9 +144,9 @@ impl crate::repository::NotificationRepository for PgNotificationRepository {
     }
 
     async fn update(&self, notification: &Notification) -> Result<Notification, NotifyError> {
-        let store: db_models::NotificationLog = notification.clone().into();
+        let store: NotificationLog = notification.clone().into();
 
-        let row = sqlx::query_as::<_, db_models::NotificationLog>(
+        let row = sqlx::query_as::<_, NotificationLog>(
             r#"UPDATE notification_log
                SET channel = $2,
                    recipient = $3,
@@ -190,7 +191,7 @@ impl crate::repository::NotificationRepository for PgNotificationRepository {
         let pending_status = crate::types::NotificationStatus::Pending as u8 as i16;
         let retrying_status = crate::types::NotificationStatus::Retrying as u8 as i16;
 
-        let rows = sqlx::query_as::<_, db_models::NotificationLog>(
+        let rows = sqlx::query_as::<_, NotificationLog>(
             r#"SELECT * FROM notification_log
                WHERE status IN ($1, $2)
                ORDER BY priority DESC, created_at ASC
@@ -247,7 +248,7 @@ impl crate::repository::NotificationRepository for PgNotificationRepository {
 
     async fn increment_retry(&self, id: Uuid) -> Result<Notification, NotifyError> {
         let retrying_status = crate::types::NotificationStatus::Retrying as u8 as i16;
-        let row = sqlx::query_as::<_, db_models::NotificationLog>(
+        let row = sqlx::query_as::<_, NotificationLog>(
             r#"UPDATE notification_log
                SET retry_count = retry_count + 1,
                    status = $2

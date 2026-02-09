@@ -17,7 +17,8 @@
 use chrono::{DateTime, TimeZone as _, Utc};
 use jiff::Timestamp;
 
-use crate::{db_models, types};
+use crate::types;
+use job_model::resume::Resume as StoreResume;
 
 fn chrono_to_timestamp(dt: DateTime<Utc>) -> Timestamp {
     Timestamp::new(dt.timestamp(), dt.timestamp_subsec_nanos() as i32)
@@ -59,8 +60,8 @@ fn resume_source_from_i16(value: i16) -> types::ResumeSource {
 // ---------------------------------------------------------------------------
 
 /// Store `Resume` -> Domain `Resume`.
-impl From<db_models::Resume> for types::Resume {
-    fn from(r: db_models::Resume) -> Self {
+impl From<StoreResume> for types::Resume {
+    fn from(r: StoreResume) -> Self {
         Self {
             id:                  r.id,
             title:               r.title,
@@ -83,7 +84,7 @@ impl From<db_models::Resume> for types::Resume {
 }
 
 /// Domain `Resume` -> Store `Resume`.
-impl From<types::Resume> for db_models::Resume {
+impl From<types::Resume> for StoreResume {
     fn from(r: types::Resume) -> Self {
         Self {
             id:                  r.id,
@@ -125,7 +126,7 @@ mod tests {
     fn resume_store_to_domain_roundtrip() {
         let now = chrono::Utc::now();
         let id = Uuid::new_v4();
-        let store_resume = db_models::Resume {
+        let store_resume = StoreResume {
             id,
             title: "Backend v1".into(),
             version_tag: "v1.0".into(),
@@ -149,7 +150,7 @@ mod tests {
         assert_eq!(domain.title, "Backend v1");
         assert_eq!(domain.tags, vec!["rust".to_owned()]);
 
-        let back: db_models::Resume = domain.into();
+        let back: StoreResume = domain.into();
         assert_eq!(back.id, id);
         assert_eq!(back.title, "Backend v1");
     }

@@ -21,8 +21,9 @@ use async_trait::async_trait;
 use job_domain_shared::id::ApplicationId;
 use sqlx::PgPool;
 
+use job_model::application::{Application as StoreApplication, ApplicationStatusHistory};
+
 use crate::{
-    db_models,
     error::ApplicationError,
     types::{Application, ApplicationFilter, StatusChangeRecord},
 };
@@ -48,9 +49,9 @@ fn map_err(e: sqlx::Error) -> ApplicationError {
 #[async_trait]
 impl crate::repository::ApplicationRepository for PgApplicationRepository {
     async fn save(&self, app: &Application) -> Result<Application, ApplicationError> {
-        let store: db_models::Application = app.clone().into();
+        let store: StoreApplication = app.clone().into();
 
-        let row = sqlx::query_as::<_, db_models::Application>(
+        let row = sqlx::query_as::<_, StoreApplication>(
             r#"INSERT INTO application
                    (id, job_id, resume_id, channel, status, cover_letter, notes,
                     tags, priority, trace_id, is_deleted, submitted_at, created_at, updated_at)
@@ -80,7 +81,7 @@ impl crate::repository::ApplicationRepository for PgApplicationRepository {
     }
 
     async fn find_by_id(&self, id: ApplicationId) -> Result<Option<Application>, ApplicationError> {
-        let row = sqlx::query_as::<_, db_models::Application>(
+        let row = sqlx::query_as::<_, StoreApplication>(
             "SELECT * FROM application WHERE id = $1 AND is_deleted = FALSE",
         )
         .bind(id.into_inner())
@@ -130,7 +131,7 @@ impl crate::repository::ApplicationRepository for PgApplicationRepository {
 
         sql.push_str(" ORDER BY created_at DESC");
 
-        let rows = sqlx::query_as::<_, db_models::Application>(&sql)
+        let rows = sqlx::query_as::<_, StoreApplication>(&sql)
             .fetch_all(&self.pool)
             .await
             .map_err(map_err)?;
@@ -146,9 +147,9 @@ impl crate::repository::ApplicationRepository for PgApplicationRepository {
     }
 
     async fn update(&self, app: &Application) -> Result<Application, ApplicationError> {
-        let store: db_models::Application = app.clone().into();
+        let store: StoreApplication = app.clone().into();
 
-        let row = sqlx::query_as::<_, db_models::Application>(
+        let row = sqlx::query_as::<_, StoreApplication>(
             r#"UPDATE application
                SET job_id = $2, resume_id = $3, channel = $4, status = $5,
                    cover_letter = $6, notes = $7, tags = $8, priority = $9,
@@ -194,7 +195,7 @@ impl crate::repository::ApplicationRepository for PgApplicationRepository {
         &self,
         record: &StatusChangeRecord,
     ) -> Result<(), ApplicationError> {
-        let store: db_models::ApplicationStatusHistory = record.clone().into();
+        let store: ApplicationStatusHistory = record.clone().into();
 
         sqlx::query(
             r#"INSERT INTO application_status_history
@@ -220,7 +221,7 @@ impl crate::repository::ApplicationRepository for PgApplicationRepository {
         &self,
         application_id: ApplicationId,
     ) -> Result<Vec<StatusChangeRecord>, ApplicationError> {
-        let rows = sqlx::query_as::<_, db_models::ApplicationStatusHistory>(
+        let rows = sqlx::query_as::<_, ApplicationStatusHistory>(
             r#"SELECT * FROM application_status_history
                WHERE application_id = $1
                ORDER BY created_at ASC"#,

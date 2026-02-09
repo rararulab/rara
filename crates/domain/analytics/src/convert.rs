@@ -18,7 +18,8 @@ use chrono::{DateTime, Datelike as _, NaiveDate, TimeZone as _, Utc};
 use jiff::Timestamp;
 use jiff::civil::Date;
 
-use crate::{db_models, types};
+use crate::types;
+use job_model::metrics::MetricsSnapshot as StoreMetricsSnapshot;
 
 // ---------------------------------------------------------------------------
 // Time helpers
@@ -70,8 +71,8 @@ fn period_from_i16(value: i16) -> types::MetricsPeriod {
 // ---------------------------------------------------------------------------
 
 /// Store `MetricsSnapshot` -> Domain `MetricsSnapshot`.
-impl From<db_models::MetricsSnapshot> for types::MetricsSnapshot {
-    fn from(r: db_models::MetricsSnapshot) -> Self {
+impl From<StoreMetricsSnapshot> for types::MetricsSnapshot {
+    fn from(r: StoreMetricsSnapshot) -> Self {
         Self {
             id:                   r.id,
             period:               period_from_i16(r.period),
@@ -91,7 +92,7 @@ impl From<db_models::MetricsSnapshot> for types::MetricsSnapshot {
 }
 
 /// Domain `MetricsSnapshot` -> Store `MetricsSnapshot`.
-impl From<types::MetricsSnapshot> for db_models::MetricsSnapshot {
+impl From<types::MetricsSnapshot> for StoreMetricsSnapshot {
     fn from(r: types::MetricsSnapshot) -> Self {
         Self {
             id:                   r.id,
@@ -131,7 +132,7 @@ mod tests {
         let date = NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
         let id = Uuid::new_v4();
 
-        let store = db_models::MetricsSnapshot {
+        let store = StoreMetricsSnapshot {
             id,
             period: 0,
             snapshot_date: date,
@@ -152,7 +153,7 @@ mod tests {
         assert_eq!(domain.period, types::MetricsPeriod::Daily);
         assert_eq!(domain.jobs_discovered, 10);
 
-        let back: db_models::MetricsSnapshot = domain.into();
+        let back: StoreMetricsSnapshot = domain.into();
         assert_eq!(back.id, id);
         assert_eq!(back.period, 0);
     }

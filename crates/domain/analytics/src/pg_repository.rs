@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::db_models;
+use job_model::metrics::MetricsSnapshot as StoreMetricsSnapshot;
 use crate::error::{AnalyticsError, DuplicateSnapshotSnafu, NotFoundSnafu, RepositorySnafu};
 use crate::types::{MetricsPeriod, MetricsSnapshot, SnapshotFilter};
 
@@ -58,9 +58,9 @@ impl crate::repository::AnalyticsRepository for PgAnalyticsRepository {
         &self,
         snapshot: &MetricsSnapshot,
     ) -> Result<MetricsSnapshot, AnalyticsError> {
-        let store: db_models::MetricsSnapshot = snapshot.clone().into();
+        let store: StoreMetricsSnapshot = snapshot.clone().into();
 
-        let row = sqlx::query_as::<_, db_models::MetricsSnapshot>(
+        let row = sqlx::query_as::<_, StoreMetricsSnapshot>(
             r#"INSERT INTO metrics_snapshot
                (id, period, snapshot_date, jobs_discovered, applications_sent,
                 interviews_scheduled, offers_received, rejections,
@@ -102,7 +102,7 @@ impl crate::repository::AnalyticsRepository for PgAnalyticsRepository {
     }
 
     async fn find_by_id(&self, id: Uuid) -> Result<Option<MetricsSnapshot>, AnalyticsError> {
-        let row = sqlx::query_as::<_, db_models::MetricsSnapshot>(
+        let row = sqlx::query_as::<_, StoreMetricsSnapshot>(
             "SELECT * FROM metrics_snapshot WHERE id = $1",
         )
         .bind(id)
@@ -119,7 +119,7 @@ impl crate::repository::AnalyticsRepository for PgAnalyticsRepository {
     ) -> Result<Option<MetricsSnapshot>, AnalyticsError> {
         let period_i16 = period as u8 as i16;
 
-        let row = sqlx::query_as::<_, db_models::MetricsSnapshot>(
+        let row = sqlx::query_as::<_, StoreMetricsSnapshot>(
             r#"SELECT * FROM metrics_snapshot
                WHERE period = $1
                ORDER BY snapshot_date DESC
@@ -162,7 +162,7 @@ impl crate::repository::AnalyticsRepository for PgAnalyticsRepository {
             let _ = write!(sql, " LIMIT ${param_idx}");
         }
 
-        let mut query = sqlx::query_as::<_, db_models::MetricsSnapshot>(&sql);
+        let mut query = sqlx::query_as::<_, StoreMetricsSnapshot>(&sql);
 
         if let Some(period) = filter.period {
             query = query.bind(period as u8 as i16);

@@ -17,7 +17,8 @@
 use chrono::{DateTime, TimeZone as _, Utc};
 use jiff::Timestamp;
 
-use crate::{db_models, types};
+use crate::types;
+use job_model::interview::InterviewPlan as StoreInterviewPlan;
 
 fn chrono_to_timestamp(dt: DateTime<Utc>) -> Timestamp {
     Timestamp::new(dt.timestamp(), dt.timestamp_subsec_nanos() as i32)
@@ -95,8 +96,8 @@ fn interview_task_status_from_i16(value: i16) -> types::InterviewTaskStatus {
 ///
 /// `materials` (JSONB) is deserialized into `PrepMaterials`; on failure
 /// we fall back to `PrepMaterials::default()`.
-impl From<db_models::InterviewPlan> for types::InterviewPlan {
-    fn from(p: db_models::InterviewPlan) -> Self {
+impl From<StoreInterviewPlan> for types::InterviewPlan {
+    fn from(p: StoreInterviewPlan) -> Self {
         let prep_materials: types::PrepMaterials = p
             .materials
             .as_ref()
@@ -127,7 +128,7 @@ impl From<db_models::InterviewPlan> for types::InterviewPlan {
 /// Domain `InterviewPlan` -> Store `InterviewPlan`.
 ///
 /// `prep_materials` is serialised to JSONB.
-impl From<types::InterviewPlan> for db_models::InterviewPlan {
+impl From<types::InterviewPlan> for StoreInterviewPlan {
     fn from(p: types::InterviewPlan) -> Self {
         let materials = serde_json::to_value(&p.prep_materials).ok();
 
@@ -203,7 +204,7 @@ mod tests {
             "additional_resources": []
         });
 
-        let store = db_models::InterviewPlan {
+        let store = StoreInterviewPlan {
             id:              Uuid::new_v4(),
             application_id:  Uuid::new_v4(),
             title:           "Tech Screen".into(),
@@ -251,7 +252,7 @@ mod tests {
             updated_at:      now,
         };
 
-        let store: db_models::InterviewPlan = domain.into();
+        let store: StoreInterviewPlan = domain.into();
         assert_eq!(store.company, "BigCo");
         assert_eq!(store.round, "final_round");
         assert_eq!(store.task_status, 2);
@@ -261,7 +262,7 @@ mod tests {
     #[test]
     fn interview_plan_null_materials_defaults() {
         let now = chrono::Utc::now();
-        let store = db_models::InterviewPlan {
+        let store = StoreInterviewPlan {
             id:              Uuid::new_v4(),
             application_id:  Uuid::new_v4(),
             title:           "Screen".into(),

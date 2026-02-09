@@ -27,7 +27,6 @@
 //! primitives; this crate adds the domain-aware orchestration layer on top.
 
 pub mod convert;
-pub mod db_models;
 pub mod engine;
 pub mod error;
 pub mod pg_repository;

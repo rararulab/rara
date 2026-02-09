@@ -17,7 +17,6 @@
 //! Resume version management and content diffing.
 
 pub mod convert;
-pub mod db_models;
 pub mod hash;
 pub mod pg_repository;
 pub mod repository;

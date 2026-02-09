@@ -21,8 +21,10 @@ use async_trait::async_trait;
 use job_domain_shared::id::{ApplicationId, InterviewId};
 use sqlx::PgPool;
 
+use job_model::interview::InterviewPlan as StoreInterviewPlan;
+
 use crate::{
-    convert, db_models,
+    convert,
     error::InterviewError,
     types::{InterviewFilter, InterviewPlan},
 };
@@ -48,9 +50,9 @@ fn map_err(e: sqlx::Error) -> InterviewError {
 #[async_trait]
 impl crate::repository::InterviewPlanRepository for PgInterviewPlanRepository {
     async fn save(&self, plan: &InterviewPlan) -> Result<InterviewPlan, InterviewError> {
-        let store: db_models::InterviewPlan = plan.clone().into();
+        let store: StoreInterviewPlan = plan.clone().into();
 
-        let row = sqlx::query_as::<_, db_models::InterviewPlan>(
+        let row = sqlx::query_as::<_, StoreInterviewPlan>(
             r#"INSERT INTO interview_plan
                    (id, application_id, title, company, position, job_description, round,
                     description, scheduled_at, task_status, materials, notes, trace_id,
@@ -85,7 +87,7 @@ impl crate::repository::InterviewPlanRepository for PgInterviewPlanRepository {
     }
 
     async fn find_by_id(&self, id: InterviewId) -> Result<Option<InterviewPlan>, InterviewError> {
-        let row = sqlx::query_as::<_, db_models::InterviewPlan>(
+        let row = sqlx::query_as::<_, StoreInterviewPlan>(
             "SELECT * FROM interview_plan WHERE id = $1 AND is_deleted = FALSE",
         )
         .bind(id.into_inner())
@@ -100,7 +102,7 @@ impl crate::repository::InterviewPlanRepository for PgInterviewPlanRepository {
         &self,
         app_id: ApplicationId,
     ) -> Result<Vec<InterviewPlan>, InterviewError> {
-        let rows = sqlx::query_as::<_, db_models::InterviewPlan>(
+        let rows = sqlx::query_as::<_, StoreInterviewPlan>(
             r#"SELECT * FROM interview_plan
                WHERE application_id = $1 AND is_deleted = FALSE
                ORDER BY created_at ASC"#,
@@ -150,7 +152,7 @@ impl crate::repository::InterviewPlanRepository for PgInterviewPlanRepository {
 
         sql.push_str(" ORDER BY created_at DESC");
 
-        let rows = sqlx::query_as::<_, db_models::InterviewPlan>(&sql)
+        let rows = sqlx::query_as::<_, StoreInterviewPlan>(&sql)
             .fetch_all(&self.pool)
             .await
             .map_err(map_err)?;
@@ -159,9 +161,9 @@ impl crate::repository::InterviewPlanRepository for PgInterviewPlanRepository {
     }
 
     async fn update(&self, plan: &InterviewPlan) -> Result<InterviewPlan, InterviewError> {
-        let store: db_models::InterviewPlan = plan.clone().into();
+        let store: StoreInterviewPlan = plan.clone().into();
 
-        let row = sqlx::query_as::<_, db_models::InterviewPlan>(
+        let row = sqlx::query_as::<_, StoreInterviewPlan>(
             r#"UPDATE interview_plan
                SET title = $2, company = $3, position = $4, job_description = $5,
                    round = $6, description = $7, scheduled_at = $8,
