@@ -12,15 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod config;
-pub mod convert;
-pub mod db;
-pub mod err;
-pub mod kv;
-pub mod models;
-pub mod repos;
+//! PostgreSQL repository implementations for domain traits.
 
-pub use config::DatabaseConfig;
-pub use db::DBStore;
-pub use err::{Error, Result};
-pub use kv::KVStore;
+pub mod application;
+pub mod interview;
+pub mod resume;

@@ -27,7 +27,8 @@ pub mod resume;
 
 pub use ai::{AiModelProvider, AiRun, PromptKind, PromptTemplate};
 pub use application::{
-    Application, ApplicationChannel, ApplicationStatus, ApplicationStatusHistory,
+    Application, ApplicationChannel, ApplicationPriority, ApplicationStatus,
+    ApplicationStatusHistory,
 };
 pub use interview::{InterviewPlan, InterviewTaskStatus};
 pub use job::{Job, JobStatus};

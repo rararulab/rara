@@ -104,6 +104,7 @@ job-common-telemetry = { version = "=0.0.17", path = "crates/common/telemetry" }
 job-common-worker = { version = "=0.0.17", path = "crates/common/worker" }
 job-error = { version = "=0.0.17", path = "crates/common/error" }
 job-server = { version = "=0.0.17", path = "crates/server" }
+yunara-store = { version = "0.1.0", path = "crates/common/yunara-store" }
 
 # Domain crates
 job-domain-ai = { version = "=0.0.17", path = "crates/domain/ai" }

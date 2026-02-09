@@ -28,6 +28,7 @@ use snafu::{ResultExt, Whatever};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
+use yunara_store::config::DatabaseConfig;
 
 /// Represents the main application with lifecycle management
 #[derive(SmartDefault)]
@@ -47,8 +48,10 @@ pub struct App {
 pub struct AppConfig {
     /// gRPC server configuration
     pub grpc_config:              GrpcServerConfig,
-    /// REST server configuration  
+    /// REST server configuration
     pub http_config:              RestServerConfig,
+    /// Database configuration
+    pub db_config:                DatabaseConfig,
     /// Whether to enable graceful shutdown
     #[default = true]
     pub enable_graceful_shutdown: bool,
@@ -117,11 +120,53 @@ impl App {
             cancellation_token: self.cancellation_token.clone(),
         };
 
+        // Initialize database
+        let db_store = yunara_store::db::DBStore::new(self.config.db_config.clone())
+            .await
+            .whatever_context("Failed to initialize database")?;
+        let pool = db_store.pool().clone();
+
+        // Create repository implementations
+        let resume_repo = Arc::new(
+            yunara_store::repos::resume::PgResumeRepository::new(pool.clone()),
+        );
+        let application_repo = Arc::new(
+            yunara_store::repos::application::PgApplicationRepository::new(pool.clone()),
+        );
+        let interview_repo = Arc::new(
+            yunara_store::repos::interview::PgInterviewPlanRepository::new(pool),
+        );
+
+        // Create domain services
+        let resume_service = Arc::new(
+            job_domain_resume::service::ResumeService::new(resume_repo),
+        );
+        let application_service = Arc::new(
+            job_domain_application::service::ApplicationService::new(application_repo),
+        );
+        let interview_service = Arc::new(
+            job_domain_interview::service::InterviewService::new(interview_repo, None),
+        );
+
+        // Build AppState
+        let app_state = Arc::new(job_server::state::AppState {
+            application_service,
+            interview_service,
+            resume_service,
+        });
+
         // Start servers
         let grpc_handle = start_grpc_server(&self.config.grpc_config, &[Arc::new(HelloService)])
             .whatever_context("Failed to start gRPC server")?;
 
-        let http_handle = start_rest_server(self.config.http_config.clone(), vec![health_routes])
+        // Build all routes as a single closure
+        let state = app_state.clone();
+        let all_routes = move |router: axum::Router| {
+            let router = health_routes(router);
+            router.merge(job_server::api::api_routes(state.clone()))
+        };
+
+        let http_handle = start_rest_server(self.config.http_config.clone(), vec![all_routes])
             .await
             .whatever_context("Failed to start REST server")?;
 

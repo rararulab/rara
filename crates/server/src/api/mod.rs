@@ -12,15 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod config;
-pub mod convert;
-pub mod db;
-pub mod err;
-pub mod kv;
-pub mod models;
-pub mod repos;
+//! HTTP API route modules for the job server.
 
-pub use config::DatabaseConfig;
-pub use db::DBStore;
-pub use err::{Error, Result};
-pub use kv::KVStore;
+pub mod application;
+pub mod error;
+pub mod interview;
+pub mod resume;
+
+use std::sync::Arc;
+
+use axum::Router;
+use job_domain_resume::repository::ResumeRepository;
+
+use crate::state::AppState;
+
+/// Merge all domain API route groups into a single router.
+pub fn api_routes<R: ResumeRepository + 'static>(state: Arc<AppState<R>>) -> Router {
+    Router::new()
+        .merge(resume::resume_routes(state.clone()))
+        .merge(application::application_routes(state.clone()))
+        .merge(interview::interview_routes(state))
+}

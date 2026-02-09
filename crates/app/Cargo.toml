@@ -12,15 +12,20 @@ categories.workspace = true
 description = "Application orchestration and lifecycle management for job"
 
 [dependencies]
+axum = { workspace = true }
 bon = { workspace = true }
 derive_more = { workspace = true }
 job-common-telemetry = { workspace = true }
+job-domain-application = { workspace = true }
+job-domain-interview = { workspace = true }
+job-domain-resume = { workspace = true }
 job-server = { workspace = true }
 smart-default = { workspace = true }
 snafu = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
+yunara-store = { workspace = true }
 
 [lints]
 workspace = true

@@ -73,6 +73,32 @@ impl std::fmt::Display for ApplicationStatus {
     }
 }
 
+/// Priority level for an application.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "application_priority", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum ApplicationPriority {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+impl Default for ApplicationPriority {
+    fn default() -> Self { Self::Medium }
+}
+
+impl std::fmt::Display for ApplicationPriority {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Low => write!(f, "low"),
+            Self::Medium => write!(f, "medium"),
+            Self::High => write!(f, "high"),
+            Self::Critical => write!(f, "critical"),
+        }
+    }
+}
+
 /// A job application record linking a job to a resume submission.
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Application {
@@ -83,6 +109,8 @@ pub struct Application {
     pub status:       ApplicationStatus,
     pub cover_letter: Option<String>,
     pub notes:        Option<String>,
+    pub tags:         Vec<String>,
+    pub priority:     ApplicationPriority,
     pub trace_id:     Option<String>,
     pub is_deleted:   bool,
     pub deleted_at:   Option<DateTime<Utc>>,
