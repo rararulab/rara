@@ -50,6 +50,7 @@ members = [
     "crates/domain/scheduler",
     "crates/domain/notify",
     "crates/domain/analytics",
+    "crates/domain/saved-job",
     "crates/server",
     "crates/paths",
     "crates/jobspy-sys",
@@ -129,6 +130,7 @@ job-domain-interview = { version = "=0.0.17", path = "crates/domain/interview" }
 job-domain-job-source = { version = "=0.0.17", path = "crates/domain/job-source" }
 job-domain-notify = { version = "=0.0.17", path = "crates/domain/notify" }
 job-domain-resume = { version = "=0.0.17", path = "crates/domain/resume" }
+job-domain-saved-job = { version = "=0.0.17", path = "crates/domain/saved-job" }
 job-domain-scheduler = { version = "=0.0.17", path = "crates/domain/scheduler" }
 job-domain-shared = { version = "=0.0.17", path = "crates/domain/shared" }
 job-workers = { version = "=0.0.17", path = "crates/workers" }

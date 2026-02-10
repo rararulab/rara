@@ -150,6 +150,9 @@ impl AppConfig {
             Arc::new(job_domain_scheduler::pg_repository::PgSchedulerRepository::new(pool.clone()));
         let analytics_repo =
             Arc::new(job_domain_analytics::pg_repository::PgAnalyticsRepository::new(pool.clone()));
+        let saved_job_repo = Arc::new(
+            job_domain_saved_job::pg_repository::PgSavedJobRepository::new(pool.clone()),
+        );
 
         // Notification service + senders
         let mut notification_service =
@@ -213,6 +216,9 @@ impl AppConfig {
             interview_repo,
             None,
         ));
+        let saved_job_service = Arc::new(job_domain_saved_job::service::SavedJobService::new(
+            saved_job_repo,
+        ));
 
         // Build routes closure — captures Arc'd services for on-demand Router
         // construction (axum::Router does not implement Clone).
@@ -222,6 +228,7 @@ impl AppConfig {
         let notify_svc = notification_service.clone();
         let scheduler_svc = scheduler_service.clone();
         let analytics_svc = analytics_service.clone();
+        let saved_job_svc = saved_job_service.clone();
         let job_source_svc = job_source_service.clone();
 
         let routes_fn: Box<dyn Fn(axum::Router) -> axum::Router + Send + Sync> =
@@ -234,6 +241,7 @@ impl AppConfig {
                     .merge(job_domain_notify::routes::routes(notify_svc.clone()))
                     .merge(job_domain_scheduler::routes::routes(scheduler_svc.clone()))
                     .merge(job_domain_analytics::routes::routes(analytics_svc.clone()))
+                    .merge(job_domain_saved_job::routes::routes(saved_job_svc.clone()))
                     .merge(
                         job_domain_job_source::routes::routes(job_source_svc.clone())
                             .layer(DedupLayer::new(DedupLayerConfig::default())),
