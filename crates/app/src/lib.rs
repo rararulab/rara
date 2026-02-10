@@ -332,6 +332,19 @@ impl App {
             .spawn();
 
         info!("Background workers started");
+
+        // Telegram bot (message receiver)
+        if let Some(ref tg_cfg) = self.config.telegram {
+            let bot = job_telegram::TelegramBot::new(&tg_cfg.bot_token);
+            let cancel = self.cancellation_token.clone();
+            tokio::spawn(async move {
+                if let Err(e) = bot.run(cancel).await {
+                    tracing::error!(error = %e, "Telegram bot stopped with error");
+                }
+            });
+            info!("Telegram bot started");
+        }
+
         info!("Application started successfully");
 
         // Spawn the main application loop
