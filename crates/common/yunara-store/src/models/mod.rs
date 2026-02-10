@@ -17,10 +17,8 @@
 //! Each module contains the entity struct(s) and associated status enums
 //! that map directly to the PostgreSQL schema.
 
-pub mod ai;
 pub mod job;
 pub mod metrics;
 
-pub use ai::{AiModelProvider, AiRun, PromptKind, PromptTemplate};
 pub use job::{Job, JobStatus};
 pub use metrics::{MetricsPeriod, MetricsSnapshot};
