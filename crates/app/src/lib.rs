@@ -249,6 +249,7 @@ impl AppConfig {
             telegram,
             ai_service,
             job_repo,
+            job_source_service,
         })
     }
 }
@@ -275,6 +276,8 @@ pub struct App {
     ai_service:           Option<Arc<job_ai::service::AiService>>,
     /// Job repository for persisting parsed jobs
     job_repo:             Arc<dyn job_domain_job_source::repository::JobRepository>,
+    /// Job source service for discovery (used by Telegram /search command)
+    job_source_service:   Arc<job_domain_job_source::service::JobSourceService>,
 }
 
 /// Handle for controlling a running application.
@@ -352,6 +355,7 @@ impl App {
             jd_parse_tx:          jd_tx,
             jd_parse_notify:      jd_parse_notify.clone(),
             telegram:             self.telegram,
+            job_source_service:   self.job_source_service,
         };
 
         let mut worker_manager = job_common_worker::Manager::with_state(worker_state);
