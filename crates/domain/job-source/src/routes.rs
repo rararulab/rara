@@ -17,10 +17,12 @@ pub fn routes(service: Arc<JobSourceService>) -> Router {
         .with_state(service)
 }
 
+#[tracing::instrument(skip(service, criteria), fields(keywords = ?criteria.keywords))]
 async fn discover_jobs(
     State(service): State<Arc<JobSourceService>>,
     Json(criteria): Json<DiscoveryCriteria>,
 ) -> Result<(StatusCode, Json<Vec<NormalizedJob>>), SourceError> {
+    tracing::info!("starting job discovery");
     // JobSourceService::discover() is synchronous (calls Python via PyO3),
     // so we wrap it in spawn_blocking to avoid blocking the async runtime.
     let result = tokio::task::spawn_blocking(move || {
@@ -39,5 +41,6 @@ async fn discover_jobs(
         return Err(err);
     }
 
+    tracing::info!(job_count = result.jobs.len(), "job discovery complete");
     Ok((StatusCode::OK, Json(result.jobs)))
 }

@@ -131,8 +131,33 @@ where
         api_router = handler(api_router);
     }
 
-    // Apply middleware layers (outermost first in the request path)
+    // Apply request-scoped middleware to the API router.
     api_router = api_router
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            Duration::from_secs(config.request_timeout),
+        ))
+        .layer({
+            #[allow(clippy::cast_possible_truncation)]
+            DefaultBodyLimit::max(config.max_body_size.as_bytes() as usize)
+        });
+
+    // Add CORS if enabled
+    if config.enable_cors {
+        let cors = CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any);
+        api_router = api_router.layer(cors);
+    }
+
+    // Build the final router: merge API routes, add /health and fallback,
+    // then apply TraceLayer as the outermost layer so it observes every
+    // request — including merged domain routes and timeout responses.
+    let router = Router::new()
+        .route("/health", get(health_check))
+        .merge(api_router)
+        .fallback(route_not_found)
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|request: &axum::http::Request<_>| {
@@ -164,31 +189,7 @@ where
                         );
                     },
                 ),
-        )
-        .layer(TimeoutLayer::with_status_code(
-            StatusCode::REQUEST_TIMEOUT,
-            Duration::from_secs(config.request_timeout),
-        ))
-        .layer({
-            #[allow(clippy::cast_possible_truncation)]
-            DefaultBodyLimit::max(config.max_body_size.as_bytes() as usize)
-        });
-
-    // Add CORS if enabled
-    if config.enable_cors {
-        let cors = CorsLayer::new()
-            .allow_origin(Any)
-            .allow_methods(Any)
-            .allow_headers(Any);
-        api_router = api_router.layer(cors);
-    }
-
-    // Put /health and global fallback on the outer router so unmatched routes
-    // always return a deterministic response.
-    let router = Router::new()
-        .route("/health", get(health_check))
-        .merge(api_router)
-        .fallback(route_not_found);
+        );
 
     // Spawn the server task
     let cancellation_token = CancellationToken::new();
@@ -371,6 +372,89 @@ mod tests {
 
         let response = client
             .get(format!("http://127.0.0.1:{port}/api/v1/goodbye"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+
+        handler.shutdown();
+        handler.wait_for_stop().await.unwrap();
+    }
+
+    /// Reproduces the issue where TraceLayer doesn't log for routes added via
+    /// `.merge()` with `.with_state()` (the pattern used by domain crates).
+    #[tokio::test]
+    async fn test_tracelayer_logs_merged_routes_with_state() {
+        init_test_logging();
+
+        use axum::extract::State;
+        use axum::routing::post;
+        use std::sync::Arc;
+
+        #[derive(Clone)]
+        struct DummyService;
+
+        async fn stateful_handler(
+            State(_svc): State<Arc<DummyService>>,
+        ) -> Json<&'static str> {
+            Json("stateful response")
+        }
+
+        /// Handler that uses spawn_blocking, mimicking the discover endpoint.
+        async fn blocking_handler(
+            State(_svc): State<Arc<DummyService>>,
+        ) -> Json<&'static str> {
+            tokio::task::spawn_blocking(|| {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            })
+            .await
+            .unwrap();
+            Json("blocking response")
+        }
+
+        /// Mimics how domain crates build their routers: Router::new()
+        /// with routes and `.with_state()`, then merged into the parent.
+        fn merged_routes(router: Router) -> Router {
+            let svc = Arc::new(DummyService);
+            let domain_router = Router::new()
+                .route("/api/v1/dummy", get(stateful_handler))
+                .route("/api/v1/blocking", post(blocking_handler))
+                .with_state(svc);
+            let router = health_routes(router);
+            router.merge(domain_router)
+        }
+
+        let port = get_available_port().await;
+        let config = RestServerConfig {
+            bind_address: format!("127.0.0.1:{port}"),
+            ..RestServerConfig::default()
+        };
+        let handlers: Vec<fn(Router) -> Router> = vec![merged_routes];
+
+        let mut handler = start_rest_server(config, handlers).await.unwrap();
+        handler.wait_for_start().await.unwrap();
+
+        let client = reqwest::Client::new();
+
+        // Health route (directly added) — should have TraceLayer
+        let response = client
+            .get(format!("http://127.0.0.1:{port}/api/v1/health"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+
+        // Merged route with state — should ALSO have TraceLayer
+        let response = client
+            .get(format!("http://127.0.0.1:{port}/api/v1/dummy"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+
+        // Merged POST route with spawn_blocking — should ALSO have TraceLayer
+        let response = client
+            .post(format!("http://127.0.0.1:{port}/api/v1/blocking"))
             .send()
             .await
             .unwrap();
