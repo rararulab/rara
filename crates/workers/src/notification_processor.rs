@@ -77,6 +77,7 @@ pub struct WorkerState {
     pub jd_parse_tx:          mpsc::Sender<JdParseRequest>,
     pub jd_parse_notify:      Arc<tokio::sync::Mutex<Option<NotifyHandle>>>,
     pub telegram:             Arc<TelegramService>,
+    pub job_source_service:   Arc<job_domain_job_source::service::JobSourceService>,
 }
 
 #[async_trait]
