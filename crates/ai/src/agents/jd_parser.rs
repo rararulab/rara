@@ -14,7 +14,7 @@
 
 //! Job description parser agent.
 
-use rig::{client::CompletionClient, completion::Prompt, providers::openai};
+use rig::{client::CompletionClient, completion::Prompt, providers::openrouter};
 
 use crate::error::AiError;
 
@@ -29,12 +29,12 @@ You are a job description parser. Given a raw job description text, extract stru
 
 /// Parses raw job description text into structured JSON using AI.
 pub struct JdParserAgent<'a> {
-    client: &'a openai::Client,
+    client: &'a openrouter::Client,
     model:  &'a str,
 }
 
 impl<'a> JdParserAgent<'a> {
-    pub(crate) fn new(client: &'a openai::Client, model: &'a str) -> Self { Self { client, model } }
+    pub(crate) fn new(client: &'a openrouter::Client, model: &'a str) -> Self { Self { client, model } }
 
     /// Parse a raw job description into a structured JSON string.
     pub async fn parse(&self, jd_text: &str) -> Result<String, AiError> {

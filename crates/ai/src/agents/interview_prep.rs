@@ -14,7 +14,7 @@
 
 //! Interview preparation agent.
 
-use rig::{client::CompletionClient, completion::Prompt, providers::openai};
+use rig::{client::CompletionClient, completion::Prompt, providers::openrouter};
 
 use crate::error::AiError;
 
@@ -28,12 +28,12 @@ You are an interview coach. Generate likely interview questions and suggested an
 
 /// Generates interview preparation materials.
 pub struct InterviewPrepAgent<'a> {
-    client: &'a openai::Client,
+    client: &'a openrouter::Client,
     model:  &'a str,
 }
 
 impl<'a> InterviewPrepAgent<'a> {
-    pub(crate) fn new(client: &'a openai::Client, model: &'a str) -> Self { Self { client, model } }
+    pub(crate) fn new(client: &'a openrouter::Client, model: &'a str) -> Self { Self { client, model } }
 
     /// Generate interview preparation materials.
     pub async fn prepare(&self, job_description: &str, resume: &str) -> Result<String, AiError> {

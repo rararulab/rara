@@ -14,7 +14,7 @@
 
 //! Resume optimization agent.
 
-use rig::{client::CompletionClient, completion::Prompt, providers::openai};
+use rig::{client::CompletionClient, completion::Prompt, providers::openrouter};
 
 use crate::error::AiError;
 
@@ -28,12 +28,12 @@ You are a professional resume writer. Rewrite the resume to better match the tar
 
 /// Optimizes a resume for a specific job posting.
 pub struct ResumeOptimizerAgent<'a> {
-    client: &'a openai::Client,
+    client: &'a openrouter::Client,
     model:  &'a str,
 }
 
 impl<'a> ResumeOptimizerAgent<'a> {
-    pub(crate) fn new(client: &'a openai::Client, model: &'a str) -> Self { Self { client, model } }
+    pub(crate) fn new(client: &'a openrouter::Client, model: &'a str) -> Self { Self { client, model } }
 
     /// Optimize a resume to better match a job description.
     pub async fn optimize(&self, resume: &str, job_description: &str) -> Result<String, AiError> {

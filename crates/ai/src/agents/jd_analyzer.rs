@@ -14,7 +14,7 @@
 
 //! Job posting analyzer agent.
 
-use rig::{client::CompletionClient, completion::Prompt, providers::openai};
+use rig::{client::CompletionClient, completion::Prompt, providers::openrouter};
 
 use crate::error::AiError;
 
@@ -40,12 +40,12 @@ Return ONLY the JSON object, no other text.";
 /// Analyzes a job posting in markdown format and extracts structured
 /// information using AI.
 pub struct JdAnalyzerAgent<'a> {
-    client: &'a openai::Client,
+    client: &'a openrouter::Client,
     model:  &'a str,
 }
 
 impl<'a> JdAnalyzerAgent<'a> {
-    pub(crate) fn new(client: &'a openai::Client, model: &'a str) -> Self { Self { client, model } }
+    pub(crate) fn new(client: &'a openrouter::Client, model: &'a str) -> Self { Self { client, model } }
 
     /// Analyze a job posting markdown and return structured JSON.
     pub async fn analyze(&self, markdown: &str) -> Result<String, AiError> {

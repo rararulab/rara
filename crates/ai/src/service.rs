@@ -14,13 +14,13 @@
 
 //! AI service — a factory for creating task-specific agents.
 //!
-//! [`AiService`] holds the rig-core OpenAI client and default model.
+//! [`AiService`] holds the rig-core OpenRouter client and default model.
 //! Each agent method returns a lightweight borrowing agent that
 //! executes a specific AI task.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use rig::providers::openai;
+use rig::providers::openrouter;
 
 use crate::{
     agents::{
@@ -82,12 +82,12 @@ impl RateLimiter {
 
 /// The AI service — a factory for creating task-specific agents.
 ///
-/// Holds the rig-core OpenAI client and default model. Each agent
+/// Holds the rig-core OpenRouter client and default model. Each agent
 /// method returns a lightweight borrowing agent that executes a
 /// specific AI task.
 pub struct AiService {
-    /// The rig-core OpenAI client.
-    client:        openai::Client,
+    /// The rig-core OpenRouter client.
+    client:        openrouter::Client,
     /// Default model to use.
     default_model: String,
     /// Optional rate limiter.
@@ -97,12 +97,12 @@ pub struct AiService {
 impl AiService {
     /// Create a new `AiService`.
     ///
-    /// - `api_key` -- the OpenAI API key.
+    /// - `api_key` -- the OpenRouter API key.
     /// - `default_model` -- model identifier to use by default.
     /// - `rate_limiter` -- optional rate limiter.
     #[must_use]
     pub fn new(api_key: &str, default_model: String, rate_limiter: Option<RateLimiter>) -> Self {
-        let client = openai::Client::builder()
+        let client = openrouter::Client::builder()
             .api_key(api_key)
             .build()
             .expect("failed to build OpenAI client");

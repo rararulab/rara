@@ -45,9 +45,9 @@ pub struct TelegramConfig {
     pub chat_id:   i64,
 }
 
-/// OpenAI API configuration.
+/// OpenRouter API configuration.
 #[derive(Debug, Clone)]
-pub struct OpenAiConfig {
+pub struct OpenRouterConfig {
     pub api_key: String,
     pub model:   String,
 }
@@ -76,8 +76,8 @@ pub struct AppConfig {
     pub enable_graceful_shutdown: bool,
     /// Telegram configuration (optional)
     pub telegram:                 Option<TelegramConfig>,
-    /// OpenAI configuration (optional)
-    pub openai:                   Option<OpenAiConfig>,
+    /// OpenRouter configuration (optional)
+    pub openrouter:               Option<OpenRouterConfig>,
     /// MinIO / S3 object store configuration (optional)
     pub minio:                    Option<MinioConfig>,
     /// Crawl4AI service URL
@@ -114,9 +114,10 @@ impl AppConfig {
             _ => None,
         };
 
-        let openai = std::env::var("OPENAI_API_KEY").ok().map(|key| {
-            let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
-            OpenAiConfig {
+        let openrouter = std::env::var("OPENROUTER_API_KEY").ok().map(|key| {
+            let model = std::env::var("OPENROUTER_MODEL")
+                .unwrap_or_else(|_| "openai/gpt-4o".to_string());
+            OpenRouterConfig {
                 api_key: key,
                 model,
             }
@@ -145,7 +146,7 @@ impl AppConfig {
         Self {
             db_config,
             telegram,
-            openai,
+            openrouter,
             minio,
             crawl4ai_url,
             gc_interval_hours,
@@ -221,18 +222,18 @@ impl AppConfig {
         ));
 
         // AI service (required)
-        let openai_cfg = match self.openai.as_ref() {
+        let or_cfg = match self.openrouter.as_ref() {
             Some(cfg) => cfg,
             None => {
-                whatever!("OpenAI is required: set OPENAI_API_KEY")
+                whatever!("OpenRouter is required: set OPENROUTER_API_KEY")
             }
         };
         let ai_service = Arc::new(job_ai::service::AiService::new(
-            &openai_cfg.api_key,
-            openai_cfg.model.clone(),
+            &or_cfg.api_key,
+            or_cfg.model.clone(),
             None,
         ));
-        info!("AI service configured (OpenAI)");
+        info!("AI service configured (OpenRouter)");
 
         // Job repository (for saving parsed JDs)
         let job_repo: Arc<dyn job_domain_job_source::repository::JobRepository> = Arc::new(
@@ -629,7 +630,7 @@ mod tests {
         let config = AppConfig::default();
         assert!(config.enable_graceful_shutdown);
         assert!(config.telegram.is_none());
-        assert!(config.openai.is_none());
+        assert!(config.openrouter.is_none());
     }
 
     #[tokio::test]

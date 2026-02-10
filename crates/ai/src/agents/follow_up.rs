@@ -14,7 +14,7 @@
 
 //! Follow-up email drafting agent.
 
-use rig::{client::CompletionClient, completion::Prompt, providers::openai};
+use rig::{client::CompletionClient, completion::Prompt, providers::openrouter};
 
 use crate::error::AiError;
 
@@ -28,12 +28,12 @@ You are a professional communicator. Draft a concise, polite follow-up email bas
 
 /// Drafts follow-up emails after interviews or applications.
 pub struct FollowUpDraftAgent<'a> {
-    client: &'a openai::Client,
+    client: &'a openrouter::Client,
     model:  &'a str,
 }
 
 impl<'a> FollowUpDraftAgent<'a> {
-    pub(crate) fn new(client: &'a openai::Client, model: &'a str) -> Self { Self { client, model } }
+    pub(crate) fn new(client: &'a openrouter::Client, model: &'a str) -> Self { Self { client, model } }
 
     /// Draft a follow-up email based on the given context.
     pub async fn draft(&self, context: &str) -> Result<String, AiError> {

@@ -14,7 +14,7 @@
 
 //! Job-fit analysis agent.
 
-use rig::{client::CompletionClient, completion::Prompt, providers::openai};
+use rig::{client::CompletionClient, completion::Prompt, providers::openrouter};
 
 use crate::error::AiError;
 
@@ -28,12 +28,12 @@ You are a career advisor. Analyze the job posting and the candidate's resume, th
 
 /// Evaluates how well a candidate's resume matches a job posting.
 pub struct JobFitAgent<'a> {
-    client: &'a openai::Client,
+    client: &'a openrouter::Client,
     model:  &'a str,
 }
 
 impl<'a> JobFitAgent<'a> {
-    pub(crate) fn new(client: &'a openai::Client, model: &'a str) -> Self { Self { client, model } }
+    pub(crate) fn new(client: &'a openrouter::Client, model: &'a str) -> Self { Self { client, model } }
 
     /// Analyze the fit between a job description and a resume.
     pub async fn analyze(&self, job_description: &str, resume: &str) -> Result<String, AiError> {

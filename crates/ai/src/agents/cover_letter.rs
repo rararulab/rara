@@ -14,7 +14,7 @@
 
 //! Cover letter generation agent.
 
-use rig::{client::CompletionClient, completion::Prompt, providers::openai};
+use rig::{client::CompletionClient, completion::Prompt, providers::openrouter};
 
 use crate::error::AiError;
 
@@ -28,12 +28,12 @@ You are a professional cover-letter writer. Craft a compelling cover letter that
 
 /// Generates cover letters tailored to job postings.
 pub struct CoverLetterAgent<'a> {
-    client: &'a openai::Client,
+    client: &'a openrouter::Client,
     model:  &'a str,
 }
 
 impl<'a> CoverLetterAgent<'a> {
-    pub(crate) fn new(client: &'a openai::Client, model: &'a str) -> Self { Self { client, model } }
+    pub(crate) fn new(client: &'a openrouter::Client, model: &'a str) -> Self { Self { client, model } }
 
     /// Generate a cover letter for the given job description and resume.
     pub async fn generate(&self, job_description: &str, resume: &str) -> Result<String, AiError> {
