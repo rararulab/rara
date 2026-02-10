@@ -15,7 +15,6 @@
 use clap::{Args, Parser, Subcommand};
 use job_common_runtime::{GlobalRuntimeOptions, block_on_background, init_global_runtimes};
 use snafu::Whatever;
-use yunara_store::config::DatabaseConfig;
 
 mod build_info;
 use job_app::AppConfig;
@@ -57,19 +56,12 @@ struct ServerArgs {}
 
 impl ServerArgs {
     fn run() -> Result<(), Whatever> {
-        let db_config =
-            DatabaseConfig::builder()
-                .database_url(std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-                    "postgres://postgres:postgres@localhost:5432/job".to_string()
-                }))
-                .build();
-
-        let mut config = AppConfig::default();
-        config.db_config = db_config;
-
-        let app = config.open();
+        let config = AppConfig::from_env();
         init_global_runtimes(&GlobalRuntimeOptions::default());
-        block_on_background(app.run())
+        block_on_background(async {
+            let app = config.open().await?;
+            app.run().await
+        })
     }
 }
 

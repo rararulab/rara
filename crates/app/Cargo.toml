@@ -14,19 +14,16 @@ description = "Application orchestration and lifecycle management for job"
 [dependencies]
 async-trait = { workspace = true }
 axum = { workspace = true }
-bon = { workspace = true }
-derive_more = { workspace = true }
 job-common-telemetry = { workspace = true }
 job-common-worker = { workspace = true }
 job-domain-ai = { workspace = true }
 job-domain-analytics = { workspace = true }
 job-domain-application = { workspace = true }
 job-domain-interview = { workspace = true }
-job-domain-job-source = { workspace = true, features = ["jobspy"] }
+job-domain-job-source = { workspace = true }
 job-domain-notify = { workspace = true }
 job-domain-resume = { workspace = true }
 job-domain-scheduler = { workspace = true }
-jobspy-sys = { workspace = true }
 job-server = { workspace = true }
 smart-default = { workspace = true }
 snafu = { workspace = true }

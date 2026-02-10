@@ -14,13 +14,9 @@
 
 //! # job-domain-job-source
 //!
-//! Job source driver abstraction and discovery service.
+//! Job source discovery service powered by JobSpy.
 
 pub mod dedup;
-pub mod driver;
-#[cfg(feature = "jobspy")]
 pub mod jobspy;
-pub mod linkedin;
-pub mod manual;
 pub mod service;
 pub mod types;

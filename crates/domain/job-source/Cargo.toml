@@ -9,25 +9,16 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Job source driver abstraction and implementations (LinkedIn, Indeed, etc.)"
+description = "Job source discovery service powered by JobSpy"
 
 [dependencies]
-async-trait.workspace = true
-chrono.workspace = true
 jiff.workspace = true
-job-domain-shared = { workspace = true }
-jobspy-sys = { workspace = true, optional = true }
+jobspy-sys = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true
 tracing.workspace = true
 uuid.workspace = true
-
-[dev-dependencies]
-tokio.workspace = true
-
-[features]
-jobspy = ["dep:jobspy-sys"]
 
 [lints]
 workspace = true

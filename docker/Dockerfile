@@ -1,5 +1,5 @@
-ARG RUST_TOOLCHAIN
-ARG TARGET_PLATFORM
+ARG RUST_TOOLCHAIN=stable
+ARG TARGET_PLATFORM=linux/amd64
 
 FROM ubuntu:25.04 as base
 ENV LANG en_US.utf8
@@ -27,7 +27,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --no-mo
 ENV PATH /root/.cargo/bin/:$PATH
 
 # Install Rust toolchains.
-ARG RUST_TOOLCHAIN
+ARG RUST_TOOLCHAIN=stable
 RUN rustup toolchain install ${RUST_TOOLCHAIN}
 
 # Install binstall
@@ -62,18 +62,19 @@ RUN --mount=type=cache,target=$SCCACHE_DIR,sharing=locked \
     just build
 
 # Use a minimal runtime image for the final stage
-FROM alpine:3.19 as runtime
+FROM debian:bookworm-slim as runtime
 
 # Install minimal runtime dependencies
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    libgcc
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy all built binaries and output files from the target folder
-COPY --from=builder /app/target/release/ /usr/local/bin/
+# Copy the built binary
+COPY --from=builder /app/target/release/job /usr/local/bin/job
 
 # Create a non-root user for security
-RUN adduser -D -s /bin/sh appuser
+RUN useradd -r -s /usr/sbin/nologin appuser
 USER appuser
 
 WORKDIR /app

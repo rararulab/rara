@@ -176,7 +176,7 @@ impl NotificationService {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::sync::Arc;
 
     use sqlx::postgres::PgPoolOptions;
     use testcontainers::runners::AsyncRunner;
@@ -217,73 +217,21 @@ mod tests {
         }
     }
 
-    async fn connect_pool(url: &str) -> sqlx::PgPool {
-        let mut last_err: Option<sqlx::Error> = None;
-        for _ in 0..30 {
-            match PgPoolOptions::new()
-                .max_connections(5)
-                .acquire_timeout(Duration::from_secs(10))
-                .connect(url)
-                .await
-            {
-                Ok(pool) => return pool,
-                Err(e) => {
-                    last_err = Some(e);
-                    tokio::time::sleep(Duration::from_millis(200)).await;
-                }
-            }
-        }
-        panic!("failed to connect to postgres: {last_err:?}");
-    }
-
     async fn setup_pool() -> (sqlx::PgPool, testcontainers::ContainerAsync<Postgres>) {
         let container = Postgres::default().start().await.unwrap();
         let host = container.get_host().await.unwrap();
         let port = container.get_host_port_ipv4(5432).await.unwrap();
         let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
-        let pool = connect_pool(&url).await;
-
-        // Ensure gen_random_uuid() is available (older PG images need pgcrypto).
-        sqlx::raw_sql("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\"")
-            .execute(&pool)
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect(&url)
             .await
             .unwrap();
 
-        // Run migrations in order.
-        let migrations: &[&str] = &[
-            include_str!("../../../job-model/migrations/20260127000000_init.sql"),
-            include_str!("../../../job-model/migrations/20260208000000_domain_models.sql"),
-            include_str!("../../../job-model/migrations/20260209000000_resume_version_mgmt.sql"),
-            include_str!("../../../job-model/migrations/20260210000000_schema_alignment.sql"),
-            include_str!("../../../job-model/migrations/20260211000000_notify_priority.sql"),
-        ];
-
-        for sql in migrations {
-            sqlx::raw_sql(sql).execute(&pool).await.unwrap();
-        }
-
-        // The scheduler migration references set_updated_at() but the
-        // function was created as trigger_set_updated_at() in the domain
-        // migration. Fix the reference before executing.
-        let scheduler_sql =
-            include_str!("../../../job-model/migrations/20260211000001_scheduler_tables.sql")
-                .replace(
-                    "FUNCTION set_updated_at()",
-                    "FUNCTION trigger_set_updated_at()",
-                );
-        sqlx::raw_sql(&scheduler_sql).execute(&pool).await.unwrap();
-
-        // Convert domain enum columns to SMALLINT codes.
-        let domain_int_migrations: &[&str] = &[
-            include_str!("../../../job-model/migrations/20260212000000_application_int_enums.sql"),
-            include_str!("../../../job-model/migrations/20260212000001_interview_int_enums.sql"),
-            include_str!("../../../job-model/migrations/20260212000002_notify_int_enums.sql"),
-            include_str!("../../../job-model/migrations/20260212000003_resume_int_enums.sql"),
-            include_str!("../../../job-model/migrations/20260212000004_scheduler_int_enums.sql"),
-        ];
-        for sql in domain_int_migrations {
-            sqlx::raw_sql(sql).execute(&pool).await.unwrap();
-        }
+        sqlx::migrate!("../../job-model/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
 
         (pool, container)
     }

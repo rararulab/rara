@@ -121,6 +121,50 @@ pub struct NormalizedJob {
 }
 
 // ---------------------------------------------------------------------------
+// RawJob → NormalizedJob
+// ---------------------------------------------------------------------------
+
+impl TryFrom<RawJob> for NormalizedJob {
+    type Error = SourceError;
+
+    fn try_from(raw: RawJob) -> Result<Self, Self::Error> {
+        let title = raw.title.filter(|s| !s.trim().is_empty()).ok_or_else(|| {
+            SourceError::NormalizationFailed {
+                source_name:   raw.source_name.clone(),
+                source_job_id: raw.source_job_id.clone(),
+                message:       "title is required".to_owned(),
+            }
+        })?;
+
+        let company =
+            raw.company
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| SourceError::NormalizationFailed {
+                    source_name:   raw.source_name.clone(),
+                    source_job_id: raw.source_job_id.clone(),
+                    message:       "company is required".to_owned(),
+                })?;
+
+        Ok(NormalizedJob {
+            id:              Uuid::new_v4(),
+            source_job_id:   raw.source_job_id,
+            source_name:     raw.source_name,
+            title:           title.trim().to_owned(),
+            company:         company.trim().to_owned(),
+            location:        raw.location.map(|l| l.trim().to_owned()),
+            description:     raw.description,
+            url:             raw.url,
+            salary_min:      raw.salary_min,
+            salary_max:      raw.salary_max,
+            salary_currency: raw.salary_currency,
+            tags:            raw.tags,
+            raw_data:        raw.raw_data,
+            posted_at:       raw.posted_at,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SourceError
 // ---------------------------------------------------------------------------
 
@@ -169,4 +213,62 @@ pub enum SourceError {
         source_job_id: String,
         message:       String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_raw(title: Option<&str>, company: Option<&str>) -> RawJob {
+        RawJob {
+            source_job_id:   "test-1".to_owned(),
+            source_name:     "test".to_owned(),
+            title:           title.map(str::to_owned),
+            company:         company.map(str::to_owned),
+            location:        Some("Remote".to_owned()),
+            description:     None,
+            url:             None,
+            salary_min:      None,
+            salary_max:      None,
+            salary_currency: None,
+            tags:            vec![],
+            raw_data:        None,
+            posted_at:       None,
+        }
+    }
+
+    #[test]
+    fn try_from_succeeds_with_required_fields() {
+        let raw = make_raw(Some("Rust Engineer"), Some("Acme Corp"));
+        let job = NormalizedJob::try_from(raw).unwrap();
+        assert_eq!(job.title, "Rust Engineer");
+        assert_eq!(job.company, "Acme Corp");
+        assert_eq!(job.source_name, "test");
+    }
+
+    #[test]
+    fn try_from_trims_whitespace() {
+        let raw = make_raw(Some("  Rust Engineer  "), Some("  Acme Corp  "));
+        let job = NormalizedJob::try_from(raw).unwrap();
+        assert_eq!(job.title, "Rust Engineer");
+        assert_eq!(job.company, "Acme Corp");
+    }
+
+    #[test]
+    fn try_from_fails_without_title() {
+        let raw = make_raw(None, Some("Acme Corp"));
+        assert!(NormalizedJob::try_from(raw).is_err());
+    }
+
+    #[test]
+    fn try_from_fails_with_blank_title() {
+        let raw = make_raw(Some("   "), Some("Acme Corp"));
+        assert!(NormalizedJob::try_from(raw).is_err());
+    }
+
+    #[test]
+    fn try_from_fails_without_company() {
+        let raw = make_raw(Some("Rust Engineer"), None);
+        assert!(NormalizedJob::try_from(raw).is_err());
+    }
 }

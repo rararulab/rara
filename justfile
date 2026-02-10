@@ -253,6 +253,10 @@ build-docker-multiarch:
         --file docker/Dockerfile \
         .
 
+[group("🐳 Docker")]
+up:
+    docker compose up
+
 # ========================================================================================
 # Development Tools
 # ========================================================================================
@@ -262,9 +266,3 @@ build-docker-multiarch:
 deps-update:
     @echo "📦 Updating dependencies..."
     ./scripts/update-deps.sh
-
-[doc("run GitHub Actions locally with act")]
-[group("🔧 Development")]
-act:
-    @echo "🎬 Running GitHub Actions locally..."
-    ./scripts/ci-act.sh check-all

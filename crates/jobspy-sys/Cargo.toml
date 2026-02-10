@@ -12,6 +12,7 @@ categories.workspace = true
 description = "Embedded Python bridge for python-jobspy with uv-managed runtime setup"
 
 [dependencies]
+bon.workspace = true
 pyo3 = { version = "0.27", features = ["auto-initialize"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
