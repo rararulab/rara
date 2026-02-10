@@ -16,8 +16,10 @@
 //!
 //! Saved job tracking with crawl and analysis pipeline.
 
+pub mod crawl4ai;
 pub mod error;
 pub mod pg_repository;
+pub mod pipeline;
 pub mod repository;
 pub mod routes;
 pub mod service;

@@ -36,6 +36,18 @@ pub enum SavedJobError {
     /// A storage/infrastructure error occurred.
     #[snafu(display("repository error: {message}"))]
     RepositoryError { message: String },
+
+    /// Crawl4AI failed to fetch the URL.
+    #[snafu(display("crawl failed for URL {url}: {message}"))]
+    CrawlError { url: String, message: String },
+
+    /// AI analysis failed.
+    #[snafu(display("AI analysis failed: {message}"))]
+    AnalysisError { message: String },
+
+    /// Object store (S3/MinIO) operation failed.
+    #[snafu(display("object store error: {message}"))]
+    ObjectStoreError { message: String },
 }
 
 impl axum::response::IntoResponse for SavedJobError {
@@ -47,6 +59,9 @@ impl axum::response::IntoResponse for SavedJobError {
             SavedJobError::RepositoryError { .. } => {
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR
             }
+            SavedJobError::CrawlError { .. }
+            | SavedJobError::AnalysisError { .. }
+            | SavedJobError::ObjectStoreError { .. } => axum::http::StatusCode::BAD_GATEWAY,
         };
         let body = serde_json::json!({
             "error": { "status": status.as_u16(), "message": self.to_string() }

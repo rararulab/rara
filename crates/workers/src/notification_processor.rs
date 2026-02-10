@@ -80,6 +80,7 @@ pub struct WorkerState {
     pub job_source_service:   Arc<job_domain_job_source::service::JobSourceService>,
     pub saved_job_service:    Option<Arc<job_domain_saved_job::service::SavedJobService<job_domain_saved_job::pg_repository::PgSavedJobRepository>>>,
     pub object_store:         Option<Arc<job_object_store::ObjectStore>>,
+    pub saved_job_pipeline:   Option<Arc<job_domain_saved_job::pipeline::SavedJobPipeline<job_domain_saved_job::pg_repository::PgSavedJobRepository>>>,
 }
 
 #[async_trait]

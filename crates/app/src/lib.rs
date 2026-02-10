@@ -254,6 +254,29 @@ impl AppConfig {
             saved_job_repo,
         ));
 
+        // Crawl4AI client + saved job pipeline (requires object_store + ai_service)
+        let crawl4ai_url = std::env::var("CRAWL4AI_URL")
+            .unwrap_or_else(|_| "http://localhost:11235".to_owned());
+        let crawl_client =
+            job_domain_saved_job::crawl4ai::Crawl4AiClient::new(&crawl4ai_url);
+
+        let saved_job_pipeline = match (&object_store, &ai_service) {
+            (Some(os), Some(ai)) => {
+                let pipeline = job_domain_saved_job::pipeline::SavedJobPipeline::new(
+                    saved_job_service.clone(),
+                    crawl_client,
+                    os.clone(),
+                    ai.clone(),
+                );
+                info!("Saved job pipeline configured (Crawl4AI + AI analysis)");
+                Some(Arc::new(pipeline))
+            }
+            _ => {
+                info!("Saved job pipeline not configured (requires object store + AI)");
+                None
+            }
+        };
+
         // Build routes closure — captures Arc'd services for on-demand Router
         // construction (axum::Router does not implement Clone).
         let resume_svc = resume_service.clone();
@@ -296,6 +319,7 @@ impl AppConfig {
             job_source_service,
             saved_job_service: Some(saved_job_service.clone()),
             object_store,
+            saved_job_pipeline,
         })
     }
 }
@@ -328,6 +352,8 @@ pub struct App {
     saved_job_service:    Option<Arc<job_domain_saved_job::service::SavedJobService<job_domain_saved_job::pg_repository::PgSavedJobRepository>>>,
     /// Object store for GC worker S3 cleanup
     object_store:         Option<Arc<job_object_store::ObjectStore>>,
+    /// Saved job pipeline for crawl + AI analysis
+    saved_job_pipeline:   Option<Arc<job_domain_saved_job::pipeline::SavedJobPipeline<job_domain_saved_job::pg_repository::PgSavedJobRepository>>>,
 }
 
 /// Handle for controlling a running application.
@@ -408,6 +434,7 @@ impl App {
             job_source_service:   self.job_source_service,
             saved_job_service:    self.saved_job_service,
             object_store:         self.object_store,
+            saved_job_pipeline:   self.saved_job_pipeline,
         };
 
         let mut worker_manager = job_common_worker::Manager::with_state(worker_state);
@@ -435,6 +462,15 @@ impl App {
             .fallible_worker(job_workers::telegram_bot::TelegramBotWorker)
             .name("telegram-bot")
             .once()
+            .spawn();
+
+        // Saved job pipeline worker (notify trigger, processes PendingCrawl jobs)
+        let _pipeline_handle = worker_manager
+            .fallible_worker(
+                job_workers::saved_job_pipeline::SavedJobPipelineWorker,
+            )
+            .name("saved-job-pipeline")
+            .on_notify()
             .spawn();
 
         // Saved job GC worker (periodic, default every 24 hours)

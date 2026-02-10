@@ -77,4 +77,12 @@ pub trait SavedJobRepository: Send + Sync {
 
     /// Clear the S3 key for a saved job (after the object has been deleted).
     async fn clear_s3_key(&self, id: Uuid) -> Result<(), SavedJobError>;
+
+    /// Update the title and/or company extracted from AI analysis.
+    async fn update_title_company(
+        &self,
+        id: Uuid,
+        title: Option<String>,
+        company: Option<String>,
+    ) -> Result<(), SavedJobError>;
 }

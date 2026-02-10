@@ -25,8 +25,8 @@ use rig::providers::openai;
 use crate::{
     agents::{
         cover_letter::CoverLetterAgent, follow_up::FollowUpDraftAgent,
-        interview_prep::InterviewPrepAgent, jd_parser::JdParserAgent, job_fit::JobFitAgent,
-        resume_optimizer::ResumeOptimizerAgent,
+        interview_prep::InterviewPrepAgent, jd_analyzer::JdAnalyzerAgent,
+        jd_parser::JdParserAgent, job_fit::JobFitAgent, resume_optimizer::ResumeOptimizerAgent,
     },
     error::AiError,
 };
@@ -140,6 +140,11 @@ impl AiService {
     /// Create a job description parser agent.
     pub fn jd_parser(&self) -> JdParserAgent<'_> {
         JdParserAgent::new(&self.client, &self.default_model)
+    }
+
+    /// Create a job description analyzer agent.
+    pub fn jd_analyzer(&self) -> JdAnalyzerAgent<'_> {
+        JdAnalyzerAgent::new(&self.client, &self.default_model)
     }
 
     /// Access the rate limiter, if configured.

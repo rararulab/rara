@@ -240,4 +240,30 @@ impl crate::repository::SavedJobRepository for PgSavedJobRepository {
         }
         Ok(())
     }
+
+    async fn update_title_company(
+        &self,
+        id: Uuid,
+        title: Option<String>,
+        company: Option<String>,
+    ) -> Result<(), SavedJobError> {
+        let result = sqlx::query(
+            r#"UPDATE saved_job
+               SET title = COALESCE($2, title),
+                   company = COALESCE($3, company),
+                   updated_at = NOW()
+               WHERE id = $1"#,
+        )
+        .bind(id)
+        .bind(title)
+        .bind(company)
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        if result.rows_affected() == 0 {
+            return Err(SavedJobError::NotFound { id });
+        }
+        Ok(())
+    }
 }

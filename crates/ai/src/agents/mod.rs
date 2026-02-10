@@ -20,6 +20,7 @@
 pub mod cover_letter;
 pub mod follow_up;
 pub mod interview_prep;
+pub mod jd_analyzer;
 pub mod jd_parser;
 pub mod job_fit;
 pub mod resume_optimizer;

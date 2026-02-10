@@ -137,4 +137,15 @@ impl<R: SavedJobRepository> SavedJobService<R> {
     pub async fn clear_s3_key(&self, id: Uuid) -> Result<(), SavedJobError> {
         self.repo.clear_s3_key(id).await
     }
+
+    /// Update the title and/or company extracted from AI analysis.
+    #[instrument(skip(self))]
+    pub async fn update_title_company(
+        &self,
+        id: Uuid,
+        title: Option<String>,
+        company: Option<String>,
+    ) -> Result<(), SavedJobError> {
+        self.repo.update_title_company(id, title, company).await
+    }
 }
