@@ -15,6 +15,9 @@
  */
 
 import { useState } from "react";
+import { useMutation } from "@tanstack/react-query";
+import { api } from "@/api/client";
+import type { DiscoveryCriteria, NormalizedJob } from "@/api/types";
 import {
   Card,
   CardContent,
@@ -32,7 +35,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, Briefcase, Info } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Search,
+  Briefcase,
+  ExternalLink,
+  AlertCircle,
+  Loader2,
+  MapPin,
+  Building2,
+  DollarSign,
+  Calendar,
+} from "lucide-react";
 
 const JOB_SITES = [
   { id: "linkedin", label: "LinkedIn" },
@@ -41,6 +56,27 @@ const JOB_SITES = [
   { id: "google", label: "Google" },
   { id: "ziprecruiter", label: "ZipRecruiter" },
 ] as const;
+
+function formatSalary(
+  min?: number,
+  max?: number,
+  currency?: string
+): string | null {
+  if (!min && !max) return null;
+  const cur = currency || "USD";
+  if (min && max) return `${cur} ${min.toLocaleString()} - ${max.toLocaleString()}`;
+  if (min) return `${cur} ${min.toLocaleString()}+`;
+  return `Up to ${cur} ${max!.toLocaleString()}`;
+}
+
+function formatDate(dateStr?: string): string | null {
+  if (!dateStr) return null;
+  try {
+    return new Date(dateStr).toLocaleDateString();
+  } catch {
+    return dateStr;
+  }
+}
 
 export default function JobDiscovery() {
   const [keywords, setKeywords] = useState("");
@@ -51,7 +87,11 @@ export default function JobDiscovery() {
     "linkedin",
     "indeed",
   ]);
-  const [submitted, setSubmitted] = useState(false);
+
+  const discoverMutation = useMutation<NormalizedJob[], Error, DiscoveryCriteria>({
+    mutationFn: (criteria) =>
+      api.post<NormalizedJob[]>("/api/v1/jobs/discover", criteria),
+  });
 
   const toggleSite = (siteId: string) => {
     setSelectedSites((prev) =>
@@ -63,8 +103,22 @@ export default function JobDiscovery() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setSubmitted(true);
+    const keywordList = keywords
+      .split(/[,\s]+/)
+      .map((k) => k.trim())
+      .filter(Boolean);
+
+    const criteria: DiscoveryCriteria = {
+      keywords: keywordList,
+      location: location || undefined,
+      job_type: jobType || undefined,
+      max_results: parseInt(maxResults, 10) || undefined,
+    };
+
+    discoverMutation.mutate(criteria);
   };
+
+  const jobs = discoverMutation.data;
 
   return (
     <div className="space-y-6">
@@ -157,46 +211,160 @@ export default function JobDiscovery() {
               </div>
             </div>
 
-            <Button type="submit" disabled={!keywords.trim()}>
-              <Search className="h-4 w-4 mr-2" />
-              Search Jobs
+            <Button
+              type="submit"
+              disabled={!keywords.trim() || discoverMutation.isPending}
+            >
+              {discoverMutation.isPending ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Search className="h-4 w-4 mr-2" />
+              )}
+              {discoverMutation.isPending ? "Searching..." : "Search Jobs"}
             </Button>
           </form>
         </CardContent>
       </Card>
 
-      {submitted && (
-        <Card className="border-blue-200 bg-blue-50/50">
+      {/* Error state */}
+      {discoverMutation.isError && (
+        <Card className="border-red-200 bg-red-50/50">
           <CardContent className="flex items-start gap-3 p-6">
-            <Info className="h-5 w-5 text-blue-600 mt-0.5 shrink-0" />
+            <AlertCircle className="h-5 w-5 text-red-600 mt-0.5 shrink-0" />
             <div>
-              <p className="font-medium text-blue-900">
-                Job discovery API coming soon
-              </p>
-              <p className="text-sm text-blue-700 mt-1">
-                This will search across selected job boards (
-                {selectedSites
-                  .map(
-                    (s) => JOB_SITES.find((site) => site.id === s)?.label ?? s
-                  )
-                  .join(", ")}
-                ) for "{keywords}" positions
-                {location ? ` in ${location}` : ""}.
+              <p className="font-medium text-red-900">Search failed</p>
+              <p className="text-sm text-red-700 mt-1">
+                {discoverMutation.error.message}
               </p>
             </div>
           </CardContent>
         </Card>
       )}
 
-      <Card>
-        <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-          <Briefcase className="h-12 w-12 mb-4 opacity-50" />
-          <p className="text-lg font-medium">Search results will appear here</p>
-          <p className="text-sm">
-            Fill in the search form above to discover job opportunities.
-          </p>
-        </CardContent>
-      </Card>
+      {/* Loading state */}
+      {discoverMutation.isPending && (
+        <Card>
+          <CardContent className="p-6 space-y-4">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="space-y-3">
+                <Skeleton className="h-5 w-2/3" />
+                <Skeleton className="h-4 w-1/3" />
+                <Skeleton className="h-4 w-1/2" />
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Results */}
+      {jobs && jobs.length > 0 && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">
+              Found {jobs.length} job{jobs.length !== 1 ? "s" : ""}
+            </h2>
+          </div>
+          {jobs.map((job) => {
+            const salary = formatSalary(
+              job.salary_min,
+              job.salary_max,
+              job.salary_currency
+            );
+            const posted = formatDate(job.posted_at);
+            return (
+              <Card key={job.id}>
+                <CardContent className="p-6">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="space-y-2 flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="text-lg font-semibold">{job.title}</h3>
+                        <Badge variant="outline">{job.source_name}</Badge>
+                      </div>
+
+                      <div className="flex items-center gap-4 text-sm text-muted-foreground flex-wrap">
+                        <span className="flex items-center gap-1">
+                          <Building2 className="h-4 w-4" />
+                          {job.company}
+                        </span>
+                        {job.location && (
+                          <span className="flex items-center gap-1">
+                            <MapPin className="h-4 w-4" />
+                            {job.location}
+                          </span>
+                        )}
+                        {salary && (
+                          <span className="flex items-center gap-1">
+                            <DollarSign className="h-4 w-4" />
+                            {salary}
+                          </span>
+                        )}
+                        {posted && (
+                          <span className="flex items-center gap-1">
+                            <Calendar className="h-4 w-4" />
+                            {posted}
+                          </span>
+                        )}
+                      </div>
+
+                      {job.tags && job.tags.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-2">
+                          {job.tags.map((tag) => (
+                            <Badge key={tag} variant="secondary" className="text-xs">
+                              {tag}
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {job.url && (
+                      <a
+                        href={job.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="shrink-0"
+                      >
+                        <Button variant="outline" size="sm">
+                          <ExternalLink className="h-4 w-4 mr-1" />
+                          View
+                        </Button>
+                      </a>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Empty results after search */}
+      {jobs && jobs.length === 0 && (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+            <Briefcase className="h-12 w-12 mb-4 opacity-50" />
+            <p className="text-lg font-medium">No jobs found</p>
+            <p className="text-sm">
+              Try adjusting your search criteria or keywords.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Initial state - no search performed yet */}
+      {!jobs && !discoverMutation.isPending && !discoverMutation.isError && (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+            <Briefcase className="h-12 w-12 mb-4 opacity-50" />
+            <p className="text-lg font-medium">
+              Search results will appear here
+            </p>
+            <p className="text-sm">
+              Fill in the search form above to discover job opportunities.
+            </p>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

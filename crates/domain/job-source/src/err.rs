@@ -60,3 +60,21 @@ pub enum SourceError {
         message:       String,
     },
 }
+
+impl axum::response::IntoResponse for SourceError {
+    fn into_response(self) -> axum::response::Response {
+        let status = match &self {
+            SourceError::Retryable { .. } => axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            SourceError::NonRetryable { .. } => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            SourceError::RateLimited { .. } => axum::http::StatusCode::TOO_MANY_REQUESTS,
+            SourceError::AuthError { .. } => axum::http::StatusCode::UNAUTHORIZED,
+            SourceError::NormalizationFailed { .. } => {
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            }
+        };
+        let body = serde_json::json!({
+            "error": { "status": status.as_u16(), "message": self.to_string() }
+        });
+        (status, axum::Json(body)).into_response()
+    }
+}
