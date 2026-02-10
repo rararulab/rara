@@ -56,6 +56,10 @@ impl FallibleWorker<WorkerState> for TelegramBotWorker {
             )
             .branch(dptree::entry().endpoint(handle_message));
 
+        // Drop any pending updates accumulated while the bot was offline,
+        // so we don't replay stale messages on every restart.
+        let _ = bot.delete_webhook().drop_pending_updates(true).await;
+
         let mut dispatcher = Dispatcher::builder(bot, handler)
             .dependencies(dptree::deps![jd_tx])
             .enable_ctrlc_handler()
