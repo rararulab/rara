@@ -1,0 +1,28 @@
+[package]
+name = "job-object-store"
+description = "S3-compatible object storage client for MinIO"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+bon = { workspace = true }
+bytes = { workspace = true }
+opendal = { workspace = true }
+serde = { workspace = true }
+smart-default = { workspace = true }
+snafu = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true
