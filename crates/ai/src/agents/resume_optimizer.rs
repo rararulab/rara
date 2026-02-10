@@ -33,7 +33,9 @@ pub struct ResumeOptimizerAgent<'a> {
 }
 
 impl<'a> ResumeOptimizerAgent<'a> {
-    pub(crate) fn new(client: &'a openrouter::Client, model: &'a str) -> Self { Self { client, model } }
+    pub(crate) fn new(client: &'a openrouter::Client, model: &'a str) -> Self {
+        Self { client, model }
+    }
 
     /// Optimize a resume to better match a job description.
     pub async fn optimize(&self, resume: &str, job_description: &str) -> Result<String, AiError> {

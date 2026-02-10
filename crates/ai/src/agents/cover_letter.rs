@@ -33,7 +33,9 @@ pub struct CoverLetterAgent<'a> {
 }
 
 impl<'a> CoverLetterAgent<'a> {
-    pub(crate) fn new(client: &'a openrouter::Client, model: &'a str) -> Self { Self { client, model } }
+    pub(crate) fn new(client: &'a openrouter::Client, model: &'a str) -> Self {
+        Self { client, model }
+    }
 
     /// Generate a cover letter for the given job description and resume.
     pub async fn generate(&self, job_description: &str, resume: &str) -> Result<String, AiError> {

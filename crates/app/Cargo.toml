@@ -15,6 +15,7 @@ description = "Application orchestration and lifecycle management for job"
 async-trait = { workspace = true }
 axum = { workspace = true }
 job-ai = { workspace = true }
+job-api = { workspace = true }
 job-common-runtime = { workspace = true }
 job-common-telemetry = { workspace = true }
 job-common-worker = { workspace = true }
@@ -31,11 +32,15 @@ job-object-store = { workspace = true }
 job-server = { workspace = true }
 job-workers = { workspace = true }
 smart-default = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 snafu = { workspace = true }
 teloxide = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
+tonic = { workspace = true }
 tracing = { workspace = true }
+uuid = { workspace = true }
 yunara-store = { workspace = true }
 
 [lints]

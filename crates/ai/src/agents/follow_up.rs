@@ -33,7 +33,9 @@ pub struct FollowUpDraftAgent<'a> {
 }
 
 impl<'a> FollowUpDraftAgent<'a> {
-    pub(crate) fn new(client: &'a openrouter::Client, model: &'a str) -> Self { Self { client, model } }
+    pub(crate) fn new(client: &'a openrouter::Client, model: &'a str) -> Self {
+        Self { client, model }
+    }
 
     /// Draft a follow-up email based on the given context.
     pub async fn draft(&self, context: &str) -> Result<String, AiError> {

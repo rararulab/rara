@@ -27,7 +27,6 @@ use job_common_worker::{FallibleWorker, Notifiable, WorkError, WorkResult, Worke
 use job_domain_saved_job::types::SavedJobStatus;
 use tracing::{info, warn};
 
-
 use crate::notification_processor::WorkerState;
 
 /// Maximum characters to store as the markdown preview.

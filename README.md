@@ -23,3 +23,23 @@
 - 当前仓库仍包含 template 遗留代码，后续会在 #16 中清理，但会保留部分“代码风格样例”供新模块参考。
 - 项目未上线，可进行非兼容重构（例如 crate 重命名、存储切换、API 调整）。
 - 详细执行约束见 `AGENT.md`。
+
+## Runtime Modes
+
+- `job server`: 仅启动主服务（HTTP + gRPC + workers）
+- `job bot`: 仅启动 Telegram bot（bot dispatcher + bot command gRPC）
+- `job combined`: 在同一进程启动主服务和 Telegram bot
+
+### Telegram Bot Integration Boundary
+
+- 主服务 -> bot：通过 gRPC `TelegramBotCommandService`
+- bot -> 主服务：通过 HTTP 调用
+  - `/api/v1/jobs/discover`
+  - `/api/v1/internal/bot/jd-parse`
+
+### Relevant Environment Variables
+
+- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
+- `MAIN_SERVICE_HTTP_BASE` (default: `http://127.0.0.1:3000`)
+- `TELEGRAM_BOT_GRPC_BIND` (default: `127.0.0.1:50061`)
+- `TELEGRAM_BOT_GRPC_TARGET` (main service uses this to send telegram commands via bot gRPC)

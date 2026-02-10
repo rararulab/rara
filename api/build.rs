@@ -27,6 +27,7 @@ fn main() {
         // .type_attribute("job.v1.hello.Message", EQ_ATTR)
         .compile_protos(&[
             "proto/hello/v1/hello.proto",
+            "proto/telegrambot/v1/command.proto",
         ], &["proto"])
         .expect("compile proto");
 }

@@ -65,7 +65,7 @@ impl FallibleWorker<WorkerState> for JdParserWorker {
                 Ok(s) => s,
                 Err(e) => {
                     error!(error = %e, "AI JD parse failed");
-                    send_reply(&state.telegram, &format!("Failed to parse JD: {e}")).await;
+                    send_reply(state.telegram.as_ref(), &format!("Failed to parse JD: {e}")).await;
                     continue;
                 }
             };
@@ -76,7 +76,7 @@ impl FallibleWorker<WorkerState> for JdParserWorker {
                 Err(e) => {
                     error!(error = %e, raw = %json_str, "Failed to deserialize AI response");
                     send_reply(
-                        &state.telegram,
+                        state.telegram.as_ref(),
                         &format!("Failed to parse AI response: {e}"),
                     )
                     .await;
@@ -111,7 +111,7 @@ impl FallibleWorker<WorkerState> for JdParserWorker {
                         "JD parsed and saved"
                     );
                     send_reply(
-                        &state.telegram,
+                        state.telegram.as_ref(),
                         &format!(
                             "Job parsed and saved!\n\n{} @ {}",
                             saved.title, saved.company
@@ -121,7 +121,7 @@ impl FallibleWorker<WorkerState> for JdParserWorker {
                 }
                 Err(e) => {
                     error!(error = %e, "Failed to save job");
-                    send_reply(&state.telegram, &format!("Failed to save job: {e}")).await;
+                    send_reply(state.telegram.as_ref(), &format!("Failed to save job: {e}")).await;
                 }
             }
         }
@@ -131,7 +131,10 @@ impl FallibleWorker<WorkerState> for JdParserWorker {
 }
 
 /// Send a reply to the configured Telegram chat.
-async fn send_reply(telegram: &TelegramService, text: &str) {
+async fn send_reply(telegram: Option<&std::sync::Arc<TelegramService>>, text: &str) {
+    let Some(telegram) = telegram else {
+        return;
+    };
     if let Err(err) = telegram.send_primary_message(text).await {
         warn!(error = %err, "failed to send JD parser reply to Telegram");
     }
