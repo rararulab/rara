@@ -22,6 +22,7 @@ job-domain-application = { workspace = true }
 job-domain-interview = { workspace = true }
 job-domain-job-source = { workspace = true }
 job-domain-notify = { workspace = true }
+job-telegram = { workspace = true }
 job-workers = { workspace = true }
 job-domain-resume = { workspace = true }
 job-domain-scheduler = { workspace = true }

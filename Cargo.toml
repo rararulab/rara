@@ -53,6 +53,7 @@ members = [
     "crates/server",
     "crates/paths",
     "crates/jobspy-sys",
+    "crates/telegram",
     "crates/workers",
 ]
 
@@ -129,6 +130,7 @@ job-domain-notify = { version = "=0.0.17", path = "crates/domain/notify" }
 job-domain-resume = { version = "=0.0.17", path = "crates/domain/resume" }
 job-domain-scheduler = { version = "=0.0.17", path = "crates/domain/scheduler" }
 job-domain-shared = { version = "=0.0.17", path = "crates/domain/shared" }
+job-telegram = { version = "=0.0.17", path = "crates/telegram" }
 job-workers = { version = "=0.0.17", path = "crates/workers" }
 jobspy-sys = { version = "=0.0.17", path = "crates/jobspy-sys" }
 
