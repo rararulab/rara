@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use clap::{Args, Parser, Subcommand};
-use job_common_runtime::{GlobalRuntimeOptions, block_on_background, init_global_runtimes};
+use job_common_runtime::{GlobalRuntimeOptions, block_on_network_io, init_global_runtimes};
+use job_common_telemetry;
 use snafu::Whatever;
 
 mod build_info;
@@ -56,9 +57,10 @@ struct ServerArgs {}
 
 impl ServerArgs {
     fn run() -> Result<(), Whatever> {
+        let _guards = job_common_telemetry::logging::init_tracing_subscriber("job");
         let config = AppConfig::from_env();
         init_global_runtimes(&GlobalRuntimeOptions::default());
-        block_on_background(async {
+        block_on_network_io(async {
             let app = config.open().await?;
             app.run().await
         })

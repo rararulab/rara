@@ -31,9 +31,13 @@
 //! [`register_sender()`](NotificationService::register_sender); the actual
 //! delivery logic lives in each [`NotificationSender`] implementation.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 
 use jiff::Timestamp;
+use job_common_worker::{Notifiable, NotifyHandle};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
@@ -55,7 +59,8 @@ use crate::{
 /// Built-in implementations:
 /// - [`NoopSender`](crate::sender::NoopSender) — no-op, used for unconfigured
 ///   channels
-/// - [`TelegramSender`](crate::sender::TelegramSender) — delivers via teloxide
+/// - [`TelegramService`](job_domain_shared::telegram_service::TelegramService)
+///   — delivers via teloxide
 #[async_trait::async_trait]
 pub trait NotificationSender: Send + Sync {
     async fn send(&self, notification: &Notification) -> Result<(), NotifyError>;
@@ -69,8 +74,9 @@ pub trait NotificationSender: Send + Sync {
 /// - `senders` — channel-indexed map of delivery backends, injected by
 ///   `job-app` at startup
 pub struct NotificationService {
-    repo:    Arc<dyn NotificationRepository>,
-    senders: HashMap<NotificationChannel, Arc<dyn NotificationSender>>,
+    repo:           Arc<dyn NotificationRepository>,
+    senders:        HashMap<NotificationChannel, Arc<dyn NotificationSender>>,
+    notify_trigger: RwLock<Option<NotifyHandle>>,
 }
 
 impl NotificationService {
@@ -78,6 +84,17 @@ impl NotificationService {
         Self {
             repo,
             senders: HashMap::new(),
+            notify_trigger: RwLock::new(None),
+        }
+    }
+
+    /// Registers the runtime notify handle used to trigger immediate
+    /// notification processing when new items are queued.
+    pub fn set_notify_trigger(&self, handle: NotifyHandle) {
+        if let Ok(mut guard) = self.notify_trigger.write() {
+            *guard = Some(handle);
+        } else {
+            warn!("failed to acquire notification trigger write lock");
         }
     }
 
@@ -130,6 +147,7 @@ impl NotificationService {
 
         let saved = self.repo.save(&notification).await?;
         info!(id = %saved.id, channel = ?saved.channel, "notification queued");
+        self.trigger_processing_now();
         Ok(saved)
     }
 
@@ -213,7 +231,9 @@ impl NotificationService {
         updated.status = NotificationStatus::Retrying;
         updated.error_message = None;
 
-        self.repo.update(&updated).await
+        let saved = self.repo.update(&updated).await?;
+        self.trigger_processing_now();
+        Ok(saved)
     }
 
     /// List notifications matching the given filter.
@@ -232,6 +252,16 @@ impl NotificationService {
     /// Get notification statistics (counts by status).
     pub async fn get_statistics(&self) -> Result<NotificationStatistics, NotifyError> {
         self.repo.get_statistics().await
+    }
+
+    fn trigger_processing_now(&self) {
+        if let Ok(guard) = self.notify_trigger.read() {
+            if let Some(handle) = guard.as_ref() {
+                handle.notify();
+            }
+        } else {
+            warn!("failed to acquire notification trigger read lock");
+        }
     }
 }
 

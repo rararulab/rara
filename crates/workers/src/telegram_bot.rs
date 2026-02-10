@@ -15,14 +15,13 @@
 //! Telegram bot worker — receives messages and delegates JD parsing.
 
 use async_trait::async_trait;
-use job_common_worker::{FallibleWorker, WorkResult, WorkerContext};
+use job_common_worker::{FallibleWorker, Notifiable, WorkResult, WorkerContext};
+use job_domain_shared::telegram_service::TelegramService;
 use teloxide::{prelude::*, utils::command::BotCommands};
 use tokio::sync::mpsc;
 use tracing::warn;
 
-use crate::{
-    notification_processor::WorkerState, telegram_service::TelegramService, types::JdParseRequest,
-};
+use crate::{notification_processor::WorkerState, types::JdParseRequest};
 
 /// Long-running worker that starts the Telegram bot dispatcher.
 ///
@@ -45,7 +44,8 @@ impl FallibleWorker<WorkerState> for TelegramBotWorker {
         let state = ctx.state();
         let telegram = state.telegram.clone();
         let bot = telegram.bot();
-        let jd_tx = state.jd_parse_tx.clone();
+    let jd_tx = state.jd_parse_tx.clone();
+    let jd_notify = state.jd_parse_notify.clone();
 
         let handler = Update::filter_message()
             .branch(
@@ -60,7 +60,7 @@ impl FallibleWorker<WorkerState> for TelegramBotWorker {
         let _ = bot.delete_webhook().drop_pending_updates(true).await;
 
         let mut dispatcher = Dispatcher::builder(bot, handler)
-            .dependencies(dptree::deps![jd_tx, telegram])
+            .dependencies(dptree::deps![jd_tx, jd_notify, telegram])
             .enable_ctrlc_handler()
             .build();
 
@@ -102,6 +102,7 @@ async fn handle_message(
     bot: Bot,
     msg: Message,
     jd_tx: mpsc::Sender<JdParseRequest>,
+    jd_notify: std::sync::Arc<tokio::sync::Mutex<Option<job_common_worker::NotifyHandle>>>,
     telegram: std::sync::Arc<TelegramService>,
 ) -> ResponseResult<()> {
     if let Some(text) = msg.text() {
@@ -117,11 +118,16 @@ async fn handle_message(
         bot.send_message(msg.chat.id, "Received your JD, processing...")
             .await?;
 
-        let _ = jd_tx
+        let send_result = jd_tx
             .send(JdParseRequest {
                 text: text.to_string(),
             })
             .await;
+        if send_result.is_ok() {
+            if let Some(handle) = jd_notify.lock().await.as_ref() {
+                handle.notify();
+            }
+        }
     }
     Ok(())
 }

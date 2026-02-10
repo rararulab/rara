@@ -16,6 +16,7 @@
 
 use async_trait::async_trait;
 use job_common_worker::{FallibleWorker, WorkResult, WorkerContext};
+use job_domain_shared::telegram_service::TelegramService;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
@@ -143,7 +144,7 @@ impl FallibleWorker<WorkerState> for JdParserWorker {
 }
 
 /// Send a reply to the configured Telegram chat.
-async fn send_reply(telegram: &crate::telegram_service::TelegramService, text: &str) {
+async fn send_reply(telegram: &TelegramService, text: &str) {
     if let Err(err) = telegram.send_primary_message(text).await {
         warn!(error = %err, "failed to send JD parser reply to Telegram");
     }

@@ -47,12 +47,13 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use job_common_worker::{FallibleWorker, WorkError, WorkResult, WorkerContext};
+use job_common_worker::{FallibleWorker, NotifyHandle, WorkError, WorkResult, WorkerContext};
 use job_domain_notify::service::NotificationService;
+use job_domain_shared::telegram_service::TelegramService;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
-use crate::{telegram_service::TelegramService, types::JdParseRequest};
+use crate::types::JdParseRequest;
 
 /// Background worker that periodically processes pending notifications in
 /// batch.
@@ -74,6 +75,7 @@ pub struct WorkerState {
     pub ai_service:           Option<Arc<job_ai::service::AiService>>,
     pub job_repo:             Option<Arc<dyn job_domain_job_source::repository::JobRepository>>,
     pub jd_parse_tx:          mpsc::Sender<JdParseRequest>,
+    pub jd_parse_notify:      Arc<tokio::sync::Mutex<Option<NotifyHandle>>>,
     pub telegram:             Arc<TelegramService>,
 }
 

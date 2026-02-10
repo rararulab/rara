@@ -18,3 +18,4 @@
 
 pub mod convert;
 pub mod id;
+pub mod telegram_service;

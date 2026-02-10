@@ -31,6 +31,7 @@ ctrlc = "3.4.2"
 human-panic = "2.0.0"
 job-app = { workspace = true }
 job-common-runtime = { workspace = true }
+job-common-telemetry.workspace = true
 shadow-rs = "1.2.1"
 snafu.workspace = true
 yunara-store = { workspace = true }

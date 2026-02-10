@@ -254,7 +254,19 @@ build-docker:
 
 [group("🐳 Docker")]
 up:
-    docker compose up
+    docker compose up --build -d
+
+[doc("start frontend dev server (proxies /api to localhost:3000)")]
+[group("🔧 Development")]
+web:
+    cd web && bun run dev
+
+[doc("start backend + frontend dev servers together")]
+[group("🔧 Development")]
+dev:
+    just run &
+    sleep 2
+    just web
 
 # ========================================================================================
 # Development Tools

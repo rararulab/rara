@@ -17,7 +17,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use job_common_telemetry as telemetry;
+use job_common_worker::Notifiable;
+use job_domain_shared::telegram_service::TelegramService;
 use job_server::{
     grpc::{GrpcServerConfig, hello::HelloService, start_grpc_server},
     http::{RestServerConfig, health_routes, start_rest_server},
@@ -113,7 +114,6 @@ impl AppConfig {
     /// Initialize the database, create all domain services, and return a
     /// ready-to-run [`App`].
     pub async fn open(self) -> Result<App, Whatever> {
-        let _guards = telemetry::logging::init_tracing_subscriber("job");
         info!("Initializing job application");
 
         let telegram_cfg = match self.telegram.as_ref() {
@@ -122,6 +122,10 @@ impl AppConfig {
                 whatever!("Telegram is required: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
             }
         };
+        let telegram = Arc::new(TelegramService::new(
+            teloxide::Bot::new(&telegram_cfg.bot_token),
+            telegram_cfg.chat_id,
+        ));
 
         // Initialize database
         let db_store = yunara_store::db::DBStore::new(self.db_config.clone())
@@ -150,14 +154,9 @@ impl AppConfig {
         let mut notification_service =
             job_domain_notify::service::NotificationService::new(notification_repo);
         info!("Telegram sender configured");
-        let telegram_sender: Arc<dyn job_domain_notify::service::NotificationSender> =
-            Arc::new(job_domain_notify::sender::TelegramSender::new(
-                &telegram_cfg.bot_token,
-                telegram_cfg.chat_id,
-            ));
         notification_service.register_sender(
             job_domain_notify::types::NotificationChannel::Telegram,
-            telegram_sender,
+            telegram.clone(),
         );
         notification_service.register_sender(
             job_domain_notify::types::NotificationChannel::Email,
@@ -234,7 +233,9 @@ impl AppConfig {
                     .merge(job_domain_notify::routes::routes(notify_svc.clone()))
                     .merge(job_domain_scheduler::routes::routes(scheduler_svc.clone()))
                     .merge(job_domain_analytics::routes::routes(analytics_svc.clone()))
-                    .merge(job_domain_job_source::routes::routes(job_source_svc.clone()))
+                    .merge(job_domain_job_source::routes::routes(
+                        job_source_svc.clone(),
+                    ))
             });
 
         info!("Application initialized successfully");
@@ -245,6 +246,7 @@ impl AppConfig {
             cancellation_token: CancellationToken::new(),
             routes_fn,
             notification_service,
+            telegram,
             ai_service,
             job_repo,
         })
@@ -267,6 +269,8 @@ pub struct App {
     routes_fn:            Box<dyn Fn(axum::Router) -> axum::Router + Send + Sync>,
     /// Notification service needed by background workers
     notification_service: Arc<job_domain_notify::service::NotificationService>,
+    /// Telegram service shared by workers and notification sender
+    telegram:             Arc<TelegramService>,
     /// AI service for JD parsing (optional)
     ai_service:           Option<Arc<job_ai::service::AiService>>,
     /// Job repository for persisting parsed jobs
@@ -330,23 +334,15 @@ impl App {
         let grpc_handle = start_grpc_server(&self.config.grpc_config, &[Arc::new(HelloService)])
             .whatever_context("Failed to start gRPC server")?;
 
+        info!("starting rest server ...");
         let http_handle = start_rest_server(self.config.http_config.clone(), vec![self.routes_fn])
             .await
             .whatever_context("Failed to start REST server")?;
 
         // Set up mpsc channel for JD parse requests
         let (jd_tx, jd_rx) = tokio::sync::mpsc::channel(100);
-
-        let telegram_cfg = match self.config.telegram.as_ref() {
-            Some(cfg) => cfg,
-            None => {
-                whatever!("Telegram is required: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
-            }
-        };
-        let telegram = std::sync::Arc::new(job_workers::telegram_service::TelegramService::new(
-            teloxide::Bot::new(&telegram_cfg.bot_token),
-            telegram_cfg.chat_id,
-        ));
+        let jd_parse_notify = Arc::new(tokio::sync::Mutex::new(None));
+        let notification_service = self.notification_service.clone();
 
         // Set up background worker manager
         let worker_state = job_workers::notification_processor::WorkerState {
@@ -354,18 +350,29 @@ impl App {
             ai_service:           self.ai_service,
             job_repo:             Some(self.job_repo),
             jd_parse_tx:          jd_tx,
-            telegram:             telegram.clone(),
+            jd_parse_notify:      jd_parse_notify.clone(),
+            telegram:             self.telegram,
         };
 
         let mut worker_manager = job_common_worker::Manager::with_state(worker_state);
 
-        let _notification_handle = worker_manager
+        let notification_handle = worker_manager
             .fallible_worker(
                 job_workers::notification_processor::NotificationProcessorWorker::new(50),
             )
             .name("notification-processor")
-            .interval(std::time::Duration::from_secs(30))
+            .on_notify()
             .spawn();
+        notification_service.set_notify_trigger(notification_handle.clone());
+        notification_handle.notify();
+
+        // JD parser worker (notify trigger, drains mpsc channel)
+        let jd_parser_handle = worker_manager
+            .fallible_worker(job_workers::jd_parser::JdParserWorker::new(jd_rx))
+            .name("jd-parser")
+            .on_notify()
+            .spawn();
+        *jd_parse_notify.lock().await = Some(jd_parser_handle);
 
         // Telegram bot worker (long-running, Once trigger)
         let _telegram_handle = worker_manager
@@ -373,16 +380,6 @@ impl App {
             .name("telegram-bot")
             .once()
             .spawn();
-        info!("Telegram bot worker started");
-
-        // JD parser worker (interval 2s, drains mpsc channel)
-        let _jd_parser_handle = worker_manager
-            .fallible_worker(job_workers::jd_parser::JdParserWorker::new(jd_rx))
-            .name("jd-parser")
-            .interval(std::time::Duration::from_secs(2))
-            .spawn();
-
-        info!("Background workers started");
 
         info!("Application started successfully");
 

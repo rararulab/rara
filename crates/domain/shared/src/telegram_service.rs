@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Telegram bot service shared by workers.
+//! Shared Telegram bot service.
 
 use teloxide::{RequestError, prelude::*, requests::Requester, types::ChatId};
+use tracing::instrument;
 
-/// Strongly-typed Telegram service for worker runtime.
+/// Strongly-typed Telegram service shared across crates.
 ///
 /// Holds the bot and the configured primary chat id used by the backend.
 #[derive(Clone)]
@@ -39,10 +40,17 @@ impl TelegramService {
 
     pub fn is_primary_chat(&self, chat_id: ChatId) -> bool { chat_id == self.primary_chat_id }
 
+    #[instrument(
+        level = "info",
+        skip(self, text),
+        fields(chat_id = self.primary_chat_id.0, text_len = text.len()),
+        err
+    )]
     pub async fn send_primary_message(&self, text: &str) -> Result<Message, RequestError> {
         self.send_message(self.primary_chat_id, text).await
     }
 
+    #[instrument(level = "info", skip(self, text), fields(chat_id = chat_id.0, text_len = text.len()), err)]
     pub async fn send_message(&self, chat_id: ChatId, text: &str) -> Result<Message, RequestError> {
         self.bot.send_message(chat_id, text).await
     }

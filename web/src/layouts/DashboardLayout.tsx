@@ -15,6 +15,7 @@
  */
 
 import { NavLink, Outlet } from 'react-router';
+import { useQuery } from '@tanstack/react-query';
 import {
   LayoutDashboard,
   Briefcase,
@@ -36,6 +37,55 @@ const navItems = [
   { to: '/notifications', icon: Bell, label: 'Notifications' },
   { to: '/scheduler', icon: Clock, label: 'Scheduler' },
 ];
+
+function ServerStatus() {
+  const { status } = useQuery({
+    queryKey: ['health'],
+    queryFn: async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5_000);
+      try {
+        const res = await fetch('/api/v1/health', { signal: controller.signal });
+        if (!res.ok) {
+          console.warn('[heartbeat] server unhealthy, status:', res.status);
+          throw new Error('unhealthy');
+        }
+        console.debug('[heartbeat] server online');
+        return true;
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          console.warn('[heartbeat] timeout after 5s');
+        } else if (err instanceof TypeError) {
+          console.warn('[heartbeat] connection refused');
+        } else {
+          console.warn('[heartbeat] error:', err);
+        }
+        throw err;
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    refetchInterval: 10_000,
+    retry: false,
+  });
+
+  const isOnline = status === 'success';
+  const isChecking = status === 'pending';
+
+  return (
+    <div className="flex items-center gap-2 px-4 py-3 text-xs text-muted-foreground">
+      <span
+        className={cn(
+          'h-2 w-2 rounded-full',
+          isChecking && 'bg-yellow-400 animate-pulse',
+          isOnline && 'bg-green-500',
+          !isOnline && !isChecking && 'bg-red-500'
+        )}
+      />
+      <span>{isChecking ? 'Connecting...' : isOnline ? 'Server online' : 'Server offline'}</span>
+    </div>
+  );
+}
 
 export default function DashboardLayout() {
   return (
@@ -66,6 +116,8 @@ export default function DashboardLayout() {
             </NavLink>
           ))}
         </nav>
+        <Separator />
+        <ServerStatus />
       </aside>
 
       {/* Main content */}

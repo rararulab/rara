@@ -24,6 +24,7 @@ job-domain-job-source = { workspace = true }
 job-domain-notify = { workspace = true }
 job-domain-resume = { workspace = true }
 job-domain-scheduler = { workspace = true }
+job-domain-shared = { workspace = true }
 job-server = { workspace = true }
 job-workers = { workspace = true }
 smart-default = { workspace = true }
