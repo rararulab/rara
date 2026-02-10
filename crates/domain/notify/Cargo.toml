@@ -29,6 +29,8 @@ tracing.workspace = true
 uuid = { workspace = true }
 
 [dev-dependencies]
+job-base.workspace = true
+job-common-telemetry.workspace = true
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["postgres"] }
 tokio = { workspace = true }

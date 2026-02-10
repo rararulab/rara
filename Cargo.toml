@@ -72,9 +72,9 @@ jiff = { version = "^0.2", features = ["serde"] }
 lazy_static = "^1.4"
 once_cell = "^1.20"
 prometheus = "^0.14"
-rig-core = "0.30"
 prost = "^0.14"
 protobuf = "^3.7"
+rig-core = "0.30"
 serde = { version = "^1.0", features = ["derive"] }
 serde_json = "1.0.143"
 smart-default = "0.7"
@@ -123,12 +123,12 @@ yunara-store = { version = "0.1.0", path = "crates/common/yunara-store" }
 job-ai = { version = "=0.0.17", path = "crates/ai" }
 job-domain-analytics = { version = "=0.0.17", path = "crates/domain/analytics" }
 job-domain-application = { version = "=0.0.17", path = "crates/domain/application" }
-job-domain-shared = { version = "=0.0.17", path = "crates/domain/shared" }
 job-domain-interview = { version = "=0.0.17", path = "crates/domain/interview" }
 job-domain-job-source = { version = "=0.0.17", path = "crates/domain/job-source" }
 job-domain-notify = { version = "=0.0.17", path = "crates/domain/notify" }
 job-domain-resume = { version = "=0.0.17", path = "crates/domain/resume" }
 job-domain-scheduler = { version = "=0.0.17", path = "crates/domain/scheduler" }
+job-domain-shared = { version = "=0.0.17", path = "crates/domain/shared" }
 job-workers = { version = "=0.0.17", path = "crates/workers" }
 jobspy-sys = { version = "=0.0.17", path = "crates/jobspy-sys" }
 

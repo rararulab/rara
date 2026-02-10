@@ -14,6 +14,8 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     git \
     build-essential \
     pkg-config \
+    protobuf-compiler \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Rust toolchain

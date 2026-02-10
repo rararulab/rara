@@ -15,9 +15,7 @@
 //! Notification sender implementations.
 
 use async_trait::async_trait;
-use teloxide::prelude::*;
-use teloxide::requests::Requester;
-use teloxide::types::ChatId;
+use teloxide::{prelude::*, requests::Requester, types::ChatId};
 use tracing::info;
 
 use crate::{error::NotifyError, service::NotificationSender, types::Notification};
@@ -46,7 +44,7 @@ pub struct TelegramSender {
 }
 
 impl TelegramSender {
-    pub fn new(bot_token: &str, chat_id: i64) -> Self {
+    pub fn new<S: Into<String>>(bot_token: S, chat_id: i64) -> Self {
         Self {
             bot:     Bot::new(bot_token),
             chat_id: ChatId(chat_id),
@@ -76,4 +74,33 @@ fn format_notification(notification: &Notification) -> String {
     }
     msg.push_str(&notification.body);
     msg
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn telegram_sender() {
+        job_common_telemetry::logging::init_default_ut_logging();
+
+        let (telegram, chat_id) = match (
+            job_base::env::var("TELEGRAM_BOT_TOKEN"),
+            job_base::env::var("TELEGRAM_CHAT_ID"),
+        ) {
+            (Ok(token), Ok(chat_id_str)) => {
+                let chat_id = chat_id_str
+                    .expect("should exists")
+                    .parse()
+                    .expect("TELEGRAM_CHAT_ID must be an integer");
+                let token = token.expect("should exists");
+                (TelegramSender::new(token, chat_id), ChatId(chat_id))
+            }
+            _ => panic!("should succeed"),
+        };
+
+        let v = telegram.bot.send_dice(chat_id);
+        let m = v.send().await.unwrap();
+        println!("{:?}", m)
+    }
 }
