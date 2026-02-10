@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod workers;
-
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -178,7 +176,7 @@ impl AppConfig {
 
         // AI service (optional, needs OPENAI_API_KEY)
         let ai_service = self.openai.as_ref().map(|cfg| {
-            Arc::new(job_domain_ai::service::AiService::new(
+            Arc::new(job_ai::service::AiService::new(
                 &cfg.api_key, cfg.model.clone(), None,
             ))
         });
@@ -319,7 +317,7 @@ impl App {
             .whatever_context("Failed to start REST server")?;
 
         // Set up background worker manager
-        let worker_state = crate::workers::notification_processor::WorkerState {
+        let worker_state = job_workers::notification_processor::WorkerState {
             notification_service: self.notification_service,
         };
 
@@ -327,7 +325,7 @@ impl App {
 
         let _notification_handle = worker_manager
             .fallible_worker(
-                crate::workers::notification_processor::NotificationProcessorWorker::new(50),
+                job_workers::notification_processor::NotificationProcessorWorker::new(50),
             )
             .name("notification-processor")
             .interval(std::time::Duration::from_secs(30))

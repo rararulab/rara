@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Background worker definitions for the application.
+//! Background worker implementations for job automation.
+//!
+//! This crate contains concrete worker implementations that orchestrate
+//! domain services for background processing tasks.
 
 pub mod notification_processor;

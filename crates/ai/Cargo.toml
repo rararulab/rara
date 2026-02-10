@@ -1,0 +1,19 @@
+[package]
+name = "job-ai"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "AI agents powered by rig-core for job automation tasks"
+
+[dependencies]
+rig-core.workspace = true
+snafu.workspace = true
+
+[lints]
+workspace = true
