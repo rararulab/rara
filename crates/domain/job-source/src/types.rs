@@ -222,9 +222,17 @@ impl From<jobspy_sys::types::ScrapedJob> for RawJob {
     }
 }
 
-/// Parse a date string like "2026-01-15" into a [`jiff::Timestamp`] at
-/// midnight UTC.
+/// Parse a date or datetime string into a [`jiff::Timestamp`].
+///
+/// Handles both ISO 8601 datetime (`"2026-01-15T00:00:00.000Z"`, as
+/// produced by pandas `to_json(date_format="iso")`) and plain date
+/// strings (`"2026-01-15"`).
 fn parse_date_to_timestamp(date_str: &str) -> Option<jiff::Timestamp> {
+    // Try full ISO 8601 datetime first (e.g. "2026-01-15T00:00:00.000Z").
+    if let Ok(ts) = date_str.parse::<jiff::Timestamp>() {
+        return Some(ts);
+    }
+    // Fall back to date-only (e.g. "2026-01-15") → midnight UTC.
     let date: jiff::civil::Date = date_str.parse().ok()?;
     let zdt = date.at(0, 0, 0, 0).in_tz("UTC").ok()?;
     Some(zdt.timestamp())
@@ -303,5 +311,36 @@ impl From<NormalizedJob> for Job {
             created_at:      now,
             updated_at:      now,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_date_to_timestamp_plain_date() {
+        let ts = parse_date_to_timestamp("2026-01-15").expect("should parse date-only");
+        assert_eq!(ts.to_string(), "2026-01-15T00:00:00Z");
+    }
+
+    #[test]
+    fn parse_date_to_timestamp_iso_datetime() {
+        let ts =
+            parse_date_to_timestamp("2026-01-15T00:00:00.000Z").expect("should parse ISO datetime");
+        assert_eq!(ts.to_string(), "2026-01-15T00:00:00Z");
+    }
+
+    #[test]
+    fn parse_date_to_timestamp_iso_datetime_with_offset() {
+        let ts =
+            parse_date_to_timestamp("2026-01-15T08:30:00+08:00").expect("should parse with offset");
+        assert_eq!(ts.to_string(), "2026-01-15T00:30:00Z");
+    }
+
+    #[test]
+    fn parse_date_to_timestamp_invalid() {
+        assert!(parse_date_to_timestamp("not-a-date").is_none());
+        assert!(parse_date_to_timestamp("").is_none());
     }
 }
