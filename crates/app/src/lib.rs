@@ -20,7 +20,13 @@ use std::{
     time::Duration,
 };
 
+use async_trait::async_trait;
+use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
+use job_api::pb::telegrambot::v1::{
+    SendMessageRequest, telegram_bot_command_service_client::TelegramBotCommandServiceClient,
+};
 use job_common_worker::Notifiable;
+use job_domain_notify::{error::NotifyError, service::NotificationSender, types::Notification};
 use job_domain_shared::telegram_service::TelegramService;
 use job_server::{
     dedup_layer::{DedupLayer, DedupLayerConfig},
@@ -31,7 +37,9 @@ use smart_default::SmartDefault;
 use snafu::{ResultExt, Whatever, whatever};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
+use tonic::transport::Channel;
 use tracing::{error, info};
+use uuid::Uuid;
 use yunara_store::config::DatabaseConfig;
 
 // ---------------------------------------------------------------------------
@@ -76,6 +84,10 @@ pub struct AppConfig {
     pub enable_graceful_shutdown: bool,
     /// Telegram configuration (optional)
     pub telegram:                 Option<TelegramConfig>,
+    /// telegram-bot gRPC target (optional). If set, main service sends
+    /// Telegram notifications via bot command service instead of local
+    /// teloxide.
+    pub telegram_bot_grpc_target: Option<String>,
     /// OpenAI configuration (optional)
     pub openai:                   Option<OpenAiConfig>,
     /// MinIO / S3 object store configuration (optional)
@@ -145,6 +157,7 @@ impl AppConfig {
         Self {
             db_config,
             telegram,
+            telegram_bot_grpc_target: std::env::var("TELEGRAM_BOT_GRPC_TARGET").ok(),
             openai,
             minio,
             crawl4ai_url,
@@ -158,16 +171,12 @@ impl AppConfig {
     pub async fn open(self) -> Result<App, Whatever> {
         info!("Initializing job application");
 
-        let telegram_cfg = match self.telegram.as_ref() {
-            Some(cfg) => cfg,
-            None => {
-                whatever!("Telegram is required: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
-            }
-        };
-        let telegram = Arc::new(TelegramService::new(
-            teloxide::Bot::new(&telegram_cfg.bot_token),
-            telegram_cfg.chat_id,
-        ));
+        let telegram = self.telegram.as_ref().map(|cfg| {
+            Arc::new(TelegramService::new(
+                teloxide::Bot::new(&cfg.bot_token),
+                cfg.chat_id,
+            ))
+        });
 
         // Initialize database
         let db_store = yunara_store::db::DBStore::new(self.db_config.clone())
@@ -197,11 +206,25 @@ impl AppConfig {
         // Notification service + senders
         let mut notification_service =
             job_domain_notify::service::NotificationService::new(notification_repo);
-        info!("Telegram sender configured");
-        notification_service.register_sender(
-            job_domain_notify::types::NotificationChannel::Telegram,
-            telegram.clone(),
-        );
+        if let Some(target) = self.telegram_bot_grpc_target.clone() {
+            info!(target, "telegram sender configured via telegram-bot gRPC");
+            notification_service.register_sender(
+                job_domain_notify::types::NotificationChannel::Telegram,
+                Arc::new(TelegramBotGrpcSender::new(target)),
+            );
+        } else if let Some(local_telegram) = telegram.clone() {
+            info!("telegram sender configured via local teloxide");
+            notification_service.register_sender(
+                job_domain_notify::types::NotificationChannel::Telegram,
+                local_telegram,
+            );
+        } else {
+            info!("telegram sender not configured, falling back to noop");
+            notification_service.register_sender(
+                job_domain_notify::types::NotificationChannel::Telegram,
+                Arc::new(job_domain_notify::sender::NoopSender),
+            );
+        }
         notification_service.register_sender(
             job_domain_notify::types::NotificationChannel::Email,
             Arc::new(job_domain_notify::sender::NoopSender),
@@ -296,9 +319,15 @@ impl AppConfig {
         let saved_job_svc = saved_job_service.clone();
         let job_source_svc = job_source_service.clone();
 
+        let ai_svc_for_bot = ai_service.clone();
+        let job_repo_for_bot = job_repo.clone();
         let routes_fn: Box<dyn Fn(axum::Router) -> axum::Router + Send + Sync> =
             Box::new(move |router: axum::Router| {
                 let router = health_routes(router);
+                let bot_router = bot_internal_routes(BotInternalState {
+                    ai_service: ai_svc_for_bot.clone(),
+                    job_repo:   job_repo_for_bot.clone(),
+                });
                 router
                     .merge(job_domain_resume::routes::routes(resume_svc.clone()))
                     .merge(job_domain_application::routes::routes(app_svc.clone()))
@@ -311,6 +340,7 @@ impl AppConfig {
                         job_domain_job_source::routes::routes(job_source_svc.clone())
                             .layer(DedupLayer::new(DedupLayerConfig::default())),
                     )
+                    .merge(bot_router)
             });
 
         info!("Application initialized successfully");
@@ -324,7 +354,6 @@ impl AppConfig {
             telegram,
             ai_service,
             job_repo,
-            job_source_service,
             saved_job_service,
             object_store,
             crawl_client,
@@ -348,14 +377,12 @@ pub struct App {
     routes_fn:            Box<dyn Fn(axum::Router) -> axum::Router + Send + Sync>,
     /// Notification service needed by background workers
     notification_service: Arc<job_domain_notify::service::NotificationService>,
-    /// Telegram service shared by workers and notification sender
-    telegram:             Arc<TelegramService>,
+    /// Telegram service (only available in combined mode with local bot token)
+    telegram:             Option<Arc<TelegramService>>,
     /// AI service for JD parsing and analysis
     ai_service:           Arc<job_ai::service::AiService>,
     /// Job repository for persisting parsed jobs
     job_repo:             Arc<dyn job_domain_job_source::repository::JobRepository>,
-    /// Job source service for discovery (used by Telegram /search command)
-    job_source_service:   Arc<job_domain_job_source::service::JobSourceService>,
     /// Saved job service for workers
     saved_job_service: Arc<
         job_domain_saved_job::service::SavedJobService<
@@ -363,9 +390,9 @@ pub struct App {
         >,
     >,
     /// Object store for S3 operations
-    object_store:  Arc<job_object_store::ObjectStore>,
+    object_store:         Arc<job_object_store::ObjectStore>,
     /// Crawl4AI client for CrawlWorker
-    crawl_client:  job_domain_saved_job::crawl4ai::Crawl4AiClient,
+    crawl_client:         job_domain_saved_job::crawl4ai::Crawl4AiClient,
 }
 
 /// Handle for controlling a running application.
@@ -443,18 +470,7 @@ impl App {
             .await
             .whatever_context("REST server failed to report started")?;
 
-        // Set up mpsc channel for JD parse requests
-        let (jd_tx, jd_rx) = tokio::sync::mpsc::channel(100);
-        let jd_parse_notify = Arc::new(tokio::sync::Mutex::new(None));
         let notification_service = self.notification_service.clone();
-
-        // // Start Telegram bot as a standalone service (same level as HTTP/gRPC)
-        // let telegram_handle = job_workers::telegram_bot::start_telegram_bot(
-        //     self.telegram.clone(),
-        //     jd_tx,
-        //     jd_parse_notify.clone(),
-        //     self.job_source_service.clone(),
-        // );
 
         // Keep a clone for wiring notify trigger after worker_state takes ownership
         let saved_job_svc_for_notify = self.saved_job_service.clone();
@@ -502,14 +518,6 @@ impl App {
             .spawn();
         notification_service.set_notify_trigger(notification_handle.clone());
         notification_handle.notify();
-
-        // JD parser worker (notify trigger, drains mpsc channel)
-        let jd_parser_handle = worker_manager
-            .fallible_worker(job_workers::jd_parser::JdParserWorker::new(jd_rx))
-            .name("jd-parser")
-            .on_notify()
-            .spawn();
-        *jd_parse_notify.lock().await = Some(jd_parser_handle);
 
         // Saved job analyze worker (notify trigger, processes Crawled jobs)
         let analyze_handle = worker_manager
@@ -579,7 +587,6 @@ impl App {
             info!("Shutting down servers");
             grpc_handle.shutdown();
             http_handle.shutdown();
-            // telegram_handle.shutdown();
 
             info!("Application shutdown complete");
         });
@@ -618,6 +625,163 @@ async fn shutdown_signal(shutdown_rx: oneshot::Receiver<()>) {
         () = terminate => { info!("Received terminate signal"); },
         _ = shutdown_rx => { info!("Received shutdown signal"); },
     }
+}
+
+#[derive(Clone)]
+struct TelegramBotGrpcSender {
+    target: String,
+}
+
+impl TelegramBotGrpcSender {
+    fn new(target: String) -> Self { Self { target } }
+}
+
+#[async_trait]
+impl NotificationSender for TelegramBotGrpcSender {
+    async fn send(&self, notification: &Notification) -> Result<(), NotifyError> {
+        let endpoint = normalize_grpc_endpoint(&self.target);
+        let channel = Channel::from_shared(endpoint.clone())
+            .map_err(|e| NotifyError::SendFailed {
+                channel: "telegram".to_owned(),
+                message: format!("invalid telegram-bot grpc target {endpoint}: {e}"),
+            })?
+            .connect()
+            .await
+            .map_err(|e| NotifyError::SendFailed {
+                channel: "telegram".to_owned(),
+                message: format!("failed to connect telegram-bot grpc service: {e}"),
+            })?;
+
+        let mut client = TelegramBotCommandServiceClient::new(channel);
+        let chat_id = notification.recipient.parse::<i64>().unwrap_or_default();
+        client
+            .send_message(SendMessageRequest {
+                chat_id,
+                text: format_notification(notification),
+            })
+            .await
+            .map_err(|e| NotifyError::SendFailed {
+                channel: "telegram".to_owned(),
+                message: format!("telegram-bot grpc send failed: {e}"),
+            })?;
+
+        Ok(())
+    }
+}
+
+fn normalize_grpc_endpoint(target: &str) -> String {
+    if target.starts_with("http://") || target.starts_with("https://") {
+        target.to_owned()
+    } else {
+        format!("http://{target}")
+    }
+}
+
+fn format_notification(notification: &Notification) -> String {
+    let mut msg = String::new();
+    if let Some(subject) = &notification.subject {
+        msg.push_str(&format!("*{}*\n\n", subject));
+    }
+    msg.push_str(&notification.body);
+    msg
+}
+
+#[derive(Clone)]
+struct BotInternalState {
+    ai_service: Arc<job_ai::service::AiService>,
+    job_repo:   Arc<dyn job_domain_job_source::repository::JobRepository>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct BotJdParseRequest {
+    text: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ParsedJob {
+    title:           String,
+    company:         String,
+    location:        Option<String>,
+    description:     Option<String>,
+    url:             Option<String>,
+    salary_min:      Option<i32>,
+    salary_max:      Option<i32>,
+    salary_currency: Option<String>,
+    tags:            Option<Vec<String>>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct BotJdParseResponse {
+    id:      Uuid,
+    title:   String,
+    company: String,
+}
+
+fn bot_internal_routes(state: BotInternalState) -> Router {
+    Router::new()
+        .route("/api/v1/internal/bot/jd-parse", post(parse_jd_from_bot))
+        .with_state(state)
+}
+
+async fn parse_jd_from_bot(
+    State(state): State<BotInternalState>,
+    Json(req): Json<BotJdParseRequest>,
+) -> Result<(StatusCode, Json<BotJdParseResponse>), (StatusCode, String)> {
+    if req.text.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "text must not be empty".to_owned()));
+    }
+
+    let json_str = state
+        .ai_service
+        .jd_parser()
+        .parse(&req.text)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("failed to parse jd via ai service: {e}"),
+            )
+        })?;
+
+    let parsed: ParsedJob = serde_json::from_str(&json_str).map_err(|e| {
+        (
+            StatusCode::BAD_GATEWAY,
+            format!("failed to deserialize ai response: {e}"),
+        )
+    })?;
+
+    let job = job_domain_job_source::types::NormalizedJob {
+        id:              Uuid::new_v4(),
+        source_job_id:   Uuid::new_v4().to_string(),
+        source_name:     "telegram".to_owned(),
+        title:           parsed.title,
+        company:         parsed.company,
+        location:        parsed.location,
+        description:     parsed.description,
+        url:             parsed.url,
+        salary_min:      parsed.salary_min,
+        salary_max:      parsed.salary_max,
+        salary_currency: parsed.salary_currency,
+        tags:            parsed.tags.unwrap_or_default(),
+        raw_data:        serde_json::to_value(&req.text).ok(),
+        posted_at:       None,
+    };
+
+    let saved = state.job_repo.save(&job).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to save parsed jd job: {e}"),
+        )
+    })?;
+
+    Ok((
+        StatusCode::OK,
+        Json(BotJdParseResponse {
+            id:      saved.id,
+            title:   saved.title,
+            company: saved.company,
+        }),
+    ))
 }
 
 #[cfg(test)]

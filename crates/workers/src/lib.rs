@@ -22,5 +22,4 @@ pub mod notification_processor;
 pub mod saved_job_analyze;
 pub mod saved_job_crawl;
 pub mod saved_job_gc;
-pub mod telegram_bot;
 pub mod types;

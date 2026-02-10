@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2026 Crrow
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,21 +12,155 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Telegram bot worker — receives messages, delegates JD parsing, and
-//! handles `/search` commands for job discovery.
+mod grpc_command;
+mod http_client;
 
 use std::sync::Arc;
 
-use job_common_worker::{Notifiable, NotifyHandle};
-use job_domain_job_source::service::JobSourceService;
+use grpc_command::TelegramBotCommandGrpcService;
+use http_client::{DiscoveryJobResponse, MainServiceHttpClient};
 use job_domain_shared::telegram_service::TelegramService;
-use job_server::ServiceHandler;
+use job_server::{
+    ServiceHandler,
+    grpc::{GrpcServerConfig, start_grpc_server},
+};
+use smart_default::SmartDefault;
+use snafu::{ResultExt, Whatever, whatever};
 use teloxide::{prelude::*, types::CallbackQuery, utils::command::BotCommands};
-use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{info, warn};
 
-use crate::types::JdParseRequest;
+#[derive(Debug, Clone)]
+pub struct TelegramConfig {
+    pub bot_token: String,
+    pub chat_id:   i64,
+}
+
+#[derive(Debug, Clone, SmartDefault)]
+pub struct BotConfig {
+    pub telegram:               Option<TelegramConfig>,
+    #[default(_code = "\"http://127.0.0.1:3000\".to_owned()")]
+    pub main_service_http_base: String,
+    pub grpc_config:            GrpcServerConfig,
+}
+
+impl BotConfig {
+    pub fn from_env() -> Self {
+        let telegram = match (
+            std::env::var("TELEGRAM_BOT_TOKEN"),
+            std::env::var("TELEGRAM_CHAT_ID"),
+        ) {
+            (Ok(token), Ok(chat_id)) => {
+                let chat_id: i64 = chat_id
+                    .parse()
+                    .expect("TELEGRAM_CHAT_ID must be an integer");
+                Some(TelegramConfig {
+                    bot_token: token,
+                    chat_id,
+                })
+            }
+            _ => None,
+        };
+
+        let main_service_http_base = std::env::var("MAIN_SERVICE_HTTP_BASE")
+            .unwrap_or_else(|_| "http://127.0.0.1:3000".to_owned());
+
+        let grpc_bind = std::env::var("TELEGRAM_BOT_GRPC_BIND")
+            .unwrap_or_else(|_| "127.0.0.1:50061".to_owned());
+
+        let grpc_config = GrpcServerConfig {
+            bind_address: grpc_bind.clone(),
+            server_address: grpc_bind,
+            ..GrpcServerConfig::default()
+        };
+
+        Self {
+            telegram,
+            main_service_http_base,
+            grpc_config,
+        }
+    }
+
+    pub async fn open(self) -> Result<BotApp, Whatever> {
+        let telegram_cfg = match self.telegram.as_ref() {
+            Some(cfg) => cfg,
+            None => {
+                whatever!("Telegram is required: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
+            }
+        };
+
+        let telegram = Arc::new(TelegramService::new(
+            teloxide::Bot::new(&telegram_cfg.bot_token),
+            telegram_cfg.chat_id,
+        ));
+
+        let main_http = Arc::new(MainServiceHttpClient::new(
+            self.main_service_http_base.clone(),
+        ));
+
+        Ok(BotApp {
+            config: self,
+            telegram,
+            main_http,
+            cancellation_token: CancellationToken::new(),
+        })
+    }
+}
+
+pub struct BotApp {
+    config:             BotConfig,
+    telegram:           Arc<TelegramService>,
+    main_http:          Arc<MainServiceHttpClient>,
+    cancellation_token: CancellationToken,
+}
+
+impl BotApp {
+    pub async fn run(self) -> Result<(), Whatever> {
+        let mut grpc_handle = start_grpc_server(
+            &self.config.grpc_config,
+            &[Arc::new(TelegramBotCommandGrpcService::new(
+                self.telegram.clone(),
+            ))],
+        )
+        .whatever_context("failed to start telegram-bot gRPC command service")?;
+        grpc_handle
+            .wait_for_start()
+            .await
+            .whatever_context("telegram-bot gRPC service failed to start")?;
+
+        let mut telegram_handle = start_telegram_dispatcher(self.telegram, self.main_http);
+        telegram_handle
+            .wait_for_start()
+            .await
+            .whatever_context("telegram-bot dispatcher failed to start")?;
+
+        let cancel = self.cancellation_token.clone();
+        tokio::spawn(async move {
+            tokio::signal::ctrl_c()
+                .await
+                .expect("failed to install Ctrl+C handler");
+            cancel.cancel();
+        });
+
+        self.cancellation_token.cancelled().await;
+        info!("telegram-bot shutdown requested");
+
+        grpc_handle.shutdown();
+        telegram_handle.shutdown();
+
+        grpc_handle
+            .wait_for_stop()
+            .await
+            .whatever_context("failed to stop telegram-bot grpc service")?;
+        telegram_handle
+            .wait_for_stop()
+            .await
+            .whatever_context("failed to stop telegram dispatcher")?;
+
+        Ok(())
+    }
+}
 
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase", description = "Available commands:")]
@@ -39,18 +173,12 @@ enum Command {
     Search(String),
 }
 
-/// Start the Telegram bot as a standalone service.
-///
-/// Returns a [`ServiceHandler`] for lifecycle management (shutdown, wait).
-/// The bot runs a teloxide long-polling dispatcher in a spawned task.
-pub fn start_telegram_bot(
+fn start_telegram_dispatcher(
     telegram: Arc<TelegramService>,
-    jd_tx: mpsc::Sender<JdParseRequest>,
-    jd_notify: Arc<tokio::sync::Mutex<Option<NotifyHandle>>>,
-    job_source_service: Arc<JobSourceService>,
+    main_http: Arc<MainServiceHttpClient>,
 ) -> ServiceHandler {
     let cancel = CancellationToken::new();
-    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (started_tx, started_rx) = oneshot::channel();
 
     let cancel_clone = cancel.clone();
     let join_handle = tokio::spawn(async move {
@@ -68,24 +196,14 @@ pub fn start_telegram_bot(
             )
             .branch(Update::filter_callback_query().endpoint(handle_callback_query));
 
-        // Drop any pending updates accumulated while the bot was offline,
-        // so we don't replay stale messages on every restart.
         let _ = bot.delete_webhook().drop_pending_updates(true).await;
 
         let mut dispatcher = Dispatcher::builder(bot, handler)
-            .dependencies(dptree::deps![
-                jd_tx,
-                jd_notify,
-                telegram,
-                job_source_service
-            ])
+            .dependencies(dptree::deps![telegram, main_http])
             .build();
 
-        // Signal that the bot is ready
         let _ = started_tx.send(());
 
-        // Graceful shutdown: when the cancellation token fires,
-        // shut down the teloxide dispatcher.
         let shutdown_token = dispatcher.shutdown_token();
         tokio::spawn(async move {
             cancel_clone.cancelled().await;
@@ -105,15 +223,14 @@ async fn handle_command(
     msg: Message,
     cmd: Command,
     telegram: Arc<TelegramService>,
-    job_source_service: Arc<JobSourceService>,
+    main_http: Arc<MainServiceHttpClient>,
 ) -> ResponseResult<()> {
     match cmd {
         Command::Start => {
             bot.send_message(
                 msg.chat.id,
-                "Welcome! I'm the Job Assistant bot.\n\u{2022} Send me a JD text and I'll parse \
-                 it\n\u{2022} Use /search <keywords> [@ location] to find jobs\n\u{2022} Use \
-                 /help to see all commands",
+                "Welcome! I'm the Job Assistant bot.\n• Send me a JD text and I'll parse it\n• \
+                 Use /search <keywords> [@ location] to find jobs\n• Use /help to see all commands",
             )
             .await?;
         }
@@ -122,22 +239,18 @@ async fn handle_command(
                 .await?;
         }
         Command::Search(args) => {
-            handle_search(bot, msg, args, telegram, job_source_service).await?;
+            handle_search(bot, msg, args, telegram, main_http).await?;
         }
     }
     Ok(())
 }
 
-/// Parse `/search <keywords> [@ location]` and call JobSourceService.
-///
-/// Format: `/search rust engineer @ beijing`
-/// Or simply: `/search rust engineer` (no location)
 async fn handle_search(
     bot: Bot,
     msg: Message,
     args: String,
     telegram: Arc<TelegramService>,
-    job_source_service: Arc<JobSourceService>,
+    main_http: Arc<MainServiceHttpClient>,
 ) -> ResponseResult<()> {
     if !telegram.is_primary_chat(msg.chat.id) {
         bot.send_message(msg.chat.id, "Unauthorized chat.").await?;
@@ -154,7 +267,6 @@ async fn handle_search(
         return Ok(());
     }
 
-    // Split on " @ " to separate keywords from location
     let (keywords_str, location) = if let Some(idx) = args.find(" @ ") {
         (&args[..idx], Some(args[idx + 3..].trim().to_owned()))
     } else {
@@ -162,73 +274,48 @@ async fn handle_search(
     };
 
     let keywords: Vec<String> = keywords_str.split_whitespace().map(String::from).collect();
-
     if keywords.is_empty() {
         bot.send_message(msg.chat.id, "Please provide at least one keyword.")
             .await?;
         return Ok(());
     }
 
-    let location_display = location.as_deref().unwrap_or("any");
     bot.send_message(
         msg.chat.id,
         format!(
-            "\u{1f50d} Searching: {} @ {} ...",
+            "🔍 Searching: {} @ {} ...",
             keywords.join(" "),
-            location_display
+            location.as_deref().unwrap_or("any")
         ),
     )
     .await?;
 
-    let max_results: u32 = 3;
-    let criteria = job_domain_job_source::types::DiscoveryCriteria {
-        keywords: keywords.clone(),
-        location: location.clone(),
-        max_results: Some(max_results),
-        ..Default::default()
-    };
-
-    let svc = job_source_service.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let empty_source = std::collections::HashSet::new();
-        let empty_fuzzy = std::collections::HashSet::new();
-        svc.discover(&criteria, &empty_source, &empty_fuzzy)
-    })
-    .await;
-
-    let discovery = match result {
-        Ok(d) => d,
+    let jobs = match main_http
+        .discover_jobs(keywords.clone(), location.clone(), 3)
+        .await
+    {
+        Ok(jobs) => jobs,
         Err(e) => {
-            bot.send_message(msg.chat.id, format!("\u{274c} Search failed: {e}"))
+            bot.send_message(msg.chat.id, format!("❌ Search failed: {e}"))
                 .await?;
             return Ok(());
         }
     };
 
-    if let Some(ref err) = discovery.error {
-        bot.send_message(msg.chat.id, format!("\u{274c} Search error: {err}"))
-            .await?;
-        return Ok(());
-    }
-
-    if discovery.jobs.is_empty() {
+    if jobs.is_empty() {
         bot.send_message(msg.chat.id, "No jobs found matching your criteria.")
             .await?;
         return Ok(());
     }
 
-    let text = format_job_results(&discovery.jobs, &keywords, location.as_deref());
-
-    // Build inline keyboard with "Load More" button.
-    // Encode search params in callback data:
-    // "search_more:<offset>:<keywords>[@<location>]"
+    let text = format_job_results(&jobs, &keywords, location.as_deref());
     let callback_data = format!(
         "search_more:{}:{}",
-        discovery.jobs.len(),
+        jobs.len(),
         encode_search_params(&keywords, location.as_deref()),
     );
     let keyboard = teloxide::types::InlineKeyboardMarkup::new(vec![vec![
-        teloxide::types::InlineKeyboardButton::callback("\u{1f4c4} Load More", callback_data),
+        teloxide::types::InlineKeyboardButton::callback("📄 Load More", callback_data),
     ]]);
 
     bot.send_message(msg.chat.id, text)
@@ -239,105 +326,73 @@ async fn handle_search(
     Ok(())
 }
 
-/// Handle inline keyboard callback queries (e.g. "Load More" button).
 async fn handle_callback_query(
     bot: Bot,
     q: CallbackQuery,
     telegram: Arc<TelegramService>,
-    job_source_service: Arc<JobSourceService>,
+    main_http: Arc<MainServiceHttpClient>,
 ) -> ResponseResult<()> {
-    // Acknowledge the callback to remove the "loading" spinner.
     bot.answer_callback_query(&q.id).await?;
 
     let data = match q.data.as_deref() {
         Some(d) => d,
         None => return Ok(()),
     };
-
     if !data.starts_with("search_more:") {
         return Ok(());
     }
 
-    // Check authorization via the message's chat
     if let Some(ref msg) = q.message {
         if !telegram.is_primary_chat(msg.chat().id) {
             return Ok(());
         }
     }
 
-    // Parse callback data: "search_more:<current_count>:<encoded_params>"
     let parts: Vec<&str> = data.splitn(3, ':').collect();
     if parts.len() != 3 {
         return Ok(());
     }
+
     let current_count: u32 = match parts[1].parse() {
         Ok(n) => n,
         Err(_) => return Ok(()),
     };
+
     let (keywords, location) = decode_search_params(parts[2]);
-
     let new_max = current_count + 3;
-    let criteria = job_domain_job_source::types::DiscoveryCriteria {
-        keywords: keywords.clone(),
-        location: location.clone(),
-        max_results: Some(new_max),
-        ..Default::default()
-    };
 
-    let svc = job_source_service.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let empty_source = std::collections::HashSet::new();
-        let empty_fuzzy = std::collections::HashSet::new();
-        svc.discover(&criteria, &empty_source, &empty_fuzzy)
-    })
-    .await;
-
-    let discovery = match result {
-        Ok(d) => d,
+    let jobs = match main_http
+        .discover_jobs(keywords.clone(), location.clone(), new_max)
+        .await
+    {
+        Ok(jobs) => jobs,
         Err(e) => {
             if let Some(ref msg) = q.message {
-                let chat_id = msg.chat().id;
-                bot.send_message(chat_id, format!("\u{274c} Load more failed: {e}"))
+                bot.send_message(msg.chat().id, format!("❌ Load more failed: {e}"))
                     .await?;
             }
             return Ok(());
         }
     };
 
-    if let Some(ref err) = discovery.error {
-        if let Some(ref msg) = q.message {
-            let chat_id = msg.chat().id;
-            bot.send_message(chat_id, format!("\u{274c} Error: {err}"))
-                .await?;
-        }
-        return Ok(());
-    }
+    let text = format_job_results(&jobs, &keywords, location.as_deref());
 
-    let text = format_job_results(&discovery.jobs, &keywords, location.as_deref());
-
-    // Update the inline keyboard — if we got fewer results than requested,
-    // there are no more results, so remove the button.
     if let Some(ref msg) = q.message {
         let msg_id = msg.id();
         let chat_id = msg.chat().id;
 
-        if (discovery.jobs.len() as u32) < new_max {
-            // No more results — remove the keyboard
+        if (jobs.len() as u32) < new_max {
             bot.edit_message_text(chat_id, msg_id, text)
                 .parse_mode(teloxide::types::ParseMode::Html)
                 .await?;
         } else {
-            // Still more — update the button with new offset
             let callback_data = format!(
                 "search_more:{}:{}",
-                discovery.jobs.len(),
+                jobs.len(),
                 encode_search_params(&keywords, location.as_deref()),
             );
             let keyboard = teloxide::types::InlineKeyboardMarkup::new(vec![vec![
-                teloxide::types::InlineKeyboardButton::callback(
-                    "\u{1f4c4} Load More",
-                    callback_data,
-                ),
+                teloxide::types::InlineKeyboardButton::callback("📄 Load More", callback_data),
             ]]);
             bot.edit_message_text(chat_id, msg_id, text)
                 .parse_mode(teloxide::types::ParseMode::Html)
@@ -352,15 +407,14 @@ async fn handle_callback_query(
 async fn handle_message(
     bot: Bot,
     msg: Message,
-    jd_tx: mpsc::Sender<JdParseRequest>,
-    jd_notify: std::sync::Arc<tokio::sync::Mutex<Option<job_common_worker::NotifyHandle>>>,
-    telegram: std::sync::Arc<TelegramService>,
+    telegram: Arc<TelegramService>,
+    main_http: Arc<MainServiceHttpClient>,
 ) -> ResponseResult<()> {
     if let Some(text) = msg.text() {
         if !telegram.is_primary_chat(msg.chat.id) {
             warn!(
                 chat_id = msg.chat.id.0,
-                "ignoring message from unauthorized Telegram chat"
+                "ignoring unauthorized telegram chat"
             );
             bot.send_message(msg.chat.id, "Unauthorized chat.").await?;
             return Ok(());
@@ -369,27 +423,17 @@ async fn handle_message(
         bot.send_message(msg.chat.id, "Received your JD, processing...")
             .await?;
 
-        let send_result = jd_tx
-            .send(JdParseRequest {
-                text: text.to_string(),
-            })
-            .await;
-        if send_result.is_ok() {
-            if let Some(handle) = jd_notify.lock().await.as_ref() {
-                handle.notify();
-            }
+        if let Err(e) = main_http.submit_jd_parse(text).await {
+            bot.send_message(msg.chat.id, format!("❌ JD parse submit failed: {e}"))
+                .await?;
         }
     }
+
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Helper functions
-// ---------------------------------------------------------------------------
-
-/// Format job results into a Telegram message (HTML parse mode).
 fn format_job_results(
-    jobs: &[job_domain_job_source::types::NormalizedJob],
+    jobs: &[DiscoveryJobResponse],
     keywords: &[String],
     location: Option<&str>,
 ) -> String {
@@ -403,21 +447,21 @@ fn format_job_results(
 
     for (i, job) in jobs.iter().enumerate() {
         text.push_str(&format!(
-            "<b>{}.</b> {} \u{2014} {}\n",
+            "<b>{}.</b> {} - {}\n",
             i + 1,
             html_escape(&job.title),
             html_escape(&job.company),
         ));
         if let Some(loc) = &job.location {
-            text.push_str(&format!("   \u{1f4cd} {}", html_escape(loc)));
+            text.push_str(&format!("   📍 {}", html_escape(loc)));
         }
         if let (Some(min), Some(max)) = (job.salary_min, job.salary_max) {
             let currency = job.salary_currency.as_deref().unwrap_or("");
-            text.push_str(&format!(" | \u{1f4b0} {}-{} {}", min, max, currency));
+            text.push_str(&format!(" | 💰 {}-{} {}", min, max, currency));
         }
         text.push('\n');
         if let Some(url) = &job.url {
-            text.push_str(&format!("   \u{1f517} {}\n", url));
+            text.push_str(&format!("   🔗 {}\n", url));
         }
         text.push('\n');
     }
@@ -425,7 +469,6 @@ fn format_job_results(
     text
 }
 
-/// Escape HTML special characters for Telegram HTML parse mode.
 fn html_escape(s: impl AsRef<str>) -> String {
     s.as_ref()
         .replace('&', "&amp;")
@@ -433,8 +476,6 @@ fn html_escape(s: impl AsRef<str>) -> String {
         .replace('>', "&gt;")
 }
 
-/// Encode search params into a compact callback data string.
-/// Format: "kw1+kw2[@location]"
 fn encode_search_params(keywords: &[String], location: Option<&str>) -> String {
     let kw = keywords.join("+");
     match location {
@@ -443,8 +484,6 @@ fn encode_search_params(keywords: &[String], location: Option<&str>) -> String {
     }
 }
 
-/// Decode search params from callback data.
-/// Returns (keywords, optional location).
 fn decode_search_params(encoded: &str) -> (Vec<String>, Option<String>) {
     if let Some(idx) = encoded.find('@') {
         let kw = encoded[..idx].split('+').map(String::from).collect();

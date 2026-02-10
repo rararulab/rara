@@ -32,6 +32,7 @@ human-panic = "2.0.0"
 job-app = { workspace = true }
 job-common-runtime = { workspace = true }
 job-common-telemetry.workspace = true
+job-telegram-bot = { workspace = true }
 shadow-rs = "1.2.1"
 snafu.workspace = true
 tokio.workspace = true

@@ -18,6 +18,7 @@ use snafu::Whatever;
 
 mod build_info;
 use job_app::AppConfig;
+use job_telegram_bot::BotConfig;
 
 #[derive(Debug, Parser)]
 #[clap(
@@ -34,6 +35,8 @@ struct Cli {
 enum Commands {
     Hello(HelloArgs),
     Server(ServerArgs),
+    Bot(BotArgs),
+    Combined(CombinedArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -63,6 +66,42 @@ impl ServerArgs {
     }
 }
 
+#[derive(Debug, Clone, Args)]
+#[command(flatten_help = true)]
+#[command(about = "Start standalone telegram-bot service")]
+#[command(long_about = "Start standalone telegram-bot service.\n\nExamples:\n  job bot")]
+struct BotArgs {}
+
+impl BotArgs {
+    async fn run() -> Result<(), Whatever> {
+        let _guards = job_common_telemetry::logging::init_tracing_subscriber("job-bot");
+        let config = BotConfig::from_env();
+        let bot = config.open().await?;
+        bot.run().await
+    }
+}
+
+#[derive(Debug, Clone, Args)]
+#[command(flatten_help = true)]
+#[command(about = "Start main service and telegram-bot in one process")]
+#[command(
+    long_about = "Start main service and telegram-bot in one process.\n\nExamples:\n  job combined"
+)]
+struct CombinedArgs {}
+
+impl CombinedArgs {
+    async fn run() -> Result<(), Whatever> {
+        let _guards = job_common_telemetry::logging::init_tracing_subscriber("job-combined");
+        let app = AppConfig::from_env().open().await?;
+        let bot = BotConfig::from_env().open().await?;
+
+        let (app_res, bot_res) = tokio::join!(app.run(), bot.run());
+        app_res?;
+        bot_res?;
+        Ok(())
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Whatever> {
     let cli = Cli::parse();
@@ -72,5 +111,7 @@ async fn main() -> Result<(), Whatever> {
             Ok(())
         }
         Commands::Server(_) => ServerArgs::run().await,
+        Commands::Bot(_) => BotArgs::run().await,
+        Commands::Combined(_) => CombinedArgs::run().await,
     }
 }

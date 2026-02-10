@@ -1,0 +1,33 @@
+[package]
+name = "job-telegram-bot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Standalone Telegram bot runtime with gRPC command ingress"
+
+[dependencies]
+async-trait = { workspace = true }
+axum = { workspace = true }
+job-api = { workspace = true }
+job-domain-shared = { workspace = true }
+job-server = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+smart-default = { workspace = true }
+snafu = { workspace = true }
+teloxide = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tonic = { workspace = true }
+tonic-health = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true

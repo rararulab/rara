@@ -53,6 +53,7 @@ members = [
     "crates/domain/analytics",
     "crates/domain/saved-job",
     "crates/server",
+    "crates/telegram-bot",
     "crates/paths",
     "crates/jobspy-sys",
     "crates/workers",
@@ -123,6 +124,7 @@ job-error = { version = "=0.0.17", path = "crates/common/error" }
 job-model = { version = "=0.0.17", path = "crates/job-model" }
 job-object-store = { version = "=0.0.17", path = "crates/common/object-store" }
 job-server = { version = "=0.0.17", path = "crates/server" }
+job-telegram-bot = { version = "=0.0.17", path = "crates/telegram-bot" }
 yunara-store = { version = "0.1.0", path = "crates/common/yunara-store" }
 
 # Domain crates

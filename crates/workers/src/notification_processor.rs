@@ -71,15 +71,15 @@ pub struct WorkerState {
     pub notification_service: Arc<NotificationService>,
     pub ai_service:           Arc<job_ai::service::AiService>,
     pub job_repo:             Arc<dyn job_domain_job_source::repository::JobRepository>,
-    pub telegram:             Arc<TelegramService>,
+    pub telegram:             Option<Arc<TelegramService>>,
     pub saved_job_service: Arc<
         job_domain_saved_job::service::SavedJobService<
             job_domain_saved_job::pg_repository::PgSavedJobRepository,
         >,
     >,
-    pub object_store:   Arc<job_object_store::ObjectStore>,
-    pub crawl_client:   job_domain_saved_job::crawl4ai::Crawl4AiClient,
-    pub analyze_notify: Arc<RwLock<Option<NotifyHandle>>>,
+    pub object_store:         Arc<job_object_store::ObjectStore>,
+    pub crawl_client:         job_domain_saved_job::crawl4ai::Crawl4AiClient,
+    pub analyze_notify:       Arc<RwLock<Option<NotifyHandle>>>,
 }
 
 #[async_trait]
