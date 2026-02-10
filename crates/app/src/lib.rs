@@ -20,6 +20,7 @@ use std::sync::{
 use job_common_worker::Notifiable;
 use job_domain_shared::telegram_service::TelegramService;
 use job_server::{
+    dedup_layer::{DedupLayer, DedupLayerConfig},
     grpc::{GrpcServerConfig, hello::HelloService, start_grpc_server},
     http::{RestServerConfig, health_routes, start_rest_server},
 };
@@ -233,9 +234,10 @@ impl AppConfig {
                     .merge(job_domain_notify::routes::routes(notify_svc.clone()))
                     .merge(job_domain_scheduler::routes::routes(scheduler_svc.clone()))
                     .merge(job_domain_analytics::routes::routes(analytics_svc.clone()))
-                    .merge(job_domain_job_source::routes::routes(
-                        job_source_svc.clone(),
-                    ))
+                    .merge(
+                        job_domain_job_source::routes::routes(job_source_svc.clone())
+                            .layer(DedupLayer::new(DedupLayerConfig::default())),
+                    )
             });
 
         info!("Application initialized successfully");
