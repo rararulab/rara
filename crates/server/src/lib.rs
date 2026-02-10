@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod dedup_layer;
 pub mod error;
 pub mod grpc;
 pub mod http;
+pub mod request_key;
 
 use futures::future::join_all;
 use job_error::Result;

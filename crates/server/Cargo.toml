@@ -15,8 +15,11 @@ description = "HTTP and gRPC server implementation for job"
 async-trait = { workspace = true }
 axum = { workspace = true }
 bon = { workspace = true }
+bytes = { workspace = true }
 derive_more = { workspace = true }
+http = { workspace = true }
 jiff = { workspace = true }
+moka = { workspace = true }
 smart-default = { workspace = true }
 # fastrace = { workspace = true }
 axum-tracing-opentelemetry = { workspace = true }
