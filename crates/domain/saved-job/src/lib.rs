@@ -12,18 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Database-layer models and SQL migrations.
+//! # job-domain-saved-job
 //!
-//! This crate owns the "store" models used by repositories (`sqlx::FromRow`)
-//! and the SQL migrations that define and evolve those tables.
+//! Saved job tracking with crawl and analysis pipeline.
 
-#![deny(unsafe_code)]
-
-pub mod application;
-pub mod interview;
-pub mod job;
-pub mod metrics;
-pub mod notify;
-pub mod resume;
-pub mod saved_job;
-pub mod scheduler;
+pub mod error;
+pub mod pg_repository;
+pub mod repository;
+pub mod routes;
+pub mod service;
+pub mod types;
