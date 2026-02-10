@@ -46,21 +46,8 @@ function ServerStatus() {
       const timer = setTimeout(() => controller.abort(), 5_000);
       try {
         const res = await fetch('/api/v1/health', { signal: controller.signal });
-        if (!res.ok) {
-          console.warn('[heartbeat] server unhealthy, status:', res.status);
-          throw new Error('unhealthy');
-        }
-        console.debug('[heartbeat] server online');
+        if (!res.ok) throw new Error('unhealthy');
         return true;
-      } catch (err) {
-        if (err instanceof DOMException && err.name === 'AbortError') {
-          console.warn('[heartbeat] timeout after 5s');
-        } else if (err instanceof TypeError) {
-          console.warn('[heartbeat] connection refused');
-        } else {
-          console.warn('[heartbeat] error:', err);
-        }
-        throw err;
       } finally {
         clearTimeout(timer);
       }

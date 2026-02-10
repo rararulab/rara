@@ -20,6 +20,7 @@ export interface DiscoveryCriteria {
   location?: string;
   job_type?: string;
   max_results?: number;
+  sites?: string[];
 }
 
 export interface NormalizedJob {

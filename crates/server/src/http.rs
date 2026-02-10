@@ -41,7 +41,7 @@ use super::ServiceHandler;
 pub const DEFAULT_MAX_HTTP_BODY_SIZE: ReadableSize = ReadableSize::mb(100);
 
 /// Default request timeout in seconds.
-pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
+pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 10;
 
 /// Configuration options for a REST server
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, SmartDefault, bon::Builder)]

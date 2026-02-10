@@ -36,9 +36,16 @@ async fn discover_jobs(
         message:     format!("task join error: {e}"),
     })?;
 
+    tracing::info!(
+        job_count = result.jobs.len(),
+        has_error = result.error.is_some(),
+        "discover result received from driver"
+    );
+
     // If the driver encountered an error, propagate it.
-    if let Some(err) = result.error {
-        return Err(err);
+    if let Some(ref err) = result.error {
+        tracing::warn!(%err, "discover returning error from driver");
+        return Err(result.error.unwrap());
     }
 
     tracing::info!(job_count = result.jobs.len(), "job discovery complete");

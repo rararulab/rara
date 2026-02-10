@@ -113,6 +113,7 @@ export default function JobDiscovery() {
       location: location || undefined,
       job_type: jobType || undefined,
       max_results: parseInt(maxResults, 10) || undefined,
+      sites: selectedSites.length > 0 ? selectedSites : undefined,
     };
 
     discoverMutation.mutate(criteria);

@@ -70,8 +70,16 @@ impl JobSourceService {
                 }
             }
         }
+        tracing::info!(
+            normalized_count = normalized.len(),
+            "normalization complete"
+        );
 
         let deduped = dedup::deduplicate(normalized, existing_source_keys, existing_fuzzy_keys);
+        tracing::info!(
+            deduped_count = deduped.len(),
+            "deduplication complete"
+        );
 
         DiscoveryResult {
             jobs:  deduped,

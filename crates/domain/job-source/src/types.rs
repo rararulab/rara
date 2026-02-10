@@ -45,6 +45,11 @@ pub struct DiscoveryCriteria {
     pub max_results:  Option<u32>,
     /// Only return jobs posted after this timestamp.
     pub posted_after: Option<Timestamp>,
+    /// Which job sites to search (e.g. "linkedin", "indeed").
+    /// If empty, the driver uses its default set.
+    #[serde(default)]
+    #[builder(default)]
+    pub sites:        Vec<String>,
 }
 
 // ---------------------------------------------------------------------------

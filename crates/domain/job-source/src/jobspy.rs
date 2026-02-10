@@ -78,8 +78,22 @@ impl JobSpyDriver {
             u32::try_from(hours.max(1)).unwrap_or(u32::MAX)
         });
 
+        // Use caller-provided sites when non-empty; fall back to defaults.
+        let sites: Vec<jobspy_sys::types::SiteName> = if query.sites.is_empty() {
+            DEFAULT_SITES.to_vec()
+        } else {
+            let parsed: Vec<_> = query
+                .sites
+                .iter()
+                .filter_map(|s| {
+                    serde_json::from_value(serde_json::Value::String(s.to_lowercase())).ok()
+                })
+                .collect();
+            if parsed.is_empty() { DEFAULT_SITES.to_vec() } else { parsed }
+        };
+
         let params = jobspy_sys::types::ScrapeParams::builder()
-            .site_name(DEFAULT_SITES.to_vec())
+            .site_name(sites)
             .search_term(search_term)
             .maybe_location(query.location.clone())
             .maybe_job_type(job_type)

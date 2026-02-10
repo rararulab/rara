@@ -31,6 +31,20 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:3000',
         changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on('proxyRes', (proxyRes, req) => {
+            if (req.url?.includes('/health')) {
+              const status = proxyRes.statusCode ?? 0;
+              const tag = status >= 200 && status < 300 ? '✓' : '✗';
+              console.log(`[heartbeat] ${tag} ${req.method} ${req.url} → ${status}`);
+            }
+          });
+          proxy.on('error', (err, req) => {
+            if (req.url?.includes('/health')) {
+              console.log(`[heartbeat] ✗ ${req.method} ${req.url} → ${err.message}`);
+            }
+          });
+        },
       },
     },
   },
