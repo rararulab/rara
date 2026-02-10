@@ -199,6 +199,40 @@ impl AppConfig {
             job_domain_job_source::pg_repository::PgJobRepository::new(pool.clone()),
         );
 
+        // Object store (MinIO / S3) — optional, for saved-job markdown
+        let object_store = {
+            let cfg = job_object_store::ObjectStoreConfig::builder()
+                .endpoint(
+                    std::env::var("MINIO_ENDPOINT")
+                        .unwrap_or_else(|_| "http://localhost:9000".to_owned()),
+                )
+                .bucket(
+                    std::env::var("MINIO_BUCKET")
+                        .unwrap_or_else(|_| "job-markdown".to_owned()),
+                )
+                .access_key(
+                    std::env::var("MINIO_ACCESS_KEY")
+                        .unwrap_or_else(|_| "minioadmin".to_owned()),
+                )
+                .secret_key(
+                    std::env::var("MINIO_SECRET_KEY")
+                        .unwrap_or_else(|_| "minioadmin".to_owned()),
+                )
+                .region("us-east-1".to_owned())
+                .root("/".to_owned())
+                .build();
+            match job_object_store::ObjectStore::new(&cfg) {
+                Ok(store) => {
+                    info!("Object store (MinIO) configured");
+                    Some(Arc::new(store))
+                }
+                Err(e) => {
+                    info!("Object store not available: {e}");
+                    None
+                }
+            }
+        };
+
         // Job Source domain — JobSpy driver + discovery service
         let jobspy_driver = job_domain_job_source::jobspy::JobSpyDriver::new()
             .whatever_context("Failed to initialize JobSpy driver")?;
@@ -260,6 +294,8 @@ impl AppConfig {
             ai_service,
             job_repo,
             job_source_service,
+            saved_job_service: Some(saved_job_service.clone()),
+            object_store,
         })
     }
 }
@@ -288,6 +324,10 @@ pub struct App {
     job_repo:             Arc<dyn job_domain_job_source::repository::JobRepository>,
     /// Job source service for discovery (used by Telegram /search command)
     job_source_service:   Arc<job_domain_job_source::service::JobSourceService>,
+    /// Saved job service for GC worker
+    saved_job_service:    Option<Arc<job_domain_saved_job::service::SavedJobService<job_domain_saved_job::pg_repository::PgSavedJobRepository>>>,
+    /// Object store for GC worker S3 cleanup
+    object_store:         Option<Arc<job_object_store::ObjectStore>>,
 }
 
 /// Handle for controlling a running application.
@@ -366,6 +406,8 @@ impl App {
             jd_parse_notify:      jd_parse_notify.clone(),
             telegram:             self.telegram,
             job_source_service:   self.job_source_service,
+            saved_job_service:    self.saved_job_service,
+            object_store:         self.object_store,
         };
 
         let mut worker_manager = job_common_worker::Manager::with_state(worker_state);
@@ -393,6 +435,20 @@ impl App {
             .fallible_worker(job_workers::telegram_bot::TelegramBotWorker)
             .name("telegram-bot")
             .once()
+            .spawn();
+
+        // Saved job GC worker (periodic, default every 24 hours)
+        let gc_interval_secs = std::env::var("GC_INTERVAL_HOURS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(24)
+            * 3600;
+        let _gc_handle = worker_manager
+            .fallible_worker(job_workers::saved_job_gc::SavedJobGcWorker::new(
+                job_workers::saved_job_gc::GcConfig::default(),
+            ))
+            .name("saved-job-gc")
+            .interval(std::time::Duration::from_secs(gc_interval_secs))
             .spawn();
 
         info!("Application started successfully");

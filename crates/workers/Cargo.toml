@@ -13,11 +13,15 @@ description = "Background worker implementations for job automation"
 
 [dependencies]
 async-trait.workspace = true
+jiff.workspace = true
 job-ai = { workspace = true }
 job-common-worker = { workspace = true }
 job-domain-job-source = { workspace = true }
 job-domain-notify = { workspace = true }
+job-domain-saved-job = { workspace = true }
 job-domain-shared = { workspace = true }
+job-object-store = { workspace = true }
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 teloxide = { workspace = true }

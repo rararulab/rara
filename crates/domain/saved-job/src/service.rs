@@ -16,6 +16,7 @@
 
 use std::sync::Arc;
 
+use jiff::Timestamp;
 use tracing::instrument;
 use uuid::Uuid;
 
@@ -110,5 +111,30 @@ impl<R: SavedJobRepository> SavedJobService<R> {
         self.repo
             .update_status(id, SavedJobStatus::PendingCrawl, None)
             .await
+    }
+
+    /// List saved jobs older than the given timestamp that are not in a
+    /// terminal status (Failed or Expired).
+    #[instrument(skip(self))]
+    pub async fn list_stale(
+        &self,
+        older_than: Timestamp,
+    ) -> Result<Vec<SavedJob>, SavedJobError> {
+        self.repo.list_stale(older_than).await
+    }
+
+    /// List saved jobs matching the given statuses that have S3 keys set.
+    #[instrument(skip(self))]
+    pub async fn list_with_s3_keys_by_status(
+        &self,
+        statuses: &[SavedJobStatus],
+    ) -> Result<Vec<SavedJob>, SavedJobError> {
+        self.repo.list_with_s3_keys_by_status(statuses).await
+    }
+
+    /// Clear the S3 key for a saved job after object cleanup.
+    #[instrument(skip(self))]
+    pub async fn clear_s3_key(&self, id: Uuid) -> Result<(), SavedJobError> {
+        self.repo.clear_s3_key(id).await
     }
 }
