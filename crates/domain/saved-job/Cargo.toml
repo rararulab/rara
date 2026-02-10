@@ -16,8 +16,8 @@ async-trait.workspace = true
 axum = { workspace = true }
 bytes.workspace = true
 jiff.workspace = true
-job-common-worker.workspace = true
 job-ai = { workspace = true }
+job-common-worker.workspace = true
 job-domain-shared = { workspace = true }
 job-model.workspace = true
 job-object-store = { workspace = true }

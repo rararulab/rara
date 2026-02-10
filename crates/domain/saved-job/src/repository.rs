@@ -17,8 +17,10 @@
 use jiff::Timestamp;
 use uuid::Uuid;
 
-use crate::error::SavedJobError;
-use crate::types::{SavedJob, SavedJobStatus};
+use crate::{
+    error::SavedJobError,
+    types::{SavedJob, SavedJobStatus},
+};
 
 /// Persistence contract for saved jobs.
 #[async_trait::async_trait]
@@ -43,7 +45,8 @@ pub trait SavedJobRepository: Send + Sync {
         error_message: Option<String>,
     ) -> Result<(), SavedJobError>;
 
-    /// Store the crawl result (S3 key + preview text) and set status to Crawled.
+    /// Store the crawl result (S3 key + preview text) and set status to
+    /// Crawled.
     async fn update_crawl_result(
         &self,
         id: Uuid,
@@ -51,7 +54,8 @@ pub trait SavedJobRepository: Send + Sync {
         preview: &str,
     ) -> Result<(), SavedJobError>;
 
-    /// Store the analysis result (JSON + match score) and set status to Analyzed.
+    /// Store the analysis result (JSON + match score) and set status to
+    /// Analyzed.
     async fn update_analysis(
         &self,
         id: Uuid,
@@ -62,10 +66,7 @@ pub trait SavedJobRepository: Send + Sync {
     /// List saved jobs created before the given timestamp that are not in a
     /// terminal status (Failed or Expired). Used by the GC worker to find
     /// stale URLs that may need to be checked for expiry.
-    async fn list_stale(
-        &self,
-        older_than: Timestamp,
-    ) -> Result<Vec<SavedJob>, SavedJobError>;
+    async fn list_stale(&self, older_than: Timestamp) -> Result<Vec<SavedJob>, SavedJobError>;
 
     /// List saved jobs that match one of the given statuses **and** have an
     /// S3 key set. Used by the GC worker to find objects that need cleanup

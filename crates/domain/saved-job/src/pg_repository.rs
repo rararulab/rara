@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! PostgreSQL-backed implementation of [`crate::repository::SavedJobRepository`].
+//! PostgreSQL-backed implementation of
+//! [`crate::repository::SavedJobRepository`].
 
 use async_trait::async_trait;
 use jiff::Timestamp;
@@ -21,8 +22,10 @@ use job_model::saved_job::SavedJob as StoreSavedJob;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::error::SavedJobError;
-use crate::types::{SavedJob, SavedJobStatus};
+use crate::{
+    error::SavedJobError,
+    types::{SavedJob, SavedJobStatus},
+};
 
 /// PostgreSQL implementation of the saved-job repository.
 pub struct PgSavedJobRepository {
@@ -89,12 +92,10 @@ impl crate::repository::SavedJobRepository for PgSavedJobRepository {
             .await
             .map_err(map_err)?
         } else {
-            sqlx::query_as::<_, StoreSavedJob>(
-                "SELECT * FROM saved_job ORDER BY created_at DESC",
-            )
-            .fetch_all(&self.pool)
-            .await
-            .map_err(map_err)?
+            sqlx::query_as::<_, StoreSavedJob>("SELECT * FROM saved_job ORDER BY created_at DESC")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(map_err)?
         };
 
         Ok(rows.into_iter().map(Into::into).collect())
@@ -119,15 +120,14 @@ impl crate::repository::SavedJobRepository for PgSavedJobRepository {
         status: SavedJobStatus,
         error_message: Option<String>,
     ) -> Result<(), SavedJobError> {
-        let result = sqlx::query(
-            "UPDATE saved_job SET status = $2, error_message = $3 WHERE id = $1",
-        )
-        .bind(id)
-        .bind(status as u8 as i16)
-        .bind(error_message)
-        .execute(&self.pool)
-        .await
-        .map_err(map_err)?;
+        let result =
+            sqlx::query("UPDATE saved_job SET status = $2, error_message = $3 WHERE id = $1")
+                .bind(id)
+                .bind(status as u8 as i16)
+                .bind(error_message)
+                .execute(&self.pool)
+                .await
+                .map_err(map_err)?;
 
         if result.rows_affected() == 0 {
             return Err(SavedJobError::NotFound { id });
@@ -187,10 +187,7 @@ impl crate::repository::SavedJobRepository for PgSavedJobRepository {
         Ok(())
     }
 
-    async fn list_stale(
-        &self,
-        older_than: Timestamp,
-    ) -> Result<Vec<SavedJob>, SavedJobError> {
+    async fn list_stale(&self, older_than: Timestamp) -> Result<Vec<SavedJob>, SavedJobError> {
         let cutoff = timestamp_to_chrono(older_than);
         let rows = sqlx::query_as::<_, StoreSavedJob>(
             r#"SELECT * FROM saved_job
@@ -227,13 +224,11 @@ impl crate::repository::SavedJobRepository for PgSavedJobRepository {
     }
 
     async fn clear_s3_key(&self, id: Uuid) -> Result<(), SavedJobError> {
-        let result = sqlx::query(
-            "UPDATE saved_job SET markdown_s3_key = NULL WHERE id = $1",
-        )
-        .bind(id)
-        .execute(&self.pool)
-        .await
-        .map_err(map_err)?;
+        let result = sqlx::query("UPDATE saved_job SET markdown_s3_key = NULL WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
 
         if result.rows_affected() == 0 {
             return Err(SavedJobError::NotFound { id });

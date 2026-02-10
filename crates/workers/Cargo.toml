@@ -19,10 +19,10 @@ job-common-runtime = { workspace = true }
 job-common-worker = { workspace = true }
 job-domain-job-source = { workspace = true }
 job-domain-notify = { workspace = true }
-job-server = { workspace = true }
 job-domain-saved-job = { workspace = true }
 job-domain-shared = { workspace = true }
 job-object-store = { workspace = true }
+job-server = { workspace = true }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

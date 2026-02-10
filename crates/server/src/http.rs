@@ -103,7 +103,6 @@ pub struct RestServerConfig {
 ///
 /// Returns an error if server binding fails or graceful shutdown encounters
 /// issues.
-///
 #[allow(clippy::unused_async)]
 pub async fn start_rest_server<F>(
     config: RestServerConfig,

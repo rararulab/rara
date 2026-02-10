@@ -39,10 +39,7 @@ pub fn routes<R: SavedJobRepository + 'static>(service: Arc<SavedJobService<R>>)
         .route("/api/v1/saved-jobs", get(list_saved_jobs::<R>))
         .route("/api/v1/saved-jobs/{id}", get(get_saved_job::<R>))
         .route("/api/v1/saved-jobs/{id}", delete(delete_saved_job::<R>))
-        .route(
-            "/api/v1/saved-jobs/{id}/retry",
-            post(retry_saved_job::<R>),
-        )
+        .route("/api/v1/saved-jobs/{id}/retry", post(retry_saved_job::<R>))
         .with_state(service)
 }
 
@@ -70,7 +67,10 @@ async fn get_saved_job<R: SavedJobRepository + 'static>(
     State(service): State<Arc<SavedJobService<R>>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<SavedJob>, SavedJobError> {
-    let job = service.get(id).await?.ok_or(SavedJobError::NotFound { id })?;
+    let job = service
+        .get(id)
+        .await?
+        .ok_or(SavedJobError::NotFound { id })?;
     Ok(Json(job))
 }
 

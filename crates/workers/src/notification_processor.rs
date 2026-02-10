@@ -72,9 +72,21 @@ pub struct WorkerState {
     pub ai_service:           Option<Arc<job_ai::service::AiService>>,
     pub job_repo:             Option<Arc<dyn job_domain_job_source::repository::JobRepository>>,
     pub telegram:             Arc<TelegramService>,
-    pub saved_job_service:    Option<Arc<job_domain_saved_job::service::SavedJobService<job_domain_saved_job::pg_repository::PgSavedJobRepository>>>,
+    pub saved_job_service: Option<
+        Arc<
+            job_domain_saved_job::service::SavedJobService<
+                job_domain_saved_job::pg_repository::PgSavedJobRepository,
+            >,
+        >,
+    >,
     pub object_store:         Option<Arc<job_object_store::ObjectStore>>,
-    pub saved_job_pipeline:   Option<Arc<job_domain_saved_job::pipeline::SavedJobPipeline<job_domain_saved_job::pg_repository::PgSavedJobRepository>>>,
+    pub saved_job_pipeline: Option<
+        Arc<
+            job_domain_saved_job::pipeline::SavedJobPipeline<
+                job_domain_saved_job::pg_repository::PgSavedJobRepository,
+            >,
+        >,
+    >,
 }
 
 #[async_trait]

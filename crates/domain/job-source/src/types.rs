@@ -431,12 +431,12 @@ mod tests {
         assert_eq!(
             detail,
             DiscoveryDetailFields {
-                job_type: Some("fulltime".to_owned()),
-                is_remote: Some(true),
-                salary_interval: Some("yearly".to_owned()),
-                salary_source: Some("direct_data".to_owned()),
-                job_level: Some("senior".to_owned()),
-                company_url: Some("https://example.com".to_owned()),
+                job_type:         Some("fulltime".to_owned()),
+                is_remote:        Some(true),
+                salary_interval:  Some("yearly".to_owned()),
+                salary_source:    Some("direct_data".to_owned()),
+                job_level:        Some("senior".to_owned()),
+                company_url:      Some("https://example.com".to_owned()),
                 company_industry: Some("software".to_owned()),
             }
         );

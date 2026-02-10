@@ -20,7 +20,7 @@ use crate::error::AiError;
 
 const SYSTEM_PROMPT: &str = "\
 You are a job posting analyzer. Given a job posting in markdown format, analyze it and return ONLY \
-a valid JSON object with these fields:
+                             a valid JSON object with these fields:
 - title (string, required - the job title)
 - company (string, required - the company name)
 - location (string or null - work location)
@@ -45,9 +45,7 @@ pub struct JdAnalyzerAgent<'a> {
 }
 
 impl<'a> JdAnalyzerAgent<'a> {
-    pub(crate) fn new(client: &'a openai::Client, model: &'a str) -> Self {
-        Self { client, model }
-    }
+    pub(crate) fn new(client: &'a openai::Client, model: &'a str) -> Self { Self { client, model } }
 
     /// Analyze a job posting markdown and return structured JSON.
     pub async fn analyze(&self, markdown: &str) -> Result<String, AiError> {

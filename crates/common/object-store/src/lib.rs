@@ -63,28 +63,28 @@ pub enum ObjectStoreError {
     /// An S3 put operation failed.
     #[snafu(display("put failed for key '{key}': {source}"))]
     Put {
-        key: String,
+        key:    String,
         source: opendal::Error,
     },
 
     /// An S3 get operation failed.
     #[snafu(display("get failed for key '{key}': {source}"))]
     Get {
-        key: String,
+        key:    String,
         source: opendal::Error,
     },
 
     /// An S3 delete operation failed.
     #[snafu(display("delete failed for key '{key}': {source}"))]
     Delete {
-        key: String,
+        key:    String,
         source: opendal::Error,
     },
 
     /// An S3 stat (exists check) operation failed.
     #[snafu(display("exists check failed for key '{key}': {source}"))]
     Exists {
-        key: String,
+        key:    String,
         source: opendal::Error,
     },
 
@@ -198,9 +198,7 @@ impl ObjectStore {
 
     /// Return a reference to the underlying OpenDAL operator for advanced use.
     #[must_use]
-    pub fn operator(&self) -> &Operator {
-        &self.op
-    }
+    pub fn operator(&self) -> &Operator { &self.op }
 }
 
 #[cfg(test)]
@@ -257,7 +255,7 @@ mod tests {
     #[test]
     fn error_display() {
         let err = ObjectStoreError::Put {
-            key: "test.txt".to_owned(),
+            key:    "test.txt".to_owned(),
             source: opendal::Error::new(opendal::ErrorKind::Unexpected, "boom"),
         };
         let msg = err.to_string();

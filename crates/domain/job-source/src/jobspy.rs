@@ -52,7 +52,7 @@ impl JobSpyDriver {
     pub fn new() -> Result<Self, SourceError> {
         let jobspy = jobspy_sys::JobSpy::new().map_err(|e| SourceError::NonRetryable {
             source_name: JOBSPY_SOURCE_NAME.to_owned(),
-            message: format!("Failed to initialize JobSpy: {e}"),
+            message:     format!("Failed to initialize JobSpy: {e}"),
         })?;
         Ok(Self { jobspy })
     }
@@ -97,13 +97,13 @@ impl JobSpyDriver {
             // Check for rate-limiting indicators in the error message.
             if e.contains("429") || e.to_lowercase().contains("rate limit") {
                 SourceError::RateLimited {
-                    source_name: JOBSPY_SOURCE_NAME.to_owned(),
+                    source_name:      JOBSPY_SOURCE_NAME.to_owned(),
                     retry_after_secs: 60,
                 }
             } else {
                 SourceError::Retryable {
                     source_name: JOBSPY_SOURCE_NAME.to_owned(),
-                    message: e,
+                    message:     e,
                 }
             }
         })?;
@@ -162,8 +162,9 @@ fn parse_bool_value(value: &str) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use jobspy_sys::types::SiteName;
+
+    use super::*;
 
     #[test]
     fn resolve_sites_falls_back_to_default_when_empty() {

@@ -68,9 +68,10 @@ impl Default for DedupLayerConfig {
 
 /// Tower [`Layer`] that wraps a service with request deduplication.
 ///
-/// Apply this to an axum [`Router`](axum::Router) via `.layer(DedupLayer::new(cfg))`.
-/// Only the first request for a given key will reach the inner service;
-/// concurrent duplicates block and receive a clone of the same response.
+/// Apply this to an axum [`Router`](axum::Router) via
+/// `.layer(DedupLayer::new(cfg))`. Only the first request for a given key will
+/// reach the inner service; concurrent duplicates block and receive a clone of
+/// the same response.
 #[derive(Clone)]
 pub struct DedupLayer {
     cache: Cache<String, Arc<CachedResponse>>,
@@ -181,12 +182,7 @@ where
             // Reconstruct an HTTP response from the cached snapshot.
             let mut builder = http::Response::builder().status(cached.status);
             if let Some(headers) = builder.headers_mut() {
-                headers.extend(
-                    cached
-                        .headers
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone())),
-                );
+                headers.extend(cached.headers.iter().map(|(k, v)| (k.clone(), v.clone())));
             }
             let resp = builder
                 .body(Body::from(cached.body.clone()))
@@ -315,9 +311,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.headers().get("x-custom").unwrap(), "value");
 
-        let body_bytes = axum::body::to_bytes(resp.into_body(), 1024)
-            .await
-            .unwrap();
+        let body_bytes = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
         assert_eq!(&body_bytes[..], b"ok");
 
         // Second call (same key) returns cached response.

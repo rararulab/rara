@@ -160,11 +160,7 @@ impl FallibleWorker<WorkerState> for SavedJobGcWorker {
         }
 
         if total_checked > 0 {
-            info!(
-                total_checked,
-                expired_count,
-                "URL liveness check complete"
-            );
+            info!(total_checked, expired_count, "URL liveness check complete");
         }
 
         // -----------------------------------------------------------------

@@ -56,9 +56,7 @@ impl axum::response::IntoResponse for SavedJobError {
             SavedJobError::NotFound { .. } => axum::http::StatusCode::NOT_FOUND,
             SavedJobError::DuplicateUrl { .. } => axum::http::StatusCode::CONFLICT,
             SavedJobError::ValidationError { .. } => axum::http::StatusCode::BAD_REQUEST,
-            SavedJobError::RepositoryError { .. } => {
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR
-            }
+            SavedJobError::RepositoryError { .. } => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             SavedJobError::CrawlError { .. }
             | SavedJobError::AnalysisError { .. }
             | SavedJobError::ObjectStoreError { .. } => axum::http::StatusCode::BAD_GATEWAY,

@@ -15,12 +15,11 @@
 //! Domain types for saved job tracking.
 
 use jiff::Timestamp;
+use job_domain_shared::convert::{chrono_opt_to_timestamp, chrono_to_timestamp, u8_from_i16};
+use job_model::saved_job::SavedJob as StoreSavedJob;
 use serde::{Deserialize, Serialize};
 use strum_macros::{Display, FromRepr};
 use uuid::Uuid;
-
-use job_domain_shared::convert::{chrono_opt_to_timestamp, chrono_to_timestamp, u8_from_i16};
-use job_model::saved_job::SavedJob as StoreSavedJob;
 
 // ---------------------------------------------------------------------------
 // Saved job status
@@ -95,8 +94,7 @@ pub struct SavedJobFilter {
 
 fn saved_job_status_from_i16(value: i16) -> SavedJobStatus {
     let repr = u8_from_i16(value, "saved_job.status");
-    SavedJobStatus::from_repr(repr)
-        .unwrap_or_else(|| panic!("invalid saved_job.status: {value}"))
+    SavedJobStatus::from_repr(repr).unwrap_or_else(|| panic!("invalid saved_job.status: {value}"))
 }
 
 /// Store `SavedJob` -> Domain `SavedJob`.
@@ -139,10 +137,16 @@ mod tests {
 
     #[test]
     fn test_saved_job_status_from_repr() {
-        assert_eq!(SavedJobStatus::from_repr(0), Some(SavedJobStatus::PendingCrawl));
+        assert_eq!(
+            SavedJobStatus::from_repr(0),
+            Some(SavedJobStatus::PendingCrawl)
+        );
         assert_eq!(SavedJobStatus::from_repr(1), Some(SavedJobStatus::Crawling));
         assert_eq!(SavedJobStatus::from_repr(2), Some(SavedJobStatus::Crawled));
-        assert_eq!(SavedJobStatus::from_repr(3), Some(SavedJobStatus::Analyzing));
+        assert_eq!(
+            SavedJobStatus::from_repr(3),
+            Some(SavedJobStatus::Analyzing)
+        );
         assert_eq!(SavedJobStatus::from_repr(4), Some(SavedJobStatus::Analyzed));
         assert_eq!(SavedJobStatus::from_repr(5), Some(SavedJobStatus::Failed));
         assert_eq!(SavedJobStatus::from_repr(6), Some(SavedJobStatus::Expired));
@@ -165,7 +169,5 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "invalid saved_job.status")]
-    fn test_saved_job_status_from_i16_invalid() {
-        saved_job_status_from_i16(99);
-    }
+    fn test_saved_job_status_from_i16_invalid() { saved_job_status_from_i16(99); }
 }

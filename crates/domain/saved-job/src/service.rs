@@ -21,9 +21,11 @@ use job_common_worker::{Notifiable, NotifyHandle};
 use tracing::{instrument, warn};
 use uuid::Uuid;
 
-use crate::error::SavedJobError;
-use crate::repository::SavedJobRepository;
-use crate::types::{SavedJob, SavedJobStatus};
+use crate::{
+    error::SavedJobError,
+    repository::SavedJobRepository,
+    types::{SavedJob, SavedJobStatus},
+};
 
 // ---------------------------------------------------------------------------
 // Service
@@ -31,7 +33,7 @@ use crate::types::{SavedJob, SavedJobStatus};
 
 /// High-level service for saved job CRUD and pipeline status management.
 pub struct SavedJobService<R: SavedJobRepository> {
-    repo: Arc<R>,
+    repo:           Arc<R>,
     notify_trigger: RwLock<Option<NotifyHandle>>,
 }
 
@@ -94,9 +96,7 @@ impl<R: SavedJobRepository> SavedJobService<R> {
 
     /// Delete a saved job.
     #[instrument(skip(self))]
-    pub async fn delete(&self, id: Uuid) -> Result<(), SavedJobError> {
-        self.repo.delete(id).await
-    }
+    pub async fn delete(&self, id: Uuid) -> Result<(), SavedJobError> { self.repo.delete(id).await }
 
     /// Update the pipeline status (and optionally record an error).
     #[instrument(skip(self))]
@@ -145,10 +145,7 @@ impl<R: SavedJobRepository> SavedJobService<R> {
     /// List saved jobs older than the given timestamp that are not in a
     /// terminal status (Failed or Expired).
     #[instrument(skip(self))]
-    pub async fn list_stale(
-        &self,
-        older_than: Timestamp,
-    ) -> Result<Vec<SavedJob>, SavedJobError> {
+    pub async fn list_stale(&self, older_than: Timestamp) -> Result<Vec<SavedJob>, SavedJobError> {
         self.repo.list_stale(older_than).await
     }
 

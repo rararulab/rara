@@ -33,9 +33,7 @@ pub struct JobSourceService {
 impl JobSourceService {
     /// Create a new service backed by the given [`JobSpyDriver`].
     #[must_use]
-    pub fn new(driver: JobSpyDriver) -> Self {
-        Self { driver }
-    }
+    pub fn new(driver: JobSpyDriver) -> Self { Self { driver } }
 
     /// Discover jobs matching the criteria, returning deduplicated
     /// results.
@@ -54,7 +52,7 @@ impl JobSourceService {
             Err(e) => {
                 tracing::error!(error = %e, "JobSpy driver failed during discovery");
                 return DiscoveryResult {
-                    jobs: vec![],
+                    jobs:  vec![],
                     error: Some(e),
                 };
             }
@@ -89,7 +87,7 @@ impl JobSourceService {
         );
 
         DiscoveryResult {
-            jobs: deduped,
+            jobs:  deduped,
             error: None,
         }
     }
@@ -110,8 +108,8 @@ fn log_description_coverage_by_source(raw_jobs: &[RawJob]) {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DescriptionCoverage {
-    total: u32,
-    with_description: u32,
+    total:               u32,
+    with_description:    u32,
     without_description: u32,
 }
 
@@ -131,8 +129,8 @@ fn description_coverage_by_source(raw_jobs: &[RawJob]) -> BTreeMap<String, Descr
         let stat = by_source
             .entry(job.source_name.clone())
             .or_insert(DescriptionCoverage {
-                total: 0,
-                with_description: 0,
+                total:               0,
+                with_description:    0,
                 without_description: 0,
             });
         stat.total += 1;
@@ -157,7 +155,7 @@ fn has_description(description: Option<&str>) -> bool {
 #[derive(Debug)]
 pub struct DiscoveryResult {
     /// Successfully normalized and deduplicated jobs.
-    pub jobs: Vec<NormalizedJob>,
+    pub jobs:  Vec<NormalizedJob>,
     /// If the driver encountered an unrecoverable error, it is
     /// captured here.
     pub error: Option<SourceError>,
@@ -169,19 +167,19 @@ mod tests {
 
     fn make_raw(source_name: &str, description: Option<&str>) -> RawJob {
         RawJob {
-            source_job_id: format!("{source_name}-id"),
-            source_name: source_name.to_owned(),
-            title: Some("title".to_owned()),
-            company: Some("company".to_owned()),
-            location: None,
-            description: description.map(ToOwned::to_owned),
-            url: None,
-            salary_min: None,
-            salary_max: None,
+            source_job_id:   format!("{source_name}-id"),
+            source_name:     source_name.to_owned(),
+            title:           Some("title".to_owned()),
+            company:         Some("company".to_owned()),
+            location:        None,
+            description:     description.map(ToOwned::to_owned),
+            url:             None,
+            salary_min:      None,
+            salary_max:      None,
             salary_currency: None,
-            tags: vec![],
-            raw_data: None,
-            posted_at: None,
+            tags:            vec![],
+            raw_data:        None,
+            posted_at:       None,
         }
     }
 

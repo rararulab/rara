@@ -25,8 +25,8 @@ use rig::providers::openai;
 use crate::{
     agents::{
         cover_letter::CoverLetterAgent, follow_up::FollowUpDraftAgent,
-        interview_prep::InterviewPrepAgent, jd_analyzer::JdAnalyzerAgent,
-        jd_parser::JdParserAgent, job_fit::JobFitAgent, resume_optimizer::ResumeOptimizerAgent,
+        interview_prep::InterviewPrepAgent, jd_analyzer::JdAnalyzerAgent, jd_parser::JdParserAgent,
+        job_fit::JobFitAgent, resume_optimizer::ResumeOptimizerAgent,
     },
     error::AiError,
 };

@@ -18,8 +18,8 @@
 //!
 //! 1. Calls Crawl4AI to convert the URL into clean markdown.
 //! 2. Uploads the markdown to MinIO / S3 via the object store.
-//! 3. Runs AI analysis on the markdown to extract structured data and
-//!    a match score.
+//! 3. Runs AI analysis on the markdown to extract structured data and a match
+//!    score.
 //! 4. Persists the analysis result in the database.
 //!
 //! On failure at any step the job is moved to `Failed` with an error
@@ -31,11 +31,10 @@ use bytes::Bytes;
 use tracing::{info, instrument, warn};
 use uuid::Uuid;
 
-use crate::crawl4ai::Crawl4AiClient;
-use crate::error::SavedJobError;
-use crate::repository::SavedJobRepository;
-use crate::service::SavedJobService;
-use crate::types::SavedJobStatus;
+use crate::{
+    crawl4ai::Crawl4AiClient, error::SavedJobError, repository::SavedJobRepository,
+    service::SavedJobService, types::SavedJobStatus,
+};
 
 /// Maximum characters to store as the markdown preview.
 const PREVIEW_LEN: usize = 500;
@@ -128,10 +127,8 @@ impl<R: SavedJobRepository> SavedJobPipeline<R> {
         };
 
         // --- Step 4: Parse and store result ---
-        let analysis_value: serde_json::Value =
-            serde_json::from_str(&analysis_json).unwrap_or_else(|_| {
-                serde_json::json!({ "raw_response": analysis_json })
-            });
+        let analysis_value: serde_json::Value = serde_json::from_str(&analysis_json)
+            .unwrap_or_else(|_| serde_json::json!({ "raw_response": analysis_json }));
 
         let match_score = analysis_value
             .get("match_score")

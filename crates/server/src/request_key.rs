@@ -14,8 +14,9 @@
 
 //! Request key extraction for HTTP request deduplication.
 //!
-//! Produces a deterministic string key from the HTTP method, path, query string,
-//! and request body. Two identical requests always produce the same key.
+//! Produces a deterministic string key from the HTTP method, path, query
+//! string, and request body. Two identical requests always produce the same
+//! key.
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 

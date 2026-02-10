@@ -30,7 +30,7 @@ use crate::error::SavedJobError;
 
 #[derive(Debug, Serialize)]
 struct CrawlRequest {
-    urls:               Vec<String>,
+    urls:                 Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     word_count_threshold: Option<u32>,
 }

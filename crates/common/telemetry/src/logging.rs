@@ -41,7 +41,9 @@ use tracing_appender::{
     rolling::{RollingFileAppender, Rotation},
 };
 use tracing_log::LogTracer;
-use tracing_subscriber::{EnvFilter, Registry, filter, fmt::format::FmtSpan, layer::SubscriberExt, prelude::*};
+use tracing_subscriber::{
+    EnvFilter, Registry, filter, fmt::format::FmtSpan, layer::SubscriberExt, prelude::*,
+};
 
 use crate::tracing_sampler::{TracingSampleOptions, create_sampler};
 

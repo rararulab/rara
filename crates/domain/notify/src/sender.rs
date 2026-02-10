@@ -41,8 +41,7 @@ impl NotificationSender for NoopSender {
 impl NotificationSender for TelegramService {
     async fn send(&self, notification: &Notification) -> Result<(), NotifyError> {
         let message = format_notification(notification);
-        self
-            .send_primary_message(&message)
+        self.send_primary_message(&message)
             .await
             .map_err(|e| NotifyError::SendFailed {
                 channel: "telegram".to_string(),
