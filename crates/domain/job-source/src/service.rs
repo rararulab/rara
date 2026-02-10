@@ -19,11 +19,13 @@ use std::collections::HashSet;
 
 use crate::{
     dedup::{self, FuzzyKey, SourceKey},
+    err::SourceError,
     jobspy::JobSpyDriver,
-    types::{DiscoveryCriteria, NormalizedJob, SourceError},
+    types::{DiscoveryCriteria, NormalizedJob},
 };
 
 /// Orchestrator that drives job discovery and deduplication.
+#[derive(Debug)]
 pub struct JobSourceService {
     driver: JobSpyDriver,
 }
@@ -75,14 +77,6 @@ impl JobSourceService {
             jobs:  deduped,
             error: None,
         }
-    }
-}
-
-impl std::fmt::Debug for JobSourceService {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("JobSourceService")
-            .field("driver", &"JobSpyDriver")
-            .finish()
     }
 }
 

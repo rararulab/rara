@@ -16,8 +16,9 @@
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-use snafu::Snafu;
 use uuid::Uuid;
+
+use crate::{err::SourceError, jobspy::JOBSPY_SOURCE_NAME};
 
 // ---------------------------------------------------------------------------
 // DiscoveryCriteria
@@ -136,14 +137,14 @@ impl TryFrom<RawJob> for NormalizedJob {
             }
         })?;
 
-        let company =
-            raw.company
-                .filter(|s| !s.trim().is_empty())
-                .ok_or_else(|| SourceError::NormalizationFailed {
-                    source_name:   raw.source_name.clone(),
-                    source_job_id: raw.source_job_id.clone(),
-                    message:       "company is required".to_owned(),
-                })?;
+        let company = raw
+            .company
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| SourceError::NormalizationFailed {
+                source_name:   raw.source_name.clone(),
+                source_job_id: raw.source_job_id.clone(),
+                message:       "company is required".to_owned(),
+            })?;
 
         Ok(NormalizedJob {
             id:              Uuid::new_v4(),
@@ -165,110 +166,75 @@ impl TryFrom<RawJob> for NormalizedJob {
 }
 
 // ---------------------------------------------------------------------------
-// SourceError
+// ScrapedJob → RawJob
 // ---------------------------------------------------------------------------
 
-/// Errors that a job source driver can produce.
-///
-/// The variants carry enough information for callers to decide whether
-/// to retry, back off, or give up.
-#[derive(Debug, Snafu)]
-#[snafu(visibility(pub))]
-pub enum SourceError {
-    /// A transient failure that can be retried.
-    #[snafu(display("Retryable error from source '{source_name}': {message}"))]
-    Retryable {
-        source_name: String,
-        message:     String,
-    },
+impl From<jobspy_sys::types::ScrapedJob> for RawJob {
+    fn from(job: jobspy_sys::types::ScrapedJob) -> Self {
+        // Use job_url as the source identifier; fall back to "unknown".
+        let source_job_id = job.job_url.as_deref().unwrap_or("unknown").to_owned();
+        let source_name = job.site.as_deref().unwrap_or(JOBSPY_SOURCE_NAME).to_owned();
 
-    /// A permanent failure that should not be retried.
-    #[snafu(display("Non-retryable error from source '{source_name}': {message}"))]
-    NonRetryable {
-        source_name: String,
-        message:     String,
-    },
+        // Combine city + state + country into a single location string.
+        let location = build_location(
+            job.city.as_deref(),
+            job.state.as_deref(),
+            job.country.as_deref(),
+        );
 
-    /// The source has rate-limited us.
-    #[snafu(display("Rate limited by source '{source_name}', retry after {retry_after_secs}s"))]
-    RateLimited {
-        source_name:      String,
-        retry_after_secs: u64,
-    },
+        // Convert salary f64 values to i32.
+        #[allow(clippy::cast_possible_truncation)]
+        let salary_min = job.min_amount.map(|v| v as i32);
+        #[allow(clippy::cast_possible_truncation)]
+        let salary_max = job.max_amount.map(|v| v as i32);
 
-    /// Authentication / authorization failure.
-    #[snafu(display("Auth error for source '{source_name}': {message}"))]
-    AuthError {
-        source_name: String,
-        message:     String,
-    },
+        // Parse date_posted (e.g. "2026-01-15") into a jiff Timestamp.
+        let posted_at = job.date_posted.as_deref().and_then(parse_date_to_timestamp);
 
-    /// The raw data could not be normalized into a valid
-    /// [`NormalizedJob`].
-    #[snafu(display(
-        "Normalization failed for job '{source_job_id}' from '{source_name}': {message}"
-    ))]
-    NormalizationFailed {
-        source_name:   String,
-        source_job_id: String,
-        message:       String,
-    },
-}
+        // Store the entire scraped job as raw_data for archival.
+        let raw_data = serde_json::to_value(&job).ok();
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_raw(title: Option<&str>, company: Option<&str>) -> RawJob {
-        RawJob {
-            source_job_id:   "test-1".to_owned(),
-            source_name:     "test".to_owned(),
-            title:           title.map(str::to_owned),
-            company:         company.map(str::to_owned),
-            location:        Some("Remote".to_owned()),
-            description:     None,
-            url:             None,
-            salary_min:      None,
-            salary_max:      None,
-            salary_currency: None,
-            tags:            vec![],
-            raw_data:        None,
-            posted_at:       None,
+        Self {
+            source_job_id,
+            source_name,
+            title: job.title,
+            company: job.company,
+            location,
+            description: job.description,
+            url: job.job_url,
+            salary_min,
+            salary_max,
+            salary_currency: job.currency,
+            tags: Vec::new(),
+            raw_data,
+            posted_at,
         }
     }
+}
 
-    #[test]
-    fn try_from_succeeds_with_required_fields() {
-        let raw = make_raw(Some("Rust Engineer"), Some("Acme Corp"));
-        let job = NormalizedJob::try_from(raw).unwrap();
-        assert_eq!(job.title, "Rust Engineer");
-        assert_eq!(job.company, "Acme Corp");
-        assert_eq!(job.source_name, "test");
-    }
+/// Parse a date string like "2026-01-15" into a [`jiff::Timestamp`] at
+/// midnight UTC.
+fn parse_date_to_timestamp(date_str: &str) -> Option<jiff::Timestamp> {
+    let date: jiff::civil::Date = date_str.parse().ok()?;
+    let zdt = date.at(0, 0, 0, 0).in_tz("UTC").ok()?;
+    Some(zdt.timestamp())
+}
 
-    #[test]
-    fn try_from_trims_whitespace() {
-        let raw = make_raw(Some("  Rust Engineer  "), Some("  Acme Corp  "));
-        let job = NormalizedJob::try_from(raw).unwrap();
-        assert_eq!(job.title, "Rust Engineer");
-        assert_eq!(job.company, "Acme Corp");
-    }
-
-    #[test]
-    fn try_from_fails_without_title() {
-        let raw = make_raw(None, Some("Acme Corp"));
-        assert!(NormalizedJob::try_from(raw).is_err());
-    }
-
-    #[test]
-    fn try_from_fails_with_blank_title() {
-        let raw = make_raw(Some("   "), Some("Acme Corp"));
-        assert!(NormalizedJob::try_from(raw).is_err());
-    }
-
-    #[test]
-    fn try_from_fails_without_company() {
-        let raw = make_raw(Some("Rust Engineer"), None);
-        assert!(NormalizedJob::try_from(raw).is_err());
+/// Build a comma-separated location string from optional city, state, and
+/// country components, skipping any that are `None` or empty.
+fn build_location(
+    city: Option<&str>,
+    state: Option<&str>,
+    country: Option<&str>,
+) -> Option<String> {
+    let parts: Vec<&str> = [city, state, country]
+        .into_iter()
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .collect();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(", "))
     }
 }

@@ -19,7 +19,10 @@
 //! scrape 8+ job boards including LinkedIn, Indeed, Glassdoor, Google,
 //! ZipRecruiter, Bayt, Naukri, and BDJobs.
 
-use crate::types::{DiscoveryCriteria, RawJob, SourceError};
+use crate::{
+    err::SourceError,
+    types::{DiscoveryCriteria, RawJob},
+};
 
 /// Source name constant for the JobSpy driver.
 pub const JOBSPY_SOURCE_NAME: &str = "jobspy";
@@ -36,7 +39,9 @@ const DEFAULT_SITES: &[jobspy_sys::types::SiteName] = &[
 /// Wraps the `jobspy_sys::JobSpy` Python bridge and translates between
 /// the domain's [`DiscoveryCriteria`] / [`RawJob`] types and the
 /// `jobspy_sys::types::ScrapeParams` / `ScrapedJob` types.
+#[derive(derive_more::Debug)]
 pub struct JobSpyDriver {
+    #[debug(skip)]
     jobspy: jobspy_sys::JobSpy,
 }
 
@@ -101,80 +106,5 @@ impl JobSpyDriver {
 
         let raw_jobs = scraped.into_iter().map(RawJob::from).collect();
         Ok(raw_jobs)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// ScrapedJob → RawJob
-// ---------------------------------------------------------------------------
-
-impl From<jobspy_sys::types::ScrapedJob> for RawJob {
-    fn from(job: jobspy_sys::types::ScrapedJob) -> Self {
-        // Use job_url as the source identifier; fall back to "unknown".
-        let source_job_id = job.job_url.as_deref().unwrap_or("unknown").to_owned();
-
-        let source_name = job.site.as_deref().unwrap_or(JOBSPY_SOURCE_NAME).to_owned();
-
-        // Combine city + state + country into a single location string.
-        let location = build_location(
-            job.city.as_deref(),
-            job.state.as_deref(),
-            job.country.as_deref(),
-        );
-
-        // Convert salary f64 values to i32.
-        #[allow(clippy::cast_possible_truncation)]
-        let salary_min = job.min_amount.map(|v| v as i32);
-        #[allow(clippy::cast_possible_truncation)]
-        let salary_max = job.max_amount.map(|v| v as i32);
-
-        // Parse date_posted (e.g. "2026-01-15") into a jiff Timestamp.
-        let posted_at = job.date_posted.as_deref().and_then(parse_date_to_timestamp);
-
-        // Store the entire scraped job as raw_data for archival.
-        let raw_data = serde_json::to_value(&job).ok();
-
-        Self {
-            source_job_id,
-            source_name,
-            title: job.title,
-            company: job.company,
-            location,
-            description: job.description,
-            url: job.job_url,
-            salary_min,
-            salary_max,
-            salary_currency: job.currency,
-            tags: Vec::new(),
-            raw_data,
-            posted_at,
-        }
-    }
-}
-
-/// Parse a date string like "2026-01-15" into a [`jiff::Timestamp`] at
-/// midnight UTC.
-fn parse_date_to_timestamp(date_str: &str) -> Option<jiff::Timestamp> {
-    let date: jiff::civil::Date = date_str.parse().ok()?;
-    let zdt = date.at(0, 0, 0, 0).in_tz("UTC").ok()?;
-    Some(zdt.timestamp())
-}
-
-/// Build a comma-separated location string from optional city, state, and
-/// country components, skipping any that are `None` or empty.
-fn build_location(
-    city: Option<&str>,
-    state: Option<&str>,
-    country: Option<&str>,
-) -> Option<String> {
-    let parts: Vec<&str> = [city, state, country]
-        .into_iter()
-        .flatten()
-        .filter(|s| !s.is_empty())
-        .collect();
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join(", "))
     }
 }

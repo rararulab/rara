@@ -17,6 +17,7 @@
 //! Job source discovery service powered by JobSpy.
 
 pub mod dedup;
+pub mod err;
 pub mod jobspy;
 pub mod service;
 pub mod types;

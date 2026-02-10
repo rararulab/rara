@@ -6,7 +6,7 @@ set dotenv-filename := ".env.local"
 RUST_TOOLCHAIN := `grep 'channel = ' rust-toolchain.toml | cut -d '"' -f 2`
 TARGET_PLATFORM := env("TARGET_PLATFORM", "linux/arm64")
 DISTRI_PLATFORM := env("DISTRI_PLATFORM", "ubuntu")
-DOCKER_TAG := env("DOCKER_TAG", "rsketch:latest")
+DOCKER_TAG := env("DOCKER_TAG", "job:latest")
 
 # ========================================================================================
 # Default Recipe & Help
@@ -15,7 +15,7 @@ DOCKER_TAG := env("DOCKER_TAG", "rsketch:latest")
 [group("📒 Help")]
 [private]
 default:
-    @just --list --list-heading '🦀 rsketch justfile manual page:\n'
+    @just --list --list-heading '🦀 job justfile manual page:\n'
 
 [doc("show help")]
 [group("📒 Help")]
@@ -122,19 +122,19 @@ cloc:
 # Build
 # ========================================================================================
 
-[doc("build rsketch binary")]
+[doc("build job binary")]
 [group("🔨 Build")]
 build:
-    @echo "🔨 Building rsketch..."
-    cargo build -p rsketch-cmd
+    @echo "🔨 Building job..."
+    cargo build -p job-cli
     @echo "📦 Moving binary to bin/ directory..."
-    mkdir -p bin/ && cp target/debug/rsketch bin/
+    mkdir -p bin/ && cp target/debug/job bin/
 
 [doc("build in release mode")]
 [group("🔨 Build")]
 build-release:
-    @echo "🔨 Building rsketch (release mode)..."
-    cargo build -p rsketch-cmd --release
+    @echo "🔨 Building job (release mode)..."
+    cargo build -p job-cli --release
 
 # ========================================================================================
 # Release & Changelog
