@@ -7,6 +7,7 @@ RUST_TOOLCHAIN := `grep 'channel = ' rust-toolchain.toml | cut -d '"' -f 2`
 TARGET_PLATFORM := env("TARGET_PLATFORM", "linux/arm64")
 DISTRI_PLATFORM := env("DISTRI_PLATFORM", "ubuntu")
 DOCKER_TAG := env("DOCKER_TAG", "job:latest")
+PYO3_PYTHON := `uv python find 3.10`
 
 # ========================================================================================
 # Default Recipe & Help
@@ -29,6 +30,7 @@ env:
     @echo "  TARGET_PLATFORM: {{TARGET_PLATFORM}}"
     @echo "  DISTRI_PLATFORM: {{DISTRI_PLATFORM}}"
     @echo "  DOCKER_TAG: {{DOCKER_TAG}}"
+    @echo "  PYO3_PYTHON: {{PYO3_PYTHON}}"
 
 # ========================================================================================
 # Code Quality
@@ -219,7 +221,7 @@ docs-open:
 [group("🏃 Running")]
 run:
     @echo "🏃 Running job binary..."
-    cargo run -p job-cli -- server
+    PYO3_PYTHON={{PYO3_PYTHON}} cargo run -p job-cli -- server
 
 [doc("run hello-world example")]
 [group("🏃 Running")]

@@ -109,10 +109,14 @@ impl JobSpy {
                 .call((), Some(&kwargs))
                 .map_err(|e| format!("scrape_jobs failed: {e}"))?;
 
-            // Convert DataFrame to JSON records
+            // Convert DataFrame to JSON records with ISO date format
+            // (pandas defaults to epoch milliseconds which breaks string deserialization)
             let to_json_kwargs = PyDict::new(py);
             to_json_kwargs
                 .set_item("orient", "records")
+                .map_err(|e| e.to_string())?;
+            to_json_kwargs
+                .set_item("date_format", "iso")
                 .map_err(|e| e.to_string())?;
 
             let json_str: String = df

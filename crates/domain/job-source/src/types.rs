@@ -30,9 +30,12 @@ use crate::{err::SourceError, jobspy::JOBSPY_SOURCE_NAME};
 ///
 /// Drivers translate these high-level criteria into whatever query
 /// format their backing platform requires.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, bon::Builder)]
 pub struct DiscoveryCriteria {
     /// Keyword terms to search for (e.g. "rust engineer").
+    #[builder(with = |it: impl IntoIterator<Item = impl Into<String>>| {
+        it.into_iter().map(Into::into).collect::<Vec<String>>()
+    })]
     pub keywords:     Vec<String>,
     /// Preferred location or "remote".
     pub location:     Option<String>,

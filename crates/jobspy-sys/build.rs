@@ -1,6 +1,5 @@
 use std::{env, fs, path::{Path, PathBuf}};
 
-use pyo3_build_config::get as pyo3_get;
 use ytmusicapi_uv::UvManager;
 
 fn main() {
@@ -42,11 +41,11 @@ fn main() {
             .expect("Failed to install python-jobspy");
     }
 
-    // Set pyo3 compilation environment variables
+    // Set pyo3 compilation environment variables.
+    // Use python_version (not pyo3_get().version) to ensure JOBSPY_COMPILED_PYTHON_VERSION
+    // matches the venv we actually created, avoiding "First run" on every test.
     println!("cargo:rustc-env=PYO3_PYTHON={}", venv.python_exe.display());
-    let compiled = pyo3_get().version;
-    let compiled_python_version = format!("{}.{}", compiled.major, compiled.minor);
-    println!("cargo:rustc-env=JOBSPY_COMPILED_PYTHON_VERSION={compiled_python_version}");
+    println!("cargo:rustc-env=JOBSPY_COMPILED_PYTHON_VERSION={python_version}");
 
     if let Some(home) = venv.python_exe.parent().and_then(|p| p.parent()) {
         println!("cargo:rustc-env=PYTHON_HOME={}", home.display());

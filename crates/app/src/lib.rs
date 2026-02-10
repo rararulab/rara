@@ -83,16 +83,23 @@ impl AppConfig {
             std::env::var("TELEGRAM_CHAT_ID"),
         ) {
             (Ok(token), Ok(chat_id)) => {
-                let chat_id: i64 = chat_id.parse().expect("TELEGRAM_CHAT_ID must be an integer");
-                Some(TelegramConfig { bot_token: token, chat_id })
+                let chat_id: i64 = chat_id
+                    .parse()
+                    .expect("TELEGRAM_CHAT_ID must be an integer");
+                Some(TelegramConfig {
+                    bot_token: token,
+                    chat_id,
+                })
             }
             _ => None,
         };
 
         let openai = std::env::var("OPENAI_API_KEY").ok().map(|key| {
-            let model =
-                std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
-            OpenAiConfig { api_key: key, model }
+            let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
+            OpenAiConfig {
+                api_key: key,
+                model,
+            }
         });
 
         Self {
@@ -127,17 +134,14 @@ impl AppConfig {
         );
         let notification_repo =
             Arc::new(job_domain_notify::pg_repository::PgNotificationRepository::new(pool.clone()));
-        let scheduler_repo = Arc::new(
-            job_domain_scheduler::pg_repository::PgSchedulerRepository::new(pool.clone()),
-        );
-        let analytics_repo = Arc::new(
-            job_domain_analytics::pg_repository::PgAnalyticsRepository::new(pool.clone()),
-        );
+        let scheduler_repo =
+            Arc::new(job_domain_scheduler::pg_repository::PgSchedulerRepository::new(pool.clone()));
+        let analytics_repo =
+            Arc::new(job_domain_analytics::pg_repository::PgAnalyticsRepository::new(pool.clone()));
 
         // Notification service + senders
-        let mut notification_service = job_domain_notify::service::NotificationService::new(
-            notification_repo,
-        );
+        let mut notification_service =
+            job_domain_notify::service::NotificationService::new(notification_repo);
         let telegram_sender: Arc<dyn job_domain_notify::service::NotificationSender> =
             match &self.telegram {
                 Some(cfg) => {
@@ -177,7 +181,9 @@ impl AppConfig {
         // AI service (optional, needs OPENAI_API_KEY)
         let ai_service = self.openai.as_ref().map(|cfg| {
             Arc::new(job_ai::service::AiService::new(
-                &cfg.api_key, cfg.model.clone(), None,
+                &cfg.api_key,
+                cfg.model.clone(),
+                None,
             ))
         });
         if ai_service.is_some() {
@@ -195,8 +201,9 @@ impl AppConfig {
         let jobspy_driver = job_domain_job_source::jobspy::JobSpyDriver::new()
             .whatever_context("Failed to initialize JobSpy driver")?;
         info!("JobSpy driver initialized");
-        let _job_source_service =
-            Arc::new(job_domain_job_source::service::JobSourceService::new(jobspy_driver));
+        let _job_source_service = Arc::new(job_domain_job_source::service::JobSourceService::new(
+            jobspy_driver,
+        ));
 
         // Domain services
         let resume_service = Arc::new(job_domain_resume::service::ResumeService::new(resume_repo));

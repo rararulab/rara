@@ -13,6 +13,7 @@ description = "Job source discovery service powered by JobSpy"
 
 [dependencies]
 async-trait.workspace = true
+bon.workspace = true
 chrono.workspace = true
 derive_more = { workspace = true }
 jiff.workspace = true

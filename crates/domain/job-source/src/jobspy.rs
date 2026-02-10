@@ -27,11 +27,10 @@ use crate::{
 /// Source name constant for the JobSpy driver.
 pub const JOBSPY_SOURCE_NAME: &str = "jobspy";
 
-/// Default sites to scrape: Indeed, LinkedIn, Glassdoor.
+/// Default sites to scrape: Indeed, LinkedIn.
 const DEFAULT_SITES: &[jobspy_sys::types::SiteName] = &[
     jobspy_sys::types::SiteName::Indeed,
     jobspy_sys::types::SiteName::LinkedIn,
-    jobspy_sys::types::SiteName::Glassdoor,
 ];
 
 /// Job source driver that uses python-jobspy to scrape multiple job boards.
@@ -106,5 +105,19 @@ impl JobSpyDriver {
 
         let raw_jobs = scraped.into_iter().map(RawJob::from).collect();
         Ok(raw_jobs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_name() {
+        let d = JobSpyDriver::new().unwrap();
+        let v = d
+            .fetch_jobs(&DiscoveryCriteria::builder().keywords(["golang"]).build())
+            .unwrap();
+        println!("{:?}", v)
     }
 }

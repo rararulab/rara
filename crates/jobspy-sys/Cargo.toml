@@ -21,7 +21,6 @@ ytmusicapi-uv = { git = "https://github.com/crrow/ytmusicapi", package = "ytmusi
 
 [build-dependencies]
 ytmusicapi-uv = { git = "https://github.com/crrow/ytmusicapi", package = "ytmusicapi-uv" }
-pyo3-build-config = { version = "0.27", features = ["resolve-config"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 dirs.workspace = true
