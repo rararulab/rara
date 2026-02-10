@@ -15,6 +15,8 @@
 //! PostgreSQL-backed implementation of [`crate::repository::SavedJobRepository`].
 
 use async_trait::async_trait;
+use jiff::Timestamp;
+use job_domain_shared::convert::timestamp_to_chrono;
 use job_model::saved_job::SavedJob as StoreSavedJob;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -180,6 +182,60 @@ impl crate::repository::SavedJobRepository for PgSavedJobRepository {
         .map_err(map_err)?;
 
         if affected.rows_affected() == 0 {
+            return Err(SavedJobError::NotFound { id });
+        }
+        Ok(())
+    }
+
+    async fn list_stale(
+        &self,
+        older_than: Timestamp,
+    ) -> Result<Vec<SavedJob>, SavedJobError> {
+        let cutoff = timestamp_to_chrono(older_than);
+        let rows = sqlx::query_as::<_, StoreSavedJob>(
+            r#"SELECT * FROM saved_job
+               WHERE status NOT IN ($1, $2)
+                 AND created_at < $3
+               ORDER BY created_at ASC"#,
+        )
+        .bind(SavedJobStatus::Failed as u8 as i16)
+        .bind(SavedJobStatus::Expired as u8 as i16)
+        .bind(cutoff)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    async fn list_with_s3_keys_by_status(
+        &self,
+        statuses: &[SavedJobStatus],
+    ) -> Result<Vec<SavedJob>, SavedJobError> {
+        let status_codes: Vec<i16> = statuses.iter().map(|s| *s as u8 as i16).collect();
+        let rows = sqlx::query_as::<_, StoreSavedJob>(
+            r#"SELECT * FROM saved_job
+               WHERE status = ANY($1)
+                 AND markdown_s3_key IS NOT NULL"#,
+        )
+        .bind(&status_codes)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    async fn clear_s3_key(&self, id: Uuid) -> Result<(), SavedJobError> {
+        let result = sqlx::query(
+            "UPDATE saved_job SET markdown_s3_key = NULL WHERE id = $1",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        if result.rows_affected() == 0 {
             return Err(SavedJobError::NotFound { id });
         }
         Ok(())

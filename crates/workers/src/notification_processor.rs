@@ -78,6 +78,8 @@ pub struct WorkerState {
     pub jd_parse_notify:      Arc<tokio::sync::Mutex<Option<NotifyHandle>>>,
     pub telegram:             Arc<TelegramService>,
     pub job_source_service:   Arc<job_domain_job_source::service::JobSourceService>,
+    pub saved_job_service:    Option<Arc<job_domain_saved_job::service::SavedJobService<job_domain_saved_job::pg_repository::PgSavedJobRepository>>>,
+    pub object_store:         Option<Arc<job_object_store::ObjectStore>>,
 }
 
 #[async_trait]

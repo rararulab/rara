@@ -19,5 +19,6 @@
 
 pub mod jd_parser;
 pub mod notification_processor;
+pub mod saved_job_gc;
 pub mod telegram_bot;
 pub mod types;

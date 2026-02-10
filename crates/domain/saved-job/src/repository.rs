@@ -14,6 +14,7 @@
 
 //! Repository trait for saved job persistence.
 
+use jiff::Timestamp;
 use uuid::Uuid;
 
 use crate::error::SavedJobError;
@@ -57,4 +58,23 @@ pub trait SavedJobRepository: Send + Sync {
         result: serde_json::Value,
         score: f32,
     ) -> Result<(), SavedJobError>;
+
+    /// List saved jobs created before the given timestamp that are not in a
+    /// terminal status (Failed or Expired). Used by the GC worker to find
+    /// stale URLs that may need to be checked for expiry.
+    async fn list_stale(
+        &self,
+        older_than: Timestamp,
+    ) -> Result<Vec<SavedJob>, SavedJobError>;
+
+    /// List saved jobs that match one of the given statuses **and** have an
+    /// S3 key set. Used by the GC worker to find objects that need cleanup
+    /// after a job has been marked expired.
+    async fn list_with_s3_keys_by_status(
+        &self,
+        statuses: &[SavedJobStatus],
+    ) -> Result<Vec<SavedJob>, SavedJobError>;
+
+    /// Clear the S3 key for a saved job (after the object has been deleted).
+    async fn clear_s3_key(&self, id: Uuid) -> Result<(), SavedJobError>;
 }
