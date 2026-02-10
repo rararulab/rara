@@ -19,6 +19,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
+      args:
+        BASE_IMAGE: job-base:latest
     depends_on:
       postgres:
         condition: service_healthy

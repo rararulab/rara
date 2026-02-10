@@ -218,8 +218,8 @@ docs-open:
 [doc("run the binary")]
 [group("🏃 Running")]
 run:
-    @echo "🏃 Running rsketch binary..."
-    cargo run --package binary hello
+    @echo "🏃 Running job binary..."
+    cargo run -p job-cli -- server
 
 [doc("run hello-world example")]
 [group("🏃 Running")]
@@ -231,24 +231,21 @@ example-hello:
 # Docker
 # ========================================================================================
 
-[doc("build Docker image")]
+[doc("build base image with Rust toolchain and cargo tools (run once)")]
 [group("🐳 Docker")]
-build-docker:
-    @echo "🐳 Building Docker image..."
-    docker buildx build \
+build-base:
+    @echo "🐳 Building base image (job-base)..."
+    docker build \
         --build-arg RUST_TOOLCHAIN={{RUST_TOOLCHAIN}} \
-        --tag {{DOCKER_TAG}} \
-        --file docker/Dockerfile \
-        --output type=docker \
+        --tag job-base:latest \
+        --file docker/base.Dockerfile \
         .
 
-[doc("build Docker image for multiple platforms")]
+[doc("build app Docker image (requires base image)")]
 [group("🐳 Docker")]
-build-docker-multiarch:
-    @echo "🐳 Building multi-arch Docker image..."
-    docker buildx build \
-        --platform linux/amd64,linux/arm64 \
-        --build-arg RUST_TOOLCHAIN={{RUST_TOOLCHAIN}} \
+build-docker:
+    @echo "🐳 Building app Docker image..."
+    docker build \
         --tag {{DOCKER_TAG}} \
         --file docker/Dockerfile \
         .

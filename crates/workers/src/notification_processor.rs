@@ -12,7 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Background worker that processes pending notifications in batches.
+//! Background worker for processing pending notifications.
+//!
+//! Notification lifecycle:
+//!
+//! 1. **Enqueue** — Anywhere in the system calls `NotificationService::send(req)`,
+//!    which creates a `status = Pending` record in the `notification_logs` table.
+//!    No actual delivery happens at this point.
+//!
+//! 2. **Process** — This worker is woken every 30 seconds by `job-common-worker`,
+//!    calling `NotificationService::process_pending(batch_size)` to pull pending
+//!    notifications and deliver them via registered `NotificationSender` backends
+//!    (Telegram / Email / Webhook). Successful sends are marked `Sent`; failures
+//!    increment `retry_count`, and exceeding `max_retries` marks them `Failed`.
+//!
+//! 3. **Retry** — Failed notifications can be manually reset to `Retrying` via
+//!    `POST /api/notifications/:id/retry`, and the next worker cycle picks them up.
+//!
+//! ```text
+//! ┌──────────┐  send()  ┌─────────┐  worker  ┌──────┐
+//! │ App code │ ───────→ │ Pending │ ───────→ │ Sent │
+//! └──────────┘          └─────────┘          └──────┘
+//!                            │ send failed         ↑
+//!                            ▼                     │ retry
+//!                       ┌─────────┐  retry ok  ┌──────────┐
+//!                       │ Failed  │ ←──────── │ Retrying │
+//!                       └─────────┘           └──────────┘
+//! ```
 
 use std::sync::Arc;
 
@@ -21,20 +47,21 @@ use job_common_worker::{FallibleWorker, WorkError, WorkResult, WorkerContext};
 use job_domain_notify::service::NotificationService;
 use tracing::{error, info};
 
-/// Background worker that periodically processes pending notifications.
+/// Background worker that periodically processes pending notifications in batch.
+///
+/// Scheduled by `job-common-worker::Manager` at a fixed interval (default 30s),
+/// pulling up to `batch_size` pending notifications per cycle.
 pub struct NotificationProcessorWorker {
     batch_size: i64,
 }
 
 impl NotificationProcessorWorker {
-    /// Create a new notification processor with the given batch size.
     pub fn new(batch_size: i64) -> Self { Self { batch_size } }
 }
 
-/// Shared state for the notification processor worker.
+/// Shared state for workers, injected by `job-app` at startup.
 #[derive(Clone)]
 pub struct WorkerState {
-    /// The notification service used to process pending notifications.
     pub notification_service: Arc<NotificationService>,
 }
 
