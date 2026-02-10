@@ -10,6 +10,7 @@ use axum::{
 };
 use job_domain_shared::id::InterviewId;
 use serde::Deserialize;
+use tracing::instrument;
 use uuid::Uuid;
 
 use crate::{
@@ -39,6 +40,7 @@ pub fn routes(service: Arc<InterviewService>) -> Router {
         .with_state(service)
 }
 
+#[instrument(skip(service, req))]
 async fn create_interview(
     State(service): State<Arc<InterviewService>>,
     Json(req): Json<CreateInterviewPlanRequest>,
@@ -47,6 +49,7 @@ async fn create_interview(
     Ok((StatusCode::CREATED, Json(plan)))
 }
 
+#[instrument(skip(service))]
 async fn list_interviews(
     State(service): State<Arc<InterviewService>>,
     Query(filter): Query<InterviewFilter>,
@@ -55,6 +58,7 @@ async fn list_interviews(
     Ok(Json(plans))
 }
 
+#[instrument(skip(service))]
 async fn get_interview(
     State(service): State<Arc<InterviewService>>,
     Path(id): Path<Uuid>,
@@ -63,6 +67,7 @@ async fn get_interview(
     Ok(Json(plan))
 }
 
+#[instrument(skip(service, req))]
 async fn update_interview(
     State(service): State<Arc<InterviewService>>,
     Path(id): Path<Uuid>,
@@ -72,6 +77,7 @@ async fn update_interview(
     Ok(Json(plan))
 }
 
+#[instrument(skip(service, body))]
 async fn update_status(
     State(service): State<Arc<InterviewService>>,
     Path(id): Path<Uuid>,
@@ -83,6 +89,7 @@ async fn update_status(
     Ok(Json(plan))
 }
 
+#[instrument(skip(service, prep_req))]
 async fn regenerate_prep(
     State(service): State<Arc<InterviewService>>,
     Path(id): Path<Uuid>,
@@ -94,6 +101,7 @@ async fn regenerate_prep(
     Ok(Json(plan))
 }
 
+#[instrument(skip(service))]
 async fn delete_interview(
     State(service): State<Arc<InterviewService>>,
     Path(id): Path<Uuid>,
