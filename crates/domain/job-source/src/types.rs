@@ -131,6 +131,34 @@ pub struct NormalizedJob {
     pub posted_at:       Option<Timestamp>,
 }
 
+/// API response model for the job discovery endpoint.
+///
+/// This keeps the existing fields and exposes a stable subset of
+/// detail fields extracted from the source payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveryJobResponse {
+    pub id:               Uuid,
+    pub source_job_id:    String,
+    pub source_name:      String,
+    pub title:            String,
+    pub company:          String,
+    pub location:         Option<String>,
+    pub description:      Option<String>,
+    pub url:              Option<String>,
+    pub salary_min:       Option<i32>,
+    pub salary_max:       Option<i32>,
+    pub salary_currency:  Option<String>,
+    pub tags:             Vec<String>,
+    pub posted_at:        Option<Timestamp>,
+    pub job_type:         Option<String>,
+    pub is_remote:        Option<bool>,
+    pub salary_interval:  Option<String>,
+    pub salary_source:    Option<String>,
+    pub job_level:        Option<String>,
+    pub company_url:      Option<String>,
+    pub company_industry: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // RawJob → NormalizedJob
 // ---------------------------------------------------------------------------
@@ -303,5 +331,120 @@ impl From<NormalizedJob> for Job {
             created_at:      now,
             updated_at:      now,
         }
+    }
+}
+
+impl From<NormalizedJob> for DiscoveryJobResponse {
+    fn from(job: NormalizedJob) -> Self {
+        let detail = job
+            .raw_data
+            .as_ref()
+            .map(DiscoveryDetailFields::from_raw_data)
+            .unwrap_or_default();
+
+        Self {
+            id:               job.id,
+            source_job_id:    job.source_job_id,
+            source_name:      job.source_name,
+            title:            job.title,
+            company:          job.company,
+            location:         job.location,
+            description:      job.description,
+            url:              job.url,
+            salary_min:       job.salary_min,
+            salary_max:       job.salary_max,
+            salary_currency:  job.salary_currency,
+            tags:             job.tags,
+            posted_at:        job.posted_at,
+            job_type:         detail.job_type,
+            is_remote:        detail.is_remote,
+            salary_interval:  detail.salary_interval,
+            salary_source:    detail.salary_source,
+            job_level:        detail.job_level,
+            company_url:      detail.company_url,
+            company_industry: detail.company_industry,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct DiscoveryDetailFields {
+    job_type:         Option<String>,
+    is_remote:        Option<bool>,
+    salary_interval:  Option<String>,
+    salary_source:    Option<String>,
+    job_level:        Option<String>,
+    company_url:      Option<String>,
+    company_industry: Option<String>,
+}
+
+impl DiscoveryDetailFields {
+    fn from_raw_data(raw: &serde_json::Value) -> Self {
+        Self {
+            job_type:         json_opt_non_empty_str(raw, "job_type"),
+            is_remote:        json_opt_bool(raw, "is_remote"),
+            salary_interval:  json_opt_non_empty_str(raw, "salary_interval"),
+            salary_source:    json_opt_non_empty_str(raw, "salary_source"),
+            job_level:        json_opt_non_empty_str(raw, "job_level"),
+            company_url:      json_opt_non_empty_str(raw, "company_url"),
+            company_industry: json_opt_non_empty_str(raw, "company_industry"),
+        }
+    }
+}
+
+fn json_opt_non_empty_str(raw: &serde_json::Value, key: &str) -> Option<String> {
+    let value = raw.get(key)?.as_str()?.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_owned())
+    }
+}
+
+fn json_opt_bool(raw: &serde_json::Value, key: &str) -> Option<bool> { raw.get(key)?.as_bool() }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discovery_detail_fields_extract_expected_values() {
+        let raw = serde_json::json!({
+            "job_type": "fulltime",
+            "is_remote": true,
+            "salary_interval": "yearly",
+            "salary_source": "direct_data",
+            "job_level": "senior",
+            "company_url": "https://example.com",
+            "company_industry": "software"
+        });
+
+        let detail = DiscoveryDetailFields::from_raw_data(&raw);
+        assert_eq!(
+            detail,
+            DiscoveryDetailFields {
+                job_type: Some("fulltime".to_owned()),
+                is_remote: Some(true),
+                salary_interval: Some("yearly".to_owned()),
+                salary_source: Some("direct_data".to_owned()),
+                job_level: Some("senior".to_owned()),
+                company_url: Some("https://example.com".to_owned()),
+                company_industry: Some("software".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn discovery_detail_fields_treats_empty_strings_as_none() {
+        let raw = serde_json::json!({
+            "job_type": " ",
+            "job_level": "",
+            "company_url": null
+        });
+
+        let detail = DiscoveryDetailFields::from_raw_data(&raw);
+        assert_eq!(detail.job_type, None);
+        assert_eq!(detail.job_level, None);
+        assert_eq!(detail.company_url, None);
     }
 }

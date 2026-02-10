@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useLocalStorage } from "@/hooks/use-local-storage";
 import {
@@ -43,6 +43,13 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Search,
   Briefcase,
@@ -94,6 +101,7 @@ function getPostedAfterTimestamp(filter: string): string | undefined {
 }
 
 export default function JobDiscovery() {
+  const [selectedJob, setSelectedJob] = useState<NormalizedJob | null>(null);
   const [cachedJobs, setCachedJobs] = useLocalStorage<NormalizedJob[] | null>(
     "job-discovery-cached-results",
     null,
@@ -171,6 +179,10 @@ export default function JobDiscovery() {
   };
 
   const jobs = discoverMutation.data ?? cachedJobs;
+
+  const openJobDetail = (job: NormalizedJob) => {
+    setSelectedJob(job);
+  };
 
   return (
     <div className="space-y-6">
@@ -346,7 +358,19 @@ export default function JobDiscovery() {
             );
             const posted = formatDate(job.posted_at);
             return (
-              <Card key={job.id}>
+              <Card
+                key={job.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => openJobDetail(job)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    openJobDetail(job);
+                  }
+                }}
+                className="cursor-pointer transition-shadow hover:shadow-md focus:outline-none focus:ring-2 focus:ring-ring"
+              >
                 <CardContent className="p-6">
                   <div className="flex items-start justify-between gap-4">
                     <div className="space-y-2 flex-1 min-w-0">
@@ -396,6 +420,7 @@ export default function JobDiscovery() {
                         href={job.url}
                         target="_blank"
                         rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
                         className="shrink-0"
                       >
                         <Button variant="outline" size="sm">
@@ -439,6 +464,96 @@ export default function JobDiscovery() {
           </CardContent>
         </Card>
       )}
+
+      <Dialog open={selectedJob !== null} onOpenChange={(open) => !open && setSelectedJob(null)}>
+        <DialogContent className="max-w-3xl max-h-[85vh] overflow-hidden">
+          {selectedJob && (
+            (() => {
+              const detailPosted = formatDate(selectedJob.posted_at);
+              const detailSalary = formatSalary(
+                selectedJob.salary_min,
+                selectedJob.salary_max,
+                selectedJob.salary_currency
+              );
+              return (
+                <>
+              <DialogHeader>
+                <DialogTitle className="pr-8">{selectedJob.title}</DialogTitle>
+                <DialogDescription>{selectedJob.company}</DialogDescription>
+              </DialogHeader>
+
+              <div className="flex items-center gap-2 flex-wrap text-sm text-muted-foreground">
+                <Badge variant="outline">{selectedJob.source_name}</Badge>
+                {selectedJob.job_type && (
+                  <Badge variant="secondary">{selectedJob.job_type}</Badge>
+                )}
+                {selectedJob.is_remote && (
+                  <Badge variant="secondary">remote</Badge>
+                )}
+                {selectedJob.job_level && (
+                  <Badge variant="secondary">{selectedJob.job_level}</Badge>
+                )}
+                {selectedJob.location && (
+                  <span className="flex items-center gap-1">
+                    <MapPin className="h-4 w-4" />
+                    {selectedJob.location}
+                  </span>
+                )}
+                {detailPosted && (
+                  <span className="flex items-center gap-1">
+                    <Calendar className="h-4 w-4" />
+                    {detailPosted}
+                  </span>
+                )}
+                {detailSalary && (
+                  <span className="flex items-center gap-1">
+                    <DollarSign className="h-4 w-4" />
+                    {detailSalary}
+                  </span>
+                )}
+              </div>
+
+              {selectedJob.company_industry && (
+                <p className="text-sm text-muted-foreground">
+                  Industry: {selectedJob.company_industry}
+                </p>
+              )}
+
+              <div className="overflow-y-auto pr-1 text-sm leading-6">
+                {selectedJob.description && selectedJob.description.trim() ? (
+                  <p className="whitespace-pre-wrap">{selectedJob.description}</p>
+                ) : (
+                  <p className="text-muted-foreground">
+                    No description available from this source. Use the original posting link for
+                    full details.
+                  </p>
+                )}
+              </div>
+
+              {selectedJob.url && (
+                <div className="pt-2 flex items-center gap-2 flex-wrap">
+                  <a href={selectedJob.url} target="_blank" rel="noopener noreferrer">
+                    <Button variant="outline">
+                      <ExternalLink className="h-4 w-4 mr-2" />
+                      Open Original Posting
+                    </Button>
+                  </a>
+                  {selectedJob.company_url && (
+                    <a href={selectedJob.company_url} target="_blank" rel="noopener noreferrer">
+                      <Button variant="ghost">
+                        <Building2 className="h-4 w-4 mr-2" />
+                        Company Page
+                      </Button>
+                    </a>
+                  )}
+                </div>
+              )}
+                </>
+              );
+            })()
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

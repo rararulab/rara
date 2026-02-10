@@ -52,7 +52,7 @@ impl JobSpyDriver {
     pub fn new() -> Result<Self, SourceError> {
         let jobspy = jobspy_sys::JobSpy::new().map_err(|e| SourceError::NonRetryable {
             source_name: JOBSPY_SOURCE_NAME.to_owned(),
-            message:     format!("Failed to initialize JobSpy: {e}"),
+            message: format!("Failed to initialize JobSpy: {e}"),
         })?;
         Ok(Self { jobspy })
     }
@@ -79,18 +79,8 @@ impl JobSpyDriver {
         });
 
         // Use caller-provided sites when non-empty; fall back to defaults.
-        let sites: Vec<jobspy_sys::types::SiteName> = if query.sites.is_empty() {
-            DEFAULT_SITES.to_vec()
-        } else {
-            let parsed: Vec<_> = query
-                .sites
-                .iter()
-                .filter_map(|s| {
-                    serde_json::from_value(serde_json::Value::String(s.to_lowercase())).ok()
-                })
-                .collect();
-            if parsed.is_empty() { DEFAULT_SITES.to_vec() } else { parsed }
-        };
+        let sites = resolve_sites(&query.sites);
+        let linkedin_fetch_description = resolve_linkedin_fetch_description(&sites);
 
         let params = jobspy_sys::types::ScrapeParams::builder()
             .site_name(sites)
@@ -99,6 +89,7 @@ impl JobSpyDriver {
             .maybe_job_type(job_type)
             .maybe_results_wanted(query.max_results)
             .maybe_hours_old(hours_old)
+            .maybe_linkedin_fetch_description(linkedin_fetch_description)
             .build();
 
         // Call Python — the GIL serializes execution so blocking is expected.
@@ -106,13 +97,13 @@ impl JobSpyDriver {
             // Check for rate-limiting indicators in the error message.
             if e.contains("429") || e.to_lowercase().contains("rate limit") {
                 SourceError::RateLimited {
-                    source_name:      JOBSPY_SOURCE_NAME.to_owned(),
+                    source_name: JOBSPY_SOURCE_NAME.to_owned(),
                     retry_after_secs: 60,
                 }
             } else {
                 SourceError::Retryable {
                     source_name: JOBSPY_SOURCE_NAME.to_owned(),
-                    message:     e,
+                    message: e,
                 }
             }
         })?;
@@ -122,9 +113,103 @@ impl JobSpyDriver {
     }
 }
 
+fn resolve_sites(query_sites: &[String]) -> Vec<jobspy_sys::types::SiteName> {
+    if query_sites.is_empty() {
+        return DEFAULT_SITES.to_vec();
+    }
+
+    let parsed: Vec<_> = query_sites
+        .iter()
+        .filter_map(|s| serde_json::from_value(serde_json::Value::String(s.to_lowercase())).ok())
+        .collect();
+    if parsed.is_empty() {
+        DEFAULT_SITES.to_vec()
+    } else {
+        parsed
+    }
+}
+
+fn resolve_linkedin_fetch_description(sites: &[jobspy_sys::types::SiteName]) -> Option<bool> {
+    resolve_linkedin_fetch_description_with_override(
+        sites,
+        parse_env_bool("JOBSPY_LINKEDIN_FETCH_DESCRIPTION"),
+    )
+}
+
+fn resolve_linkedin_fetch_description_with_override(
+    sites: &[jobspy_sys::types::SiteName],
+    env_override: Option<bool>,
+) -> Option<bool> {
+    if !sites.contains(&jobspy_sys::types::SiteName::LinkedIn) {
+        return None;
+    }
+
+    env_override.or(Some(true))
+}
+
+fn parse_env_bool(name: &str) -> Option<bool> {
+    let value = std::env::var(name).ok()?;
+    parse_bool_value(&value)
+}
+
+fn parse_bool_value(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use jobspy_sys::types::SiteName;
+
+    #[test]
+    fn resolve_sites_falls_back_to_default_when_empty() {
+        assert_eq!(resolve_sites(&[]), DEFAULT_SITES.to_vec());
+    }
+
+    #[test]
+    fn resolve_sites_parses_known_values() {
+        let sites = resolve_sites(&["linkedin".to_owned(), "indeed".to_owned()]);
+        assert_eq!(sites, vec![SiteName::LinkedIn, SiteName::Indeed]);
+    }
+
+    #[test]
+    fn resolve_sites_falls_back_to_default_when_all_invalid() {
+        let sites = resolve_sites(&["bogus".to_owned()]);
+        assert_eq!(sites, DEFAULT_SITES.to_vec());
+    }
+
+    #[test]
+    fn linkedin_fetch_description_defaults_true_for_linkedin() {
+        let value = resolve_linkedin_fetch_description_with_override(&[SiteName::LinkedIn], None);
+        assert_eq!(value, Some(true));
+    }
+
+    #[test]
+    fn linkedin_fetch_description_respects_env_override() {
+        let value =
+            resolve_linkedin_fetch_description_with_override(&[SiteName::LinkedIn], Some(false));
+        assert_eq!(value, Some(false));
+    }
+
+    #[test]
+    fn linkedin_fetch_description_is_none_without_linkedin() {
+        let value =
+            resolve_linkedin_fetch_description_with_override(&[SiteName::Indeed], Some(true));
+        assert_eq!(value, None);
+    }
+
+    #[test]
+    fn parse_bool_value_handles_expected_inputs() {
+        assert_eq!(parse_bool_value("true"), Some(true));
+        assert_eq!(parse_bool_value("1"), Some(true));
+        assert_eq!(parse_bool_value("off"), Some(false));
+        assert_eq!(parse_bool_value("0"), Some(false));
+        assert_eq!(parse_bool_value("unknown"), None);
+    }
 
     #[test]
     fn test_name() {

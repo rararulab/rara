@@ -38,6 +38,13 @@ export interface NormalizedJob {
   salary_currency?: string;
   tags: string[];
   posted_at?: string;
+  job_type?: string;
+  is_remote?: boolean;
+  salary_interval?: string;
+  salary_source?: string;
+  job_level?: string;
+  company_url?: string;
+  company_industry?: string;
 }
 
 // Analytics

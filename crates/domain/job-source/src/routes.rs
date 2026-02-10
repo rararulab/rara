@@ -7,7 +7,7 @@ use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
 use crate::{
     err::SourceError,
     service::JobSourceService,
-    types::{DiscoveryCriteria, NormalizedJob},
+    types::{DiscoveryCriteria, DiscoveryJobResponse},
 };
 
 /// Register all job source routes on a new router with shared state.
@@ -21,7 +21,7 @@ pub fn routes(service: Arc<JobSourceService>) -> Router {
 async fn discover_jobs(
     State(service): State<Arc<JobSourceService>>,
     Json(criteria): Json<DiscoveryCriteria>,
-) -> Result<(StatusCode, Json<Vec<NormalizedJob>>), SourceError> {
+) -> Result<(StatusCode, Json<Vec<DiscoveryJobResponse>>), SourceError> {
     tracing::info!("starting job discovery");
     // JobSourceService::discover() is synchronous (calls Python via PyO3),
     // so we wrap it in spawn_blocking to avoid blocking the async runtime.
@@ -48,6 +48,13 @@ async fn discover_jobs(
         return Err(result.error.unwrap());
     }
 
-    tracing::info!(job_count = result.jobs.len(), "job discovery complete");
-    Ok((StatusCode::OK, Json(result.jobs)))
+    let job_count = result.jobs.len();
+    let response = result
+        .jobs
+        .into_iter()
+        .map(DiscoveryJobResponse::from)
+        .collect();
+
+    tracing::info!(job_count, "job discovery complete");
+    Ok((StatusCode::OK, Json(response)))
 }
