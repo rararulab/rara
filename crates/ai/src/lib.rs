@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # job-domain-ai
+//! # job-ai
 //!
 //! AI provider abstraction with task-specific agents for job-related
 //! operations such as fit analysis, resume optimization, interview

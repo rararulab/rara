@@ -16,12 +16,13 @@ async-trait = { workspace = true }
 axum = { workspace = true }
 job-common-telemetry = { workspace = true }
 job-common-worker = { workspace = true }
-job-domain-ai = { workspace = true }
+job-ai = { workspace = true }
 job-domain-analytics = { workspace = true }
 job-domain-application = { workspace = true }
 job-domain-interview = { workspace = true }
 job-domain-job-source = { workspace = true }
 job-domain-notify = { workspace = true }
+job-workers = { workspace = true }
 job-domain-resume = { workspace = true }
 job-domain-scheduler = { workspace = true }
 job-server = { workspace = true }

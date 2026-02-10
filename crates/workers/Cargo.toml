@@ -1,5 +1,5 @@
 [package]
-name = "job-domain-ai"
+name = "job-workers"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -9,11 +9,13 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "AI provider abstraction with task-specific agents"
+description = "Background worker implementations for job automation"
 
 [dependencies]
-rig-core.workspace = true
-snafu.workspace = true
+async-trait.workspace = true
+job-common-worker = { workspace = true }
+job-domain-notify = { workspace = true }
+tracing.workspace = true
 
 [lints]
 workspace = true
