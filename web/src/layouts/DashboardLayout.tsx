@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { useEffect, useSyncExternalStore } from 'react';
 import { NavLink, Outlet } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -24,9 +25,23 @@ import {
   Search,
   Bell,
   Clock,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Sun,
+  Moon,
+  Monitor,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Separator } from '@/components/ui/separator';
+import { Button } from '@/components/ui/button';
+import { useLocalStorage } from '@/hooks/use-local-storage';
+import { useTheme } from '@/hooks/use-theme';
+
+const THEME_META = {
+  system: { icon: Monitor, label: 'System' },
+  light:  { icon: Sun,     label: 'Light' },
+  dark:   { icon: Moon,    label: 'Dark' },
+} as const;
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -38,7 +53,7 @@ const navItems = [
   { to: '/scheduler', icon: Clock, label: 'Scheduler' },
 ];
 
-function ServerStatus() {
+function ServerStatus({ collapsed }: { collapsed: boolean }) {
   const { status } = useQuery({
     queryKey: ['health'],
     queryFn: async () => {
@@ -60,51 +75,106 @@ function ServerStatus() {
   const isChecking = status === 'pending';
 
   return (
-    <div className="flex items-center gap-2 px-4 py-3 text-xs text-muted-foreground">
+    <div className={cn('flex items-center gap-2 py-3 text-xs text-muted-foreground', collapsed ? 'justify-center px-2' : 'px-4')}>
       <span
         className={cn(
-          'h-2 w-2 rounded-full',
+          'h-2 w-2 shrink-0 rounded-full',
           isChecking && 'bg-yellow-400 animate-pulse',
           isOnline && 'bg-green-500',
           !isOnline && !isChecking && 'bg-red-500'
         )}
       />
-      <span>{isChecking ? 'Connecting...' : isOnline ? 'Server online' : 'Server offline'}</span>
+      {!collapsed && (
+        <span>{isChecking ? 'Connecting...' : isOnline ? 'Server online' : 'Server offline'}</span>
+      )}
     </div>
   );
 }
 
+function ThemeToggle({ collapsed }: { collapsed: boolean }) {
+  const { theme, cycleTheme } = useTheme();
+  const meta = THEME_META[theme];
+  const Icon = meta.icon;
+
+  return (
+    <Button
+      variant="ghost"
+      size={collapsed ? 'icon' : 'sm'}
+      className={cn('shrink-0', collapsed ? 'mx-auto h-8 w-8' : 'mx-4 justify-start gap-2')}
+      onClick={cycleTheme}
+      title={`Theme: ${meta.label}`}
+    >
+      <Icon className="h-4 w-4 shrink-0" />
+      {!collapsed && <span className="text-xs text-muted-foreground">{meta.label}</span>}
+    </Button>
+  );
+}
+
+const WIDE_QUERY = '(min-width: 768px)';
+
+function useIsWide(): boolean {
+  return useSyncExternalStore(
+    (cb) => {
+      const mql = window.matchMedia(WIDE_QUERY);
+      mql.addEventListener('change', cb);
+      return () => mql.removeEventListener('change', cb);
+    },
+    () => window.matchMedia(WIDE_QUERY).matches,
+  );
+}
+
 export default function DashboardLayout() {
+  const [collapsed, setCollapsed] = useLocalStorage('sidebar-collapsed', false);
+  const isWide = useIsWide();
+
+  useEffect(() => {
+    setCollapsed(!isWide);
+  }, [isWide, setCollapsed]);
+
   return (
     <div className="flex h-screen">
       {/* Sidebar */}
-      <aside className="w-64 border-r bg-card flex flex-col">
-        <div className="p-6">
-          <h1 className="text-xl font-bold">Job Platform</h1>
+      <aside className={cn('border-r bg-card flex flex-col transition-all duration-200', collapsed ? 'w-16' : 'w-64')}>
+        <div className={cn('flex items-center', collapsed ? 'justify-center p-4' : 'justify-between p-6')}>
+          {!collapsed && <h1 className="text-xl font-bold">Job Platform</h1>}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 shrink-0"
+            onClick={() => setCollapsed((prev) => !prev)}
+          >
+            {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+          </Button>
         </div>
         <Separator />
-        <nav className="flex-1 p-4 space-y-1">
+        <nav className={cn('flex-1 space-y-1', collapsed ? 'p-2' : 'p-4')}>
           {navItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
               end={item.to === '/'}
+              title={collapsed ? item.label : undefined}
               className={({ isActive }) =>
                 cn(
-                  'flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                  'flex items-center rounded-md text-sm font-medium transition-colors',
+                  collapsed ? 'justify-center px-2 py-2' : 'gap-3 px-3 py-2',
                   isActive
                     ? 'bg-accent text-accent-foreground'
                     : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
                 )
               }
             >
-              <item.icon className="h-4 w-4" />
-              {item.label}
+              <item.icon className="h-4 w-4 shrink-0" />
+              {!collapsed && item.label}
             </NavLink>
           ))}
         </nav>
         <Separator />
-        <ServerStatus />
+        <div className="py-2">
+          <ThemeToggle collapsed={collapsed} />
+        </div>
+        <Separator />
+        <ServerStatus collapsed={collapsed} />
       </aside>
 
       {/* Main content */}

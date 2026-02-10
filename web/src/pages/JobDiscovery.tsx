@@ -85,7 +85,7 @@ function formatDate(dateStr?: string): string | null {
 }
 
 function getPostedAfterTimestamp(filter: string): string | undefined {
-  if (!filter) return undefined;
+  if (!filter || filter === "any") return undefined;
   const now = Date.now();
   const hours: Record<string, number> = { "24h": 24, "7d": 168, "30d": 720 };
   const h = hours[filter];
@@ -102,7 +102,7 @@ export default function JobDiscovery() {
     "job-discovery-selected-sites",
     ["linkedin", "indeed"],
   );
-  const [postedAfter, setPostedAfter] = useLocalStorage("job-discovery-posted-after", "");
+  const [postedAfter, setPostedAfter] = useLocalStorage("job-discovery-posted-after", "any");
 
   const locationSuggestions = useMemo(() => {
     const recent: string[] = [];
@@ -249,7 +249,7 @@ export default function JobDiscovery() {
                     <SelectValue placeholder="Any time" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">Any time</SelectItem>
+                    <SelectItem value="any">Any time</SelectItem>
                     <SelectItem value="24h">Last 24 hours</SelectItem>
                     <SelectItem value="7d">Last 7 days</SelectItem>
                     <SelectItem value="30d">Last 30 days</SelectItem>
