@@ -24,6 +24,7 @@ use axum::{
 };
 use job_domain_shared::id::ApplicationId;
 use serde::Deserialize;
+use tracing::instrument;
 use uuid::Uuid;
 
 use crate::{
@@ -59,6 +60,7 @@ pub fn routes(service: Arc<ApplicationService>) -> Router {
         .with_state(service)
 }
 
+#[instrument(skip(service, req))]
 async fn create_application(
     State(service): State<Arc<ApplicationService>>,
     Json(req): Json<CreateApplicationRequest>,
@@ -67,6 +69,7 @@ async fn create_application(
     Ok((StatusCode::CREATED, Json(app)))
 }
 
+#[instrument(skip(service))]
 async fn list_applications(
     State(service): State<Arc<ApplicationService>>,
     Query(filter): Query<ApplicationFilter>,
@@ -75,6 +78,7 @@ async fn list_applications(
     Ok(Json(apps))
 }
 
+#[instrument(skip(service))]
 async fn get_application(
     State(service): State<Arc<ApplicationService>>,
     Path(id): Path<Uuid>,
@@ -83,6 +87,7 @@ async fn get_application(
     Ok(Json(app))
 }
 
+#[instrument(skip(service, req))]
 async fn update_application(
     State(service): State<Arc<ApplicationService>>,
     Path(id): Path<Uuid>,
@@ -94,6 +99,7 @@ async fn update_application(
     Ok(Json(app))
 }
 
+#[instrument(skip(service, body))]
 async fn transition_status(
     State(service): State<Arc<ApplicationService>>,
     Path(id): Path<Uuid>,
@@ -105,6 +111,7 @@ async fn transition_status(
     Ok(Json(app))
 }
 
+#[instrument(skip(service))]
 async fn get_status_history(
     State(service): State<Arc<ApplicationService>>,
     Path(id): Path<Uuid>,
@@ -113,6 +120,7 @@ async fn get_status_history(
     Ok(Json(history))
 }
 
+#[instrument(skip(service))]
 async fn delete_application(
     State(service): State<Arc<ApplicationService>>,
     Path(id): Path<Uuid>,

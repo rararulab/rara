@@ -23,6 +23,7 @@ use axum::{
 };
 use job_domain_shared::id::SchedulerTaskId;
 use serde::Deserialize;
+use tracing::instrument;
 use uuid::Uuid;
 
 use crate::{
@@ -52,6 +53,7 @@ pub fn routes(service: Arc<SchedulerService>) -> Router {
         .with_state(service)
 }
 
+#[instrument(skip(service))]
 async fn list_tasks(
     State(service): State<Arc<SchedulerService>>,
     Query(query): Query<TaskListQuery>,
@@ -64,6 +66,7 @@ async fn list_tasks(
     Ok(Json(tasks))
 }
 
+#[instrument(skip(service))]
 async fn get_task(
     State(service): State<Arc<SchedulerService>>,
     Path(id): Path<Uuid>,
@@ -72,6 +75,7 @@ async fn get_task(
     Ok(Json(task))
 }
 
+#[instrument(skip(service))]
 async fn enable_task(
     State(service): State<Arc<SchedulerService>>,
     Path(id): Path<Uuid>,
@@ -80,6 +84,7 @@ async fn enable_task(
     Ok(Json(task))
 }
 
+#[instrument(skip(service))]
 async fn disable_task(
     State(service): State<Arc<SchedulerService>>,
     Path(id): Path<Uuid>,
@@ -88,6 +93,7 @@ async fn disable_task(
     Ok(Json(task))
 }
 
+#[instrument(skip(service))]
 async fn get_history(
     State(service): State<Arc<SchedulerService>>,
     Path(id): Path<Uuid>,

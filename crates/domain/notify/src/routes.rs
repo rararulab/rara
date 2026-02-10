@@ -22,6 +22,7 @@ use axum::{
     routing::{get, post},
 };
 use serde::Deserialize;
+use tracing::instrument;
 use uuid::Uuid;
 
 use crate::{
@@ -51,6 +52,7 @@ pub fn routes(service: Arc<NotificationService>) -> Router {
         .with_state(service)
 }
 
+#[instrument(skip(service))]
 async fn list_notifications(
     State(service): State<Arc<NotificationService>>,
     Query(query): Query<NotificationListQuery>,
@@ -78,6 +80,7 @@ async fn list_notifications(
     Ok(Json(notifications))
 }
 
+#[instrument(skip(service))]
 async fn get_statistics(
     State(service): State<Arc<NotificationService>>,
 ) -> Result<Json<NotificationStatistics>, NotifyError> {
@@ -85,6 +88,7 @@ async fn get_statistics(
     Ok(Json(stats))
 }
 
+#[instrument(skip(service))]
 async fn get_notification(
     State(service): State<Arc<NotificationService>>,
     Path(id): Path<Uuid>,
@@ -96,6 +100,7 @@ async fn get_notification(
     Ok(Json(notification))
 }
 
+#[instrument(skip(service))]
 async fn retry_notification(
     State(service): State<Arc<NotificationService>>,
     Path(id): Path<Uuid>,

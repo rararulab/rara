@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::time::Duration;
+
 use axum::{
     Router, extract::DefaultBodyLimit, http::StatusCode, response::IntoResponse, routing::get,
 };
@@ -24,6 +26,7 @@ use snafu::ResultExt;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::timeout::TimeoutLayer;
 use tracing::info;
 
 use super::ServiceHandler;
@@ -31,18 +34,24 @@ use super::ServiceHandler;
 /// Default maximum HTTP request body size (100 MB)
 pub const DEFAULT_MAX_HTTP_BODY_SIZE: ReadableSize = ReadableSize::mb(100);
 
+/// Default request timeout in seconds.
+pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
+
 /// Configuration options for a REST server
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, SmartDefault, bon::Builder)]
 pub struct RestServerConfig {
     /// The address to bind the REST server
     #[default = "127.0.0.1:3000"]
-    pub bind_address:  String,
+    pub bind_address:     String,
     /// Maximum HTTP request body size
     #[default(_code = "DEFAULT_MAX_HTTP_BODY_SIZE")]
-    pub max_body_size: ReadableSize,
+    pub max_body_size:    ReadableSize,
     /// Whether to enable CORS
     #[default = true]
-    pub enable_cors:   bool,
+    pub enable_cors:      bool,
+    /// Request timeout in seconds
+    #[default(DEFAULT_REQUEST_TIMEOUT_SECS)]
+    pub request_timeout:  u64,
 }
 
 /// Starts the REST server and returns a handle for managing its lifecycle.
@@ -113,6 +122,10 @@ where
         .route("/health", get(health_check))
         .layer(OtelInResponseLayer)
         .layer(OtelAxumLayer::default())
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            Duration::from_secs(config.request_timeout),
+        ))
         .layer({
             #[allow(clippy::cast_possible_truncation)]
             DefaultBodyLimit::max(config.max_body_size.as_bytes() as usize)

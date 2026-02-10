@@ -22,6 +22,7 @@ use axum::{
     http::StatusCode,
     routing::{delete, get, post, put},
 };
+use tracing::instrument;
 use uuid::Uuid;
 
 use crate::{
@@ -41,6 +42,7 @@ pub fn routes<R: ResumeRepository + 'static>(service: Arc<ResumeService<R>>) -> 
         .with_state(service)
 }
 
+#[instrument(skip(service, req))]
 async fn create_resume<R: ResumeRepository + 'static>(
     State(service): State<Arc<ResumeService<R>>>,
     Json(req): Json<CreateResumeRequest>,
@@ -49,6 +51,7 @@ async fn create_resume<R: ResumeRepository + 'static>(
     Ok((StatusCode::CREATED, Json(resume)))
 }
 
+#[instrument(skip(service))]
 async fn list_resumes<R: ResumeRepository + 'static>(
     State(service): State<Arc<ResumeService<R>>>,
     Query(filter): Query<ResumeFilter>,
@@ -57,6 +60,7 @@ async fn list_resumes<R: ResumeRepository + 'static>(
     Ok(Json(resumes))
 }
 
+#[instrument(skip(service))]
 async fn get_resume<R: ResumeRepository + 'static>(
     State(service): State<Arc<ResumeService<R>>>,
     Path(id): Path<Uuid>,
@@ -65,6 +69,7 @@ async fn get_resume<R: ResumeRepository + 'static>(
     Ok(Json(resume))
 }
 
+#[instrument(skip(service, req))]
 async fn update_resume<R: ResumeRepository + 'static>(
     State(service): State<Arc<ResumeService<R>>>,
     Path(id): Path<Uuid>,
@@ -74,6 +79,7 @@ async fn update_resume<R: ResumeRepository + 'static>(
     Ok(Json(resume))
 }
 
+#[instrument(skip(service))]
 async fn delete_resume<R: ResumeRepository + 'static>(
     State(service): State<Arc<ResumeService<R>>>,
     Path(id): Path<Uuid>,

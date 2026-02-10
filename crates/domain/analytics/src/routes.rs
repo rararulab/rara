@@ -22,6 +22,7 @@ use axum::{
     routing::{delete, get, post},
 };
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 use uuid::Uuid;
 
 use crate::{
@@ -66,6 +67,7 @@ pub fn routes(service: Arc<AnalyticsService>) -> Router {
         .with_state(service)
 }
 
+#[instrument(skip(service, req))]
 async fn create_snapshot(
     State(service): State<Arc<AnalyticsService>>,
     Json(req): Json<CreateSnapshotRequest>,
@@ -74,6 +76,7 @@ async fn create_snapshot(
     Ok(Json(snapshot))
 }
 
+#[instrument(skip(service))]
 async fn list_snapshots(
     State(service): State<Arc<AnalyticsService>>,
     Query(query): Query<SnapshotListQuery>,
@@ -88,6 +91,7 @@ async fn list_snapshots(
     Ok(Json(snapshots))
 }
 
+#[instrument(skip(service))]
 async fn get_latest(
     State(service): State<Arc<AnalyticsService>>,
     Query(query): Query<LatestQuery>,
@@ -97,6 +101,7 @@ async fn get_latest(
     Ok(Json(snapshot))
 }
 
+#[instrument(skip(service))]
 async fn get_snapshot(
     State(service): State<Arc<AnalyticsService>>,
     Path(id): Path<Uuid>,
@@ -105,6 +110,7 @@ async fn get_snapshot(
     Ok(Json(snapshot))
 }
 
+#[instrument(skip(service))]
 async fn get_derived_rates(
     State(service): State<Arc<AnalyticsService>>,
     Path(id): Path<Uuid>,
@@ -119,6 +125,7 @@ async fn get_derived_rates(
     Ok(Json(rates))
 }
 
+#[instrument(skip(service))]
 async fn delete_snapshot(
     State(service): State<Arc<AnalyticsService>>,
     Path(id): Path<Uuid>,
