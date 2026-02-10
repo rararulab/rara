@@ -178,10 +178,8 @@ impl AppConfig {
 
         // AI service (optional, needs OPENAI_API_KEY)
         let ai_service = self.openai.as_ref().map(|cfg| {
-            let tmpl_mgr =
-                Arc::new(job_domain_ai::template::InMemoryTemplateManager::new());
             Arc::new(job_domain_ai::service::AiService::new(
-                &cfg.api_key, cfg.model.clone(), tmpl_mgr, None,
+                &cfg.api_key, cfg.model.clone(), None,
             ))
         });
         if ai_service.is_some() {

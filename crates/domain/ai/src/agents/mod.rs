@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # job-domain-ai
+//! Task-specific AI agents.
 //!
-//! AI provider abstraction with task-specific agents for job-related
-//! operations such as fit analysis, resume optimization, interview
-//! preparation, follow-up drafting, and cover letter generation.
+//! Each agent is a lightweight struct that borrows the underlying
+//! OpenAI client and model name from [`AiService`](crate::service::AiService).
 
-pub mod agents;
-pub mod error;
-pub mod service;
+pub mod cover_letter;
+pub mod follow_up;
+pub mod interview_prep;
+pub mod job_fit;
+pub mod resume_optimizer;
