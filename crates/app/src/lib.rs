@@ -220,46 +220,45 @@ impl AppConfig {
             analytics_repo,
         ));
 
-        // AI service (optional, needs OPENAI_API_KEY)
-        let ai_service = self.openai.as_ref().map(|cfg| {
-            Arc::new(job_ai::service::AiService::new(
-                &cfg.api_key,
-                cfg.model.clone(),
-                None,
-            ))
-        });
-        if ai_service.is_some() {
-            info!("AI service configured (OpenAI)");
-        } else {
-            info!("AI service not configured (OPENAI_API_KEY not set)");
-        }
+        // AI service (required)
+        let openai_cfg = match self.openai.as_ref() {
+            Some(cfg) => cfg,
+            None => {
+                whatever!("OpenAI is required: set OPENAI_API_KEY")
+            }
+        };
+        let ai_service = Arc::new(job_ai::service::AiService::new(
+            &openai_cfg.api_key,
+            openai_cfg.model.clone(),
+            None,
+        ));
+        info!("AI service configured (OpenAI)");
 
         // Job repository (for saving parsed JDs)
         let job_repo: Arc<dyn job_domain_job_source::repository::JobRepository> = Arc::new(
             job_domain_job_source::pg_repository::PgJobRepository::new(pool.clone()),
         );
 
-        // Object store (MinIO / S3) — optional, for saved-job markdown
-        let object_store = self.minio.as_ref().and_then(|m| {
-            let cfg = job_object_store::ObjectStoreConfig::builder()
-                .endpoint(m.endpoint.clone())
-                .bucket(m.bucket.clone())
-                .access_key(m.access_key.clone())
-                .secret_key(m.secret_key.clone())
-                .region(m.region.clone())
-                .root("/".to_owned())
-                .build();
-            match job_object_store::ObjectStore::new(&cfg) {
-                Ok(store) => {
-                    info!("Object store (MinIO) configured");
-                    Some(Arc::new(store))
-                }
-                Err(e) => {
-                    info!("Object store not available: {e}");
-                    None
-                }
+        // Object store (MinIO / S3) — required, for saved-job markdown
+        let minio_cfg = match self.minio.as_ref() {
+            Some(cfg) => cfg,
+            None => {
+                whatever!("MinIO is required: set MINIO_ENDPOINT")
             }
-        });
+        };
+        let os_cfg = job_object_store::ObjectStoreConfig::builder()
+            .endpoint(minio_cfg.endpoint.clone())
+            .bucket(minio_cfg.bucket.clone())
+            .access_key(minio_cfg.access_key.clone())
+            .secret_key(minio_cfg.secret_key.clone())
+            .region(minio_cfg.region.clone())
+            .root("/".to_owned())
+            .build();
+        let object_store = Arc::new(
+            job_object_store::ObjectStore::new(&os_cfg)
+                .whatever_context("Failed to initialize object store")?,
+        );
+        info!("Object store (MinIO) configured");
 
         // Job Source domain — JobSpy driver + discovery service
         let jobspy_driver = job_domain_job_source::jobspy::JobSpyDriver::new()
@@ -282,25 +281,9 @@ impl AppConfig {
             saved_job_repo,
         ));
 
-        // Crawl4AI client + saved job pipeline (requires object_store + ai_service)
+        // Crawl4AI client (used by CrawlWorker)
         let crawl_client = job_domain_saved_job::crawl4ai::Crawl4AiClient::new(&self.crawl4ai_url);
-
-        let saved_job_pipeline = match (&object_store, &ai_service) {
-            (Some(os), Some(ai)) => {
-                let pipeline = job_domain_saved_job::pipeline::SavedJobPipeline::new(
-                    saved_job_service.clone(),
-                    crawl_client,
-                    os.clone(),
-                    ai.clone(),
-                );
-                info!("Saved job pipeline configured (Crawl4AI + AI analysis)");
-                Some(Arc::new(pipeline))
-            }
-            _ => {
-                info!("Saved job pipeline not configured (requires object store + AI)");
-                None
-            }
-        };
+        info!("Crawl4AI client configured");
 
         // Build routes closure — captures Arc'd services for on-demand Router
         // construction (axum::Router does not implement Clone).
@@ -342,9 +325,9 @@ impl AppConfig {
             ai_service,
             job_repo,
             job_source_service,
-            saved_job_service: Some(saved_job_service.clone()),
+            saved_job_service,
             object_store,
-            saved_job_pipeline,
+            crawl_client,
         })
     }
 }
@@ -367,30 +350,22 @@ pub struct App {
     notification_service: Arc<job_domain_notify::service::NotificationService>,
     /// Telegram service shared by workers and notification sender
     telegram:             Arc<TelegramService>,
-    /// AI service for JD parsing (optional)
-    ai_service:           Option<Arc<job_ai::service::AiService>>,
+    /// AI service for JD parsing and analysis
+    ai_service:           Arc<job_ai::service::AiService>,
     /// Job repository for persisting parsed jobs
     job_repo:             Arc<dyn job_domain_job_source::repository::JobRepository>,
     /// Job source service for discovery (used by Telegram /search command)
     job_source_service:   Arc<job_domain_job_source::service::JobSourceService>,
-    /// Saved job service for GC worker
-    saved_job_service: Option<
-        Arc<
-            job_domain_saved_job::service::SavedJobService<
-                job_domain_saved_job::pg_repository::PgSavedJobRepository,
-            >,
+    /// Saved job service for workers
+    saved_job_service: Arc<
+        job_domain_saved_job::service::SavedJobService<
+            job_domain_saved_job::pg_repository::PgSavedJobRepository,
         >,
     >,
-    /// Object store for GC worker S3 cleanup
-    object_store:         Option<Arc<job_object_store::ObjectStore>>,
-    /// Saved job pipeline for crawl + AI analysis
-    saved_job_pipeline: Option<
-        Arc<
-            job_domain_saved_job::pipeline::SavedJobPipeline<
-                job_domain_saved_job::pg_repository::PgSavedJobRepository,
-            >,
-        >,
-    >,
+    /// Object store for S3 operations
+    object_store:  Arc<job_object_store::ObjectStore>,
+    /// Crawl4AI client for CrawlWorker
+    crawl_client:  job_domain_saved_job::crawl4ai::Crawl4AiClient,
 }
 
 /// Handle for controlling a running application.
@@ -484,15 +459,20 @@ impl App {
         // Keep a clone for wiring notify trigger after worker_state takes ownership
         let saved_job_svc_for_notify = self.saved_job_service.clone();
 
+        // Shared holder for the analyze worker's notify handle — set after
+        // the analyze worker is spawned so the crawl worker can trigger it.
+        let analyze_notify = Arc::new(std::sync::RwLock::new(None));
+
         // Set up background worker manager
         let worker_state = job_workers::notification_processor::WorkerState {
             notification_service: self.notification_service,
             ai_service:           self.ai_service,
-            job_repo:             Some(self.job_repo),
+            job_repo:             self.job_repo,
             telegram:             self.telegram,
             saved_job_service:    self.saved_job_service,
             object_store:         self.object_store,
-            saved_job_pipeline:   self.saved_job_pipeline,
+            crawl_client:         self.crawl_client,
+            analyze_notify:       analyze_notify.clone(),
         };
 
         // Use an app-owned runtime for workers so shutdown can fully reclaim
@@ -531,16 +511,28 @@ impl App {
             .spawn();
         *jd_parse_notify.lock().await = Some(jd_parser_handle);
 
-        // Saved job pipeline worker (notify trigger, processes PendingCrawl jobs)
-        let pipeline_handle = worker_manager
-            .fallible_worker(job_workers::saved_job_pipeline::SavedJobPipelineWorker)
-            .name("saved-job-pipeline")
+        // Saved job analyze worker (notify trigger, processes Crawled jobs)
+        let analyze_handle = worker_manager
+            .fallible_worker(job_workers::saved_job_analyze::SavedJobAnalyzeWorker)
+            .name("saved-job-analyze")
             .on_notify()
             .spawn();
-        if let Some(svc) = &saved_job_svc_for_notify {
-            svc.set_notify_trigger(pipeline_handle.clone());
+
+        // Store the analyze notify handle so CrawlWorker can trigger analysis
+        // after crawling completes.
+        if let Ok(mut guard) = analyze_notify.write() {
+            *guard = Some(analyze_handle.clone());
         }
-        pipeline_handle.notify(); // process any leftover PendingCrawl on startup
+
+        // Saved job crawl worker (notify trigger, processes PendingCrawl jobs)
+        let crawl_handle = worker_manager
+            .fallible_worker(job_workers::saved_job_crawl::SavedJobCrawlWorker)
+            .name("saved-job-crawl")
+            .on_notify()
+            .spawn();
+        saved_job_svc_for_notify.set_notify_trigger(crawl_handle.clone());
+        crawl_handle.notify(); // drain any leftover PendingCrawl on startup
+        analyze_handle.notify(); // drain any leftover Crawled on startup
 
         // Saved job GC worker (periodic, default every 24 hours)
         let gc_interval_secs = self.config.gc_interval_hours * 3600;

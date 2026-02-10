@@ -44,10 +44,10 @@
 //!                       └─────────┘           └──────────┘
 //! ```
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
-use job_common_worker::{FallibleWorker, WorkError, WorkResult, WorkerContext};
+use job_common_worker::{FallibleWorker, NotifyHandle, WorkError, WorkResult, WorkerContext};
 use job_domain_notify::service::NotificationService;
 use job_domain_shared::telegram_service::TelegramService;
 use tracing::{error, info};
@@ -69,24 +69,17 @@ impl NotificationProcessorWorker {
 #[derive(Clone)]
 pub struct WorkerState {
     pub notification_service: Arc<NotificationService>,
-    pub ai_service:           Option<Arc<job_ai::service::AiService>>,
-    pub job_repo:             Option<Arc<dyn job_domain_job_source::repository::JobRepository>>,
+    pub ai_service:           Arc<job_ai::service::AiService>,
+    pub job_repo:             Arc<dyn job_domain_job_source::repository::JobRepository>,
     pub telegram:             Arc<TelegramService>,
-    pub saved_job_service: Option<
-        Arc<
-            job_domain_saved_job::service::SavedJobService<
-                job_domain_saved_job::pg_repository::PgSavedJobRepository,
-            >,
+    pub saved_job_service: Arc<
+        job_domain_saved_job::service::SavedJobService<
+            job_domain_saved_job::pg_repository::PgSavedJobRepository,
         >,
     >,
-    pub object_store:         Option<Arc<job_object_store::ObjectStore>>,
-    pub saved_job_pipeline: Option<
-        Arc<
-            job_domain_saved_job::pipeline::SavedJobPipeline<
-                job_domain_saved_job::pg_repository::PgSavedJobRepository,
-            >,
-        >,
-    >,
+    pub object_store:   Arc<job_object_store::ObjectStore>,
+    pub crawl_client:   job_domain_saved_job::crawl4ai::Crawl4AiClient,
+    pub analyze_notify: Arc<RwLock<Option<NotifyHandle>>>,
 }
 
 #[async_trait]

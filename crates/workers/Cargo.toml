@@ -13,6 +13,7 @@ description = "Background worker implementations for job automation"
 
 [dependencies]
 async-trait.workspace = true
+bytes.workspace = true
 jiff.workspace = true
 job-ai = { workspace = true }
 job-common-runtime = { workspace = true }

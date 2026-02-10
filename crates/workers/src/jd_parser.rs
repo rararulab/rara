@@ -57,21 +57,8 @@ impl FallibleWorker<WorkerState> for JdParserWorker {
         while let Ok(req) = self.rx.try_recv() {
             let state = ctx.state();
 
-            let ai = match &state.ai_service {
-                Some(ai) => ai,
-                None => {
-                    send_reply(&state.telegram, "AI service not configured").await;
-                    continue;
-                }
-            };
-
-            let repo = match &state.job_repo {
-                Some(r) => r,
-                None => {
-                    send_reply(&state.telegram, "Job repository not configured").await;
-                    continue;
-                }
-            };
+            let ai = &state.ai_service;
+            let repo = &state.job_repo;
 
             // 1. AI parse
             let json_str = match ai.jd_parser().parse(&req.text).await {

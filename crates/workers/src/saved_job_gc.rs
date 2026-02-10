@@ -83,13 +83,7 @@ impl FallibleWorker<WorkerState> for SavedJobGcWorker {
     async fn work(&mut self, ctx: WorkerContext<WorkerState>) -> WorkResult {
         let state = ctx.state();
 
-        let saved_job_service = match &state.saved_job_service {
-            Some(svc) => svc,
-            None => {
-                // Service not configured — nothing to do.
-                return Ok(());
-            }
-        };
+        let saved_job_service = &state.saved_job_service;
 
         // -----------------------------------------------------------------
         // Phase 1: Check stale URLs for liveness
@@ -167,13 +161,7 @@ impl FallibleWorker<WorkerState> for SavedJobGcWorker {
         // Phase 2: Clean up S3 objects for expired jobs
         // -----------------------------------------------------------------
 
-        let object_store = match &state.object_store {
-            Some(os) => os,
-            None => {
-                // No object store configured — skip cleanup phase.
-                return Ok(());
-            }
-        };
+        let object_store = &state.object_store;
 
         let expired_with_s3 = saved_job_service
             .list_with_s3_keys_by_status(&[SavedJobStatus::Expired])
