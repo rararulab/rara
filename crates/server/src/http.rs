@@ -21,7 +21,6 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
-use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
 use job_base::readable_size::ReadableSize;
 use job_error::{ParseAddressSnafu, Result};
 use serde::{Deserialize, Serialize};
@@ -42,7 +41,7 @@ use super::ServiceHandler;
 pub const DEFAULT_MAX_HTTP_BODY_SIZE: ReadableSize = ReadableSize::mb(100);
 
 /// Default request timeout in seconds.
-pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 5;
+pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 
 /// Configuration options for a REST server
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, SmartDefault, bon::Builder)]
@@ -124,10 +123,16 @@ where
             addr: config.bind_address.clone(),
         })?;
 
-    // Build the API router with middleware
-    let mut api_router = Router::new()
-        .layer(OtelInResponseLayer)
-        .layer(OtelAxumLayer::default())
+    // Register route handlers FIRST, then apply layers.
+    // In axum, .layer() only applies to routes that already exist on the router.
+    let mut api_router = Router::new();
+    for handler in &route_handlers {
+        info!("Registering REST route handler");
+        api_router = handler(api_router);
+    }
+
+    // Apply middleware layers (outermost first in the request path)
+    api_router = api_router
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|request: &axum::http::Request<_>| {
@@ -176,12 +181,6 @@ where
             .allow_methods(Any)
             .allow_headers(Any);
         api_router = api_router.layer(cors);
-    }
-
-    // Register route handlers
-    for handler in &route_handlers {
-        info!("Registering REST route handler");
-        api_router = handler(api_router);
     }
 
     // Put /health and global fallback on the outer router so unmatched routes
@@ -264,7 +263,7 @@ mod tests {
 
     fn init_test_logging() {
         let _ = tracing_subscriber::fmt()
-            .with_env_filter("debug")
+            .with_max_level(tracing::Level::DEBUG)
             .try_init();
     }
 

@@ -17,7 +17,7 @@
 use std::sync::Arc;
 
 use jiff::Timestamp;
-use tracing::info;
+use tracing::{info, instrument};
 use uuid::Uuid;
 
 use crate::{
@@ -36,6 +36,7 @@ impl AnalyticsService {
     pub fn new(repo: Arc<dyn AnalyticsRepository>) -> Self { Self { repo } }
 
     /// Create a new metrics snapshot.
+    #[instrument(skip(self, req))]
     pub async fn create_snapshot(
         &self,
         req: CreateSnapshotRequest,
@@ -62,6 +63,7 @@ impl AnalyticsService {
     }
 
     /// Get a snapshot by ID.
+    #[instrument(skip(self))]
     pub async fn get_snapshot(&self, id: Uuid) -> Result<MetricsSnapshot, AnalyticsError> {
         self.repo
             .find_by_id(id)
@@ -70,6 +72,7 @@ impl AnalyticsService {
     }
 
     /// Get the most recent snapshot for a period.
+    #[instrument(skip(self))]
     pub async fn get_latest(
         &self,
         period: MetricsPeriod,
@@ -78,6 +81,7 @@ impl AnalyticsService {
     }
 
     /// List snapshots matching a filter.
+    #[instrument(skip(self, filter))]
     pub async fn list_snapshots(
         &self,
         filter: &SnapshotFilter,
@@ -86,6 +90,7 @@ impl AnalyticsService {
     }
 
     /// Delete a snapshot.
+    #[instrument(skip(self))]
     pub async fn delete_snapshot(&self, id: Uuid) -> Result<(), AnalyticsError> {
         self.repo.delete_snapshot(id).await
     }

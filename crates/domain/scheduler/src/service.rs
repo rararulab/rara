@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use jiff::Timestamp;
 use job_domain_shared::id::SchedulerTaskId;
-use tracing::info;
+use tracing::{info, instrument};
 use uuid::Uuid;
 
 use crate::{
@@ -37,6 +37,7 @@ impl SchedulerService {
     pub fn new(repo: Arc<dyn SchedulerRepository>) -> Self { Self { repo } }
 
     /// Register a new scheduler task.
+    #[instrument(skip(self, req))]
     pub async fn register_task(
         &self,
         req: CreateTaskRequest,
@@ -84,6 +85,7 @@ impl SchedulerService {
     }
 
     /// Retrieve a task by id, returning an error if not found.
+    #[instrument(skip(self))]
     pub async fn get_task(&self, id: SchedulerTaskId) -> Result<ScheduledTask, SchedulerError> {
         self.repo
             .find_task_by_id(id)
@@ -94,6 +96,7 @@ impl SchedulerService {
     }
 
     /// Enable a previously disabled task.
+    #[instrument(skip(self))]
     pub async fn enable_task(&self, id: SchedulerTaskId) -> Result<ScheduledTask, SchedulerError> {
         let mut task = self.get_task(id).await?;
         task.enabled = true;
@@ -101,6 +104,7 @@ impl SchedulerService {
     }
 
     /// Disable a task so it will not be scheduled.
+    #[instrument(skip(self))]
     pub async fn disable_task(&self, id: SchedulerTaskId) -> Result<ScheduledTask, SchedulerError> {
         let mut task = self.get_task(id).await?;
         task.enabled = false;
@@ -108,6 +112,7 @@ impl SchedulerService {
     }
 
     /// List tasks matching the given filter.
+    #[instrument(skip(self, filter))]
     pub async fn list_tasks(
         &self,
         filter: &TaskFilter,
@@ -116,6 +121,7 @@ impl SchedulerService {
     }
 
     /// Record a completed task execution and update the task metadata.
+    #[instrument(skip(self, error))]
     pub async fn record_execution(
         &self,
         task_id: SchedulerTaskId,
@@ -145,6 +151,7 @@ impl SchedulerService {
     }
 
     /// Get the execution history for a task.
+    #[instrument(skip(self))]
     pub async fn get_history(
         &self,
         task_id: SchedulerTaskId,
@@ -154,6 +161,7 @@ impl SchedulerService {
     }
 
     /// Soft-delete a task.
+    #[instrument(skip(self))]
     pub async fn delete_task(&self, id: SchedulerTaskId) -> Result<(), SchedulerError> {
         self.repo.delete_task(id).await
     }

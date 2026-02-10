@@ -38,7 +38,7 @@ use std::{
 
 use jiff::Timestamp;
 use job_common_worker::{Notifiable, NotifyHandle};
-use tracing::{error, info, warn};
+use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -114,6 +114,7 @@ impl NotificationService {
     ///
     /// Does **not** send immediately — actual delivery is handled by the
     /// background worker calling [`process_pending()`](Self::process_pending).
+    #[instrument(skip(self, req))]
     pub async fn send(&self, req: SendNotificationRequest) -> Result<Notification, NotifyError> {
         if req.recipient.is_empty() {
             return Err(NotifyError::ValidationError {
@@ -161,6 +162,7 @@ impl NotificationService {
     ///    - Failure with `retry_count < max_retries` → increment `retry_count`
     ///    - Failure at max retries → mark as `Failed` with error message
     /// 4. Return a [`ProcessResult`] summarizing the batch outcome
+    #[instrument(skip(self))]
     pub async fn process_pending(&self, batch_size: i64) -> Result<ProcessResult, NotifyError> {
         let pending = self.repo.find_pending(batch_size).await?;
         let mut result = ProcessResult::default();
@@ -210,6 +212,7 @@ impl NotificationService {
     /// next worker cycle picks it up for re-delivery.
     ///
     /// Exposed via REST API: `POST /api/notifications/:id/retry`
+    #[instrument(skip(self))]
     pub async fn retry(&self, id: Uuid) -> Result<Notification, NotifyError> {
         let notification = self
             .repo
@@ -237,6 +240,7 @@ impl NotificationService {
     }
 
     /// List notifications matching the given filter.
+    #[instrument(skip(self, filter))]
     pub async fn list(
         &self,
         filter: &NotificationFilter,
@@ -245,11 +249,13 @@ impl NotificationService {
     }
 
     /// Find a notification by ID.
+    #[instrument(skip(self))]
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<Notification>, NotifyError> {
         self.repo.find_by_id(id).await
     }
 
     /// Get notification statistics (counts by status).
+    #[instrument(skip(self))]
     pub async fn get_statistics(&self) -> Result<NotificationStatistics, NotifyError> {
         self.repo.get_statistics().await
     }
