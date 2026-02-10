@@ -15,9 +15,9 @@
 //! Error types for the application domain.
 
 use job_domain_shared::id::ApplicationId;
+use snafu::Snafu;
 
 use crate::types::ApplicationStatus;
-use snafu::Snafu;
 
 /// Errors that can occur in the application domain.
 #[derive(Debug, Snafu)]
@@ -54,7 +54,9 @@ impl axum::response::IntoResponse for ApplicationError {
             ApplicationError::ValidationError { .. } => axum::http::StatusCode::BAD_REQUEST,
             ApplicationError::InvalidTransition { .. } => axum::http::StatusCode::CONFLICT,
             ApplicationError::DuplicateApplication { .. } => axum::http::StatusCode::CONFLICT,
-            ApplicationError::RepositoryError { .. } => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            ApplicationError::RepositoryError { .. } => {
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            }
         };
         let body = serde_json::json!({
             "error": { "status": status.as_u16(), "message": self.to_string() }

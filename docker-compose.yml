@@ -15,29 +15,10 @@ services:
       timeout: 5s
       retries: 5
 
-  app:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile
-      args:
-        BASE_IMAGE: job-base:latest
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgres://postgres:postgres@postgres:5432/job
-      HTTP_BIND: 0.0.0.0:3000
-      GRPC_BIND: 0.0.0.0:50051
-    ports:
-      - "3000:3000"
-      - "50051:50051"
-
   web:
     build:
       context: .
       dockerfile: docker/web.Dockerfile
-    depends_on:
-      - app
     ports:
       - "8080:80"
 

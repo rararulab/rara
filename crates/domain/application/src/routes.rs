@@ -1,3 +1,17 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! HTTP API routes for application lifecycle management.
 
 use std::sync::Arc;
@@ -16,8 +30,8 @@ use crate::{
     error::ApplicationError,
     service::ApplicationService,
     types::{
-        Application, ApplicationFilter, ApplicationStatus, ChangeSource,
-        CreateApplicationRequest, StatusChangeRecord, UpdateApplicationRequest,
+        Application, ApplicationFilter, ApplicationStatus, ChangeSource, CreateApplicationRequest,
+        StatusChangeRecord, UpdateApplicationRequest,
     },
 };
 
@@ -40,10 +54,7 @@ pub fn routes(service: Arc<ApplicationService>) -> Router {
             "/api/v1/applications/{id}/transition",
             post(transition_status),
         )
-        .route(
-            "/api/v1/applications/{id}/history",
-            get(get_status_history),
-        )
+        .route("/api/v1/applications/{id}/history", get(get_status_history))
         .route("/api/v1/applications/{id}", delete(delete_application))
         .with_state(service)
 }
@@ -98,9 +109,7 @@ async fn get_status_history(
     State(service): State<Arc<ApplicationService>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<StatusChangeRecord>>, ApplicationError> {
-    let history = service
-        .get_status_history(ApplicationId::from(id))
-        .await?;
+    let history = service.get_status_history(ApplicationId::from(id)).await?;
     Ok(Json(history))
 }
 

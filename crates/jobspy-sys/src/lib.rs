@@ -1,3 +1,17 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 mod setup;
 pub mod types;
 
@@ -8,13 +22,14 @@ use std::{
 };
 
 use pyo3::{prelude::*, types::PyDict};
-use types::{ScrapedJob, ScrapeParams, SiteName};
+use types::{ScrapeParams, ScrapedJob, SiteName};
 
 /// A wrapper around the Python `JobSpy` library for scraping job boards.
 pub struct JobSpy;
 
 impl JobSpy {
-    /// Create a new `JobSpy` instance, ensuring the Python environment is ready.
+    /// Create a new `JobSpy` instance, ensuring the Python environment is
+    /// ready.
     pub fn new() -> Result<Self, String> {
         setup::ensure_runtime_env()?;
         Ok(Self)
@@ -22,7 +37,8 @@ impl JobSpy {
 
     /// Scrape jobs from the specified job boards using `python-jobspy`.
     ///
-    /// Returns a list of [`ScrapedJob`] results parsed from the Python `DataFrame`.
+    /// Returns a list of [`ScrapedJob`] results parsed from the Python
+    /// `DataFrame`.
     pub fn scrape_jobs(&self, params: &ScrapeParams) -> Result<Vec<ScrapedJob>, String> {
         with_interpreter(|py| {
             let jobspy = py
@@ -36,7 +52,11 @@ impl JobSpy {
             let kwargs = PyDict::new(py);
 
             // site_name as list of strings
-            let sites: Vec<&str> = params.site_name.iter().map(SiteName::as_python_str).collect();
+            let sites: Vec<&str> = params
+                .site_name
+                .iter()
+                .map(SiteName::as_python_str)
+                .collect();
             kwargs
                 .set_item("site_name", sites)
                 .map_err(|e| e.to_string())?;
@@ -46,7 +66,9 @@ impl JobSpy {
                 .map_err(|e| e.to_string())?;
 
             if let Some(ref loc) = params.location {
-                kwargs.set_item("location", loc).map_err(|e| e.to_string())?;
+                kwargs
+                    .set_item("location", loc)
+                    .map_err(|e| e.to_string())?;
             }
             if let Some(dist) = params.distance {
                 kwargs
@@ -69,9 +91,7 @@ impl JobSpy {
                     .map_err(|e| e.to_string())?;
             }
             if let Some(h) = params.hours_old {
-                kwargs
-                    .set_item("hours_old", h)
-                    .map_err(|e| e.to_string())?;
+                kwargs.set_item("hours_old", h).map_err(|e| e.to_string())?;
             }
             if let Some(ea) = params.easy_apply {
                 kwargs
@@ -99,9 +119,7 @@ impl JobSpy {
                     .map_err(|e| e.to_string())?;
             }
             if let Some(v) = params.verbose {
-                kwargs
-                    .set_item("verbose", v)
-                    .map_err(|e| e.to_string())?;
+                kwargs.set_item("verbose", v).map_err(|e| e.to_string())?;
             }
 
             // Call scrape_jobs(**kwargs) -> DataFrame

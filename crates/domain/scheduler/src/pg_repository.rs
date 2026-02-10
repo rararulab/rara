@@ -19,9 +19,8 @@ use std::fmt::Write;
 
 use async_trait::async_trait;
 use job_domain_shared::id::SchedulerTaskId;
-use sqlx::PgPool;
-
 use job_model::scheduler::{SchedulerTask, TaskRunHistory};
+use sqlx::PgPool;
 
 use crate::{
     error::SchedulerError,

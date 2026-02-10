@@ -18,9 +18,7 @@ use async_trait::async_trait;
 use job_model::job::Job;
 use sqlx::PgPool;
 
-use crate::err::SourceError;
-use crate::repository::JobRepository;
-use crate::types::NormalizedJob;
+use crate::{err::SourceError, repository::JobRepository, types::NormalizedJob};
 
 /// PostgreSQL-backed job repository.
 pub struct PgJobRepository {

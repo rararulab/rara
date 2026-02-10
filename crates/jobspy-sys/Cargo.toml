@@ -13,17 +13,17 @@ description = "Embedded Python bridge for python-jobspy with uv-managed runtime 
 
 [dependencies]
 bon.workspace = true
+dirs.workspace = true
 pyo3 = { version = "0.27", features = ["auto-initialize"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-dirs.workspace = true
 ytmusicapi-uv = { git = "https://github.com/crrow/ytmusicapi", package = "ytmusicapi-uv" }
 
 [build-dependencies]
-ytmusicapi-uv = { git = "https://github.com/crrow/ytmusicapi", package = "ytmusicapi-uv" }
+dirs.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-dirs.workspace = true
+ytmusicapi-uv = { git = "https://github.com/crrow/ytmusicapi", package = "ytmusicapi-uv" }
 
 [lints]
 workspace = true

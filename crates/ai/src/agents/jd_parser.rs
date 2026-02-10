@@ -18,20 +18,14 @@ use rig::{client::CompletionClient, completion::Prompt, providers::openai};
 
 use crate::error::AiError;
 
-const SYSTEM_PROMPT: &str = "\
-You are a job description parser. Given a raw job description text, extract \
-structured information and return ONLY a valid JSON object with these fields:\n\
-- title (string, required)\n\
-- company (string, required)\n\
-- location (string or null)\n\
-- description (string or null - a clean summary)\n\
-- url (string or null)\n\
-- salary_min (integer or null)\n\
-- salary_max (integer or null)\n\
-- salary_currency (string or null, e.g. \"USD\")\n\
-- tags (array of strings - relevant skills/keywords)\n\
-\n\
-Return ONLY the JSON object, no other text.";
+const SYSTEM_PROMPT: &str =
+    "\
+You are a job description parser. Given a raw job description text, extract structured information \
+     and return ONLY a valid JSON object with these fields:\n- title (string, required)\n- \
+     company (string, required)\n- location (string or null)\n- description (string or null - a \
+     clean summary)\n- url (string or null)\n- salary_min (integer or null)\n- salary_max \
+     (integer or null)\n- salary_currency (string or null, e.g. \"USD\")\n- tags (array of \
+     strings - relevant skills/keywords)\n\nReturn ONLY the JSON object, no other text.";
 
 /// Parses raw job description text into structured JSON using AI.
 pub struct JdParserAgent<'a> {
@@ -40,9 +34,7 @@ pub struct JdParserAgent<'a> {
 }
 
 impl<'a> JdParserAgent<'a> {
-    pub(crate) fn new(client: &'a openai::Client, model: &'a str) -> Self {
-        Self { client, model }
-    }
+    pub(crate) fn new(client: &'a openai::Client, model: &'a str) -> Self { Self { client, model } }
 
     /// Parse a raw job description into a structured JSON string.
     pub async fn parse(&self, jd_text: &str) -> Result<String, AiError> {

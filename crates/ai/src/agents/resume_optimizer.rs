@@ -19,8 +19,8 @@ use rig::{client::CompletionClient, completion::Prompt, providers::openai};
 use crate::error::AiError;
 
 const SYSTEM_PROMPT: &str = "\
-You are a professional resume writer. Rewrite the resume to better match \
-the target job description while keeping all facts accurate. Focus on:
+You are a professional resume writer. Rewrite the resume to better match the target job \
+                             description while keeping all facts accurate. Focus on:
 - Highlighting relevant experience and skills
 - Using keywords from the job description
 - Improving clarity and impact of bullet points
@@ -33,27 +33,24 @@ pub struct ResumeOptimizerAgent<'a> {
 }
 
 impl<'a> ResumeOptimizerAgent<'a> {
-    pub(crate) fn new(client: &'a openai::Client, model: &'a str) -> Self {
-        Self { client, model }
-    }
+    pub(crate) fn new(client: &'a openai::Client, model: &'a str) -> Self { Self { client, model } }
 
     /// Optimize a resume to better match a job description.
-    pub async fn optimize(
-        &self,
-        resume: &str,
-        job_description: &str,
-    ) -> Result<String, AiError> {
-        let user_input = format!(
-            "## Current Resume\n{resume}\n\n## Target Job Description\n{job_description}"
-        );
+    pub async fn optimize(&self, resume: &str, job_description: &str) -> Result<String, AiError> {
+        let user_input =
+            format!("## Current Resume\n{resume}\n\n## Target Job Description\n{job_description}");
 
-        let agent = self.client
+        let agent = self
+            .client
             .agent(self.model)
             .preamble(SYSTEM_PROMPT)
             .build();
 
-        agent.prompt(&user_input).await.map_err(|e| AiError::RequestFailed {
-            message: e.to_string(),
-        })
+        agent
+            .prompt(&user_input)
+            .await
+            .map_err(|e| AiError::RequestFailed {
+                message: e.to_string(),
+            })
     }
 }

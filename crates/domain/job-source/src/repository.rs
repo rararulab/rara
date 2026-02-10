@@ -16,8 +16,7 @@
 
 use async_trait::async_trait;
 
-use crate::err::SourceError;
-use crate::types::NormalizedJob;
+use crate::{err::SourceError, types::NormalizedJob};
 
 /// Persistence abstraction for job records.
 #[async_trait]

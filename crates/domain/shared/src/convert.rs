@@ -15,8 +15,7 @@
 //! Common conversion helpers between chrono (DB layer) and jiff (domain layer).
 
 use chrono::{DateTime, Datelike as _, NaiveDate, TimeZone as _, Utc};
-use jiff::Timestamp;
-use jiff::civil::Date;
+use jiff::{Timestamp, civil::Date};
 
 pub fn chrono_to_timestamp(dt: DateTime<Utc>) -> Timestamp {
     Timestamp::new(dt.timestamp(), dt.timestamp_subsec_nanos() as i32)

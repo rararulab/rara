@@ -56,7 +56,9 @@ impl axum::response::IntoResponse for SchedulerError {
             SchedulerError::NotFoundByName { .. } => axum::http::StatusCode::NOT_FOUND,
             SchedulerError::InvalidCronExpression { .. } => axum::http::StatusCode::BAD_REQUEST,
             SchedulerError::TaskDisabled { .. } => axum::http::StatusCode::BAD_REQUEST,
-            SchedulerError::TaskExecutionFailed { .. } => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            SchedulerError::TaskExecutionFailed { .. } => {
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            }
             SchedulerError::RepositoryError { .. } => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
         };
         let body = serde_json::json!({

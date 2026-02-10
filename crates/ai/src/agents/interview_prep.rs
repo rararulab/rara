@@ -19,8 +19,8 @@ use rig::{client::CompletionClient, completion::Prompt, providers::openai};
 use crate::error::AiError;
 
 const SYSTEM_PROMPT: &str = "\
-You are an interview coach. Generate likely interview questions and suggested \
-answers based on the job description and resume. Include:
+You are an interview coach. Generate likely interview questions and suggested answers based on the \
+                             job description and resume. Include:
 - Technical questions relevant to the role
 - Behavioral questions (STAR format answers)
 - Questions the candidate should ask the interviewer
@@ -33,27 +33,23 @@ pub struct InterviewPrepAgent<'a> {
 }
 
 impl<'a> InterviewPrepAgent<'a> {
-    pub(crate) fn new(client: &'a openai::Client, model: &'a str) -> Self {
-        Self { client, model }
-    }
+    pub(crate) fn new(client: &'a openai::Client, model: &'a str) -> Self { Self { client, model } }
 
     /// Generate interview preparation materials.
-    pub async fn prepare(
-        &self,
-        job_description: &str,
-        resume: &str,
-    ) -> Result<String, AiError> {
-        let user_input = format!(
-            "## Job Description\n{job_description}\n\n## My Resume\n{resume}"
-        );
+    pub async fn prepare(&self, job_description: &str, resume: &str) -> Result<String, AiError> {
+        let user_input = format!("## Job Description\n{job_description}\n\n## My Resume\n{resume}");
 
-        let agent = self.client
+        let agent = self
+            .client
             .agent(self.model)
             .preamble(SYSTEM_PROMPT)
             .build();
 
-        agent.prompt(&user_input).await.map_err(|e| AiError::RequestFailed {
-            message: e.to_string(),
-        })
+        agent
+            .prompt(&user_input)
+            .await
+            .map_err(|e| AiError::RequestFailed {
+                message: e.to_string(),
+            })
     }
 }

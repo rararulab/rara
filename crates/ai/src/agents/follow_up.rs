@@ -19,8 +19,8 @@ use rig::{client::CompletionClient, completion::Prompt, providers::openai};
 use crate::error::AiError;
 
 const SYSTEM_PROMPT: &str = "\
-You are a professional communicator. Draft a concise, polite follow-up email \
-based on the context provided. The email should:
+You are a professional communicator. Draft a concise, polite follow-up email based on the context \
+                             provided. The email should:
 - Be professional but warm
 - Reference specific details from the interaction
 - Express continued interest
@@ -33,19 +33,21 @@ pub struct FollowUpDraftAgent<'a> {
 }
 
 impl<'a> FollowUpDraftAgent<'a> {
-    pub(crate) fn new(client: &'a openai::Client, model: &'a str) -> Self {
-        Self { client, model }
-    }
+    pub(crate) fn new(client: &'a openai::Client, model: &'a str) -> Self { Self { client, model } }
 
     /// Draft a follow-up email based on the given context.
     pub async fn draft(&self, context: &str) -> Result<String, AiError> {
-        let agent = self.client
+        let agent = self
+            .client
             .agent(self.model)
             .preamble(SYSTEM_PROMPT)
             .build();
 
-        agent.prompt(context).await.map_err(|e| AiError::RequestFailed {
-            message: e.to_string(),
-        })
+        agent
+            .prompt(context)
+            .await
+            .map_err(|e| AiError::RequestFailed {
+                message: e.to_string(),
+            })
     }
 }

@@ -31,9 +31,10 @@
 
 use std::collections::HashMap;
 
-use crate::types::ApplicationStatus;
-
-use crate::error::{ApplicationError, InvalidTransitionSnafu};
+use crate::{
+    error::{ApplicationError, InvalidTransitionSnafu},
+    types::ApplicationStatus,
+};
 
 // ---------------------------------------------------------------------------
 // TransitionRule
@@ -156,9 +157,8 @@ impl Default for StateMachine {
 
 #[cfg(test)]
 mod tests {
-    use crate::types::ApplicationStatus;
-
     use super::*;
+    use crate::types::ApplicationStatus;
 
     fn sm() -> StateMachine { StateMachine::default() }
 

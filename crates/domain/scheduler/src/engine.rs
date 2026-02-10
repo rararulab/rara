@@ -24,20 +24,22 @@
 //! 3. Invokes the executor and records success/failure via
 //!    [`SchedulerService::record_execution`].
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use tracing::{error, info, instrument};
 
-use crate::error::SchedulerError;
-use crate::service::SchedulerService;
-use crate::types::{ScheduledTask, TaskFilter, TaskRunStatus};
+use crate::{
+    error::SchedulerError,
+    service::SchedulerService,
+    types::{ScheduledTask, TaskFilter, TaskRunStatus},
+};
 
 /// Trait for implementing concrete task executors.
 ///
 /// Each scheduled task type has a corresponding executor registered
-/// with the [`CronEngine`].  The executor's [`task_name`](TaskExecutor::task_name)
-/// must match the [`ScheduledTask::name`] stored in the database.
+/// with the [`CronEngine`].  The executor's
+/// [`task_name`](TaskExecutor::task_name) must match the
+/// [`ScheduledTask::name`] stored in the database.
 #[async_trait::async_trait]
 pub trait TaskExecutor: Send + Sync + 'static {
     /// The task name this executor handles.
@@ -60,7 +62,7 @@ pub trait TaskExecutor: Send + Sync + 'static {
 /// cron-triggered workers that call [`CronEngine::execute_task`]).
 pub struct CronEngine {
     scheduler_service: Arc<SchedulerService>,
-    executors: HashMap<String, Arc<dyn TaskExecutor>>,
+    executors:         HashMap<String, Arc<dyn TaskExecutor>>,
 }
 
 impl CronEngine {
@@ -133,7 +135,7 @@ impl CronEngine {
                 .get(task_name)
                 .ok_or_else(|| SchedulerError::TaskExecutionFailed {
                     task_name: task_name.to_string(),
-                    message: "no executor registered".to_string(),
+                    message:   "no executor registered".to_string(),
                 })?;
 
         // Run the executor, measure duration, and record the result.
@@ -161,7 +163,7 @@ impl CronEngine {
                     .await?;
                 Err(SchedulerError::TaskExecutionFailed {
                     task_name: task_name.to_string(),
-                    message: error_msg,
+                    message:   error_msg,
                 })
             }
         }
@@ -170,43 +172,42 @@ impl CronEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Mutex;
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
 
     use jiff::Timestamp;
     use job_domain_shared::id::SchedulerTaskId;
 
-    use crate::repository::SchedulerRepository;
-    use crate::types::{CreateTaskRequest, TaskRunRecord};
+    use super::*;
+    use crate::{
+        repository::SchedulerRepository,
+        types::{CreateTaskRequest, TaskRunRecord},
+    };
 
     // ---- Mock executor implementations ----
 
     /// An executor that always succeeds.
     struct SuccessExecutor {
-        name: String,
+        name:     String,
         executed: AtomicBool,
     }
 
     impl SuccessExecutor {
         fn new(name: &str) -> Self {
             Self {
-                name: name.to_string(),
+                name:     name.to_string(),
                 executed: AtomicBool::new(false),
             }
         }
 
-        fn was_executed(&self) -> bool {
-            self.executed.load(Ordering::SeqCst)
-        }
+        fn was_executed(&self) -> bool { self.executed.load(Ordering::SeqCst) }
     }
 
     #[async_trait::async_trait]
     impl TaskExecutor for SuccessExecutor {
-        fn task_name(&self) -> &str {
-            &self.name
-        }
+        fn task_name(&self) -> &str { &self.name }
 
         async fn execute(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             self.executed.store(true, Ordering::SeqCst);
@@ -216,14 +217,14 @@ mod tests {
 
     /// An executor that always fails.
     struct FailingExecutor {
-        name: String,
+        name:          String,
         error_message: String,
     }
 
     impl FailingExecutor {
         fn new(name: &str, error: &str) -> Self {
             Self {
-                name: name.to_string(),
+                name:          name.to_string(),
                 error_message: error.to_string(),
             }
         }
@@ -231,9 +232,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl TaskExecutor for FailingExecutor {
-        fn task_name(&self) -> &str {
-            &self.name
-        }
+        fn task_name(&self) -> &str { &self.name }
 
         async fn execute(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             Err(self.error_message.clone().into())
@@ -244,24 +243,21 @@ mod tests {
 
     struct MockSchedulerRepo {
         tasks: Mutex<Vec<ScheduledTask>>,
-        runs: Mutex<Vec<TaskRunRecord>>,
+        runs:  Mutex<Vec<TaskRunRecord>>,
     }
 
     impl MockSchedulerRepo {
         fn new() -> Self {
             Self {
                 tasks: Mutex::new(Vec::new()),
-                runs: Mutex::new(Vec::new()),
+                runs:  Mutex::new(Vec::new()),
             }
         }
     }
 
     #[async_trait::async_trait]
     impl SchedulerRepository for MockSchedulerRepo {
-        async fn save_task(
-            &self,
-            task: &ScheduledTask,
-        ) -> Result<ScheduledTask, SchedulerError> {
+        async fn save_task(&self, task: &ScheduledTask) -> Result<ScheduledTask, SchedulerError> {
             let mut store = self.tasks.lock().unwrap();
             store.push(task.clone());
             Ok(task.clone())
@@ -298,10 +294,7 @@ mod tests {
             Ok(results)
         }
 
-        async fn update_task(
-            &self,
-            task: &ScheduledTask,
-        ) -> Result<ScheduledTask, SchedulerError> {
+        async fn update_task(&self, task: &ScheduledTask) -> Result<ScheduledTask, SchedulerError> {
             let mut store = self.tasks.lock().unwrap();
             if let Some(existing) = store.iter_mut().find(|t| t.id == task.id) {
                 *existing = task.clone();
@@ -423,7 +416,7 @@ mod tests {
         // Register the task in the database.
         let task = service
             .register_task(CreateTaskRequest {
-                name: "job-discovery".to_string(),
+                name:      "job-discovery".to_string(),
                 cron_expr: "0 */30 * * * *".to_string(),
             })
             .await
@@ -453,7 +446,7 @@ mod tests {
 
         let task = service
             .register_task(CreateTaskRequest {
-                name: "flaky-task".to_string(),
+                name:      "flaky-task".to_string(),
                 cron_expr: "0 0 * * * *".to_string(),
             })
             .await
@@ -473,10 +466,7 @@ mod tests {
         assert_eq!(updated.run_count, 1);
         assert_eq!(updated.failure_count, 1);
         assert_eq!(updated.last_status, Some(TaskRunStatus::Failed));
-        assert_eq!(
-            updated.last_error,
-            Some("connection refused".to_string())
-        );
+        assert_eq!(updated.last_error, Some("connection refused".to_string()));
 
         // Verify the run history entry exists.
         let history = service.get_history(task.id, 10).await.unwrap();
@@ -492,7 +482,7 @@ mod tests {
         // Register two tasks.
         let _enabled_task = service
             .register_task(CreateTaskRequest {
-                name: "job-discovery".to_string(),
+                name:      "job-discovery".to_string(),
                 cron_expr: "0 */30 * * * *".to_string(),
             })
             .await
@@ -500,7 +490,7 @@ mod tests {
 
         let disabled_task = service
             .register_task(CreateTaskRequest {
-                name: "metrics-snapshot".to_string(),
+                name:      "metrics-snapshot".to_string(),
                 cron_expr: "0 0 1 * * *".to_string(),
             })
             .await
@@ -526,7 +516,7 @@ mod tests {
         // Register two tasks in the database.
         service
             .register_task(CreateTaskRequest {
-                name: "job-discovery".to_string(),
+                name:      "job-discovery".to_string(),
                 cron_expr: "0 */30 * * * *".to_string(),
             })
             .await
@@ -534,7 +524,7 @@ mod tests {
 
         service
             .register_task(CreateTaskRequest {
-                name: "metrics-snapshot".to_string(),
+                name:      "metrics-snapshot".to_string(),
                 cron_expr: "0 0 1 * * *".to_string(),
             })
             .await
@@ -572,7 +562,7 @@ mod tests {
         // Register the task but do not register an executor.
         service
             .register_task(CreateTaskRequest {
-                name: "orphan-task".to_string(),
+                name:      "orphan-task".to_string(),
                 cron_expr: "0 0 * * * *".to_string(),
             })
             .await

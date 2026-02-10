@@ -23,7 +23,7 @@ use job_server::{
     http::{RestServerConfig, health_routes, start_rest_server},
 };
 use smart_default::SmartDefault;
-use snafu::{ResultExt, Whatever};
+use snafu::{ResultExt, Whatever, whatever};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -116,6 +116,13 @@ impl AppConfig {
         let _guards = telemetry::logging::init_tracing_subscriber("job");
         info!("Initializing job application");
 
+        let telegram_cfg = match self.telegram.as_ref() {
+            Some(cfg) => cfg,
+            None => {
+                whatever!("Telegram is required: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
+            }
+        };
+
         // Initialize database
         let db_store = yunara_store::db::DBStore::new(self.db_config.clone())
             .await
@@ -142,20 +149,12 @@ impl AppConfig {
         // Notification service + senders
         let mut notification_service =
             job_domain_notify::service::NotificationService::new(notification_repo);
+        info!("Telegram sender configured");
         let telegram_sender: Arc<dyn job_domain_notify::service::NotificationSender> =
-            match &self.telegram {
-                Some(cfg) => {
-                    info!("Telegram sender configured");
-                    Arc::new(job_domain_notify::sender::TelegramSender::new(
-                        &cfg.bot_token,
-                        cfg.chat_id,
-                    ))
-                }
-                None => {
-                    info!("Telegram not configured, using noop sender");
-                    Arc::new(job_domain_notify::sender::NoopSender)
-                }
-            };
+            Arc::new(job_domain_notify::sender::TelegramSender::new(
+                &telegram_cfg.bot_token,
+                telegram_cfg.chat_id,
+            ));
         notification_service.register_sender(
             job_domain_notify::types::NotificationChannel::Telegram,
             telegram_sender,
@@ -336,12 +335,16 @@ impl App {
         // Set up mpsc channel for JD parse requests
         let (jd_tx, jd_rx) = tokio::sync::mpsc::channel(100);
 
-        // Create Telegram bot instance (if configured)
-        let bot = self
-            .config
-            .telegram
-            .as_ref()
-            .map(|cfg| teloxide::Bot::new(&cfg.bot_token));
+        let telegram_cfg = match self.config.telegram.as_ref() {
+            Some(cfg) => cfg,
+            None => {
+                whatever!("Telegram is required: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
+            }
+        };
+        let telegram = std::sync::Arc::new(job_workers::telegram_service::TelegramService::new(
+            teloxide::Bot::new(&telegram_cfg.bot_token),
+            telegram_cfg.chat_id,
+        ));
 
         // Set up background worker manager
         let worker_state = job_workers::notification_processor::WorkerState {
@@ -349,7 +352,7 @@ impl App {
             ai_service:           self.ai_service,
             job_repo:             Some(self.job_repo),
             jd_parse_tx:          jd_tx,
-            bot:                  bot.clone(),
+            telegram:             telegram.clone(),
         };
 
         let mut worker_manager = job_common_worker::Manager::with_state(worker_state);
@@ -363,14 +366,12 @@ impl App {
             .spawn();
 
         // Telegram bot worker (long-running, Once trigger)
-        if bot.is_some() {
-            let _telegram_handle = worker_manager
-                .fallible_worker(job_workers::telegram_bot::TelegramBotWorker)
-                .name("telegram-bot")
-                .once()
-                .spawn();
-            info!("Telegram bot worker started");
-        }
+        let _telegram_handle = worker_manager
+            .fallible_worker(job_workers::telegram_bot::TelegramBotWorker)
+            .name("telegram-bot")
+            .once()
+            .spawn();
+        info!("Telegram bot worker started");
 
         // JD parser worker (interval 2s, drains mpsc channel)
         let _jd_parser_handle = worker_manager

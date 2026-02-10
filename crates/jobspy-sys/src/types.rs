@@ -1,4 +1,18 @@
-use serde::{Deserialize, Serialize};
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Supported job board sites for scraping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -76,32 +90,32 @@ impl JobType {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, bon::Builder)]
 pub struct ScrapeParams {
-    pub site_name:    Vec<SiteName>,
-    pub search_term:  String,
+    pub site_name:                  Vec<SiteName>,
+    pub search_term:                String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub location:     Option<String>,
+    pub location:                   Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub distance:     Option<u32>,
+    pub distance:                   Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub job_type:     Option<JobType>,
+    pub job_type:                   Option<JobType>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub is_remote:    Option<bool>,
+    pub is_remote:                  Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub results_wanted: Option<u32>,
+    pub results_wanted:             Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub hours_old:    Option<u32>,
+    pub hours_old:                  Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub easy_apply:   Option<bool>,
+    pub easy_apply:                 Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub country_indeed: Option<String>,
+    pub country_indeed:             Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub linkedin_fetch_description: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub enforce_annual_salary: Option<bool>,
+    pub enforce_annual_salary:      Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub proxies:      Option<Vec<String>>,
+    pub proxies:                    Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub verbose:      Option<u32>,
+    pub verbose:                    Option<u32>,
 }
 
 /// A single job result from `JobSpy`'s `scrape_jobs()` `DataFrame`.
@@ -128,5 +142,43 @@ pub struct ScrapedJob {
     pub salary_interval:  Option<String>,
     pub job_level:        Option<String>,
     pub company_industry: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_string_or_vec")]
     pub emails:           Option<Vec<String>>,
+}
+
+/// Deserialize a field that pandas may serialize as either a single string
+/// or an array of strings (or null).
+fn deserialize_string_or_vec<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de;
+
+    struct StringOrVec;
+
+    impl<'de> de::Visitor<'de> for StringOrVec {
+        type Value = Option<Vec<String>>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("null, a string, or a list of strings")
+        }
+
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> { Ok(None) }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> { Ok(None) }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            Ok(Some(vec![v.to_owned()]))
+        }
+
+        fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            let mut v = Vec::new();
+            while let Some(s) = seq.next_element::<String>()? {
+                v.push(s);
+            }
+            Ok(if v.is_empty() { None } else { Some(v) })
+        }
+    }
+
+    deserializer.deserialize_any(StringOrVec)
 }

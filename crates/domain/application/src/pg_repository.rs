@@ -19,9 +19,8 @@ use std::fmt::Write;
 
 use async_trait::async_trait;
 use job_domain_shared::id::ApplicationId;
-use sqlx::PgPool;
-
 use job_model::application::{Application as StoreApplication, ApplicationStatusHistory};
+use sqlx::PgPool;
 
 use crate::{
     error::ApplicationError,

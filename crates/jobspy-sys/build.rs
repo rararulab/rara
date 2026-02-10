@@ -1,4 +1,21 @@
-use std::{env, fs, path::{Path, PathBuf}};
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 use ytmusicapi_uv::UvManager;
 
@@ -19,8 +36,7 @@ fn main() {
     let uv = UvManager::new(cache_dir.clone()).expect("Failed to initialize UV");
 
     // Install Python
-    let python_version =
-        env::var("JOBSPY_PYTHON_VERSION").unwrap_or_else(|_| "3.10".to_string());
+    let python_version = env::var("JOBSPY_PYTHON_VERSION").unwrap_or_else(|_| "3.10".to_string());
     let python = uv
         .ensure_python(&python_version)
         .expect("Failed to install Python");
@@ -32,18 +48,16 @@ fn main() {
         .expect("Failed to create virtual environment");
 
     // Install python-jobspy
-    if !uv
-        .is_package_installed(&venv, "jobspy")
-        .unwrap_or(false)
-    {
+    if !uv.is_package_installed(&venv, "jobspy").unwrap_or(false) {
         println!("cargo:warning=Installing python-jobspy...");
         uv.install_package(&venv, "python-jobspy")
             .expect("Failed to install python-jobspy");
     }
 
     // Set pyo3 compilation environment variables.
-    // Use python_version (not pyo3_get().version) to ensure JOBSPY_COMPILED_PYTHON_VERSION
-    // matches the venv we actually created, avoiding "First run" on every test.
+    // Use python_version (not pyo3_get().version) to ensure
+    // JOBSPY_COMPILED_PYTHON_VERSION matches the venv we actually created,
+    // avoiding "First run" on every test.
     println!("cargo:rustc-env=PYO3_PYTHON={}", venv.python_exe.display());
     println!("cargo:rustc-env=JOBSPY_COMPILED_PYTHON_VERSION={python_version}");
 

@@ -12,17 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! PostgreSQL-backed implementation of [`crate::repository::AnalyticsRepository`].
+//! PostgreSQL-backed implementation of
+//! [`crate::repository::AnalyticsRepository`].
 
 use std::fmt::Write;
 
 use async_trait::async_trait;
+use job_model::metrics::MetricsSnapshot as StoreMetricsSnapshot;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use job_model::metrics::MetricsSnapshot as StoreMetricsSnapshot;
-use crate::error::{AnalyticsError, DuplicateSnapshotSnafu, NotFoundSnafu, RepositorySnafu};
-use crate::types::{MetricsPeriod, MetricsSnapshot, SnapshotFilter};
+use crate::{
+    error::{AnalyticsError, DuplicateSnapshotSnafu, NotFoundSnafu, RepositorySnafu},
+    types::{MetricsPeriod, MetricsSnapshot, SnapshotFilter},
+};
 
 /// PostgreSQL implementation of the analytics repository.
 pub struct PgAnalyticsRepository {

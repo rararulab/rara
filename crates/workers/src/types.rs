@@ -16,8 +16,6 @@
 
 /// A request to parse a job description received from Telegram.
 pub struct JdParseRequest {
-    /// Telegram chat ID to reply to.
-    pub chat_id: i64,
     /// Raw job description text from the user.
-    pub text:    String,
+    pub text: String,
 }

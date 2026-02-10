@@ -16,12 +16,13 @@
 
 use async_trait::async_trait;
 use job_common_worker::{FallibleWorker, WorkResult, WorkerContext};
-use teloxide::prelude::*;
-use teloxide::utils::command::BotCommands;
+use teloxide::{prelude::*, utils::command::BotCommands};
 use tokio::sync::mpsc;
+use tracing::warn;
 
-use crate::notification_processor::WorkerState;
-use crate::types::JdParseRequest;
+use crate::{
+    notification_processor::WorkerState, telegram_service::TelegramService, types::JdParseRequest,
+};
 
 /// Long-running worker that starts the Telegram bot dispatcher.
 ///
@@ -42,10 +43,8 @@ enum Command {
 impl FallibleWorker<WorkerState> for TelegramBotWorker {
     async fn work(&mut self, ctx: WorkerContext<WorkerState>) -> WorkResult {
         let state = ctx.state();
-        let bot = match &state.bot {
-            Some(b) => b.clone(),
-            None => return Ok(()),
-        };
+        let telegram = state.telegram.clone();
+        let bot = telegram.bot();
         let jd_tx = state.jd_parse_tx.clone();
 
         let handler = Update::filter_message()
@@ -61,7 +60,7 @@ impl FallibleWorker<WorkerState> for TelegramBotWorker {
         let _ = bot.delete_webhook().drop_pending_updates(true).await;
 
         let mut dispatcher = Dispatcher::builder(bot, handler)
-            .dependencies(dptree::deps![jd_tx])
+            .dependencies(dptree::deps![jd_tx, telegram])
             .enable_ctrlc_handler()
             .build();
 
@@ -86,8 +85,8 @@ async fn handle_command(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<
         Command::Start => {
             bot.send_message(
                 msg.chat.id,
-                "Welcome! I'm the Job Assistant bot. Send me a job description \
-                 and I'll parse it for you. Use /help to see commands.",
+                "Welcome! I'm the Job Assistant bot. Send me a job description and I'll parse it \
+                 for you. Use /help to see commands.",
             )
             .await?;
         }
@@ -103,15 +102,24 @@ async fn handle_message(
     bot: Bot,
     msg: Message,
     jd_tx: mpsc::Sender<JdParseRequest>,
+    telegram: std::sync::Arc<TelegramService>,
 ) -> ResponseResult<()> {
     if let Some(text) = msg.text() {
+        if !telegram.is_primary_chat(msg.chat.id) {
+            warn!(
+                chat_id = msg.chat.id.0,
+                "ignoring message from unauthorized Telegram chat"
+            );
+            bot.send_message(msg.chat.id, "Unauthorized chat.").await?;
+            return Ok(());
+        }
+
         bot.send_message(msg.chat.id, "Received your JD, processing...")
             .await?;
 
         let _ = jd_tx
             .send(JdParseRequest {
-                chat_id: msg.chat.id.0,
-                text:    text.to_string(),
+                text: text.to_string(),
             })
             .await;
     }

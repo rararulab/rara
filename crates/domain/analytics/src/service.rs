@@ -20,9 +20,11 @@ use jiff::Timestamp;
 use tracing::info;
 use uuid::Uuid;
 
-use crate::error::AnalyticsError;
-use crate::repository::AnalyticsRepository;
-use crate::types::{CreateSnapshotRequest, MetricsPeriod, MetricsSnapshot, SnapshotFilter};
+use crate::{
+    error::AnalyticsError,
+    repository::AnalyticsRepository,
+    types::{CreateSnapshotRequest, MetricsPeriod, MetricsSnapshot, SnapshotFilter},
+};
 
 /// Application service for analytics / metrics snapshots.
 pub struct AnalyticsService {
@@ -31,9 +33,7 @@ pub struct AnalyticsService {
 
 impl AnalyticsService {
     /// Create a new analytics service backed by the given repository.
-    pub fn new(repo: Arc<dyn AnalyticsRepository>) -> Self {
-        Self { repo }
-    }
+    pub fn new(repo: Arc<dyn AnalyticsRepository>) -> Self { Self { repo } }
 
     /// Create a new metrics snapshot.
     pub async fn create_snapshot(

@@ -114,6 +114,8 @@ mod tests {
 
     #[test]
     fn test_name() {
+        job_common_telemetry::logging::init_default_ut_logging();
+
         let d = JobSpyDriver::new().unwrap();
         let v = d
             .fetch_jobs(&DiscoveryCriteria::builder().keywords(["golang"]).build())

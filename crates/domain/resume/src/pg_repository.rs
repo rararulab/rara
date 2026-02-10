@@ -17,12 +17,11 @@
 use std::fmt::Write;
 
 use async_trait::async_trait;
-use job_domain_shared::convert::timestamp_to_chrono;
 use jiff::{Zoned, tz::TimeZone};
+use job_domain_shared::convert::timestamp_to_chrono;
+use job_model::resume::Resume as StoreResume;
 use sqlx::PgPool;
 use uuid::Uuid;
-
-use job_model::resume::Resume as StoreResume;
 
 use crate::{
     hash::content_hash,

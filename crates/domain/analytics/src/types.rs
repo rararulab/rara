@@ -14,8 +14,7 @@
 
 //! Domain types for metrics analytics.
 
-use jiff::Timestamp;
-use jiff::civil::Date;
+use jiff::{Timestamp, civil::Date};
 use serde::{Deserialize, Serialize};
 use strum_macros::{Display, FromRepr};
 use uuid::Uuid;
@@ -39,7 +38,8 @@ pub enum MetricsPeriod {
 // Domain model
 // ---------------------------------------------------------------------------
 
-/// A point-in-time statistics snapshot for a given period (domain representation).
+/// A point-in-time statistics snapshot for a given period (domain
+/// representation).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricsSnapshot {
     pub id:                   Uuid,

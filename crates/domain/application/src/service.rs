@@ -22,8 +22,6 @@ use std::sync::Arc;
 
 use jiff::Timestamp;
 use job_domain_shared::id::ApplicationId;
-
-use crate::types::ApplicationStatus;
 use tracing::instrument;
 use uuid::Uuid;
 
@@ -32,7 +30,7 @@ use crate::{
     repository::ApplicationRepository,
     state_machine::StateMachine,
     types::{
-        Application, ApplicationFilter, ApplicationStatistics, ChangeSource,
+        Application, ApplicationFilter, ApplicationStatistics, ApplicationStatus, ChangeSource,
         CreateApplicationRequest, StatusChangeRecord, UpdateApplicationRequest,
     },
 };
@@ -294,8 +292,6 @@ mod tests {
     use std::sync::Arc;
 
     use job_domain_shared::id::{ApplicationId, JobSourceId, ResumeId};
-
-    use crate::types::ApplicationStatus;
     use sqlx::postgres::PgPoolOptions;
     use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::postgres::Postgres;
@@ -304,7 +300,7 @@ mod tests {
     use crate::{
         error::ApplicationError,
         pg_repository::PgApplicationRepository,
-        types::{ApplicationChannel, ApplicationFilter, ChangeSource, Priority},
+        types::{ApplicationChannel, ApplicationFilter, ApplicationStatus, ChangeSource, Priority},
     };
 
     // -----------------------------------------------------------------------

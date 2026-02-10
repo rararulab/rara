@@ -113,8 +113,7 @@ use job_model::scheduler::{SchedulerTask, TaskRunHistory};
 
 fn task_run_status_from_i16(value: i16) -> TaskRunStatus {
     let repr = u8_from_i16(value, "scheduler_task.last_status/task_run_history.status");
-    TaskRunStatus::from_repr(repr)
-        .unwrap_or_else(|| panic!("invalid task run status: {value}"))
+    TaskRunStatus::from_repr(repr).unwrap_or_else(|| panic!("invalid task run status: {value}"))
 }
 
 /// Store `SchedulerTask` -> Domain `ScheduledTask`.

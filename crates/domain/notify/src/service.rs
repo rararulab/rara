@@ -14,19 +14,22 @@
 
 //! Notification service: queuing, sending, and retry logic.
 //!
-//! [`NotificationService`] is the core orchestrator for the notification domain:
+//! [`NotificationService`] is the core orchestrator for the notification
+//! domain:
 //!
-//! - **Queuing**: [`send()`](NotificationService::send) validates the request and
-//!   persists a `Pending` notification to the database — no actual delivery happens.
-//! - **Batch processing**: [`process_pending()`](NotificationService::process_pending)
-//!   pulls pending notifications from the database and dispatches them through
-//!   registered [`NotificationSender`] backends.
-//! - **Retry**: [`retry()`](NotificationService::retry) resets a `Failed` notification
-//!   to `Retrying` so the next worker cycle picks it up again.
+//! - **Queuing**: [`send()`](NotificationService::send) validates the request
+//!   and persists a `Pending` notification to the database — no actual delivery
+//!   happens.
+//! - **Batch processing**:
+//!   [`process_pending()`](NotificationService::process_pending) pulls pending
+//!   notifications from the database and dispatches them through registered
+//!   [`NotificationSender`] backends.
+//! - **Retry**: [`retry()`](NotificationService::retry) resets a `Failed`
+//!   notification to `Retrying` so the next worker cycle picks it up again.
 //!
 //! Channel backends (Telegram / Email / Webhook) are registered at startup via
-//! [`register_sender()`](NotificationService::register_sender); the actual delivery
-//! logic lives in each [`NotificationSender`] implementation.
+//! [`register_sender()`](NotificationService::register_sender); the actual
+//! delivery logic lives in each [`NotificationSender`] implementation.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -45,11 +48,13 @@ use crate::{
 
 /// Trait for notification channel backends (e.g. Telegram, Email).
 ///
-/// Each channel must implement this trait. [`NotificationService::process_pending()`]
-/// dispatches to the appropriate sender based on `notification.channel`.
+/// Each channel must implement this trait.
+/// [`NotificationService::process_pending()`] dispatches to the appropriate
+/// sender based on `notification.channel`.
 ///
 /// Built-in implementations:
-/// - [`NoopSender`](crate::sender::NoopSender) — no-op, used for unconfigured channels
+/// - [`NoopSender`](crate::sender::NoopSender) — no-op, used for unconfigured
+///   channels
 /// - [`TelegramSender`](crate::sender::TelegramSender) — delivers via teloxide
 #[async_trait::async_trait]
 pub trait NotificationSender: Send + Sync {
@@ -59,8 +64,10 @@ pub trait NotificationSender: Send + Sync {
 /// Core notification domain service.
 ///
 /// Holds two dependencies:
-/// - `repo` — persistence layer (PostgreSQL impl: [`PgNotificationRepository`](crate::pg_repository::PgNotificationRepository))
-/// - `senders` — channel-indexed map of delivery backends, injected by `job-app` at startup
+/// - `repo` — persistence layer (PostgreSQL impl:
+///   [`PgNotificationRepository`](crate::pg_repository::PgNotificationRepository))
+/// - `senders` — channel-indexed map of delivery backends, injected by
+///   `job-app` at startup
 pub struct NotificationService {
     repo:    Arc<dyn NotificationRepository>,
     senders: HashMap<NotificationChannel, Arc<dyn NotificationSender>>,
@@ -128,7 +135,8 @@ impl NotificationService {
 
     /// Process pending notifications in batch.
     ///
-    /// 1. Pull up to `batch_size` notifications with `Pending`/`Retrying` status
+    /// 1. Pull up to `batch_size` notifications with `Pending`/`Retrying`
+    ///    status
     /// 2. Look up the [`NotificationSender`] for each notification's channel
     /// 3. Attempt delivery for each notification:
     ///    - Success → mark as `Sent`

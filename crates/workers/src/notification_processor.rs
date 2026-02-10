@@ -16,18 +16,22 @@
 //!
 //! Notification lifecycle:
 //!
-//! 1. **Enqueue** — Anywhere in the system calls `NotificationService::send(req)`,
-//!    which creates a `status = Pending` record in the `notification_logs` table.
-//!    No actual delivery happens at this point.
+//! 1. **Enqueue** — Anywhere in the system calls
+//!    `NotificationService::send(req)`, which creates a `status = Pending`
+//!    record in the `notification_logs` table. No actual delivery happens at
+//!    this point.
 //!
-//! 2. **Process** — This worker is woken every 30 seconds by `job-common-worker`,
-//!    calling `NotificationService::process_pending(batch_size)` to pull pending
-//!    notifications and deliver them via registered `NotificationSender` backends
-//!    (Telegram / Email / Webhook). Successful sends are marked `Sent`; failures
-//!    increment `retry_count`, and exceeding `max_retries` marks them `Failed`.
+//! 2. **Process** — This worker is woken every 30 seconds by
+//!    `job-common-worker`, calling
+//!    `NotificationService::process_pending(batch_size)` to pull pending
+//!    notifications and deliver them via registered `NotificationSender`
+//!    backends (Telegram / Email / Webhook). Successful sends are marked
+//!    `Sent`; failures increment `retry_count`, and exceeding `max_retries`
+//!    marks them `Failed`.
 //!
 //! 3. **Retry** — Failed notifications can be manually reset to `Retrying` via
-//!    `POST /api/notifications/:id/retry`, and the next worker cycle picks them up.
+//!    `POST /api/notifications/:id/retry`, and the next worker cycle picks them
+//!    up.
 //!
 //! ```text
 //! ┌──────────┐  send()  ┌─────────┐  worker  ┌──────┐
@@ -48,9 +52,10 @@ use job_domain_notify::service::NotificationService;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
-use crate::types::JdParseRequest;
+use crate::{telegram_service::TelegramService, types::JdParseRequest};
 
-/// Background worker that periodically processes pending notifications in batch.
+/// Background worker that periodically processes pending notifications in
+/// batch.
 ///
 /// Scheduled by `job-common-worker::Manager` at a fixed interval (default 30s),
 /// pulling up to `batch_size` pending notifications per cycle.
@@ -69,7 +74,7 @@ pub struct WorkerState {
     pub ai_service:           Option<Arc<job_ai::service::AiService>>,
     pub job_repo:             Option<Arc<dyn job_domain_job_source::repository::JobRepository>>,
     pub jd_parse_tx:          mpsc::Sender<JdParseRequest>,
-    pub bot:                  Option<teloxide::Bot>,
+    pub telegram:             Arc<TelegramService>,
 }
 
 #[async_trait]

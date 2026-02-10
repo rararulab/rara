@@ -18,10 +18,9 @@
 use std::fmt::Write;
 
 use async_trait::async_trait;
+use job_model::notify::NotificationLog;
 use sqlx::PgPool;
 use uuid::Uuid;
-
-use job_model::notify::NotificationLog;
 
 use crate::{
     error::NotifyError,
@@ -86,13 +85,12 @@ impl crate::repository::NotificationRepository for PgNotificationRepository {
     }
 
     async fn find_by_id(&self, id: Uuid) -> Result<Option<Notification>, NotifyError> {
-        let row = sqlx::query_as::<_, NotificationLog>(
-            "SELECT * FROM notification_log WHERE id = $1",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(map_err)?;
+        let row =
+            sqlx::query_as::<_, NotificationLog>("SELECT * FROM notification_log WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_err)?;
 
         Ok(row.map(Into::into))
     }

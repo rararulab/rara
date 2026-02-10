@@ -1,3 +1,17 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! HTTP API routes for notification management.
 
 use std::sync::Arc;
@@ -33,10 +47,7 @@ pub fn routes(service: Arc<NotificationService>) -> Router {
         .route("/api/v1/notifications", get(list_notifications))
         .route("/api/v1/notifications/stats", get(get_statistics))
         .route("/api/v1/notifications/{id}", get(get_notification))
-        .route(
-            "/api/v1/notifications/{id}/retry",
-            post(retry_notification),
-        )
+        .route("/api/v1/notifications/{id}/retry", post(retry_notification))
         .with_state(service)
 }
 
@@ -78,7 +89,10 @@ async fn get_notification(
     State(service): State<Arc<NotificationService>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Notification>, NotifyError> {
-    let notification = service.get_by_id(id).await?.ok_or(NotifyError::NotFound { id })?;
+    let notification = service
+        .get_by_id(id)
+        .await?
+        .ok_or(NotifyError::NotFound { id })?;
     Ok(Json(notification))
 }
 

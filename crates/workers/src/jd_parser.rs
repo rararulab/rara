@@ -16,13 +16,10 @@
 
 use async_trait::async_trait;
 use job_common_worker::{FallibleWorker, WorkResult, WorkerContext};
-use teloxide::prelude::*;
-use teloxide::types::ChatId;
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
-use crate::notification_processor::WorkerState;
-use crate::types::JdParseRequest;
+use crate::{notification_processor::WorkerState, types::JdParseRequest};
 
 /// Worker that drains the JD parse channel on each tick.
 ///
@@ -62,7 +59,7 @@ impl FallibleWorker<WorkerState> for JdParserWorker {
             let ai = match &state.ai_service {
                 Some(ai) => ai,
                 None => {
-                    send_reply(&state.bot, req.chat_id, "AI service not configured").await;
+                    send_reply(&state.telegram, "AI service not configured").await;
                     continue;
                 }
             };
@@ -70,7 +67,7 @@ impl FallibleWorker<WorkerState> for JdParserWorker {
             let repo = match &state.job_repo {
                 Some(r) => r,
                 None => {
-                    send_reply(&state.bot, req.chat_id, "Job repository not configured").await;
+                    send_reply(&state.telegram, "Job repository not configured").await;
                     continue;
                 }
             };
@@ -80,12 +77,7 @@ impl FallibleWorker<WorkerState> for JdParserWorker {
                 Ok(s) => s,
                 Err(e) => {
                     error!(error = %e, "AI JD parse failed");
-                    send_reply(
-                        &state.bot,
-                        req.chat_id,
-                        &format!("Failed to parse JD: {e}"),
-                    )
-                    .await;
+                    send_reply(&state.telegram, &format!("Failed to parse JD: {e}")).await;
                     continue;
                 }
             };
@@ -96,8 +88,7 @@ impl FallibleWorker<WorkerState> for JdParserWorker {
                 Err(e) => {
                     error!(error = %e, raw = %json_str, "Failed to deserialize AI response");
                     send_reply(
-                        &state.bot,
-                        req.chat_id,
+                        &state.telegram,
                         &format!("Failed to parse AI response: {e}"),
                     )
                     .await;
@@ -132,20 +123,17 @@ impl FallibleWorker<WorkerState> for JdParserWorker {
                         "JD parsed and saved"
                     );
                     send_reply(
-                        &state.bot,
-                        req.chat_id,
-                        &format!("Job parsed and saved!\n\n{} @ {}", saved.title, saved.company),
+                        &state.telegram,
+                        &format!(
+                            "Job parsed and saved!\n\n{} @ {}",
+                            saved.title, saved.company
+                        ),
                     )
                     .await;
                 }
                 Err(e) => {
                     error!(error = %e, "Failed to save job");
-                    send_reply(
-                        &state.bot,
-                        req.chat_id,
-                        &format!("Failed to save job: {e}"),
-                    )
-                    .await;
+                    send_reply(&state.telegram, &format!("Failed to save job: {e}")).await;
                 }
             }
         }
@@ -154,9 +142,9 @@ impl FallibleWorker<WorkerState> for JdParserWorker {
     }
 }
 
-/// Send a reply to a Telegram chat, swallowing errors.
-async fn send_reply(bot: &Option<teloxide::Bot>, chat_id: i64, text: &str) {
-    if let Some(bot) = bot {
-        let _ = bot.send_message(ChatId(chat_id), text).await;
+/// Send a reply to the configured Telegram chat.
+async fn send_reply(telegram: &crate::telegram_service::TelegramService, text: &str) {
+    if let Err(err) = telegram.send_primary_message(text).await {
+        warn!(error = %err, "failed to send JD parser reply to Telegram");
     }
 }

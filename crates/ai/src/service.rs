@@ -24,11 +24,8 @@ use rig::providers::openai;
 
 use crate::{
     agents::{
-        cover_letter::CoverLetterAgent,
-        follow_up::FollowUpDraftAgent,
-        interview_prep::InterviewPrepAgent,
-        jd_parser::JdParserAgent,
-        job_fit::JobFitAgent,
+        cover_letter::CoverLetterAgent, follow_up::FollowUpDraftAgent,
+        interview_prep::InterviewPrepAgent, jd_parser::JdParserAgent, job_fit::JobFitAgent,
         resume_optimizer::ResumeOptimizerAgent,
     },
     error::AiError,
@@ -118,9 +115,7 @@ impl AiService {
     }
 
     /// Create a job-fit analysis agent.
-    pub fn job_fit(&self) -> JobFitAgent<'_> {
-        JobFitAgent::new(&self.client, &self.default_model)
-    }
+    pub fn job_fit(&self) -> JobFitAgent<'_> { JobFitAgent::new(&self.client, &self.default_model) }
 
     /// Create a resume optimization agent.
     pub fn resume_optimizer(&self) -> ResumeOptimizerAgent<'_> {
@@ -148,9 +143,7 @@ impl AiService {
     }
 
     /// Access the rate limiter, if configured.
-    pub fn rate_limiter(&self) -> Option<&RateLimiter> {
-        self.rate_limiter.as_ref()
-    }
+    pub fn rate_limiter(&self) -> Option<&RateLimiter> { self.rate_limiter.as_ref() }
 }
 
 #[cfg(test)]
