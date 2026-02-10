@@ -45,6 +45,20 @@ pub struct ServiceHandler {
 }
 
 impl ServiceHandler {
+    /// Create a new ServiceHandler from raw components.
+    pub fn new(
+        join_handle: JoinHandle<()>,
+        cancellation_token: CancellationToken,
+        started_rx: Receiver<()>,
+    ) -> Self {
+        Self {
+            join_handle,
+            cancellation_token,
+            started_rx: Some(started_rx),
+            reporter_handles: Vec::new(),
+        }
+    }
+
     /// Waits for the server to start accepting connections.
     ///
     /// This method blocks until the server has successfully bound to its

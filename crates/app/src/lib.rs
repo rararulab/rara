@@ -423,15 +423,20 @@ impl App {
         let jd_parse_notify = Arc::new(tokio::sync::Mutex::new(None));
         let notification_service = self.notification_service.clone();
 
+        // Start Telegram bot as a standalone service (same level as HTTP/gRPC)
+        let telegram_handle = job_workers::telegram_bot::start_telegram_bot(
+            self.telegram.clone(),
+            jd_tx,
+            jd_parse_notify.clone(),
+            self.job_source_service.clone(),
+        );
+
         // Set up background worker manager
         let worker_state = job_workers::notification_processor::WorkerState {
             notification_service: self.notification_service,
             ai_service:           self.ai_service,
             job_repo:             Some(self.job_repo),
-            jd_parse_tx:          jd_tx,
-            jd_parse_notify:      jd_parse_notify.clone(),
             telegram:             self.telegram,
-            job_source_service:   self.job_source_service,
             saved_job_service:    self.saved_job_service,
             object_store:         self.object_store,
             saved_job_pipeline:   self.saved_job_pipeline,
@@ -456,13 +461,6 @@ impl App {
             .on_notify()
             .spawn();
         *jd_parse_notify.lock().await = Some(jd_parser_handle);
-
-        // Telegram bot worker (long-running, Once trigger)
-        let _telegram_handle = worker_manager
-            .fallible_worker(job_workers::telegram_bot::TelegramBotWorker)
-            .name("telegram-bot")
-            .once()
-            .spawn();
 
         // Saved job pipeline worker (notify trigger, processes PendingCrawl jobs)
         let _pipeline_handle = worker_manager
@@ -509,10 +507,11 @@ impl App {
             info!("Shutting down background workers");
             worker_manager.shutdown().await;
 
-            // Shutdown servers
+            // Shutdown servers and standalone services
             info!("Shutting down servers");
             grpc_handle.shutdown();
             http_handle.shutdown();
+            telegram_handle.shutdown();
 
             info!("Application shutdown complete");
         });

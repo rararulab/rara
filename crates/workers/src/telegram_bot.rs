@@ -17,21 +17,16 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use job_common_worker::{FallibleWorker, Notifiable, WorkResult, WorkerContext};
+use job_common_worker::{Notifiable, NotifyHandle};
 use job_domain_job_source::service::JobSourceService;
 use job_domain_shared::telegram_service::TelegramService;
+use job_server::ServiceHandler;
 use teloxide::{prelude::*, types::CallbackQuery, utils::command::BotCommands};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use crate::{notification_processor::WorkerState, types::JdParseRequest};
-
-/// Long-running worker that starts the Telegram bot dispatcher.
-///
-/// Spawned with a `Once` trigger — it runs the teloxide long-polling
-/// loop until cancelled.
-pub struct TelegramBotWorker;
+use crate::types::JdParseRequest;
 
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase", description = "Available commands:")]
@@ -44,15 +39,22 @@ enum Command {
     Search(String),
 }
 
-#[async_trait]
-impl FallibleWorker<WorkerState> for TelegramBotWorker {
-    async fn work(&mut self, ctx: WorkerContext<WorkerState>) -> WorkResult {
-        let state = ctx.state();
-        let telegram = state.telegram.clone();
+/// Start the Telegram bot as a standalone service.
+///
+/// Returns a [`ServiceHandler`] for lifecycle management (shutdown, wait).
+/// The bot runs a teloxide long-polling dispatcher in a spawned task.
+pub fn start_telegram_bot(
+    telegram: Arc<TelegramService>,
+    jd_tx: mpsc::Sender<JdParseRequest>,
+    jd_notify: Arc<tokio::sync::Mutex<Option<NotifyHandle>>>,
+    job_source_service: Arc<JobSourceService>,
+) -> ServiceHandler {
+    let cancel = CancellationToken::new();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+
+    let cancel_clone = cancel.clone();
+    let join_handle = tokio::spawn(async move {
         let bot = telegram.bot();
-        let jd_tx = state.jd_parse_tx.clone();
-        let jd_notify = state.jd_parse_notify.clone();
-        let job_source_service = state.job_source_service.clone();
 
         let handler = dptree::entry()
             .branch(
@@ -72,23 +74,25 @@ impl FallibleWorker<WorkerState> for TelegramBotWorker {
 
         let mut dispatcher = Dispatcher::builder(bot, handler)
             .dependencies(dptree::deps![jd_tx, jd_notify, telegram, job_source_service])
-            .enable_ctrlc_handler()
             .build();
 
-        // Graceful shutdown: when the worker context is cancelled,
+        // Signal that the bot is ready
+        let _ = started_tx.send(());
+
+        // Graceful shutdown: when the cancellation token fires,
         // shut down the teloxide dispatcher.
         let shutdown_token = dispatcher.shutdown_token();
-        let child_token = ctx.child_token();
         tokio::spawn(async move {
-            child_token.cancelled().await;
+            cancel_clone.cancelled().await;
             if let Ok(f) = shutdown_token.shutdown() {
                 f.await;
             }
         });
 
         dispatcher.dispatch().await;
-        Ok(())
-    }
+    });
+
+    ServiceHandler::new(join_handle, cancel, started_rx)
 }
 
 async fn handle_command(
