@@ -27,6 +27,7 @@ use crate::{
         cover_letter::CoverLetterAgent,
         follow_up::FollowUpDraftAgent,
         interview_prep::InterviewPrepAgent,
+        jd_parser::JdParserAgent,
         job_fit::JobFitAgent,
         resume_optimizer::ResumeOptimizerAgent,
     },
@@ -139,6 +140,11 @@ impl AiService {
     /// Create a cover letter generation agent.
     pub fn cover_letter(&self) -> CoverLetterAgent<'_> {
         CoverLetterAgent::new(&self.client, &self.default_model)
+    }
+
+    /// Create a job description parser agent.
+    pub fn jd_parser(&self) -> JdParserAgent<'_> {
+        JdParserAgent::new(&self.client, &self.default_model)
     }
 
     /// Access the rate limiter, if configured.

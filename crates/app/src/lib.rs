@@ -131,7 +131,7 @@ impl AppConfig {
             job_domain_scheduler::pg_repository::PgSchedulerRepository::new(pool.clone()),
         );
         let analytics_repo = Arc::new(
-            job_domain_analytics::pg_repository::PgAnalyticsRepository::new(pool),
+            job_domain_analytics::pg_repository::PgAnalyticsRepository::new(pool.clone()),
         );
 
         // Notification service + senders
@@ -185,7 +185,11 @@ impl AppConfig {
         } else {
             info!("AI service not configured (OPENAI_API_KEY not set)");
         }
-        let _ai_service = ai_service;
+
+        // Job repository (for saving parsed JDs)
+        let job_repo: Arc<dyn job_domain_job_source::repository::JobRepository> = Arc::new(
+            job_domain_job_source::pg_repository::PgJobRepository::new(pool.clone()),
+        );
 
         // Job Source domain — JobSpy driver + discovery service
         let jobspy_driver = job_domain_job_source::jobspy::JobSpyDriver::new()
@@ -233,6 +237,8 @@ impl AppConfig {
             cancellation_token: CancellationToken::new(),
             routes_fn,
             notification_service,
+            ai_service,
+            job_repo,
         })
     }
 }
@@ -253,6 +259,10 @@ pub struct App {
     routes_fn:            Box<dyn Fn(axum::Router) -> axum::Router + Send + Sync>,
     /// Notification service needed by background workers
     notification_service: Arc<job_domain_notify::service::NotificationService>,
+    /// AI service for JD parsing (optional)
+    ai_service:           Option<Arc<job_ai::service::AiService>>,
+    /// Job repository for persisting parsed jobs
+    job_repo:             Arc<dyn job_domain_job_source::repository::JobRepository>,
 }
 
 /// Handle for controlling a running application.
@@ -316,9 +326,23 @@ impl App {
             .await
             .whatever_context("Failed to start REST server")?;
 
+        // Set up mpsc channel for JD parse requests
+        let (jd_tx, jd_rx) = tokio::sync::mpsc::channel(100);
+
+        // Create Telegram bot instance (if configured)
+        let bot = self
+            .config
+            .telegram
+            .as_ref()
+            .map(|cfg| teloxide::Bot::new(&cfg.bot_token));
+
         // Set up background worker manager
         let worker_state = job_workers::notification_processor::WorkerState {
             notification_service: self.notification_service,
+            ai_service:           self.ai_service,
+            job_repo:             Some(self.job_repo),
+            jd_parse_tx:          jd_tx,
+            bot:                  bot.clone(),
         };
 
         let mut worker_manager = job_common_worker::Manager::with_state(worker_state);
@@ -331,19 +355,24 @@ impl App {
             .interval(std::time::Duration::from_secs(30))
             .spawn();
 
-        info!("Background workers started");
-
-        // Telegram bot (message receiver)
-        if let Some(ref tg_cfg) = self.config.telegram {
-            let bot = job_telegram::TelegramBot::new(&tg_cfg.bot_token);
-            let cancel = self.cancellation_token.clone();
-            tokio::spawn(async move {
-                if let Err(e) = bot.run(cancel).await {
-                    tracing::error!(error = %e, "Telegram bot stopped with error");
-                }
-            });
-            info!("Telegram bot started");
+        // Telegram bot worker (long-running, Once trigger)
+        if bot.is_some() {
+            let _telegram_handle = worker_manager
+                .fallible_worker(job_workers::telegram_bot::TelegramBotWorker)
+                .name("telegram-bot")
+                .once()
+                .spawn();
+            info!("Telegram bot worker started");
         }
+
+        // JD parser worker (interval 2s, drains mpsc channel)
+        let _jd_parser_handle = worker_manager
+            .fallible_worker(job_workers::jd_parser::JdParserWorker::new(jd_rx))
+            .name("jd-parser")
+            .interval(std::time::Duration::from_secs(2))
+            .spawn();
+
+        info!("Background workers started");
 
         info!("Application started successfully");
 

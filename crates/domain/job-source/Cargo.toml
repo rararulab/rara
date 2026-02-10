@@ -12,12 +12,17 @@ categories.workspace = true
 description = "Job source discovery service powered by JobSpy"
 
 [dependencies]
+async-trait.workspace = true
+chrono.workspace = true
 derive_more = { workspace = true }
 jiff.workspace = true
+job-domain-shared = { workspace = true }
+job-model = { workspace = true }
 jobspy-sys = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true
+sqlx = { workspace = true }
 tracing.workspace = true
 uuid.workspace = true
 

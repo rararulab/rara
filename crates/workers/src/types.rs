@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Background worker implementations for job automation.
-//!
-//! This crate contains concrete worker implementations that orchestrate
-//! domain services for background processing tasks.
+//! Shared types for worker communication.
 
-pub mod jd_parser;
-pub mod notification_processor;
-pub mod telegram_bot;
-pub mod types;
+/// A request to parse a job description received from Telegram.
+pub struct JdParseRequest {
+    /// Telegram chat ID to reply to.
+    pub chat_id: i64,
+    /// Raw job description text from the user.
+    pub text:    String,
+}

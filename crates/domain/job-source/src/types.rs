@@ -15,6 +15,8 @@
 //! Domain types for job source discovery and normalization.
 
 use jiff::Timestamp;
+use job_domain_shared::convert;
+use job_model::job::{Job, JobStatus};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -236,5 +238,62 @@ fn build_location(
         None
     } else {
         Some(parts.join(", "))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Job (DB model) → NormalizedJob
+// ---------------------------------------------------------------------------
+
+impl From<Job> for NormalizedJob {
+    fn from(row: Job) -> Self {
+        Self {
+            id:              row.id,
+            source_job_id:   row.source_job_id,
+            source_name:     row.source_name,
+            title:           row.title,
+            company:         row.company,
+            location:        row.location,
+            description:     row.description,
+            url:             row.url,
+            salary_min:      row.salary_min,
+            salary_max:      row.salary_max,
+            salary_currency: row.salary_currency,
+            tags:            row.tags,
+            raw_data:        row.raw_data,
+            posted_at:       convert::chrono_opt_to_timestamp(row.posted_at),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// NormalizedJob → Job (for INSERT — fills in defaults)
+// ---------------------------------------------------------------------------
+
+impl From<NormalizedJob> for Job {
+    fn from(nj: NormalizedJob) -> Self {
+        let now = chrono::Utc::now();
+        Self {
+            id:              nj.id,
+            source_job_id:   nj.source_job_id,
+            source_name:     nj.source_name,
+            title:           nj.title,
+            company:         nj.company,
+            location:        nj.location,
+            description:     nj.description,
+            url:             nj.url,
+            salary_min:      nj.salary_min,
+            salary_max:      nj.salary_max,
+            salary_currency: nj.salary_currency,
+            tags:            nj.tags,
+            status:          JobStatus::Active,
+            raw_data:        nj.raw_data,
+            trace_id:        None,
+            is_deleted:      false,
+            deleted_at:      None,
+            posted_at:       convert::timestamp_opt_to_chrono(nj.posted_at),
+            created_at:      now,
+            updated_at:      now,
+        }
     }
 }

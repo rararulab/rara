@@ -12,12 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Background worker implementations for job automation.
-//!
-//! This crate contains concrete worker implementations that orchestrate
-//! domain services for background processing tasks.
+//! Repository trait for persisting normalized jobs.
 
-pub mod jd_parser;
-pub mod notification_processor;
-pub mod telegram_bot;
-pub mod types;
+use async_trait::async_trait;
+
+use crate::err::SourceError;
+use crate::types::NormalizedJob;
+
+/// Persistence abstraction for job records.
+#[async_trait]
+pub trait JobRepository: Send + Sync {
+    /// Save a normalized job to the store.
+    ///
+    /// Returns the persisted job (with DB-generated fields populated).
+    async fn save(&self, job: &NormalizedJob) -> Result<NormalizedJob, SourceError>;
+}

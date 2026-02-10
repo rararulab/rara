@@ -45,7 +45,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use job_common_worker::{FallibleWorker, WorkError, WorkResult, WorkerContext};
 use job_domain_notify::service::NotificationService;
+use tokio::sync::mpsc;
 use tracing::{error, info};
+
+use crate::types::JdParseRequest;
 
 /// Background worker that periodically processes pending notifications in batch.
 ///
@@ -63,6 +66,10 @@ impl NotificationProcessorWorker {
 #[derive(Clone)]
 pub struct WorkerState {
     pub notification_service: Arc<NotificationService>,
+    pub ai_service:           Option<Arc<job_ai::service::AiService>>,
+    pub job_repo:             Option<Arc<dyn job_domain_job_source::repository::JobRepository>>,
+    pub jd_parse_tx:          mpsc::Sender<JdParseRequest>,
+    pub bot:                  Option<teloxide::Bot>,
 }
 
 #[async_trait]

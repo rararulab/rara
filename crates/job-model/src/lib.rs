@@ -21,6 +21,7 @@
 
 pub mod application;
 pub mod interview;
+pub mod job;
 pub mod metrics;
 pub mod notify;
 pub mod resume;
