@@ -14,8 +14,14 @@
  * limitations under the License.
  */
 
-import { useState } from "react";
+import { useMemo } from "react";
 import { useMutation } from "@tanstack/react-query";
+import { useLocalStorage } from "@/hooks/use-local-storage";
+import {
+  POPULAR_LOCATIONS,
+  RECENT_LOCATIONS_KEY,
+  MAX_RECENT_LOCATIONS,
+} from "@/data/locations";
 import { api } from "@/api/client";
 import type { DiscoveryCriteria, NormalizedJob } from "@/api/types";
 import {
@@ -79,14 +85,27 @@ function formatDate(dateStr?: string): string | null {
 }
 
 export default function JobDiscovery() {
-  const [keywords, setKeywords] = useState("");
-  const [location, setLocation] = useState("");
-  const [jobType, setJobType] = useState<string>("");
-  const [maxResults, setMaxResults] = useState("20");
-  const [selectedSites, setSelectedSites] = useState<string[]>([
-    "linkedin",
-    "indeed",
-  ]);
+  const [keywords, setKeywords] = useLocalStorage("job-discovery-keywords", "");
+  const [location, setLocation] = useLocalStorage("job-discovery-location", "");
+  const [jobType, setJobType] = useLocalStorage("job-discovery-job-type", "");
+  const [maxResults, setMaxResults] = useLocalStorage("job-discovery-max-results", "20");
+  const [selectedSites, setSelectedSites] = useLocalStorage<string[]>(
+    "job-discovery-selected-sites",
+    ["linkedin", "indeed"],
+  );
+
+  const locationSuggestions = useMemo(() => {
+    const recent: string[] = [];
+    try {
+      const stored = window.localStorage.getItem(RECENT_LOCATIONS_KEY);
+      if (stored) recent.push(...(JSON.parse(stored) as string[]));
+    } catch { /* ignore */ }
+    const seen = new Set(recent.map((l) => l.toLowerCase()));
+    const staticFiltered = POPULAR_LOCATIONS.filter(
+      (l) => !seen.has(l.toLowerCase()),
+    );
+    return [...recent, ...staticFiltered];
+  }, []);
 
   const discoverMutation = useMutation<NormalizedJob[], Error, DiscoveryCriteria>({
     mutationFn: (criteria) =>
@@ -115,6 +134,20 @@ export default function JobDiscovery() {
       max_results: parseInt(maxResults, 10) || undefined,
       sites: selectedSites.length > 0 ? selectedSites : undefined,
     };
+
+    // Save location to recent locations
+    if (location.trim()) {
+      try {
+        const stored = window.localStorage.getItem(RECENT_LOCATIONS_KEY);
+        const recent: string[] = stored ? (JSON.parse(stored) as string[]) : [];
+        const trimmed = location.trim();
+        const updated = [
+          trimmed,
+          ...recent.filter((l) => l.toLowerCase() !== trimmed.toLowerCase()),
+        ].slice(0, MAX_RECENT_LOCATIONS);
+        window.localStorage.setItem(RECENT_LOCATIONS_KEY, JSON.stringify(updated));
+      } catch { /* ignore */ }
+    }
 
     discoverMutation.mutate(criteria);
   };
@@ -161,7 +194,14 @@ export default function JobDiscovery() {
                   placeholder="e.g. San Francisco, Remote"
                   value={location}
                   onChange={(e) => setLocation(e.target.value)}
+                  list="location-suggestions"
+                  autoComplete="off"
                 />
+                <datalist id="location-suggestions">
+                  {locationSuggestions.map((loc) => (
+                    <option key={loc} value={loc} />
+                  ))}
+                </datalist>
               </div>
 
               <div className="space-y-2">

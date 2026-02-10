@@ -75,10 +75,14 @@ impl JobSourceService {
             "normalization complete"
         );
 
-        let deduped = dedup::deduplicate(normalized, existing_source_keys, existing_fuzzy_keys);
+        let mut deduped = dedup::deduplicate(normalized, existing_source_keys, existing_fuzzy_keys);
+
+        // Sort by posted_at descending (newest first, None last).
+        deduped.sort_by(|a, b| b.posted_at.cmp(&a.posted_at));
+
         tracing::info!(
             deduped_count = deduped.len(),
-            "deduplication complete"
+            "deduplication and sorting complete"
         );
 
         DiscoveryResult {
