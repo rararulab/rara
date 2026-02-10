@@ -15,7 +15,11 @@
 use std::time::Duration;
 
 use axum::{
-    Router, extract::DefaultBodyLimit, http::StatusCode, response::IntoResponse, routing::get,
+    Router,
+    extract::DefaultBodyLimit,
+    http::{Method, StatusCode, Uri},
+    response::IntoResponse,
+    routing::get,
 };
 use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
 use job_base::readable_size::ReadableSize;
@@ -25,9 +29,12 @@ use smart_default::SmartDefault;
 use snafu::ResultExt;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
-use tower_http::cors::{Any, CorsLayer};
-use tower_http::timeout::TimeoutLayer;
-use tracing::info;
+use tower_http::{
+    cors::{Any, CorsLayer},
+    timeout::TimeoutLayer,
+    trace::TraceLayer,
+};
+use tracing::{Span, info};
 
 use super::ServiceHandler;
 
@@ -35,23 +42,23 @@ use super::ServiceHandler;
 pub const DEFAULT_MAX_HTTP_BODY_SIZE: ReadableSize = ReadableSize::mb(100);
 
 /// Default request timeout in seconds.
-pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
+pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 5;
 
 /// Configuration options for a REST server
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, SmartDefault, bon::Builder)]
 pub struct RestServerConfig {
     /// The address to bind the REST server
     #[default = "127.0.0.1:3000"]
-    pub bind_address:     String,
+    pub bind_address:    String,
     /// Maximum HTTP request body size
     #[default(_code = "DEFAULT_MAX_HTTP_BODY_SIZE")]
-    pub max_body_size:    ReadableSize,
+    pub max_body_size:   ReadableSize,
     /// Whether to enable CORS
     #[default = true]
-    pub enable_cors:      bool,
+    pub enable_cors:     bool,
     /// Request timeout in seconds
     #[default(DEFAULT_REQUEST_TIMEOUT_SECS)]
-    pub request_timeout:  u64,
+    pub request_timeout: u64,
 }
 
 /// Starts the REST server and returns a handle for managing its lifecycle.
@@ -117,11 +124,42 @@ where
             addr: config.bind_address.clone(),
         })?;
 
-    // Build the router with middleware
-    let mut router = Router::new()
-        .route("/health", get(health_check))
+    // Build the API router with middleware
+    let mut api_router = Router::new()
         .layer(OtelInResponseLayer)
         .layer(OtelAxumLayer::default())
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(|request: &axum::http::Request<_>| {
+                    tracing::info_span!(
+                        "http_request",
+                        method = %request.method(),
+                        path = %request.uri().path(),
+                    )
+                })
+                .on_response(
+                    |response: &axum::http::Response<_>,
+                     latency: Duration,
+                     _span: &Span| {
+                        tracing::info!(
+                            status = response.status().as_u16(),
+                            latency_ms = latency.as_millis(),
+                            "response"
+                        );
+                    },
+                )
+                .on_failure(
+                    |error: tower_http::classify::ServerErrorsFailureClass,
+                     latency: Duration,
+                     _span: &Span| {
+                        tracing::error!(
+                            error = %error,
+                            latency_ms = latency.as_millis(),
+                            "request failed"
+                        );
+                    },
+                ),
+        )
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             Duration::from_secs(config.request_timeout),
@@ -137,14 +175,21 @@ where
             .allow_origin(Any)
             .allow_methods(Any)
             .allow_headers(Any);
-        router = router.layer(cors);
+        api_router = api_router.layer(cors);
     }
 
     // Register route handlers
     for handler in &route_handlers {
         info!("Registering REST route handler");
-        router = handler(router);
+        api_router = handler(api_router);
     }
+
+    // Put /health and global fallback on the outer router so unmatched routes
+    // always return a deterministic response.
+    let router = Router::new()
+        .route("/health", get(health_check))
+        .merge(api_router)
+        .fallback(route_not_found);
 
     // Spawn the server task
     let cancellation_token = CancellationToken::new();
@@ -153,6 +198,7 @@ where
         let cancellation_token_clone = cancellation_token.clone();
         let join_handle = tokio::spawn(async move {
             let listener = tokio::net::TcpListener::bind(bind_addr).await.unwrap();
+            info!("REST server (on {})", bind_addr);
             let result = axum::serve(listener, router)
                 .with_graceful_shutdown(async move {
                     info!("REST server (on {}) starting", bind_addr);
@@ -162,11 +208,7 @@ where
                     info!("REST server (on {}) received shutdown signal", bind_addr);
                 })
                 .await;
-
-            info!(
-                "REST server (on {}) task completed: {:?}",
-                bind_addr, result
-            );
+            info!("REST server finished: {:?}", result);
         });
         (join_handle, started_rx)
     };
@@ -181,6 +223,17 @@ where
 
 /// Health check endpoint for the REST server
 async fn health_check() -> impl IntoResponse { (StatusCode::OK, "OK") }
+
+/// Default fallback for unmatched HTTP routes.
+async fn route_not_found(method: Method, uri: Uri) -> impl IntoResponse {
+    let body = axum::Json(serde_json::json!({
+        "error": "route_not_found",
+        "message": "Route not found",
+        "method": method.as_str(),
+        "path": uri.path(),
+    }));
+    (StatusCode::NOT_FOUND, body)
+}
 
 /// Health check handler that returns detailed health information
 async fn api_health_handler() -> axum::Json<serde_json::Value> {
@@ -323,6 +376,36 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), 200);
+
+        handler.shutdown();
+        handler.wait_for_stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_route_not_found_fallback() {
+        init_test_logging();
+
+        let port = get_available_port().await;
+        let config = RestServerConfig {
+            bind_address: format!("127.0.0.1:{port}"),
+            ..RestServerConfig::default()
+        };
+        let handlers = vec![health_routes];
+
+        let mut handler = start_rest_server(config, handlers).await.unwrap();
+        handler.wait_for_start().await.unwrap();
+
+        let client = reqwest::Client::new();
+        let response = client
+            .get(format!("http://127.0.0.1:{port}/api/v1/not-exists"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["error"], "route_not_found");
+        assert_eq!(body["path"], "/api/v1/not-exists");
 
         handler.shutdown();
         handler.wait_for_stop().await.unwrap();
