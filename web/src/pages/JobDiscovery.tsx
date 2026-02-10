@@ -84,6 +84,15 @@ function formatDate(dateStr?: string): string | null {
   }
 }
 
+function getPostedAfterTimestamp(filter: string): string | undefined {
+  if (!filter) return undefined;
+  const now = Date.now();
+  const hours: Record<string, number> = { "24h": 24, "7d": 168, "30d": 720 };
+  const h = hours[filter];
+  if (!h) return undefined;
+  return new Date(now - h * 3600 * 1000).toISOString();
+}
+
 export default function JobDiscovery() {
   const [keywords, setKeywords] = useLocalStorage("job-discovery-keywords", "");
   const [location, setLocation] = useLocalStorage("job-discovery-location", "");
@@ -93,6 +102,7 @@ export default function JobDiscovery() {
     "job-discovery-selected-sites",
     ["linkedin", "indeed"],
   );
+  const [postedAfter, setPostedAfter] = useLocalStorage("job-discovery-posted-after", "");
 
   const locationSuggestions = useMemo(() => {
     const recent: string[] = [];
@@ -133,6 +143,7 @@ export default function JobDiscovery() {
       job_type: jobType || undefined,
       max_results: parseInt(maxResults, 10) || undefined,
       sites: selectedSites.length > 0 ? selectedSites : undefined,
+      posted_after: getPostedAfterTimestamp(postedAfter),
     };
 
     // Save location to recent locations
@@ -229,6 +240,21 @@ export default function JobDiscovery() {
                   value={maxResults}
                   onChange={(e) => setMaxResults(e.target.value)}
                 />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="posted-after">Posted Within</Label>
+                <Select value={postedAfter} onValueChange={setPostedAfter}>
+                  <SelectTrigger id="posted-after">
+                    <SelectValue placeholder="Any time" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">Any time</SelectItem>
+                    <SelectItem value="24h">Last 24 hours</SelectItem>
+                    <SelectItem value="7d">Last 7 days</SelectItem>
+                    <SelectItem value="30d">Last 30 days</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 

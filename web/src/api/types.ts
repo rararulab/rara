@@ -21,6 +21,7 @@ export interface DiscoveryCriteria {
   job_type?: string;
   max_results?: number;
   sites?: string[];
+  posted_after?: string;
 }
 
 export interface NormalizedJob {
