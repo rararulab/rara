@@ -27,14 +27,6 @@ pub enum AiError {
         retry_after_secs: u64,
     },
 
-    /// A prompt template variable was missing during rendering.
-    #[snafu(display("Missing template variable: {variable}"))]
-    MissingTemplateVariable { variable: String },
-
-    /// The requested prompt template was not found.
-    #[snafu(display("Prompt template not found: {name}"))]
-    TemplateNotFound { name: String },
-
     /// No AI provider is configured.
     #[snafu(display("AI provider not configured"))]
     NotConfigured,

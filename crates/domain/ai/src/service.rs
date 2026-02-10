@@ -12,45 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! AI service orchestrator.
+//! AI service — a factory for creating task-specific agents.
 //!
-//! [`AiService`] wraps a rig-core OpenAI client with prompt template
-//! management and rate limiting. It is the primary entry point for the
-//! rest of the application to invoke AI operations.
+//! [`AiService`] holds the rig-core OpenAI client and default model.
+//! Each agent method returns a lightweight borrowing agent that
+//! executes a specific AI task.
 
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::Instant,
-};
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use jiff::Timestamp;
-use rig::{client::CompletionClient, completion::Prompt, providers::openai};
-use uuid::Uuid;
+use rig::providers::openai;
 
 use crate::{
+    agents::{
+        cover_letter::CoverLetterAgent,
+        follow_up::FollowUpDraftAgent,
+        interview_prep::InterviewPrepAgent,
+        job_fit::JobFitAgent,
+        resume_optimizer::ResumeOptimizerAgent,
+    },
     error::AiError,
-    kind::AiTaskConfig,
-    template::{self, PromptTemplateManager},
 };
-
-/// Result of running an AI task, combining the model response with
-/// metadata for observability.
-#[derive(Debug, Clone)]
-pub struct AiRunResult {
-    /// Unique identifier for this run.
-    pub run_id:      Uuid,
-    /// The generated text content.
-    pub content:     String,
-    /// Model identifier that produced this response.
-    pub model:       String,
-    /// Wall-clock duration of the provider call in milliseconds.
-    pub duration_ms: u64,
-    /// Timestamp when the run started.
-    pub created_at:  Timestamp,
-}
 
 /// Simple rate limiter based on a token counter.
 ///
@@ -101,36 +82,28 @@ impl RateLimiter {
     pub fn reset(&self) { self.consumed.store(0, Ordering::Relaxed); }
 }
 
-/// The AI service orchestrator.
+/// The AI service — a factory for creating task-specific agents.
 ///
-/// Wraps a rig-core OpenAI client with a [`PromptTemplateManager`]
-/// for template resolution and an optional [`RateLimiter`].
+/// Holds the rig-core OpenAI client and default model. Each agent
+/// method returns a lightweight borrowing agent that executes a
+/// specific AI task.
 pub struct AiService {
     /// The rig-core OpenAI client.
-    client:           openai::Client,
-    /// Default model to use when no override is specified.
-    default_model:    String,
-    /// Template manager for loading and rendering prompt templates.
-    template_manager: Arc<dyn PromptTemplateManager>,
+    client:        openai::Client,
+    /// Default model to use.
+    default_model: String,
     /// Optional rate limiter.
-    rate_limiter:     Option<RateLimiter>,
+    rate_limiter:  Option<RateLimiter>,
 }
 
 impl AiService {
     /// Create a new `AiService`.
     ///
     /// - `api_key` -- the OpenAI API key.
-    /// - `default_model` -- model identifier to use when none is
-    ///   overridden per-task.
-    /// - `template_manager` -- how to load prompt templates.
+    /// - `default_model` -- model identifier to use by default.
     /// - `rate_limiter` -- optional rate limiter.
     #[must_use]
-    pub fn new(
-        api_key: &str,
-        default_model: String,
-        template_manager: Arc<dyn PromptTemplateManager>,
-        rate_limiter: Option<RateLimiter>,
-    ) -> Self {
+    pub fn new(api_key: &str, default_model: String, rate_limiter: Option<RateLimiter>) -> Self {
         let client = openai::Client::builder()
             .api_key(api_key)
             .build()
@@ -139,82 +112,38 @@ impl AiService {
         Self {
             client,
             default_model,
-            template_manager,
             rate_limiter,
         }
     }
 
-    /// Run an AI task.
-    ///
-    /// 1. Load and render the prompt template (falling back to the
-    ///    built-in default).
-    /// 2. Build a rig agent with the resolved system prompt.
-    /// 3. Apply rate limiting.
-    /// 4. Call the agent and return an [`AiRunResult`].
-    pub async fn run_task(&self, config: &AiTaskConfig) -> Result<AiRunResult, AiError> {
-        // 1. Load / render prompt template.
-        let system_prompt =
-            if let Some(tpl) = self.template_manager.get_for_task_kind(config.kind).await? {
-                template::render(&tpl.content, &config.variables)?
-            } else {
-                let default = config.kind.default_system_prompt();
-                template::render(default, &config.variables)
-                    .unwrap_or_else(|_| default.to_owned())
-            };
+    /// Create a job-fit analysis agent.
+    pub fn job_fit(&self) -> JobFitAgent<'_> {
+        JobFitAgent::new(&self.client, &self.default_model)
+    }
 
-        // 2. Build rig agent.
-        let model = config
-            .model_override
-            .as_deref()
-            .unwrap_or(&self.default_model);
+    /// Create a resume optimization agent.
+    pub fn resume_optimizer(&self) -> ResumeOptimizerAgent<'_> {
+        ResumeOptimizerAgent::new(&self.client, &self.default_model)
+    }
 
-        let mut builder = self.client.agent(model).preamble(&system_prompt);
-        if let Some(temp) = config.temperature {
-            builder = builder.temperature(f64::from(temp));
-        }
-        let agent = builder.build();
+    /// Create an interview preparation agent.
+    pub fn interview_prep(&self) -> InterviewPrepAgent<'_> {
+        InterviewPrepAgent::new(&self.client, &self.default_model)
+    }
 
-        // 3. Rate limiting (input estimation).
-        let user_input = config
-            .variables
-            .get("user_input")
-            .cloned()
-            .unwrap_or_default();
+    /// Create a follow-up email drafting agent.
+    pub fn follow_up(&self) -> FollowUpDraftAgent<'_> {
+        FollowUpDraftAgent::new(&self.client, &self.default_model)
+    }
 
-        if let Some(limiter) = &self.rate_limiter {
-            let estimated_tokens = (system_prompt.len() + user_input.len()) as u64 / 4;
-            limiter.try_consume(estimated_tokens, model)?;
-        }
+    /// Create a cover letter generation agent.
+    pub fn cover_letter(&self) -> CoverLetterAgent<'_> {
+        CoverLetterAgent::new(&self.client, &self.default_model)
+    }
 
-        // 4. Call rig agent.
-        let start = Instant::now();
-        let created_at = Timestamp::now();
-        let run_id = Uuid::new_v4();
-
-        let content: String = agent
-            .prompt(&user_input)
-            .await
-            .map_err(|e| AiError::RequestFailed {
-                message: e.to_string(),
-            })?;
-
-        #[expect(clippy::cast_possible_truncation)]
-        let duration_ms = start.elapsed().as_millis() as u64;
-
-        tracing::info!(
-            run_id = %run_id,
-            model = model,
-            duration_ms = duration_ms,
-            "AI task completed"
-        );
-
-        Ok(AiRunResult {
-            run_id,
-            content,
-            model: model.to_owned(),
-            duration_ms,
-            created_at,
-        })
+    /// Access the rate limiter, if configured.
+    pub fn rate_limiter(&self) -> Option<&RateLimiter> {
+        self.rate_limiter.as_ref()
     }
 }
 
