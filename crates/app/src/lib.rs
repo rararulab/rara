@@ -12,9 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
 };
 
 use job_common_worker::Notifiable;
@@ -28,7 +31,7 @@ use smart_default::SmartDefault;
 use snafu::{ResultExt, Whatever, whatever};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{error, info};
 use yunara_store::config::DatabaseConfig;
 
 // ---------------------------------------------------------------------------
@@ -49,6 +52,16 @@ pub struct OpenAiConfig {
     pub model:   String,
 }
 
+/// MinIO / S3-compatible object store configuration.
+#[derive(Debug, Clone)]
+pub struct MinioConfig {
+    pub endpoint:   String,
+    pub bucket:     String,
+    pub access_key: String,
+    pub secret_key: String,
+    pub region:     String,
+}
+
 /// Configuration for the application.
 #[derive(Debug, Clone, SmartDefault)]
 pub struct AppConfig {
@@ -65,13 +78,18 @@ pub struct AppConfig {
     pub telegram:                 Option<TelegramConfig>,
     /// OpenAI configuration (optional)
     pub openai:                   Option<OpenAiConfig>,
+    /// MinIO / S3 object store configuration (optional)
+    pub minio:                    Option<MinioConfig>,
+    /// Crawl4AI service URL
+    #[default(_code = r#""http://localhost:11235".to_owned()"#)]
+    pub crawl4ai_url:             String,
+    /// Saved-job GC interval in hours
+    #[default = 24]
+    pub gc_interval_hours:        u64,
 }
 
 impl AppConfig {
     /// Build an `AppConfig` from environment variables.
-    ///
-    /// Reads `DATABASE_URL`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`,
-    /// `OPENAI_API_KEY`, and `OPENAI_MODEL`.
     pub fn from_env() -> Self {
         let db_config =
             DatabaseConfig::builder()
@@ -104,10 +122,33 @@ impl AppConfig {
             }
         });
 
+        let minio = std::env::var("MINIO_ENDPOINT")
+            .ok()
+            .map(|endpoint| MinioConfig {
+                endpoint,
+                bucket: std::env::var("MINIO_BUCKET").unwrap_or_else(|_| "job-markdown".to_owned()),
+                access_key: std::env::var("MINIO_ACCESS_KEY")
+                    .unwrap_or_else(|_| "minioadmin".to_owned()),
+                secret_key: std::env::var("MINIO_SECRET_KEY")
+                    .unwrap_or_else(|_| "minioadmin".to_owned()),
+                region: std::env::var("MINIO_REGION").unwrap_or_else(|_| "us-east-1".to_owned()),
+            });
+
+        let crawl4ai_url =
+            std::env::var("CRAWL4AI_URL").unwrap_or_else(|_| "http://localhost:11235".to_owned());
+
+        let gc_interval_hours = std::env::var("GC_INTERVAL_HOURS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(24);
+
         Self {
             db_config,
             telegram,
             openai,
+            minio,
+            crawl4ai_url,
+            gc_interval_hours,
             ..Default::default()
         }
     }
@@ -150,9 +191,8 @@ impl AppConfig {
             Arc::new(job_domain_scheduler::pg_repository::PgSchedulerRepository::new(pool.clone()));
         let analytics_repo =
             Arc::new(job_domain_analytics::pg_repository::PgAnalyticsRepository::new(pool.clone()));
-        let saved_job_repo = Arc::new(
-            job_domain_saved_job::pg_repository::PgSavedJobRepository::new(pool.clone()),
-        );
+        let saved_job_repo =
+            Arc::new(job_domain_saved_job::pg_repository::PgSavedJobRepository::new(pool.clone()));
 
         // Notification service + senders
         let mut notification_service =
@@ -200,25 +240,13 @@ impl AppConfig {
         );
 
         // Object store (MinIO / S3) — optional, for saved-job markdown
-        let object_store = {
+        let object_store = self.minio.as_ref().and_then(|m| {
             let cfg = job_object_store::ObjectStoreConfig::builder()
-                .endpoint(
-                    std::env::var("MINIO_ENDPOINT")
-                        .unwrap_or_else(|_| "http://localhost:9000".to_owned()),
-                )
-                .bucket(
-                    std::env::var("MINIO_BUCKET")
-                        .unwrap_or_else(|_| "job-markdown".to_owned()),
-                )
-                .access_key(
-                    std::env::var("MINIO_ACCESS_KEY")
-                        .unwrap_or_else(|_| "minioadmin".to_owned()),
-                )
-                .secret_key(
-                    std::env::var("MINIO_SECRET_KEY")
-                        .unwrap_or_else(|_| "minioadmin".to_owned()),
-                )
-                .region("us-east-1".to_owned())
+                .endpoint(m.endpoint.clone())
+                .bucket(m.bucket.clone())
+                .access_key(m.access_key.clone())
+                .secret_key(m.secret_key.clone())
+                .region(m.region.clone())
                 .root("/".to_owned())
                 .build();
             match job_object_store::ObjectStore::new(&cfg) {
@@ -231,7 +259,7 @@ impl AppConfig {
                     None
                 }
             }
-        };
+        });
 
         // Job Source domain — JobSpy driver + discovery service
         let jobspy_driver = job_domain_job_source::jobspy::JobSpyDriver::new()
@@ -255,10 +283,7 @@ impl AppConfig {
         ));
 
         // Crawl4AI client + saved job pipeline (requires object_store + ai_service)
-        let crawl4ai_url = std::env::var("CRAWL4AI_URL")
-            .unwrap_or_else(|_| "http://localhost:11235".to_owned());
-        let crawl_client =
-            job_domain_saved_job::crawl4ai::Crawl4AiClient::new(&crawl4ai_url);
+        let crawl_client = job_domain_saved_job::crawl4ai::Crawl4AiClient::new(&self.crawl4ai_url);
 
         let saved_job_pipeline = match (&object_store, &ai_service) {
             (Some(os), Some(ai)) => {
@@ -349,11 +374,23 @@ pub struct App {
     /// Job source service for discovery (used by Telegram /search command)
     job_source_service:   Arc<job_domain_job_source::service::JobSourceService>,
     /// Saved job service for GC worker
-    saved_job_service:    Option<Arc<job_domain_saved_job::service::SavedJobService<job_domain_saved_job::pg_repository::PgSavedJobRepository>>>,
+    saved_job_service: Option<
+        Arc<
+            job_domain_saved_job::service::SavedJobService<
+                job_domain_saved_job::pg_repository::PgSavedJobRepository,
+            >,
+        >,
+    >,
     /// Object store for GC worker S3 cleanup
     object_store:         Option<Arc<job_object_store::ObjectStore>>,
     /// Saved job pipeline for crawl + AI analysis
-    saved_job_pipeline:   Option<Arc<job_domain_saved_job::pipeline::SavedJobPipeline<job_domain_saved_job::pg_repository::PgSavedJobRepository>>>,
+    saved_job_pipeline: Option<
+        Arc<
+            job_domain_saved_job::pipeline::SavedJobPipeline<
+                job_domain_saved_job::pg_repository::PgSavedJobRepository,
+            >,
+        >,
+    >,
 }
 
 /// Handle for controlling a running application.
@@ -410,26 +447,42 @@ impl App {
         };
 
         // Start servers
-        let grpc_handle = start_grpc_server(&self.config.grpc_config, &[Arc::new(HelloService)])
-            .whatever_context("Failed to start gRPC server")?;
+        let mut grpc_handle =
+            start_grpc_server(&self.config.grpc_config, &[Arc::new(HelloService)])
+                .whatever_context("Failed to start gRPC server")?;
 
         info!("starting rest server ...");
-        let http_handle = start_rest_server(self.config.http_config.clone(), vec![self.routes_fn])
+        let mut http_handle =
+            start_rest_server(self.config.http_config.clone(), vec![self.routes_fn])
+                .await
+                .whatever_context("Failed to start REST server")?;
+
+        // Ensure sockets are actually accepting requests before we continue
+        // with worker/bootstrap side effects.
+        grpc_handle
+            .wait_for_start()
             .await
-            .whatever_context("Failed to start REST server")?;
+            .whatever_context("gRPC server failed to report started")?;
+        http_handle
+            .wait_for_start()
+            .await
+            .whatever_context("REST server failed to report started")?;
 
         // Set up mpsc channel for JD parse requests
         let (jd_tx, jd_rx) = tokio::sync::mpsc::channel(100);
         let jd_parse_notify = Arc::new(tokio::sync::Mutex::new(None));
         let notification_service = self.notification_service.clone();
 
-        // Start Telegram bot as a standalone service (same level as HTTP/gRPC)
-        let telegram_handle = job_workers::telegram_bot::start_telegram_bot(
-            self.telegram.clone(),
-            jd_tx,
-            jd_parse_notify.clone(),
-            self.job_source_service.clone(),
-        );
+        // // Start Telegram bot as a standalone service (same level as HTTP/gRPC)
+        // let telegram_handle = job_workers::telegram_bot::start_telegram_bot(
+        //     self.telegram.clone(),
+        //     jd_tx,
+        //     jd_parse_notify.clone(),
+        //     self.job_source_service.clone(),
+        // );
+
+        // Keep a clone for wiring notify trigger after worker_state takes ownership
+        let saved_job_svc_for_notify = self.saved_job_service.clone();
 
         // Set up background worker manager
         let worker_state = job_workers::notification_processor::WorkerState {
@@ -442,7 +495,23 @@ impl App {
             saved_job_pipeline:   self.saved_job_pipeline,
         };
 
-        let mut worker_manager = job_common_worker::Manager::with_state(worker_state);
+        // Use an app-owned runtime for workers so shutdown can fully reclaim
+        // worker threads instead of relying on global background runtimes.
+        let worker_runtime = Arc::new(
+            job_common_runtime::RuntimeOptions::builder()
+                .thread_name("job-worker".to_owned())
+                .enable_io(true)
+                .enable_time(true)
+                .build()
+                .create()
+                .whatever_context("Failed to create worker runtime")?,
+        );
+        let manager_config = job_common_worker::ManagerConfig {
+            runtime:          Some(worker_runtime),
+            shutdown_timeout: Duration::from_secs(30),
+        };
+        let mut worker_manager =
+            job_common_worker::Manager::with_state_and_config(worker_state, manager_config);
 
         let notification_handle = worker_manager
             .fallible_worker(
@@ -463,20 +532,18 @@ impl App {
         *jd_parse_notify.lock().await = Some(jd_parser_handle);
 
         // Saved job pipeline worker (notify trigger, processes PendingCrawl jobs)
-        let _pipeline_handle = worker_manager
-            .fallible_worker(
-                job_workers::saved_job_pipeline::SavedJobPipelineWorker,
-            )
+        let pipeline_handle = worker_manager
+            .fallible_worker(job_workers::saved_job_pipeline::SavedJobPipelineWorker)
             .name("saved-job-pipeline")
             .on_notify()
             .spawn();
+        if let Some(svc) = &saved_job_svc_for_notify {
+            svc.set_notify_trigger(pipeline_handle.clone());
+        }
+        pipeline_handle.notify(); // process any leftover PendingCrawl on startup
 
         // Saved job GC worker (periodic, default every 24 hours)
-        let gc_interval_secs = std::env::var("GC_INTERVAL_HOURS")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(24)
-            * 3600;
+        let gc_interval_secs = self.config.gc_interval_hours * 3600;
         let _gc_handle = worker_manager
             .fallible_worker(job_workers::saved_job_gc::SavedJobGcWorker::new(
                 job_workers::saved_job_gc::GcConfig::default(),
@@ -503,15 +570,24 @@ impl App {
             running.store(false, Ordering::SeqCst);
             cancellation_token.cancel();
 
-            // Shutdown background workers
+            // Shutdown background workers. Do not block forever here:
+            // if one worker gets stuck, we must still tear down servers.
             info!("Shutting down background workers");
-            worker_manager.shutdown().await;
+            if tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                worker_manager.shutdown(),
+            )
+            .await
+            .is_err()
+            {
+                error!("Worker manager shutdown timed out; continuing shutdown");
+            }
 
             // Shutdown servers and standalone services
             info!("Shutting down servers");
             grpc_handle.shutdown();
             http_handle.shutdown();
-            telegram_handle.shutdown();
+            // telegram_handle.shutdown();
 
             info!("Application shutdown complete");
         });

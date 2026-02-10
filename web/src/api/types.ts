@@ -166,3 +166,34 @@ export interface TaskRunRecord {
   finished_at: string | null;
   error_message: string | null;
 }
+
+// Saved Jobs
+export interface SavedJob {
+  id: string;
+  url: string;
+  title: string | null;
+  company: string | null;
+  status: string;
+  markdown_s3_key: string | null;
+  markdown_preview: string | null;
+  analysis_result: Record<string, unknown> | null;
+  match_score: number | null;
+  error_message: string | null;
+  crawled_at: string | null;
+  analyzed_at: string | null;
+  expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export const SAVED_JOB_STATUSES = [
+  "pending_crawl",
+  "crawling",
+  "crawled",
+  "analyzing",
+  "analyzed",
+  "failed",
+  "expired",
+] as const;
+
+export type SavedJobStatus = (typeof SAVED_JOB_STATUSES)[number];

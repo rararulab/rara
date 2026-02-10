@@ -73,7 +73,12 @@ pub fn start_telegram_bot(
         let _ = bot.delete_webhook().drop_pending_updates(true).await;
 
         let mut dispatcher = Dispatcher::builder(bot, handler)
-            .dependencies(dptree::deps![jd_tx, jd_notify, telegram, job_source_service])
+            .dependencies(dptree::deps![
+                jd_tx,
+                jd_notify,
+                telegram,
+                job_source_service
+            ])
             .build();
 
         // Signal that the bot is ready
@@ -106,10 +111,9 @@ async fn handle_command(
         Command::Start => {
             bot.send_message(
                 msg.chat.id,
-                "Welcome! I'm the Job Assistant bot.\n\
-                 \u{2022} Send me a JD text and I'll parse it\n\
-                 \u{2022} Use /search <keywords> [@ location] to find jobs\n\
-                 \u{2022} Use /help to see all commands",
+                "Welcome! I'm the Job Assistant bot.\n\u{2022} Send me a JD text and I'll parse \
+                 it\n\u{2022} Use /search <keywords> [@ location] to find jobs\n\u{2022} Use \
+                 /help to see all commands",
             )
             .await?;
         }
@@ -157,10 +161,7 @@ async fn handle_search(
         (args, None)
     };
 
-    let keywords: Vec<String> = keywords_str
-        .split_whitespace()
-        .map(String::from)
-        .collect();
+    let keywords: Vec<String> = keywords_str.split_whitespace().map(String::from).collect();
 
     if keywords.is_empty() {
         bot.send_message(msg.chat.id, "Please provide at least one keyword.")
@@ -219,17 +220,15 @@ async fn handle_search(
     let text = format_job_results(&discovery.jobs, &keywords, location.as_deref());
 
     // Build inline keyboard with "Load More" button.
-    // Encode search params in callback data: "search_more:<offset>:<keywords>[@<location>]"
+    // Encode search params in callback data:
+    // "search_more:<offset>:<keywords>[@<location>]"
     let callback_data = format!(
         "search_more:{}:{}",
         discovery.jobs.len(),
         encode_search_params(&keywords, location.as_deref()),
     );
     let keyboard = teloxide::types::InlineKeyboardMarkup::new(vec![vec![
-        teloxide::types::InlineKeyboardButton::callback(
-            "\u{1f4c4} Load More",
-            callback_data,
-        ),
+        teloxide::types::InlineKeyboardButton::callback("\u{1f4c4} Load More", callback_data),
     ]]);
 
     bot.send_message(msg.chat.id, text)

@@ -115,14 +115,23 @@ impl FallibleWorker<WorkerState> for SavedJobGcWorker {
                 break;
             }
 
-            let is_dead = match self.http_client.head(&job.url).send().await {
-                Ok(resp) => {
-                    let status = resp.status();
-                    status == reqwest::StatusCode::NOT_FOUND
-                        || status == reqwest::StatusCode::GONE
+            let req = self.http_client.head(&job.url).send();
+            let is_dead = tokio::select! {
+                () = ctx.cancelled() => {
+                    info!("GC worker cancelled during URL checks");
+                    break;
                 }
-                Err(e) if e.is_timeout() || e.is_connect() => true,
-                Err(_) => false,
+                resp = req => {
+                    match resp {
+                        Ok(resp) => {
+                            let status = resp.status();
+                            status == reqwest::StatusCode::NOT_FOUND
+                                || status == reqwest::StatusCode::GONE
+                        }
+                        Err(e) if e.is_timeout() || e.is_connect() => true,
+                        Err(_) => false,
+                    }
+                }
             };
 
             if is_dead {
@@ -141,7 +150,13 @@ impl FallibleWorker<WorkerState> for SavedJobGcWorker {
             }
 
             // Small delay to avoid hammering external servers.
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::select! {
+                () = ctx.cancelled() => {
+                    info!("GC worker cancelled during URL checks");
+                    break;
+                }
+                () = tokio::time::sleep(Duration::from_millis(100)) => {}
+            }
         }
 
         if total_checked > 0 {

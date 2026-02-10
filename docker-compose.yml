@@ -52,7 +52,7 @@ services:
       "
 
   crawl4ai:
-    image: unclecode/crawl4ai:basic
+    image: unclecode/crawl4ai:latest
     ports:
       - "11235:11235"
     healthcheck:

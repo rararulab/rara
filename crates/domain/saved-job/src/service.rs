@@ -14,10 +14,11 @@
 
 //! Application-level service for saved job management.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use jiff::Timestamp;
-use tracing::instrument;
+use job_common_worker::{Notifiable, NotifyHandle};
+use tracing::{instrument, warn};
 use uuid::Uuid;
 
 use crate::error::SavedJobError;
@@ -31,12 +32,36 @@ use crate::types::{SavedJob, SavedJobStatus};
 /// High-level service for saved job CRUD and pipeline status management.
 pub struct SavedJobService<R: SavedJobRepository> {
     repo: Arc<R>,
+    notify_trigger: RwLock<Option<NotifyHandle>>,
 }
 
 impl<R: SavedJobRepository> SavedJobService<R> {
     /// Create a new service backed by the given repository.
     #[must_use]
-    pub const fn new(repo: Arc<R>) -> Self { Self { repo } }
+    pub fn new(repo: Arc<R>) -> Self {
+        Self {
+            repo,
+            notify_trigger: RwLock::new(None),
+        }
+    }
+
+    /// Registers the runtime notify handle used to trigger immediate
+    /// pipeline processing when new jobs are saved.
+    pub fn set_notify_trigger(&self, handle: NotifyHandle) {
+        if let Ok(mut guard) = self.notify_trigger.write() {
+            *guard = Some(handle);
+        } else {
+            warn!("failed to acquire saved-job notify trigger write lock");
+        }
+    }
+
+    fn trigger_pipeline(&self) {
+        if let Ok(guard) = self.notify_trigger.read() {
+            if let Some(handle) = guard.as_ref() {
+                handle.notify();
+            }
+        }
+    }
 
     /// Save a new job by URL.
     #[instrument(skip(self))]
@@ -47,7 +72,9 @@ impl<R: SavedJobRepository> SavedJobService<R> {
                 message: "url must not be empty".to_owned(),
             });
         }
-        self.repo.create(url).await
+        let job = self.repo.create(url).await?;
+        self.trigger_pipeline();
+        Ok(job)
     }
 
     /// Get a saved job by id.
@@ -110,7 +137,9 @@ impl<R: SavedJobRepository> SavedJobService<R> {
     pub async fn retry(&self, id: Uuid) -> Result<(), SavedJobError> {
         self.repo
             .update_status(id, SavedJobStatus::PendingCrawl, None)
-            .await
+            .await?;
+        self.trigger_pipeline();
+        Ok(())
     }
 
     /// List saved jobs older than the given timestamp that are not in a

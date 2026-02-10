@@ -34,6 +34,7 @@ job-common-runtime = { workspace = true }
 job-common-telemetry.workspace = true
 shadow-rs = "1.2.1"
 snafu.workspace = true
+tokio.workspace = true
 yunara-store = { workspace = true }
 
 [build-dependencies]

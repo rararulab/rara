@@ -23,8 +23,12 @@ import {
   FileText,
   MessageSquare,
   Search,
+  Bookmark,
   Bell,
   Clock,
+  Globe,
+  Database,
+  ExternalLink,
   PanelLeftClose,
   PanelLeftOpen,
   Sun,
@@ -49,6 +53,7 @@ const navItems = [
   { to: '/resumes', icon: FileText, label: 'Resumes' },
   { to: '/interviews', icon: MessageSquare, label: 'Interviews' },
   { to: '/discovery', icon: Search, label: 'Job Discovery' },
+  { to: '/saved-jobs', icon: Bookmark, label: 'Saved Jobs' },
   { to: '/notifications', icon: Bell, label: 'Notifications' },
   { to: '/scheduler', icon: Clock, label: 'Scheduler' },
 ];
@@ -168,6 +173,42 @@ export default function DashboardLayout() {
               {!collapsed && item.label}
             </NavLink>
           ))}
+          <a
+            href="http://localhost:9001"
+            target="_blank"
+            rel="noopener noreferrer"
+            title={collapsed ? 'Object Storage' : undefined}
+            className={cn(
+              'flex items-center rounded-md text-sm font-medium transition-colors text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+              collapsed ? 'justify-center px-2 py-2' : 'gap-3 px-3 py-2'
+            )}
+          >
+            <Database className="h-4 w-4 shrink-0" />
+            {!collapsed && (
+              <>
+                <span>Object Storage</span>
+                <ExternalLink className="h-3.5 w-3.5 ml-auto shrink-0 opacity-70" />
+              </>
+            )}
+          </a>
+          <a
+            href="http://localhost:11235/dashboard"
+            target="_blank"
+            rel="noopener noreferrer"
+            title={collapsed ? 'Crawl4AI UI' : undefined}
+            className={cn(
+              'flex items-center rounded-md text-sm font-medium transition-colors text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+              collapsed ? 'justify-center px-2 py-2' : 'gap-3 px-3 py-2'
+            )}
+          >
+            <Globe className="h-4 w-4 shrink-0" />
+            {!collapsed && (
+              <>
+                <span>Crawl4AI UI</span>
+                <ExternalLink className="h-3.5 w-3.5 ml-auto shrink-0 opacity-70" />
+              </>
+            )}
+          </a>
         </nav>
         <Separator />
         <div className="py-2">

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use clap::{Args, Parser, Subcommand};
-use job_common_runtime::{GlobalRuntimeOptions, block_on_network_io, init_global_runtimes};
 use job_common_telemetry;
 use snafu::Whatever;
 
@@ -56,24 +55,22 @@ impl HelloArgs {
 struct ServerArgs {}
 
 impl ServerArgs {
-    fn run() -> Result<(), Whatever> {
+    async fn run() -> Result<(), Whatever> {
         let _guards = job_common_telemetry::logging::init_tracing_subscriber("job");
         let config = AppConfig::from_env();
-        init_global_runtimes(&GlobalRuntimeOptions::default());
-        block_on_network_io(async {
-            let app = config.open().await?;
-            app.run().await
-        })
+        let app = config.open().await?;
+        app.run().await
     }
 }
 
-fn main() -> Result<(), Whatever> {
+#[tokio::main]
+async fn main() -> Result<(), Whatever> {
     let cli = Cli::parse();
     match cli.commands {
         Commands::Hello(_) => {
             HelloArgs::run();
             Ok(())
         }
-        Commands::Server(_) => ServerArgs::run(),
+        Commands::Server(_) => ServerArgs::run().await,
     }
 }

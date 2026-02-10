@@ -16,6 +16,7 @@ async-trait = { workspace = true }
 axum = { workspace = true }
 job-ai = { workspace = true }
 job-common-telemetry = { workspace = true }
+job-common-runtime = { workspace = true }
 job-common-worker = { workspace = true }
 job-domain-analytics = { workspace = true }
 job-domain-application = { workspace = true }

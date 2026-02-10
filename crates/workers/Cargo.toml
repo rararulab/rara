@@ -15,6 +15,7 @@ description = "Background worker implementations for job automation"
 async-trait.workspace = true
 jiff.workspace = true
 job-ai = { workspace = true }
+job-common-runtime = { workspace = true }
 job-common-worker = { workspace = true }
 job-domain-job-source = { workspace = true }
 job-domain-notify = { workspace = true }

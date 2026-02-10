@@ -24,6 +24,7 @@ import Interviews from '@/pages/Interviews';
 import JobDiscovery from '@/pages/JobDiscovery';
 import Notifications from '@/pages/Notifications';
 import Scheduler from '@/pages/Scheduler';
+import SavedJobs from '@/pages/SavedJobs';
 
 const queryClient = new QueryClient();
 
@@ -38,6 +39,7 @@ export default function App() {
             <Route path="resumes" element={<Resumes />} />
             <Route path="interviews" element={<Interviews />} />
             <Route path="discovery" element={<JobDiscovery />} />
+            <Route path="saved-jobs" element={<SavedJobs />} />
             <Route path="notifications" element={<Notifications />} />
             <Route path="scheduler" element={<Scheduler />} />
           </Route>

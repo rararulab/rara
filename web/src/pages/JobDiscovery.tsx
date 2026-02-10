@@ -100,6 +100,14 @@ function getPostedAfterTimestamp(filter: string): string | undefined {
   return new Date(now - h * 3600 * 1000).toISOString();
 }
 
+function normalizeDescription(text: string): string {
+  return text
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]*\n[ \t]*\n+/g, "\n\n")
+    .trim();
+}
+
 export default function JobDiscovery() {
   const [selectedJob, setSelectedJob] = useState<NormalizedJob | null>(null);
   const [cachedJobs, setCachedJobs] = useLocalStorage<NormalizedJob[] | null>(
@@ -466,7 +474,7 @@ export default function JobDiscovery() {
       )}
 
       <Dialog open={selectedJob !== null} onOpenChange={(open) => !open && setSelectedJob(null)}>
-        <DialogContent className="max-w-3xl max-h-[85vh] overflow-hidden">
+        <DialogContent className="max-w-3xl h-[85vh] overflow-hidden flex flex-col">
           {selectedJob && (
             (() => {
               const detailPosted = formatDate(selectedJob.posted_at);
@@ -519,9 +527,11 @@ export default function JobDiscovery() {
                 </p>
               )}
 
-              <div className="overflow-y-auto pr-1 text-sm leading-6">
+              <div className="min-h-0 flex-1 overflow-y-auto pr-1 text-sm leading-6">
                 {selectedJob.description && selectedJob.description.trim() ? (
-                  <p className="whitespace-pre-wrap">{selectedJob.description}</p>
+                  <p className="whitespace-pre-wrap">
+                    {normalizeDescription(selectedJob.description)}
+                  </p>
                 ) : (
                   <p className="text-muted-foreground">
                     No description available from this source. Use the original posting link for

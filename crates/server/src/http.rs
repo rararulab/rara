@@ -22,7 +22,7 @@ use axum::{
     routing::get,
 };
 use job_base::readable_size::ReadableSize;
-use job_error::{ParseAddressSnafu, Result};
+use job_error::{ConnectionSnafu, ParseAddressSnafu, Result};
 use serde::{Deserialize, Serialize};
 use smart_default::SmartDefault;
 use snafu::ResultExt;
@@ -104,9 +104,6 @@ pub struct RestServerConfig {
 /// Returns an error if server binding fails or graceful shutdown encounters
 /// issues.
 ///
-/// # Panics
-///
-/// May panic if TcpListener binding fails within the spawn context.
 #[allow(clippy::unused_async)]
 pub async fn start_rest_server<F>(
     config: RestServerConfig,
@@ -168,9 +165,7 @@ where
                     )
                 })
                 .on_response(
-                    |response: &axum::http::Response<_>,
-                     latency: Duration,
-                     _span: &Span| {
+                    |response: &axum::http::Response<_>, latency: Duration, _span: &Span| {
                         tracing::info!(
                             status = response.status().as_u16(),
                             latency_ms = latency.as_millis(),
@@ -191,19 +186,22 @@ where
                 ),
         );
 
+    let listener = tokio::net::TcpListener::bind(bind_addr)
+        .await
+        .context(ConnectionSnafu {
+            addr: config.bind_address.clone(),
+        })?;
+
     // Spawn the server task
     let cancellation_token = CancellationToken::new();
     let (join_handle, started_rx) = {
         let (started_tx, started_rx) = oneshot::channel::<()>();
         let cancellation_token_clone = cancellation_token.clone();
         let join_handle = tokio::spawn(async move {
-            let listener = tokio::net::TcpListener::bind(bind_addr).await.unwrap();
             info!("REST server (on {})", bind_addr);
+            let _ = started_tx.send(());
             let result = axum::serve(listener, router)
                 .with_graceful_shutdown(async move {
-                    info!("REST server (on {}) starting", bind_addr);
-                    let _ = started_tx.send(());
-                    info!("REST server (on {}) started", bind_addr);
                     cancellation_token_clone.cancelled().await;
                     info!("REST server (on {}) received shutdown signal", bind_addr);
                 })
@@ -387,23 +385,19 @@ mod tests {
     async fn test_tracelayer_logs_merged_routes_with_state() {
         init_test_logging();
 
-        use axum::extract::State;
-        use axum::routing::post;
         use std::sync::Arc;
+
+        use axum::{extract::State, routing::post};
 
         #[derive(Clone)]
         struct DummyService;
 
-        async fn stateful_handler(
-            State(_svc): State<Arc<DummyService>>,
-        ) -> Json<&'static str> {
+        async fn stateful_handler(State(_svc): State<Arc<DummyService>>) -> Json<&'static str> {
             Json("stateful response")
         }
 
         /// Handler that uses spawn_blocking, mimicking the discover endpoint.
-        async fn blocking_handler(
-            State(_svc): State<Arc<DummyService>>,
-        ) -> Json<&'static str> {
+        async fn blocking_handler(State(_svc): State<Arc<DummyService>>) -> Json<&'static str> {
             tokio::task::spawn_blocking(|| {
                 std::thread::sleep(std::time::Duration::from_millis(100));
             })
