@@ -201,7 +201,7 @@ impl AppConfig {
         let jobspy_driver = job_domain_job_source::jobspy::JobSpyDriver::new()
             .whatever_context("Failed to initialize JobSpy driver")?;
         info!("JobSpy driver initialized");
-        let _job_source_service = Arc::new(job_domain_job_source::service::JobSourceService::new(
+        let job_source_service = Arc::new(job_domain_job_source::service::JobSourceService::new(
             jobspy_driver,
         ));
 
@@ -223,6 +223,7 @@ impl AppConfig {
         let notify_svc = notification_service.clone();
         let scheduler_svc = scheduler_service.clone();
         let analytics_svc = analytics_service.clone();
+        let job_source_svc = job_source_service.clone();
 
         let routes_fn: Box<dyn Fn(axum::Router) -> axum::Router + Send + Sync> =
             Box::new(move |router: axum::Router| {
@@ -234,6 +235,7 @@ impl AppConfig {
                     .merge(job_domain_notify::routes::routes(notify_svc.clone()))
                     .merge(job_domain_scheduler::routes::routes(scheduler_svc.clone()))
                     .merge(job_domain_analytics::routes::routes(analytics_svc.clone()))
+                    .merge(job_domain_job_source::routes::routes(job_source_svc.clone()))
             });
 
         info!("Application initialized successfully");

@@ -13,6 +13,7 @@ description = "Job source discovery service powered by JobSpy"
 
 [dependencies]
 async-trait.workspace = true
+axum = { workspace = true }
 bon.workspace = true
 chrono.workspace = true
 derive_more = { workspace = true }
@@ -24,6 +25,7 @@ serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true
 sqlx = { workspace = true }
+tokio = { workspace = true }
 tracing.workspace = true
 uuid.workspace = true
 

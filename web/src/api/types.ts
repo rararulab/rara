@@ -1,3 +1,27 @@
+// Job Discovery
+export interface DiscoveryCriteria {
+  keywords: string[];
+  location?: string;
+  job_type?: string;
+  max_results?: number;
+}
+
+export interface NormalizedJob {
+  id: string;
+  source_job_id: string;
+  source_name: string;
+  title: string;
+  company: string;
+  location?: string;
+  description?: string;
+  url?: string;
+  salary_min?: number;
+  salary_max?: number;
+  salary_currency?: string;
+  tags: string[];
+  posted_at?: string;
+}
+
 // Analytics
 export interface MetricsSnapshot {
   id: string;

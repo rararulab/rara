@@ -21,5 +21,6 @@ pub mod err;
 pub mod jobspy;
 pub mod pg_repository;
 pub mod repository;
+pub mod routes;
 pub mod service;
 pub mod types;
