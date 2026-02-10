@@ -94,6 +94,10 @@ function getPostedAfterTimestamp(filter: string): string | undefined {
 }
 
 export default function JobDiscovery() {
+  const [cachedJobs, setCachedJobs] = useLocalStorage<NormalizedJob[] | null>(
+    "job-discovery-cached-results",
+    null,
+  );
   const [keywords, setKeywords] = useLocalStorage("job-discovery-keywords", "");
   const [location, setLocation] = useLocalStorage("job-discovery-location", "");
   const [jobType, setJobType] = useLocalStorage("job-discovery-job-type", "");
@@ -120,6 +124,9 @@ export default function JobDiscovery() {
   const discoverMutation = useMutation<NormalizedJob[], Error, DiscoveryCriteria>({
     mutationFn: (criteria) =>
       api.post<NormalizedJob[]>("/api/v1/jobs/discover", criteria),
+    onSuccess: (result) => {
+      setCachedJobs(result);
+    },
   });
 
   const toggleSite = (siteId: string) => {
@@ -163,7 +170,7 @@ export default function JobDiscovery() {
     discoverMutation.mutate(criteria);
   };
 
-  const jobs = discoverMutation.data;
+  const jobs = discoverMutation.data ?? cachedJobs;
 
   return (
     <div className="space-y-6">
