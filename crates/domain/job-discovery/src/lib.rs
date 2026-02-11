@@ -15,6 +15,8 @@
 //! # job-domain-job-discovery
 //!
 //! Job source discovery service powered by JobSpy.
+use std::sync::Arc;
+use sqlx::PgPool;
 
 pub mod dedup;
 pub mod err;
@@ -24,3 +26,13 @@ pub mod repository;
 pub mod routes;
 pub mod service;
 pub mod types;
+
+#[must_use]
+pub fn wire_job_repository(pool: PgPool) -> Arc<dyn repository::JobRepository> {
+    Arc::new(pg_repository::PgJobRepository::new(pool))
+}
+
+pub fn wire_job_source_service() -> Result<service::JobSourceService, err::SourceError> {
+    let driver = jobspy::JobSpyDriver::new()?;
+    Ok(service::JobSourceService::new(driver))
+}

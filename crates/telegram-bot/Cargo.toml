@@ -19,9 +19,9 @@ job-server = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sqlx = { workspace = true }
 smart-default = { workspace = true }
 snafu = { workspace = true }
+sqlx = { workspace = true }
 teloxide = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

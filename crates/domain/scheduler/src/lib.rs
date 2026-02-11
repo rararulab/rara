@@ -25,6 +25,8 @@
 //!
 //! The existing `job-common-worker` crate provides low-level worker
 //! primitives; this crate adds the domain-aware orchestration layer on top.
+use std::sync::Arc;
+use sqlx::PgPool;
 
 pub mod engine;
 pub mod error;
@@ -33,6 +35,13 @@ pub mod repository;
 pub mod routes;
 pub mod service;
 pub mod types;
+
+#[must_use]
+pub fn wire_scheduler_service(pool: PgPool) -> service::SchedulerService {
+    let repo: Arc<dyn repository::SchedulerRepository> =
+        Arc::new(pg_repository::PgSchedulerRepository::new(pool));
+    service::SchedulerService::new(repo)
+}
 
 /// Trait for tasks that can be executed by the scheduler.
 #[async_trait::async_trait]

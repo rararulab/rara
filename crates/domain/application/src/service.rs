@@ -41,6 +41,7 @@ use crate::{
 
 /// High-level service for application CRUD, status transitions, and
 /// history tracking.
+#[derive(Clone)]
 pub struct ApplicationService {
     repo:          Arc<dyn ApplicationRepository>,
     state_machine: StateMachine,

@@ -15,6 +15,8 @@
 //! # job-domain-interview
 //!
 //! Interview management and AI preparation plan generation.
+use std::sync::Arc;
+use sqlx::PgPool;
 
 pub mod error;
 pub mod pg_repository;
@@ -23,3 +25,10 @@ pub mod repository;
 pub mod routes;
 pub mod service;
 pub mod types;
+
+#[must_use]
+pub fn wire_interview_service(pool: PgPool) -> service::InterviewService {
+    let repo: Arc<dyn repository::InterviewPlanRepository> =
+        Arc::new(pg_repository::PgInterviewPlanRepository::new(pool));
+    service::InterviewService::new(repo, None)
+}

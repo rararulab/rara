@@ -14,7 +14,7 @@
 
 use sqlx::{PgPool, Postgres, postgres::PgPoolOptions};
 
-use crate::{config::DatabaseConfig, err::*, kv::KVStore};
+use crate::{err::*, kv::KVStore};
 
 /// Database store that manages the PostgreSQL connection pool
 #[derive(Clone)]
@@ -23,37 +23,7 @@ pub struct DBStore {
 }
 
 impl DBStore {
-    /// Create a new database store with the given configuration
-    ///
-    /// # Arguments
-    /// * `config` - Database configuration
-    #[tracing::instrument(level = "trace", skip(config), fields(database_url = %config.database_url), err)]
-    pub async fn new(config: DatabaseConfig) -> Result<Self> {
-        let mut pool_options = PgPoolOptions::new()
-            .max_connections(config.max_connections)
-            .min_connections(config.min_connections)
-            .acquire_timeout(config.connect_timeout);
-
-        if let Some(max_lifetime) = config.max_lifetime {
-            pool_options = pool_options.max_lifetime(max_lifetime);
-        }
-
-        if let Some(idle_timeout) = config.idle_timeout {
-            pool_options = pool_options.idle_timeout(idle_timeout);
-        }
-        let pool = pool_options.connect(&config.database_url).await?;
-
-        tracing::info!(
-            "Initialized DBStore with database_url: {}",
-            config.database_url
-        );
-
-        sqlx::migrate!("../../job-model/migrations")
-            .run(&pool)
-            .await?;
-
-        Ok(Self { pool })
-    }
+    pub(crate) fn new(pool: PgPool) -> Self { Self { pool } }
 
     /// Get a KV store instance
     pub fn kv_store(&self) -> KVStore { KVStore::new(self.pool.clone()) }
@@ -76,4 +46,8 @@ impl DBStore {
             .connect_lazy(database_url)?;
         Ok(Self { pool })
     }
+}
+
+impl Into<PgPool> for DBStore {
+    fn into(self) -> PgPool { self.pool }
 }

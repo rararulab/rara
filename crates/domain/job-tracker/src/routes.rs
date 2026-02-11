@@ -14,8 +14,6 @@
 
 //! HTTP API routes for saved job management.
 
-use std::sync::Arc;
-
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
@@ -32,7 +30,7 @@ use crate::{
 };
 
 /// Register all saved-job routes on a new router with shared state.
-pub fn routes(service: Arc<SavedJobService>) -> Router {
+pub fn routes(service: SavedJobService) -> Router {
     Router::new()
         .route("/api/v1/saved-jobs", post(create_saved_job))
         .route("/api/v1/saved-jobs", get(list_saved_jobs))
@@ -45,7 +43,7 @@ pub fn routes(service: Arc<SavedJobService>) -> Router {
 
 #[instrument(skip(service, req))]
 async fn create_saved_job(
-    State(service): State<Arc<SavedJobService>>,
+    State(service): State<SavedJobService>,
     Json(req): Json<CreateSavedJobRequest>,
 ) -> Result<(StatusCode, Json<SavedJob>), SavedJobError> {
     let saved_job = service.create(&req.url).await?;
@@ -54,7 +52,7 @@ async fn create_saved_job(
 
 #[instrument(skip(service))]
 async fn list_saved_jobs(
-    State(service): State<Arc<SavedJobService>>,
+    State(service): State<SavedJobService>,
     Query(filter): Query<SavedJobFilter>,
 ) -> Result<Json<Vec<SavedJob>>, SavedJobError> {
     let status = filter.status.and_then(|s| parse_status(&s));
@@ -64,7 +62,7 @@ async fn list_saved_jobs(
 
 #[instrument(skip(service))]
 async fn get_saved_job(
-    State(service): State<Arc<SavedJobService>>,
+    State(service): State<SavedJobService>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<SavedJob>, SavedJobError> {
     let job = service
@@ -76,7 +74,7 @@ async fn get_saved_job(
 
 #[instrument(skip(service))]
 async fn delete_saved_job(
-    State(service): State<Arc<SavedJobService>>,
+    State(service): State<SavedJobService>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, SavedJobError> {
     service.delete(id).await?;
@@ -85,7 +83,7 @@ async fn delete_saved_job(
 
 #[instrument(skip(service))]
 async fn retry_saved_job(
-    State(service): State<Arc<SavedJobService>>,
+    State(service): State<SavedJobService>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, SavedJobError> {
     service.retry(id).await?;
@@ -94,7 +92,7 @@ async fn retry_saved_job(
 
 #[instrument(skip(service))]
 async fn list_saved_job_events(
-    State(service): State<Arc<SavedJobService>>,
+    State(service): State<SavedJobService>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<PipelineEvent>>, SavedJobError> {
     let events = service.list_events(id).await?;

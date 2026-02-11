@@ -12,12 +12,12 @@ categories.workspace = true
 description = "Saved job tracking with crawl and analysis pipeline"
 
 [dependencies]
-job-ai.workspace = true
-job-domain-job-discovery.workspace = true
 async-trait.workspace = true
 axum = { workspace = true }
 jiff.workspace = true
+job-ai.workspace = true
 job-common-worker.workspace = true
+job-domain-job-discovery.workspace = true
 job-domain-shared = { workspace = true }
 job-model.workspace = true
 reqwest.workspace = true

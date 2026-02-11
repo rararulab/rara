@@ -14,8 +14,6 @@
 
 //! HTTP API routes for resume management.
 
-use std::sync::Arc;
-
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
@@ -32,7 +30,7 @@ use crate::{
 };
 
 /// Register all resume routes on a new router with shared state.
-pub fn routes<R: ResumeRepository + 'static>(service: Arc<ResumeService<R>>) -> Router {
+pub fn routes<R: ResumeRepository + 'static>(service: ResumeService<R>) -> Router {
     Router::new()
         .route("/api/v1/resumes", post(create_resume::<R>))
         .route("/api/v1/resumes", get(list_resumes::<R>))
@@ -44,7 +42,7 @@ pub fn routes<R: ResumeRepository + 'static>(service: Arc<ResumeService<R>>) -> 
 
 #[instrument(skip(service, req))]
 async fn create_resume<R: ResumeRepository + 'static>(
-    State(service): State<Arc<ResumeService<R>>>,
+    State(service): State<ResumeService<R>>,
     Json(req): Json<CreateResumeRequest>,
 ) -> Result<(StatusCode, Json<Resume>), ResumeError> {
     let resume = service.create(req).await?;
@@ -53,7 +51,7 @@ async fn create_resume<R: ResumeRepository + 'static>(
 
 #[instrument(skip(service))]
 async fn list_resumes<R: ResumeRepository + 'static>(
-    State(service): State<Arc<ResumeService<R>>>,
+    State(service): State<ResumeService<R>>,
     Query(filter): Query<ResumeFilter>,
 ) -> Result<Json<Vec<Resume>>, ResumeError> {
     let resumes = service.list(filter).await?;
@@ -62,7 +60,7 @@ async fn list_resumes<R: ResumeRepository + 'static>(
 
 #[instrument(skip(service))]
 async fn get_resume<R: ResumeRepository + 'static>(
-    State(service): State<Arc<ResumeService<R>>>,
+    State(service): State<ResumeService<R>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Resume>, ResumeError> {
     let resume = service.get(id).await?.ok_or(ResumeError::NotFound { id })?;
@@ -71,7 +69,7 @@ async fn get_resume<R: ResumeRepository + 'static>(
 
 #[instrument(skip(service, req))]
 async fn update_resume<R: ResumeRepository + 'static>(
-    State(service): State<Arc<ResumeService<R>>>,
+    State(service): State<ResumeService<R>>,
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateResumeRequest>,
 ) -> Result<Json<Resume>, ResumeError> {
@@ -81,7 +79,7 @@ async fn update_resume<R: ResumeRepository + 'static>(
 
 #[instrument(skip(service))]
 async fn delete_resume<R: ResumeRepository + 'static>(
-    State(service): State<Arc<ResumeService<R>>>,
+    State(service): State<ResumeService<R>>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ResumeError> {
     service.delete(id).await?;

@@ -27,13 +27,13 @@ You are a professional resume writer. Rewrite the resume to better match the tar
 - Maintaining professional formatting";
 
 /// Optimizes a resume for a specific job posting.
-pub struct ResumeOptimizerAgent<'a> {
-    client: &'a openrouter::Client,
-    model:  &'a str,
+pub struct ResumeOptimizerAgent {
+    client: openrouter::Client,
+    model:  String,
 }
 
-impl<'a> ResumeOptimizerAgent<'a> {
-    pub(crate) fn new(client: &'a openrouter::Client, model: &'a str) -> Self {
+impl ResumeOptimizerAgent {
+    pub(crate) fn new(client: openrouter::Client, model: String) -> Self {
         Self { client, model }
     }
 
@@ -44,7 +44,7 @@ impl<'a> ResumeOptimizerAgent<'a> {
 
         let agent = self
             .client
-            .agent(self.model)
+            .agent(&self.model)
             .preamble(SYSTEM_PROMPT)
             .build();
 

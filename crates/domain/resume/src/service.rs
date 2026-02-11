@@ -42,6 +42,14 @@ pub struct ResumeService<R: ResumeRepository> {
     repo: Arc<R>,
 }
 
+impl<R: ResumeRepository> Clone for ResumeService<R> {
+    fn clone(&self) -> Self {
+        Self {
+            repo: self.repo.clone(),
+        }
+    }
+}
+
 impl<R: ResumeRepository> ResumeService<R> {
     /// Create a new service backed by the given repository.
     #[must_use]

@@ -27,6 +27,7 @@ use crate::{
 };
 
 /// Application service for analytics / metrics snapshots.
+#[derive(Clone)]
 pub struct AnalyticsService {
     repo: Arc<dyn AnalyticsRepository>,
 }

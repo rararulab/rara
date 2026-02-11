@@ -15,6 +15,8 @@
 //! # job-domain-resume
 //!
 //! Resume version management and content diffing.
+use std::sync::Arc;
+use sqlx::PgPool;
 
 pub mod hash;
 pub mod pg_repository;
@@ -23,3 +25,11 @@ pub mod routes;
 pub mod service;
 pub mod types;
 pub mod version;
+
+pub type ResumeAppService = service::ResumeService<pg_repository::PgResumeRepository>;
+
+#[must_use]
+pub fn wire_resume_service(pool: PgPool) -> ResumeAppService {
+    let repo = Arc::new(pg_repository::PgResumeRepository::new(pool));
+    service::ResumeService::new(repo)
+}

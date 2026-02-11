@@ -15,7 +15,10 @@
 //! [`JobSourceService`] orchestrates job discovery via [`JobSpyDriver`]
 //! and applies deduplication.
 
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashSet},
+    sync::Arc,
+};
 
 use crate::{
     dedup::{self, FuzzyKey, SourceKey},
@@ -25,15 +28,19 @@ use crate::{
 };
 
 /// Orchestrator that drives job discovery and deduplication.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct JobSourceService {
-    driver: JobSpyDriver,
+    driver: Arc<JobSpyDriver>,
 }
 
 impl JobSourceService {
     /// Create a new service backed by the given [`JobSpyDriver`].
     #[must_use]
-    pub fn new(driver: JobSpyDriver) -> Self { Self { driver } }
+    pub fn new(driver: JobSpyDriver) -> Self {
+        Self {
+            driver: Arc::new(driver),
+        }
+    }
 
     /// Discover jobs matching the criteria, returning deduplicated
     /// results.

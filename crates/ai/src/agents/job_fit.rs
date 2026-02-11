@@ -27,13 +27,13 @@ You are a career advisor. Analyze the job posting and the candidate's resume, th
 - A brief summary of the overall fit";
 
 /// Evaluates how well a candidate's resume matches a job posting.
-pub struct JobFitAgent<'a> {
-    client: &'a openrouter::Client,
-    model:  &'a str,
+pub struct JobFitAgent {
+    client: openrouter::Client,
+    model:  String,
 }
 
-impl<'a> JobFitAgent<'a> {
-    pub(crate) fn new(client: &'a openrouter::Client, model: &'a str) -> Self {
+impl JobFitAgent {
+    pub(crate) fn new(client: openrouter::Client, model: String) -> Self {
         Self { client, model }
     }
 
@@ -43,7 +43,7 @@ impl<'a> JobFitAgent<'a> {
 
         let agent = self
             .client
-            .agent(self.model)
+            .agent(&self.model)
             .preamble(SYSTEM_PROMPT)
             .build();
 

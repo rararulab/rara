@@ -57,9 +57,9 @@ pub enum SavedJobStatus {
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum PipelineStage {
-    Crawl   = 0,
+    Crawl = 0,
     Analyze = 1,
-    Gc      = 2,
+    Gc = 2,
 }
 
 /// Kind of pipeline event.
@@ -68,10 +68,10 @@ pub enum PipelineStage {
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum PipelineEventKind {
-    Started   = 0,
+    Started = 0,
     Completed = 1,
-    Failed    = 2,
-    Info      = 3,
+    Failed = 2,
+    Info = 3,
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +92,8 @@ pub struct PipelineEvent {
 
 fn pipeline_stage_from_i16(value: i16) -> PipelineStage {
     let repr = u8_from_i16(value, "saved_job_event.stage");
-    PipelineStage::from_repr(repr).unwrap_or_else(|| panic!("invalid saved_job_event.stage: {value}"))
+    PipelineStage::from_repr(repr)
+        .unwrap_or_else(|| panic!("invalid saved_job_event.stage: {value}"))
 }
 
 fn pipeline_event_kind_from_i16(value: i16) -> PipelineEventKind {
@@ -265,10 +266,22 @@ mod tests {
 
     #[test]
     fn test_pipeline_event_kind_from_repr() {
-        assert_eq!(PipelineEventKind::from_repr(0), Some(PipelineEventKind::Started));
-        assert_eq!(PipelineEventKind::from_repr(1), Some(PipelineEventKind::Completed));
-        assert_eq!(PipelineEventKind::from_repr(2), Some(PipelineEventKind::Failed));
-        assert_eq!(PipelineEventKind::from_repr(3), Some(PipelineEventKind::Info));
+        assert_eq!(
+            PipelineEventKind::from_repr(0),
+            Some(PipelineEventKind::Started)
+        );
+        assert_eq!(
+            PipelineEventKind::from_repr(1),
+            Some(PipelineEventKind::Completed)
+        );
+        assert_eq!(
+            PipelineEventKind::from_repr(2),
+            Some(PipelineEventKind::Failed)
+        );
+        assert_eq!(
+            PipelineEventKind::from_repr(3),
+            Some(PipelineEventKind::Info)
+        );
         assert_eq!(PipelineEventKind::from_repr(4), None);
     }
 

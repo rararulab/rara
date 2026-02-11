@@ -14,8 +14,6 @@
 
 //! HTTP API routes for application lifecycle management.
 
-use std::sync::Arc;
-
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
@@ -45,7 +43,7 @@ struct TransitionRequest {
 }
 
 /// Register all application routes on a new router with shared state.
-pub fn routes(service: Arc<ApplicationService>) -> Router {
+pub fn routes(service: ApplicationService) -> Router {
     Router::new()
         .route("/api/v1/applications", post(create_application))
         .route("/api/v1/applications", get(list_applications))
@@ -62,7 +60,7 @@ pub fn routes(service: Arc<ApplicationService>) -> Router {
 
 #[instrument(skip(service, req))]
 async fn create_application(
-    State(service): State<Arc<ApplicationService>>,
+    State(service): State<ApplicationService>,
     Json(req): Json<CreateApplicationRequest>,
 ) -> Result<(StatusCode, Json<Application>), ApplicationError> {
     let app = service.create_application(req).await?;
@@ -71,7 +69,7 @@ async fn create_application(
 
 #[instrument(skip(service))]
 async fn list_applications(
-    State(service): State<Arc<ApplicationService>>,
+    State(service): State<ApplicationService>,
     Query(filter): Query<ApplicationFilter>,
 ) -> Result<Json<Vec<Application>>, ApplicationError> {
     let apps = service.list_applications(&filter).await?;
@@ -80,7 +78,7 @@ async fn list_applications(
 
 #[instrument(skip(service))]
 async fn get_application(
-    State(service): State<Arc<ApplicationService>>,
+    State(service): State<ApplicationService>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Application>, ApplicationError> {
     let app = service.get_application(ApplicationId::from(id)).await?;
@@ -89,7 +87,7 @@ async fn get_application(
 
 #[instrument(skip(service, req))]
 async fn update_application(
-    State(service): State<Arc<ApplicationService>>,
+    State(service): State<ApplicationService>,
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateApplicationRequest>,
 ) -> Result<Json<Application>, ApplicationError> {
@@ -101,7 +99,7 @@ async fn update_application(
 
 #[instrument(skip(service, body))]
 async fn transition_status(
-    State(service): State<Arc<ApplicationService>>,
+    State(service): State<ApplicationService>,
     Path(id): Path<Uuid>,
     Json(body): Json<TransitionRequest>,
 ) -> Result<Json<Application>, ApplicationError> {
@@ -113,7 +111,7 @@ async fn transition_status(
 
 #[instrument(skip(service))]
 async fn get_status_history(
-    State(service): State<Arc<ApplicationService>>,
+    State(service): State<ApplicationService>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<StatusChangeRecord>>, ApplicationError> {
     let history = service.get_status_history(ApplicationId::from(id)).await?;
@@ -122,7 +120,7 @@ async fn get_status_history(
 
 #[instrument(skip(service))]
 async fn delete_application(
-    State(service): State<Arc<ApplicationService>>,
+    State(service): State<ApplicationService>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApplicationError> {
     service.delete_application(ApplicationId::from(id)).await?;

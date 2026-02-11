@@ -14,12 +14,11 @@
 
 //! AI service — a factory for creating task-specific agents.
 //!
-//! [`AiService`] holds the rig-core OpenRouter client and default model.
-//! Each agent method returns a lightweight borrowing agent that
-//! executes a specific AI task.
+//! [`AiService`] holds a [`SettingsSvc`] and creates an OpenRouter client
+//! on-demand from runtime settings. If the user hasn't configured an API
+//! key, agent factory methods return [`AiError::NotConfigured`].
 
-use std::sync::atomic::{AtomicU64, Ordering};
-
+use job_domain_shared::settings::SettingsSvc;
 use rig::providers::openrouter;
 
 use crate::{
@@ -31,152 +30,81 @@ use crate::{
     error::AiError,
 };
 
-/// Simple rate limiter based on a token counter.
-///
-/// Tracks how many tokens have been consumed and rejects requests once
-/// a configurable budget is exhausted. A more sophisticated
-/// implementation (sliding window, token bucket) can replace this
-/// later.
-#[derive(Debug)]
-pub struct RateLimiter {
-    /// Maximum number of tokens allowed.
-    budget:   u64,
-    /// Tokens consumed so far.
-    consumed: AtomicU64,
-}
-
-impl RateLimiter {
-    /// Create a new rate limiter with the given token budget.
-    #[must_use]
-    pub const fn new(budget: u64) -> Self {
-        Self {
-            budget,
-            consumed: AtomicU64::new(0),
-        }
-    }
-
-    /// Try to consume `tokens` from the budget.
-    ///
-    /// Returns `Ok(())` if the budget allows it, or an
-    /// [`AiError::RateLimited`] if the budget is exhausted.
-    pub fn try_consume(&self, tokens: u64, provider: &str) -> Result<(), AiError> {
-        let prev = self.consumed.fetch_add(tokens, Ordering::Relaxed);
-        if prev + tokens > self.budget {
-            // Roll back the optimistic addition.
-            self.consumed.fetch_sub(tokens, Ordering::Relaxed);
-            return Err(AiError::RateLimited {
-                provider:         provider.to_owned(),
-                retry_after_secs: 60,
-            });
-        }
-        Ok(())
-    }
-
-    /// Return the number of tokens consumed so far.
-    #[must_use]
-    pub fn consumed(&self) -> u64 { self.consumed.load(Ordering::Relaxed) }
-
-    /// Reset the consumed counter to zero.
-    pub fn reset(&self) { self.consumed.store(0, Ordering::Relaxed); }
-}
+const DEFAULT_MODEL: &str = "openai/gpt-4o";
 
 /// The AI service — a factory for creating task-specific agents.
 ///
-/// Holds the rig-core OpenRouter client and default model. Each agent
-/// method returns a lightweight borrowing agent that executes a
-/// specific AI task.
+/// Reads the OpenRouter API key and model from [`SettingsSvc`] on every
+/// call, so configuration changes take effect immediately without restart.
+#[derive(Clone)]
 pub struct AiService {
-    /// The rig-core OpenRouter client.
-    client:        openrouter::Client,
-    /// Default model to use.
-    default_model: String,
-    /// Optional rate limiter.
-    rate_limiter:  Option<RateLimiter>,
+    settings: SettingsSvc,
 }
 
 impl AiService {
-    /// Create a new `AiService`.
+    /// Create a new `AiService` backed by the given settings service.
+    pub fn new(settings: SettingsSvc) -> Self { Self { settings } }
+
+    /// Build an OpenRouter client + model from current settings.
     ///
-    /// - `api_key` -- the OpenRouter API key.
-    /// - `default_model` -- model identifier to use by default.
-    /// - `rate_limiter` -- optional rate limiter.
-    #[must_use]
-    pub fn new(api_key: &str, default_model: String, rate_limiter: Option<RateLimiter>) -> Self {
+    /// Returns `Err(AiError::NotConfigured)` when no API key is set.
+    fn client(&self) -> Result<(openrouter::Client, String), AiError> {
+        let current = self.settings.current();
+        let api_key = current
+            .ai
+            .openrouter_api_key
+            .as_deref()
+            .ok_or(AiError::NotConfigured)?;
+        let model = current
+            .ai
+            .model
+            .unwrap_or_else(|| DEFAULT_MODEL.to_owned());
         let client = openrouter::Client::builder()
             .api_key(api_key)
             .build()
-            .expect("failed to build OpenAI client");
-
-        Self {
-            client,
-            default_model,
-            rate_limiter,
-        }
+            .expect("failed to build OpenRouter client");
+        Ok((client, model))
     }
 
     /// Create a job-fit analysis agent.
-    pub fn job_fit(&self) -> JobFitAgent<'_> { JobFitAgent::new(&self.client, &self.default_model) }
+    pub fn job_fit(&self) -> Result<JobFitAgent, AiError> {
+        let (client, model) = self.client()?;
+        Ok(JobFitAgent::new(client, model))
+    }
 
     /// Create a resume optimization agent.
-    pub fn resume_optimizer(&self) -> ResumeOptimizerAgent<'_> {
-        ResumeOptimizerAgent::new(&self.client, &self.default_model)
+    pub fn resume_optimizer(&self) -> Result<ResumeOptimizerAgent, AiError> {
+        let (client, model) = self.client()?;
+        Ok(ResumeOptimizerAgent::new(client, model))
     }
 
     /// Create an interview preparation agent.
-    pub fn interview_prep(&self) -> InterviewPrepAgent<'_> {
-        InterviewPrepAgent::new(&self.client, &self.default_model)
+    pub fn interview_prep(&self) -> Result<InterviewPrepAgent, AiError> {
+        let (client, model) = self.client()?;
+        Ok(InterviewPrepAgent::new(client, model))
     }
 
     /// Create a follow-up email drafting agent.
-    pub fn follow_up(&self) -> FollowUpDraftAgent<'_> {
-        FollowUpDraftAgent::new(&self.client, &self.default_model)
+    pub fn follow_up(&self) -> Result<FollowUpDraftAgent, AiError> {
+        let (client, model) = self.client()?;
+        Ok(FollowUpDraftAgent::new(client, model))
     }
 
     /// Create a cover letter generation agent.
-    pub fn cover_letter(&self) -> CoverLetterAgent<'_> {
-        CoverLetterAgent::new(&self.client, &self.default_model)
+    pub fn cover_letter(&self) -> Result<CoverLetterAgent, AiError> {
+        let (client, model) = self.client()?;
+        Ok(CoverLetterAgent::new(client, model))
     }
 
     /// Create a job description parser agent.
-    pub fn jd_parser(&self) -> JdParserAgent<'_> {
-        JdParserAgent::new(&self.client, &self.default_model)
+    pub fn jd_parser(&self) -> Result<JdParserAgent, AiError> {
+        let (client, model) = self.client()?;
+        Ok(JdParserAgent::new(client, model))
     }
 
     /// Create a job description analyzer agent.
-    pub fn jd_analyzer(&self) -> JdAnalyzerAgent<'_> {
-        JdAnalyzerAgent::new(&self.client, &self.default_model)
-    }
-
-    /// Access the rate limiter, if configured.
-    pub fn rate_limiter(&self) -> Option<&RateLimiter> { self.rate_limiter.as_ref() }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rate_limiter_allows_within_budget() {
-        let limiter = RateLimiter::new(100);
-        assert!(limiter.try_consume(50, "test").is_ok());
-        assert!(limiter.try_consume(50, "test").is_ok());
-        assert_eq!(limiter.consumed(), 100);
-    }
-
-    #[test]
-    fn rate_limiter_rejects_over_budget() {
-        let limiter = RateLimiter::new(100);
-        assert!(limiter.try_consume(60, "test").is_ok());
-        let err = limiter.try_consume(60, "test").unwrap_err();
-        assert!(err.to_string().contains("Rate limited"));
-    }
-
-    #[test]
-    fn rate_limiter_reset_clears_counter() {
-        let limiter = RateLimiter::new(100);
-        limiter.try_consume(80, "test").unwrap();
-        limiter.reset();
-        assert_eq!(limiter.consumed(), 0);
-        assert!(limiter.try_consume(80, "test").is_ok());
+    pub fn jd_analyzer(&self) -> Result<JdAnalyzerAgent, AiError> {
+        let (client, model) = self.client()?;
+        Ok(JdAnalyzerAgent::new(client, model))
     }
 }

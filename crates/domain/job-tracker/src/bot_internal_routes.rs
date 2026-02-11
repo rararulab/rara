@@ -1,4 +1,4 @@
-// Copyright 2026 Crrow
+// Copyright 2025 Crrow
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,17 +14,16 @@
 
 //! Internal bot routes for JD parse + persistence workflow.
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
-use uuid::Uuid;
-
 use job_domain_job_discovery::repository::JobRepository;
+use uuid::Uuid;
 
 #[derive(Clone)]
 struct BotInternalState {
-    ai_service_handle: Arc<RwLock<Option<Arc<job_ai::service::AiService>>>>,
-    job_repo:          Arc<dyn JobRepository>,
+    ai_service: job_ai::service::AiService,
+    job_repo:   Arc<dyn JobRepository>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -54,13 +53,13 @@ struct BotJdParseResponse {
 
 /// Build internal bot routes.
 pub fn routes(
-    ai_service_handle: Arc<RwLock<Option<Arc<job_ai::service::AiService>>>>,
+    ai_service: job_ai::service::AiService,
     job_repo: Arc<dyn JobRepository>,
 ) -> Router {
     Router::new()
         .route("/api/v1/internal/bot/jd-parse", post(parse_jd_from_bot))
         .with_state(BotInternalState {
-            ai_service_handle,
+            ai_service,
             job_repo,
         })
 }
@@ -73,17 +72,14 @@ async fn parse_jd_from_bot(
         return Err((StatusCode::BAD_REQUEST, "text must not be empty".to_owned()));
     }
 
-    let ai_service = state
-        .ai_service_handle
-        .read()
-        .ok()
-        .and_then(|g| g.as_ref().cloned())
-        .ok_or((
+    let agent = state.ai_service.jd_parser().map_err(|e| {
+        (
             StatusCode::SERVICE_UNAVAILABLE,
-            "ai service not configured; set OPENROUTER key/model via /api/v1/settings".to_owned(),
-        ))?;
+            format!("ai service not available: {e}"),
+        )
+    })?;
 
-    let json_str = ai_service.jd_parser().parse(&req.text).await.map_err(|e| {
+    let json_str = agent.parse(&req.text).await.map_err(|e| {
         (
             StatusCode::BAD_GATEWAY,
             format!("failed to parse jd via ai service: {e}"),

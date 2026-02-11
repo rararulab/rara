@@ -24,6 +24,8 @@
 //! - AI cost and token usage tracking.
 //!
 //! It stores periodic snapshots and exposes query interfaces for dashboards.
+use std::sync::Arc;
+use sqlx::PgPool;
 
 pub mod error;
 pub mod pg_repository;
@@ -31,3 +33,10 @@ pub mod repository;
 pub mod routes;
 pub mod service;
 pub mod types;
+
+#[must_use]
+pub fn wire_analytics_service(pool: PgPool) -> service::AnalyticsService {
+    let repo: Arc<dyn repository::AnalyticsRepository> =
+        Arc::new(pg_repository::PgAnalyticsRepository::new(pool));
+    service::AnalyticsService::new(repo)
+}

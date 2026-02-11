@@ -27,13 +27,13 @@ You are a professional communicator. Draft a concise, polite follow-up email bas
 - Include a clear call to action";
 
 /// Drafts follow-up emails after interviews or applications.
-pub struct FollowUpDraftAgent<'a> {
-    client: &'a openrouter::Client,
-    model:  &'a str,
+pub struct FollowUpDraftAgent {
+    client: openrouter::Client,
+    model:  String,
 }
 
-impl<'a> FollowUpDraftAgent<'a> {
-    pub(crate) fn new(client: &'a openrouter::Client, model: &'a str) -> Self {
+impl FollowUpDraftAgent {
+    pub(crate) fn new(client: openrouter::Client, model: String) -> Self {
         Self { client, model }
     }
 
@@ -41,7 +41,7 @@ impl<'a> FollowUpDraftAgent<'a> {
     pub async fn draft(&self, context: &str) -> Result<String, AiError> {
         let agent = self
             .client
-            .agent(self.model)
+            .agent(&self.model)
             .preamble(SYSTEM_PROMPT)
             .build();
 

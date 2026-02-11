@@ -42,6 +42,7 @@ use crate::{
 // ---------------------------------------------------------------------------
 
 /// High-level service for interview plan CRUD and AI prep generation.
+#[derive(Clone)]
 pub struct InterviewService {
     repo:           Arc<dyn InterviewPlanRepository>,
     prep_generator: Option<Arc<dyn PrepGenerator>>,

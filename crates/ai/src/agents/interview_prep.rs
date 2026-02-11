@@ -27,13 +27,13 @@ You are an interview coach. Generate likely interview questions and suggested an
 - Tips for preparation";
 
 /// Generates interview preparation materials.
-pub struct InterviewPrepAgent<'a> {
-    client: &'a openrouter::Client,
-    model:  &'a str,
+pub struct InterviewPrepAgent {
+    client: openrouter::Client,
+    model:  String,
 }
 
-impl<'a> InterviewPrepAgent<'a> {
-    pub(crate) fn new(client: &'a openrouter::Client, model: &'a str) -> Self {
+impl InterviewPrepAgent {
+    pub(crate) fn new(client: openrouter::Client, model: String) -> Self {
         Self { client, model }
     }
 
@@ -43,7 +43,7 @@ impl<'a> InterviewPrepAgent<'a> {
 
         let agent = self
             .client
-            .agent(self.model)
+            .agent(&self.model)
             .preamble(SYSTEM_PROMPT)
             .build();
 

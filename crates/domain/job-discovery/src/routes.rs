@@ -14,7 +14,7 @@
 
 //! HTTP API routes for job source discovery.
 
-use std::{collections::HashSet, sync::Arc};
+use std::collections::HashSet;
 
 use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
 
@@ -25,7 +25,7 @@ use crate::{
 };
 
 /// Register all job source routes on a new router with shared state.
-pub fn routes(service: Arc<JobSourceService>) -> Router {
+pub fn routes(service: JobSourceService) -> Router {
     Router::new()
         .route("/api/v1/jobs/discover", post(discover_jobs))
         .with_state(service)
@@ -33,7 +33,7 @@ pub fn routes(service: Arc<JobSourceService>) -> Router {
 
 #[tracing::instrument(skip(service, criteria), fields(keywords = ?criteria.keywords))]
 async fn discover_jobs(
-    State(service): State<Arc<JobSourceService>>,
+    State(service): State<JobSourceService>,
     Json(criteria): Json<DiscoveryCriteria>,
 ) -> Result<(StatusCode, Json<Vec<DiscoveryJobResponse>>), SourceError> {
     tracing::info!("starting job discovery");

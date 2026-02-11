@@ -15,6 +15,8 @@
 //! # job-domain-application
 //!
 //! Application lifecycle management with state machine.
+use std::sync::Arc;
+use sqlx::PgPool;
 
 pub mod error;
 pub mod pg_repository;
@@ -23,3 +25,10 @@ pub mod routes;
 pub mod service;
 pub mod state_machine;
 pub mod types;
+
+#[must_use]
+pub fn wire(pool: PgPool) -> service::ApplicationService {
+    let repo: Arc<dyn repository::ApplicationRepository> =
+        Arc::new(pg_repository::PgApplicationRepository::new(pool));
+    service::ApplicationService::new(repo)
+}

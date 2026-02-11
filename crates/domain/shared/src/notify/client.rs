@@ -1,4 +1,4 @@
-// Copyright 2026 Crrow
+// Copyright 2025 Crrow
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -38,8 +38,8 @@ pub struct NotifyClient {
 
 impl NotifyClient {
     /// Create client from an existing postgres pool and ensure queue exists.
-    pub async fn new(pool: PgPool) -> Result<Self, NotifyError> {
-        let queue = PGMQueue::new_with_pool(pool).await;
+    pub async fn new<P: Into<PgPool>>(pool: P) -> Result<Self, NotifyError> {
+        let queue = PGMQueue::new_with_pool(pool.into()).await;
         queue
             .create(TELEGRAM_NOTIFY_QUEUE_NAME)
             .await
@@ -136,7 +136,9 @@ impl NotifyClient {
     pub async fn telegram_overview(&self) -> Result<NotificationQueueOverview, NotifyError> {
         let queue_table = queue_table_name(TELEGRAM_NOTIFY_QUEUE_NAME)?;
         let archive_table = archive_table_name(TELEGRAM_NOTIFY_QUEUE_NAME)?;
-        let ready_count = self.count_rows_if_exists(&queue_table, Some("vt <= now()")).await?;
+        let ready_count = self
+            .count_rows_if_exists(&queue_table, Some("vt <= now()"))
+            .await?;
         let inflight_count = self
             .count_rows_if_exists(&queue_table, Some("vt > now()"))
             .await?;
@@ -164,11 +166,8 @@ impl NotifyClient {
         let items = match state {
             QueueMessageState::Ready => {
                 let rows = sqlx::query(&format!(
-                    "SELECT msg_id, read_ct, enqueued_at, vt, message \
-                     FROM {queue_table} \
-                     WHERE vt <= now() \
-                     ORDER BY msg_id DESC \
-                     LIMIT $1 OFFSET $2"
+                    "SELECT msg_id, read_ct, enqueued_at, vt, message FROM {queue_table} WHERE vt \
+                     <= now() ORDER BY msg_id DESC LIMIT $1 OFFSET $2"
                 ))
                 .bind(limit)
                 .bind(offset)
@@ -183,11 +182,8 @@ impl NotifyClient {
             }
             QueueMessageState::Inflight => {
                 let rows = sqlx::query(&format!(
-                    "SELECT msg_id, read_ct, enqueued_at, vt, message \
-                     FROM {queue_table} \
-                     WHERE vt > now() \
-                     ORDER BY msg_id DESC \
-                     LIMIT $1 OFFSET $2"
+                    "SELECT msg_id, read_ct, enqueued_at, vt, message FROM {queue_table} WHERE vt \
+                     > now() ORDER BY msg_id DESC LIMIT $1 OFFSET $2"
                 ))
                 .bind(limit)
                 .bind(offset)
@@ -205,10 +201,8 @@ impl NotifyClient {
                     return Ok(Vec::new());
                 }
                 let rows = sqlx::query(&format!(
-                    "SELECT msg_id, read_ct, enqueued_at, vt, archived_at, message \
-                     FROM {archive_table} \
-                     ORDER BY msg_id DESC \
-                     LIMIT $1 OFFSET $2"
+                    "SELECT msg_id, read_ct, enqueued_at, vt, archived_at, message FROM \
+                     {archive_table} ORDER BY msg_id DESC LIMIT $1 OFFSET $2"
                 ))
                 .bind(limit)
                 .bind(offset)
@@ -299,14 +293,16 @@ fn queue_row_to_message(
     })
 }
 
-fn archive_row_to_message(row: sqlx::postgres::PgRow) -> Result<NotificationQueueMessage, sqlx::Error> {
+fn archive_row_to_message(
+    row: sqlx::postgres::PgRow,
+) -> Result<NotificationQueueMessage, sqlx::Error> {
     Ok(NotificationQueueMessage {
-        state: QueueMessageState::Archived,
-        msg_id: row.try_get("msg_id")?,
-        read_ct: row.try_get("read_ct")?,
+        state:       QueueMessageState::Archived,
+        msg_id:      row.try_get("msg_id")?,
+        read_ct:     row.try_get("read_ct")?,
         enqueued_at: row.try_get("enqueued_at")?,
-        vt: row.try_get("vt")?,
+        vt:          row.try_get("vt")?,
         archived_at: row.try_get("archived_at")?,
-        payload: row.try_get("message")?,
+        payload:     row.try_get("message")?,
     })
 }

@@ -19,18 +19,19 @@
 //! job is set to `Failed`.
 
 use async_trait::async_trait;
+use job_ai::error::AiError;
 use job_common_worker::{FallibleWorker, WorkError, WorkResult, WorkerContext};
 use job_domain_job_tracker::types::{PipelineEventKind, PipelineStage, SavedJobStatus};
 use tracing::{info, warn};
 
-use crate::worker_state::AppWorkerState;
+use crate::worker_state::AppState;
 
 /// Worker that analyzes crawled saved jobs using AI.
 pub struct SavedJobAnalyzeWorker;
 
 #[async_trait]
-impl FallibleWorker<AppWorkerState> for SavedJobAnalyzeWorker {
-    async fn work(&mut self, ctx: WorkerContext<AppWorkerState>) -> WorkResult {
+impl FallibleWorker<AppState> for SavedJobAnalyzeWorker {
+    async fn work(&mut self, ctx: WorkerContext<AppState>) -> WorkResult {
         let state = ctx.state();
 
         let crawled = state
@@ -48,16 +49,14 @@ impl FallibleWorker<AppWorkerState> for SavedJobAnalyzeWorker {
         let mut analyzed_count = 0u32;
 
         for job in &crawled {
-            let ai_service = match state
-                .ai_service_handle
-                .read()
-                .ok()
-                .and_then(|g| g.as_ref().cloned())
-            {
-                Some(svc) => svc,
-                None => {
+            let agent = match state.ai_service.jd_analyzer() {
+                Ok(agent) => agent,
+                Err(AiError::NotConfigured) => {
                     warn!("AI service not configured; skipping saved-job analyze tick");
                     return Ok(());
+                }
+                Err(e) => {
+                    return Err(WorkError::transient(format!("AI service error: {e}")));
                 }
             };
 
@@ -83,8 +82,8 @@ impl FallibleWorker<AppWorkerState> for SavedJobAnalyzeWorker {
 
             // Fetch full markdown from S3, falling back to preview.
             let markdown = if let Some(s3_key) = &job.markdown_s3_key {
-                match state.object_store.get(s3_key).await {
-                    Ok(data) => String::from_utf8_lossy(&data).to_string(),
+                match state.object_store.read(s3_key).await {
+                    Ok(data) => String::from_utf8_lossy(data.to_bytes().as_ref()).to_string(),
                     Err(e) => {
                         warn!(id = %job.id, error = %e, "failed to fetch markdown from S3, falling back to preview");
                         match &job.markdown_preview {
@@ -123,7 +122,7 @@ impl FallibleWorker<AppWorkerState> for SavedJobAnalyzeWorker {
             };
 
             // Run AI analysis
-            let analysis_json = match ai_service.jd_analyzer().analyze(&markdown).await {
+            let analysis_json = match agent.analyze(&markdown).await {
                 Ok(json) => json,
                 Err(e) => {
                     warn!(id = %job.id, error = %e, "AI analysis failed");

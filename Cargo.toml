@@ -65,8 +65,8 @@ axum-tracing-opentelemetry = "0.33.0"
 backon = "^1.3"
 bon = "^3.6"
 bytes = "^1.11"
-config = { version = "0.15", features = ["toml"] }
 chrono = { version = "^0.4", features = ["serde"] }
+config = { version = "0.15", features = ["toml"] }
 derive_more = { version = "2.0", features = ["full"] }
 dirs = "^6"
 futures = "^0.3"
@@ -133,8 +133,8 @@ job-domain-analytics = { version = "=0.0.17", path = "crates/domain/analytics" }
 job-domain-application = { version = "=0.0.17", path = "crates/domain/application" }
 job-domain-interview = { version = "=0.0.17", path = "crates/domain/interview" }
 job-domain-job-discovery = { version = "=0.0.17", path = "crates/domain/job-discovery" }
-job-domain-resume = { version = "=0.0.17", path = "crates/domain/resume" }
 job-domain-job-tracker = { version = "=0.0.17", path = "crates/domain/job-tracker" }
+job-domain-resume = { version = "=0.0.17", path = "crates/domain/resume" }
 job-domain-scheduler = { version = "=0.0.17", path = "crates/domain/scheduler" }
 job-domain-shared = { version = "=0.0.17", path = "crates/domain/shared" }
 job-workers = { version = "=0.0.17", path = "crates/workers" }

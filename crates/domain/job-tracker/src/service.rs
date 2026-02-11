@@ -32,9 +32,10 @@ use crate::{
 // ---------------------------------------------------------------------------
 
 /// High-level service for saved job CRUD and pipeline status management.
+#[derive(Clone)]
 pub struct SavedJobService {
     repo:           Arc<dyn SavedJobRepository>,
-    notify_trigger: RwLock<Option<NotifyHandle>>,
+    notify_trigger: Arc<RwLock<Option<NotifyHandle>>>,
 }
 
 impl SavedJobService {
@@ -43,7 +44,7 @@ impl SavedJobService {
     pub fn new(repo: Arc<dyn SavedJobRepository>) -> Self {
         Self {
             repo,
-            notify_trigger: RwLock::new(None),
+            notify_trigger: Arc::new(RwLock::new(None)),
         }
     }
 

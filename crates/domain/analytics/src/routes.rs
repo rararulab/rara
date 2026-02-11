@@ -14,8 +14,6 @@
 
 //! HTTP API routes for analytics metrics snapshots.
 
-use std::sync::Arc;
-
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
@@ -53,7 +51,7 @@ pub struct DerivedRates {
 }
 
 /// Register all analytics routes on a new router with shared state.
-pub fn routes(service: Arc<AnalyticsService>) -> Router {
+pub fn routes(service: AnalyticsService) -> Router {
     Router::new()
         .route("/api/v1/analytics/snapshots", post(create_snapshot))
         .route("/api/v1/analytics/snapshots", get(list_snapshots))
@@ -69,7 +67,7 @@ pub fn routes(service: Arc<AnalyticsService>) -> Router {
 
 #[instrument(skip(service, req))]
 async fn create_snapshot(
-    State(service): State<Arc<AnalyticsService>>,
+    State(service): State<AnalyticsService>,
     Json(req): Json<CreateSnapshotRequest>,
 ) -> Result<Json<MetricsSnapshot>, AnalyticsError> {
     let snapshot = service.create_snapshot(req).await?;
@@ -78,7 +76,7 @@ async fn create_snapshot(
 
 #[instrument(skip(service))]
 async fn list_snapshots(
-    State(service): State<Arc<AnalyticsService>>,
+    State(service): State<AnalyticsService>,
     Query(query): Query<SnapshotListQuery>,
 ) -> Result<Json<Vec<MetricsSnapshot>>, AnalyticsError> {
     let filter = SnapshotFilter {
@@ -93,7 +91,7 @@ async fn list_snapshots(
 
 #[instrument(skip(service))]
 async fn get_latest(
-    State(service): State<Arc<AnalyticsService>>,
+    State(service): State<AnalyticsService>,
     Query(query): Query<LatestQuery>,
 ) -> Result<Json<Option<MetricsSnapshot>>, AnalyticsError> {
     let period = query.period.unwrap_or(MetricsPeriod::Daily);
@@ -103,7 +101,7 @@ async fn get_latest(
 
 #[instrument(skip(service))]
 async fn get_snapshot(
-    State(service): State<Arc<AnalyticsService>>,
+    State(service): State<AnalyticsService>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<MetricsSnapshot>, AnalyticsError> {
     let snapshot = service.get_snapshot(id).await?;
@@ -112,7 +110,7 @@ async fn get_snapshot(
 
 #[instrument(skip(service))]
 async fn get_derived_rates(
-    State(service): State<Arc<AnalyticsService>>,
+    State(service): State<AnalyticsService>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<DerivedRates>, AnalyticsError> {
     let snapshot = service.get_snapshot(id).await?;
@@ -127,7 +125,7 @@ async fn get_derived_rates(
 
 #[instrument(skip(service))]
 async fn delete_snapshot(
-    State(service): State<Arc<AnalyticsService>>,
+    State(service): State<AnalyticsService>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<()>, AnalyticsError> {
     service.delete_snapshot(id).await?;

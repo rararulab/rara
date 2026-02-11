@@ -28,6 +28,7 @@ use crate::{
 };
 
 /// Application service for managing scheduled tasks.
+#[derive(Clone)]
 pub struct SchedulerService {
     repo: Arc<dyn SchedulerRepository>,
 }

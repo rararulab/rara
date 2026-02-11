@@ -1,4 +1,4 @@
-// Copyright 2026 Crrow
+// Copyright 2025 Crrow
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use job_domain_shared::runtime_settings::{RUNTIME_SETTINGS_KV_KEY, RuntimeSettings};
+use job_domain_shared::settings::{RUNTIME_SETTINGS_KV_KEY, SettingsSvc};
 use snafu::{ResultExt, Whatever};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};

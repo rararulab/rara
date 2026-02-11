@@ -14,8 +14,6 @@
 
 //! HTTP API routes for scheduler task management.
 
-use std::sync::Arc;
-
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
@@ -43,7 +41,7 @@ pub struct HistoryQuery {
 }
 
 /// Register all scheduler routes on a new router with shared state.
-pub fn routes(service: Arc<SchedulerService>) -> Router {
+pub fn routes(service: SchedulerService) -> Router {
     Router::new()
         .route("/api/v1/scheduler/tasks", get(list_tasks))
         .route("/api/v1/scheduler/tasks/{id}", get(get_task))
@@ -55,7 +53,7 @@ pub fn routes(service: Arc<SchedulerService>) -> Router {
 
 #[instrument(skip(service))]
 async fn list_tasks(
-    State(service): State<Arc<SchedulerService>>,
+    State(service): State<SchedulerService>,
     Query(query): Query<TaskListQuery>,
 ) -> Result<Json<Vec<ScheduledTask>>, SchedulerError> {
     let filter = TaskFilter {
@@ -68,7 +66,7 @@ async fn list_tasks(
 
 #[instrument(skip(service))]
 async fn get_task(
-    State(service): State<Arc<SchedulerService>>,
+    State(service): State<SchedulerService>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ScheduledTask>, SchedulerError> {
     let task = service.get_task(SchedulerTaskId::from(id)).await?;
@@ -77,7 +75,7 @@ async fn get_task(
 
 #[instrument(skip(service))]
 async fn enable_task(
-    State(service): State<Arc<SchedulerService>>,
+    State(service): State<SchedulerService>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ScheduledTask>, SchedulerError> {
     let task = service.enable_task(SchedulerTaskId::from(id)).await?;
@@ -86,7 +84,7 @@ async fn enable_task(
 
 #[instrument(skip(service))]
 async fn disable_task(
-    State(service): State<Arc<SchedulerService>>,
+    State(service): State<SchedulerService>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ScheduledTask>, SchedulerError> {
     let task = service.disable_task(SchedulerTaskId::from(id)).await?;
@@ -95,7 +93,7 @@ async fn disable_task(
 
 #[instrument(skip(service))]
 async fn get_history(
-    State(service): State<Arc<SchedulerService>>,
+    State(service): State<SchedulerService>,
     Path(id): Path<Uuid>,
     Query(query): Query<HistoryQuery>,
 ) -> Result<Json<Vec<TaskRunRecord>>, SchedulerError> {

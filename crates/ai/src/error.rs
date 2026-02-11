@@ -20,13 +20,6 @@ use snafu::Snafu;
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub))]
 pub enum AiError {
-    /// The rate limiter rejected the request.
-    #[snafu(display("Rate limited by {provider}: retry after {retry_after_secs}s"))]
-    RateLimited {
-        provider:         String,
-        retry_after_secs: u64,
-    },
-
     /// No AI provider is configured.
     #[snafu(display("AI provider not configured"))]
     NotConfigured,

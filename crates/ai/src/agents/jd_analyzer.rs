@@ -39,13 +39,13 @@ Return ONLY the JSON object, no other text.";
 
 /// Analyzes a job posting in markdown format and extracts structured
 /// information using AI.
-pub struct JdAnalyzerAgent<'a> {
-    client: &'a openrouter::Client,
-    model:  &'a str,
+pub struct JdAnalyzerAgent {
+    client: openrouter::Client,
+    model:  String,
 }
 
-impl<'a> JdAnalyzerAgent<'a> {
-    pub(crate) fn new(client: &'a openrouter::Client, model: &'a str) -> Self {
+impl JdAnalyzerAgent {
+    pub(crate) fn new(client: openrouter::Client, model: String) -> Self {
         Self { client, model }
     }
 
@@ -53,7 +53,7 @@ impl<'a> JdAnalyzerAgent<'a> {
     pub async fn analyze(&self, markdown: &str) -> Result<String, AiError> {
         let agent = self
             .client
-            .agent(self.model)
+            .agent(&self.model)
             .preamble(SYSTEM_PROMPT)
             .build();
 

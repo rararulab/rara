@@ -98,8 +98,5 @@ pub trait SavedJobRepository: Send + Sync {
     ) -> Result<PipelineEvent, SavedJobError>;
 
     /// List all pipeline events for a saved job, ordered by created_at ASC.
-    async fn list_events(
-        &self,
-        saved_job_id: Uuid,
-    ) -> Result<Vec<PipelineEvent>, SavedJobError>;
+    async fn list_events(&self, saved_job_id: Uuid) -> Result<Vec<PipelineEvent>, SavedJobError>;
 }

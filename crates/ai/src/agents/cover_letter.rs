@@ -27,13 +27,13 @@ You are a professional cover-letter writer. Craft a compelling cover letter that
 - Be concise (under 400 words)";
 
 /// Generates cover letters tailored to job postings.
-pub struct CoverLetterAgent<'a> {
-    client: &'a openrouter::Client,
-    model:  &'a str,
+pub struct CoverLetterAgent {
+    client: openrouter::Client,
+    model:  String,
 }
 
-impl<'a> CoverLetterAgent<'a> {
-    pub(crate) fn new(client: &'a openrouter::Client, model: &'a str) -> Self {
+impl CoverLetterAgent {
+    pub(crate) fn new(client: openrouter::Client, model: String) -> Self {
         Self { client, model }
     }
 
@@ -43,7 +43,7 @@ impl<'a> CoverLetterAgent<'a> {
 
         let agent = self
             .client
-            .agent(self.model)
+            .agent(&self.model)
             .preamble(SYSTEM_PROMPT)
             .build();
 

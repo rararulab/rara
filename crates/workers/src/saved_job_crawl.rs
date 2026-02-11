@@ -22,12 +22,11 @@
 //! After processing, triggers the AnalyzeWorker via its `NotifyHandle`.
 
 use async_trait::async_trait;
-use bytes::Bytes;
 use job_common_worker::{FallibleWorker, Notifiable, WorkError, WorkResult, WorkerContext};
 use job_domain_job_tracker::types::{PipelineEventKind, PipelineStage, SavedJobStatus};
 use tracing::{info, warn};
 
-use crate::worker_state::AppWorkerState;
+use crate::worker_state::AppState;
 
 /// Maximum characters to store as the markdown preview.
 const PREVIEW_LEN: usize = 500;
@@ -36,8 +35,8 @@ const PREVIEW_LEN: usize = 500;
 pub struct SavedJobCrawlWorker;
 
 #[async_trait]
-impl FallibleWorker<AppWorkerState> for SavedJobCrawlWorker {
-    async fn work(&mut self, ctx: WorkerContext<AppWorkerState>) -> WorkResult {
+impl FallibleWorker<AppState> for SavedJobCrawlWorker {
+    async fn work(&mut self, ctx: WorkerContext<AppState>) -> WorkResult {
         let state = ctx.state();
 
         let pending = state
@@ -104,11 +103,7 @@ impl FallibleWorker<AppWorkerState> for SavedJobCrawlWorker {
 
             // Upload to S3
             let s3_key = format!("saved-jobs/{}.md", job.id);
-            if let Err(e) = state
-                .object_store
-                .put(&s3_key, Bytes::from(markdown.clone()))
-                .await
-            {
+            if let Err(e) = state.object_store.write(&s3_key, markdown.clone()).await {
                 warn!(id = %job.id, error = %e, "S3 upload failed");
                 let _ = state
                     .saved_job_service

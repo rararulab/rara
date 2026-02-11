@@ -25,8 +25,8 @@ strum.workspace = true
 strum_macros.workspace = true
 teloxide.workspace = true
 tracing.workspace = true
-yunara-store = { workspace = true }
 uuid = { version = "1", features = ["v4", "serde"] }
+yunara-store = { workspace = true }
 
 [lints]
 workspace = true

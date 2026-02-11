@@ -15,11 +15,12 @@
 //! JD parser worker — drains the parse channel and processes each request.
 
 use async_trait::async_trait;
+use job_ai::error::AiError;
 use job_common_worker::{FallibleWorker, WorkResult, WorkerContext};
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
-use crate::{types::JdParseRequest, worker_state::AppWorkerState};
+use crate::{types::JdParseRequest, worker_state::AppState};
 
 /// Worker that drains the JD parse channel on each tick.
 ///
@@ -50,28 +51,27 @@ struct ParsedJob {
 }
 
 #[async_trait]
-impl FallibleWorker<AppWorkerState> for JdParserWorker {
-    async fn work(&mut self, ctx: WorkerContext<AppWorkerState>) -> WorkResult {
+impl FallibleWorker<AppState> for JdParserWorker {
+    async fn work(&mut self, ctx: WorkerContext<AppState>) -> WorkResult {
         // Drain all pending requests from the channel.
         while let Ok(req) = self.rx.try_recv() {
             let state = ctx.state();
 
-            let ai = match state
-                .ai_service_handle
-                .read()
-                .ok()
-                .and_then(|g| g.as_ref().cloned())
-            {
-                Some(ai) => ai,
-                None => {
+            let agent = match state.ai_service.jd_parser() {
+                Ok(agent) => agent,
+                Err(AiError::NotConfigured) => {
                     error!("AI service not configured; skipping JD parse request");
+                    continue;
+                }
+                Err(e) => {
+                    error!(error = %e, "AI service error; skipping JD parse request");
                     continue;
                 }
             };
             let repo = &state.job_repo;
 
             // 1. AI parse
-            let json_str = match ai.jd_parser().parse(&req.text).await {
+            let json_str = match agent.parse(&req.text).await {
                 Ok(s) => s,
                 Err(e) => {
                     error!(error = %e, "AI JD parse failed");

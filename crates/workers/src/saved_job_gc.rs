@@ -35,7 +35,7 @@ use job_common_worker::{FallibleWorker, WorkError, WorkResult, WorkerContext};
 use job_domain_job_tracker::types::{PipelineEventKind, PipelineStage, SavedJobStatus};
 use tracing::{info, instrument, warn};
 
-use crate::worker_state::AppWorkerState;
+use crate::worker_state::AppState;
 
 // -------------------------------------------------------------------------
 // Configuration
@@ -78,9 +78,9 @@ impl SavedJobGcWorker {
 }
 
 #[async_trait]
-impl FallibleWorker<AppWorkerState> for SavedJobGcWorker {
+impl FallibleWorker<AppState> for SavedJobGcWorker {
     #[instrument(skip_all, name = "saved_job_gc")]
-    async fn work(&mut self, ctx: WorkerContext<AppWorkerState>) -> WorkResult {
+    async fn work(&mut self, ctx: WorkerContext<AppState>) -> WorkResult {
         let state = ctx.state();
 
         let saved_job_service = &state.saved_job_service;

@@ -83,8 +83,7 @@ impl ServerArgs {
     async fn run() -> Result<(), Whatever> {
         let _guards = job_common_telemetry::logging::init_tracing_subscriber("job");
         let config = load_config()?;
-        let app = config.open().await?;
-        app.run().await
+        config.run().await
     }
 }
 
@@ -117,10 +116,9 @@ impl CombinedArgs {
         let _guards = job_common_telemetry::logging::init_tracing_subscriber("job-combined");
         let config = load_config()?;
         let bot_config = build_bot_config(&config);
-        let app = config.open().await?;
         let bot = bot_config.open().await?;
 
-        let (app_res, bot_res) = tokio::join!(app.run(), bot.run());
+        let (app_res, bot_res) = tokio::join!(config.run(), bot.run());
         app_res?;
         bot_res?;
         Ok(())

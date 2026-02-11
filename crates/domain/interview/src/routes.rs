@@ -14,8 +14,6 @@
 
 //! HTTP API routes for interview plan management.
 
-use std::sync::Arc;
-
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
@@ -42,7 +40,7 @@ struct UpdateStatusRequest {
 }
 
 /// Register all interview routes on a new router with shared state.
-pub fn routes(service: Arc<InterviewService>) -> Router {
+pub fn routes(service: InterviewService) -> Router {
     Router::new()
         .route("/api/v1/interviews", post(create_interview))
         .route("/api/v1/interviews", get(list_interviews))
@@ -56,7 +54,7 @@ pub fn routes(service: Arc<InterviewService>) -> Router {
 
 #[instrument(skip(service, req))]
 async fn create_interview(
-    State(service): State<Arc<InterviewService>>,
+    State(service): State<InterviewService>,
     Json(req): Json<CreateInterviewPlanRequest>,
 ) -> Result<(StatusCode, Json<InterviewPlan>), InterviewError> {
     let plan = service.create_plan(req).await?;
@@ -65,7 +63,7 @@ async fn create_interview(
 
 #[instrument(skip(service))]
 async fn list_interviews(
-    State(service): State<Arc<InterviewService>>,
+    State(service): State<InterviewService>,
     Query(filter): Query<InterviewFilter>,
 ) -> Result<Json<Vec<InterviewPlan>>, InterviewError> {
     let plans = service.list_plans(&filter).await?;
@@ -74,7 +72,7 @@ async fn list_interviews(
 
 #[instrument(skip(service))]
 async fn get_interview(
-    State(service): State<Arc<InterviewService>>,
+    State(service): State<InterviewService>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<InterviewPlan>, InterviewError> {
     let plan = service.get_plan(InterviewId::from(id)).await?;
@@ -83,7 +81,7 @@ async fn get_interview(
 
 #[instrument(skip(service, req))]
 async fn update_interview(
-    State(service): State<Arc<InterviewService>>,
+    State(service): State<InterviewService>,
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateInterviewPlanRequest>,
 ) -> Result<Json<InterviewPlan>, InterviewError> {
@@ -93,7 +91,7 @@ async fn update_interview(
 
 #[instrument(skip(service, body))]
 async fn update_status(
-    State(service): State<Arc<InterviewService>>,
+    State(service): State<InterviewService>,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateStatusRequest>,
 ) -> Result<Json<InterviewPlan>, InterviewError> {
@@ -105,7 +103,7 @@ async fn update_status(
 
 #[instrument(skip(service, prep_req))]
 async fn regenerate_prep(
-    State(service): State<Arc<InterviewService>>,
+    State(service): State<InterviewService>,
     Path(id): Path<Uuid>,
     Json(prep_req): Json<PrepGenerationRequest>,
 ) -> Result<Json<InterviewPlan>, InterviewError> {
@@ -117,7 +115,7 @@ async fn regenerate_prep(
 
 #[instrument(skip(service))]
 async fn delete_interview(
-    State(service): State<Arc<InterviewService>>,
+    State(service): State<InterviewService>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, InterviewError> {
     service.delete_plan(InterviewId::from(id)).await?;

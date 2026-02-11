@@ -12,11 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # job-domain-shared
-//!
-//! Shared cross-domain ID definitions.
+pub mod model;
+pub mod router;
+pub mod service;
 
-pub mod convert;
-pub mod id;
-pub mod notify;
-pub mod settings;
+pub use service::SettingsSvc;

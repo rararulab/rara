@@ -1,4 +1,4 @@
-// Copyright 2026 Crrow
+// Copyright 2025 Crrow
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,9 +14,11 @@
 
 //! HTTP routes for notification queue observability.
 
-use std::sync::Arc;
-
-use axum::{Json, Router, extract::Query, extract::State, http::StatusCode};
+use axum::{
+    Json, Router,
+    extract::{Query, State},
+    http::StatusCode,
+};
 use serde::Deserialize;
 
 use crate::notify::{
@@ -30,7 +32,7 @@ const MAX_LIMIT: i64 = 200;
 
 #[derive(Clone)]
 struct RouteState {
-    client: Arc<NotifyClient>,
+    client: NotifyClient,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -49,7 +51,7 @@ struct QueueMessagesQuery {
 }
 
 /// Build notification observability routes.
-pub fn routes(client: Arc<NotifyClient>) -> Router {
+pub fn routes(client: NotifyClient) -> Router {
     Router::new()
         .route(
             "/api/v1/notifications/queues/telegram/overview",
@@ -65,7 +67,11 @@ pub fn routes(client: Arc<NotifyClient>) -> Router {
 async fn get_telegram_queue_overview(
     State(state): State<RouteState>,
 ) -> Result<Json<NotificationQueueOverview>, (StatusCode, String)> {
-    let overview = state.client.telegram_overview().await.map_err(internal_err)?;
+    let overview = state
+        .client
+        .telegram_overview()
+        .await
+        .map_err(internal_err)?;
     Ok(Json(overview))
 }
 
@@ -74,10 +80,7 @@ async fn list_telegram_queue_messages(
     Query(query): Query<QueueMessagesQuery>,
 ) -> Result<Json<QueueMessagesResponse>, (StatusCode, String)> {
     let state_filter = parse_state(query.state.as_deref())?;
-    let limit = query
-        .limit
-        .unwrap_or(DEFAULT_LIMIT)
-        .clamp(1_i64, MAX_LIMIT);
+    let limit = query.limit.unwrap_or(DEFAULT_LIMIT).clamp(1_i64, MAX_LIMIT);
     let offset = query.offset.unwrap_or(0_i64).max(0_i64);
 
     let items = state

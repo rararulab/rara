@@ -13,21 +13,30 @@ description = "Background worker implementations for job automation"
 
 [dependencies]
 async-trait.workspace = true
-bytes.workspace = true
+axum = { workspace = true }
 jiff.workspace = true
 job-ai = { workspace = true }
 job-common-runtime = { workspace = true }
 job-common-worker = { workspace = true }
+job-domain-analytics = { workspace = true }
+job-domain-application = { workspace = true }
+job-domain-interview = { workspace = true }
 job-domain-job-discovery = { workspace = true }
 job-domain-job-tracker = { workspace = true }
-job-object-store = { workspace = true }
+job-domain-resume = { workspace = true }
+job-domain-scheduler = { workspace = true }
+job-domain-shared = { workspace = true }
+job-server = { workspace = true }
+opendal.workspace = true
 reqwest.workspace = true
 serde.workspace = true
+snafu.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing.workspace = true
 uuid.workspace = true
+yunara-store = { workspace = true }
 
 [lints]
 workspace = true

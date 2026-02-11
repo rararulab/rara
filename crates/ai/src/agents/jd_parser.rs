@@ -28,13 +28,13 @@ You are a job description parser. Given a raw job description text, extract stru
      strings - relevant skills/keywords)\n\nReturn ONLY the JSON object, no other text.";
 
 /// Parses raw job description text into structured JSON using AI.
-pub struct JdParserAgent<'a> {
-    client: &'a openrouter::Client,
-    model:  &'a str,
+pub struct JdParserAgent {
+    client: openrouter::Client,
+    model:  String,
 }
 
-impl<'a> JdParserAgent<'a> {
-    pub(crate) fn new(client: &'a openrouter::Client, model: &'a str) -> Self {
+impl JdParserAgent {
+    pub(crate) fn new(client: openrouter::Client, model: String) -> Self {
         Self { client, model }
     }
 
@@ -42,7 +42,7 @@ impl<'a> JdParserAgent<'a> {
     pub async fn parse(&self, jd_text: &str) -> Result<String, AiError> {
         let agent = self
             .client
-            .agent(self.model)
+            .agent(&self.model)
             .preamble(SYSTEM_PROMPT)
             .build();
 

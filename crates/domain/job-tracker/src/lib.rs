@@ -15,7 +15,10 @@
 //! # job-domain-job-tracker
 //!
 //! Saved job tracking with crawl and analysis pipeline.
+use std::sync::Arc;
+use sqlx::PgPool;
 
+pub mod bot_internal_routes;
 pub mod crawl4ai;
 pub mod error;
 pub mod pg_repository;
@@ -23,4 +26,10 @@ pub mod repository;
 pub mod routes;
 pub mod service;
 pub mod types;
-pub mod bot_internal_routes;
+
+#[must_use]
+pub fn wire_saved_job_service(pool: PgPool) -> service::SavedJobService {
+    let repo: Arc<dyn repository::SavedJobRepository> =
+        Arc::new(pg_repository::PgSavedJobRepository::new(pool));
+    service::SavedJobService::new(repo)
+}

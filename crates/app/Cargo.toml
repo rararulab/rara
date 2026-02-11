@@ -12,34 +12,20 @@ categories.workspace = true
 description = "Application orchestration and lifecycle management for job"
 
 [dependencies]
-async-trait = { workspace = true }
 axum = { workspace = true }
 config = { workspace = true }
-job-ai = { workspace = true }
-job-api = { workspace = true }
 job-common-runtime = { workspace = true }
-job-common-telemetry = { workspace = true }
 job-common-worker = { workspace = true }
-job-domain-analytics = { workspace = true }
-job-domain-application = { workspace = true }
-job-domain-interview = { workspace = true }
-job-domain-job-discovery = { workspace = true }
-job-domain-resume = { workspace = true }
-job-domain-job-tracker = { workspace = true }
-job-domain-scheduler = { workspace = true }
 job-domain-shared = { workspace = true }
 job-object-store = { workspace = true }
 job-server = { workspace = true }
 job-workers = { workspace = true }
-smart-default = { workspace = true }
+opendal = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 snafu = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
-tonic = { workspace = true }
 tracing = { workspace = true }
-uuid = { workspace = true }
 yunara-store = { workspace = true }
 
 [lints]

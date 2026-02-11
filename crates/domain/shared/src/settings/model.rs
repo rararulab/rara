@@ -1,49 +1,32 @@
-// Copyright 2026 Crrow
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 //! Runtime-configurable application settings shared across services.
 
 use serde::{Deserialize, Serialize};
 
-/// KV key for persisted runtime settings JSON.
-pub const RUNTIME_SETTINGS_KV_KEY: &str = "runtime_settings.v1";
-
 /// Full runtime settings document persisted in `kv_table`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RuntimeSettings {
-    pub ai:         AiRuntimeSettings,
-    pub telegram:   TelegramRuntimeSettings,
+pub struct Settings {
+    pub ai:         AISettings,
+    pub telegram:   TelegramSettings,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// AI-specific runtime settings.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AiRuntimeSettings {
+pub struct AISettings {
     pub openrouter_api_key: Option<String>,
     pub model:              Option<String>,
 }
 
 /// Telegram-specific runtime settings.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TelegramRuntimeSettings {
+pub struct TelegramSettings {
     pub bot_token: Option<String>,
     pub chat_id:   Option<i64>,
 }
 
 /// Partial update payload for runtime settings writes.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RuntimeSettingsPatch {
+pub struct UpdateRequest {
     pub ai:       Option<AiRuntimeSettingsPatch>,
     pub telegram: Option<TelegramRuntimeSettingsPatch>,
 }
@@ -60,30 +43,9 @@ pub struct TelegramRuntimeSettingsPatch {
     pub chat_id:   Option<i64>,
 }
 
-impl RuntimeSettings {
-    /// Merge a lower-priority fallback document into `self`.
-    #[must_use]
-    pub fn with_fallback(mut self, fallback: &Self) -> Self {
-        if self.ai.openrouter_api_key.is_none() {
-            self.ai.openrouter_api_key = fallback.ai.openrouter_api_key.clone();
-        }
-        if self.ai.model.is_none() {
-            self.ai.model = fallback.ai.model.clone();
-        }
-        if self.telegram.bot_token.is_none() {
-            self.telegram.bot_token = fallback.telegram.bot_token.clone();
-        }
-        if self.telegram.chat_id.is_none() {
-            self.telegram.chat_id = fallback.telegram.chat_id;
-        }
-        if self.updated_at.is_none() {
-            self.updated_at = fallback.updated_at;
-        }
-        self
-    }
-
+impl Settings {
     /// Apply a partial update patch.
-    pub fn apply_patch(&mut self, patch: RuntimeSettingsPatch) {
+    pub fn apply_patch(&mut self, patch: UpdateRequest) {
         if let Some(ai) = patch.ai {
             if let Some(key) = ai.openrouter_api_key {
                 self.ai.openrouter_api_key = normalize_secret(Some(key));
