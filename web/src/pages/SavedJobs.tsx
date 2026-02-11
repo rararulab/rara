@@ -798,7 +798,12 @@ export default function SavedJobs() {
           job={freshSelectedJob}
           open={true}
           onOpenChange={(open) => {
-            if (!open) setSelectedJob(null);
+            if (!open) {
+              // While delete confirmation is open, ignore close signals from
+              // the detail dialog to avoid cross-dialog state races.
+              if (deleteOpen) return;
+              setSelectedJob(null);
+            }
           }}
           onRetry={() => {
             retryMutation.mutate(freshSelectedJob.id);
