@@ -201,11 +201,13 @@ function DeleteDialog({
   open,
   onOpenChange,
   onCancel,
+  onDeleted,
   job,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCancel: () => void;
+  onDeleted: () => void;
   job: SavedJob;
 }) {
   const queryClient = useQueryClient();
@@ -214,7 +216,7 @@ function DeleteDialog({
     mutationFn: () => api.del<void>(`/api/v1/saved-jobs/${job.id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["saved-jobs"] });
-      onOpenChange(false);
+      onDeleted();
     },
   });
 
@@ -647,9 +649,13 @@ export default function SavedJobs() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
 
   const closeDeleteDialog = () => {
-    const deletingId = deleteJob?.id;
     setDeleteOpen(false);
     setDeleteJob(null);
+  };
+
+  const handleDeleteSuccess = () => {
+    const deletingId = deleteJob?.id;
+    closeDeleteDialog();
     if (deletingId && selectedJob?.id === deletingId) {
       setSelectedJob(null);
     }
@@ -781,6 +787,7 @@ export default function SavedJobs() {
             }
           }}
           onCancel={closeDeleteDialog}
+          onDeleted={handleDeleteSuccess}
           job={deleteJob}
         />
       )}
