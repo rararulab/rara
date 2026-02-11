@@ -90,26 +90,11 @@ pub fn routes(pool: PgPool) -> Router {
 async fn get_telegram_queue_overview(
     State(state): State<RouteState>,
 ) -> Result<Json<QueueOverviewResponse>, (StatusCode, String)> {
-    let ready_count = sqlx::query_scalar::<_, i64>(&format!(
-        "SELECT COUNT(*) FROM {TELEGRAM_QUEUE_TABLE} WHERE vt <= now()"
-    ))
-    .fetch_one(&state.pool)
-    .await
-    .map_err(internal_err)?;
-
-    let inflight_count = sqlx::query_scalar::<_, i64>(&format!(
-        "SELECT COUNT(*) FROM {TELEGRAM_QUEUE_TABLE} WHERE vt > now()"
-    ))
-    .fetch_one(&state.pool)
-    .await
-    .map_err(internal_err)?;
-
-    let archived_count = sqlx::query_scalar::<_, i64>(&format!(
-        "SELECT COUNT(*) FROM {TELEGRAM_ARCHIVE_TABLE}"
-    ))
-    .fetch_one(&state.pool)
-    .await
-    .map_err(internal_err)?;
+    let ready_count =
+        count_rows_if_exists(&state.pool, TELEGRAM_QUEUE_TABLE, Some("vt <= now()")).await?;
+    let inflight_count =
+        count_rows_if_exists(&state.pool, TELEGRAM_QUEUE_TABLE, Some("vt > now()")).await?;
+    let archived_count = count_rows_if_exists(&state.pool, TELEGRAM_ARCHIVE_TABLE, None).await?;
 
     Ok(Json(QueueOverviewResponse {
         queue_name: TELEGRAM_NOTIFY_QUEUE_NAME.to_owned(),
@@ -170,6 +155,14 @@ async fn list_telegram_queue_messages(
                 .map_err(internal_err)?
         }
         QueueMessageState::Archived => {
+            if !table_exists(&state.pool, TELEGRAM_ARCHIVE_TABLE).await? {
+                return Ok(Json(QueueMessagesResponse {
+                    state: state_filter,
+                    limit,
+                    offset,
+                    items: Vec::new(),
+                }));
+            }
             let rows = sqlx::query(&format!(
                 "SELECT msg_id, read_ct, enqueued_at, vt, archived_at, message \
                  FROM {TELEGRAM_ARCHIVE_TABLE} \
@@ -207,6 +200,33 @@ fn parse_state(input: Option<&str>) -> Result<QueueMessageState, (StatusCode, St
             format!("invalid state '{other}', expected ready|inflight|archived"),
         )),
     }
+}
+
+async fn table_exists(pool: &PgPool, table_name: &str) -> Result<bool, (StatusCode, String)> {
+    sqlx::query_scalar::<_, bool>("SELECT to_regclass($1) IS NOT NULL")
+        .bind(table_name)
+        .fetch_one(pool)
+        .await
+        .map_err(internal_err)
+}
+
+async fn count_rows_if_exists(
+    pool: &PgPool,
+    table_name: &str,
+    where_clause: Option<&str>,
+) -> Result<i64, (StatusCode, String)> {
+    if !table_exists(pool, table_name).await? {
+        return Ok(0);
+    }
+
+    let query = match where_clause {
+        Some(predicate) => format!("SELECT COUNT(*) FROM {table_name} WHERE {predicate}"),
+        None => format!("SELECT COUNT(*) FROM {table_name}"),
+    };
+    sqlx::query_scalar::<_, i64>(&query)
+        .fetch_one(pool)
+        .await
+        .map_err(internal_err)
 }
 
 fn internal_err(err: sqlx::Error) -> (StatusCode, String) {
