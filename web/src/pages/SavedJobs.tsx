@@ -30,6 +30,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -228,13 +229,11 @@ function DeleteDialog({
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-          >
-            Cancel
-          </Button>
+          <DialogClose asChild>
+            <Button type="button" variant="outline">
+              Cancel
+            </Button>
+          </DialogClose>
           <Button
             variant="destructive"
             onClick={() => mutation.mutate()}
@@ -761,12 +760,13 @@ export default function SavedJobs() {
       {deleteJob && (
         <DeleteDialog
           key={deleteJob.id}
-          open={true}
+          open={deleteJob !== null}
           onOpenChange={(open) => {
             if (!open) {
+              const deletingId = deleteJob.id;
               setDeleteJob(null);
               // Close detail modal too if we deleted the selected job
-              if (selectedJob?.id === deleteJob.id) {
+              if (selectedJob?.id === deletingId) {
                 setSelectedJob(null);
               }
             }
