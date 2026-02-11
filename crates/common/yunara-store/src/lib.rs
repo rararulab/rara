@@ -16,7 +16,6 @@ pub mod config;
 pub mod db;
 pub mod err;
 pub mod kv;
-pub mod models;
 
 pub use config::DatabaseConfig;
 pub use db::DBStore;

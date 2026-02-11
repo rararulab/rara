@@ -16,15 +16,12 @@ workspace = true
 [dependencies]
 async-trait.workspace = true
 bon.workspace = true
-chrono = { workspace = true, features = ["serde"] }
 humantime-serde = "1.1.1"
 serde.workspace = true
 serde_json.workspace = true
 smart-default = "0.7"
 snafu.workspace = true
 sqlx = { workspace = true }
-strum.workspace = true
-strum_macros.workspace = true
 tracing.workspace = true
 uuid = { workspace = true }
 
