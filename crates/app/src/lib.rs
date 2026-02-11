@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod settings;
-
 use std::{
     sync::{
         Arc, RwLock,
@@ -22,33 +20,25 @@ use std::{
     time::Duration,
 };
 
-use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
 use job_server::{
     dedup_layer::{DedupLayer, DedupLayerConfig},
     grpc::{GrpcServerConfig, hello::HelloService, start_grpc_server},
     http::{RestServerConfig, health_routes, start_rest_server},
 };
-use smart_default::SmartDefault;
-use snafu::{ResultExt, Whatever, whatever};
+use serde::Deserialize;
+use snafu::{ResultExt, Whatever};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
-use uuid::Uuid;
 use yunara_store::config::DatabaseConfig;
 
 // ---------------------------------------------------------------------------
-// Config types
+// Static config types (immutable after startup)
 // ---------------------------------------------------------------------------
 
-/// OpenRouter API configuration.
-#[derive(Debug, Clone)]
-pub struct OpenRouterConfig {
-    pub api_key: String,
-    pub model:   String,
-}
-
 /// MinIO / S3-compatible object store configuration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
 pub struct MinioConfig {
     pub endpoint:   String,
     pub bucket:     String,
@@ -57,48 +47,102 @@ pub struct MinioConfig {
     pub region:     String,
 }
 
-/// Configuration for the application.
-#[derive(Debug, Clone, SmartDefault)]
+impl Default for MinioConfig {
+    fn default() -> Self {
+        Self {
+            endpoint:   "http://localhost:9000".to_owned(),
+            bucket:     "job-markdown".to_owned(),
+            access_key: "minioadmin".to_owned(),
+            secret_key: "minioadmin".to_owned(),
+            region:     "us-east-1".to_owned(),
+        }
+    }
+}
+
+/// Crawl4AI service configuration.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Crawl4AiConfig {
+    pub url: String,
+}
+
+impl Default for Crawl4AiConfig {
+    fn default() -> Self {
+        Self {
+            url: "http://localhost:11235".to_owned(),
+        }
+    }
+}
+
+/// Static application configuration — immutable after startup.
+///
+/// Deserializable from `config.toml` + environment variables via the `config`
+/// crate. For runtime-changeable values (OpenRouter key, Telegram token, …) see
+/// [`job_domain_shared::runtime_settings_service::RuntimeSettingsService`].
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
 pub struct AppConfig {
-    /// gRPC server configuration
-    pub grpc_config:              GrpcServerConfig,
-    /// REST server configuration
-    pub http_config:              RestServerConfig,
-    /// Database configuration
-    pub db_config:                DatabaseConfig,
-    /// Whether to enable graceful shutdown
-    #[default = true]
-    pub enable_graceful_shutdown: bool,
-    /// OpenRouter configuration (optional)
-    pub openrouter:               Option<OpenRouterConfig>,
-    /// MinIO / S3 object store configuration (optional)
-    pub minio:                    Option<MinioConfig>,
-    /// Crawl4AI service URL
-    #[default(_code = r#""http://localhost:11235".to_owned()"#)]
-    pub crawl4ai_url:             String,
-    /// Saved-job GC interval in hours
-    #[default = 24]
-    pub gc_interval_hours:        u64,
+    /// Database connection pool.
+    pub database:               DatabaseConfig,
+    /// HTTP server bind / limits.
+    pub http:                   RestServerConfig,
+    /// gRPC server bind / limits.
+    pub grpc:                   GrpcServerConfig,
+    /// MinIO / S3-compatible object store.
+    pub minio:                  MinioConfig,
+    /// Crawl4AI service.
+    pub crawl4ai:               Crawl4AiConfig,
+    /// Saved-job GC interval in hours.
+    pub gc_interval_hours:      u64,
+    /// Main service HTTP base URL (for telegram bot → main service calls).
+    pub main_service_http_base: String,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            database:               DatabaseConfig::default(),
+            http:                   RestServerConfig::default(),
+            grpc:                   GrpcServerConfig::default(),
+            minio:                  MinioConfig::default(),
+            crawl4ai:               Crawl4AiConfig::default(),
+            gc_interval_hours:      24,
+            main_service_http_base: "http://127.0.0.1:3000".to_owned(),
+        }
+    }
 }
 
 impl AppConfig {
-    /// Build an `AppConfig` from environment variables and optional config file.
+    /// Load config from config file + environment variables.
     ///
-    /// Uses [`Settings::new()`] which supports layered configuration:
-    /// 1. Legacy environment variables (`DATABASE_URL`, `OPENROUTER_API_KEY`, etc.)
+    /// Source priority (highest first):
+    /// 1. Legacy environment variables (`DATABASE_URL`, `MINIO_ENDPOINT`, etc.)
     /// 2. `JOB__`-prefixed environment variables
     /// 3. `config.toml` file in the working directory
     /// 4. Code defaults
-    pub fn from_env() -> Self {
-        match crate::settings::Settings::new() {
-            Ok(settings) => settings.into_app_config(),
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to load config via Settings, falling back to defaults: {e}"
-                );
-                Self::default()
-            }
-        }
+    pub fn new() -> Result<Self, config::ConfigError> {
+        let builder = config::Config::builder()
+            .add_source(config::File::with_name("config").required(false))
+            .add_source(
+                config::Environment::with_prefix("JOB")
+                    .separator("__")
+                    .try_parsing(true),
+            )
+            .set_override_option("database.database_url", std::env::var("DATABASE_URL").ok())?
+            .set_override_option("minio.endpoint", std::env::var("MINIO_ENDPOINT").ok())?
+            .set_override_option("minio.bucket", std::env::var("MINIO_BUCKET").ok())?
+            .set_override_option("minio.access_key", std::env::var("MINIO_ACCESS_KEY").ok())?
+            .set_override_option("minio.secret_key", std::env::var("MINIO_SECRET_KEY").ok())?
+            .set_override_option("minio.region", std::env::var("MINIO_REGION").ok())?
+            .set_override_option("crawl4ai.url", std::env::var("CRAWL4AI_URL").ok())?
+            .set_override_option("gc_interval_hours", std::env::var("GC_INTERVAL_HOURS").ok())?
+            .set_override_option(
+                "main_service_http_base",
+                std::env::var("MAIN_SERVICE_HTTP_BASE").ok(),
+            )?;
+
+        let cfg = builder.build()?;
+        cfg.try_deserialize()
     }
 
     /// Initialize the database, create all domain services, and return a
@@ -107,7 +151,7 @@ impl AppConfig {
         info!("Initializing job application");
 
         // Initialize database
-        let db_store = yunara_store::db::DBStore::new(self.db_config.clone())
+        let db_store = yunara_store::db::DBStore::new(self.database.clone())
             .await
             .whatever_context("Failed to initialize database")?;
         let pool = db_store.pool().clone();
@@ -126,15 +170,18 @@ impl AppConfig {
             Arc::new(job_domain_scheduler::pg_repository::PgSchedulerRepository::new(pool.clone()));
         let analytics_repo =
             Arc::new(job_domain_analytics::pg_repository::PgAnalyticsRepository::new(pool.clone()));
-        let saved_job_repo: Arc<dyn job_domain_saved_job::repository::SavedJobRepository> =
-            Arc::new(job_domain_saved_job::pg_repository::PgSavedJobRepository::new(pool.clone()));
+        let saved_job_repo: Arc<dyn job_domain_job_tracker::repository::SavedJobRepository> =
+            Arc::new(job_domain_job_tracker::pg_repository::PgSavedJobRepository::new(pool.clone()));
 
         // Runtime settings (DB-backed, env as fallback defaults).
-        let fallback_settings = runtime_settings_from_env(self.openrouter.as_ref());
+        let fallback_settings = runtime_settings_from_env();
         let settings_service = Arc::new(
-            settings::RuntimeSettingsService::load(db_store.kv_store(), fallback_settings)
-                .await
-                .whatever_context("Failed to initialize runtime settings service")?,
+            job_domain_shared::runtime_settings_service::RuntimeSettingsService::load(
+                db_store.kv_store(),
+                fallback_settings,
+            )
+            .await
+            .whatever_context("Failed to initialize runtime settings service")?,
         );
         let initial_settings = settings_service.current();
         let ai_service_handle = Arc::new(RwLock::new(build_ai_service(&initial_settings)));
@@ -158,23 +205,17 @@ impl AppConfig {
         ));
 
         // Job repository (for saving parsed JDs)
-        let job_repo: Arc<dyn job_domain_job_source::repository::JobRepository> = Arc::new(
-            job_domain_job_source::pg_repository::PgJobRepository::new(pool.clone()),
+        let job_repo: Arc<dyn job_domain_job_discovery::repository::JobRepository> = Arc::new(
+            job_domain_job_discovery::pg_repository::PgJobRepository::new(pool.clone()),
         );
 
         // Object store (MinIO / S3) — required, for saved-job markdown
-        let minio_cfg = match self.minio.as_ref() {
-            Some(cfg) => cfg,
-            None => {
-                whatever!("MinIO is required: set MINIO_ENDPOINT")
-            }
-        };
         let os_cfg = job_object_store::ObjectStoreConfig::builder()
-            .endpoint(minio_cfg.endpoint.clone())
-            .bucket(minio_cfg.bucket.clone())
-            .access_key(minio_cfg.access_key.clone())
-            .secret_key(minio_cfg.secret_key.clone())
-            .region(minio_cfg.region.clone())
+            .endpoint(self.minio.endpoint.clone())
+            .bucket(self.minio.bucket.clone())
+            .access_key(self.minio.access_key.clone())
+            .secret_key(self.minio.secret_key.clone())
+            .region(self.minio.region.clone())
             .root("/".to_owned())
             .build();
         let object_store = Arc::new(
@@ -184,10 +225,10 @@ impl AppConfig {
         info!("Object store (MinIO) configured");
 
         // Job Source domain — JobSpy driver + discovery service
-        let jobspy_driver = job_domain_job_source::jobspy::JobSpyDriver::new()
+        let jobspy_driver = job_domain_job_discovery::jobspy::JobSpyDriver::new()
             .whatever_context("Failed to initialize JobSpy driver")?;
         info!("JobSpy driver initialized");
-        let job_source_service = Arc::new(job_domain_job_source::service::JobSourceService::new(
+        let job_source_service = Arc::new(job_domain_job_discovery::service::JobSourceService::new(
             jobspy_driver,
         ));
 
@@ -200,12 +241,12 @@ impl AppConfig {
             interview_repo,
             None,
         ));
-        let saved_job_service = Arc::new(job_domain_saved_job::service::SavedJobService::new(
+        let saved_job_service = Arc::new(job_domain_job_tracker::service::SavedJobService::new(
             saved_job_repo,
         ));
 
         // Crawl4AI client (used by CrawlWorker)
-        let crawl_client = job_domain_saved_job::crawl4ai::Crawl4AiClient::new(&self.crawl4ai_url);
+        let crawl_client = job_domain_job_tracker::crawl4ai::Crawl4AiClient::new(&self.crawl4ai.url);
         info!("Crawl4AI client configured");
 
         // Build routes closure — captures Arc'd services for on-demand Router
@@ -224,26 +265,35 @@ impl AppConfig {
         let routes_fn: Box<dyn Fn(axum::Router) -> axum::Router + Send + Sync> =
             Box::new(move |router: axum::Router| {
                 let router = health_routes(router);
-                let bot_router = bot_internal_routes(BotInternalState {
-                    ai_service_handle: ai_handle_for_bot.clone(),
-                    job_repo:          job_repo_for_bot.clone(),
-                });
                 router
                     .merge(job_domain_resume::routes::routes(resume_svc.clone()))
                     .merge(job_domain_application::routes::routes(app_svc.clone()))
                     .merge(job_domain_interview::routes::routes(interview_svc.clone()))
                     .merge(job_domain_scheduler::routes::routes(scheduler_svc.clone()))
                     .merge(job_domain_analytics::routes::routes(analytics_svc.clone()))
-                    .merge(job_domain_saved_job::routes::routes(saved_job_svc.clone()))
+                    .merge(job_domain_job_tracker::routes::routes(saved_job_svc.clone()))
                     .merge(
-                        job_domain_job_source::routes::routes(job_source_svc.clone())
+                        job_domain_job_discovery::routes::routes(job_source_svc.clone())
                             .layer(DedupLayer::new(DedupLayerConfig::default())),
                     )
-                    .merge(settings_routes(
+                    .merge(job_domain_shared::runtime_settings_routes::routes(
                         settings_svc.clone(),
-                        ai_handle_for_bot.clone(),
+                        Some(Arc::new({
+                            let ai_handle = ai_handle_for_bot.clone();
+                            move |updated| {
+                                let next_ai = build_ai_service(updated);
+                                let mut guard = ai_handle
+                                    .write()
+                                    .map_err(|_| "failed to lock ai runtime handle".to_owned())?;
+                                *guard = next_ai;
+                                Ok(())
+                            }
+                        })),
                     ))
-                    .merge(bot_router)
+                    .merge(job_domain_job_tracker::bot_internal_routes::routes(
+                        ai_handle_for_bot.clone(),
+                        job_repo_for_bot.clone(),
+                    ))
             });
 
         info!("Application initialized successfully");
@@ -262,19 +312,22 @@ impl AppConfig {
     }
 }
 
-fn runtime_settings_from_env(
-    openrouter: Option<&OpenRouterConfig>,
-) -> job_domain_shared::runtime_settings::RuntimeSettings {
+/// Build fallback [`RuntimeSettings`] from environment variables.
+///
+/// These are only used as defaults when the KV store has no persisted settings.
+fn runtime_settings_from_env() -> job_domain_shared::runtime_settings::RuntimeSettings {
     let mut settings = job_domain_shared::runtime_settings::RuntimeSettings::default();
-    if let Some(cfg) = openrouter {
-        settings.ai.openrouter_api_key = Some(cfg.api_key.clone());
-        settings.ai.model = Some(cfg.model.clone());
-    }
+    settings.ai.openrouter_api_key = std::env::var("OPENROUTER_API_KEY").ok();
+    settings.ai.model = std::env::var("OPENROUTER_MODEL").ok();
+    settings.telegram.bot_token = std::env::var("TELEGRAM_BOT_TOKEN").ok();
+    settings.telegram.chat_id = std::env::var("TELEGRAM_CHAT_ID")
+        .ok()
+        .and_then(|s| s.parse().ok());
     settings.normalize();
     settings
 }
 
-fn build_ai_service(
+pub(crate) fn build_ai_service(
     settings: &job_domain_shared::runtime_settings::RuntimeSettings,
 ) -> Option<Arc<job_ai::service::AiService>> {
     let api_key = settings.ai.openrouter_api_key.as_deref()?;
@@ -305,13 +358,13 @@ pub struct App {
     /// Hot-swappable AI service built from current runtime settings.
     ai_service_handle:  Arc<RwLock<Option<Arc<job_ai::service::AiService>>>>,
     /// Job repository for persisting parsed jobs
-    job_repo:           Arc<dyn job_domain_job_source::repository::JobRepository>,
+    job_repo:           Arc<dyn job_domain_job_discovery::repository::JobRepository>,
     /// Saved job service for workers
-    saved_job_service:  Arc<job_domain_saved_job::service::SavedJobService>,
+    saved_job_service:  Arc<job_domain_job_tracker::service::SavedJobService>,
     /// Object store for S3 operations
     object_store:       Arc<job_object_store::ObjectStore>,
     /// Crawl4AI client for CrawlWorker
-    crawl_client:       job_domain_saved_job::crawl4ai::Crawl4AiClient,
+    crawl_client:       job_domain_job_tracker::crawl4ai::Crawl4AiClient,
 }
 
 /// Handle for controlling a running application.
@@ -368,15 +421,13 @@ impl App {
         };
 
         // Start servers
-        let mut grpc_handle =
-            start_grpc_server(&self.config.grpc_config, &[Arc::new(HelloService)])
-                .whatever_context("Failed to start gRPC server")?;
+        let mut grpc_handle = start_grpc_server(&self.config.grpc, &[Arc::new(HelloService)])
+            .whatever_context("Failed to start gRPC server")?;
 
         info!("starting rest server ...");
-        let mut http_handle =
-            start_rest_server(self.config.http_config.clone(), vec![self.routes_fn])
-                .await
-                .whatever_context("Failed to start REST server")?;
+        let mut http_handle = start_rest_server(self.config.http.clone(), vec![self.routes_fn])
+            .await
+            .whatever_context("Failed to start REST server")?;
 
         // Ensure sockets are actually accepting requests before we continue
         // with worker/bootstrap side effects.
@@ -462,7 +513,7 @@ impl App {
         // Spawn the main application loop
         let running = Arc::clone(&self.running);
         let cancellation_token = self.cancellation_token.clone();
-        let enable_graceful_shutdown = self.config.enable_graceful_shutdown;
+        let enable_graceful_shutdown = true;
 
         tokio::spawn(async move {
             if enable_graceful_shutdown {
@@ -532,159 +583,6 @@ async fn shutdown_signal(shutdown_rx: oneshot::Receiver<()>) {
     }
 }
 
-#[derive(Clone)]
-struct BotInternalState {
-    ai_service_handle: Arc<RwLock<Option<Arc<job_ai::service::AiService>>>>,
-    job_repo:          Arc<dyn job_domain_job_source::repository::JobRepository>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct BotJdParseRequest {
-    text: String,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct ParsedJob {
-    title:           String,
-    company:         String,
-    location:        Option<String>,
-    description:     Option<String>,
-    url:             Option<String>,
-    salary_min:      Option<i32>,
-    salary_max:      Option<i32>,
-    salary_currency: Option<String>,
-    tags:            Option<Vec<String>>,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct BotJdParseResponse {
-    id:      Uuid,
-    title:   String,
-    company: String,
-}
-
-fn bot_internal_routes(state: BotInternalState) -> Router {
-    Router::new()
-        .route("/api/v1/internal/bot/jd-parse", post(parse_jd_from_bot))
-        .with_state(state)
-}
-
-#[derive(Clone)]
-struct SettingsRouteState {
-    settings_service:  Arc<settings::RuntimeSettingsService>,
-    ai_service_handle: Arc<RwLock<Option<Arc<job_ai::service::AiService>>>>,
-}
-
-fn settings_routes(
-    settings_service: Arc<settings::RuntimeSettingsService>,
-    ai_service_handle: Arc<RwLock<Option<Arc<job_ai::service::AiService>>>>,
-) -> Router {
-    Router::new()
-        .route("/api/v1/settings", axum::routing::get(get_settings))
-        .route("/api/v1/settings", post(update_settings))
-        .with_state(SettingsRouteState {
-            settings_service,
-            ai_service_handle,
-        })
-}
-
-async fn get_settings(
-    State(state): State<SettingsRouteState>,
-) -> Result<Json<settings::RuntimeSettingsView>, (StatusCode, String)> {
-    let current = state.settings_service.current();
-    Ok(Json(settings::to_view(&current)))
-}
-
-async fn update_settings(
-    State(state): State<SettingsRouteState>,
-    Json(patch): Json<job_domain_shared::runtime_settings::RuntimeSettingsPatch>,
-) -> Result<Json<settings::RuntimeSettingsView>, (StatusCode, String)> {
-    let updated = state.settings_service.update(patch).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to update runtime settings: {e}"),
-        )
-    })?;
-
-    let next_ai = build_ai_service(&updated);
-    if let Ok(mut guard) = state.ai_service_handle.write() {
-        *guard = next_ai;
-    } else {
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "failed to lock ai runtime handle".to_owned(),
-        ));
-    }
-
-    Ok(Json(settings::to_view(&updated)))
-}
-
-async fn parse_jd_from_bot(
-    State(state): State<BotInternalState>,
-    Json(req): Json<BotJdParseRequest>,
-) -> Result<(StatusCode, Json<BotJdParseResponse>), (StatusCode, String)> {
-    if req.text.trim().is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "text must not be empty".to_owned()));
-    }
-
-    let ai_service = state
-        .ai_service_handle
-        .read()
-        .ok()
-        .and_then(|g| g.as_ref().cloned())
-        .ok_or((
-            StatusCode::SERVICE_UNAVAILABLE,
-            "ai service not configured; set OPENROUTER key/model via /api/v1/settings".to_owned(),
-        ))?;
-
-    let json_str = ai_service.jd_parser().parse(&req.text).await.map_err(|e| {
-        (
-            StatusCode::BAD_GATEWAY,
-            format!("failed to parse jd via ai service: {e}"),
-        )
-    })?;
-
-    let parsed: ParsedJob = serde_json::from_str(&json_str).map_err(|e| {
-        (
-            StatusCode::BAD_GATEWAY,
-            format!("failed to deserialize ai response: {e}"),
-        )
-    })?;
-
-    let job = job_domain_job_source::types::NormalizedJob {
-        id:              Uuid::new_v4(),
-        source_job_id:   Uuid::new_v4().to_string(),
-        source_name:     "telegram".to_owned(),
-        title:           parsed.title,
-        company:         parsed.company,
-        location:        parsed.location,
-        description:     parsed.description,
-        url:             parsed.url,
-        salary_min:      parsed.salary_min,
-        salary_max:      parsed.salary_max,
-        salary_currency: parsed.salary_currency,
-        tags:            parsed.tags.unwrap_or_default(),
-        raw_data:        serde_json::to_value(&req.text).ok(),
-        posted_at:       None,
-    };
-
-    let saved = state.job_repo.save(&job).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to save parsed jd job: {e}"),
-        )
-    })?;
-
-    Ok((
-        StatusCode::OK,
-        Json(BotJdParseResponse {
-            id:      saved.id,
-            title:   saved.title,
-            company: saved.company,
-        }),
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -692,8 +590,9 @@ mod tests {
     #[test]
     fn test_config_defaults() {
         let config = AppConfig::default();
-        assert!(config.enable_graceful_shutdown);
-        assert!(config.openrouter.is_none());
+        assert_eq!(config.minio.endpoint, "http://localhost:9000");
+        assert_eq!(config.crawl4ai.url, "http://localhost:11235");
+        assert_eq!(config.gc_interval_hours, 24);
     }
 
     #[tokio::test]

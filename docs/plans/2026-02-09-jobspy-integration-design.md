@@ -18,7 +18,7 @@ crates/
       setup.rs                   # OnceLock runtime initialization
       types.rs                   # ScrapedJob, SiteName, JobType enums
 
-  domain/job-source/
+  domain/job-discovery/
     src/
       jobspy.rs                  # New: JobSpyDriver impl JobSourceDriver
 ```

@@ -24,7 +24,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use job_common_worker::{FallibleWorker, Notifiable, WorkError, WorkResult, WorkerContext};
-use job_domain_saved_job::types::SavedJobStatus;
+use job_domain_job_tracker::types::SavedJobStatus;
 use tracing::{info, warn};
 
 use crate::worker_state::AppWorkerState;

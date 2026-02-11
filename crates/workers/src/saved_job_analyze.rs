@@ -20,7 +20,7 @@
 
 use async_trait::async_trait;
 use job_common_worker::{FallibleWorker, WorkError, WorkResult, WorkerContext};
-use job_domain_saved_job::types::SavedJobStatus;
+use job_domain_job_tracker::types::SavedJobStatus;
 use tracing::{info, warn};
 
 use crate::worker_state::AppWorkerState;

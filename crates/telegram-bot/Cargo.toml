@@ -13,7 +13,7 @@ description = "Standalone Telegram bot runtime with gRPC command ingress"
 
 [dependencies]
 axum = { workspace = true }
-job-domain-job-source = { workspace = true }
+job-domain-job-discovery = { workspace = true }
 job-domain-shared = { workspace = true }
 job-server = { workspace = true }
 reqwest = { workspace = true }

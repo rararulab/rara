@@ -115,7 +115,7 @@ no crate may depend on a crate in a higher layer.
 | Crate | Path | Purpose |
 |-------|------|---------|
 | `job-domain-core` | `crates/domain/core` | Shared domain IDs, status enums, repository traits, domain events |
-| `job-domain-job-source` | `crates/domain/job-source` | Job source driver abstraction and implementations |
+| `job-domain-job-source` | `crates/domain/job-discovery` | Job source driver abstraction and implementations |
 | `job-domain-ai` | `crates/domain/ai` | AI provider abstraction, prompt templates, model routing |
 | `job-domain-resume` | `crates/domain/resume` | Resume version management and tailoring |
 | `job-domain-application` | `crates/domain/application` | Application lifecycle state machine |

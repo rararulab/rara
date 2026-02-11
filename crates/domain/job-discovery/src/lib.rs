@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # job-domain-saved-job
+//! # job-domain-job-discovery
 //!
-//! Saved job tracking with crawl and analysis pipeline.
+//! Job source discovery service powered by JobSpy.
 
-pub mod crawl4ai;
-pub mod error;
+pub mod dedup;
+pub mod err;
+pub mod jobspy;
 pub mod pg_repository;
 pub mod repository;
 pub mod routes;

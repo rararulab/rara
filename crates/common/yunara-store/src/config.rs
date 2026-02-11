@@ -14,10 +14,12 @@
 
 use std::time::Duration;
 
+use serde::Deserialize;
 use smart_default::SmartDefault;
 
 /// Database configuration
-#[derive(Debug, Clone, SmartDefault, bon::Builder)]
+#[derive(Debug, Clone, SmartDefault, bon::Builder, Deserialize)]
+#[serde(default)]
 #[builder(on(String, into), on(Duration, into))]
 pub struct DatabaseConfig {
     /// PostgreSQL database URL, e.g. `postgres://user:pass@host:5432/dbname`
@@ -38,15 +40,18 @@ pub struct DatabaseConfig {
     /// Connection timeout (default: 30 seconds)
     #[default(_code = "Duration::from_secs(30)")]
     #[builder(default = Duration::from_secs(30), getter)]
+    #[serde(with = "humantime_serde")]
     pub connect_timeout: Duration,
 
     /// Maximum lifetime of a connection (default: 30 minutes)
     #[default(_code = "Some(Duration::from_secs(1800))")]
     #[builder(getter)]
+    #[serde(with = "humantime_serde::option")]
     pub max_lifetime: Option<Duration>,
 
     /// Idle timeout for connections (default: 10 minutes)
     #[default(_code = "Some(Duration::from_secs(600))")]
     #[builder(getter)]
+    #[serde(with = "humantime_serde::option")]
     pub idle_timeout: Option<Duration>,
 }

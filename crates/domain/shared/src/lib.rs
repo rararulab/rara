@@ -20,3 +20,5 @@ pub mod convert;
 pub mod id;
 pub mod notify;
 pub mod runtime_settings;
+pub mod runtime_settings_routes;
+pub mod runtime_settings_service;

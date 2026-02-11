@@ -1,12 +1,17 @@
-# Job Application Platform Configuration
+# Job Application Platform — Static Configuration
 #
 # Copy this file to `config.toml` and adjust values for your environment.
 #
 # Configuration priority (highest first):
-#   1. Legacy environment variables (DATABASE_URL, OPENROUTER_API_KEY, etc.)
+#   1. Legacy environment variables (DATABASE_URL, MINIO_ENDPOINT, etc.)
 #   2. JOB__-prefixed environment variables (JOB__DATABASE__DATABASE_URL, etc.)
 #   3. config.toml (this file)
 #   4. Code defaults
+#
+# NOTE: Runtime-changeable settings (OpenRouter API key, Telegram bot token)
+# are managed via the web API at POST /api/v1/settings, NOT in this file.
+# Environment variables OPENROUTER_API_KEY, OPENROUTER_MODEL, TELEGRAM_BOT_TOKEN,
+# TELEGRAM_CHAT_ID are used as initial defaults when the DB has no persisted settings.
 
 [database]
 database_url = "postgres://postgres:postgres@localhost:5432/job"
@@ -29,10 +34,6 @@ server_address = "127.0.0.1:50051"
 max_recv_message_size = "512MiB"
 max_send_message_size = "512MiB"
 
-[openrouter]
-api_key = "your-openrouter-api-key"
-model = "openai/gpt-4o"
-
 [minio]
 endpoint = "http://localhost:9000"
 bucket = "job-markdown"
@@ -48,11 +49,6 @@ gc_interval_hours = 24
 
 # Graceful shutdown on SIGTERM/Ctrl+C
 enable_graceful_shutdown = true
-
-# Telegram bot configuration (for `job bot` or `job combined`)
-[telegram]
-bot_token = "your-telegram-bot-token"
-chat_id = 0
 
 # Main service HTTP base URL (for telegram bot -> main service calls)
 main_service_http_base = "http://127.0.0.1:3000"

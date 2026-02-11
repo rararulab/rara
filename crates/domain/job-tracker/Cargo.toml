@@ -1,5 +1,5 @@
 [package]
-name = "job-domain-saved-job"
+name = "job-domain-job-tracker"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -12,6 +12,8 @@ categories.workspace = true
 description = "Saved job tracking with crawl and analysis pipeline"
 
 [dependencies]
+job-ai.workspace = true
+job-domain-job-discovery.workspace = true
 async-trait.workspace = true
 axum = { workspace = true }
 jiff.workspace = true

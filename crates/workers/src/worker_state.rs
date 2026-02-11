@@ -22,9 +22,9 @@ use job_common_worker::NotifyHandle;
 #[derive(Clone)]
 pub struct AppWorkerState {
     pub ai_service_handle: Arc<RwLock<Option<Arc<job_ai::service::AiService>>>>,
-    pub job_repo:          Arc<dyn job_domain_job_source::repository::JobRepository>,
-    pub saved_job_service: Arc<job_domain_saved_job::service::SavedJobService>,
+    pub job_repo:          Arc<dyn job_domain_job_discovery::repository::JobRepository>,
+    pub saved_job_service: Arc<job_domain_job_tracker::service::SavedJobService>,
     pub object_store:      Arc<job_object_store::ObjectStore>,
-    pub crawl_client:      job_domain_saved_job::crawl4ai::Crawl4AiClient,
+    pub crawl_client:      job_domain_job_tracker::crawl4ai::Crawl4AiClient,
     pub analyze_notify:    Arc<RwLock<Option<NotifyHandle>>>,
 }

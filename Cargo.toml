@@ -43,14 +43,14 @@ members = [
     "crates/common/yunara-store",
     "crates/job-model",
     "crates/domain/shared",
-    "crates/domain/job-source",
+    "crates/domain/job-discovery",
     "crates/ai",
     "crates/domain/resume",
     "crates/domain/application",
     "crates/domain/interview",
     "crates/domain/scheduler",
     "crates/domain/analytics",
-    "crates/domain/saved-job",
+    "crates/domain/job-tracker",
     "crates/server",
     "crates/telegram-bot",
     "crates/paths",
@@ -132,9 +132,9 @@ job-ai = { version = "=0.0.17", path = "crates/ai" }
 job-domain-analytics = { version = "=0.0.17", path = "crates/domain/analytics" }
 job-domain-application = { version = "=0.0.17", path = "crates/domain/application" }
 job-domain-interview = { version = "=0.0.17", path = "crates/domain/interview" }
-job-domain-job-source = { version = "=0.0.17", path = "crates/domain/job-source" }
+job-domain-job-discovery = { version = "=0.0.17", path = "crates/domain/job-discovery" }
 job-domain-resume = { version = "=0.0.17", path = "crates/domain/resume" }
-job-domain-saved-job = { version = "=0.0.17", path = "crates/domain/saved-job" }
+job-domain-job-tracker = { version = "=0.0.17", path = "crates/domain/job-tracker" }
 job-domain-scheduler = { version = "=0.0.17", path = "crates/domain/scheduler" }
 job-domain-shared = { version = "=0.0.17", path = "crates/domain/shared" }
 job-workers = { version = "=0.0.17", path = "crates/workers" }

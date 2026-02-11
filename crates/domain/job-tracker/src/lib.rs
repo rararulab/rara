@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # job-domain-job-source
+//! # job-domain-job-tracker
 //!
-//! Job source discovery service powered by JobSpy.
+//! Saved job tracking with crawl and analysis pipeline.
 
-pub mod dedup;
-pub mod err;
-pub mod jobspy;
+pub mod crawl4ai;
+pub mod error;
 pub mod pg_repository;
 pub mod repository;
 pub mod routes;
 pub mod service;
 pub mod types;
+pub mod bot_internal_routes;

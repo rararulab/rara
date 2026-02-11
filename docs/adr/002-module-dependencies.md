@@ -64,7 +64,7 @@ job/
 |-------|------|---------|
 | `job-common-outbox` | `crates/common/outbox/` | Outbox table operations, event publishing/consuming |
 | `job-common-audit` | `crates/common/audit/` | Audit log writing, querying |
-| `job-domain-job-source` | `crates/domain/job-source/` | Job board scraping, normalization |
+| `job-domain-job-source` | `crates/domain/job-discovery/` | Job board scraping, normalization |
 | `job-domain-ai` | `crates/domain/ai/` | AI provider abstraction, prompt management |
 | `job-domain-resume` | `crates/domain/resume/` | Resume CRUD, versioning |
 | `job-domain-applicant` | `crates/domain/applicant/` | Application state machine |
@@ -144,7 +144,7 @@ analytics          |     -      |  -  |   -    |     -     |     -     |     -  
 ### 1. Service Trait (核心接口)
 
 ```rust
-// crates/domain/job-source/src/lib.rs
+// crates/domain/job-discovery/src/lib.rs
 
 /// Core interface for job discovery operations.
 #[async_trait]
@@ -163,7 +163,7 @@ pub trait JobSourceService: Send + Sync {
 ### 2. Domain Types (数据模型)
 
 ```rust
-// crates/domain/job-source/src/types.rs
+// crates/domain/job-discovery/src/types.rs
 
 pub struct JobId(Uuid);
 pub struct JobListing {
@@ -189,7 +189,7 @@ pub enum JobSource {
 ### 3. Events (出站事件)
 
 ```rust
-// crates/domain/job-source/src/events.rs
+// crates/domain/job-discovery/src/events.rs
 
 pub const EVENT_JOB_DISCOVERED: &str = "job.discovered";
 
@@ -297,7 +297,7 @@ pub struct AppState {
 ```toml
 [dependencies]
 # All domain crates (for concrete implementations)
-job-domain-job-source = { path = "../domain/job-source" }
+job-domain-job-source = { path = "../domain/job-discovery" }
 job-domain-ai = { path = "../domain/ai" }
 job-domain-resume = { path = "../domain/resume" }
 job-domain-applicant = { path = "../domain/applicant" }
@@ -361,7 +361,7 @@ fn register_workers(manager: &mut Manager<AppState>, state: &AppState) {
 
 ```rust
 // Each domain module exposes routes
-// crates/domain/job-source/src/routes.rs
+// crates/domain/job-discovery/src/routes.rs
 pub fn job_source_routes(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/v1/jobs", get(list_jobs).post(trigger_discovery))
@@ -391,7 +391,7 @@ let route_handlers = vec![
 3. Add DB migrations for `outbox_events` and `audit_log` tables
 
 ### Step 2: First Domain Module
-1. Create `crates/domain/job-source/` as first domain crate
+1. Create `crates/domain/job-discovery/` as first domain crate
 2. Define `JobSourceService` trait + types + events
 3. Implement basic scraping logic
 4. Wire into `job-app`

@@ -12,6 +12,7 @@ categories.workspace = true
 description = "Shared domain interfaces, traits, and types for cross-crate contracts"
 
 [dependencies]
+axum.workspace = true
 chrono.workspace = true
 derive_more.workspace = true
 jiff.workspace = true
@@ -24,6 +25,7 @@ strum.workspace = true
 strum_macros.workspace = true
 teloxide.workspace = true
 tracing.workspace = true
+yunara-store = { workspace = true }
 uuid = { version = "1", features = ["v4", "serde"] }
 
 [lints]

@@ -1,5 +1,5 @@
 [package]
-name = "job-domain-job-source"
+name = "job-domain-job-discovery"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -18,6 +18,7 @@ bon.workspace = true
 chrono.workspace = true
 derive_more = { workspace = true }
 jiff.workspace = true
+job-ai = { workspace = true }
 job-domain-shared = { workspace = true }
 job-model = { workspace = true }
 jobspy-sys = { workspace = true }

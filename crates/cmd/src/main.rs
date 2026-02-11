@@ -18,7 +18,7 @@ use snafu::{ResultExt, Whatever};
 
 mod build_info;
 
-use job_app::settings::Settings;
+use job_app::AppConfig;
 use job_telegram_bot::{BotConfig, TelegramConfig};
 
 #[derive(Debug, Parser)]
@@ -58,29 +58,32 @@ impl HelloArgs {
 #[command(long_about = "Start the job server.\n\nExamples:\n  job server")]
 struct ServerArgs {}
 
-fn load_settings() -> Result<Settings, Whatever> {
-    Settings::new().whatever_context("Failed to load settings")
+fn load_config() -> Result<AppConfig, Whatever> {
+    AppConfig::new().whatever_context("Failed to load config")
 }
 
-/// Convert [`Settings`] into [`BotConfig`] for telegram-bot.
-fn settings_to_bot_config(settings: &Settings) -> BotConfig {
-    let db_config = settings.database.clone().into_database_config();
-    let telegram = settings.telegram.as_ref().map(|t| TelegramConfig {
-        bot_token: t.bot_token.clone(),
-        chat_id:   t.chat_id,
+/// Build [`BotConfig`] from static config + env vars for telegram credentials.
+fn build_bot_config(config: &AppConfig) -> BotConfig {
+    let db_config = config.database.clone();
+    let telegram = std::env::var("TELEGRAM_BOT_TOKEN").ok().and_then(|token| {
+        let chat_id: i64 = std::env::var("TELEGRAM_CHAT_ID").ok()?.parse().ok()?;
+        Some(TelegramConfig {
+            bot_token: token,
+            chat_id,
+        })
     });
     BotConfig {
         db_config,
         telegram,
-        main_service_http_base: settings.main_service_http_base.clone(),
+        main_service_http_base: config.main_service_http_base.clone(),
     }
 }
 
 impl ServerArgs {
     async fn run() -> Result<(), Whatever> {
         let _guards = job_common_telemetry::logging::init_tracing_subscriber("job");
-        let settings = load_settings()?;
-        let app = settings.into_app_config().open().await?;
+        let config = load_config()?;
+        let app = config.open().await?;
         app.run().await
     }
 }
@@ -94,8 +97,8 @@ struct BotArgs {}
 impl BotArgs {
     async fn run() -> Result<(), Whatever> {
         let _guards = job_common_telemetry::logging::init_tracing_subscriber("job-bot");
-        let settings = load_settings()?;
-        let bot_config = settings_to_bot_config(&settings);
+        let config = load_config()?;
+        let bot_config = build_bot_config(&config);
         let bot = bot_config.open().await?;
         bot.run().await
     }
@@ -112,9 +115,9 @@ struct CombinedArgs {}
 impl CombinedArgs {
     async fn run() -> Result<(), Whatever> {
         let _guards = job_common_telemetry::logging::init_tracing_subscriber("job-combined");
-        let settings = load_settings()?;
-        let bot_config = settings_to_bot_config(&settings);
-        let app = settings.into_app_config().open().await?;
+        let config = load_config()?;
+        let bot_config = build_bot_config(&config);
+        let app = config.open().await?;
         let bot = bot_config.open().await?;
 
         let (app_res, bot_res) = tokio::join!(app.run(), bot.run());
