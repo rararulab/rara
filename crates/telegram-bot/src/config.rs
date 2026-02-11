@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use job_domain_shared::runtime_settings::{RUNTIME_SETTINGS_KV_KEY, RuntimeSettings};
+use job_domain_shared::settings::{model::Settings, service::RUNTIME_SETTINGS_KV_KEY};
 use smart_default::SmartDefault;
 use snafu::{ResultExt, Whatever, whatever};
 use tokio_util::sync::CancellationToken;
@@ -97,13 +97,15 @@ impl BotConfig {
     /// - HTTP client to main service
     /// - Shared notify queue adapter (`pgmq`)
     pub async fn open(self) -> Result<BotApp, Whatever> {
-        let db_store = yunara_store::db::DBStore::new(self.db_config.clone())
+        let db_store = self
+            .db_config
+            .open()
             .await
             .whatever_context("Failed to initialize database for bot")?;
         let kv_store = db_store.kv_store();
 
         let mut runtime_settings = kv_store
-            .get::<RuntimeSettings>(RUNTIME_SETTINGS_KV_KEY)
+            .get::<Settings>(RUNTIME_SETTINGS_KV_KEY)
             .await
             .whatever_context("Failed to load runtime settings for bot")?
             .unwrap_or_default();

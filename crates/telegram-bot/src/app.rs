@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use job_domain_shared::settings::{RUNTIME_SETTINGS_KV_KEY, SettingsSvc};
+use job_domain_shared::settings::{model::Settings, service::RUNTIME_SETTINGS_KV_KEY};
 use snafu::{ResultExt, Whatever};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -117,7 +117,7 @@ impl BotApp {
             }
 
             let loaded = kv_store
-                .get::<RuntimeSettings>(RUNTIME_SETTINGS_KV_KEY)
+                .get::<Settings>(RUNTIME_SETTINGS_KV_KEY)
                 .await;
             let mut settings = match loaded {
                 Ok(Some(settings)) => settings,
