@@ -25,6 +25,7 @@ import JobDiscovery from '@/pages/JobDiscovery';
 import Notifications from '@/pages/Notifications';
 import Scheduler from '@/pages/Scheduler';
 import SavedJobs from '@/pages/SavedJobs';
+import Settings from '@/pages/Settings';
 
 const queryClient = new QueryClient();
 
@@ -42,6 +43,7 @@ export default function App() {
             <Route path="saved-jobs" element={<SavedJobs />} />
             <Route path="notifications" element={<Notifications />} />
             <Route path="scheduler" element={<Scheduler />} />
+            <Route path="settings" element={<Settings />} />
           </Route>
         </Routes>
       </BrowserRouter>

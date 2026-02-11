@@ -16,7 +16,7 @@ pub mod settings;
 
 use std::{
     sync::{
-        Arc,
+        Arc, RwLock,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
@@ -32,7 +32,7 @@ use smart_default::SmartDefault;
 use snafu::{ResultExt, Whatever, whatever};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 use yunara_store::config::DatabaseConfig;
 
@@ -129,6 +129,26 @@ impl AppConfig {
         let saved_job_repo: Arc<dyn job_domain_saved_job::repository::SavedJobRepository> =
             Arc::new(job_domain_saved_job::pg_repository::PgSavedJobRepository::new(pool.clone()));
 
+        // Runtime settings (DB-backed, env as fallback defaults).
+        let fallback_settings = runtime_settings_from_env(self.openrouter.as_ref());
+        let settings_service = Arc::new(
+            settings::RuntimeSettingsService::load(db_store.kv_store(), fallback_settings)
+                .await
+                .whatever_context("Failed to initialize runtime settings service")?,
+        );
+        let initial_settings = settings_service.current();
+        let ai_service_handle = Arc::new(RwLock::new(build_ai_service(&initial_settings)));
+        if ai_service_handle
+            .read()
+            .ok()
+            .and_then(|g| g.as_ref().cloned())
+            .is_some()
+        {
+            info!("AI service configured from runtime settings");
+        } else {
+            warn!("AI service not configured yet; set it via POST /api/v1/settings");
+        }
+
         // Scheduler + analytics services
         let scheduler_service = Arc::new(job_domain_scheduler::service::SchedulerService::new(
             scheduler_repo,
@@ -136,20 +156,6 @@ impl AppConfig {
         let analytics_service = Arc::new(job_domain_analytics::service::AnalyticsService::new(
             analytics_repo,
         ));
-
-        // AI service (required)
-        let or_cfg = match self.openrouter.as_ref() {
-            Some(cfg) => cfg,
-            None => {
-                whatever!("OpenRouter is required: set OPENROUTER_API_KEY")
-            }
-        };
-        let ai_service = Arc::new(job_ai::service::AiService::new(
-            &or_cfg.api_key,
-            or_cfg.model.clone(),
-            None,
-        ));
-        info!("AI service configured (OpenRouter)");
 
         // Job repository (for saving parsed JDs)
         let job_repo: Arc<dyn job_domain_job_source::repository::JobRepository> = Arc::new(
@@ -211,15 +217,16 @@ impl AppConfig {
         let analytics_svc = analytics_service.clone();
         let saved_job_svc = saved_job_service.clone();
         let job_source_svc = job_source_service.clone();
+        let settings_svc = settings_service.clone();
 
-        let ai_svc_for_bot = ai_service.clone();
+        let ai_handle_for_bot = ai_service_handle.clone();
         let job_repo_for_bot = job_repo.clone();
         let routes_fn: Box<dyn Fn(axum::Router) -> axum::Router + Send + Sync> =
             Box::new(move |router: axum::Router| {
                 let router = health_routes(router);
                 let bot_router = bot_internal_routes(BotInternalState {
-                    ai_service: ai_svc_for_bot.clone(),
-                    job_repo:   job_repo_for_bot.clone(),
+                    ai_service_handle: ai_handle_for_bot.clone(),
+                    job_repo:          job_repo_for_bot.clone(),
                 });
                 router
                     .merge(job_domain_resume::routes::routes(resume_svc.clone()))
@@ -232,6 +239,10 @@ impl AppConfig {
                         job_domain_job_source::routes::routes(job_source_svc.clone())
                             .layer(DedupLayer::new(DedupLayerConfig::default())),
                     )
+                    .merge(settings_routes(
+                        settings_svc.clone(),
+                        ai_handle_for_bot.clone(),
+                    ))
                     .merge(bot_router)
             });
 
@@ -242,13 +253,39 @@ impl AppConfig {
             running: Arc::new(AtomicBool::new(false)),
             cancellation_token: CancellationToken::new(),
             routes_fn,
-            ai_service,
+            ai_service_handle,
             job_repo,
             saved_job_service,
             object_store,
             crawl_client,
         })
     }
+}
+
+fn runtime_settings_from_env(
+    openrouter: Option<&OpenRouterConfig>,
+) -> job_domain_shared::runtime_settings::RuntimeSettings {
+    let mut settings = job_domain_shared::runtime_settings::RuntimeSettings::default();
+    if let Some(cfg) = openrouter {
+        settings.ai.openrouter_api_key = Some(cfg.api_key.clone());
+        settings.ai.model = Some(cfg.model.clone());
+    }
+    settings.normalize();
+    settings
+}
+
+fn build_ai_service(
+    settings: &job_domain_shared::runtime_settings::RuntimeSettings,
+) -> Option<Arc<job_ai::service::AiService>> {
+    let api_key = settings.ai.openrouter_api_key.as_deref()?;
+    let model = settings
+        .ai
+        .model
+        .clone()
+        .unwrap_or_else(|| "openai/gpt-4o".to_owned());
+    Some(Arc::new(job_ai::service::AiService::new(
+        api_key, model, None,
+    )))
 }
 
 // ---------------------------------------------------------------------------
@@ -265,8 +302,8 @@ pub struct App {
     cancellation_token: CancellationToken,
     /// Closure that builds the axum Router from domain routes
     routes_fn:          Box<dyn Fn(axum::Router) -> axum::Router + Send + Sync>,
-    /// AI service for JD parsing and analysis
-    ai_service:         Arc<job_ai::service::AiService>,
+    /// Hot-swappable AI service built from current runtime settings.
+    ai_service_handle:  Arc<RwLock<Option<Arc<job_ai::service::AiService>>>>,
     /// Job repository for persisting parsed jobs
     job_repo:           Arc<dyn job_domain_job_source::repository::JobRepository>,
     /// Saved job service for workers
@@ -361,7 +398,7 @@ impl App {
 
         // Set up background worker manager.
         let worker_state = job_workers::worker_state::AppWorkerState {
-            ai_service:        self.ai_service,
+            ai_service_handle: self.ai_service_handle,
             job_repo:          self.job_repo,
             saved_job_service: self.saved_job_service,
             object_store:      self.object_store,
@@ -497,8 +534,8 @@ async fn shutdown_signal(shutdown_rx: oneshot::Receiver<()>) {
 
 #[derive(Clone)]
 struct BotInternalState {
-    ai_service: Arc<job_ai::service::AiService>,
-    job_repo:   Arc<dyn job_domain_job_source::repository::JobRepository>,
+    ai_service_handle: Arc<RwLock<Option<Arc<job_ai::service::AiService>>>>,
+    job_repo:          Arc<dyn job_domain_job_source::repository::JobRepository>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -532,6 +569,56 @@ fn bot_internal_routes(state: BotInternalState) -> Router {
         .with_state(state)
 }
 
+#[derive(Clone)]
+struct SettingsRouteState {
+    settings_service:  Arc<settings::RuntimeSettingsService>,
+    ai_service_handle: Arc<RwLock<Option<Arc<job_ai::service::AiService>>>>,
+}
+
+fn settings_routes(
+    settings_service: Arc<settings::RuntimeSettingsService>,
+    ai_service_handle: Arc<RwLock<Option<Arc<job_ai::service::AiService>>>>,
+) -> Router {
+    Router::new()
+        .route("/api/v1/settings", axum::routing::get(get_settings))
+        .route("/api/v1/settings", post(update_settings))
+        .with_state(SettingsRouteState {
+            settings_service,
+            ai_service_handle,
+        })
+}
+
+async fn get_settings(
+    State(state): State<SettingsRouteState>,
+) -> Result<Json<settings::RuntimeSettingsView>, (StatusCode, String)> {
+    let current = state.settings_service.current();
+    Ok(Json(settings::to_view(&current)))
+}
+
+async fn update_settings(
+    State(state): State<SettingsRouteState>,
+    Json(patch): Json<job_domain_shared::runtime_settings::RuntimeSettingsPatch>,
+) -> Result<Json<settings::RuntimeSettingsView>, (StatusCode, String)> {
+    let updated = state.settings_service.update(patch).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to update runtime settings: {e}"),
+        )
+    })?;
+
+    let next_ai = build_ai_service(&updated);
+    if let Ok(mut guard) = state.ai_service_handle.write() {
+        *guard = next_ai;
+    } else {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to lock ai runtime handle".to_owned(),
+        ));
+    }
+
+    Ok(Json(settings::to_view(&updated)))
+}
+
 async fn parse_jd_from_bot(
     State(state): State<BotInternalState>,
     Json(req): Json<BotJdParseRequest>,
@@ -540,17 +627,22 @@ async fn parse_jd_from_bot(
         return Err((StatusCode::BAD_REQUEST, "text must not be empty".to_owned()));
     }
 
-    let json_str = state
-        .ai_service
-        .jd_parser()
-        .parse(&req.text)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::BAD_GATEWAY,
-                format!("failed to parse jd via ai service: {e}"),
-            )
-        })?;
+    let ai_service = state
+        .ai_service_handle
+        .read()
+        .ok()
+        .and_then(|g| g.as_ref().cloned())
+        .ok_or((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "ai service not configured; set OPENROUTER key/model via /api/v1/settings".to_owned(),
+        ))?;
+
+    let json_str = ai_service.jd_parser().parse(&req.text).await.map_err(|e| {
+        (
+            StatusCode::BAD_GATEWAY,
+            format!("failed to parse jd via ai service: {e}"),
+        )
+    })?;
 
     let parsed: ParsedJob = serde_json::from_str(&json_str).map_err(|e| {
         (

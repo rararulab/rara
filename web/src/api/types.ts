@@ -197,3 +197,28 @@ export const SAVED_JOB_STATUSES = [
 ] as const;
 
 export type SavedJobStatus = (typeof SAVED_JOB_STATUSES)[number];
+
+// Runtime Settings
+export interface RuntimeSettingsView {
+  ai: {
+    configured: boolean;
+    model: string | null;
+    key_hint: string | null;
+  };
+  telegram: {
+    configured: boolean;
+    chat_id: number | null;
+    token_hint: string | null;
+  };
+}
+
+export interface RuntimeSettingsPatch {
+  ai?: {
+    openrouter_api_key?: string;
+    model?: string;
+  };
+  telegram?: {
+    bot_token?: string;
+    chat_id?: number;
+  };
+}

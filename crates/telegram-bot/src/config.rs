@@ -14,6 +14,7 @@
 
 use std::sync::Arc;
 
+use job_domain_shared::runtime_settings::{RUNTIME_SETTINGS_KV_KEY, RuntimeSettings};
 use smart_default::SmartDefault;
 use snafu::{ResultExt, Whatever, whatever};
 use tokio_util::sync::CancellationToken;
@@ -96,17 +97,43 @@ impl BotConfig {
     /// - HTTP client to main service
     /// - Shared notify queue adapter (`pgmq`)
     pub async fn open(self) -> Result<BotApp, Whatever> {
-        let telegram_cfg = match self.telegram.as_ref() {
-            Some(cfg) => cfg,
+        let db_store = yunara_store::db::DBStore::new(self.db_config.clone())
+            .await
+            .whatever_context("Failed to initialize database for bot")?;
+        let kv_store = db_store.kv_store();
+
+        let mut runtime_settings = kv_store
+            .get::<RuntimeSettings>(RUNTIME_SETTINGS_KV_KEY)
+            .await
+            .whatever_context("Failed to load runtime settings for bot")?
+            .unwrap_or_default();
+        runtime_settings.normalize();
+
+        let env_telegram = self.telegram.clone();
+        let bot_token = match runtime_settings
+            .telegram
+            .bot_token
+            .or_else(|| env_telegram.as_ref().map(|cfg| cfg.bot_token.clone()))
+        {
+            Some(token) => token,
             None => {
-                whatever!("Telegram is required: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
+                whatever!(
+                    "Telegram bot token is required: set TELEGRAM_BOT_TOKEN or /api/v1/settings"
+                )
+            }
+        };
+        let chat_id = match runtime_settings
+            .telegram
+            .chat_id
+            .or_else(|| env_telegram.as_ref().map(|cfg| cfg.chat_id))
+        {
+            Some(chat_id) => chat_id,
+            None => {
+                whatever!("Telegram chat_id is required: set TELEGRAM_CHAT_ID or /api/v1/settings")
             }
         };
 
-        let telegram = Arc::new(TelegramService::new(
-            teloxide::Bot::new(&telegram_cfg.bot_token),
-            telegram_cfg.chat_id,
-        ));
+        let telegram = Arc::new(TelegramService::new(bot_token, chat_id));
 
         let main_http = Arc::new(MainServiceHttpClient::new(
             self.main_service_http_base.clone(),
@@ -114,9 +141,6 @@ impl BotConfig {
 
         let runtime = Arc::new(TelegramBotRuntime::new(telegram, main_http));
 
-        let db_store = yunara_store::db::DBStore::new(self.db_config.clone())
-            .await
-            .whatever_context("Failed to initialize database for bot")?;
         let notify_client = Arc::new(
             job_domain_shared::notify::client::NotifyClient::new(db_store.pool().clone())
                 .await
@@ -127,6 +151,7 @@ impl BotConfig {
             _config: self,
             runtime,
             notify_client,
+            kv_store,
             cancellation_token: CancellationToken::new(),
         })
     }

@@ -14,6 +14,7 @@
 
 use std::sync::Arc;
 
+use job_domain_shared::runtime_settings::{RUNTIME_SETTINGS_KV_KEY, RuntimeSettings};
 use snafu::{ResultExt, Whatever};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -24,8 +25,10 @@ use crate::{config::BotConfig, runtime::TelegramBotRuntime};
 pub struct BotApp {
     pub(crate) _config:            BotConfig,
     pub(crate) runtime:            Arc<TelegramBotRuntime>,
-    /// Shared notification queue client (`notification_dispatch`).
+    /// Shared notification queue client (`notification_telegram_dispatch`).
     pub(crate) notify_client:      Arc<job_domain_shared::notify::client::NotifyClient>,
+    /// KV store used for runtime settings sync.
+    pub(crate) kv_store:           yunara_store::KVStore,
     pub(crate) cancellation_token: CancellationToken,
 }
 
@@ -33,6 +36,7 @@ impl BotApp {
     const NOTIFY_BATCH_SIZE: i32 = 50;
     const NOTIFY_IDLE_SLEEP_SECS: u64 = 5;
     const NOTIFY_VT_SECONDS: i32 = 60;
+    const SETTINGS_SYNC_INTERVAL_SECS: u64 = 10;
 
     fn format_notification_message(
         notification: &job_domain_shared::notify::types::QueuedTelegramNotification,
@@ -101,6 +105,43 @@ impl BotApp {
         }
     }
 
+    async fn settings_sync_loop(
+        kv_store: yunara_store::KVStore,
+        telegram: Arc<crate::telegram_service::TelegramService>,
+        cancellation_token: CancellationToken,
+    ) {
+        loop {
+            tokio::select! {
+                _ = cancellation_token.cancelled() => break,
+                _ = tokio::time::sleep(std::time::Duration::from_secs(Self::SETTINGS_SYNC_INTERVAL_SECS)) => {}
+            }
+
+            let loaded = kv_store
+                .get::<RuntimeSettings>(RUNTIME_SETTINGS_KV_KEY)
+                .await;
+            let mut settings = match loaded {
+                Ok(Some(settings)) => settings,
+                Ok(None) => continue,
+                Err(e) => {
+                    warn!(error = %e, "failed to load runtime settings in bot sync loop");
+                    continue;
+                }
+            };
+            settings.normalize();
+
+            let (Some(bot_token), Some(chat_id)) = (
+                settings.telegram.bot_token.clone(),
+                settings.telegram.chat_id,
+            ) else {
+                continue;
+            };
+
+            if telegram.update_config(bot_token, chat_id) {
+                info!("telegram runtime settings updated from DB");
+            }
+        }
+    }
+
     /// Start telegram dispatcher + queue consumer and block until shutdown.
     pub async fn run(self) -> Result<(), Whatever> {
         // Start Telegram long-polling dispatcher.
@@ -113,6 +154,11 @@ impl BotApp {
         // Start notify queue consumer (pgmq) for main-service -> bot delivery.
         let notify_consumer_handle = tokio::spawn(Self::notify_consumer_loop(
             self.notify_client.clone(),
+            self.runtime.telegram.clone(),
+            self.cancellation_token.clone(),
+        ));
+        let settings_sync_handle = tokio::spawn(Self::settings_sync_loop(
+            self.kv_store.clone(),
             self.runtime.telegram.clone(),
             self.cancellation_token.clone(),
         ));
@@ -138,6 +184,9 @@ impl BotApp {
         notify_consumer_handle
             .await
             .whatever_context("failed to join notify consumer task")?;
+        settings_sync_handle
+            .await
+            .whatever_context("failed to join settings sync task")?;
 
         Ok(())
     }

@@ -48,6 +48,19 @@ impl FallibleWorker<AppWorkerState> for SavedJobAnalyzeWorker {
         let mut analyzed_count = 0u32;
 
         for job in &crawled {
+            let ai_service = match state
+                .ai_service_handle
+                .read()
+                .ok()
+                .and_then(|g| g.as_ref().cloned())
+            {
+                Some(svc) => svc,
+                None => {
+                    warn!("AI service not configured; skipping saved-job analyze tick");
+                    return Ok(());
+                }
+            };
+
             // Claim the job first to prevent duplicate processing on restart.
             if let Err(e) = state
                 .saved_job_service
@@ -100,7 +113,7 @@ impl FallibleWorker<AppWorkerState> for SavedJobAnalyzeWorker {
             };
 
             // Run AI analysis
-            let analysis_json = match state.ai_service.jd_analyzer().analyze(&markdown).await {
+            let analysis_json = match ai_service.jd_analyzer().analyze(&markdown).await {
                 Ok(json) => json,
                 Err(e) => {
                     warn!(id = %job.id, error = %e, "AI analysis failed");
