@@ -61,8 +61,14 @@ impl axum::response::IntoResponse for SavedJobError {
             | SavedJobError::AnalysisError { .. }
             | SavedJobError::ObjectStoreError { .. } => axum::http::StatusCode::BAD_GATEWAY,
         };
+        let message = self.to_string();
+        if status.is_server_error() {
+            tracing::error!(http_status = status.as_u16(), error = %message, "saved-job request error");
+        } else if status.is_client_error() && status != axum::http::StatusCode::NOT_FOUND {
+            tracing::warn!(http_status = status.as_u16(), error = %message, "saved-job request error");
+        }
         let body = serde_json::json!({
-            "error": { "status": status.as_u16(), "message": self.to_string() }
+            "error": { "status": status.as_u16(), "message": message }
         });
         (status, axum::Json(body)).into_response()
     }

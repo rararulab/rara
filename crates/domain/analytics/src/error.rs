@@ -40,8 +40,12 @@ impl axum::response::IntoResponse for AnalyticsError {
             AnalyticsError::Repository { .. } => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             AnalyticsError::DuplicateSnapshot { .. } => axum::http::StatusCode::CONFLICT,
         };
+        let message = self.to_string();
+        if status.is_server_error() {
+            tracing::error!(http_status = status.as_u16(), error = %message, "analytics request error");
+        }
         let body = serde_json::json!({
-            "error": { "status": status.as_u16(), "message": self.to_string() }
+            "error": { "status": status.as_u16(), "message": message }
         });
         (status, axum::Json(body)).into_response()
     }

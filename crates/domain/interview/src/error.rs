@@ -70,8 +70,12 @@ impl axum::response::IntoResponse for InterviewError {
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR
             }
         };
+        let message = self.to_string();
+        if status.is_server_error() {
+            tracing::error!(http_status = status.as_u16(), error = %message, "interview request error");
+        }
         let body = serde_json::json!({
-            "error": { "status": status.as_u16(), "message": self.to_string() }
+            "error": { "status": status.as_u16(), "message": message }
         });
         (status, axum::Json(body)).into_response()
     }
