@@ -26,6 +26,7 @@ import {
   Bookmark,
   Bell,
   Clock,
+  Settings as SettingsIcon,
   Globe,
   Database,
   ExternalLink,
@@ -56,6 +57,7 @@ const navItems = [
   { to: '/saved-jobs', icon: Bookmark, label: 'Saved Jobs' },
   { to: '/notifications', icon: Bell, label: 'Notifications' },
   { to: '/scheduler', icon: Clock, label: 'Scheduler' },
+  { to: '/settings', icon: SettingsIcon, label: 'Settings' },
 ];
 
 function ServerStatus({ collapsed }: { collapsed: boolean }) {

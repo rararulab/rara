@@ -56,7 +56,18 @@ impl FallibleWorker<AppWorkerState> for JdParserWorker {
         while let Ok(req) = self.rx.try_recv() {
             let state = ctx.state();
 
-            let ai = &state.ai_service;
+            let ai = match state
+                .ai_service_handle
+                .read()
+                .ok()
+                .and_then(|g| g.as_ref().cloned())
+            {
+                Some(ai) => ai,
+                None => {
+                    error!("AI service not configured; skipping JD parse request");
+                    continue;
+                }
+            };
             let repo = &state.job_repo;
 
             // 1. AI parse

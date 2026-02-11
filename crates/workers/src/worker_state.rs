@@ -21,7 +21,7 @@ use job_common_worker::NotifyHandle;
 /// Shared application worker state used by all workers.
 #[derive(Clone)]
 pub struct AppWorkerState {
-    pub ai_service:        Arc<job_ai::service::AiService>,
+    pub ai_service_handle: Arc<RwLock<Option<Arc<job_ai::service::AiService>>>>,
     pub job_repo:          Arc<dyn job_domain_job_source::repository::JobRepository>,
     pub saved_job_service: Arc<job_domain_saved_job::service::SavedJobService>,
     pub object_store:      Arc<job_object_store::ObjectStore>,
