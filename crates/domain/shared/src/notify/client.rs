@@ -16,18 +16,20 @@
 
 use jiff::Timestamp;
 use pgmq::PGMQueue;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::notify::{
     error::NotifyError,
     types::{
-        DequeuedTelegramNotification, QueuedTelegramNotification, SendTelegramNotificationRequest,
+        DequeuedTelegramNotification, NotificationQueueMessage, NotificationQueueOverview,
+        QueueMessageState, QueuedTelegramNotification, SendTelegramNotificationRequest,
     },
 };
 
 /// PGMQ queue name dedicated to telegram notification tasks.
 pub const TELEGRAM_NOTIFY_QUEUE_NAME: &str = "notification_telegram_dispatch";
+const MAX_LIMIT: i64 = 200;
 
 #[derive(Clone)]
 pub struct NotifyClient {
@@ -129,4 +131,182 @@ impl NotifyClient {
             })?;
         Ok(())
     }
+
+    /// Read queue-level counters for telegram notification dispatch.
+    pub async fn telegram_overview(&self) -> Result<NotificationQueueOverview, NotifyError> {
+        let queue_table = queue_table_name(TELEGRAM_NOTIFY_QUEUE_NAME)?;
+        let archive_table = archive_table_name(TELEGRAM_NOTIFY_QUEUE_NAME)?;
+        let ready_count = self.count_rows_if_exists(&queue_table, Some("vt <= now()")).await?;
+        let inflight_count = self
+            .count_rows_if_exists(&queue_table, Some("vt > now()"))
+            .await?;
+        let archived_count = self.count_rows_if_exists(&archive_table, None).await?;
+        Ok(NotificationQueueOverview {
+            queue_name: TELEGRAM_NOTIFY_QUEUE_NAME.to_owned(),
+            ready_count,
+            inflight_count,
+            archived_count,
+        })
+    }
+
+    /// List queue messages by state for observability.
+    pub async fn list_telegram_messages(
+        &self,
+        state: QueueMessageState,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<NotificationQueueMessage>, NotifyError> {
+        let limit = limit.clamp(1_i64, MAX_LIMIT);
+        let offset = offset.max(0_i64);
+        let queue_table = queue_table_name(TELEGRAM_NOTIFY_QUEUE_NAME)?;
+        let archive_table = archive_table_name(TELEGRAM_NOTIFY_QUEUE_NAME)?;
+
+        let items = match state {
+            QueueMessageState::Ready => {
+                let rows = sqlx::query(&format!(
+                    "SELECT msg_id, read_ct, enqueued_at, vt, message \
+                     FROM {queue_table} \
+                     WHERE vt <= now() \
+                     ORDER BY msg_id DESC \
+                     LIMIT $1 OFFSET $2"
+                ))
+                .bind(limit)
+                .bind(offset)
+                .fetch_all(&self.queue.connection)
+                .await
+                .map_err(sql_to_notify_err)?;
+
+                rows.into_iter()
+                    .map(|row| queue_row_to_message(row, QueueMessageState::Ready))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(sql_to_notify_err)?
+            }
+            QueueMessageState::Inflight => {
+                let rows = sqlx::query(&format!(
+                    "SELECT msg_id, read_ct, enqueued_at, vt, message \
+                     FROM {queue_table} \
+                     WHERE vt > now() \
+                     ORDER BY msg_id DESC \
+                     LIMIT $1 OFFSET $2"
+                ))
+                .bind(limit)
+                .bind(offset)
+                .fetch_all(&self.queue.connection)
+                .await
+                .map_err(sql_to_notify_err)?;
+
+                rows.into_iter()
+                    .map(|row| queue_row_to_message(row, QueueMessageState::Inflight))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(sql_to_notify_err)?
+            }
+            QueueMessageState::Archived => {
+                if !self.table_exists(&archive_table).await? {
+                    return Ok(Vec::new());
+                }
+                let rows = sqlx::query(&format!(
+                    "SELECT msg_id, read_ct, enqueued_at, vt, archived_at, message \
+                     FROM {archive_table} \
+                     ORDER BY msg_id DESC \
+                     LIMIT $1 OFFSET $2"
+                ))
+                .bind(limit)
+                .bind(offset)
+                .fetch_all(&self.queue.connection)
+                .await
+                .map_err(sql_to_notify_err)?;
+
+                rows.into_iter()
+                    .map(archive_row_to_message)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(sql_to_notify_err)?
+            }
+        };
+
+        Ok(items)
+    }
+
+    async fn table_exists(&self, table_name: &str) -> Result<bool, NotifyError> {
+        sqlx::query_scalar::<_, bool>("SELECT to_regclass($1) IS NOT NULL")
+            .bind(table_name)
+            .fetch_one(&self.queue.connection)
+            .await
+            .map_err(sql_to_notify_err)
+    }
+
+    async fn count_rows_if_exists(
+        &self,
+        table_name: &str,
+        where_clause: Option<&str>,
+    ) -> Result<i64, NotifyError> {
+        if !self.table_exists(table_name).await? {
+            return Ok(0);
+        }
+
+        let query = match where_clause {
+            Some(predicate) => format!("SELECT COUNT(*) FROM {table_name} WHERE {predicate}"),
+            None => format!("SELECT COUNT(*) FROM {table_name}"),
+        };
+        sqlx::query_scalar::<_, i64>(&query)
+            .fetch_one(&self.queue.connection)
+            .await
+            .map_err(sql_to_notify_err)
+    }
+}
+
+fn queue_table_name(queue_name: &str) -> Result<String, NotifyError> {
+    validate_queue_name(queue_name)?;
+    Ok(format!("pgmq.q_{queue_name}"))
+}
+
+fn archive_table_name(queue_name: &str) -> Result<String, NotifyError> {
+    validate_queue_name(queue_name)?;
+    Ok(format!("pgmq.a_{queue_name}"))
+}
+
+fn validate_queue_name(queue_name: &str) -> Result<(), NotifyError> {
+    let is_valid = !queue_name.is_empty()
+        && queue_name
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_');
+    if is_valid {
+        Ok(())
+    } else {
+        Err(NotifyError::ValidationError {
+            message: format!("invalid queue name: {queue_name}"),
+        })
+    }
+}
+
+fn sql_to_notify_err(err: sqlx::Error) -> NotifyError {
+    NotifyError::RepositoryError {
+        message: format!("notification queue query failed: {err}"),
+    }
+}
+
+fn queue_row_to_message(
+    row: sqlx::postgres::PgRow,
+    state: QueueMessageState,
+) -> Result<NotificationQueueMessage, sqlx::Error> {
+    Ok(NotificationQueueMessage {
+        state,
+        msg_id: row.try_get("msg_id")?,
+        read_ct: row.try_get("read_ct")?,
+        enqueued_at: row.try_get("enqueued_at")?,
+        vt: row.try_get("vt")?,
+        archived_at: None,
+        payload: row.try_get("message")?,
+    })
+}
+
+fn archive_row_to_message(row: sqlx::postgres::PgRow) -> Result<NotificationQueueMessage, sqlx::Error> {
+    Ok(NotificationQueueMessage {
+        state: QueueMessageState::Archived,
+        msg_id: row.try_get("msg_id")?,
+        read_ct: row.try_get("read_ct")?,
+        enqueued_at: row.try_get("enqueued_at")?,
+        vt: row.try_get("vt")?,
+        archived_at: row.try_get("archived_at")?,
+        payload: row.try_get("message")?,
+    })
 }

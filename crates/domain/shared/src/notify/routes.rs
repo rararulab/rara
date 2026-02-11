@@ -14,56 +14,31 @@
 
 //! HTTP routes for notification queue observability.
 
+use std::sync::Arc;
+
 use axum::{Json, Router, extract::Query, extract::State, http::StatusCode};
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Row};
+use serde::Deserialize;
 
-use crate::notify::client::TELEGRAM_NOTIFY_QUEUE_NAME;
+use crate::notify::{
+    client::NotifyClient,
+    error::NotifyError,
+    types::{NotificationQueueMessage, NotificationQueueOverview, QueueMessageState},
+};
 
-const TELEGRAM_QUEUE_TABLE: &str = "pgmq.q_notification_telegram_dispatch";
-const TELEGRAM_ARCHIVE_TABLE: &str = "pgmq.a_notification_telegram_dispatch";
 const DEFAULT_LIMIT: i64 = 50;
 const MAX_LIMIT: i64 = 200;
 
 #[derive(Clone)]
 struct RouteState {
-    pool: PgPool,
+    client: Arc<NotifyClient>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct QueueOverviewResponse {
-    pub queue_name:     String,
-    pub ready_count:    i64,
-    pub inflight_count: i64,
-    pub archived_count: i64,
-}
-
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum QueueMessageState {
-    Ready,
-    Inflight,
-    Archived,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct QueueMessageView {
-    pub state:       QueueMessageState,
-    pub msg_id:      i64,
-    pub read_ct:     i32,
-    pub enqueued_at: DateTime<Utc>,
-    pub vt:          DateTime<Utc>,
-    pub archived_at: Option<DateTime<Utc>>,
-    pub payload:     serde_json::Value,
-}
-
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct QueueMessagesResponse {
     pub state:  QueueMessageState,
     pub limit:  i64,
     pub offset: i64,
-    pub items:  Vec<QueueMessageView>,
+    pub items:  Vec<NotificationQueueMessage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,7 +49,7 @@ struct QueueMessagesQuery {
 }
 
 /// Build notification observability routes.
-pub fn routes(pool: PgPool) -> Router {
+pub fn routes(client: Arc<NotifyClient>) -> Router {
     Router::new()
         .route(
             "/api/v1/notifications/queues/telegram/overview",
@@ -84,24 +59,14 @@ pub fn routes(pool: PgPool) -> Router {
             "/api/v1/notifications/queues/telegram/messages",
             axum::routing::get(list_telegram_queue_messages),
         )
-        .with_state(RouteState { pool })
+        .with_state(RouteState { client })
 }
 
 async fn get_telegram_queue_overview(
     State(state): State<RouteState>,
-) -> Result<Json<QueueOverviewResponse>, (StatusCode, String)> {
-    let ready_count =
-        count_rows_if_exists(&state.pool, TELEGRAM_QUEUE_TABLE, Some("vt <= now()")).await?;
-    let inflight_count =
-        count_rows_if_exists(&state.pool, TELEGRAM_QUEUE_TABLE, Some("vt > now()")).await?;
-    let archived_count = count_rows_if_exists(&state.pool, TELEGRAM_ARCHIVE_TABLE, None).await?;
-
-    Ok(Json(QueueOverviewResponse {
-        queue_name: TELEGRAM_NOTIFY_QUEUE_NAME.to_owned(),
-        ready_count,
-        inflight_count,
-        archived_count,
-    }))
+) -> Result<Json<NotificationQueueOverview>, (StatusCode, String)> {
+    let overview = state.client.telegram_overview().await.map_err(internal_err)?;
+    Ok(Json(overview))
 }
 
 async fn list_telegram_queue_messages(
@@ -115,72 +80,11 @@ async fn list_telegram_queue_messages(
         .clamp(1_i64, MAX_LIMIT);
     let offset = query.offset.unwrap_or(0_i64).max(0_i64);
 
-    let items = match state_filter {
-        QueueMessageState::Ready => {
-            let rows = sqlx::query(&format!(
-                "SELECT msg_id, read_ct, enqueued_at, vt, message \
-                 FROM {TELEGRAM_QUEUE_TABLE} \
-                 WHERE vt <= now() \
-                 ORDER BY msg_id DESC \
-                 LIMIT $1 OFFSET $2"
-            ))
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&state.pool)
-            .await
-            .map_err(internal_err)?;
-
-            rows.into_iter()
-                .map(|row| queue_row_to_view(row, QueueMessageState::Ready))
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(internal_err)?
-        }
-        QueueMessageState::Inflight => {
-            let rows = sqlx::query(&format!(
-                "SELECT msg_id, read_ct, enqueued_at, vt, message \
-                 FROM {TELEGRAM_QUEUE_TABLE} \
-                 WHERE vt > now() \
-                 ORDER BY msg_id DESC \
-                 LIMIT $1 OFFSET $2"
-            ))
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&state.pool)
-            .await
-            .map_err(internal_err)?;
-
-            rows.into_iter()
-                .map(|row| queue_row_to_view(row, QueueMessageState::Inflight))
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(internal_err)?
-        }
-        QueueMessageState::Archived => {
-            if !table_exists(&state.pool, TELEGRAM_ARCHIVE_TABLE).await? {
-                return Ok(Json(QueueMessagesResponse {
-                    state: state_filter,
-                    limit,
-                    offset,
-                    items: Vec::new(),
-                }));
-            }
-            let rows = sqlx::query(&format!(
-                "SELECT msg_id, read_ct, enqueued_at, vt, archived_at, message \
-                 FROM {TELEGRAM_ARCHIVE_TABLE} \
-                 ORDER BY msg_id DESC \
-                 LIMIT $1 OFFSET $2"
-            ))
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&state.pool)
-            .await
-            .map_err(internal_err)?;
-
-            rows.into_iter()
-                .map(archive_row_to_view)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(internal_err)?
-        }
-    };
+    let items = state
+        .client
+        .list_telegram_messages(state_filter, limit, offset)
+        .await
+        .map_err(internal_err)?;
 
     Ok(Json(QueueMessagesResponse {
         state: state_filter,
@@ -202,60 +106,9 @@ fn parse_state(input: Option<&str>) -> Result<QueueMessageState, (StatusCode, St
     }
 }
 
-async fn table_exists(pool: &PgPool, table_name: &str) -> Result<bool, (StatusCode, String)> {
-    sqlx::query_scalar::<_, bool>("SELECT to_regclass($1) IS NOT NULL")
-        .bind(table_name)
-        .fetch_one(pool)
-        .await
-        .map_err(internal_err)
-}
-
-async fn count_rows_if_exists(
-    pool: &PgPool,
-    table_name: &str,
-    where_clause: Option<&str>,
-) -> Result<i64, (StatusCode, String)> {
-    if !table_exists(pool, table_name).await? {
-        return Ok(0);
-    }
-
-    let query = match where_clause {
-        Some(predicate) => format!("SELECT COUNT(*) FROM {table_name} WHERE {predicate}"),
-        None => format!("SELECT COUNT(*) FROM {table_name}"),
-    };
-    sqlx::query_scalar::<_, i64>(&query)
-        .fetch_one(pool)
-        .await
-        .map_err(internal_err)
-}
-
-fn internal_err(err: sqlx::Error) -> (StatusCode, String) {
+fn internal_err(err: NotifyError) -> (StatusCode, String) {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         format!("notification queue query failed: {err}"),
     )
-}
-
-fn queue_row_to_view(row: sqlx::postgres::PgRow, state: QueueMessageState) -> Result<QueueMessageView, sqlx::Error> {
-    Ok(QueueMessageView {
-        state,
-        msg_id: row.try_get("msg_id")?,
-        read_ct: row.try_get("read_ct")?,
-        enqueued_at: row.try_get("enqueued_at")?,
-        vt: row.try_get("vt")?,
-        archived_at: None,
-        payload: row.try_get("message")?,
-    })
-}
-
-fn archive_row_to_view(row: sqlx::postgres::PgRow) -> Result<QueueMessageView, sqlx::Error> {
-    Ok(QueueMessageView {
-        state: QueueMessageState::Archived,
-        msg_id: row.try_get("msg_id")?,
-        read_ct: row.try_get("read_ct")?,
-        enqueued_at: row.try_get("enqueued_at")?,
-        vt: row.try_get("vt")?,
-        archived_at: row.try_get("archived_at")?,
-        payload: row.try_get("message")?,
-    })
 }

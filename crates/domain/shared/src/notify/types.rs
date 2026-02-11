@@ -20,6 +20,33 @@ use strum_macros::FromRepr;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QueueMessageState {
+    Ready,
+    Inflight,
+    Archived,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationQueueOverview {
+    pub queue_name:     String,
+    pub ready_count:    i64,
+    pub inflight_count: i64,
+    pub archived_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationQueueMessage {
+    pub state:       QueueMessageState,
+    pub msg_id:      i64,
+    pub read_ct:     i32,
+    pub enqueued_at: chrono::DateTime<chrono::Utc>,
+    pub vt:          chrono::DateTime<chrono::Utc>,
+    pub archived_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub payload:     serde_json::Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
 #[derive(FromRepr)]
 pub enum NotificationPriority {

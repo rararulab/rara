@@ -155,6 +155,11 @@ impl AppConfig {
             .await
             .whatever_context("Failed to initialize database")?;
         let pool = db_store.pool().clone();
+        let notify_client = Arc::new(
+            job_domain_shared::notify::client::NotifyClient::new(pool.clone())
+                .await
+                .whatever_context("Failed to initialize notify queue client")?,
+        );
 
         // Create repository implementations (from domain crates)
         let resume_repo = Arc::new(job_domain_resume::pg_repository::PgResumeRepository::new(
@@ -259,7 +264,7 @@ impl AppConfig {
         let saved_job_svc = saved_job_service.clone();
         let job_source_svc = job_source_service.clone();
         let settings_svc = settings_service.clone();
-        let pool_for_notify_routes = pool.clone();
+        let notify_client_for_routes = notify_client.clone();
 
         let ai_handle_for_bot = ai_service_handle.clone();
         let job_repo_for_bot = job_repo.clone();
@@ -292,7 +297,7 @@ impl AppConfig {
                         })),
                     ))
                     .merge(job_domain_shared::notify::routes::routes(
-                        pool_for_notify_routes.clone(),
+                        notify_client_for_routes.clone(),
                     ))
                     .merge(job_domain_job_tracker::bot_internal_routes::routes(
                         ai_handle_for_bot.clone(),
