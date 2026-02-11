@@ -34,7 +34,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Bell, Clock3, Archive, Hourglass, ListOrdered } from "lucide-react";
+import { Bell, Clock3, Archive, Hourglass, ListOrdered, RefreshCw } from "lucide-react";
 
 const PAGE_SIZE = 50;
 
@@ -107,7 +107,6 @@ export default function Notifications() {
   const overviewQuery = useQuery({
     queryKey: ["notifications", "queue", "overview"],
     queryFn: () => api.get<NotificationQueueOverview>("/api/v1/notifications/queues/telegram/overview"),
-    refetchInterval: 5000,
   });
 
   const messagesQuery = useQuery({
@@ -116,7 +115,6 @@ export default function Notifications() {
       api.get<NotificationQueueMessagesResponse>(
         `/api/v1/notifications/queues/telegram/messages?state=${stateFilter}&limit=${PAGE_SIZE}&offset=${offset}`,
       ),
-    refetchInterval: 5000,
   });
 
   const stateTotal = useMemo(() => {
@@ -130,6 +128,12 @@ export default function Notifications() {
   const maxPage = Math.max(0, Math.ceil(stateTotal / PAGE_SIZE) - 1);
   const canPrev = page > 0;
   const canNext = page < maxPage;
+  const isRefreshing = overviewQuery.isFetching || messagesQuery.isFetching;
+
+  const handleRefresh = () => {
+    void overviewQuery.refetch();
+    void messagesQuery.refetch();
+  };
 
   return (
     <div className="space-y-6">
@@ -165,6 +169,10 @@ export default function Notifications() {
         </div>
 
         <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={handleRefresh} disabled={isRefreshing}>
+            <RefreshCw className="h-3 w-3 mr-1" />
+            {isRefreshing ? "Refreshing..." : "Refresh"}
+          </Button>
           <Button variant="outline" size="sm" disabled={!canPrev} onClick={() => setPage((p) => Math.max(0, p - 1))}>
             Prev
           </Button>
