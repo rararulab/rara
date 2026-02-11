@@ -20,14 +20,7 @@ use std::{
     time::Duration,
 };
 
-use async_trait::async_trait;
 use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
-use job_api::pb::telegrambot::v1::{
-    SendMessageRequest, telegram_bot_command_service_client::TelegramBotCommandServiceClient,
-};
-use job_common_worker::Notifiable;
-use job_domain_notify::{error::NotifyError, service::NotificationSender, types::Notification};
-use job_domain_shared::telegram_service::TelegramService;
 use job_server::{
     dedup_layer::{DedupLayer, DedupLayerConfig},
     grpc::{GrpcServerConfig, hello::HelloService, start_grpc_server},
@@ -37,7 +30,6 @@ use smart_default::SmartDefault;
 use snafu::{ResultExt, Whatever, whatever};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
-use tonic::transport::Channel;
 use tracing::{error, info};
 use uuid::Uuid;
 use yunara_store::config::DatabaseConfig;
@@ -45,13 +37,6 @@ use yunara_store::config::DatabaseConfig;
 // ---------------------------------------------------------------------------
 // Config types
 // ---------------------------------------------------------------------------
-
-/// Telegram bot configuration.
-#[derive(Debug, Clone)]
-pub struct TelegramConfig {
-    pub bot_token: String,
-    pub chat_id:   i64,
-}
 
 /// OpenRouter API configuration.
 #[derive(Debug, Clone)]
@@ -82,11 +67,8 @@ pub struct AppConfig {
     /// Whether to enable graceful shutdown
     #[default = true]
     pub enable_graceful_shutdown: bool,
-    /// Telegram configuration (optional)
-    pub telegram:                 Option<TelegramConfig>,
     /// telegram-bot gRPC target (optional). If set, main service sends
-    /// Telegram notifications via bot command service instead of local
-    /// teloxide.
+    /// Telegram notifications via bot command service.
     pub telegram_bot_grpc_target: Option<String>,
     /// OpenRouter configuration (optional)
     pub openrouter:               Option<OpenRouterConfig>,
@@ -109,22 +91,6 @@ impl AppConfig {
                     "postgres://postgres:postgres@localhost:5432/job".to_string()
                 }))
                 .build();
-
-        let telegram = match (
-            std::env::var("TELEGRAM_BOT_TOKEN"),
-            std::env::var("TELEGRAM_CHAT_ID"),
-        ) {
-            (Ok(token), Ok(chat_id)) => {
-                let chat_id: i64 = chat_id
-                    .parse()
-                    .expect("TELEGRAM_CHAT_ID must be an integer");
-                Some(TelegramConfig {
-                    bot_token: token,
-                    chat_id,
-                })
-            }
-            _ => None,
-        };
 
         let openrouter = std::env::var("OPENROUTER_API_KEY").ok().map(|key| {
             let model =
@@ -157,7 +123,6 @@ impl AppConfig {
 
         Self {
             db_config,
-            telegram,
             telegram_bot_grpc_target: std::env::var("TELEGRAM_BOT_GRPC_TARGET").ok(),
             openrouter,
             minio,
@@ -171,13 +136,6 @@ impl AppConfig {
     /// ready-to-run [`App`].
     pub async fn open(self) -> Result<App, Whatever> {
         info!("Initializing job application");
-
-        let telegram = self.telegram.as_ref().map(|cfg| {
-            Arc::new(TelegramService::new(
-                teloxide::Bot::new(&cfg.bot_token),
-                cfg.chat_id,
-            ))
-        });
 
         // Initialize database
         let db_store = yunara_store::db::DBStore::new(self.db_config.clone())
@@ -211,16 +169,12 @@ impl AppConfig {
             info!(target, "telegram sender configured via telegram-bot gRPC");
             notification_service.register_sender(
                 job_domain_notify::types::NotificationChannel::Telegram,
-                Arc::new(TelegramBotGrpcSender::new(target)),
-            );
-        } else if let Some(local_telegram) = telegram.clone() {
-            info!("telegram sender configured via local teloxide");
-            notification_service.register_sender(
-                job_domain_notify::types::NotificationChannel::Telegram,
-                local_telegram,
+                Arc::new(job_domain_notify::sender::TelegramBotGrpcSender::new(
+                    target,
+                )),
             );
         } else {
-            info!("telegram sender not configured, falling back to noop");
+            info!("telegram sender not configured, fallback to noop");
             notification_service.register_sender(
                 job_domain_notify::types::NotificationChannel::Telegram,
                 Arc::new(job_domain_notify::sender::NoopSender),
@@ -352,7 +306,6 @@ impl AppConfig {
             cancellation_token: CancellationToken::new(),
             routes_fn,
             notification_service,
-            telegram,
             ai_service,
             job_repo,
             saved_job_service,
@@ -378,8 +331,6 @@ pub struct App {
     routes_fn:            Box<dyn Fn(axum::Router) -> axum::Router + Send + Sync>,
     /// Notification service needed by background workers
     notification_service: Arc<job_domain_notify::service::NotificationService>,
-    /// Telegram service (only available in combined mode with local bot token)
-    telegram:             Option<Arc<TelegramService>>,
     /// AI service for JD parsing and analysis
     ai_service:           Arc<job_ai::service::AiService>,
     /// Job repository for persisting parsed jobs
@@ -485,7 +436,6 @@ impl App {
             notification_service: self.notification_service,
             ai_service:           self.ai_service,
             job_repo:             self.job_repo,
-            telegram:             self.telegram,
             saved_job_service:    self.saved_job_service,
             object_store:         self.object_store,
             crawl_client:         self.crawl_client,
@@ -515,15 +465,16 @@ impl App {
                 job_workers::notification_processor::NotificationProcessorWorker::new(50),
             )
             .name("notification-processor")
+            .eager()
             .on_notify()
             .spawn();
         notification_service.set_notify_trigger(notification_handle.clone());
-        notification_handle.notify();
 
         // Saved job analyze worker (notify trigger, processes Crawled jobs)
         let analyze_handle = worker_manager
             .fallible_worker(job_workers::saved_job_analyze::SavedJobAnalyzeWorker)
             .name("saved-job-analyze")
+            .eager()
             .on_notify()
             .spawn();
 
@@ -537,11 +488,10 @@ impl App {
         let crawl_handle = worker_manager
             .fallible_worker(job_workers::saved_job_crawl::SavedJobCrawlWorker)
             .name("saved-job-crawl")
+            .eager()
             .on_notify()
             .spawn();
         saved_job_svc_for_notify.set_notify_trigger(crawl_handle.clone());
-        crawl_handle.notify(); // drain any leftover PendingCrawl on startup
-        analyze_handle.notify(); // drain any leftover Crawled on startup
 
         // Saved job GC worker (periodic, default every 24 hours)
         let gc_interval_secs = self.config.gc_interval_hours * 3600;
@@ -626,65 +576,6 @@ async fn shutdown_signal(shutdown_rx: oneshot::Receiver<()>) {
         () = terminate => { info!("Received terminate signal"); },
         _ = shutdown_rx => { info!("Received shutdown signal"); },
     }
-}
-
-#[derive(Clone)]
-struct TelegramBotGrpcSender {
-    target: String,
-}
-
-impl TelegramBotGrpcSender {
-    fn new(target: String) -> Self { Self { target } }
-}
-
-#[async_trait]
-impl NotificationSender for TelegramBotGrpcSender {
-    async fn send(&self, notification: &Notification) -> Result<(), NotifyError> {
-        let endpoint = normalize_grpc_endpoint(&self.target);
-        let channel = Channel::from_shared(endpoint.clone())
-            .map_err(|e| NotifyError::SendFailed {
-                channel: "telegram".to_owned(),
-                message: format!("invalid telegram-bot grpc target {endpoint}: {e}"),
-            })?
-            .connect()
-            .await
-            .map_err(|e| NotifyError::SendFailed {
-                channel: "telegram".to_owned(),
-                message: format!("failed to connect telegram-bot grpc service: {e}"),
-            })?;
-
-        let mut client = TelegramBotCommandServiceClient::new(channel);
-        let chat_id = notification.recipient.parse::<i64>().unwrap_or_default();
-        client
-            .send_message(SendMessageRequest {
-                chat_id,
-                text: format_notification(notification),
-            })
-            .await
-            .map_err(|e| NotifyError::SendFailed {
-                channel: "telegram".to_owned(),
-                message: format!("telegram-bot grpc send failed: {e}"),
-            })?;
-
-        Ok(())
-    }
-}
-
-fn normalize_grpc_endpoint(target: &str) -> String {
-    if target.starts_with("http://") || target.starts_with("https://") {
-        target.to_owned()
-    } else {
-        format!("http://{target}")
-    }
-}
-
-fn format_notification(notification: &Notification) -> String {
-    let mut msg = String::new();
-    if let Some(subject) = &notification.subject {
-        msg.push_str(&format!("*{}*\n\n", subject));
-    }
-    msg.push_str(&notification.body);
-    msg
 }
 
 #[derive(Clone)]
@@ -793,7 +684,6 @@ mod tests {
     fn test_config_defaults() {
         let config = AppConfig::default();
         assert!(config.enable_graceful_shutdown);
-        assert!(config.telegram.is_none());
         assert!(config.openrouter.is_none());
     }
 

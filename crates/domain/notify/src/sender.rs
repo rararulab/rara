@@ -15,7 +15,10 @@
 //! Notification sender implementations.
 
 use async_trait::async_trait;
-use job_domain_shared::telegram_service::TelegramService;
+use job_api::pb::telegrambot::v1::{
+    SendMessageRequest, telegram_bot_command_service_client::TelegramBotCommandServiceClient,
+};
+use tonic::transport::Channel;
 use tracing::info;
 
 use crate::{error::NotifyError, service::NotificationSender, types::Notification};
@@ -37,17 +40,55 @@ impl NotificationSender for NoopSender {
     }
 }
 
+/// gRPC sender that forwards Telegram notifications to telegram-bot process.
+#[derive(Clone)]
+pub struct TelegramBotGrpcSender {
+    target: String,
+}
+
+impl TelegramBotGrpcSender {
+    #[must_use]
+    pub fn new(target: String) -> Self { Self { target } }
+}
+
 #[async_trait]
-impl NotificationSender for TelegramService {
+impl NotificationSender for TelegramBotGrpcSender {
     async fn send(&self, notification: &Notification) -> Result<(), NotifyError> {
-        let message = format_notification(notification);
-        self.send_primary_message(&message)
+        let endpoint = normalize_grpc_endpoint(&self.target);
+        let channel = Channel::from_shared(endpoint.clone())
+            .map_err(|e| NotifyError::SendFailed {
+                channel: "telegram".to_owned(),
+                message: format!("invalid telegram-bot grpc target {endpoint}: {e}"),
+            })?
+            .connect()
             .await
             .map_err(|e| NotifyError::SendFailed {
-                channel: "telegram".to_string(),
-                message: e.to_string(),
+                channel: "telegram".to_owned(),
+                message: format!("failed to connect telegram-bot grpc service: {e}"),
             })?;
+
+        let mut client = TelegramBotCommandServiceClient::new(channel);
+        let chat_id = notification.recipient.parse::<i64>().unwrap_or_default();
+        client
+            .send_message(SendMessageRequest {
+                chat_id,
+                text: format_notification(notification),
+            })
+            .await
+            .map_err(|e| NotifyError::SendFailed {
+                channel: "telegram".to_owned(),
+                message: format!("telegram-bot grpc send failed: {e}"),
+            })?;
+
         Ok(())
+    }
+}
+
+fn normalize_grpc_endpoint(target: &str) -> String {
+    if target.starts_with("http://") || target.starts_with("https://") {
+        target.to_owned()
+    } else {
+        format!("http://{target}")
     }
 }
 

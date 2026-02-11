@@ -49,7 +49,6 @@ use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 use job_common_worker::{FallibleWorker, NotifyHandle, WorkError, WorkResult, WorkerContext};
 use job_domain_notify::service::NotificationService;
-use job_domain_shared::telegram_service::TelegramService;
 use tracing::{error, info};
 
 /// Background worker that periodically processes pending notifications in
@@ -71,7 +70,6 @@ pub struct WorkerState {
     pub notification_service: Arc<NotificationService>,
     pub ai_service:           Arc<job_ai::service::AiService>,
     pub job_repo:             Arc<dyn job_domain_job_source::repository::JobRepository>,
-    pub telegram:             Option<Arc<TelegramService>>,
     pub saved_job_service: Arc<
         job_domain_saved_job::service::SavedJobService<
             job_domain_saved_job::pg_repository::PgSavedJobRepository,

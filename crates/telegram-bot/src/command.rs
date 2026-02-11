@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2026 Crrow
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,9 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # job-domain-shared
-//!
-//! Shared cross-domain ID definitions.
+use teloxide::utils::command::BotCommands;
 
-pub mod convert;
-pub mod id;
+/// Telegram commands accepted from users.
+#[derive(BotCommands, Clone)]
+#[command(rename_rule = "lowercase", description = "Available commands:")]
+pub(crate) enum Command {
+    #[command(description = "Start the bot")]
+    Start,
+    #[command(description = "Show help")]
+    Help,
+    #[command(description = "Search jobs: /search <keywords> [@ location]")]
+    Search(String),
+}

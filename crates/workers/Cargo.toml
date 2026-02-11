@@ -21,7 +21,6 @@ job-common-worker = { workspace = true }
 job-domain-job-source = { workspace = true }
 job-domain-notify = { workspace = true }
 job-domain-saved-job = { workspace = true }
-job-domain-shared = { workspace = true }
 job-object-store = { workspace = true }
 reqwest.workspace = true
 serde.workspace = true

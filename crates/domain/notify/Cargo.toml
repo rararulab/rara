@@ -16,6 +16,7 @@ async-trait.workspace = true
 axum = { workspace = true }
 chrono.workspace = true
 jiff.workspace = true
+job-api = { workspace = true }
 job-common-worker = { workspace = true }
 job-domain-shared = { workspace = true }
 job-model.workspace = true
@@ -25,7 +26,7 @@ snafu.workspace = true
 sqlx = { workspace = true }
 strum.workspace = true
 strum_macros.workspace = true
-teloxide = { workspace = true }
+tonic = { workspace = true }
 tracing.workspace = true
 uuid = { workspace = true }
 

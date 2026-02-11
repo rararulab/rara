@@ -319,6 +319,7 @@ impl<S: Clone + Send + Sync + 'static> Manager<S> {
         worker: W,
         name: &'static str,
         blocking: bool,
+        eager: bool,
         trigger: Trigger,
         pause_mode: crate::PauseMode,
     ) -> H
@@ -364,6 +365,7 @@ impl<S: Clone + Send + Sync + 'static> Manager<S> {
             paused_clone,
             pause_notify_clone,
             pause_mode,
+            eager,
             driver,
             name,
         );
@@ -401,6 +403,7 @@ impl<S: Clone + Send + Sync + 'static> Manager<S> {
         worker: W,
         name: &'static str,
         blocking: bool,
+        eager: bool,
         trigger: Trigger,
         pause_mode: crate::PauseMode,
     ) -> H
@@ -446,6 +449,7 @@ impl<S: Clone + Send + Sync + 'static> Manager<S> {
             paused_clone,
             pause_notify_clone,
             pause_mode,
+            eager,
             driver,
             name,
         );
@@ -611,6 +615,7 @@ async fn run_worker<S: Clone + Send + Sync, W: Worker>(
     paused: Arc<AtomicBool>,
     pause_notify: Arc<Notify>,
     pause_mode: crate::PauseMode,
+    eager: bool,
     mut driver: TriggerDriverEnum,
     name: &'static str,
 ) {
@@ -623,6 +628,16 @@ async fn run_worker<S: Clone + Send + Sync, W: Worker>(
 
     // Call on_start hook
     worker.on_start(ctx.clone()).await;
+
+    // Eager: run work once before entering trigger loop
+    if eager && !ctx.is_cancelled() {
+        let start = Instant::now();
+        worker.work(ctx.clone()).await;
+        WORKER_EXECUTIONS.with_label_values(&[name]).inc();
+        WORKER_EXECUTION_DURATION_SECONDS
+            .with_label_values(&[name])
+            .observe(start.elapsed().as_secs_f64());
+    }
 
     // Main execution loop
     while driver.wait_next(&ctx).await {
@@ -684,6 +699,7 @@ async fn run_fallible_worker<S: Clone + Send + Sync + 'static, W: crate::Fallibl
     paused: Arc<AtomicBool>,
     pause_notify: Arc<Notify>,
     pause_mode: crate::PauseMode,
+    eager: bool,
     mut driver: TriggerDriverEnum,
     name: &'static str,
 ) {
@@ -705,6 +721,35 @@ async fn run_fallible_worker<S: Clone + Send + Sync + 'static, W: crate::Fallibl
             WORKER_STOPPED.with_label_values(&[name]).inc();
             WORKER_ACTIVE.with_label_values(&[name]).set(0);
             return;
+        }
+    }
+
+    // Eager: run work once before entering trigger loop
+    if eager && !ctx.is_cancelled() {
+        let start = Instant::now();
+        let result = worker.work(ctx.clone()).await;
+
+        WORKER_EXECUTIONS.with_label_values(&[name]).inc();
+        WORKER_EXECUTION_DURATION_SECONDS
+            .with_label_values(&[name])
+            .observe(start.elapsed().as_secs_f64());
+
+        if let Err(e) = result {
+            error!(error = %e, "Eager execution failed");
+            WORKER_EXECUTION_ERRORS.with_label_values(&[name]).inc();
+            WORKER_ERRORS.with_label_values(&[name]).inc();
+
+            if e.is_fatal() {
+                error!("Fatal error in eager execution, stopping worker");
+                if let Err(e) = worker.on_shutdown(ctx.clone()).await {
+                    error!(error = %e, "Worker on_shutdown failed");
+                    WORKER_SHUTDOWN_ERRORS.with_label_values(&[name]).inc();
+                    WORKER_ERRORS.with_label_values(&[name]).inc();
+                }
+                WORKER_STOPPED.with_label_values(&[name]).inc();
+                WORKER_ACTIVE.with_label_values(&[name]).set(0);
+                return;
+            }
         }
     }
 

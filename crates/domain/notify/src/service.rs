@@ -59,8 +59,8 @@ use crate::{
 /// Built-in implementations:
 /// - [`NoopSender`](crate::sender::NoopSender) — no-op, used for unconfigured
 ///   channels
-/// - [`TelegramService`](job_domain_shared::telegram_service::TelegramService)
-///   — delivers via teloxide
+/// - [`TelegramBotGrpcSender`](crate::sender::TelegramBotGrpcSender) — forwards
+///   messages to telegram-bot gRPC command ingress
 #[async_trait::async_trait]
 pub trait NotificationSender: Send + Sync {
     async fn send(&self, notification: &Notification) -> Result<(), NotifyError>;

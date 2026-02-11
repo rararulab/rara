@@ -12,10 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Typed HTTP client from bot runtime to main service.
+//!
+//! This client intentionally reuses domain request/response models for
+//! discover API to avoid payload drift between bot and main service.
+
+use job_domain_job_source::types::DiscoveryCriteria;
+pub use job_domain_job_source::types::DiscoveryJobResponse;
 use reqwest::StatusCode;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use snafu::{ResultExt, Snafu};
 
+/// Error model for bot -> main-service HTTP calls.
 #[derive(Debug, Snafu)]
 pub enum MainServiceHttpError {
     #[snafu(display("request failed: {source}"))]
@@ -24,6 +32,7 @@ pub enum MainServiceHttpError {
     HttpStatus { status: StatusCode, body: String },
 }
 
+/// Main service HTTP client used by bot runtime.
 #[derive(Clone)]
 pub struct MainServiceHttpClient {
     base_url: String,
@@ -31,6 +40,7 @@ pub struct MainServiceHttpClient {
 }
 
 impl MainServiceHttpClient {
+    /// Create a client with normalized base URL.
     pub fn new(base_url: String) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_owned(),
@@ -38,6 +48,9 @@ impl MainServiceHttpClient {
         }
     }
 
+    /// Call main service discovery API.
+    ///
+    /// Maps directly to `POST /api/v1/jobs/discover`.
     pub async fn discover_jobs(
         &self,
         keywords: Vec<String>,
@@ -75,6 +88,10 @@ impl MainServiceHttpClient {
         Ok(jobs)
     }
 
+    /// Submit a raw JD text to main service for parse-and-save flow.
+    ///
+    /// Maps to bot internal endpoint:
+    /// `POST /api/v1/internal/bot/jd-parse`.
     pub async fn submit_jd_parse(&self, text: &str) -> Result<(), MainServiceHttpError> {
         let url = format!("{}/api/v1/internal/bot/jd-parse", self.base_url);
         let resp = self
@@ -98,27 +115,7 @@ impl MainServiceHttpClient {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct DiscoveryCriteria {
-    keywords:     Vec<String>,
-    location:     Option<String>,
-    job_type:     Option<String>,
-    max_results:  Option<u32>,
-    posted_after: Option<String>,
-    sites:        Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
 struct JdParseRequest {
+    /// Raw JD text from telegram message.
     text: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct DiscoveryJobResponse {
-    pub title:           String,
-    pub company:         String,
-    pub location:        Option<String>,
-    pub url:             Option<String>,
-    pub salary_min:      Option<i32>,
-    pub salary_max:      Option<i32>,
-    pub salary_currency: Option<String>,
 }

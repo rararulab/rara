@@ -16,9 +16,8 @@
 
 use async_trait::async_trait;
 use job_common_worker::{FallibleWorker, WorkResult, WorkerContext};
-use job_domain_shared::telegram_service::TelegramService;
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::{notification_processor::WorkerState, types::JdParseRequest};
 
@@ -27,7 +26,7 @@ use crate::{notification_processor::WorkerState, types::JdParseRequest};
 /// For every [`JdParseRequest`]:
 /// 1. Calls the AI agent to extract structured fields.
 /// 2. Saves the resulting `NormalizedJob` via `JobRepository`.
-/// 3. Sends a confirmation (or error) back to the Telegram chat.
+/// 3. Persists results to DB for downstream workflows.
 pub struct JdParserWorker {
     rx: mpsc::Receiver<JdParseRequest>,
 }
@@ -65,7 +64,6 @@ impl FallibleWorker<WorkerState> for JdParserWorker {
                 Ok(s) => s,
                 Err(e) => {
                     error!(error = %e, "AI JD parse failed");
-                    send_reply(state.telegram.as_ref(), &format!("Failed to parse JD: {e}")).await;
                     continue;
                 }
             };
@@ -75,11 +73,6 @@ impl FallibleWorker<WorkerState> for JdParserWorker {
                 Ok(p) => p,
                 Err(e) => {
                     error!(error = %e, raw = %json_str, "Failed to deserialize AI response");
-                    send_reply(
-                        state.telegram.as_ref(),
-                        &format!("Failed to parse AI response: {e}"),
-                    )
-                    .await;
                     continue;
                 }
             };
@@ -110,32 +103,13 @@ impl FallibleWorker<WorkerState> for JdParserWorker {
                         company = %saved.company,
                         "JD parsed and saved"
                     );
-                    send_reply(
-                        state.telegram.as_ref(),
-                        &format!(
-                            "Job parsed and saved!\n\n{} @ {}",
-                            saved.title, saved.company
-                        ),
-                    )
-                    .await;
                 }
                 Err(e) => {
                     error!(error = %e, "Failed to save job");
-                    send_reply(state.telegram.as_ref(), &format!("Failed to save job: {e}")).await;
                 }
             }
         }
 
         Ok(())
-    }
-}
-
-/// Send a reply to the configured Telegram chat.
-async fn send_reply(telegram: Option<&std::sync::Arc<TelegramService>>, text: &str) {
-    let Some(telegram) = telegram else {
-        return;
-    };
-    if let Err(err) = telegram.send_primary_message(text).await {
-        warn!(error = %err, "failed to send JD parser reply to Telegram");
     }
 }

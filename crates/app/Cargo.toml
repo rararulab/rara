@@ -27,7 +27,6 @@ job-domain-notify = { workspace = true }
 job-domain-resume = { workspace = true }
 job-domain-saved-job = { workspace = true }
 job-domain-scheduler = { workspace = true }
-job-domain-shared = { workspace = true }
 job-object-store = { workspace = true }
 job-server = { workspace = true }
 job-workers = { workspace = true }
@@ -35,7 +34,6 @@ smart-default = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 snafu = { workspace = true }
-teloxide = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tonic = { workspace = true }

@@ -89,6 +89,7 @@ pub struct WorkerBuilder<'m, S, W, T> {
     worker:     W,
     name:       Option<&'static str>,
     blocking:   bool,
+    eager:      bool,
     trigger:    Option<Trigger>,
     pause_mode: Option<crate::PauseMode>,
     _phantom:   PhantomData<T>,
@@ -105,6 +106,7 @@ where
             worker,
             name: None,
             blocking: false,
+            eager: false,
             trigger: None,
             pause_mode: None,
             _phantom: PhantomData,
@@ -135,6 +137,7 @@ where
             worker:     self.worker,
             name:       self.name,
             blocking:   self.blocking,
+            eager:      self.eager,
             trigger:    self.trigger,
             pause_mode: self.pause_mode,
             _phantom:   PhantomData,
@@ -166,6 +169,7 @@ where
             worker:     self.worker,
             name:       self.name,
             blocking:   self.blocking,
+            eager:      self.eager,
             trigger:    self.trigger,
             pause_mode: self.pause_mode,
             _phantom:   PhantomData,
@@ -202,6 +206,7 @@ where
             worker:     self.worker,
             name:       self.name,
             blocking:   self.blocking,
+            eager:      self.eager,
             trigger:    self.trigger,
             pause_mode: self.pause_mode,
             _phantom:   PhantomData,
@@ -267,6 +272,7 @@ where
             worker:     self.worker,
             name:       self.name,
             blocking:   self.blocking,
+            eager:      self.eager,
             trigger:    self.trigger,
             pause_mode: self.pause_mode,
             _phantom:   PhantomData,
@@ -312,6 +318,7 @@ where
             worker:     self.worker,
             name:       self.name,
             blocking:   self.blocking,
+            eager:      self.eager,
             trigger:    self.trigger,
             pause_mode: self.pause_mode,
             _phantom:   PhantomData,
@@ -363,6 +370,7 @@ where
             worker:     self.worker,
             name:       self.name,
             blocking:   self.blocking,
+            eager:      self.eager,
             trigger:    self.trigger,
             pause_mode: self.pause_mode,
             _phantom:   PhantomData,
@@ -434,6 +442,16 @@ where
         self
     }
 
+    /// Runs `work()` once immediately after `on_start()`, before entering
+    /// the trigger loop.
+    ///
+    /// Useful for `on_notify()` workers that need to drain pending work on
+    /// startup without requiring an external `handle.notify()` call.
+    pub const fn eager(mut self) -> Self {
+        self.eager = true;
+        self
+    }
+
     /// Sets the pause mode (soft or hard pause).
     ///
     /// - `PauseMode::Soft` (default): Driver continues, work is skipped
@@ -460,6 +478,7 @@ where
             self.worker,
             name,
             self.blocking,
+            self.eager,
             self.trigger.unwrap(),
             pause_mode,
         )
@@ -481,6 +500,7 @@ where
             self.worker,
             name,
             self.blocking,
+            self.eager,
             self.trigger.unwrap(),
             pause_mode,
         )
@@ -503,6 +523,7 @@ where
             self.worker,
             name,
             self.blocking,
+            self.eager,
             self.trigger.unwrap(),
             pause_mode,
         )
@@ -525,6 +546,7 @@ where
             self.worker,
             name,
             self.blocking,
+            self.eager,
             self.trigger.unwrap(),
             pause_mode,
         )
@@ -547,6 +569,7 @@ where
             self.worker,
             name,
             self.blocking,
+            self.eager,
             self.trigger.unwrap(),
             pause_mode,
         )
@@ -569,6 +592,7 @@ where
             self.worker,
             name,
             self.blocking,
+            self.eager,
             self.trigger.unwrap(),
             pause_mode,
         )
@@ -680,6 +704,7 @@ pub struct FallibleWorkerBuilder<'m, S, W, T> {
     worker:     W,
     name:       Option<&'static str>,
     blocking:   bool,
+    eager:      bool,
     trigger:    Option<crate::Trigger>,
     pause_mode: Option<crate::PauseMode>,
     _phantom:   PhantomData<T>,
@@ -696,6 +721,7 @@ where
             worker,
             name: None,
             blocking: false,
+            eager: false,
             trigger: None,
             pause_mode: None,
             _phantom: PhantomData,
@@ -710,6 +736,7 @@ where
             worker:     self.worker,
             name:       self.name,
             blocking:   self.blocking,
+            eager:      self.eager,
             trigger:    self.trigger,
             pause_mode: self.pause_mode,
             _phantom:   PhantomData,
@@ -724,6 +751,7 @@ where
             worker:     self.worker,
             name:       self.name,
             blocking:   self.blocking,
+            eager:      self.eager,
             trigger:    self.trigger,
             pause_mode: self.pause_mode,
             _phantom:   PhantomData,
@@ -741,6 +769,7 @@ where
             worker:     self.worker,
             name:       self.name,
             blocking:   self.blocking,
+            eager:      self.eager,
             trigger:    self.trigger,
             pause_mode: self.pause_mode,
             _phantom:   PhantomData,
@@ -759,6 +788,7 @@ where
             worker:     self.worker,
             name:       self.name,
             blocking:   self.blocking,
+            eager:      self.eager,
             trigger:    self.trigger,
             pause_mode: self.pause_mode,
             _phantom:   PhantomData,
@@ -776,6 +806,7 @@ where
             worker:     self.worker,
             name:       self.name,
             blocking:   self.blocking,
+            eager:      self.eager,
             trigger:    self.trigger,
             pause_mode: self.pause_mode,
             _phantom:   PhantomData,
@@ -795,6 +826,7 @@ where
             worker:     self.worker,
             name:       self.name,
             blocking:   self.blocking,
+            eager:      self.eager,
             trigger:    self.trigger,
             pause_mode: self.pause_mode,
             _phantom:   PhantomData,
@@ -817,6 +849,16 @@ where
     /// Marks this worker as blocking (runs on dedicated blocking thread pool).
     pub const fn blocking(mut self) -> Self {
         self.blocking = true;
+        self
+    }
+
+    /// Runs `work()` once immediately after `on_start()`, before entering
+    /// the trigger loop.
+    ///
+    /// Useful for `on_notify()` workers that need to drain pending work on
+    /// startup without requiring an external `handle.notify()` call.
+    pub const fn eager(mut self) -> Self {
+        self.eager = true;
         self
     }
 
@@ -844,6 +886,7 @@ where
             self.worker,
             name,
             self.blocking,
+            self.eager,
             self.trigger.unwrap(),
             pause_mode,
         )
@@ -863,6 +906,7 @@ where
             self.worker,
             name,
             self.blocking,
+            self.eager,
             self.trigger.unwrap(),
             pause_mode,
         )
@@ -882,6 +926,7 @@ where
             self.worker,
             name,
             self.blocking,
+            self.eager,
             self.trigger.unwrap(),
             pause_mode,
         )
@@ -901,6 +946,7 @@ where
             self.worker,
             name,
             self.blocking,
+            self.eager,
             self.trigger.unwrap(),
             pause_mode,
         )
@@ -920,6 +966,7 @@ where
             self.worker,
             name,
             self.blocking,
+            self.eager,
             self.trigger.unwrap(),
             pause_mode,
         )
@@ -939,6 +986,7 @@ where
             self.worker,
             name,
             self.blocking,
+            self.eager,
             self.trigger.unwrap(),
             pause_mode,
         )

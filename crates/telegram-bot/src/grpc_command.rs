@@ -12,6 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! gRPC command ingress for telegram-bot.
+//!
+//! This service receives commands from main service and applies them on
+//! bot-side adapters (currently Telegram message sending).
+//!
+//! Delivery contract:
+//! 1. Persist outgoing message into `telegram_outbox` as `pending`.
+//! 2. Attempt Telegram API send.
+//! 3. Update outbox row to `sent` or `failed`.
+//!
+//! This keeps transport-level reliability data local to telegram-bot.
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -19,26 +31,89 @@ use job_api::pb::telegrambot::v1::{
     DispatchCommandRequest, DispatchCommandResponse, SendMessageRequest, SendMessageResponse,
     telegram_bot_command_service_server,
 };
-use job_domain_shared::telegram_service::TelegramService;
 use job_server::grpc::GrpcServiceHandler;
 use tokio_util::sync::CancellationToken;
 use tonic::{Request, Response, Status, service::RoutesBuilder};
 use tonic_health::server::HealthReporter;
 use tracing::warn;
 
+use crate::{outbox::TelegramOutboxRepository, telegram_service::TelegramService};
+
+/// Concrete gRPC service implementation for `TelegramBotCommandService`.
 #[derive(Clone)]
 pub struct TelegramBotCommandGrpcService {
-    telegram: Arc<TelegramService>,
+    telegram:    Arc<TelegramService>,
+    outbox_repo: Arc<TelegramOutboxRepository>,
 }
 
 impl TelegramBotCommandGrpcService {
-    pub fn new(telegram: Arc<TelegramService>) -> Self { Self { telegram } }
+    /// Construct service with a shared Telegram adapter.
+    pub fn new(telegram: Arc<TelegramService>, outbox_repo: Arc<TelegramOutboxRepository>) -> Self {
+        Self {
+            telegram,
+            outbox_repo,
+        }
+    }
+
+    /// Persist one outgoing message to outbox, send it, and update final
+    /// status.
+    ///
+    /// `chat_id == 0` means "use configured primary chat".
+    async fn send_and_record(&self, chat_id: i64, text: &str, source: &str) -> Result<(), Status> {
+        // Normalize target chat id for persistence.
+        let persisted_chat_id = if chat_id == 0 {
+            self.telegram.primary_chat_id().0
+        } else {
+            chat_id
+        };
+
+        // Record "pending" before network I/O so crash/restart won't lose intent.
+        let outbox_id = self
+            .outbox_repo
+            .enqueue(persisted_chat_id, text, source)
+            .await
+            .map_err(|e| Status::internal(format!("failed to persist telegram outbox: {e}")))?;
+
+        // Actual Telegram delivery attempt.
+        let send_result = if chat_id == 0 {
+            self.telegram.send_primary_message(text).await
+        } else {
+            self.telegram
+                .send_message(teloxide::types::ChatId(chat_id), text)
+                .await
+        };
+
+        match send_result {
+            Ok(_) => {
+                // Mark delivered.
+                self.outbox_repo
+                    .mark_sent(outbox_id)
+                    .await
+                    .map_err(|e| Status::internal(format!("failed to mark outbox sent: {e}")))?;
+            }
+            Err(e) => {
+                // Mark failed with provider error for later diagnostics/retry tooling.
+                self.outbox_repo
+                    .mark_failed(outbox_id, &e.to_string())
+                    .await
+                    .map_err(|repo_err| {
+                        Status::internal(format!("failed to mark outbox failed: {repo_err}"))
+                    })?;
+                return Err(Status::internal(e.to_string()));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait]
 impl telegram_bot_command_service_server::TelegramBotCommandService
     for TelegramBotCommandGrpcService
 {
+    /// Send one message directly to a target chat.
+    ///
+    /// `chat_id = 0` means fallback to configured primary chat.
     async fn send_message(
         &self,
         request: Request<SendMessageRequest>,
@@ -47,16 +122,8 @@ impl telegram_bot_command_service_server::TelegramBotCommandService
         if req.text.trim().is_empty() {
             return Err(Status::invalid_argument("text must not be empty"));
         }
-
-        let send_result = if req.chat_id == 0 {
-            self.telegram.send_primary_message(&req.text).await
-        } else {
-            self.telegram
-                .send_message(teloxide::types::ChatId(req.chat_id), &req.text)
-                .await
-        };
-
-        send_result.map_err(|e| Status::internal(e.to_string()))?;
+        self.send_and_record(req.chat_id, &req.text, "grpc:send_message")
+            .await?;
         Ok(Response::new(SendMessageResponse { accepted: true }))
     }
 
@@ -64,16 +131,16 @@ impl telegram_bot_command_service_server::TelegramBotCommandService
         &self,
         request: Request<DispatchCommandRequest>,
     ) -> Result<Response<DispatchCommandResponse>, Status> {
+        // Command envelope dispatch by string is intentionally simple for now.
+        // We can evolve this into typed payloads once command surface grows.
         let req = request.into_inner();
         match req.command.as_str() {
             "send_message" => {
                 if req.payload_json.trim().is_empty() {
                     return Err(Status::invalid_argument("payload_json must not be empty"));
                 }
-                self.telegram
-                    .send_primary_message(&req.payload_json)
-                    .await
-                    .map_err(|e| Status::internal(e.to_string()))?;
+                self.send_and_record(0, &req.payload_json, "grpc:dispatch_command")
+                    .await?;
                 Ok(Response::new(DispatchCommandResponse {
                     accepted: true,
                     message:  "send_message executed".to_owned(),
