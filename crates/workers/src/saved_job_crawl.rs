@@ -24,7 +24,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use job_common_worker::{FallibleWorker, Notifiable, WorkError, WorkResult, WorkerContext};
-use job_domain_job_tracker::types::SavedJobStatus;
+use job_domain_job_tracker::types::{PipelineEventKind, PipelineStage, SavedJobStatus};
 use tracing::{info, warn};
 
 use crate::worker_state::AppWorkerState;
@@ -64,6 +64,16 @@ impl FallibleWorker<AppWorkerState> for SavedJobCrawlWorker {
                 warn!(id = %job.id, error = %e, "failed to set Crawling status");
                 continue;
             }
+            let _ = state
+                .saved_job_service
+                .log_event(
+                    job.id,
+                    PipelineStage::Crawl,
+                    PipelineEventKind::Started,
+                    "crawl started",
+                    None,
+                )
+                .await;
 
             // Crawl the URL
             let markdown = match state.crawl_client.crawl(&job.url).await {
@@ -76,6 +86,16 @@ impl FallibleWorker<AppWorkerState> for SavedJobCrawlWorker {
                             job.id,
                             SavedJobStatus::Failed,
                             Some(format!("crawl failed: {e}")),
+                        )
+                        .await;
+                    let _ = state
+                        .saved_job_service
+                        .log_event(
+                            job.id,
+                            PipelineStage::Crawl,
+                            PipelineEventKind::Failed,
+                            &format!("crawl failed: {e}"),
+                            None,
                         )
                         .await;
                     continue;
@@ -96,6 +116,16 @@ impl FallibleWorker<AppWorkerState> for SavedJobCrawlWorker {
                         job.id,
                         SavedJobStatus::Failed,
                         Some(format!("S3 upload failed: {e}")),
+                    )
+                    .await;
+                let _ = state
+                    .saved_job_service
+                    .log_event(
+                        job.id,
+                        PipelineStage::Crawl,
+                        PipelineEventKind::Failed,
+                        &format!("S3 upload failed: {e}"),
+                        None,
                     )
                     .await;
                 continue;
@@ -120,6 +150,19 @@ impl FallibleWorker<AppWorkerState> for SavedJobCrawlWorker {
                 continue;
             }
 
+            let _ = state
+                .saved_job_service
+                .log_event(
+                    job.id,
+                    PipelineStage::Crawl,
+                    PipelineEventKind::Completed,
+                    "crawl completed",
+                    Some(serde_json::json!({
+                        "s3_key": s3_key,
+                        "markdown_len": markdown.len()
+                    })),
+                )
+                .await;
             info!(id = %job.id, s3_key = %s3_key, markdown_len = markdown.len(), "crawl + upload complete");
             crawled_count += 1;
         }

@@ -28,7 +28,7 @@ use uuid::Uuid;
 use crate::{
     error::SavedJobError,
     service::SavedJobService,
-    types::{CreateSavedJobRequest, SavedJob, SavedJobFilter, SavedJobStatus},
+    types::{CreateSavedJobRequest, PipelineEvent, SavedJob, SavedJobFilter, SavedJobStatus},
 };
 
 /// Register all saved-job routes on a new router with shared state.
@@ -39,6 +39,7 @@ pub fn routes(service: Arc<SavedJobService>) -> Router {
         .route("/api/v1/saved-jobs/{id}", get(get_saved_job))
         .route("/api/v1/saved-jobs/{id}", delete(delete_saved_job))
         .route("/api/v1/saved-jobs/{id}/retry", post(retry_saved_job))
+        .route("/api/v1/saved-jobs/{id}/events", get(list_saved_job_events))
         .with_state(service)
 }
 
@@ -89,6 +90,15 @@ async fn retry_saved_job(
 ) -> Result<StatusCode, SavedJobError> {
     service.retry(id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[instrument(skip(service))]
+async fn list_saved_job_events(
+    State(service): State<Arc<SavedJobService>>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<PipelineEvent>>, SavedJobError> {
+    let events = service.list_events(id).await?;
+    Ok(Json(events))
 }
 
 /// Parse a status string (e.g. "analyzed") into a `SavedJobStatus`.

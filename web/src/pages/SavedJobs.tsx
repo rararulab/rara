@@ -17,7 +17,12 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
-import type { SavedJob, SavedJobStatus } from "@/api/types";
+import type {
+  SavedJob,
+  SavedJobStatus,
+  PipelineEvent,
+  PipelineEventKind,
+} from "@/api/types";
 import { SAVED_JOB_STATUSES } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -45,8 +50,6 @@ import {
   Trash2,
   ExternalLink,
   RotateCcw,
-  ChevronDown,
-  ChevronRight,
   Loader2,
 } from "lucide-react";
 
@@ -98,6 +101,17 @@ function StatusBadge({ status }: { status: string }) {
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return "-";
   return new Date(dateStr).toLocaleDateString();
+}
+
+function formatDateTime(dateStr: string): string {
+  const d = new Date(dateStr);
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 function truncateUrl(url: string, max = 60): string {
@@ -240,30 +254,90 @@ function DeleteDialog({
 }
 
 // ---------------------------------------------------------------------------
-// Analysis Details
+// Pipeline Timeline
+// ---------------------------------------------------------------------------
+
+const EVENT_KIND_COLORS: Record<PipelineEventKind, string> = {
+  started: "bg-blue-500",
+  completed: "bg-green-500",
+  failed: "bg-red-500",
+  info: "bg-gray-400",
+};
+
+const STAGE_LABELS: Record<string, string> = {
+  crawl: "Crawl",
+  analyze: "Analyze",
+  gc: "GC",
+};
+
+function PipelineTimeline({ events }: { events: PipelineEvent[] }) {
+  if (events.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground italic">
+        No pipeline events yet.
+      </p>
+    );
+  }
+
+  return (
+    <div className="relative space-y-0">
+      {events.map((event, idx) => {
+        const dotColor =
+          EVENT_KIND_COLORS[event.event_kind as PipelineEventKind] ??
+          "bg-gray-400";
+        const isLast = idx === events.length - 1;
+
+        return (
+          <div key={event.id} className="flex gap-3 relative">
+            {/* Vertical line + dot */}
+            <div className="flex flex-col items-center">
+              <div
+                className={`w-2.5 h-2.5 rounded-full shrink-0 mt-1.5 ${dotColor}`}
+              />
+              {!isLast && (
+                <div className="w-px flex-1 bg-border min-h-[24px]" />
+              )}
+            </div>
+
+            {/* Content */}
+            <div className="pb-4 min-w-0 flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Badge variant="outline" className="text-xs px-1.5 py-0">
+                  {STAGE_LABELS[event.stage] ?? event.stage}
+                </Badge>
+                <span className="text-xs text-muted-foreground">
+                  {formatDateTime(event.created_at)}
+                </span>
+              </div>
+              <p className="text-sm mt-0.5">{event.message}</p>
+              {event.metadata && (
+                <div className="mt-1 text-xs text-muted-foreground font-mono bg-muted/50 rounded px-2 py-1 inline-block">
+                  {Object.entries(event.metadata).map(([k, v]) => (
+                    <span key={k} className="mr-3">
+                      {k}={String(v)}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Analysis Details (used in modal)
 // ---------------------------------------------------------------------------
 
 function AnalysisDetails({ job }: { job: SavedJob }) {
   const analysis = job.analysis_result as Record<string, unknown> | null;
 
-  return (
-    <div className="bg-muted/20 p-4 space-y-3">
-      {/* Match Score */}
-      {job.match_score != null && (
-        <div className="space-y-1">
-          <div className="flex items-center gap-2 text-sm">
-            <span className="font-medium">Match Score:</span>
-            <span className="font-bold text-lg">{job.match_score}%</span>
-          </div>
-          <div className="h-2 w-48 rounded-full bg-muted overflow-hidden">
-            <div
-              className="h-full rounded-full bg-green-500 transition-all"
-              style={{ width: `${Math.min(job.match_score, 100)}%` }}
-            />
-          </div>
-        </div>
-      )}
+  if (!analysis && !job.error_message) return null;
 
+  return (
+    <div className="space-y-3">
       {/* Analysis Result Fields */}
       {analysis && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
@@ -304,33 +378,158 @@ function AnalysisDetails({ job }: { job: SavedJob }) {
         </div>
       )}
 
-      {/* Markdown Preview */}
-      {job.markdown_preview && (
-        <details className="text-sm">
-          <summary className="cursor-pointer font-medium text-muted-foreground hover:text-foreground">
-            Markdown Preview
-          </summary>
-          <pre className="mt-2 max-h-48 overflow-auto rounded bg-muted p-3 text-xs whitespace-pre-wrap">
-            {job.markdown_preview}
-          </pre>
-        </details>
-      )}
-
       {/* Error Message */}
       {job.error_message && (
         <div className="text-sm text-red-500">
           <span className="font-medium">Error:</span> {job.error_message}
         </div>
       )}
-
-      {/* Timestamps */}
-      <div className="text-xs text-muted-foreground space-y-0.5 pt-1">
-        <p>Created: {formatDate(job.created_at)}</p>
-        {job.crawled_at && <p>Crawled: {formatDate(job.crawled_at)}</p>}
-        {job.analyzed_at && <p>Analyzed: {formatDate(job.analyzed_at)}</p>}
-        {job.expires_at && <p>Expires: {formatDate(job.expires_at)}</p>}
-      </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Saved Job Detail Modal
+// ---------------------------------------------------------------------------
+
+function SavedJobDetailModal({
+  job,
+  open,
+  onOpenChange,
+  onRetry,
+  onDelete,
+}: {
+  job: SavedJob;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onRetry: () => void;
+  onDelete: () => void;
+}) {
+  const isProcessing = PROCESSING_STATUSES.has(job.status);
+  const canRetry = job.status === "failed" || job.status === "expired";
+
+  const {
+    data: events,
+    isLoading: eventsLoading,
+  } = useQuery({
+    queryKey: ["saved-job-events", job.id],
+    queryFn: () =>
+      api.get<PipelineEvent[]>(`/api/v1/saved-jobs/${job.id}/events`),
+    refetchInterval: isProcessing ? 3000 : false,
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-3xl h-[85vh] overflow-hidden flex flex-col p-0">
+        {/* Header */}
+        <DialogHeader className="px-6 pt-6 pb-4 shrink-0 border-b">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <DialogTitle className="text-lg font-semibold truncate">
+                {job.title ?? truncateUrl(job.url, 80)}
+              </DialogTitle>
+              <DialogDescription className="mt-1">
+                {job.company && (
+                  <span className="font-medium">{job.company}</span>
+                )}
+                {job.company && " -- "}
+                <span className="text-xs">{truncateUrl(job.url, 70)}</span>
+              </DialogDescription>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {job.match_score != null && (
+                <span className="text-sm font-bold">{job.match_score}%</span>
+              )}
+              <StatusBadge status={job.status} />
+            </div>
+          </div>
+        </DialogHeader>
+
+        {/* Scrollable content */}
+        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
+          {/* Match Score Bar */}
+          {job.match_score != null && (
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 text-sm">
+                <span className="font-medium">Match Score:</span>
+                <span className="font-bold text-lg">{job.match_score}%</span>
+              </div>
+              <div className="h-2 w-full max-w-xs rounded-full bg-muted overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-green-500 transition-all"
+                  style={{ width: `${Math.min(job.match_score, 100)}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Analysis Details */}
+          <AnalysisDetails job={job} />
+
+          {/* Pipeline Timeline */}
+          <div>
+            <h3 className="text-sm font-semibold mb-3">Pipeline Timeline</h3>
+            {eventsLoading ? (
+              <div className="space-y-2">
+                <Skeleton className="h-4 w-64" />
+                <Skeleton className="h-4 w-48" />
+                <Skeleton className="h-4 w-56" />
+              </div>
+            ) : (
+              <PipelineTimeline events={events ?? []} />
+            )}
+          </div>
+
+          {/* Markdown Preview */}
+          {job.markdown_preview && (
+            <details className="text-sm">
+              <summary className="cursor-pointer font-medium text-muted-foreground hover:text-foreground">
+                Markdown Preview
+              </summary>
+              <pre className="mt-2 max-h-48 overflow-auto rounded bg-muted p-3 text-xs whitespace-pre-wrap">
+                {job.markdown_preview}
+              </pre>
+            </details>
+          )}
+
+          {/* Timestamps */}
+          <div className="text-xs text-muted-foreground space-y-0.5">
+            <p>Created: {formatDate(job.created_at)}</p>
+            {job.crawled_at && <p>Crawled: {formatDate(job.crawled_at)}</p>}
+            {job.analyzed_at && <p>Analyzed: {formatDate(job.analyzed_at)}</p>}
+            {job.expires_at && <p>Expires: {formatDate(job.expires_at)}</p>}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <DialogFooter className="px-6 py-4 shrink-0 border-t">
+          <div className="flex items-center gap-2 w-full justify-between">
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => window.open(job.url, "_blank")}
+              >
+                <ExternalLink className="h-4 w-4 mr-1" />
+                Open URL
+              </Button>
+            </div>
+            <div className="flex items-center gap-2">
+              {canRetry && (
+                <Button variant="outline" size="sm" onClick={onRetry}>
+                  <RotateCcw className="h-4 w-4 mr-1" />
+                  Retry
+                </Button>
+              )}
+              <Button variant="destructive" size="sm" onClick={onDelete}>
+                <Trash2 className="h-4 w-4 mr-1" />
+                Delete
+              </Button>
+            </div>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -340,14 +539,12 @@ function AnalysisDetails({ job }: { job: SavedJob }) {
 
 function JobCard({
   job,
-  expanded,
-  onToggleExpand,
+  onSelect,
   onRetry,
   onDelete,
 }: {
   job: SavedJob;
-  expanded: boolean;
-  onToggleExpand: () => void;
+  onSelect: () => void;
   onRetry: () => void;
   onDelete: () => void;
 }) {
@@ -357,14 +554,8 @@ function JobCard({
     <div className="border rounded-lg overflow-hidden">
       <div
         className="flex items-center gap-3 p-4 hover:bg-muted/30 cursor-pointer transition-colors"
-        onClick={onToggleExpand}
+        onClick={onSelect}
       >
-        {expanded ? (
-          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-        ) : (
-          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-        )}
-
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="font-medium truncate">
@@ -421,8 +612,6 @@ function JobCard({
           </Button>
         </div>
       </div>
-
-      {expanded && <AnalysisDetails job={job} />}
     </div>
   );
 }
@@ -436,7 +625,6 @@ function ListSkeleton() {
     <div className="space-y-3">
       {Array.from({ length: 4 }).map((_, i) => (
         <div key={i} className="border rounded-lg p-4 flex gap-4">
-          <Skeleton className="h-5 w-5" />
           <div className="flex-1 space-y-2">
             <Skeleton className="h-5 w-64" />
             <Skeleton className="h-4 w-32" />
@@ -456,7 +644,7 @@ export default function SavedJobs() {
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteJob, setDeleteJob] = useState<SavedJob | null>(null);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [selectedJob, setSelectedJob] = useState<SavedJob | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("all");
 
   const filterParam =
@@ -478,6 +666,12 @@ export default function SavedJobs() {
       return hasProcessing ? 5000 : false;
     },
   });
+
+  // Keep selectedJob in sync with fresh data from the list query
+  const freshSelectedJob =
+    selectedJob && jobs
+      ? jobs.find((j) => j.id === selectedJob.id) ?? selectedJob
+      : selectedJob;
 
   const retryMutation = useMutation({
     mutationFn: (id: string) =>
@@ -548,10 +742,7 @@ export default function SavedJobs() {
             <JobCard
               key={job.id}
               job={job}
-              expanded={expandedId === job.id}
-              onToggleExpand={() =>
-                setExpandedId(expandedId === job.id ? null : job.id)
-              }
+              onSelect={() => setSelectedJob(job)}
               onRetry={() => retryMutation.mutate(job.id)}
               onDelete={() => setDeleteJob(job)}
             />
@@ -572,9 +763,32 @@ export default function SavedJobs() {
           key={deleteJob.id}
           open={true}
           onOpenChange={(open) => {
-            if (!open) setDeleteJob(null);
+            if (!open) {
+              setDeleteJob(null);
+              // Close detail modal too if we deleted the selected job
+              if (selectedJob?.id === deleteJob.id) {
+                setSelectedJob(null);
+              }
+            }
           }}
           job={deleteJob}
+        />
+      )}
+
+      {freshSelectedJob && (
+        <SavedJobDetailModal
+          key={freshSelectedJob.id}
+          job={freshSelectedJob}
+          open={true}
+          onOpenChange={(open) => {
+            if (!open) setSelectedJob(null);
+          }}
+          onRetry={() => {
+            retryMutation.mutate(freshSelectedJob.id);
+          }}
+          onDelete={() => {
+            setDeleteJob(freshSelectedJob);
+          }}
         />
       )}
     </div>

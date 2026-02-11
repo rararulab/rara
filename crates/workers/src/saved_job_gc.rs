@@ -32,7 +32,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use job_common_worker::{FallibleWorker, WorkError, WorkResult, WorkerContext};
-use job_domain_job_tracker::types::SavedJobStatus;
+use job_domain_job_tracker::types::{PipelineEventKind, PipelineStage, SavedJobStatus};
 use tracing::{info, instrument, warn};
 
 use crate::worker_state::AppWorkerState;
@@ -139,6 +139,15 @@ impl FallibleWorker<AppWorkerState> for SavedJobGcWorker {
                 {
                     warn!(id = %job.id, error = %e, "failed to mark saved job as expired");
                 } else {
+                    let _ = saved_job_service
+                        .log_event(
+                            job.id,
+                            PipelineStage::Gc,
+                            PipelineEventKind::Completed,
+                            "URL expired",
+                            None,
+                        )
+                        .await;
                     expired_count += 1;
                 }
             }
@@ -200,6 +209,15 @@ impl FallibleWorker<AppWorkerState> for SavedJobGcWorker {
                     "failed to clear S3 key in DB"
                 );
             } else {
+                let _ = saved_job_service
+                    .log_event(
+                        job.id,
+                        PipelineStage::Gc,
+                        PipelineEventKind::Info,
+                        "S3 object cleaned up",
+                        Some(serde_json::json!({ "s3_key": s3_key })),
+                    )
+                    .await;
                 cleaned_count += 1;
             }
         }

@@ -18,13 +18,13 @@
 use async_trait::async_trait;
 use jiff::Timestamp;
 use job_domain_shared::convert::timestamp_to_chrono;
-use job_model::saved_job::SavedJob as StoreSavedJob;
+use job_model::saved_job::{SavedJob as StoreSavedJob, SavedJobEvent as StoreSavedJobEvent};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::{
     error::SavedJobError,
-    types::{SavedJob, SavedJobStatus},
+    types::{PipelineEvent, PipelineEventKind, PipelineStage, SavedJob, SavedJobStatus},
 };
 
 /// PostgreSQL implementation of the saved-job repository.
@@ -260,5 +260,45 @@ impl crate::repository::SavedJobRepository for PgSavedJobRepository {
             return Err(SavedJobError::NotFound { id });
         }
         Ok(())
+    }
+
+    async fn create_event(
+        &self,
+        saved_job_id: Uuid,
+        stage: PipelineStage,
+        event_kind: PipelineEventKind,
+        message: &str,
+        metadata: Option<serde_json::Value>,
+    ) -> Result<PipelineEvent, SavedJobError> {
+        let row = sqlx::query_as::<_, StoreSavedJobEvent>(
+            r#"INSERT INTO saved_job_event (saved_job_id, stage, event_kind, message, metadata)
+               VALUES ($1, $2, $3, $4, $5)
+               RETURNING *"#,
+        )
+        .bind(saved_job_id)
+        .bind(stage as u8 as i16)
+        .bind(event_kind as u8 as i16)
+        .bind(message)
+        .bind(metadata)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        Ok(row.into())
+    }
+
+    async fn list_events(
+        &self,
+        saved_job_id: Uuid,
+    ) -> Result<Vec<PipelineEvent>, SavedJobError> {
+        let rows = sqlx::query_as::<_, StoreSavedJobEvent>(
+            "SELECT * FROM saved_job_event WHERE saved_job_id = $1 ORDER BY created_at ASC",
+        )
+        .bind(saved_job_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
     }
 }
