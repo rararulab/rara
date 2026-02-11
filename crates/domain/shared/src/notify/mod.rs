@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2026 Crrow
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,25 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # job-domain-notify
-//!
-//! Notification dispatch for the Job Automation platform.
-//!
-//! This crate is responsible for delivering notifications to the user through
-//! various channels:
-//!
-//! - Telegram bot messages.
-//! - Email (SMTP or provider API).
-//! - Webhooks.
-//!
-//! It listens to domain events (via the types from `job_domain_shared`)
-//! and translates them into human-readable messages dispatched through the
-//! configured channel(s).
+//! Shared notify queue client and payload types.
 
+pub mod client;
 pub mod error;
-pub mod pg_repository;
-pub mod repository;
-pub mod routes;
-pub mod sender;
-pub mod service;
 pub mod types;

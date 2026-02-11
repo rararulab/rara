@@ -67,9 +67,6 @@ pub struct AppConfig {
     /// Whether to enable graceful shutdown
     #[default = true]
     pub enable_graceful_shutdown: bool,
-    /// telegram-bot gRPC target (optional). If set, main service sends
-    /// Telegram notifications via bot command service.
-    pub telegram_bot_grpc_target: Option<String>,
     /// OpenRouter configuration (optional)
     pub openrouter:               Option<OpenRouterConfig>,
     /// MinIO / S3 object store configuration (optional)
@@ -123,7 +120,6 @@ impl AppConfig {
 
         Self {
             db_config,
-            telegram_bot_grpc_target: std::env::var("TELEGRAM_BOT_GRPC_TARGET").ok(),
             openrouter,
             minio,
             crawl4ai_url,
@@ -153,42 +149,12 @@ impl AppConfig {
         let interview_repo = Arc::new(
             job_domain_interview::pg_repository::PgInterviewPlanRepository::new(pool.clone()),
         );
-        let notification_repo =
-            Arc::new(job_domain_notify::pg_repository::PgNotificationRepository::new(pool.clone()));
         let scheduler_repo =
             Arc::new(job_domain_scheduler::pg_repository::PgSchedulerRepository::new(pool.clone()));
         let analytics_repo =
             Arc::new(job_domain_analytics::pg_repository::PgAnalyticsRepository::new(pool.clone()));
-        let saved_job_repo =
+        let saved_job_repo: Arc<dyn job_domain_saved_job::repository::SavedJobRepository> =
             Arc::new(job_domain_saved_job::pg_repository::PgSavedJobRepository::new(pool.clone()));
-
-        // Notification service + senders
-        let mut notification_service =
-            job_domain_notify::service::NotificationService::new(notification_repo);
-        if let Some(target) = self.telegram_bot_grpc_target.clone() {
-            info!(target, "telegram sender configured via telegram-bot gRPC");
-            notification_service.register_sender(
-                job_domain_notify::types::NotificationChannel::Telegram,
-                Arc::new(job_domain_notify::sender::TelegramBotGrpcSender::new(
-                    target,
-                )),
-            );
-        } else {
-            info!("telegram sender not configured, fallback to noop");
-            notification_service.register_sender(
-                job_domain_notify::types::NotificationChannel::Telegram,
-                Arc::new(job_domain_notify::sender::NoopSender),
-            );
-        }
-        notification_service.register_sender(
-            job_domain_notify::types::NotificationChannel::Email,
-            Arc::new(job_domain_notify::sender::NoopSender),
-        );
-        notification_service.register_sender(
-            job_domain_notify::types::NotificationChannel::Webhook,
-            Arc::new(job_domain_notify::sender::NoopSender),
-        );
-        let notification_service = Arc::new(notification_service);
 
         // Scheduler + analytics services
         let scheduler_service = Arc::new(job_domain_scheduler::service::SchedulerService::new(
@@ -268,7 +234,6 @@ impl AppConfig {
         let resume_svc = resume_service.clone();
         let app_svc = application_service.clone();
         let interview_svc = interview_service.clone();
-        let notify_svc = notification_service.clone();
         let scheduler_svc = scheduler_service.clone();
         let analytics_svc = analytics_service.clone();
         let saved_job_svc = saved_job_service.clone();
@@ -287,7 +252,6 @@ impl AppConfig {
                     .merge(job_domain_resume::routes::routes(resume_svc.clone()))
                     .merge(job_domain_application::routes::routes(app_svc.clone()))
                     .merge(job_domain_interview::routes::routes(interview_svc.clone()))
-                    .merge(job_domain_notify::routes::routes(notify_svc.clone()))
                     .merge(job_domain_scheduler::routes::routes(scheduler_svc.clone()))
                     .merge(job_domain_analytics::routes::routes(analytics_svc.clone()))
                     .merge(job_domain_saved_job::routes::routes(saved_job_svc.clone()))
@@ -305,7 +269,6 @@ impl AppConfig {
             running: Arc::new(AtomicBool::new(false)),
             cancellation_token: CancellationToken::new(),
             routes_fn,
-            notification_service,
             ai_service,
             job_repo,
             saved_job_service,
@@ -322,29 +285,23 @@ impl AppConfig {
 /// Represents the main application with lifecycle management.
 pub struct App {
     /// Application configuration
-    config:               AppConfig,
+    config:             AppConfig,
     /// Controls if the application should continue running
-    running:              Arc<AtomicBool>,
+    running:            Arc<AtomicBool>,
     /// Cancellation token for graceful shutdown
-    cancellation_token:   CancellationToken,
+    cancellation_token: CancellationToken,
     /// Closure that builds the axum Router from domain routes
-    routes_fn:            Box<dyn Fn(axum::Router) -> axum::Router + Send + Sync>,
-    /// Notification service needed by background workers
-    notification_service: Arc<job_domain_notify::service::NotificationService>,
+    routes_fn:          Box<dyn Fn(axum::Router) -> axum::Router + Send + Sync>,
     /// AI service for JD parsing and analysis
-    ai_service:           Arc<job_ai::service::AiService>,
+    ai_service:         Arc<job_ai::service::AiService>,
     /// Job repository for persisting parsed jobs
-    job_repo:             Arc<dyn job_domain_job_source::repository::JobRepository>,
+    job_repo:           Arc<dyn job_domain_job_source::repository::JobRepository>,
     /// Saved job service for workers
-    saved_job_service: Arc<
-        job_domain_saved_job::service::SavedJobService<
-            job_domain_saved_job::pg_repository::PgSavedJobRepository,
-        >,
-    >,
+    saved_job_service:  Arc<job_domain_saved_job::service::SavedJobService>,
     /// Object store for S3 operations
-    object_store:         Arc<job_object_store::ObjectStore>,
+    object_store:       Arc<job_object_store::ObjectStore>,
     /// Crawl4AI client for CrawlWorker
-    crawl_client:         job_domain_saved_job::crawl4ai::Crawl4AiClient,
+    crawl_client:       job_domain_saved_job::crawl4ai::Crawl4AiClient,
 }
 
 /// Handle for controlling a running application.
@@ -422,8 +379,6 @@ impl App {
             .await
             .whatever_context("REST server failed to report started")?;
 
-        let notification_service = self.notification_service.clone();
-
         // Keep a clone for wiring notify trigger after worker_state takes ownership
         let saved_job_svc_for_notify = self.saved_job_service.clone();
 
@@ -431,15 +386,14 @@ impl App {
         // the analyze worker is spawned so the crawl worker can trigger it.
         let analyze_notify = Arc::new(std::sync::RwLock::new(None));
 
-        // Set up background worker manager
-        let worker_state = job_workers::notification_processor::WorkerState {
-            notification_service: self.notification_service,
-            ai_service:           self.ai_service,
-            job_repo:             self.job_repo,
-            saved_job_service:    self.saved_job_service,
-            object_store:         self.object_store,
-            crawl_client:         self.crawl_client,
-            analyze_notify:       analyze_notify.clone(),
+        // Set up background worker manager.
+        let worker_state = job_workers::worker_state::AppWorkerState {
+            ai_service:        self.ai_service,
+            job_repo:          self.job_repo,
+            saved_job_service: self.saved_job_service,
+            object_store:      self.object_store,
+            crawl_client:      self.crawl_client,
+            analyze_notify:    analyze_notify.clone(),
         };
 
         // Use an app-owned runtime for workers so shutdown can fully reclaim
@@ -459,16 +413,6 @@ impl App {
         };
         let mut worker_manager =
             job_common_worker::Manager::with_state_and_config(worker_state, manager_config);
-
-        let notification_handle = worker_manager
-            .fallible_worker(
-                job_workers::notification_processor::NotificationProcessorWorker::new(50),
-            )
-            .name("notification-processor")
-            .eager()
-            .on_notify()
-            .spawn();
-        notification_service.set_notify_trigger(notification_handle.clone());
 
         // Saved job analyze worker (notify trigger, processes Crawled jobs)
         let analyze_handle = worker_manager

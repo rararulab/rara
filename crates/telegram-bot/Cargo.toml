@@ -12,10 +12,9 @@ categories.workspace = true
 description = "Standalone Telegram bot runtime with gRPC command ingress"
 
 [dependencies]
-async-trait = { workspace = true }
 axum = { workspace = true }
-job-api = { workspace = true }
 job-domain-job-source = { workspace = true }
+job-domain-shared = { workspace = true }
 job-server = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
@@ -26,8 +25,6 @@ snafu = { workspace = true }
 teloxide = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
-tonic = { workspace = true }
-tonic-health = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 yunara-store = { workspace = true }

@@ -23,14 +23,14 @@ use job_common_worker::{FallibleWorker, WorkError, WorkResult, WorkerContext};
 use job_domain_saved_job::types::SavedJobStatus;
 use tracing::{info, warn};
 
-use crate::notification_processor::WorkerState;
+use crate::worker_state::AppWorkerState;
 
 /// Worker that analyzes crawled saved jobs using AI.
 pub struct SavedJobAnalyzeWorker;
 
 #[async_trait]
-impl FallibleWorker<WorkerState> for SavedJobAnalyzeWorker {
-    async fn work(&mut self, ctx: WorkerContext<WorkerState>) -> WorkResult {
+impl FallibleWorker<AppWorkerState> for SavedJobAnalyzeWorker {
+    async fn work(&mut self, ctx: WorkerContext<AppWorkerState>) -> WorkResult {
         let state = ctx.state();
 
         let crawled = state

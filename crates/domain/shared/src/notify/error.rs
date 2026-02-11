@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Error types for the notification domain.
+//! Error types for shared notify queue operations.
 
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
@@ -34,20 +34,4 @@ pub enum NotifyError {
 
     #[snafu(display("retry exhausted for {id} after {attempts} attempts"))]
     RetryExhausted { id: Uuid, attempts: i32 },
-}
-
-impl axum::response::IntoResponse for NotifyError {
-    fn into_response(self) -> axum::response::Response {
-        let status = match &self {
-            NotifyError::NotFound { .. } => axum::http::StatusCode::NOT_FOUND,
-            NotifyError::ValidationError { .. } => axum::http::StatusCode::BAD_REQUEST,
-            NotifyError::RetryExhausted { .. } => axum::http::StatusCode::CONFLICT,
-            NotifyError::SendFailed { .. } => axum::http::StatusCode::BAD_GATEWAY,
-            NotifyError::RepositoryError { .. } => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-        };
-        let body = serde_json::json!({
-            "error": { "status": status.as_u16(), "message": self.to_string() }
-        });
-        (status, axum::Json(body)).into_response()
-    }
 }

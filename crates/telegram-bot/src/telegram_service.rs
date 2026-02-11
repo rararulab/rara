@@ -36,9 +36,6 @@ impl TelegramService {
     /// Clone raw `teloxide::Bot` for dispatcher wiring.
     pub(crate) fn bot(&self) -> Bot { self.bot.clone() }
 
-    /// Get configured primary chat id.
-    pub(crate) fn primary_chat_id(&self) -> ChatId { self.primary_chat_id }
-
     /// Authorization helper: accept only configured primary chat.
     pub(crate) fn is_primary_chat(&self, chat_id: ChatId) -> bool {
         chat_id == self.primary_chat_id

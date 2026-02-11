@@ -27,7 +27,7 @@ use job_common_worker::{FallibleWorker, Notifiable, WorkError, WorkResult, Worke
 use job_domain_saved_job::types::SavedJobStatus;
 use tracing::{info, warn};
 
-use crate::notification_processor::WorkerState;
+use crate::worker_state::AppWorkerState;
 
 /// Maximum characters to store as the markdown preview.
 const PREVIEW_LEN: usize = 500;
@@ -36,8 +36,8 @@ const PREVIEW_LEN: usize = 500;
 pub struct SavedJobCrawlWorker;
 
 #[async_trait]
-impl FallibleWorker<WorkerState> for SavedJobCrawlWorker {
-    async fn work(&mut self, ctx: WorkerContext<WorkerState>) -> WorkResult {
+impl FallibleWorker<AppWorkerState> for SavedJobCrawlWorker {
+    async fn work(&mut self, ctx: WorkerContext<AppWorkerState>) -> WorkResult {
         let state = ctx.state();
 
         let pending = state

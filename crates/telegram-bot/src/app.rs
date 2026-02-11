@@ -16,45 +16,106 @@ use std::sync::Arc;
 
 use snafu::{ResultExt, Whatever};
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{error, info, warn};
 
-use crate::{
-    config::BotConfig, grpc_command::TelegramBotCommandGrpcService,
-    outbox::TelegramOutboxRepository, runtime::TelegramBotRuntime,
-};
+use crate::{config::BotConfig, runtime::TelegramBotRuntime};
 
 /// Bot process application handle.
 pub struct BotApp {
-    pub(crate) config:             BotConfig,
+    pub(crate) _config:            BotConfig,
     pub(crate) runtime:            Arc<TelegramBotRuntime>,
-    /// Bot-owned transport outbox repository.
-    pub(crate) outbox_repo:        Arc<TelegramOutboxRepository>,
+    /// Shared notification queue client (`notification_dispatch`).
+    pub(crate) notify_client:      Arc<job_domain_shared::notify::client::NotifyClient>,
     pub(crate) cancellation_token: CancellationToken,
 }
 
 impl BotApp {
-    /// Start both ingress endpoints and block until shutdown.
-    pub async fn run(self) -> Result<(), Whatever> {
-        // Start gRPC command ingress for main-service -> bot calls.
-        let mut grpc_handle = job_server::grpc::start_grpc_server(
-            &self.config.grpc_config,
-            &[Arc::new(TelegramBotCommandGrpcService::new(
-                self.runtime.telegram.clone(),
-                self.outbox_repo.clone(),
-            ))],
-        )
-        .whatever_context("failed to start telegram-bot gRPC command service")?;
-        grpc_handle
-            .wait_for_start()
-            .await
-            .whatever_context("telegram-bot gRPC service failed to start")?;
+    const NOTIFY_BATCH_SIZE: i32 = 50;
+    const NOTIFY_IDLE_SLEEP_SECS: u64 = 5;
+    const NOTIFY_VT_SECONDS: i32 = 60;
 
+    fn format_notification_message(
+        notification: &job_domain_shared::notify::types::QueuedTelegramNotification,
+    ) -> String {
+        let mut text = String::new();
+        if let Some(subject) = &notification.subject {
+            text.push_str(&format!("*{}*\n\n", subject));
+        }
+        text.push_str(&notification.body);
+        text
+    }
+
+    async fn notify_consumer_loop(
+        notify_client: Arc<job_domain_shared::notify::client::NotifyClient>,
+        telegram: Arc<crate::telegram_service::TelegramService>,
+        cancellation_token: CancellationToken,
+    ) {
+        loop {
+            tokio::select! {
+                _ = cancellation_token.cancelled() => break,
+                _ = tokio::time::sleep(std::time::Duration::from_secs(Self::NOTIFY_IDLE_SLEEP_SECS)) => {}
+            }
+
+            let batch = match notify_client
+                .dequeue_telegram_batch(Self::NOTIFY_BATCH_SIZE, Self::NOTIFY_VT_SECONDS)
+                .await
+            {
+                Ok(batch) => batch,
+                Err(e) => {
+                    error!(error = %e, "failed to dequeue notify batch in telegram-bot");
+                    continue;
+                }
+            };
+
+            if batch.is_empty() {
+                continue;
+            }
+
+            for item in batch {
+                let text = Self::format_notification_message(&item.payload);
+                let delivery = match item.payload.chat_id {
+                    Some(chat_id) => {
+                        telegram
+                            .send_message(teloxide::types::ChatId(chat_id), &text)
+                            .await
+                    }
+                    None => telegram.send_primary_message(&text).await,
+                };
+
+                match delivery {
+                    Ok(_) => {
+                        if let Err(e) = notify_client.ack_telegram(item.msg_id).await {
+                            error!(msg_id = item.msg_id, error = %e, "failed to ack delivered telegram notification");
+                        }
+                    }
+                    Err(e) => {
+                        warn!(msg_id = item.msg_id, error = %e, read_ct = item.read_ct, "telegram notification delivery failed");
+                        if item.read_ct >= item.payload.max_retries
+                            && let Err(ack_err) = notify_client.ack_telegram(item.msg_id).await
+                        {
+                            error!(msg_id = item.msg_id, error = %ack_err, "failed to ack terminal telegram notification");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Start telegram dispatcher + queue consumer and block until shutdown.
+    pub async fn run(self) -> Result<(), Whatever> {
         // Start Telegram long-polling dispatcher.
         let mut telegram_handle = self.runtime.start_dispatcher();
         telegram_handle
             .wait_for_start()
             .await
             .whatever_context("telegram-bot dispatcher failed to start")?;
+
+        // Start notify queue consumer (pgmq) for main-service -> bot delivery.
+        let notify_consumer_handle = tokio::spawn(Self::notify_consumer_loop(
+            self.notify_client.clone(),
+            self.runtime.telegram.clone(),
+            self.cancellation_token.clone(),
+        ));
 
         // Keep process alive until Ctrl+C.
         let cancel = self.cancellation_token.clone();
@@ -68,18 +129,15 @@ impl BotApp {
         self.cancellation_token.cancelled().await;
         info!("telegram-bot shutdown requested");
 
-        // Graceful teardown order: stop ingress first, then wait joins.
-        grpc_handle.shutdown();
+        // Graceful teardown order: stop dispatcher, then wait joins.
         telegram_handle.shutdown();
-
-        grpc_handle
-            .wait_for_stop()
-            .await
-            .whatever_context("failed to stop telegram-bot grpc service")?;
         telegram_handle
             .wait_for_stop()
             .await
             .whatever_context("failed to stop telegram dispatcher")?;
+        notify_consumer_handle
+            .await
+            .whatever_context("failed to join notify consumer task")?;
 
         Ok(())
     }

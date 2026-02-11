@@ -49,7 +49,6 @@ members = [
     "crates/domain/application",
     "crates/domain/interview",
     "crates/domain/scheduler",
-    "crates/domain/notify",
     "crates/domain/analytics",
     "crates/domain/saved-job",
     "crates/server",
@@ -133,7 +132,6 @@ job-domain-analytics = { version = "=0.0.17", path = "crates/domain/analytics" }
 job-domain-application = { version = "=0.0.17", path = "crates/domain/application" }
 job-domain-interview = { version = "=0.0.17", path = "crates/domain/interview" }
 job-domain-job-source = { version = "=0.0.17", path = "crates/domain/job-source" }
-job-domain-notify = { version = "=0.0.17", path = "crates/domain/notify" }
 job-domain-resume = { version = "=0.0.17", path = "crates/domain/resume" }
 job-domain-saved-job = { version = "=0.0.17", path = "crates/domain/saved-job" }
 job-domain-scheduler = { version = "=0.0.17", path = "crates/domain/scheduler" }

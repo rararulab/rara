@@ -14,15 +14,14 @@
 
 use std::sync::Arc;
 
-use job_server::grpc::GrpcServerConfig;
 use smart_default::SmartDefault;
 use snafu::{ResultExt, Whatever, whatever};
 use tokio_util::sync::CancellationToken;
 use yunara_store::config::DatabaseConfig;
 
 use crate::{
-    app::BotApp, http_client::MainServiceHttpClient, outbox::TelegramOutboxRepository,
-    runtime::TelegramBotRuntime, telegram_service::TelegramService,
+    app::BotApp, http_client::MainServiceHttpClient, runtime::TelegramBotRuntime,
+    telegram_service::TelegramService,
 };
 
 /// Telegram credential/config values.
@@ -44,8 +43,6 @@ pub struct BotConfig {
     /// Main service HTTP endpoint.
     #[default(_code = "\"http://127.0.0.1:3000\".to_owned()")]
     pub main_service_http_base: String,
-    /// Bot command gRPC server config.
-    pub grpc_config:            GrpcServerConfig,
 }
 
 impl BotConfig {
@@ -58,7 +55,6 @@ impl BotConfig {
     /// Optional envs:
     /// - `DATABASE_URL`
     /// - `MAIN_SERVICE_HTTP_BASE`
-    /// - `TELEGRAM_BOT_GRPC_BIND`
     pub fn from_env() -> Self {
         let db_config =
             DatabaseConfig::builder()
@@ -86,20 +82,10 @@ impl BotConfig {
         let main_service_http_base = std::env::var("MAIN_SERVICE_HTTP_BASE")
             .unwrap_or_else(|_| "http://127.0.0.1:3000".to_owned());
 
-        let grpc_bind = std::env::var("TELEGRAM_BOT_GRPC_BIND")
-            .unwrap_or_else(|_| "127.0.0.1:50061".to_owned());
-
-        let grpc_config = GrpcServerConfig {
-            bind_address: grpc_bind.clone(),
-            server_address: grpc_bind,
-            ..GrpcServerConfig::default()
-        };
-
         Self {
             db_config,
             telegram,
             main_service_http_base,
-            grpc_config,
         }
     }
 
@@ -108,7 +94,7 @@ impl BotConfig {
     /// Initializes:
     /// - Telegram adapter
     /// - HTTP client to main service
-    /// - Bot-owned outbox repository (postgres)
+    /// - Shared notify queue adapter (`pgmq`)
     pub async fn open(self) -> Result<BotApp, Whatever> {
         let telegram_cfg = match self.telegram.as_ref() {
             Some(cfg) => cfg,
@@ -131,12 +117,16 @@ impl BotConfig {
         let db_store = yunara_store::db::DBStore::new(self.db_config.clone())
             .await
             .whatever_context("Failed to initialize database for bot")?;
-        let outbox_repo = Arc::new(TelegramOutboxRepository::new(db_store.pool().clone()));
+        let notify_client = Arc::new(
+            job_domain_shared::notify::client::NotifyClient::new(db_store.pool().clone())
+                .await
+                .whatever_context("Failed to initialize shared notify queue client")?,
+        );
 
         Ok(BotApp {
-            config: self,
+            _config: self,
             runtime,
-            outbox_repo,
+            notify_client,
             cancellation_token: CancellationToken::new(),
         })
     }

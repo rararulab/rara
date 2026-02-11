@@ -27,25 +27,24 @@ use uuid::Uuid;
 
 use crate::{
     error::SavedJobError,
-    repository::SavedJobRepository,
     service::SavedJobService,
     types::{CreateSavedJobRequest, SavedJob, SavedJobFilter, SavedJobStatus},
 };
 
 /// Register all saved-job routes on a new router with shared state.
-pub fn routes<R: SavedJobRepository + 'static>(service: Arc<SavedJobService<R>>) -> Router {
+pub fn routes(service: Arc<SavedJobService>) -> Router {
     Router::new()
-        .route("/api/v1/saved-jobs", post(create_saved_job::<R>))
-        .route("/api/v1/saved-jobs", get(list_saved_jobs::<R>))
-        .route("/api/v1/saved-jobs/{id}", get(get_saved_job::<R>))
-        .route("/api/v1/saved-jobs/{id}", delete(delete_saved_job::<R>))
-        .route("/api/v1/saved-jobs/{id}/retry", post(retry_saved_job::<R>))
+        .route("/api/v1/saved-jobs", post(create_saved_job))
+        .route("/api/v1/saved-jobs", get(list_saved_jobs))
+        .route("/api/v1/saved-jobs/{id}", get(get_saved_job))
+        .route("/api/v1/saved-jobs/{id}", delete(delete_saved_job))
+        .route("/api/v1/saved-jobs/{id}/retry", post(retry_saved_job))
         .with_state(service)
 }
 
 #[instrument(skip(service, req))]
-async fn create_saved_job<R: SavedJobRepository + 'static>(
-    State(service): State<Arc<SavedJobService<R>>>,
+async fn create_saved_job(
+    State(service): State<Arc<SavedJobService>>,
     Json(req): Json<CreateSavedJobRequest>,
 ) -> Result<(StatusCode, Json<SavedJob>), SavedJobError> {
     let saved_job = service.create(&req.url).await?;
@@ -53,8 +52,8 @@ async fn create_saved_job<R: SavedJobRepository + 'static>(
 }
 
 #[instrument(skip(service))]
-async fn list_saved_jobs<R: SavedJobRepository + 'static>(
-    State(service): State<Arc<SavedJobService<R>>>,
+async fn list_saved_jobs(
+    State(service): State<Arc<SavedJobService>>,
     Query(filter): Query<SavedJobFilter>,
 ) -> Result<Json<Vec<SavedJob>>, SavedJobError> {
     let status = filter.status.and_then(|s| parse_status(&s));
@@ -63,8 +62,8 @@ async fn list_saved_jobs<R: SavedJobRepository + 'static>(
 }
 
 #[instrument(skip(service))]
-async fn get_saved_job<R: SavedJobRepository + 'static>(
-    State(service): State<Arc<SavedJobService<R>>>,
+async fn get_saved_job(
+    State(service): State<Arc<SavedJobService>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<SavedJob>, SavedJobError> {
     let job = service
@@ -75,8 +74,8 @@ async fn get_saved_job<R: SavedJobRepository + 'static>(
 }
 
 #[instrument(skip(service))]
-async fn delete_saved_job<R: SavedJobRepository + 'static>(
-    State(service): State<Arc<SavedJobService<R>>>,
+async fn delete_saved_job(
+    State(service): State<Arc<SavedJobService>>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, SavedJobError> {
     service.delete(id).await?;
@@ -84,8 +83,8 @@ async fn delete_saved_job<R: SavedJobRepository + 'static>(
 }
 
 #[instrument(skip(service))]
-async fn retry_saved_job<R: SavedJobRepository + 'static>(
-    State(service): State<Arc<SavedJobService<R>>>,
+async fn retry_saved_job(
+    State(service): State<Arc<SavedJobService>>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, SavedJobError> {
     service.retry(id).await?;

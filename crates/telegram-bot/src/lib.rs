@@ -17,22 +17,18 @@
 //! This crate provides a standalone bot process that:
 //! - receives user messages via Telegram long polling,
 //! - calls main service HTTP APIs for search/JD parse flows,
-//! - exposes a gRPC command ingress for main service -> bot commands.
+//! - consumes notification tasks from `pgmq` for main service -> bot delivery.
 //!
 //! Internal module layout:
 //! - `config`: env/config parsing and dependency assembly
 //! - `app`: process lifecycle
 //! - `runtime`: Telegram dispatcher behavior
-//! - `grpc_command`: bot command ingress service
 //! - `http_client`: bot -> main-service typed HTTP client
-//! - `outbox`: bot-owned transport persistence
 
 mod app;
 mod command;
 mod config;
-mod grpc_command;
 mod http_client;
-mod outbox;
 mod runtime;
 mod telegram_service;
 

@@ -19,7 +19,7 @@ use job_common_worker::{FallibleWorker, WorkResult, WorkerContext};
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
-use crate::{notification_processor::WorkerState, types::JdParseRequest};
+use crate::{types::JdParseRequest, worker_state::AppWorkerState};
 
 /// Worker that drains the JD parse channel on each tick.
 ///
@@ -50,8 +50,8 @@ struct ParsedJob {
 }
 
 #[async_trait]
-impl FallibleWorker<WorkerState> for JdParserWorker {
-    async fn work(&mut self, ctx: WorkerContext<WorkerState>) -> WorkResult {
+impl FallibleWorker<AppWorkerState> for JdParserWorker {
+    async fn work(&mut self, ctx: WorkerContext<AppWorkerState>) -> WorkResult {
         // Drain all pending requests from the channel.
         while let Ok(req) = self.rx.try_recv() {
             let state = ctx.state();

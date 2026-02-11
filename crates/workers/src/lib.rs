@@ -18,8 +18,8 @@
 //! domain services for background processing tasks.
 
 pub mod jd_parser;
-pub mod notification_processor;
 pub mod saved_job_analyze;
 pub mod saved_job_crawl;
 pub mod saved_job_gc;
 pub mod types;
+pub mod worker_state;
