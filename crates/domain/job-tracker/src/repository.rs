@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use crate::{
     error::SavedJobError,
-    types::{SavedJob, SavedJobStatus},
+    types::{PipelineEvent, PipelineEventKind, PipelineStage, SavedJob, SavedJobStatus},
 };
 
 /// Persistence contract for saved jobs.
@@ -86,4 +86,20 @@ pub trait SavedJobRepository: Send + Sync {
         title: Option<String>,
         company: Option<String>,
     ) -> Result<(), SavedJobError>;
+
+    /// Insert a pipeline event for a saved job.
+    async fn create_event(
+        &self,
+        saved_job_id: Uuid,
+        stage: PipelineStage,
+        event_kind: PipelineEventKind,
+        message: &str,
+        metadata: Option<serde_json::Value>,
+    ) -> Result<PipelineEvent, SavedJobError>;
+
+    /// List all pipeline events for a saved job, ordered by created_at ASC.
+    async fn list_events(
+        &self,
+        saved_job_id: Uuid,
+    ) -> Result<Vec<PipelineEvent>, SavedJobError>;
 }

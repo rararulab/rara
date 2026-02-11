@@ -24,7 +24,7 @@ use uuid::Uuid;
 use crate::{
     error::SavedJobError,
     repository::SavedJobRepository,
-    types::{SavedJob, SavedJobStatus},
+    types::{PipelineEvent, PipelineEventKind, PipelineStage, SavedJob, SavedJobStatus},
 };
 
 // ---------------------------------------------------------------------------
@@ -75,6 +75,15 @@ impl SavedJobService {
             });
         }
         let job = self.repo.create(url).await?;
+        let _ = self
+            .log_event(
+                job.id,
+                PipelineStage::Crawl,
+                PipelineEventKind::Info,
+                "job saved, pending crawl",
+                None,
+            )
+            .await;
         self.trigger_pipeline();
         Ok(job)
     }
@@ -138,6 +147,15 @@ impl SavedJobService {
         self.repo
             .update_status(id, SavedJobStatus::PendingCrawl, None)
             .await?;
+        let _ = self
+            .log_event(
+                id,
+                PipelineStage::Crawl,
+                PipelineEventKind::Info,
+                "retry initiated",
+                None,
+            )
+            .await;
         self.trigger_pipeline();
         Ok(())
     }
@@ -173,5 +191,29 @@ impl SavedJobService {
         company: Option<String>,
     ) -> Result<(), SavedJobError> {
         self.repo.update_title_company(id, title, company).await
+    }
+
+    /// Record a pipeline event for a saved job.
+    #[instrument(skip(self, metadata))]
+    pub async fn log_event(
+        &self,
+        saved_job_id: Uuid,
+        stage: PipelineStage,
+        event_kind: PipelineEventKind,
+        message: &str,
+        metadata: Option<serde_json::Value>,
+    ) -> Result<PipelineEvent, SavedJobError> {
+        self.repo
+            .create_event(saved_job_id, stage, event_kind, message, metadata)
+            .await
+    }
+
+    /// List all pipeline events for a saved job.
+    #[instrument(skip(self))]
+    pub async fn list_events(
+        &self,
+        saved_job_id: Uuid,
+    ) -> Result<Vec<PipelineEvent>, SavedJobError> {
+        self.repo.list_events(saved_job_id).await
     }
 }

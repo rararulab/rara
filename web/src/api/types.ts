@@ -186,6 +186,28 @@ export interface SavedJob {
   updated_at: string;
 }
 
+// Pipeline Events
+export interface PipelineEvent {
+  id: string;
+  saved_job_id: string;
+  stage: string;
+  event_kind: string;
+  message: string;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export const PIPELINE_STAGES = ["crawl", "analyze", "gc"] as const;
+export type PipelineStage = (typeof PIPELINE_STAGES)[number];
+
+export const PIPELINE_EVENT_KINDS = [
+  "started",
+  "completed",
+  "failed",
+  "info",
+] as const;
+export type PipelineEventKind = (typeof PIPELINE_EVENT_KINDS)[number];
+
 export const SAVED_JOB_STATUSES = [
   "pending_crawl",
   "crawling",

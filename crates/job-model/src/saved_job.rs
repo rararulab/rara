@@ -37,3 +37,15 @@ pub struct SavedJob {
     pub created_at:       DateTime<Utc>,
     pub updated_at:       DateTime<Utc>,
 }
+
+/// A pipeline event for a saved job (DB row).
+#[derive(Debug, Clone, FromRow)]
+pub struct SavedJobEvent {
+    pub id:           Uuid,
+    pub saved_job_id: Uuid,
+    pub stage:        i16,
+    pub event_kind:   i16,
+    pub message:      String,
+    pub metadata:     Option<serde_json::Value>,
+    pub created_at:   DateTime<Utc>,
+}

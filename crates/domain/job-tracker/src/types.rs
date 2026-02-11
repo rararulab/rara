@@ -16,7 +16,7 @@
 
 use jiff::Timestamp;
 use job_domain_shared::convert::{chrono_opt_to_timestamp, chrono_to_timestamp, u8_from_i16};
-use job_model::saved_job::SavedJob as StoreSavedJob;
+use job_model::saved_job::{SavedJob as StoreSavedJob, SavedJobEvent as StoreSavedJobEvent};
 use serde::{Deserialize, Serialize};
 use strum_macros::{Display, FromRepr};
 use uuid::Uuid;
@@ -45,6 +45,75 @@ pub enum SavedJobStatus {
     Failed = 5,
     /// The job posting has expired.
     Expired = 6,
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline event enums
+// ---------------------------------------------------------------------------
+
+/// Pipeline stage for a saved job event.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, FromRepr)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum PipelineStage {
+    Crawl   = 0,
+    Analyze = 1,
+    Gc      = 2,
+}
+
+/// Kind of pipeline event.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, FromRepr)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum PipelineEventKind {
+    Started   = 0,
+    Completed = 1,
+    Failed    = 2,
+    Info      = 3,
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline event model
+// ---------------------------------------------------------------------------
+
+/// A pipeline event for a saved job (domain representation).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PipelineEvent {
+    pub id:           Uuid,
+    pub saved_job_id: Uuid,
+    pub stage:        PipelineStage,
+    pub event_kind:   PipelineEventKind,
+    pub message:      String,
+    pub metadata:     Option<serde_json::Value>,
+    pub created_at:   Timestamp,
+}
+
+fn pipeline_stage_from_i16(value: i16) -> PipelineStage {
+    let repr = u8_from_i16(value, "saved_job_event.stage");
+    PipelineStage::from_repr(repr).unwrap_or_else(|| panic!("invalid saved_job_event.stage: {value}"))
+}
+
+fn pipeline_event_kind_from_i16(value: i16) -> PipelineEventKind {
+    let repr = u8_from_i16(value, "saved_job_event.event_kind");
+    PipelineEventKind::from_repr(repr)
+        .unwrap_or_else(|| panic!("invalid saved_job_event.event_kind: {value}"))
+}
+
+/// Store `SavedJobEvent` -> Domain `PipelineEvent`.
+impl From<StoreSavedJobEvent> for PipelineEvent {
+    fn from(r: StoreSavedJobEvent) -> Self {
+        Self {
+            id:           r.id,
+            saved_job_id: r.saved_job_id,
+            stage:        pipeline_stage_from_i16(r.stage),
+            event_kind:   pipeline_event_kind_from_i16(r.event_kind),
+            message:      r.message,
+            metadata:     r.metadata,
+            created_at:   chrono_to_timestamp(r.created_at),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -170,4 +239,57 @@ mod tests {
     #[test]
     #[should_panic(expected = "invalid saved_job.status")]
     fn test_saved_job_status_from_i16_invalid() { saved_job_status_from_i16(99); }
+
+    #[test]
+    fn test_pipeline_stage_display() {
+        assert_eq!(PipelineStage::Crawl.to_string(), "crawl");
+        assert_eq!(PipelineStage::Analyze.to_string(), "analyze");
+        assert_eq!(PipelineStage::Gc.to_string(), "gc");
+    }
+
+    #[test]
+    fn test_pipeline_stage_from_repr() {
+        assert_eq!(PipelineStage::from_repr(0), Some(PipelineStage::Crawl));
+        assert_eq!(PipelineStage::from_repr(1), Some(PipelineStage::Analyze));
+        assert_eq!(PipelineStage::from_repr(2), Some(PipelineStage::Gc));
+        assert_eq!(PipelineStage::from_repr(3), None);
+    }
+
+    #[test]
+    fn test_pipeline_event_kind_display() {
+        assert_eq!(PipelineEventKind::Started.to_string(), "started");
+        assert_eq!(PipelineEventKind::Completed.to_string(), "completed");
+        assert_eq!(PipelineEventKind::Failed.to_string(), "failed");
+        assert_eq!(PipelineEventKind::Info.to_string(), "info");
+    }
+
+    #[test]
+    fn test_pipeline_event_kind_from_repr() {
+        assert_eq!(PipelineEventKind::from_repr(0), Some(PipelineEventKind::Started));
+        assert_eq!(PipelineEventKind::from_repr(1), Some(PipelineEventKind::Completed));
+        assert_eq!(PipelineEventKind::from_repr(2), Some(PipelineEventKind::Failed));
+        assert_eq!(PipelineEventKind::from_repr(3), Some(PipelineEventKind::Info));
+        assert_eq!(PipelineEventKind::from_repr(4), None);
+    }
+
+    #[test]
+    fn test_pipeline_stage_from_i16() {
+        assert_eq!(pipeline_stage_from_i16(0), PipelineStage::Crawl);
+        assert_eq!(pipeline_stage_from_i16(1), PipelineStage::Analyze);
+        assert_eq!(pipeline_stage_from_i16(2), PipelineStage::Gc);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid saved_job_event.stage")]
+    fn test_pipeline_stage_from_i16_invalid() { pipeline_stage_from_i16(99); }
+
+    #[test]
+    fn test_pipeline_event_kind_from_i16() {
+        assert_eq!(pipeline_event_kind_from_i16(0), PipelineEventKind::Started);
+        assert_eq!(pipeline_event_kind_from_i16(3), PipelineEventKind::Info);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid saved_job_event.event_kind")]
+    fn test_pipeline_event_kind_from_i16_invalid() { pipeline_event_kind_from_i16(99); }
 }

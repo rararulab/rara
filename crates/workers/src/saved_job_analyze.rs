@@ -20,7 +20,7 @@
 
 use async_trait::async_trait;
 use job_common_worker::{FallibleWorker, WorkError, WorkResult, WorkerContext};
-use job_domain_job_tracker::types::SavedJobStatus;
+use job_domain_job_tracker::types::{PipelineEventKind, PipelineStage, SavedJobStatus};
 use tracing::{info, warn};
 
 use crate::worker_state::AppWorkerState;
@@ -70,6 +70,16 @@ impl FallibleWorker<AppWorkerState> for SavedJobAnalyzeWorker {
                 warn!(id = %job.id, error = %e, "failed to set Analyzing status");
                 continue;
             }
+            let _ = state
+                .saved_job_service
+                .log_event(
+                    job.id,
+                    PipelineStage::Analyze,
+                    PipelineEventKind::Started,
+                    "AI analysis started",
+                    None,
+                )
+                .await;
 
             // Fetch full markdown from S3, falling back to preview.
             let markdown = if let Some(s3_key) = &job.markdown_s3_key {
@@ -125,6 +135,16 @@ impl FallibleWorker<AppWorkerState> for SavedJobAnalyzeWorker {
                             Some(format!("AI analysis failed: {e}")),
                         )
                         .await;
+                    let _ = state
+                        .saved_job_service
+                        .log_event(
+                            job.id,
+                            PipelineStage::Analyze,
+                            PipelineEventKind::Failed,
+                            &format!("AI analysis failed: {e}"),
+                            None,
+                        )
+                        .await;
                     continue;
                 }
             };
@@ -177,6 +197,16 @@ impl FallibleWorker<AppWorkerState> for SavedJobAnalyzeWorker {
                 continue;
             }
 
+            let _ = state
+                .saved_job_service
+                .log_event(
+                    job.id,
+                    PipelineStage::Analyze,
+                    PipelineEventKind::Completed,
+                    "analysis completed",
+                    Some(serde_json::json!({ "match_score": match_score })),
+                )
+                .await;
             info!(id = %job.id, match_score, "analysis complete");
             analyzed_count += 1;
         }
