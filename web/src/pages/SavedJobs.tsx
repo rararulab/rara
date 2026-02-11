@@ -30,7 +30,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import {
   Dialog,
-  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -201,10 +200,12 @@ function CreateDialog({
 function DeleteDialog({
   open,
   onOpenChange,
+  onCancel,
   job,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onCancel: () => void;
   job: SavedJob;
 }) {
   const queryClient = useQueryClient();
@@ -229,11 +230,9 @@ function DeleteDialog({
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <DialogClose asChild>
-            <Button type="button" variant="outline">
-              Cancel
-            </Button>
-          </DialogClose>
+          <Button type="button" variant="outline" onClick={onCancel}>
+            Cancel
+          </Button>
           <Button
             variant="destructive"
             onClick={() => mutation.mutate()}
@@ -643,8 +642,23 @@ export default function SavedJobs() {
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteJob, setDeleteJob] = useState<SavedJob | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [selectedJob, setSelectedJob] = useState<SavedJob | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("all");
+
+  const closeDeleteDialog = () => {
+    const deletingId = deleteJob?.id;
+    setDeleteOpen(false);
+    setDeleteJob(null);
+    if (deletingId && selectedJob?.id === deletingId) {
+      setSelectedJob(null);
+    }
+  };
+
+  const openDeleteDialog = (job: SavedJob) => {
+    setDeleteJob(job);
+    setDeleteOpen(true);
+  };
 
   const filterParam =
     statusFilter === "all" ? "" : `?status=${statusFilter}`;
@@ -743,7 +757,7 @@ export default function SavedJobs() {
               job={job}
               onSelect={() => setSelectedJob(job)}
               onRetry={() => retryMutation.mutate(job.id)}
-              onDelete={() => setDeleteJob(job)}
+              onDelete={() => openDeleteDialog(job)}
             />
           ))}
         </div>
@@ -760,17 +774,13 @@ export default function SavedJobs() {
       {deleteJob && (
         <DeleteDialog
           key={deleteJob.id}
-          open={deleteJob !== null}
+          open={deleteOpen}
           onOpenChange={(open) => {
             if (!open) {
-              const deletingId = deleteJob.id;
-              setDeleteJob(null);
-              // Close detail modal too if we deleted the selected job
-              if (selectedJob?.id === deletingId) {
-                setSelectedJob(null);
-              }
+              closeDeleteDialog();
             }
           }}
+          onCancel={closeDeleteDialog}
           job={deleteJob}
         />
       )}
@@ -787,7 +797,7 @@ export default function SavedJobs() {
             retryMutation.mutate(freshSelectedJob.id);
           }}
           onDelete={() => {
-            setDeleteJob(freshSelectedJob);
+            openDeleteDialog(freshSelectedJob);
           }}
         />
       )}
