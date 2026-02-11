@@ -18,12 +18,22 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import type { RuntimeSettingsPatch, RuntimeSettingsView } from "@/api/types";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { ChevronRight, MessageSquare, Sparkles } from "lucide-react";
+
+type SettingKey = "ai" | "telegram";
 
 export default function Settings() {
   const queryClient = useQueryClient();
@@ -31,6 +41,7 @@ export default function Settings() {
   const [aiApiKey, setAiApiKey] = useState("");
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramChatId, setTelegramChatId] = useState("");
+  const [selectedSetting, setSelectedSetting] = useState<SettingKey | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -114,6 +125,12 @@ export default function Settings() {
     updateMutation.mutate(patch);
   };
 
+  const openSetting = (setting: SettingKey) => {
+    setError(null);
+    setSuccess(null);
+    setSelectedSetting(setting);
+  };
+
   if (settingsQuery.isLoading) {
     return (
       <div className="space-y-6">
@@ -135,6 +152,10 @@ export default function Settings() {
   }
 
   const current = settingsQuery.data;
+  const isDialogOpen = selectedSetting !== null;
+
+  const dialogTitle =
+    selectedSetting === "ai" ? "AI (OpenRouter)" : "Telegram Bot";
 
   return (
     <div className="space-y-6">
@@ -145,84 +166,134 @@ export default function Settings() {
         </p>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card>
-          <CardHeader className="space-y-2">
-            <CardTitle className="flex items-center gap-2">
-              AI (OpenRouter)
-              <Badge variant={current.ai.configured ? "default" : "secondary"}>
-                {current.ai.configured ? "Configured" : "Not configured"}
-              </Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="ai-model">Model</Label>
-              <Input
-                id="ai-model"
-                value={aiModel}
-                onChange={(e) => setAiModel(e.target.value)}
-                placeholder="openai/gpt-4o"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="ai-api-key">OpenRouter API Key</Label>
-              <Input
-                id="ai-api-key"
-                type="password"
-                value={aiApiKey}
-                onChange={(e) => setAiApiKey(e.target.value)}
-                placeholder={current.ai.key_hint ?? "sk-or-v1-..."}
-              />
+      <div className="space-y-3">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
+          onClick={() => openSetting("ai")}
+        >
+          <div className="flex items-center gap-3">
+            <Sparkles className="h-4 w-4 text-muted-foreground" />
+            <div className="space-y-1">
+              <p className="font-medium">AI (OpenRouter)</p>
               <p className="text-xs text-muted-foreground">
-                Current key hint: {current.ai.key_hint ?? "Not set"}
+                Model: {current.ai.model ?? "Not set"} · Key:{" "}
+                {current.ai.key_hint ?? "Not set"}
               </p>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+          <div className="flex items-center gap-3">
+            <Badge variant={current.ai.configured ? "default" : "secondary"}>
+              {current.ai.configured ? "Configured" : "Not configured"}
+            </Badge>
+            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+          </div>
+        </button>
 
-        <Card>
-          <CardHeader className="space-y-2">
-            <CardTitle className="flex items-center gap-2">
-              Telegram Bot
-              <Badge variant={current.telegram.configured ? "default" : "secondary"}>
-                {current.telegram.configured ? "Configured" : "Not configured"}
-              </Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="telegram-chat-id">Chat ID</Label>
-              <Input
-                id="telegram-chat-id"
-                value={telegramChatId}
-                onChange={(e) => setTelegramChatId(e.target.value)}
-                placeholder="123456789"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="telegram-token">Bot Token</Label>
-              <Input
-                id="telegram-token"
-                type="password"
-                value={telegramToken}
-                onChange={(e) => setTelegramToken(e.target.value)}
-                placeholder={current.telegram.token_hint ?? "123456:ABC..."}
-              />
+        <button
+          type="button"
+          className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
+          onClick={() => openSetting("telegram")}
+        >
+          <div className="flex items-center gap-3">
+            <MessageSquare className="h-4 w-4 text-muted-foreground" />
+            <div className="space-y-1">
+              <p className="font-medium">Telegram Bot</p>
               <p className="text-xs text-muted-foreground">
-                Current token hint: {current.telegram.token_hint ?? "Not set"}
+                Chat ID: {current.telegram.chat_id ?? "Not set"} · Token:{" "}
+                {current.telegram.token_hint ?? "Not set"}
               </p>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+          <div className="flex items-center gap-3">
+            <Badge variant={current.telegram.configured ? "default" : "secondary"}>
+              {current.telegram.configured ? "Configured" : "Not configured"}
+            </Badge>
+            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+          </div>
+        </button>
       </div>
 
       {error && <p className="text-sm text-destructive">{error}</p>}
       {success && <p className="text-sm text-green-600">{success}</p>}
 
-      <Button onClick={handleSave} disabled={updateMutation.isPending}>
-        {updateMutation.isPending ? "Saving..." : "Save Settings"}
-      </Button>
+      <Dialog open={isDialogOpen} onOpenChange={(open) => !open && setSelectedSetting(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{dialogTitle}</DialogTitle>
+            <DialogDescription>
+              Review current values and update this setting.
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedSetting === "ai" && (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="ai-model">Model</Label>
+                <Input
+                  id="ai-model"
+                  value={aiModel}
+                  onChange={(e) => setAiModel(e.target.value)}
+                  placeholder="openai/gpt-4o"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="ai-api-key">OpenRouter API Key</Label>
+                <Input
+                  id="ai-api-key"
+                  type="password"
+                  value={aiApiKey}
+                  onChange={(e) => setAiApiKey(e.target.value)}
+                  placeholder={current.ai.key_hint ?? "sk-or-v1-..."}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Current key hint: {current.ai.key_hint ?? "Not set"}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {selectedSetting === "telegram" && (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="telegram-chat-id">Chat ID</Label>
+                <Input
+                  id="telegram-chat-id"
+                  value={telegramChatId}
+                  onChange={(e) => setTelegramChatId(e.target.value)}
+                  placeholder="123456789"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="telegram-token">Bot Token</Label>
+                <Input
+                  id="telegram-token"
+                  type="password"
+                  value={telegramToken}
+                  onChange={(e) => setTelegramToken(e.target.value)}
+                  placeholder={current.telegram.token_hint ?? "123456:ABC..."}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Current token hint: {current.telegram.token_hint ?? "Not set"}
+                </p>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setSelectedSetting(null)}
+              disabled={updateMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleSave} disabled={updateMutation.isPending}>
+              {updateMutation.isPending ? "Saving..." : "Save Settings"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
