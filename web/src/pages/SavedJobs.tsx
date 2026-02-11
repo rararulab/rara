@@ -36,6 +36,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -200,13 +210,11 @@ function CreateDialog({
 function DeleteDialog({
   open,
   onOpenChange,
-  onCancel,
   onDeleted,
   job,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCancel: () => void;
   onDeleted: () => void;
   job: SavedJob;
 }) {
@@ -221,35 +229,38 @@ function DeleteDialog({
   });
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[400px]">
-        <DialogHeader>
-          <DialogTitle>Delete Saved Job</DialogTitle>
-          <DialogDescription>
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent className="sm:max-w-[400px]">
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete Saved Job</AlertDialogTitle>
+          <AlertDialogDescription>
             Are you sure you want to delete{" "}
             <strong>{job.title ?? truncateUrl(job.url)}</strong>? This action
             cannot be undone.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={onCancel}>
-            Cancel
-          </Button>
-          <Button
-            variant="destructive"
-            onClick={() => mutation.mutate()}
-            disabled={mutation.isPending}
-          >
-            {mutation.isPending ? "Deleting..." : "Delete"}
-          </Button>
-        </DialogFooter>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
         {mutation.isError && (
-          <p className="text-sm text-destructive mt-2">
+          <p className="text-sm text-destructive">
             Error: {(mutation.error as Error).message}
           </p>
         )}
-      </DialogContent>
-    </Dialog>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={mutation.isPending}>
+            Cancel
+          </AlertDialogCancel>
+          <AlertDialogAction
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            onClick={(e) => {
+              e.preventDefault();
+              mutation.mutate();
+            }}
+            disabled={mutation.isPending}
+          >
+            {mutation.isPending ? "Deleting..." : "Delete"}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
@@ -422,7 +433,7 @@ function SavedJobDetailModal({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl h-[85vh] overflow-hidden flex flex-col p-0">
         {/* Header */}
-        <DialogHeader className="px-6 pt-6 pb-4 shrink-0 border-b">
+        <DialogHeader className="px-6 pt-6 pb-4 pr-14 shrink-0 border-b">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
               <DialogTitle className="text-lg font-semibold truncate">
@@ -650,12 +661,14 @@ export default function SavedJobs() {
 
   const closeDeleteDialog = () => {
     setDeleteOpen(false);
-    setDeleteJob(null);
+    // Don't null deleteJob here — let AlertDialog close animation finish.
+    // deleteJob will be overwritten next time a delete is initiated.
   };
 
   const handleDeleteSuccess = () => {
     const deletingId = deleteJob?.id;
-    closeDeleteDialog();
+    setDeleteOpen(false);
+    setDeleteJob(null);
     if (deletingId && selectedJob?.id === deletingId) {
       setSelectedJob(null);
     }
@@ -782,11 +795,8 @@ export default function SavedJobs() {
           key={deleteJob.id}
           open={deleteOpen}
           onOpenChange={(open) => {
-            if (!open) {
-              closeDeleteDialog();
-            }
+            if (!open) closeDeleteDialog();
           }}
-          onCancel={closeDeleteDialog}
           onDeleted={handleDeleteSuccess}
           job={deleteJob}
         />
@@ -798,18 +808,17 @@ export default function SavedJobs() {
           job={freshSelectedJob}
           open={true}
           onOpenChange={(open) => {
-            if (!open) {
-              // While delete confirmation is open, ignore close signals from
-              // the detail dialog to avoid cross-dialog state races.
-              if (deleteOpen) return;
-              setSelectedJob(null);
-            }
+            if (!open) setSelectedJob(null);
           }}
           onRetry={() => {
             retryMutation.mutate(freshSelectedJob.id);
           }}
           onDelete={() => {
-            openDeleteDialog(freshSelectedJob);
+            // Close detail modal first, then open delete confirmation.
+            // Avoids nesting two Radix dialogs which causes pointer-event conflicts.
+            const job = freshSelectedJob;
+            setSelectedJob(null);
+            openDeleteDialog(job);
           }}
         />
       )}
