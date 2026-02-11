@@ -259,6 +259,7 @@ impl AppConfig {
         let saved_job_svc = saved_job_service.clone();
         let job_source_svc = job_source_service.clone();
         let settings_svc = settings_service.clone();
+        let pool_for_notify_routes = pool.clone();
 
         let ai_handle_for_bot = ai_service_handle.clone();
         let job_repo_for_bot = job_repo.clone();
@@ -289,6 +290,9 @@ impl AppConfig {
                                 Ok(())
                             }
                         })),
+                    ))
+                    .merge(job_domain_shared::notify::routes::routes(
+                        pool_for_notify_routes.clone(),
                     ))
                     .merge(job_domain_job_tracker::bot_internal_routes::routes(
                         ai_handle_for_bot.clone(),
