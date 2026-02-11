@@ -22,8 +22,9 @@ pub const RUNTIME_SETTINGS_KV_KEY: &str = "runtime_settings.v1";
 /// Full runtime settings document persisted in `kv_table`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimeSettings {
-    pub ai:       AiRuntimeSettings,
-    pub telegram: TelegramRuntimeSettings,
+    pub ai:         AiRuntimeSettings,
+    pub telegram:   TelegramRuntimeSettings,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// AI-specific runtime settings.
@@ -74,6 +75,9 @@ impl RuntimeSettings {
         }
         if self.telegram.chat_id.is_none() {
             self.telegram.chat_id = fallback.telegram.chat_id;
+        }
+        if self.updated_at.is_none() {
+            self.updated_at = fallback.updated_at;
         }
         self
     }

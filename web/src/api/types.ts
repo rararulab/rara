@@ -210,6 +210,7 @@ export interface RuntimeSettingsView {
     chat_id: number | null;
     token_hint: string | null;
   };
+  updated_at: string | null;
 }
 
 export interface RuntimeSettingsPatch {

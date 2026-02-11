@@ -34,6 +34,14 @@ import {
 import { ChevronRight, MessageSquare, Sparkles } from "lucide-react";
 
 type SettingKey = "ai" | "telegram";
+type ToastState = { kind: "success" | "error"; message: string } | null;
+
+function formatUpdatedAt(value: string | null): string {
+  if (!value) return "Never";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return d.toLocaleString();
+}
 
 export default function Settings() {
   const queryClient = useQueryClient();
@@ -42,8 +50,7 @@ export default function Settings() {
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramChatId, setTelegramChatId] = useState("");
   const [selectedSetting, setSelectedSetting] = useState<SettingKey | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastState>(null);
 
   const settingsQuery = useQuery({
     queryKey: ["settings"],
@@ -103,33 +110,33 @@ export default function Settings() {
       queryClient.setQueryData(["settings"], updated);
       setAiApiKey("");
       setTelegramToken("");
-      setSuccess("Settings updated successfully.");
-      setError(null);
+      setSelectedSetting(null);
+      setToast({ kind: "success", message: "Settings updated successfully." });
     },
     onError: (e: unknown) => {
       const message = e instanceof Error ? e.message : "Failed to update settings";
-      setError(message);
-      setSuccess(null);
+      setToast({ kind: "error", message });
     },
   });
 
   const handleSave = () => {
-    setError(null);
-    setSuccess(null);
-
     if (!settingsQuery.data) return;
     if (!patch) {
-      setError("No valid settings changes to save.");
+      setToast({ kind: "error", message: "No valid settings changes to save." });
       return;
     }
     updateMutation.mutate(patch);
   };
 
   const openSetting = (setting: SettingKey) => {
-    setError(null);
-    setSuccess(null);
     setSelectedSetting(setting);
   };
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
   if (settingsQuery.isLoading) {
     return (
@@ -163,6 +170,9 @@ export default function Settings() {
         <h1 className="text-2xl font-bold">Settings</h1>
         <p className="text-muted-foreground mt-2">
           Configure runtime credentials without restarting services.
+        </p>
+        <p className="text-xs text-muted-foreground mt-1">
+          Last updated: {formatUpdatedAt(current.updated_at)}
         </p>
       </div>
 
@@ -213,9 +223,6 @@ export default function Settings() {
           </div>
         </button>
       </div>
-
-      {error && <p className="text-sm text-destructive">{error}</p>}
-      {success && <p className="text-sm text-green-600">{success}</p>}
 
       <Dialog open={isDialogOpen} onOpenChange={(open) => !open && setSelectedSetting(null)}>
         <DialogContent>
@@ -294,6 +301,20 @@ export default function Settings() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {toast && (
+        <div className="fixed right-6 top-6 z-50">
+          <div
+            className={`rounded-md border px-4 py-3 text-sm shadow-lg ${
+              toast.kind === "success"
+                ? "border-green-200 bg-green-50 text-green-800"
+                : "border-red-200 bg-red-50 text-red-800"
+            }`}
+          >
+            {toast.message}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

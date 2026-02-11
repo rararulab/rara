@@ -16,6 +16,7 @@
 
 use std::sync::{Arc, RwLock};
 
+use chrono::Utc;
 use snafu::{ResultExt, Whatever, whatever};
 use yunara_store::KVStore;
 
@@ -56,6 +57,7 @@ impl RuntimeSettingsService {
         let mut next = self.current();
         next.apply_patch(patch);
         next.normalize();
+        next.updated_at = Some(Utc::now());
 
         self.kv
             .set(RUNTIME_SETTINGS_KV_KEY, &next)
@@ -79,8 +81,9 @@ impl RuntimeSettingsService {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RuntimeSettingsView {
-    pub ai:       AiSettingsView,
-    pub telegram: TelegramSettingsView,
+    pub ai:         AiSettingsView,
+    pub telegram:   TelegramSettingsView,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -111,6 +114,7 @@ pub fn to_view(settings: &RuntimeSettings) -> RuntimeSettingsView {
             chat_id:    settings.telegram.chat_id,
             token_hint: secret_hint(settings.telegram.bot_token.as_deref()),
         },
+        updated_at: settings.updated_at,
     }
 }
 
