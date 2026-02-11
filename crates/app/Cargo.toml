@@ -14,6 +14,7 @@ description = "Application orchestration and lifecycle management for job"
 [dependencies]
 async-trait = { workspace = true }
 axum = { workspace = true }
+config = { workspace = true }
 job-ai = { workspace = true }
 job-api = { workspace = true }
 job-common-runtime = { workspace = true }

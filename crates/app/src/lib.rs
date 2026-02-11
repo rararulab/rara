@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod settings;
+
 use std::{
     sync::{
         Arc,
@@ -80,51 +82,22 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    /// Build an `AppConfig` from environment variables.
+    /// Build an `AppConfig` from environment variables and optional config file.
+    ///
+    /// Uses [`Settings::new()`] which supports layered configuration:
+    /// 1. Legacy environment variables (`DATABASE_URL`, `OPENROUTER_API_KEY`, etc.)
+    /// 2. `JOB__`-prefixed environment variables
+    /// 3. `config.toml` file in the working directory
+    /// 4. Code defaults
     pub fn from_env() -> Self {
-        let db_config =
-            DatabaseConfig::builder()
-                .database_url(std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-                    "postgres://postgres:postgres@localhost:5432/job".to_string()
-                }))
-                .build();
-
-        let openrouter = std::env::var("OPENROUTER_API_KEY").ok().map(|key| {
-            let model =
-                std::env::var("OPENROUTER_MODEL").unwrap_or_else(|_| "openai/gpt-4o".to_string());
-            OpenRouterConfig {
-                api_key: key,
-                model,
+        match crate::settings::Settings::new() {
+            Ok(settings) => settings.into_app_config(),
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to load config via Settings, falling back to defaults: {e}"
+                );
+                Self::default()
             }
-        });
-
-        let minio = std::env::var("MINIO_ENDPOINT")
-            .ok()
-            .map(|endpoint| MinioConfig {
-                endpoint,
-                bucket: std::env::var("MINIO_BUCKET").unwrap_or_else(|_| "job-markdown".to_owned()),
-                access_key: std::env::var("MINIO_ACCESS_KEY")
-                    .unwrap_or_else(|_| "minioadmin".to_owned()),
-                secret_key: std::env::var("MINIO_SECRET_KEY")
-                    .unwrap_or_else(|_| "minioadmin".to_owned()),
-                region: std::env::var("MINIO_REGION").unwrap_or_else(|_| "us-east-1".to_owned()),
-            });
-
-        let crawl4ai_url =
-            std::env::var("CRAWL4AI_URL").unwrap_or_else(|_| "http://localhost:11235".to_owned());
-
-        let gc_interval_hours = std::env::var("GC_INTERVAL_HOURS")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(24);
-
-        Self {
-            db_config,
-            openrouter,
-            minio,
-            crawl4ai_url,
-            gc_interval_hours,
-            ..Default::default()
         }
     }
 

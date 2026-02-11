@@ -21,6 +21,9 @@ Cargo.lock
 .env.local
 .env
 
+# Local config file (may contain secrets — use config.example.toml as template)
+config.toml
+
 # Act artifacts directory
 /tmp/act-artifacts
 
