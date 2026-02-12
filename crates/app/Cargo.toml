@@ -1,6 +1,6 @@
 [package]
 name = "job-app"
-version.workspace = true
+version = "0.0.1"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

@@ -75,7 +75,7 @@ impl FallibleWorker<AppState> for SavedJobCrawlWorker {
                 .await;
 
             // Crawl the URL
-            let markdown = match state.crawl_client.crawl(&job.url).await {
+            let markdown = match state.crawl_client.crawl_md(&job.url).await {
                 Ok(md) => md,
                 Err(e) => {
                     warn!(id = %job.id, error = %e, "crawl failed");

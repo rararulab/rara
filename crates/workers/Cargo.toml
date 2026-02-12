@@ -1,6 +1,6 @@
 [package]
 name = "job-workers"
-version.workspace = true
+version = "0.0.1"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -16,6 +16,7 @@ async-trait.workspace = true
 axum = { workspace = true }
 jiff.workspace = true
 job-ai = { workspace = true }
+job-common-crawl4ai = { workspace = true }
 job-common-runtime = { workspace = true }
 job-common-worker = { workspace = true }
 job-domain-analytics = { workspace = true }
@@ -29,8 +30,8 @@ job-server = { workspace = true }
 opendal.workspace = true
 reqwest.workspace = true
 serde.workspace = true
-snafu.workspace = true
 serde_json.workspace = true
+snafu.workspace = true
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing.workspace = true

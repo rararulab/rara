@@ -42,7 +42,7 @@ pub struct AppState {
 
     // -- infra --
     pub object_store: Operator,
-    pub crawl_client: job_domain_job::crawl4ai::Crawl4AiClient,
+    pub crawl_client: job_common_crawl4ai::Crawl4AiClient,
 
     // -- worker coordination --
     pub analyze_notify: Arc<RwLock<Option<NotifyHandle>>>,
@@ -87,7 +87,7 @@ impl AppState {
 
         // -- infra clients ---------------------------------------------------
 
-        let crawl_client = job_domain_job::crawl4ai::Crawl4AiClient::new(crawl4ai_url);
+        let crawl_client = job_common_crawl4ai::Crawl4AiClient::new(crawl4ai_url);
         info!("Crawl4AI client configured");
 
         Ok(Self {

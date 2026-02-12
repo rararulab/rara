@@ -20,7 +20,6 @@ use std::sync::Arc;
 
 use sqlx::PgPool;
 
-pub mod crawl4ai;
 pub mod dedup;
 pub mod error;
 pub mod jobspy;
