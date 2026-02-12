@@ -21,7 +21,7 @@
 use async_trait::async_trait;
 use job_ai::error::AiError;
 use job_common_worker::{FallibleWorker, WorkError, WorkResult, WorkerContext};
-use job_domain_job_tracker::types::{PipelineEventKind, PipelineStage, SavedJobStatus};
+use job_domain_job::types::{PipelineEventKind, PipelineStage, SavedJobStatus};
 use tracing::{info, warn};
 
 use crate::worker_state::AppState;

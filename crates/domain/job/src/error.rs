@@ -12,7 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Error types for the job domain (discovery + tracker).
+
 use snafu::Snafu;
+use uuid::Uuid;
+
+// ===========================================================================
+// Discovery errors
+// ===========================================================================
 
 /// Errors that a job source driver can produce.
 ///
@@ -75,6 +82,67 @@ impl axum::response::IntoResponse for SourceError {
         let message = self.to_string();
         if status.is_server_error() {
             tracing::error!(http_status = status.as_u16(), error = %message, "source request error");
+        }
+        let body = serde_json::json!({
+            "error": { "status": status.as_u16(), "message": message }
+        });
+        (status, axum::Json(body)).into_response()
+    }
+}
+
+// ===========================================================================
+// Tracker errors
+// ===========================================================================
+
+/// Errors that can occur in the saved-job domain.
+#[derive(Debug, Snafu)]
+#[snafu(visibility(pub))]
+pub enum SavedJobError {
+    /// The requested saved job was not found.
+    #[snafu(display("saved job not found: {id}"))]
+    NotFound { id: Uuid },
+
+    /// A saved job with this URL already exists.
+    #[snafu(display("duplicate URL: {url}"))]
+    DuplicateUrl { url: String },
+
+    /// The request data failed validation.
+    #[snafu(display("validation error: {message}"))]
+    ValidationError { message: String },
+
+    /// A storage/infrastructure error occurred.
+    #[snafu(display("repository error: {message}"))]
+    RepositoryError { message: String },
+
+    /// Crawl4AI failed to fetch the URL.
+    #[snafu(display("crawl failed for URL {url}: {message}"))]
+    CrawlError { url: String, message: String },
+
+    /// AI analysis failed.
+    #[snafu(display("AI analysis failed: {message}"))]
+    AnalysisError { message: String },
+
+    /// Object store (S3/MinIO) operation failed.
+    #[snafu(display("object store error: {message}"))]
+    ObjectStoreError { message: String },
+}
+
+impl axum::response::IntoResponse for SavedJobError {
+    fn into_response(self) -> axum::response::Response {
+        let status = match &self {
+            SavedJobError::NotFound { .. } => axum::http::StatusCode::NOT_FOUND,
+            SavedJobError::DuplicateUrl { .. } => axum::http::StatusCode::CONFLICT,
+            SavedJobError::ValidationError { .. } => axum::http::StatusCode::BAD_REQUEST,
+            SavedJobError::RepositoryError { .. } => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            SavedJobError::CrawlError { .. }
+            | SavedJobError::AnalysisError { .. }
+            | SavedJobError::ObjectStoreError { .. } => axum::http::StatusCode::BAD_GATEWAY,
+        };
+        let message = self.to_string();
+        if status.is_server_error() {
+            tracing::error!(http_status = status.as_u16(), error = %message, "saved-job request error");
+        } else if status.is_client_error() && status != axum::http::StatusCode::NOT_FOUND {
+            tracing::warn!(http_status = status.as_u16(), error = %message, "saved-job request error");
         }
         let body = serde_json::json!({
             "error": { "status": status.as_u16(), "message": message }

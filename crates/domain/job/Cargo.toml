@@ -1,5 +1,5 @@
 [package]
-name = "job-domain-job-tracker"
+name = "job-domain-job"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -9,17 +9,20 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Saved job tracking with crawl and analysis pipeline"
+description = "Unified job domain: discovery, tracking, and pipeline management"
 
 [dependencies]
 async-trait.workspace = true
 axum = { workspace = true }
+bon.workspace = true
+chrono.workspace = true
+derive_more = { workspace = true }
 jiff.workspace = true
-job-ai.workspace = true
+job-ai = { workspace = true }
 job-common-worker.workspace = true
-job-domain-job-discovery.workspace = true
 job-domain-shared = { workspace = true }
-job-model.workspace = true
+job-model = { workspace = true }
+jobspy-sys = { workspace = true }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -27,10 +30,13 @@ snafu.workspace = true
 sqlx = { workspace = true }
 strum.workspace = true
 strum_macros.workspace = true
+tokio = { workspace = true }
 tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+job-base.workspace = true
+job-common-telemetry.workspace = true
 tokio = { workspace = true }
 
 [lints]

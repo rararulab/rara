@@ -12,18 +12,38 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Repository trait for saved job persistence.
+//! Repository traits for job persistence (discovery + tracker).
 
+use async_trait::async_trait;
 use jiff::Timestamp;
 use uuid::Uuid;
 
 use crate::{
-    error::SavedJobError,
-    types::{PipelineEvent, PipelineEventKind, PipelineStage, SavedJob, SavedJobStatus},
+    error::{SavedJobError, SourceError},
+    types::{
+        NormalizedJob, PipelineEvent, PipelineEventKind, PipelineStage, SavedJob, SavedJobStatus,
+    },
 };
 
+// ===========================================================================
+// Discovery repository
+// ===========================================================================
+
+/// Persistence abstraction for job records.
+#[async_trait]
+pub trait JobRepository: Send + Sync {
+    /// Save a normalized job to the store.
+    ///
+    /// Returns the persisted job (with DB-generated fields populated).
+    async fn save(&self, job: &NormalizedJob) -> Result<NormalizedJob, SourceError>;
+}
+
+// ===========================================================================
+// Tracker repository
+// ===========================================================================
+
 /// Persistence contract for saved jobs.
-#[async_trait::async_trait]
+#[async_trait]
 pub trait SavedJobRepository: Send + Sync {
     /// Insert a new saved job with `status = PendingCrawl`.
     async fn create(&self, url: &str) -> Result<SavedJob, SavedJobError>;

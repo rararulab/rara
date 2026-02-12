@@ -17,8 +17,9 @@
 use std::sync::Arc;
 
 use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
-use job_domain_job_discovery::repository::JobRepository;
 use uuid::Uuid;
+
+use crate::{repository::JobRepository, types::NormalizedJob};
 
 #[derive(Clone)]
 struct BotInternalState {
@@ -93,7 +94,7 @@ async fn parse_jd_from_bot(
         )
     })?;
 
-    let job = job_domain_job_discovery::types::NormalizedJob {
+    let job = NormalizedJob {
         id:              Uuid::new_v4(),
         source_job_id:   Uuid::new_v4().to_string(),
         source_name:     "telegram".to_owned(),

@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! HTTP API routes for saved job management.
+//! HTTP API routes for job discovery and saved job management.
+
+use std::collections::HashSet;
 
 use axum::{
     Json, Router,
@@ -24,13 +26,74 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::{
-    error::SavedJobError,
-    service::SavedJobService,
-    types::{CreateSavedJobRequest, PipelineEvent, SavedJob, SavedJobFilter, SavedJobStatus},
+    discovery_service::JobSourceService,
+    error::{SavedJobError, SourceError},
+    tracker_service::SavedJobService,
+    types::{
+        CreateSavedJobRequest, DiscoveryCriteria, DiscoveryJobResponse, PipelineEvent, SavedJob,
+        SavedJobFilter, SavedJobStatus,
+    },
 };
 
+// ===========================================================================
+// Discovery routes
+// ===========================================================================
+
+/// Register all job source discovery routes on a new router with shared state.
+pub fn discovery_routes(service: JobSourceService) -> Router {
+    Router::new()
+        .route("/api/v1/jobs/discover", post(discover_jobs))
+        .with_state(service)
+}
+
+#[tracing::instrument(skip(service, criteria), fields(keywords = ?criteria.keywords))]
+async fn discover_jobs(
+    State(service): State<JobSourceService>,
+    Json(criteria): Json<DiscoveryCriteria>,
+) -> Result<(StatusCode, Json<Vec<DiscoveryJobResponse>>), SourceError> {
+    tracing::info!("starting job discovery");
+    // JobSourceService::discover() is synchronous (calls Python via PyO3),
+    // so we wrap it in spawn_blocking to avoid blocking the async runtime.
+    let result = tokio::task::spawn_blocking(move || {
+        let existing_source_keys = HashSet::new();
+        let existing_fuzzy_keys = HashSet::new();
+        service.discover(&criteria, &existing_source_keys, &existing_fuzzy_keys)
+    })
+    .await
+    .map_err(|e| SourceError::NonRetryable {
+        source_name: "system".to_owned(),
+        message:     format!("task join error: {e}"),
+    })?;
+
+    tracing::info!(
+        job_count = result.jobs.len(),
+        has_error = result.error.is_some(),
+        "discover result received from driver"
+    );
+
+    // If the driver encountered an error, propagate it.
+    if let Some(ref err) = result.error {
+        tracing::warn!(%err, "discover returning error from driver");
+        return Err(result.error.unwrap());
+    }
+
+    let job_count = result.jobs.len();
+    let response = result
+        .jobs
+        .into_iter()
+        .map(DiscoveryJobResponse::from)
+        .collect();
+
+    tracing::info!(job_count, "job discovery complete");
+    Ok((StatusCode::OK, Json(response)))
+}
+
+// ===========================================================================
+// Tracker routes
+// ===========================================================================
+
 /// Register all saved-job routes on a new router with shared state.
-pub fn routes(service: SavedJobService) -> Router {
+pub fn tracker_routes(service: SavedJobService) -> Router {
     Router::new()
         .route("/api/v1/saved-jobs", post(create_saved_job))
         .route("/api/v1/saved-jobs", get(list_saved_jobs))

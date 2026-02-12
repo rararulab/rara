@@ -20,7 +20,7 @@
 //! ZipRecruiter, Bayt, Naukri, and BDJobs.
 
 use crate::{
-    err::SourceError,
+    error::SourceError,
     types::{DiscoveryCriteria, RawJob},
 };
 
@@ -64,7 +64,7 @@ impl JobSpyDriver {
             return Ok(Vec::new());
         }
 
-        // Deserialize job_type string → jobspy_sys JobType via serde aliases.
+        // Deserialize job_type string -> jobspy_sys JobType via serde aliases.
         let job_type = query.job_type.as_deref().and_then(|jt| {
             serde_json::from_value(serde_json::Value::String(jt.to_lowercase())).ok()
         });

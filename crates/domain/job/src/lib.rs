@@ -12,19 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # job-domain-job-discovery
+//! # job-domain-job
 //!
-//! Job source discovery service powered by JobSpy.
+//! Unified job domain: discovery, tracking, and pipeline management.
+
 use std::sync::Arc;
+
 use sqlx::PgPool;
 
+pub mod bot_internal_routes;
+pub mod crawl4ai;
 pub mod dedup;
-pub mod err;
+pub mod discovery_service;
+pub mod error;
 pub mod jobspy;
 pub mod pg_repository;
 pub mod repository;
 pub mod routes;
-pub mod service;
+pub mod tracker_service;
 pub mod types;
 
 #[must_use]
@@ -32,7 +37,14 @@ pub fn wire_job_repository(pool: PgPool) -> Arc<dyn repository::JobRepository> {
     Arc::new(pg_repository::PgJobRepository::new(pool))
 }
 
-pub fn wire_job_source_service() -> Result<service::JobSourceService, err::SourceError> {
+pub fn wire_job_source_service() -> Result<discovery_service::JobSourceService, error::SourceError> {
     let driver = jobspy::JobSpyDriver::new()?;
-    Ok(service::JobSourceService::new(driver))
+    Ok(discovery_service::JobSourceService::new(driver))
+}
+
+#[must_use]
+pub fn wire_saved_job_service(pool: PgPool) -> tracker_service::SavedJobService {
+    let repo: Arc<dyn repository::SavedJobRepository> =
+        Arc::new(pg_repository::PgSavedJobRepository::new(pool));
+    tracker_service::SavedJobService::new(repo)
 }

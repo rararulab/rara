@@ -21,8 +21,7 @@ job-common-worker = { workspace = true }
 job-domain-analytics = { workspace = true }
 job-domain-application = { workspace = true }
 job-domain-interview = { workspace = true }
-job-domain-job-discovery = { workspace = true }
-job-domain-job-tracker = { workspace = true }
+job-domain-job = { workspace = true }
 job-domain-resume = { workspace = true }
 job-domain-scheduler = { workspace = true }
 job-domain-shared = { workspace = true }

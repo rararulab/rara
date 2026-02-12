@@ -34,9 +34,9 @@ pub struct AppState {
     pub interview_service:   job_domain_interview::service::InterviewService,
     pub scheduler_service:   job_domain_scheduler::service::SchedulerService,
     pub analytics_service:   job_domain_analytics::service::AnalyticsService,
-    pub saved_job_service:   job_domain_job_tracker::service::SavedJobService,
-    pub job_source_service:  job_domain_job_discovery::service::JobSourceService,
-    pub job_repo:            Arc<dyn job_domain_job_discovery::repository::JobRepository>,
+    pub saved_job_service:   job_domain_job::tracker_service::SavedJobService,
+    pub job_source_service:  job_domain_job::discovery_service::JobSourceService,
+    pub job_repo:            Arc<dyn job_domain_job::repository::JobRepository>,
 
     // -- shared --
     pub settings_svc:  job_domain_shared::settings::SettingsSvc,
@@ -44,7 +44,7 @@ pub struct AppState {
 
     // -- infra --
     pub object_store: Operator,
-    pub crawl_client: job_domain_job_tracker::crawl4ai::Crawl4AiClient,
+    pub crawl_client: job_domain_job::crawl4ai::Crawl4AiClient,
 
     // -- worker coordination --
     pub analyze_notify: Arc<RwLock<Option<NotifyHandle>>>,
@@ -88,17 +88,17 @@ impl AppState {
         let analytics_service =
             job_domain_analytics::wire_analytics_service(pool.clone());
         let saved_job_service =
-            job_domain_job_tracker::wire_saved_job_service(pool.clone());
-        let job_repo = job_domain_job_discovery::wire_job_repository(pool);
+            job_domain_job::wire_saved_job_service(pool.clone());
+        let job_repo = job_domain_job::wire_job_repository(pool);
 
-        let job_source_service = job_domain_job_discovery::wire_job_source_service()
+        let job_source_service = job_domain_job::wire_job_source_service()
             .whatever_context("Failed to initialize JobSpy driver")?;
         info!("JobSpy driver initialized");
 
         // -- infra clients ---------------------------------------------------
 
         let crawl_client =
-            job_domain_job_tracker::crawl4ai::Crawl4AiClient::new(crawl4ai_url);
+            job_domain_job::crawl4ai::Crawl4AiClient::new(crawl4ai_url);
         info!("Crawl4AI client configured");
 
         Ok(Self {
@@ -139,11 +139,11 @@ impl AppState {
             .merge(job_domain_analytics::routes::routes(
                 self.analytics_service.clone(),
             ))
-            .merge(job_domain_job_tracker::routes::routes(
+            .merge(job_domain_job::routes::tracker_routes(
                 self.saved_job_service.clone(),
             ))
             .merge(
-                job_domain_job_discovery::routes::routes(
+                job_domain_job::routes::discovery_routes(
                     self.job_source_service.clone(),
                 )
                 .layer(DedupLayer::new(DedupLayerConfig::default())),
@@ -154,7 +154,7 @@ impl AppState {
             .merge(job_domain_shared::notify::routes::routes(
                 self.notify_client.clone(),
             ))
-            .merge(job_domain_job_tracker::bot_internal_routes::routes(
+            .merge(job_domain_job::bot_internal_routes::routes(
                 self.ai_service.clone(),
                 self.job_repo.clone(),
             ))

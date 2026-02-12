@@ -89,7 +89,7 @@ impl FallibleWorker<AppState> for JdParserWorker {
             };
 
             // 3. Build NormalizedJob
-            let job = job_domain_job_discovery::types::NormalizedJob {
+            let job = job_domain_job::types::NormalizedJob {
                 id:              uuid::Uuid::new_v4(),
                 source_job_id:   uuid::Uuid::new_v4().to_string(),
                 source_name:     "telegram".to_string(),

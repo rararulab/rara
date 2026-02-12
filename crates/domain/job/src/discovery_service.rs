@@ -22,7 +22,7 @@ use std::{
 
 use crate::{
     dedup::{self, FuzzyKey, SourceKey},
-    err::SourceError,
+    error::SourceError,
     jobspy::JobSpyDriver,
     types::{DiscoveryCriteria, NormalizedJob, RawJob},
 };
@@ -68,7 +68,7 @@ impl JobSourceService {
         tracing::info!(count = raw_jobs.len(), "JobSpy returned raw jobs");
         log_description_coverage_by_source(&raw_jobs);
 
-        // Normalize raw → NormalizedJob via TryFrom.
+        // Normalize raw -> NormalizedJob via TryFrom.
         let mut normalized = Vec::with_capacity(raw_jobs.len());
         for raw in raw_jobs {
             match NormalizedJob::try_from(raw) {
