@@ -215,7 +215,7 @@ impl AppConfig {
             .eager()
             .on_notify()
             .spawn();
-        app_state.saved_job_service.set_notify_trigger(crawl_handle);
+        app_state.job_service.set_notify_trigger(crawl_handle);
 
         let gc_interval_secs = self.gc_interval_hours * 3600;
         let _gc_handle = worker_manager

@@ -34,9 +34,7 @@ pub struct AppState {
     pub interview_service:   job_domain_interview::service::InterviewService,
     pub scheduler_service:   job_domain_scheduler::service::SchedulerService,
     pub analytics_service:   job_domain_analytics::service::AnalyticsService,
-    pub saved_job_service:   job_domain_job::tracker_service::SavedJobService,
-    pub job_source_service:  job_domain_job::discovery_service::JobSourceService,
-    pub job_repo:            Arc<dyn job_domain_job::repository::JobRepository>,
+    pub job_service:         job_domain_job::service::JobService,
 
     // -- shared --
     pub settings_svc:  job_domain_shared::settings::SettingsSvc,
@@ -62,10 +60,9 @@ impl AppState {
 
         // -- runtime settings ------------------------------------------------
 
-        let settings_svc =
-            job_domain_shared::settings::SettingsSvc::load(db_store.kv_store())
-                .await
-                .whatever_context("Failed to initialize runtime settings")?;
+        let settings_svc = job_domain_shared::settings::SettingsSvc::load(db_store.kv_store())
+            .await
+            .whatever_context("Failed to initialize runtime settings")?;
         info!("Runtime settings service loaded");
 
         // -- AI service ------------------------------------------------------
@@ -81,24 +78,16 @@ impl AppState {
 
         let resume_service = job_domain_resume::wire_resume_service(pool.clone());
         let application_service = job_domain_application::wire(pool.clone());
-        let interview_service =
-            job_domain_interview::wire_interview_service(pool.clone());
-        let scheduler_service =
-            job_domain_scheduler::wire_scheduler_service(pool.clone());
-        let analytics_service =
-            job_domain_analytics::wire_analytics_service(pool.clone());
-        let saved_job_service =
-            job_domain_job::wire_saved_job_service(pool.clone());
-        let job_repo = job_domain_job::wire_job_repository(pool);
-
-        let job_source_service = job_domain_job::wire_job_source_service()
-            .whatever_context("Failed to initialize JobSpy driver")?;
-        info!("JobSpy driver initialized");
+        let interview_service = job_domain_interview::wire_interview_service(pool.clone());
+        let scheduler_service = job_domain_scheduler::wire_scheduler_service(pool.clone());
+        let analytics_service = job_domain_analytics::wire_analytics_service(pool.clone());
+        let job_service = job_domain_job::wire_job_service(pool, ai_service.clone())
+            .whatever_context("Failed to initialize job service")?;
+        info!("Job service initialized");
 
         // -- infra clients ---------------------------------------------------
 
-        let crawl_client =
-            job_domain_job::crawl4ai::Crawl4AiClient::new(crawl4ai_url);
+        let crawl_client = job_domain_job::crawl4ai::Crawl4AiClient::new(crawl4ai_url);
         info!("Crawl4AI client configured");
 
         Ok(Self {
@@ -108,9 +97,7 @@ impl AppState {
             interview_service,
             scheduler_service,
             analytics_service,
-            saved_job_service,
-            job_source_service,
-            job_repo,
+            job_service,
             settings_svc,
             notify_client,
             object_store,
@@ -139,24 +126,18 @@ impl AppState {
             .merge(job_domain_analytics::routes::routes(
                 self.analytics_service.clone(),
             ))
-            .merge(job_domain_job::routes::tracker_routes(
-                self.saved_job_service.clone(),
+            .merge(job_domain_job::routes::management_routes(
+                self.job_service.clone(),
             ))
             .merge(
-                job_domain_job::routes::discovery_routes(
-                    self.job_source_service.clone(),
-                )
-                .layer(DedupLayer::new(DedupLayerConfig::default())),
+                job_domain_job::routes::discovery_routes(self.job_service.clone())
+                    .layer(DedupLayer::new(DedupLayerConfig::default())),
             )
             .merge(job_domain_shared::settings::router::routes(
                 self.settings_svc.clone(),
             ))
             .merge(job_domain_shared::notify::routes::routes(
                 self.notify_client.clone(),
-            ))
-            .merge(job_domain_job::bot_internal_routes::routes(
-                self.ai_service.clone(),
-                self.job_repo.clone(),
             ))
     }
 }

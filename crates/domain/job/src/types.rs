@@ -21,7 +21,7 @@ use job_model::{
     saved_job::{SavedJob as StoreSavedJob, SavedJobEvent as StoreSavedJobEvent},
 };
 use serde::{Deserialize, Serialize};
-use strum_macros::{Display, FromRepr};
+use strum_macros::{Display, EnumString, FromRepr};
 use uuid::Uuid;
 
 use crate::{error::SourceError, jobspy::JOBSPY_SOURCE_NAME};
@@ -103,6 +103,20 @@ pub struct RawJob {
 // NormalizedJob
 // ---------------------------------------------------------------------------
 
+/// Intermediate struct for deserializing AI-parsed job descriptions.
+#[derive(Debug, Deserialize)]
+pub struct ParsedJob {
+    pub title:           String,
+    pub company:         String,
+    pub location:        Option<String>,
+    pub description:     Option<String>,
+    pub url:             Option<String>,
+    pub salary_min:      Option<i32>,
+    pub salary_max:      Option<i32>,
+    pub salary_currency: Option<String>,
+    pub tags:            Option<Vec<String>>,
+}
+
 /// A cleaned, standardized job record ready for persistence.
 ///
 /// All required fields are guaranteed to be present after
@@ -137,6 +151,29 @@ pub struct NormalizedJob {
     pub raw_data:        Option<serde_json::Value>,
     /// When the listing was originally posted.
     pub posted_at:       Option<Timestamp>,
+}
+
+impl NormalizedJob {
+    /// Build a `NormalizedJob` from an AI-parsed result.
+    #[must_use]
+    pub fn from_parsed(parsed: ParsedJob, raw_text: &str) -> Self {
+        Self {
+            id:              Uuid::new_v4(),
+            source_job_id:   Uuid::new_v4().to_string(),
+            source_name:     "telegram".to_owned(),
+            title:           parsed.title,
+            company:         parsed.company,
+            location:        parsed.location,
+            description:     parsed.description,
+            url:             parsed.url,
+            salary_min:      parsed.salary_min,
+            salary_max:      parsed.salary_max,
+            salary_currency: parsed.salary_currency,
+            tags:            parsed.tags.unwrap_or_default(),
+            raw_data:        serde_json::to_value(raw_text).ok(),
+            posted_at:       None,
+        }
+    }
 }
 
 /// API response model for the job discovery endpoint.
@@ -429,7 +466,7 @@ fn json_opt_bool(raw: &serde_json::Value, key: &str) -> Option<bool> { raw.get(k
 
 /// Pipeline status for a saved job.
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, FromRepr)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, EnumString, FromRepr)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum SavedJobStatus {

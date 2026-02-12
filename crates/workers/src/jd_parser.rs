@@ -15,7 +15,6 @@
 //! JD parser worker — drains the parse channel and processes each request.
 
 use async_trait::async_trait;
-use job_ai::error::AiError;
 use job_common_worker::{FallibleWorker, WorkResult, WorkerContext};
 use tokio::sync::mpsc;
 use tracing::{error, info};
@@ -25,29 +24,14 @@ use crate::{types::JdParseRequest, worker_state::AppState};
 /// Worker that drains the JD parse channel on each tick.
 ///
 /// For every [`JdParseRequest`]:
-/// 1. Calls the AI agent to extract structured fields.
-/// 2. Saves the resulting `NormalizedJob` via `JobRepository`.
-/// 3. Persists results to DB for downstream workflows.
+/// 1. Calls [`JobService::parse_jd`] which runs the AI agent and saves the job.
+/// 2. Logs the outcome.
 pub struct JdParserWorker {
     rx: mpsc::Receiver<JdParseRequest>,
 }
 
 impl JdParserWorker {
     pub fn new(rx: mpsc::Receiver<JdParseRequest>) -> Self { Self { rx } }
-}
-
-/// Intermediate struct for deserializing the AI response JSON.
-#[derive(serde::Deserialize)]
-struct ParsedJob {
-    title:           String,
-    company:         String,
-    location:        Option<String>,
-    description:     Option<String>,
-    url:             Option<String>,
-    salary_min:      Option<i32>,
-    salary_max:      Option<i32>,
-    salary_currency: Option<String>,
-    tags:            Option<Vec<String>>,
 }
 
 #[async_trait]
@@ -57,66 +41,16 @@ impl FallibleWorker<AppState> for JdParserWorker {
         while let Ok(req) = self.rx.try_recv() {
             let state = ctx.state();
 
-            let agent = match state.ai_service.jd_parser() {
-                Ok(agent) => agent,
-                Err(AiError::NotConfigured) => {
-                    error!("AI service not configured; skipping JD parse request");
-                    continue;
-                }
-                Err(e) => {
-                    error!(error = %e, "AI service error; skipping JD parse request");
-                    continue;
-                }
-            };
-            let repo = &state.job_repo;
-
-            // 1. AI parse
-            let json_str = match agent.parse(&req.text).await {
-                Ok(s) => s,
-                Err(e) => {
-                    error!(error = %e, "AI JD parse failed");
-                    continue;
-                }
-            };
-
-            // 2. Deserialize AI output
-            let parsed: ParsedJob = match serde_json::from_str(&json_str) {
-                Ok(p) => p,
-                Err(e) => {
-                    error!(error = %e, raw = %json_str, "Failed to deserialize AI response");
-                    continue;
-                }
-            };
-
-            // 3. Build NormalizedJob
-            let job = job_domain_job::types::NormalizedJob {
-                id:              uuid::Uuid::new_v4(),
-                source_job_id:   uuid::Uuid::new_v4().to_string(),
-                source_name:     "telegram".to_string(),
-                title:           parsed.title.clone(),
-                company:         parsed.company.clone(),
-                location:        parsed.location,
-                description:     parsed.description,
-                url:             parsed.url,
-                salary_min:      parsed.salary_min,
-                salary_max:      parsed.salary_max,
-                salary_currency: parsed.salary_currency,
-                tags:            parsed.tags.unwrap_or_default(),
-                raw_data:        serde_json::to_value(&req.text).ok(),
-                posted_at:       None,
-            };
-
-            // 4. Save to DB
-            match repo.save(&job).await {
-                Ok(saved) => {
+            match state.job_service.parse_jd(&req.text).await {
+                Ok(job) => {
                     info!(
-                        title = %saved.title,
-                        company = %saved.company,
+                        title = %job.title,
+                        company = %job.company,
                         "JD parsed and saved"
                     );
                 }
                 Err(e) => {
-                    error!(error = %e, "Failed to save job");
+                    error!(error = %e, "JD parse failed");
                 }
             }
         }

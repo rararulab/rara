@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! HTTP API routes for job discovery and saved job management.
+//! HTTP API routes for job discovery, saved-job management, and bot
+//! integration.
 
 use std::collections::HashSet;
 
@@ -26,12 +27,11 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::{
-    discovery_service::JobSourceService,
     error::{SavedJobError, SourceError},
-    tracker_service::SavedJobService,
+    service::JobService,
     types::{
-        CreateSavedJobRequest, DiscoveryCriteria, DiscoveryJobResponse, PipelineEvent, SavedJob,
-        SavedJobFilter, SavedJobStatus,
+        CreateSavedJobRequest, DiscoveryCriteria, DiscoveryJobResponse, NormalizedJob,
+        PipelineEvent, SavedJob, SavedJobFilter,
     },
 };
 
@@ -39,8 +39,8 @@ use crate::{
 // Discovery routes
 // ===========================================================================
 
-/// Register all job source discovery routes on a new router with shared state.
-pub fn discovery_routes(service: JobSourceService) -> Router {
+/// Discovery routes (caller may apply DedupLayer).
+pub fn discovery_routes(service: JobService) -> Router {
     Router::new()
         .route("/api/v1/jobs/discover", post(discover_jobs))
         .with_state(service)
@@ -48,11 +48,11 @@ pub fn discovery_routes(service: JobSourceService) -> Router {
 
 #[tracing::instrument(skip(service, criteria), fields(keywords = ?criteria.keywords))]
 async fn discover_jobs(
-    State(service): State<JobSourceService>,
+    State(service): State<JobService>,
     Json(criteria): Json<DiscoveryCriteria>,
 ) -> Result<(StatusCode, Json<Vec<DiscoveryJobResponse>>), SourceError> {
     tracing::info!("starting job discovery");
-    // JobSourceService::discover() is synchronous (calls Python via PyO3),
+    // JobService::discover() is synchronous (calls Python via PyO3),
     // so we wrap it in spawn_blocking to avoid blocking the async runtime.
     let result = tokio::task::spawn_blocking(move || {
         let existing_source_keys = HashSet::new();
@@ -89,24 +89,32 @@ async fn discover_jobs(
 }
 
 // ===========================================================================
-// Tracker routes
+// Management routes (tracker + bot internal)
 // ===========================================================================
 
-/// Register all saved-job routes on a new router with shared state.
-pub fn tracker_routes(service: SavedJobService) -> Router {
+/// Saved-job CRUD and bot internal routes.
+pub fn management_routes(service: JobService) -> Router {
     Router::new()
+        // Tracker
         .route("/api/v1/saved-jobs", post(create_saved_job))
         .route("/api/v1/saved-jobs", get(list_saved_jobs))
         .route("/api/v1/saved-jobs/{id}", get(get_saved_job))
         .route("/api/v1/saved-jobs/{id}", delete(delete_saved_job))
         .route("/api/v1/saved-jobs/{id}/retry", post(retry_saved_job))
-        .route("/api/v1/saved-jobs/{id}/events", get(list_saved_job_events))
+        .route(
+            "/api/v1/saved-jobs/{id}/events",
+            get(list_saved_job_events),
+        )
+        // Bot internal
+        .route("/api/v1/internal/bot/jd-parse", post(parse_jd_from_bot))
         .with_state(service)
 }
 
+// -- Tracker handlers -------------------------------------------------------
+
 #[instrument(skip(service, req))]
 async fn create_saved_job(
-    State(service): State<SavedJobService>,
+    State(service): State<JobService>,
     Json(req): Json<CreateSavedJobRequest>,
 ) -> Result<(StatusCode, Json<SavedJob>), SavedJobError> {
     let saved_job = service.create(&req.url).await?;
@@ -115,17 +123,17 @@ async fn create_saved_job(
 
 #[instrument(skip(service))]
 async fn list_saved_jobs(
-    State(service): State<SavedJobService>,
+    State(service): State<JobService>,
     Query(filter): Query<SavedJobFilter>,
 ) -> Result<Json<Vec<SavedJob>>, SavedJobError> {
-    let status = filter.status.and_then(|s| parse_status(&s));
+    let status = filter.status.and_then(|s| s.parse().ok());
     let jobs = service.list(status).await?;
     Ok(Json(jobs))
 }
 
 #[instrument(skip(service))]
 async fn get_saved_job(
-    State(service): State<SavedJobService>,
+    State(service): State<JobService>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<SavedJob>, SavedJobError> {
     let job = service
@@ -137,7 +145,7 @@ async fn get_saved_job(
 
 #[instrument(skip(service))]
 async fn delete_saved_job(
-    State(service): State<SavedJobService>,
+    State(service): State<JobService>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, SavedJobError> {
     service.delete(id).await?;
@@ -146,7 +154,7 @@ async fn delete_saved_job(
 
 #[instrument(skip(service))]
 async fn retry_saved_job(
-    State(service): State<SavedJobService>,
+    State(service): State<JobService>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, SavedJobError> {
     service.retry(id).await?;
@@ -155,23 +163,48 @@ async fn retry_saved_job(
 
 #[instrument(skip(service))]
 async fn list_saved_job_events(
-    State(service): State<SavedJobService>,
+    State(service): State<JobService>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<PipelineEvent>>, SavedJobError> {
     let events = service.list_events(id).await?;
     Ok(Json(events))
 }
 
-/// Parse a status string (e.g. "analyzed") into a `SavedJobStatus`.
-fn parse_status(s: &str) -> Option<SavedJobStatus> {
-    match s {
-        "pending_crawl" => Some(SavedJobStatus::PendingCrawl),
-        "crawling" => Some(SavedJobStatus::Crawling),
-        "crawled" => Some(SavedJobStatus::Crawled),
-        "analyzing" => Some(SavedJobStatus::Analyzing),
-        "analyzed" => Some(SavedJobStatus::Analyzed),
-        "failed" => Some(SavedJobStatus::Failed),
-        "expired" => Some(SavedJobStatus::Expired),
-        _ => None,
+// -- Bot internal handler ---------------------------------------------------
+
+#[derive(Debug, serde::Deserialize)]
+struct BotJdParseRequest {
+    text: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct BotJdParseResponse {
+    id:      Uuid,
+    title:   String,
+    company: String,
+}
+
+async fn parse_jd_from_bot(
+    State(service): State<JobService>,
+    Json(req): Json<BotJdParseRequest>,
+) -> Result<(StatusCode, Json<BotJdParseResponse>), (StatusCode, String)> {
+    if req.text.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "text must not be empty".to_owned()));
     }
+
+    let saved: NormalizedJob = service.parse_jd(&req.text).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to parse jd: {e}"),
+        )
+    })?;
+
+    Ok((
+        StatusCode::OK,
+        Json(BotJdParseResponse {
+            id:      saved.id,
+            title:   saved.title,
+            company: saved.company,
+        }),
+    ))
 }

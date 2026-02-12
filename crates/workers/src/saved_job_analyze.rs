@@ -35,7 +35,7 @@ impl FallibleWorker<AppState> for SavedJobAnalyzeWorker {
         let state = ctx.state();
 
         let crawled = state
-            .saved_job_service
+            .job_service
             .list(Some(SavedJobStatus::Crawled))
             .await
             .map_err(|e| WorkError::transient(format!("list Crawled failed: {e}")))?;
@@ -49,7 +49,7 @@ impl FallibleWorker<AppState> for SavedJobAnalyzeWorker {
         let mut analyzed_count = 0u32;
 
         for job in &crawled {
-            let agent = match state.ai_service.jd_analyzer() {
+            let agent = match state.job_service.ai_service().jd_analyzer() {
                 Ok(agent) => agent,
                 Err(AiError::NotConfigured) => {
                     warn!("AI service not configured; skipping saved-job analyze tick");
@@ -62,7 +62,7 @@ impl FallibleWorker<AppState> for SavedJobAnalyzeWorker {
 
             // Claim the job first to prevent duplicate processing on restart.
             if let Err(e) = state
-                .saved_job_service
+                .job_service
                 .update_status(job.id, SavedJobStatus::Analyzing, None)
                 .await
             {
@@ -70,7 +70,7 @@ impl FallibleWorker<AppState> for SavedJobAnalyzeWorker {
                 continue;
             }
             let _ = state
-                .saved_job_service
+                .job_service
                 .log_event(
                     job.id,
                     PipelineStage::Analyze,
@@ -91,7 +91,7 @@ impl FallibleWorker<AppState> for SavedJobAnalyzeWorker {
                             None => {
                                 warn!(id = %job.id, "no markdown available for analysis");
                                 let _ = state
-                                    .saved_job_service
+                                    .job_service
                                     .update_status(
                                         job.id,
                                         SavedJobStatus::Failed,
@@ -109,7 +109,7 @@ impl FallibleWorker<AppState> for SavedJobAnalyzeWorker {
                     None => {
                         warn!(id = %job.id, "no markdown available for analysis");
                         let _ = state
-                            .saved_job_service
+                            .job_service
                             .update_status(
                                 job.id,
                                 SavedJobStatus::Failed,
@@ -127,7 +127,7 @@ impl FallibleWorker<AppState> for SavedJobAnalyzeWorker {
                 Err(e) => {
                     warn!(id = %job.id, error = %e, "AI analysis failed");
                     let _ = state
-                        .saved_job_service
+                        .job_service
                         .update_status(
                             job.id,
                             SavedJobStatus::Failed,
@@ -135,7 +135,7 @@ impl FallibleWorker<AppState> for SavedJobAnalyzeWorker {
                         )
                         .await;
                     let _ = state
-                        .saved_job_service
+                        .job_service
                         .log_event(
                             job.id,
                             PipelineStage::Analyze,
@@ -170,7 +170,7 @@ impl FallibleWorker<AppState> for SavedJobAnalyzeWorker {
 
             if title.is_some() || company.is_some() {
                 if let Err(e) = state
-                    .saved_job_service
+                    .job_service
                     .update_title_company(job.id, title, company)
                     .await
                 {
@@ -180,13 +180,13 @@ impl FallibleWorker<AppState> for SavedJobAnalyzeWorker {
 
             // Store analysis result (sets status to Analyzed)
             if let Err(e) = state
-                .saved_job_service
+                .job_service
                 .update_analysis(job.id, analysis_value, match_score)
                 .await
             {
                 warn!(id = %job.id, error = %e, "failed to store analysis result");
                 let _ = state
-                    .saved_job_service
+                    .job_service
                     .update_status(
                         job.id,
                         SavedJobStatus::Failed,
@@ -197,7 +197,7 @@ impl FallibleWorker<AppState> for SavedJobAnalyzeWorker {
             }
 
             let _ = state
-                .saved_job_service
+                .job_service
                 .log_event(
                     job.id,
                     PipelineStage::Analyze,

@@ -20,31 +20,30 @@ use std::sync::Arc;
 
 use sqlx::PgPool;
 
-pub mod bot_internal_routes;
 pub mod crawl4ai;
 pub mod dedup;
-pub mod discovery_service;
 pub mod error;
 pub mod jobspy;
 pub mod pg_repository;
 pub mod repository;
 pub mod routes;
-pub mod tracker_service;
+pub mod service;
 pub mod types;
 
-#[must_use]
-pub fn wire_job_repository(pool: PgPool) -> Arc<dyn repository::JobRepository> {
-    Arc::new(pg_repository::PgJobRepository::new(pool))
-}
-
-pub fn wire_job_source_service() -> Result<discovery_service::JobSourceService, error::SourceError> {
+/// Wire the unified [`service::JobService`] with all dependencies.
+pub fn wire_job_service(
+    pool: PgPool,
+    ai_service: job_ai::service::AiService,
+) -> Result<service::JobService, error::SourceError> {
     let driver = jobspy::JobSpyDriver::new()?;
-    Ok(discovery_service::JobSourceService::new(driver))
-}
-
-#[must_use]
-pub fn wire_saved_job_service(pool: PgPool) -> tracker_service::SavedJobService {
-    let repo: Arc<dyn repository::SavedJobRepository> =
-        Arc::new(pg_repository::PgSavedJobRepository::new(pool));
-    tracker_service::SavedJobService::new(repo)
+    let saved_job_repo: Arc<dyn repository::SavedJobRepository> =
+        Arc::new(pg_repository::PgSavedJobRepository::new(pool.clone()));
+    let job_repo: Arc<dyn repository::JobRepository> =
+        Arc::new(pg_repository::PgJobRepository::new(pool));
+    Ok(service::JobService::new(
+        driver,
+        saved_job_repo,
+        job_repo,
+        ai_service,
+    ))
 }

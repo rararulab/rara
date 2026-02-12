@@ -40,7 +40,7 @@ impl FallibleWorker<AppState> for SavedJobCrawlWorker {
         let state = ctx.state();
 
         let pending = state
-            .saved_job_service
+            .job_service
             .list(Some(SavedJobStatus::PendingCrawl))
             .await
             .map_err(|e| WorkError::transient(format!("list PendingCrawl failed: {e}")))?;
@@ -56,7 +56,7 @@ impl FallibleWorker<AppState> for SavedJobCrawlWorker {
         for job in &pending {
             // Transition to Crawling
             if let Err(e) = state
-                .saved_job_service
+                .job_service
                 .update_status(job.id, SavedJobStatus::Crawling, None)
                 .await
             {
@@ -64,7 +64,7 @@ impl FallibleWorker<AppState> for SavedJobCrawlWorker {
                 continue;
             }
             let _ = state
-                .saved_job_service
+                .job_service
                 .log_event(
                     job.id,
                     PipelineStage::Crawl,
@@ -80,7 +80,7 @@ impl FallibleWorker<AppState> for SavedJobCrawlWorker {
                 Err(e) => {
                     warn!(id = %job.id, error = %e, "crawl failed");
                     let _ = state
-                        .saved_job_service
+                        .job_service
                         .update_status(
                             job.id,
                             SavedJobStatus::Failed,
@@ -88,7 +88,7 @@ impl FallibleWorker<AppState> for SavedJobCrawlWorker {
                         )
                         .await;
                     let _ = state
-                        .saved_job_service
+                        .job_service
                         .log_event(
                             job.id,
                             PipelineStage::Crawl,
@@ -106,7 +106,7 @@ impl FallibleWorker<AppState> for SavedJobCrawlWorker {
             if let Err(e) = state.object_store.write(&s3_key, markdown.clone()).await {
                 warn!(id = %job.id, error = %e, "S3 upload failed");
                 let _ = state
-                    .saved_job_service
+                    .job_service
                     .update_status(
                         job.id,
                         SavedJobStatus::Failed,
@@ -114,7 +114,7 @@ impl FallibleWorker<AppState> for SavedJobCrawlWorker {
                     )
                     .await;
                 let _ = state
-                    .saved_job_service
+                    .job_service
                     .log_event(
                         job.id,
                         PipelineStage::Crawl,
@@ -129,13 +129,13 @@ impl FallibleWorker<AppState> for SavedJobCrawlWorker {
             // Store crawl result (sets status to Crawled)
             let preview: String = markdown.chars().take(PREVIEW_LEN).collect();
             if let Err(e) = state
-                .saved_job_service
+                .job_service
                 .update_crawl_result(job.id, &s3_key, &preview)
                 .await
             {
                 warn!(id = %job.id, error = %e, "failed to store crawl result");
                 let _ = state
-                    .saved_job_service
+                    .job_service
                     .update_status(
                         job.id,
                         SavedJobStatus::Failed,
@@ -146,7 +146,7 @@ impl FallibleWorker<AppState> for SavedJobCrawlWorker {
             }
 
             let _ = state
-                .saved_job_service
+                .job_service
                 .log_event(
                     job.id,
                     PipelineStage::Crawl,

@@ -83,7 +83,7 @@ impl FallibleWorker<AppState> for SavedJobGcWorker {
     async fn work(&mut self, ctx: WorkerContext<AppState>) -> WorkResult {
         let state = ctx.state();
 
-        let saved_job_service = &state.saved_job_service;
+        let job_service = &state.job_service;
 
         // -----------------------------------------------------------------
         // Phase 1: Check stale URLs for liveness
@@ -95,7 +95,7 @@ impl FallibleWorker<AppState> for SavedJobGcWorker {
             ))
             .expect("timestamp subtraction");
 
-        let stale_jobs = saved_job_service
+        let stale_jobs = job_service
             .list_stale(cutoff)
             .await
             .map_err(|e| WorkError::transient(format!("list_stale failed: {e}")))?;
@@ -129,7 +129,7 @@ impl FallibleWorker<AppState> for SavedJobGcWorker {
             };
 
             if is_dead {
-                if let Err(e) = saved_job_service
+                if let Err(e) = job_service
                     .update_status(
                         job.id,
                         SavedJobStatus::Expired,
@@ -139,7 +139,7 @@ impl FallibleWorker<AppState> for SavedJobGcWorker {
                 {
                     warn!(id = %job.id, error = %e, "failed to mark saved job as expired");
                 } else {
-                    let _ = saved_job_service
+                    let _ = job_service
                         .log_event(
                             job.id,
                             PipelineStage::Gc,
@@ -172,7 +172,7 @@ impl FallibleWorker<AppState> for SavedJobGcWorker {
 
         let object_store = &state.object_store;
 
-        let expired_with_s3 = saved_job_service
+        let expired_with_s3 = job_service
             .list_with_s3_keys_by_status(&[SavedJobStatus::Expired])
             .await
             .map_err(|e| {
@@ -202,14 +202,14 @@ impl FallibleWorker<AppState> for SavedJobGcWorker {
                 continue;
             }
 
-            if let Err(e) = saved_job_service.clear_s3_key(job.id).await {
+            if let Err(e) = job_service.clear_s3_key(job.id).await {
                 warn!(
                     id = %job.id,
                     error = %e,
                     "failed to clear S3 key in DB"
                 );
             } else {
-                let _ = saved_job_service
+                let _ = job_service
                     .log_event(
                         job.id,
                         PipelineStage::Gc,
