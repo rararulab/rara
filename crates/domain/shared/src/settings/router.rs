@@ -14,12 +14,7 @@
 
 //! HTTP routes for runtime settings.
 
-use axum::{
-    Json, Router,
-    extract::State,
-    http::StatusCode,
-    routing::get,
-};
+use axum::{Json, Router, extract::State, http::StatusCode, routing::get};
 
 use crate::settings::{
     model::{Settings, UpdateRequest},
@@ -67,9 +62,9 @@ pub struct RuntimeSettingsView {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AiSettingsView {
-    pub configured: bool,
-    pub model:      Option<String>,
-    pub key_hint:   Option<String>,
+    pub configured:         bool,
+    pub model:              Option<String>,
+    pub openrouter_api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -96,9 +91,9 @@ impl Into<RuntimeSettingsView> for Settings {
 
         RuntimeSettingsView {
             ai:         AiSettingsView {
-                configured: self.ai.openrouter_api_key.is_some(),
-                model:      self.ai.model.clone(),
-                key_hint:   secret_hint(self.ai.openrouter_api_key.as_deref()),
+                configured:         self.ai.openrouter_api_key.is_some(),
+                model:              self.ai.model.clone(),
+                openrouter_api_key: self.ai.openrouter_api_key.clone(),
             },
             telegram:   TgSettingsResp {
                 configured: self.telegram.bot_token.is_some() && self.telegram.chat_id.is_some(),

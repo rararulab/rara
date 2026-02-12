@@ -189,7 +189,6 @@ export interface SavedJob {
   company: string | null;
   status: string;
   markdown_s3_key: string | null;
-  markdown_preview: string | null;
   analysis_result: Record<string, unknown> | null;
   match_score: number | null;
   error_message: string | null;
@@ -239,7 +238,7 @@ export interface RuntimeSettingsView {
   ai: {
     configured: boolean;
     model: string | null;
-    key_hint: string | null;
+    openrouter_api_key: string | null;
   };
   telegram: {
     configured: boolean;

@@ -466,7 +466,9 @@ fn json_opt_bool(raw: &serde_json::Value, key: &str) -> Option<bool> { raw.get(k
 
 /// Pipeline status for a saved job.
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, EnumString, FromRepr)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, EnumString, FromRepr,
+)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum SavedJobStatus {
@@ -569,6 +571,7 @@ pub struct SavedJob {
     pub company:          Option<String>,
     pub status:           SavedJobStatus,
     pub markdown_s3_key:  Option<String>,
+    #[serde(skip_serializing)]
     pub markdown_preview: Option<String>,
     pub analysis_result:  Option<serde_json::Value>,
     pub match_score:      Option<f32>,

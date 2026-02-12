@@ -128,6 +128,7 @@ impl AppState {
             ))
             .merge(job_domain_job::routes::management_routes(
                 self.job_service.clone(),
+                self.object_store.clone(),
             ))
             .merge(
                 job_domain_job::routes::discovery_routes(self.job_service.clone())

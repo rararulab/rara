@@ -20,9 +20,11 @@ use std::collections::HashSet;
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{StatusCode, header},
+    response::IntoResponse,
     routing::{delete, get, post},
 };
+use opendal::Operator;
 use tracing::instrument;
 use uuid::Uuid;
 
@@ -93,7 +95,11 @@ async fn discover_jobs(
 // ===========================================================================
 
 /// Saved-job CRUD and bot internal routes.
-pub fn management_routes(service: JobService) -> Router {
+pub fn management_routes(service: JobService, object_store: Operator) -> Router {
+    let state = ManagementState {
+        service,
+        object_store,
+    };
     Router::new()
         // Tracker
         .route("/api/v1/saved-jobs", post(create_saved_job))
@@ -101,73 +107,112 @@ pub fn management_routes(service: JobService) -> Router {
         .route("/api/v1/saved-jobs/{id}", get(get_saved_job))
         .route("/api/v1/saved-jobs/{id}", delete(delete_saved_job))
         .route("/api/v1/saved-jobs/{id}/retry", post(retry_saved_job))
+        .route("/api/v1/saved-jobs/{id}/markdown", get(get_saved_job_markdown))
         .route(
             "/api/v1/saved-jobs/{id}/events",
             get(list_saved_job_events),
         )
         // Bot internal
         .route("/api/v1/internal/bot/jd-parse", post(parse_jd_from_bot))
-        .with_state(service)
+        .with_state(state)
+}
+
+#[derive(Clone)]
+struct ManagementState {
+    service:      JobService,
+    object_store: Operator,
 }
 
 // -- Tracker handlers -------------------------------------------------------
 
-#[instrument(skip(service, req))]
+#[instrument(skip(state, req))]
 async fn create_saved_job(
-    State(service): State<JobService>,
+    State(state): State<ManagementState>,
     Json(req): Json<CreateSavedJobRequest>,
 ) -> Result<(StatusCode, Json<SavedJob>), SavedJobError> {
-    let saved_job = service.create(&req.url).await?;
+    let saved_job = state.service.create(&req.url).await?;
     Ok((StatusCode::CREATED, Json(saved_job)))
 }
 
-#[instrument(skip(service))]
+#[instrument(skip(state))]
 async fn list_saved_jobs(
-    State(service): State<JobService>,
+    State(state): State<ManagementState>,
     Query(filter): Query<SavedJobFilter>,
 ) -> Result<Json<Vec<SavedJob>>, SavedJobError> {
     let status = filter.status.and_then(|s| s.parse().ok());
-    let jobs = service.list(status).await?;
+    let jobs = state.service.list(status).await?;
     Ok(Json(jobs))
 }
 
-#[instrument(skip(service))]
+#[instrument(skip(state))]
 async fn get_saved_job(
-    State(service): State<JobService>,
+    State(state): State<ManagementState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<SavedJob>, SavedJobError> {
-    let job = service
+    let job = state
+        .service
         .get(id)
         .await?
         .ok_or(SavedJobError::NotFound { id })?;
     Ok(Json(job))
 }
 
-#[instrument(skip(service))]
+#[instrument(skip(state))]
 async fn delete_saved_job(
-    State(service): State<JobService>,
+    State(state): State<ManagementState>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, SavedJobError> {
-    service.delete(id).await?;
+    state.service.delete(id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[instrument(skip(service))]
+#[instrument(skip(state))]
 async fn retry_saved_job(
-    State(service): State<JobService>,
+    State(state): State<ManagementState>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, SavedJobError> {
-    service.retry(id).await?;
+    state.service.retry(id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[instrument(skip(service))]
+#[instrument(skip(state))]
 async fn list_saved_job_events(
-    State(service): State<JobService>,
+    State(state): State<ManagementState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<PipelineEvent>>, SavedJobError> {
-    let events = service.list_events(id).await?;
+    let events = state.service.list_events(id).await?;
     Ok(Json(events))
+}
+
+#[instrument(skip(state))]
+async fn get_saved_job_markdown(
+    State(state): State<ManagementState>,
+    Path(id): Path<Uuid>,
+) -> Result<impl IntoResponse, SavedJobError> {
+    let job = state
+        .service
+        .get(id)
+        .await?
+        .ok_or(SavedJobError::NotFound { id })?;
+    let s3_key = job
+        .markdown_s3_key
+        .ok_or_else(|| SavedJobError::ValidationError {
+            message: "saved job has no markdown object key".to_owned(),
+        })?;
+
+    let data = state
+        .object_store
+        .read(&s3_key)
+        .await
+        .map_err(|e| SavedJobError::ObjectStoreError {
+            message: format!("failed to read markdown object {s3_key}: {e}"),
+        })?;
+    let markdown = String::from_utf8_lossy(data.to_bytes().as_ref()).to_string();
+
+    Ok((
+        [(header::CONTENT_TYPE, "text/markdown; charset=utf-8")],
+        markdown,
+    ))
 }
 
 // -- Bot internal handler ---------------------------------------------------
@@ -185,14 +230,14 @@ struct BotJdParseResponse {
 }
 
 async fn parse_jd_from_bot(
-    State(service): State<JobService>,
+    State(state): State<ManagementState>,
     Json(req): Json<BotJdParseRequest>,
 ) -> Result<(StatusCode, Json<BotJdParseResponse>), (StatusCode, String)> {
     if req.text.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "text must not be empty".to_owned()));
     }
 
-    let saved: NormalizedJob = service.parse_jd(&req.text).await.map_err(|e| {
+    let saved: NormalizedJob = state.service.parse_jd(&req.text).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("failed to parse jd: {e}"),

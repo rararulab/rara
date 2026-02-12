@@ -23,6 +23,7 @@ job-common-worker.workspace = true
 job-domain-shared = { workspace = true }
 job-model = { workspace = true }
 jobspy-sys = { workspace = true }
+opendal.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true

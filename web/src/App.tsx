@@ -25,6 +25,7 @@ import JobDiscovery from '@/pages/JobDiscovery';
 import Notifications from '@/pages/Notifications';
 import Scheduler from '@/pages/Scheduler';
 import SavedJobs from '@/pages/SavedJobs';
+import SavedJobMarkdownPreview from '@/pages/SavedJobMarkdownPreview';
 import Settings from '@/pages/Settings';
 
 const queryClient = new QueryClient();
@@ -34,6 +35,7 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <Routes>
+          <Route path="saved-jobs/:id/markdown" element={<SavedJobMarkdownPreview />} />
           <Route element={<DashboardLayout />}>
             <Route index element={<Dashboard />} />
             <Route path="applications" element={<Applications />} />

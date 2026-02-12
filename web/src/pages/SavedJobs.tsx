@@ -491,18 +491,6 @@ function SavedJobDetailModal({
             )}
           </div>
 
-          {/* Markdown Preview */}
-          {job.markdown_preview && (
-            <details className="text-sm">
-              <summary className="cursor-pointer font-medium text-muted-foreground hover:text-foreground">
-                Markdown Preview
-              </summary>
-              <pre className="mt-2 max-h-48 overflow-auto rounded bg-muted p-3 text-xs whitespace-pre-wrap">
-                {job.markdown_preview}
-              </pre>
-            </details>
-          )}
-
           {/* Timestamps */}
           <div className="text-xs text-muted-foreground space-y-0.5">
             <p>Created: {formatDate(job.created_at)}</p>
@@ -526,6 +514,15 @@ function SavedJobDetailModal({
               </Button>
             </div>
             <div className="flex items-center gap-2">
+              {job.markdown_s3_key && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => window.open(`/saved-jobs/${job.id}/markdown`, "_blank")}
+                >
+                  Markdown Preview
+                </Button>
+              )}
               {canRetry && (
                 <Button variant="outline" size="sm" onClick={onRetry}>
                   <RotateCcw className="h-4 w-4 mr-1" />

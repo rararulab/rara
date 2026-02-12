@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import type { RuntimeSettingsPatch, RuntimeSettingsView } from "@/api/types";
@@ -23,6 +23,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -31,10 +32,25 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ChevronRight, MessageSquare, Sparkles } from "lucide-react";
+import {
+  ChevronRight,
+  Download,
+  ExternalLink,
+  Eye,
+  EyeOff,
+  MessageSquare,
+  Search,
+  SlidersHorizontal,
+  Sparkles,
+} from "lucide-react";
 
 type SettingKey = "ai" | "telegram";
 type ToastState = { kind: "success" | "error"; message: string } | null;
+type OpenRouterModel = {
+  id: string;
+  name: string;
+  contextLength: number | null;
+};
 
 function formatUpdatedAt(value: string | null): string {
   if (!value) return "Never";
@@ -47,6 +63,11 @@ export default function Settings() {
   const queryClient = useQueryClient();
   const [aiModel, setAiModel] = useState("");
   const [aiApiKey, setAiApiKey] = useState("");
+  const [showAiApiKey, setShowAiApiKey] = useState(false);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const [modelSearch, setModelSearch] = useState("");
+  const [models, setModels] = useState<OpenRouterModel[]>([]);
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramChatId, setTelegramChatId] = useState("");
   const [selectedSetting, setSelectedSetting] = useState<SettingKey | null>(null);
@@ -60,6 +81,7 @@ export default function Settings() {
   useEffect(() => {
     if (!settingsQuery.data) return;
     setAiModel(settingsQuery.data.ai.model ?? "");
+    setAiApiKey(settingsQuery.data.ai.openrouter_api_key ?? "");
     setTelegramChatId(
       settingsQuery.data.telegram.chat_id == null
         ? ""
@@ -67,14 +89,24 @@ export default function Settings() {
     );
   }, [settingsQuery.data]);
 
+  const filteredModels = useMemo(() => {
+    const q = modelSearch.trim().toLowerCase();
+    const filtered = !q
+      ? models
+      : models.filter((m) => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q));
+    return [...filtered].sort((a, b) => Number(b.id === aiModel) - Number(a.id === aiModel));
+  }, [modelSearch, models]);
+
+  const selectedModelForSave = useMemo(() => aiModel.trim(), [aiModel]);
+
   const patch = useMemo<RuntimeSettingsPatch | null>(() => {
     const current = settingsQuery.data;
     if (!current) return null;
     const next: RuntimeSettingsPatch = {};
 
     const aiPatch: NonNullable<RuntimeSettingsPatch["ai"]> = {};
-    if (aiModel.trim() !== "" && aiModel.trim() !== (current.ai.model ?? "")) {
-      aiPatch.model = aiModel.trim();
+    if (selectedModelForSave !== "" && selectedModelForSave !== (current.ai.model ?? "")) {
+      aiPatch.model = selectedModelForSave;
     }
     if (aiApiKey.trim() !== "") {
       aiPatch.openrouter_api_key = aiApiKey.trim();
@@ -101,14 +133,15 @@ export default function Settings() {
     }
 
     return Object.keys(next).length > 0 ? next : null;
-  }, [aiApiKey, aiModel, settingsQuery.data, telegramChatId, telegramToken]);
+  }, [aiApiKey, selectedModelForSave, settingsQuery.data, telegramChatId, telegramToken]);
 
   const updateMutation = useMutation({
     mutationFn: (payload: RuntimeSettingsPatch) =>
       api.post<RuntimeSettingsView>("/api/v1/settings", payload),
     onSuccess: (updated) => {
       queryClient.setQueryData(["settings"], updated);
-      setAiApiKey("");
+      setAiApiKey(updated.ai.openrouter_api_key ?? "");
+      setShowAiApiKey(false);
       setTelegramToken("");
       setSelectedSetting(null);
       setToast({ kind: "success", message: "Settings updated successfully." });
@@ -130,6 +163,72 @@ export default function Settings() {
 
   const openSetting = (setting: SettingKey) => {
     setSelectedSetting(setting);
+    if (setting === "ai") {
+      setModelSearch("");
+      setModelsError(null);
+      setShowAiApiKey(false);
+    }
+  };
+
+  const fetchModels = useCallback(async () => {
+    const key = aiApiKey.trim() || settingsQuery.data?.ai.openrouter_api_key?.trim() || "";
+    if (!key) {
+      setModelsError("Please enter your OpenRouter API key first.");
+      return;
+    }
+    setModelsLoading(true);
+    setModelsError(null);
+    try {
+      const resp = await fetch("https://openrouter.ai/api/v1/models", {
+        headers: {
+          Authorization: `Bearer ${key}`,
+        },
+      });
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(text || "Failed to fetch models.");
+      }
+      const data = (await resp.json()) as {
+        data?: Array<{
+          id?: string;
+          name?: string;
+          context_length?: number;
+          contextLength?: number;
+        }>;
+      };
+      const loaded = (data.data ?? [])
+        .map((m) => {
+          const id = (m.id ?? "").trim();
+          if (!id) return null;
+          const name = (m.name ?? id).trim();
+          const contextLength = m.context_length ?? m.contextLength ?? null;
+          return {
+            id,
+            name,
+            contextLength,
+          } satisfies OpenRouterModel;
+        })
+        .filter((m): m is OpenRouterModel => Boolean(m));
+      setModels(loaded);
+      if (loaded.length > 0) {
+        if (aiModel && loaded.some((m) => m.id === aiModel)) {
+          setAiModel(aiModel);
+        } else {
+          setAiModel(loaded[0].id);
+        }
+      }
+      setToast({ kind: "success", message: `Fetched ${loaded.length} models.` });
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Failed to fetch models";
+      setModelsError(message);
+    } finally {
+      setModelsLoading(false);
+    }
+  }, [aiApiKey, aiModel, settingsQuery.data?.ai.openrouter_api_key]);
+
+  const toggleModel = (id: string, checked: boolean) => {
+    if (!checked) return;
+    setAiModel(id);
   };
 
   useEffect(() => {
@@ -137,6 +236,20 @@ export default function Settings() {
     const timer = window.setTimeout(() => setToast(null), 3000);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    if (selectedSetting !== "ai") return;
+    if (!settingsQuery.data?.ai.openrouter_api_key) return;
+    if (models.length > 0) return;
+    if (modelsLoading) return;
+    void fetchModels();
+  }, [
+    fetchModels,
+    models.length,
+    modelsLoading,
+    selectedSetting,
+    settingsQuery.data?.ai.openrouter_api_key,
+  ]);
 
   if (settingsQuery.isLoading) {
     return (
@@ -188,7 +301,7 @@ export default function Settings() {
               <p className="font-medium">AI (OpenRouter)</p>
               <p className="text-xs text-muted-foreground">
                 Model: {current.ai.model ?? "Not set"} · Key:{" "}
-                {current.ai.key_hint ?? "Not set"}
+                {current.ai.openrouter_api_key ? "Set" : "Not set"}
               </p>
             </div>
           </div>
@@ -225,8 +338,8 @@ export default function Settings() {
       </div>
 
       <Dialog open={isDialogOpen} onOpenChange={(open) => !open && setSelectedSetting(null)}>
-        <DialogContent>
-          <DialogHeader>
+        <DialogContent className="max-h-[85vh] overflow-y-auto p-0 sm:max-w-3xl">
+          <DialogHeader className="border-b px-6 pb-4 pt-6">
             <DialogTitle>{dialogTitle}</DialogTitle>
             <DialogDescription>
               Review current values and update this setting.
@@ -234,28 +347,126 @@ export default function Settings() {
           </DialogHeader>
 
           {selectedSetting === "ai" && (
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="ai-model">Model</Label>
-                <Input
-                  id="ai-model"
-                  value={aiModel}
-                  onChange={(e) => setAiModel(e.target.value)}
-                  placeholder="openai/gpt-4o"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="ai-api-key">OpenRouter API Key</Label>
-                <Input
-                  id="ai-api-key"
-                  type="password"
-                  value={aiApiKey}
-                  onChange={(e) => setAiApiKey(e.target.value)}
-                  placeholder={current.ai.key_hint ?? "sk-or-v1-..."}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Current key hint: {current.ai.key_hint ?? "Not set"}
+            <div className="space-y-6 px-6 py-5">
+              <div className="space-y-3 rounded-xl border bg-card p-4">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="ai-api-key" className="text-base font-semibold">
+                    OpenRouter API Key
+                  </Label>
+                  <span className="text-xs text-muted-foreground">
+                    {current.ai.openrouter_api_key ? "Current: Saved in settings" : "No key saved"}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="ai-api-key"
+                    type={showAiApiKey ? "text" : "password"}
+                    value={aiApiKey}
+                    onChange={(e) => setAiApiKey(e.target.value)}
+                    placeholder={current.ai.openrouter_api_key ?? "sk-or-v1-..."}
+                    className="h-11"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="h-11 w-11 shrink-0"
+                    onClick={() => setShowAiApiKey((v) => !v)}
+                  >
+                    {showAiApiKey ? <EyeOff /> : <Eye />}
+                  </Button>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  Get your API key from{" "}
+                  <a
+                    href="https://openrouter.ai/keys"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 text-primary hover:underline"
+                  >
+                    OpenRouter Keys <ExternalLink className="h-3 w-3" />
+                  </a>
                 </p>
+              </div>
+
+              <div className="space-y-3 rounded-xl border bg-card p-4">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="models-search" className="text-xl font-semibold">
+                    Models
+                  </Label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={fetchModels}
+                    disabled={modelsLoading}
+                    className="h-10 px-4"
+                  >
+                    <Download className="h-4 w-4" />
+                    {modelsLoading ? "Fetching..." : "Fetch"}
+                  </Button>
+                </div>
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="models-search"
+                    value={modelSearch}
+                    onChange={(e) => setModelSearch(e.target.value)}
+                    placeholder="Search models..."
+                    className="h-11 pl-10"
+                  />
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  Showing {filteredModels.length} models (enabled first)
+                </p>
+                <p className="text-sm">
+                  Selected model:{" "}
+                  <span className="font-medium">
+                    {selectedModelForSave || current.ai.model || "Not set"}
+                  </span>
+                </p>
+                {modelsError && (
+                  <p className="text-sm text-destructive">{modelsError}</p>
+                )}
+                <div className="max-h-80 overflow-y-auto rounded-lg border bg-background">
+                  {filteredModels.length === 0 && !selectedModelForSave && !current.ai.model && (
+                    <div className="p-4 text-sm text-muted-foreground">
+                      No models yet. Enter API key and click Fetch.
+                    </div>
+                  )}
+                  {filteredModels.length === 0 && (selectedModelForSave || current.ai.model) && (
+                    <div className="flex items-center justify-between gap-3 border-b px-3 py-2.5 last:border-b-0">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold">
+                          Current Saved Model
+                        </p>
+                        <p className="truncate text-xs text-muted-foreground">
+                          {selectedModelForSave || current.ai.model}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                  {filteredModels.map((model) => (
+                    <div
+                      key={model.id}
+                      className="flex items-center justify-between gap-3 border-b px-3 py-2.5 last:border-b-0"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold">{model.name}</p>
+                        <p className="truncate text-xs text-muted-foreground">
+                          {model.id}
+                          {model.contextLength ? ` · ${Math.round(model.contextLength / 1000)}K` : ""}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <SlidersHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
+                        <Switch
+                          checked={model.id === aiModel}
+                          onCheckedChange={(checked) => toggleModel(model.id, checked)}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           )}
@@ -287,7 +498,7 @@ export default function Settings() {
             </div>
           )}
 
-          <DialogFooter>
+          <DialogFooter className="border-t px-6 py-4">
             <Button
               variant="outline"
               onClick={() => setSelectedSetting(null)}
