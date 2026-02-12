@@ -16,6 +16,7 @@
 //!
 //! Application lifecycle management with state machine.
 use std::sync::Arc;
+
 use sqlx::PgPool;
 
 pub mod error;

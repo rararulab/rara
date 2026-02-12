@@ -34,9 +34,7 @@ pub struct JdParserAgent {
 }
 
 impl JdParserAgent {
-    pub(crate) fn new(client: openrouter::Client, model: String) -> Self {
-        Self { client, model }
-    }
+    pub(crate) fn new(client: openrouter::Client, model: String) -> Self { Self { client, model } }
 
     /// Parse a raw job description into a structured JSON string.
     pub async fn parse(&self, jd_text: &str) -> Result<String, AiError> {

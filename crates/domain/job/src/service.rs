@@ -327,25 +327,27 @@ impl JobService {
 
     /// Parse a job description text via AI and save as a [`NormalizedJob`].
     pub async fn parse_jd(&self, text: &str) -> Result<NormalizedJob, SourceError> {
-        let agent = self.ai_service.jd_parser().map_err(|e| {
-            SourceError::NonRetryable {
+        let agent = self
+            .ai_service
+            .jd_parser()
+            .map_err(|e| SourceError::NonRetryable {
                 source_name: "ai".to_owned(),
                 message:     format!("ai service not available: {e}"),
-            }
-        })?;
+            })?;
 
-        let json_str =
-            agent.parse(text).await.map_err(|e| SourceError::NonRetryable {
+        let json_str = agent
+            .parse(text)
+            .await
+            .map_err(|e| SourceError::NonRetryable {
                 source_name: "ai".to_owned(),
                 message:     format!("failed to parse jd: {e}"),
             })?;
 
-        let parsed: ParsedJob = serde_json::from_str(&json_str).map_err(|e| {
-            SourceError::NonRetryable {
+        let parsed: ParsedJob =
+            serde_json::from_str(&json_str).map_err(|e| SourceError::NonRetryable {
                 source_name: "ai".to_owned(),
                 message:     format!("failed to deserialize ai response: {e}"),
-            }
-        })?;
+            })?;
 
         let job = NormalizedJob::from_parsed(parsed, text);
         self.job_repo.save(&job).await

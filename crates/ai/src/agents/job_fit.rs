@@ -33,9 +33,7 @@ pub struct JobFitAgent {
 }
 
 impl JobFitAgent {
-    pub(crate) fn new(client: openrouter::Client, model: String) -> Self {
-        Self { client, model }
-    }
+    pub(crate) fn new(client: openrouter::Client, model: String) -> Self { Self { client, model } }
 
     /// Analyze the fit between a job description and a resume.
     pub async fn analyze(&self, job_description: &str, resume: &str) -> Result<String, AiError> {

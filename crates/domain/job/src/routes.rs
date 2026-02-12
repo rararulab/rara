@@ -200,13 +200,14 @@ async fn get_saved_job_markdown(
             message: "saved job has no markdown object key".to_owned(),
         })?;
 
-    let data = state
-        .object_store
-        .read(&s3_key)
-        .await
-        .map_err(|e| SavedJobError::ObjectStoreError {
-            message: format!("failed to read markdown object {s3_key}: {e}"),
-        })?;
+    let data =
+        state
+            .object_store
+            .read(&s3_key)
+            .await
+            .map_err(|e| SavedJobError::ObjectStoreError {
+                message: format!("failed to read markdown object {s3_key}: {e}"),
+            })?;
     let markdown = String::from_utf8_lossy(data.to_bytes().as_ref()).to_string();
 
     Ok((

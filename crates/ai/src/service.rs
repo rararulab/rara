@@ -55,10 +55,7 @@ impl AiService {
             .openrouter_api_key
             .as_deref()
             .ok_or(AiError::NotConfigured)?;
-        let model = current
-            .ai
-            .model
-            .unwrap_or_else(|| DEFAULT_MODEL.to_owned());
+        let model = current.ai.model.unwrap_or_else(|| DEFAULT_MODEL.to_owned());
         let client = openrouter::Client::builder()
             .api_key(api_key)
             .build()

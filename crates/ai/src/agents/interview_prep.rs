@@ -33,9 +33,7 @@ pub struct InterviewPrepAgent {
 }
 
 impl InterviewPrepAgent {
-    pub(crate) fn new(client: openrouter::Client, model: String) -> Self {
-        Self { client, model }
-    }
+    pub(crate) fn new(client: openrouter::Client, model: String) -> Self { Self { client, model } }
 
     /// Generate interview preparation materials.
     pub async fn prepare(&self, job_description: &str, resume: &str) -> Result<String, AiError> {

@@ -25,6 +25,7 @@
 //!
 //! It stores periodic snapshots and exposes query interfaces for dashboards.
 use std::sync::Arc;
+
 use sqlx::PgPool;
 
 pub mod error;

@@ -116,9 +116,7 @@ impl BotApp {
                 _ = tokio::time::sleep(std::time::Duration::from_secs(Self::SETTINGS_SYNC_INTERVAL_SECS)) => {}
             }
 
-            let loaded = kv_store
-                .get::<Settings>(RUNTIME_SETTINGS_KV_KEY)
-                .await;
+            let loaded = kv_store.get::<Settings>(RUNTIME_SETTINGS_KV_KEY).await;
             let mut settings = match loaded {
                 Ok(Some(settings)) => settings,
                 Ok(None) => continue,

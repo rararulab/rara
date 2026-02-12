@@ -45,9 +45,7 @@ pub struct JdAnalyzerAgent {
 }
 
 impl JdAnalyzerAgent {
-    pub(crate) fn new(client: openrouter::Client, model: String) -> Self {
-        Self { client, model }
-    }
+    pub(crate) fn new(client: openrouter::Client, model: String) -> Self { Self { client, model } }
 
     /// Analyze a job posting markdown and return structured JSON.
     pub async fn analyze(&self, markdown: &str) -> Result<String, AiError> {

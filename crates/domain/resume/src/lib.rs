@@ -16,6 +16,7 @@
 //!
 //! Resume version management and content diffing.
 use std::sync::Arc;
+
 use sqlx::PgPool;
 
 pub mod hash;
