@@ -1,0 +1,32 @@
+[package]
+name = "rara-domain-chat"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Chat domain service — session-based conversations backed by LLM agents"
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+chrono.workspace = true
+openrouter-rs = "^0.4"
+rara-agents.workspace = true
+rara-sessions.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+snafu.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

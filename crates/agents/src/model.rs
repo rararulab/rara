@@ -34,7 +34,7 @@ pub type OpenRouterLoaderRef = Arc<dyn OpenRouterLoader>;
 pub const OPENROUTER_API_KEY_ENV: &str = "OPENROUTER_KEY";
 
 #[async_trait]
-pub trait OpenRouterLoader {
+pub trait OpenRouterLoader: Send + Sync {
     async fn acquire_client(&self) -> Result<OpenRouterClient>;
 
     fn build_client<S: AsRef<str>>(api_key: S) -> Result<OpenRouterClient>
