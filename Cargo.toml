@@ -55,6 +55,7 @@ members = [
     "crates/paths",
     "crates/jobspy-sys",
     "crates/workers",
+    "crates/agents",
 ]
 
 [workspace.dependencies]
