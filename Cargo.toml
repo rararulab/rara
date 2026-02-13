@@ -80,6 +80,7 @@ prost = "^0.14"
 protobuf = "^3.7"
 reqwest = "0.12"
 rig-core = "0.30"
+schemars = "^1.2"
 serde = { version = "^1.0", features = ["derive"] }
 serde_json = "1.0.143"
 smart-default = "0.7"
@@ -112,6 +113,7 @@ testcontainers = "0.26"
 testcontainers-modules = { version = "0.14", features = ["postgres"] }
 
 # Internal workspace crates (use =version to keep in sync with workspace version)
+job-agent = { path = "crates/agent" }
 job-ai = { path = "crates/ai" }
 job-api = { path = "api" }
 job-app = { path = "crates/app" }

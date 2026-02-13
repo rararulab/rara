@@ -12,5 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod arc_cow;
 pub mod env;
 pub mod readable_size;
+pub mod shared_string;

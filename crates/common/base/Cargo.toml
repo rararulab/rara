@@ -14,6 +14,7 @@ description = "Base utilities and common types for job"
 [dependencies]
 derive_more = { workspace = true }
 dotenvy = "0.15.7"
+schemars.workspace = true
 serde.workspace = true
 snafu.workspace = true
 
