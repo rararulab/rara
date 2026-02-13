@@ -93,10 +93,10 @@ pub struct SnapshotFilter {
 // DB model conversions
 // ---------------------------------------------------------------------------
 
-use job_domain_shared::convert::{
+use rara_domain_shared::convert::{
     chrono_to_timestamp, civil_to_naive_date, naive_date_to_civil, timestamp_to_chrono, u8_from_i16,
 };
-use job_model::metrics::MetricsSnapshot as StoreMetricsSnapshot;
+use rara_model::metrics::MetricsSnapshot as StoreMetricsSnapshot;
 
 fn period_from_i16(value: i16) -> MetricsPeriod {
     let repr = u8_from_i16(value, "metrics.period");

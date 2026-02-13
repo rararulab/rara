@@ -39,7 +39,7 @@ use std::time::Duration;
 /// ```rust,no_run
 /// use std::time::Duration;
 ///
-/// use job_common_worker::{Manager, Pausable, PauseMode, Worker, WorkerContext};
+/// use common_worker::{Manager, Pausable, PauseMode, Worker, WorkerContext};
 ///
 /// # struct MyWorker;
 /// # #[async_trait::async_trait]
@@ -119,7 +119,7 @@ pub enum PauseMode {
 /// ```rust
 /// use std::{str::FromStr, time::Duration};
 ///
-/// use job_common_worker::Trigger;
+/// use common_worker::Trigger;
 ///
 /// // Run every 5 seconds
 /// let trigger = Trigger::Interval(Duration::from_secs(5));

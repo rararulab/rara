@@ -58,7 +58,7 @@ pub trait TaskExecutor: Send + Sync + 'static {
 /// Cron engine that manages task executor registration and dispatching.
 ///
 /// The engine itself does **not** own a cron scheduler; it is meant to
-/// be driven externally (e.g. by `job-common-worker` `Manager` spawning
+/// be driven externally (e.g. by `raracommon-worker` `Manager` spawning
 /// cron-triggered workers that call [`CronEngine::execute_task`]).
 pub struct CronEngine {
     scheduler_service: Arc<SchedulerService>,
@@ -178,7 +178,7 @@ mod tests {
     };
 
     use jiff::Timestamp;
-    use job_domain_shared::id::SchedulerTaskId;
+    use rara_domain_shared::id::SchedulerTaskId;
 
     use super::*;
     use crate::{
@@ -378,19 +378,19 @@ mod tests {
     async fn test_register_executor() {
         let (mut engine, _service) = setup_engine().await;
 
-        let executor = Arc::new(SuccessExecutor::new("job-discovery"));
+        let executor = Arc::new(SuccessExecutor::new("raradiscovery"));
         engine.register_executor(executor);
 
         let names = engine.registered_names();
         assert_eq!(names.len(), 1);
-        assert!(names.contains(&"job-discovery"));
+        assert!(names.contains(&"raradiscovery"));
     }
 
     #[tokio::test]
     async fn test_register_multiple_executors() {
         let (mut engine, _service) = setup_engine().await;
 
-        engine.register_executor(Arc::new(SuccessExecutor::new("job-discovery")));
+        engine.register_executor(Arc::new(SuccessExecutor::new("raradiscovery")));
         engine.register_executor(Arc::new(SuccessExecutor::new("resume-refresh")));
         engine.register_executor(Arc::new(SuccessExecutor::new("metrics-snapshot")));
 
@@ -402,8 +402,8 @@ mod tests {
     async fn test_register_executor_replaces_existing() {
         let (mut engine, _service) = setup_engine().await;
 
-        engine.register_executor(Arc::new(SuccessExecutor::new("job-discovery")));
-        engine.register_executor(Arc::new(SuccessExecutor::new("job-discovery")));
+        engine.register_executor(Arc::new(SuccessExecutor::new("raradiscovery")));
+        engine.register_executor(Arc::new(SuccessExecutor::new("raradiscovery")));
 
         let names = engine.registered_names();
         assert_eq!(names.len(), 1);
@@ -416,19 +416,19 @@ mod tests {
         // Register the task in the database.
         let task = service
             .register_task(CreateTaskRequest {
-                name:      "job-discovery".to_string(),
+                name:      "raradiscovery".to_string(),
                 cron_expr: "0 */30 * * * *".to_string(),
             })
             .await
             .unwrap();
 
         // Register the executor.
-        let executor = Arc::new(SuccessExecutor::new("job-discovery"));
+        let executor = Arc::new(SuccessExecutor::new("raradiscovery"));
         let executor_ref = Arc::clone(&executor);
         engine.register_executor(executor);
 
         // Execute.
-        engine.execute_task("job-discovery").await.unwrap();
+        engine.execute_task("raradiscovery").await.unwrap();
 
         // Verify the executor ran.
         assert!(executor_ref.was_executed());
@@ -482,7 +482,7 @@ mod tests {
         // Register two tasks.
         let _enabled_task = service
             .register_task(CreateTaskRequest {
-                name:      "job-discovery".to_string(),
+                name:      "raradiscovery".to_string(),
                 cron_expr: "0 */30 * * * *".to_string(),
             })
             .await
@@ -500,13 +500,13 @@ mod tests {
         service.disable_task(disabled_task.id).await.unwrap();
 
         // Register executors for both.
-        engine.register_executor(Arc::new(SuccessExecutor::new("job-discovery")));
+        engine.register_executor(Arc::new(SuccessExecutor::new("raradiscovery")));
         engine.register_executor(Arc::new(SuccessExecutor::new("metrics-snapshot")));
 
         // Only the enabled task should be runnable.
         let runnable = engine.get_runnable_tasks().await.unwrap();
         assert_eq!(runnable.len(), 1);
-        assert_eq!(runnable[0].name, "job-discovery");
+        assert_eq!(runnable[0].name, "raradiscovery");
     }
 
     #[tokio::test]
@@ -516,7 +516,7 @@ mod tests {
         // Register two tasks in the database.
         service
             .register_task(CreateTaskRequest {
-                name:      "job-discovery".to_string(),
+                name:      "raradiscovery".to_string(),
                 cron_expr: "0 */30 * * * *".to_string(),
             })
             .await
@@ -531,12 +531,12 @@ mod tests {
             .unwrap();
 
         // Only register an executor for one of them.
-        engine.register_executor(Arc::new(SuccessExecutor::new("job-discovery")));
+        engine.register_executor(Arc::new(SuccessExecutor::new("raradiscovery")));
 
         // Only the task with a registered executor should be runnable.
         let runnable = engine.get_runnable_tasks().await.unwrap();
         assert_eq!(runnable.len(), 1);
-        assert_eq!(runnable[0].name, "job-discovery");
+        assert_eq!(runnable[0].name, "raradiscovery");
     }
 
     #[tokio::test]

@@ -1,5 +1,5 @@
 [package]
-name = "job-app"
+name = "rara-app"
 version = "0.0.1"
 edition.workspace = true
 license.workspace = true
@@ -13,14 +13,14 @@ description = "Application orchestration and lifecycle management for job"
 
 [dependencies]
 axum = { workspace = true }
+common-runtime = { workspace = true }
+common-worker = { workspace = true }
 config = { workspace = true }
-job-common-runtime = { workspace = true }
-job-common-worker = { workspace = true }
-job-domain-shared = { workspace = true }
-job-object-store = { workspace = true }
-job-server = { workspace = true }
-job-workers = { workspace = true }
+object-store = { workspace = true }
 opendal = { workspace = true }
+rara-domain-shared = { workspace = true }
+rara-server = { workspace = true }
+rara-workers = { workspace = true }
 serde = { workspace = true }
 snafu = { workspace = true }
 tokio = { workspace = true }

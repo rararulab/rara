@@ -18,8 +18,8 @@ use std::fmt::Write;
 
 use async_trait::async_trait;
 use jiff::{Zoned, tz::TimeZone};
-use job_domain_shared::convert::timestamp_to_chrono;
-use job_model::resume::Resume as StoreResume;
+use rara_domain_shared::convert::timestamp_to_chrono;
+use rara_model::resume::Resume as StoreResume;
 use sqlx::PgPool;
 use uuid::Uuid;
 

@@ -1,5 +1,5 @@
 [package]
-name = "job-domain-resume"
+name = "rara-domain-resume"
 version = "0.0.1"
 edition.workspace = true
 authors.workspace = true
@@ -16,8 +16,8 @@ async-trait.workspace = true
 axum = { workspace = true }
 chrono.workspace = true
 jiff.workspace = true
-job-domain-shared = { workspace = true }
-job-model.workspace = true
+rara-domain-shared = { workspace = true }
+rara-model.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"

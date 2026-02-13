@@ -20,7 +20,7 @@ use std::{
     time::Duration,
 };
 
-use job_common_worker::{Handle, Manager, Notifiable, Pausable, Worker, WorkerContext};
+use common_worker::{Handle, Manager, Notifiable, Pausable, Worker, WorkerContext};
 
 struct TestWorker {
     counter: Arc<AtomicUsize>,

@@ -15,7 +15,7 @@
 //! Domain types for interview plan management.
 
 use jiff::Timestamp;
-use job_domain_shared::id::{ApplicationId, InterviewId};
+use rara_domain_shared::id::{ApplicationId, InterviewId};
 use serde::{Deserialize, Serialize};
 use strum_macros::{Display, FromRepr};
 
@@ -256,11 +256,11 @@ pub struct PrepGenerationRequest {
 // DB model conversions
 // ---------------------------------------------------------------------------
 
-use job_domain_shared::convert::{
+use rara_domain_shared::convert::{
     chrono_opt_to_timestamp, chrono_to_timestamp, timestamp_opt_to_chrono, timestamp_to_chrono,
     u8_from_i16,
 };
-use job_model::interview::InterviewPlan as StoreInterviewPlan;
+use rara_model::interview::InterviewPlan as StoreInterviewPlan;
 
 /// Parse a round string from the DB into a domain `InterviewRound`.
 pub fn parse_interview_round(s: &str) -> InterviewRound {
@@ -309,8 +309,8 @@ impl From<StoreInterviewPlan> for InterviewPlan {
             .unwrap_or_default();
 
         Self {
-            id: job_domain_shared::id::InterviewId::from(p.id),
-            application_id: job_domain_shared::id::ApplicationId::from(p.application_id),
+            id: rara_domain_shared::id::InterviewId::from(p.id),
+            application_id: rara_domain_shared::id::ApplicationId::from(p.application_id),
             title: p.title,
             company: p.company,
             position: p.position,

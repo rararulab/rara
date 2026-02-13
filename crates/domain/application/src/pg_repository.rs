@@ -18,8 +18,8 @@
 use std::fmt::Write;
 
 use async_trait::async_trait;
-use job_domain_shared::id::ApplicationId;
-use job_model::application::{Application as StoreApplication, ApplicationStatusHistory};
+use rara_domain_shared::id::ApplicationId;
+use rara_model::application::{Application as StoreApplication, ApplicationStatusHistory};
 use sqlx::PgPool;
 
 use crate::{

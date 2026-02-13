@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use job_domain_shared::settings::{model::Settings, service::RUNTIME_SETTINGS_KV_KEY};
+use rara_domain_shared::settings::{model::Settings, service::RUNTIME_SETTINGS_KV_KEY};
 use snafu::{ResultExt, Whatever};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -26,7 +26,7 @@ pub struct BotApp {
     pub(crate) _config:            BotConfig,
     pub(crate) runtime:            Arc<TelegramBotRuntime>,
     /// Shared notification queue client (`notification_telegram_dispatch`).
-    pub(crate) notify_client:      Arc<job_domain_shared::notify::client::NotifyClient>,
+    pub(crate) notify_client:      Arc<rara_domain_shared::notify::client::NotifyClient>,
     /// KV store used for runtime settings sync.
     pub(crate) kv_store:           yunara_store::KVStore,
     pub(crate) cancellation_token: CancellationToken,
@@ -39,7 +39,7 @@ impl BotApp {
     const SETTINGS_SYNC_INTERVAL_SECS: u64 = 10;
 
     fn format_notification_message(
-        notification: &job_domain_shared::notify::types::QueuedTelegramNotification,
+        notification: &rara_domain_shared::notify::types::QueuedTelegramNotification,
     ) -> String {
         let mut text = String::new();
         if let Some(subject) = &notification.subject {
@@ -50,7 +50,7 @@ impl BotApp {
     }
 
     async fn notify_consumer_loop(
-        notify_client: Arc<job_domain_shared::notify::client::NotifyClient>,
+        notify_client: Arc<rara_domain_shared::notify::client::NotifyClient>,
         telegram: Arc<crate::telegram_service::TelegramService>,
         cancellation_token: CancellationToken,
     ) {

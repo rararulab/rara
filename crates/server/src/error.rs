@@ -15,7 +15,7 @@
 use std::any::Any;
 
 use axum::{Json, response::IntoResponse};
-use job_error::{ErrorExt, StackError, StatusCode};
+use rara_error::{ErrorExt, StackError, StatusCode};
 use serde::Serialize;
 use snafu::Snafu;
 use strum::EnumProperty;

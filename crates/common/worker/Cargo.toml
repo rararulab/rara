@@ -1,5 +1,5 @@
 [package]
-name = "job-common-worker"
+name = "common-worker"
 version = "0.0.1"
 edition.workspace = true
 license.workspace = true
@@ -14,9 +14,9 @@ description = "Background worker and task scheduling utilities for job"
 [dependencies]
 async-trait.workspace = true
 chrono = "0.4"
+common-runtime = { workspace = true }
 croner = "3"
 derive_more = { workspace = true }
-job-common-runtime = { workspace = true }
 lazy_static.workspace = true
 prometheus.workspace = true
 smart-default = "0.7"

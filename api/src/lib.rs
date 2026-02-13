@@ -23,7 +23,7 @@ pub mod pb {
         clippy::missing_const_for_fn
     )]
 
-    pub const GRPC_DESC: &[u8] = tonic::include_file_descriptor_set!("job_grpc_desc");
+    pub const GRPC_DESC: &[u8] = tonic::include_file_descriptor_set!("rara_grpc_desc");
 
     pub mod hello {
         pub mod v1 {

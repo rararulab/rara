@@ -21,7 +21,7 @@
 use std::sync::Arc;
 
 use jiff::Timestamp;
-use job_domain_shared::id::ApplicationId;
+use rara_domain_shared::id::ApplicationId;
 use tracing::instrument;
 use uuid::Uuid;
 
@@ -292,7 +292,7 @@ impl std::fmt::Debug for ApplicationService {
 mod tests {
     use std::sync::Arc;
 
-    use job_domain_shared::id::{ApplicationId, JobSourceId, ResumeId};
+    use rara_domain_shared::id::{ApplicationId, JobSourceId, ResumeId};
     use sqlx::postgres::PgPoolOptions;
     use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::postgres::Postgres;
@@ -321,7 +321,7 @@ mod tests {
             .await
             .unwrap();
 
-        sqlx::migrate!("../../job-model/migrations")
+        sqlx::migrate!("../../rara-model/migrations")
             .run(&pool)
             .await
             .unwrap();

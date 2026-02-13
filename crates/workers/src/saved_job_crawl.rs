@@ -22,8 +22,8 @@
 //! After processing, triggers the AnalyzeWorker via its `NotifyHandle`.
 
 use async_trait::async_trait;
-use job_common_worker::{FallibleWorker, Notifiable, WorkError, WorkResult, WorkerContext};
-use job_domain_job::types::{PipelineEventKind, PipelineStage, SavedJobStatus};
+use common_worker::{FallibleWorker, Notifiable, WorkError, WorkResult, WorkerContext};
+use rara_domain_job::types::{PipelineEventKind, PipelineStage, SavedJobStatus};
 use tracing::{info, warn};
 
 use crate::worker_state::AppState;

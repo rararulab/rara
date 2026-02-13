@@ -1,5 +1,5 @@
 [package]
-name = "job-server"
+name = "rara-server"
 authors.workspace = true
 version = "0.0.1"
 edition.workspace = true
@@ -23,11 +23,11 @@ moka = { workspace = true }
 smart-default = { workspace = true }
 # fastrace = { workspace = true }
 axum-tracing-opentelemetry = { workspace = true }
+base = { workspace = true }
+common-runtime = { workspace = true }
 futures = { workspace = true }
-job-api = { workspace = true }
-job-base = { workspace = true }
-job-common-runtime = { workspace = true }
-job-error = { workspace = true }
+rara-api = { workspace = true }
+rara-error = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 snafu = { workspace = true }

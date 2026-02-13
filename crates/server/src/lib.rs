@@ -19,7 +19,7 @@ pub mod http;
 pub mod request_key;
 
 use futures::future::join_all;
-use job_error::Result;
+use rara_error::Result;
 use tokio::{sync::oneshot::Receiver, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 

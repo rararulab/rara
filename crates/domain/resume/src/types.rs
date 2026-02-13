@@ -26,10 +26,10 @@ use uuid::Uuid;
 
 /// Strongly-typed resume identifier.
 ///
-/// This is a domain-local alias that wraps [`job_domain_shared::ResumeId`] so
-/// that callers of this crate do not need to depend on `job-domain-shared`
+/// This is a domain-local alias that wraps [`rara_domain_shared::ResumeId`] so
+/// that callers of this crate do not need to depend on `raradomain-shared`
 /// directly.
-pub type ResumeId = job_domain_shared::id::ResumeId;
+pub type ResumeId = rara_domain_shared::id::ResumeId;
 
 // ---------------------------------------------------------------------------
 // Resume source
@@ -203,11 +203,11 @@ pub enum ResumeError {
 // DB model conversions
 // ---------------------------------------------------------------------------
 
-use job_domain_shared::convert::{
+use rara_domain_shared::convert::{
     chrono_opt_to_timestamp, chrono_to_timestamp, timestamp_opt_to_chrono, timestamp_to_chrono,
     u8_from_i16,
 };
-use job_model::resume::Resume as StoreResume;
+use rara_model::resume::Resume as StoreResume;
 
 fn resume_source_from_i16(value: i16) -> ResumeSource {
     let repr = u8_from_i16(value, "resume.source");

@@ -1,5 +1,5 @@
 [package]
-name = "job-domain-job"
+name = "rara-domain-job"
 version = "0.0.1"
 edition.workspace = true
 authors.workspace = true
@@ -16,14 +16,14 @@ async-trait.workspace = true
 axum = { workspace = true }
 bon.workspace = true
 chrono.workspace = true
+common-worker.workspace = true
 derive_more = { workspace = true }
 jiff.workspace = true
-job-ai = { workspace = true }
-job-common-worker.workspace = true
-job-domain-shared = { workspace = true }
-job-model = { workspace = true }
 jobspy-sys = { workspace = true }
 opendal.workspace = true
+rara-ai = { workspace = true }
+rara-domain-shared = { workspace = true }
+rara-model = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true
@@ -35,8 +35,8 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-job-base.workspace = true
-job-common-telemetry.workspace = true
+base.workspace = true
+common-telemetry.workspace = true
 tokio = { workspace = true }
 
 [lints]

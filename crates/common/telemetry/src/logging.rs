@@ -529,7 +529,7 @@ pub fn init_global_logging(
         } else {
             let rolling_appender = RollingFileAppender::builder()
                 .rotation(Rotation::HOURLY)
-                .filename_prefix("job-err")
+                .filename_prefix("raraerr")
                 .max_log_files(opts.max_log_files)
                 .build(&opts.dir)
                 .unwrap_or_else(|e| {

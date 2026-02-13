@@ -33,7 +33,7 @@ use crate::{context::WorkerContext, err::WorkResult};
 /// # Example
 ///
 /// ```rust
-/// use job_common_worker::{FallibleWorker, WorkerContext, WorkResult, WorkError};
+/// use common_worker::{FallibleWorker, WorkerContext, WorkResult, WorkError};
 ///
 /// struct DatabaseCleanup;
 ///
@@ -104,7 +104,7 @@ pub trait FallibleWorker<S: Clone + Send + Sync + 'static>: Send + 'static {
 /// # Example
 ///
 /// ```rust
-/// use job_common_worker::{Worker, WorkerContext};
+/// use common_worker::{Worker, WorkerContext};
 ///
 /// struct MyWorker {
 ///     counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,

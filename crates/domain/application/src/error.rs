@@ -14,7 +14,7 @@
 
 //! Error types for the application domain.
 
-use job_domain_shared::id::ApplicationId;
+use rara_domain_shared::id::ApplicationId;
 use snafu::Snafu;
 
 use crate::types::ApplicationStatus;

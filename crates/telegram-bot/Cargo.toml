@@ -1,5 +1,5 @@
 [package]
-name = "job-telegram-bot"
+name = "rara-telegram-bot"
 version = "0.0.1"
 edition.workspace = true
 license.workspace = true
@@ -13,9 +13,9 @@ description = "Standalone Telegram bot runtime with gRPC command ingress"
 
 [dependencies]
 axum = { workspace = true }
-job-domain-job = { workspace = true }
-job-domain-shared = { workspace = true }
-job-server = { workspace = true }
+rara-domain-job = { workspace = true }
+rara-domain-shared = { workspace = true }
+rara-server = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

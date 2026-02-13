@@ -34,7 +34,7 @@ use tokio_util::sync::CancellationToken;
 /// ```rust
 /// use std::sync::Arc;
 ///
-/// use job_common_worker::WorkerContext;
+/// use common_worker::WorkerContext;
 ///
 /// #[derive(Clone)]
 /// struct AppState {
@@ -106,7 +106,7 @@ impl<S> WorkerContext<S> {
     /// Use this in `tokio::select!` to make your work cancellable:
     ///
     /// ```rust,no_run
-    /// # use job_common_worker::WorkerContext;
+    /// # use common_worker::WorkerContext;
     /// # async fn example(ctx: WorkerContext<()>) {
     /// tokio::select! {
     ///     _ = ctx.cancelled() => println!("Shutdown requested"),

@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # job-ai
+//! # raraai
 //!
-//! AI provider abstraction with task-specific agents for job-related
+//! AI provider abstraction with task-specific agents for rararelated
 //! operations such as fit analysis, resume optimization, interview
 //! preparation, follow-up drafting, and cover letter generation.
 

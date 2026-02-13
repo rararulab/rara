@@ -220,8 +220,8 @@ docs-open:
 [doc("run the binary")]
 [group("🏃 Running")]
 run:
-    @echo "🏃 Running job binary..."
-    PYO3_PYTHON={{PYO3_PYTHON}} cargo run -p job-cli -- server
+    @echo "🏃 Running rara binary..."
+    PYO3_PYTHON={{PYO3_PYTHON}} cargo run -p rara-cli -- server
 
 [doc("run hello-world example")]
 [group("🏃 Running")]

@@ -17,8 +17,8 @@
 //! This client intentionally reuses domain request/response models for
 //! discover API to avoid payload drift between bot and main service.
 
-use job_domain_job::types::DiscoveryCriteria;
-pub use job_domain_job::types::DiscoveryJobResponse;
+use rara_domain_job::types::DiscoveryCriteria;
+pub use rara_domain_job::types::DiscoveryJobResponse;
 use reqwest::StatusCode;
 use serde::Serialize;
 use snafu::{ResultExt, Snafu};

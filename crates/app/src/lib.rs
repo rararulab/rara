@@ -20,12 +20,12 @@ use std::{
     time::Duration,
 };
 
-use job_domain_shared::notify::client::NotifyClient;
-use job_server::{
+use opendal::Operator;
+use rara_domain_shared::notify::client::NotifyClient;
+use rara_server::{
     grpc::{GrpcServerConfig, hello::HelloService, start_grpc_server},
     http::{RestServerConfig, health_routes, start_rest_server},
 };
-use opendal::Operator;
 use serde::Deserialize;
 use snafu::{ResultExt, Whatever};
 use tokio::sync::oneshot;
@@ -56,7 +56,7 @@ impl Default for Crawl4AiConfig {
 ///
 /// Deserializable from `config.toml` + environment variables via the `config`
 /// crate. For runtime-changeable values (OpenRouter key, Telegram token, …) see
-/// [`job_domain_shared::settings::SettingsSvc`].
+/// [`rara_domain_shared::settings::SettingsSvc`].
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
@@ -68,7 +68,7 @@ pub struct AppConfig {
     pub grpc:                   GrpcServerConfig,
     /// S3-compatible object store.
     #[serde(alias = "minio")]
-    pub object_store:           job_object_store::ObjectStoreConfig,
+    pub object_store:           object_store::ObjectStoreConfig,
     /// Crawl4AI service.
     pub crawl4ai:               Crawl4AiConfig,
     /// Saved-job GC interval in hours.
@@ -79,8 +79,8 @@ pub struct AppConfig {
 
 impl Default for AppConfig {
     fn default() -> Self {
-        let mut object_store = job_object_store::ObjectStoreConfig::default();
-        object_store.bucket = "job-markdown".to_owned();
+        let mut object_store = object_store::ObjectStoreConfig::default();
+        object_store.bucket = "raramarkdown".to_owned();
         Self {
             database: DatabaseConfig::default(),
             http: RestServerConfig::default(),
@@ -133,7 +133,7 @@ impl AppConfig {
             .await
             .whatever_context("Failed to initialize infrastructure services")?;
 
-        let app_state = job_workers::worker_state::AppState::init(
+        let app_state = rara_workers::worker_state::AppState::init(
             &db_store,
             object_store,
             notify_client,
@@ -183,24 +183,24 @@ impl AppConfig {
         // -- background workers ----------------------------------------------
 
         let worker_runtime = Arc::new(
-            job_common_runtime::RuntimeOptions::builder()
-                .thread_name("job-worker".to_owned())
+            common_runtime::RuntimeOptions::builder()
+                .thread_name("raraworker".to_owned())
                 .enable_io(true)
                 .enable_time(true)
                 .build()
                 .create()
                 .whatever_context("Failed to create worker runtime")?,
         );
-        let manager_config = job_common_worker::ManagerConfig {
+        let manager_config = common_worker::ManagerConfig {
             runtime:          Some(worker_runtime),
             shutdown_timeout: Duration::from_secs(30),
         };
         let mut worker_manager =
-            job_common_worker::Manager::with_state_and_config(app_state.clone(), manager_config);
+            common_worker::Manager::with_state_and_config(app_state.clone(), manager_config);
 
         let analyze_handle = worker_manager
-            .fallible_worker(job_workers::saved_job_analyze::SavedJobAnalyzeWorker)
-            .name("saved-job-analyze")
+            .fallible_worker(rara_workers::saved_job_analyze::SavedJobAnalyzeWorker)
+            .name("saved-raraanalyze")
             .eager()
             .on_notify()
             .spawn();
@@ -210,8 +210,8 @@ impl AppConfig {
         }
 
         let crawl_handle = worker_manager
-            .fallible_worker(job_workers::saved_job_crawl::SavedJobCrawlWorker)
-            .name("saved-job-crawl")
+            .fallible_worker(rara_workers::saved_job_crawl::SavedJobCrawlWorker)
+            .name("saved-raracrawl")
             .eager()
             .on_notify()
             .spawn();
@@ -219,10 +219,10 @@ impl AppConfig {
 
         let gc_interval_secs = self.gc_interval_hours * 3600;
         let _gc_handle = worker_manager
-            .fallible_worker(job_workers::saved_job_gc::SavedJobGcWorker::new(
-                job_workers::saved_job_gc::GcConfig::default(),
+            .fallible_worker(rara_workers::saved_job_gc::SavedJobGcWorker::new(
+                rara_workers::saved_job_gc::GcConfig::default(),
             ))
-            .name("saved-job-gc")
+            .name("saved-raragc")
             .interval(std::time::Duration::from_secs(gc_interval_secs))
             .spawn();
 
@@ -349,7 +349,7 @@ mod tests {
     fn test_config_defaults() {
         let config = AppConfig::default();
         assert_eq!(config.object_store.endpoint, "http://localhost:9000");
-        assert_eq!(config.object_store.bucket, "job-markdown");
+        assert_eq!(config.object_store.bucket, "raramarkdown");
         assert_eq!(config.crawl4ai.url, "http://localhost:11235");
         assert_eq!(config.gc_interval_hours, 24);
     }

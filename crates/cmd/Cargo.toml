@@ -1,5 +1,5 @@
 [package]
-name = "job-cli"
+name = "rara-cli"
 authors.workspace = true
 version = "0.0.1"
 edition.workspace = true
@@ -27,12 +27,12 @@ path = "src/main.rs"
 [dependencies]
 chrono = { workspace = true }
 clap = { version = "4.4.16", features = ["derive"] }
+common-runtime = { workspace = true }
+common-telemetry.workspace = true
 ctrlc = "3.4.2"
 human-panic = "2.0.0"
-job-app = { workspace = true }
-job-common-runtime = { workspace = true }
-job-common-telemetry.workspace = true
-job-telegram-bot = { workspace = true }
+rara-app = { workspace = true }
+rara-telegram-bot = { workspace = true }
 shadow-rs = "1.2.1"
 snafu.workspace = true
 tokio.workspace = true

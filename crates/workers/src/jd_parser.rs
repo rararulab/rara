@@ -15,7 +15,7 @@
 //! JD parser worker — drains the parse channel and processes each request.
 
 use async_trait::async_trait;
-use job_common_worker::{FallibleWorker, WorkResult, WorkerContext};
+use common_worker::{FallibleWorker, WorkResult, WorkerContext};
 use tokio::sync::mpsc;
 use tracing::{error, info};
 

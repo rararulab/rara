@@ -1,5 +1,5 @@
 [package]
-name = "job-ai"
+name = "rara-ai"
 version = "0.0.1"
 edition.workspace = true
 authors.workspace = true
@@ -12,7 +12,7 @@ categories.workspace = true
 description = "AI agents powered by rig-core for job automation tasks"
 
 [dependencies]
-job-domain-shared = { workspace = true }
+rara-domain-shared = { workspace = true }
 rig-core.workspace = true
 snafu.workspace = true
 

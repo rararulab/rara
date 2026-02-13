@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # job-domain-resume
+//! # raradomain-resume
 //!
 //! Resume version management and content diffing.
 use std::sync::Arc;

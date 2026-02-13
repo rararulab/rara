@@ -18,7 +18,7 @@
 use std::fmt::Write;
 
 use async_trait::async_trait;
-use job_model::metrics::MetricsSnapshot as StoreMetricsSnapshot;
+use rara_model::metrics::MetricsSnapshot as StoreMetricsSnapshot;
 use sqlx::PgPool;
 use uuid::Uuid;
 

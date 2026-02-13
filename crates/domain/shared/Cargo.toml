@@ -1,5 +1,5 @@
 [package]
-name = "job-domain-shared"
+name = "rara-domain-shared"
 version = "0.0.1"
 edition.workspace = true
 authors.workspace = true

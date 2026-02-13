@@ -17,7 +17,7 @@
 use std::sync::Arc;
 
 use jiff::Timestamp;
-use job_domain_shared::id::SchedulerTaskId;
+use rara_domain_shared::id::SchedulerTaskId;
 use tracing::{info, instrument};
 use uuid::Uuid;
 
@@ -190,7 +190,7 @@ mod tests {
             .await
             .unwrap();
 
-        sqlx::migrate!("../../job-model/migrations")
+        sqlx::migrate!("../../rara-model/migrations")
             .run(&pool)
             .await
             .unwrap();
@@ -210,13 +210,13 @@ mod tests {
 
         let task = service
             .register_task(CreateTaskRequest {
-                name:      "job-discovery".to_string(),
+                name:      "raradiscovery".to_string(),
                 cron_expr: "0 */30 * * * *".to_string(),
             })
             .await
             .unwrap();
 
-        assert_eq!(task.name, "job-discovery");
+        assert_eq!(task.name, "raradiscovery");
         assert!(task.enabled);
         assert_eq!(task.run_count, 0);
     }
@@ -227,7 +227,7 @@ mod tests {
 
         service
             .register_task(CreateTaskRequest {
-                name:      "job-discovery".to_string(),
+                name:      "raradiscovery".to_string(),
                 cron_expr: "0 */30 * * * *".to_string(),
             })
             .await
@@ -235,7 +235,7 @@ mod tests {
 
         let result = service
             .register_task(CreateTaskRequest {
-                name:      "job-discovery".to_string(),
+                name:      "raradiscovery".to_string(),
                 cron_expr: "0 */15 * * * *".to_string(),
             })
             .await;
@@ -347,7 +347,7 @@ mod tests {
 
         service
             .register_task(CreateTaskRequest {
-                name:      "job-discovery".to_string(),
+                name:      "raradiscovery".to_string(),
                 cron_expr: "0 */30 * * * *".to_string(),
             })
             .await
@@ -371,7 +371,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(enabled_only.len(), 1);
-        assert_eq!(enabled_only[0].name, "job-discovery");
+        assert_eq!(enabled_only[0].name, "raradiscovery");
     }
 
     #[tokio::test]

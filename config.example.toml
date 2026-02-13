@@ -36,7 +36,7 @@ max_send_message_size = "512MiB"
 
 [minio]
 endpoint = "http://localhost:9000"
-bucket = "job-markdown"
+bucket = "raramarkdown"
 access_key = "minioadmin"
 secret_key = "minioadmin"
 region = "us-east-1"

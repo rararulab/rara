@@ -21,7 +21,7 @@
 use std::sync::Arc;
 
 use jiff::Timestamp;
-use job_domain_shared::id::{ApplicationId, InterviewId};
+use rara_domain_shared::id::{ApplicationId, InterviewId};
 use tracing::instrument;
 
 use crate::{
@@ -356,7 +356,7 @@ mod tests {
             .await
             .unwrap();
 
-        sqlx::migrate!("../../job-model/migrations")
+        sqlx::migrate!("../../rara-model/migrations")
             .run(&pool)
             .await
             .unwrap();

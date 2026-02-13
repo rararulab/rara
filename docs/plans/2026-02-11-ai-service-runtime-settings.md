@@ -70,10 +70,10 @@ Add `job-domain-shared = { workspace = true }`.
 
 ```rust
 // Before:
-pub ai_service_handle: Arc<RwLock<Option<Arc<job_ai::service::AiService>>>>,
+pub ai_service_handle: Arc<RwLock<Option<Arc<rara_ai::service::AiService>>>>,
 
 // After:
-pub ai_service: Arc<job_ai::service::AiService>,
+pub ai_service: Arc<rara_ai::service::AiService>,
 ```
 
 ### 7. `crates/workers/src/saved_job_analyze.rs` — Simplify

@@ -41,7 +41,7 @@ members = [
     "crates/common/object-store",
     "crates/common/worker",
     "crates/common/yunara-store",
-    "crates/job-model",
+    "crates/rara-model",
     "crates/domain/shared",
     "crates/domain/job",
     "crates/ai",
@@ -114,30 +114,30 @@ testcontainers = "0.26"
 testcontainers-modules = { version = "0.14", features = ["postgres"] }
 
 # Internal workspace crates (use =version to keep in sync with workspace version)
-job-agent = { path = "crates/agent" }
-job-ai = { path = "crates/ai" }
-job-api = { path = "api" }
-job-app = { path = "crates/app" }
-job-base = { path = "crates/common/base" }
-job-cli = { path = "crates/cmd" }
-job-common-crawl4ai = { path = "crates/common/crawl4ai" }
-job-common-runtime = { path = "crates/common/runtime" }
-job-common-telemetry = { path = "crates/common/telemetry" }
-job-common-worker = { path = "crates/common/worker" }
-job-domain-analytics = { path = "crates/domain/analytics" }
-job-domain-application = { path = "crates/domain/application" }
-job-domain-interview = { path = "crates/domain/interview" }
-job-domain-job = { path = "crates/domain/job" }
-job-domain-resume = { path = "crates/domain/resume" }
-job-domain-scheduler = { path = "crates/domain/scheduler" }
-job-domain-shared = { path = "crates/domain/shared" }
-job-error = { path = "crates/common/error" }
-job-model = { path = "crates/job-model" }
-job-object-store = { path = "crates/common/object-store" }
-job-server = { path = "crates/server" }
-job-telegram-bot = { path = "crates/telegram-bot" }
-job-workers = { path = "crates/workers" }
+base = { path = "crates/common/base" }
+common-runtime = { path = "crates/common/runtime" }
+common-telemetry = { path = "crates/common/telemetry" }
+common-worker = { path = "crates/common/worker" }
+crawl4ai = { path = "crates/common/crawl4ai" }
 jobspy-sys = { path = "crates/jobspy-sys" }
+object-store = { path = "crates/common/object-store" }
+rara-agents = { path = "crates/agents" }
+rara-ai = { path = "crates/ai" }
+rara-api = { path = "api" }
+rara-app = { path = "crates/app" }
+rara-cli = { path = "crates/cmd" }
+rara-domain-analytics = { path = "crates/domain/analytics" }
+rara-domain-application = { path = "crates/domain/application" }
+rara-domain-interview = { path = "crates/domain/interview" }
+rara-domain-job = { path = "crates/domain/job" }
+rara-domain-resume = { path = "crates/domain/resume" }
+rara-domain-scheduler = { path = "crates/domain/scheduler" }
+rara-domain-shared = { path = "crates/domain/shared" }
+rara-error = { path = "crates/common/error" }
+rara-model = { path = "crates/rara-model" }
+rara-server = { path = "crates/server" }
+rara-telegram-bot = { path = "crates/telegram-bot" }
+rara-workers = { path = "crates/workers" }
 yunara-store = { path = "crates/common/yunara-store" }
 
 # Config for 'cargo dist'

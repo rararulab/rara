@@ -1,5 +1,5 @@
 [package]
-name = "job-paths"
+name = "rara-paths"
 version = "0.0.1"
 edition.workspace = true
 description = "Path utilities for job"

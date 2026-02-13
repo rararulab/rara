@@ -15,7 +15,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use job_api::pb::hello::v1::{HelloRequest, HelloResponse, hello_service_server};
+use rara_api::pb::hello::v1::{HelloRequest, HelloResponse, hello_service_server};
 use tokio_util::sync::CancellationToken;
 use tonic::service::RoutesBuilder;
 use tonic_health::server::HealthReporter;
@@ -58,7 +58,7 @@ impl HelloService {
 impl GrpcServiceHandler for HelloService {
     fn service_name(&self) -> &'static str { "HelloService" }
 
-    fn file_descriptor_set(&self) -> &'static [u8] { job_api::pb::GRPC_DESC }
+    fn file_descriptor_set(&self) -> &'static [u8] { rara_api::pb::GRPC_DESC }
 
     fn register_service(self: &Arc<Self>, builder: &mut RoutesBuilder) {
         builder.add_service(hello_service_server::HelloServiceServer::from_arc(

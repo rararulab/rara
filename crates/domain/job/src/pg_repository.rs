@@ -17,8 +17,8 @@
 
 use async_trait::async_trait;
 use jiff::Timestamp;
-use job_domain_shared::convert::timestamp_to_chrono;
-use job_model::{
+use rara_domain_shared::convert::timestamp_to_chrono;
+use rara_model::{
     job::Job,
     saved_job::{SavedJob as StoreSavedJob, SavedJobEvent as StoreSavedJobEvent},
 };

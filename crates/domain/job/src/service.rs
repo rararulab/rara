@@ -20,8 +20,8 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use common_worker::{Notifiable, NotifyHandle};
 use jiff::Timestamp;
-use job_common_worker::{Notifiable, NotifyHandle};
 use tracing::{instrument, warn};
 use uuid::Uuid;
 
@@ -46,7 +46,7 @@ pub struct JobService {
     driver:         Arc<JobSpyDriver>,
     saved_job_repo: Arc<dyn SavedJobRepository>,
     job_repo:       Arc<dyn JobRepository>,
-    ai_service:     job_ai::service::AiService,
+    ai_service:     rara_ai::service::AiService,
     notify_trigger: Arc<RwLock<Option<NotifyHandle>>>,
 }
 
@@ -56,7 +56,7 @@ impl JobService {
         driver: JobSpyDriver,
         saved_job_repo: Arc<dyn SavedJobRepository>,
         job_repo: Arc<dyn JobRepository>,
-        ai_service: job_ai::service::AiService,
+        ai_service: rara_ai::service::AiService,
     ) -> Self {
         Self {
             driver: Arc::new(driver),
@@ -70,7 +70,7 @@ impl JobService {
     // -- Accessors ----------------------------------------------------------
 
     /// Access the AI service (for workers that need `jd_analyzer` etc.).
-    pub fn ai_service(&self) -> &job_ai::service::AiService { &self.ai_service }
+    pub fn ai_service(&self) -> &rara_ai::service::AiService { &self.ai_service }
 
     /// Access the job repository directly.
     pub fn job_repo(&self) -> &Arc<dyn JobRepository> { &self.job_repo }

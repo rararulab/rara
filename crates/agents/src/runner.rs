@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use backon::{ExponentialBuilder, Retryable};
+use base::shared_string::SharedString;
 use bon::Builder;
-use job_base::shared_string::SharedString;
 use openrouter_rs::{
     api::chat::{Content, Message},
     types::{Choice, Role, completion::CompletionsResponse},
@@ -393,7 +393,8 @@ mod tests {
         ; "tool_call"
     )]
     #[tokio::test]
-    // #[ignore = "requires real OpenRouter API key; runs real OpenRouter integration cases"]
+    // #[ignore = "requires real OpenRouter API key; runs real OpenRouter
+    // integration cases"]
     async fn run_real_openrouter_table_driven(
         case_name: &'static str,
         system_prompt: &'static str,
@@ -401,7 +402,7 @@ mod tests {
         register_echo: bool,
         expect_tool_call: bool,
     ) {
-        job_common_telemetry::logging::init_default_ut_logging();
+        common_telemetry::logging::init_default_ut_logging();
         let model_name = std::env::var("OPENROUTER_MODEL")
             .unwrap_or_else(|_| "z-ai/glm-4.5-air:free".to_owned());
 
@@ -413,10 +414,7 @@ mod tests {
         let events: Arc<Mutex<Vec<RunnerEvent>>> = Arc::new(Mutex::new(Vec::new()));
         let events_ref = Arc::clone(&events);
         let on_event: OnEvent = Box::new(move |event| {
-            events_ref
-                .lock()
-                .expect("event lock poisoned")
-                .push(event);
+            events_ref.lock().expect("event lock poisoned").push(event);
         });
 
         let runner = AgentRunner::builder()

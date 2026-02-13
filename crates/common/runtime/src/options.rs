@@ -39,8 +39,8 @@ pub struct RuntimeOptions {
     #[default(None)]
     pub worker_threads: Option<usize>,
 
-    #[default("job-rt".to_string())]
-    #[builder(default = "job-rt".to_string())]
+    #[default("rarart".to_string())]
+    #[builder(default = "rarart".to_string())]
     pub thread_name: String,
 
     #[default(true)]

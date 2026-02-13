@@ -18,8 +18,8 @@
 use std::fmt::Write;
 
 use async_trait::async_trait;
-use job_domain_shared::id::SchedulerTaskId;
-use job_model::scheduler::{SchedulerTask, TaskRunHistory};
+use rara_domain_shared::id::SchedulerTaskId;
+use rara_model::scheduler::{SchedulerTask, TaskRunHistory};
 use sqlx::PgPool;
 
 use crate::{

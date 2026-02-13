@@ -19,9 +19,9 @@
 //! job is set to `Failed`.
 
 use async_trait::async_trait;
-use job_ai::error::AiError;
-use job_common_worker::{FallibleWorker, WorkError, WorkResult, WorkerContext};
-use job_domain_job::types::{PipelineEventKind, PipelineStage, SavedJobStatus};
+use common_worker::{FallibleWorker, WorkError, WorkResult, WorkerContext};
+use rara_ai::error::AiError;
+use rara_domain_job::types::{PipelineEventKind, PipelineStage, SavedJobStatus};
 use tracing::{info, warn};
 
 use crate::worker_state::AppState;

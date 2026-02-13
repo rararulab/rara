@@ -15,8 +15,10 @@
 //! Domain types for job discovery, normalization, and saved job tracking.
 
 use jiff::Timestamp;
-use job_domain_shared::convert::{self, chrono_opt_to_timestamp, chrono_to_timestamp, u8_from_i16};
-use job_model::{
+use rara_domain_shared::convert::{
+    self, chrono_opt_to_timestamp, chrono_to_timestamp, u8_from_i16,
+};
+use rara_model::{
     job::{Job, JobStatus},
     saved_job::{SavedJob as StoreSavedJob, SavedJobEvent as StoreSavedJobEvent},
 };

@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use job_domain_shared::settings::{model::Settings, service::RUNTIME_SETTINGS_KV_KEY};
+use rara_domain_shared::settings::{model::Settings, service::RUNTIME_SETTINGS_KV_KEY};
 use smart_default::SmartDefault;
 use snafu::{ResultExt, Whatever, whatever};
 use tokio_util::sync::CancellationToken;
@@ -144,7 +144,7 @@ impl BotConfig {
         let runtime = Arc::new(TelegramBotRuntime::new(telegram, main_http));
 
         let notify_client = Arc::new(
-            job_domain_shared::notify::client::NotifyClient::new(db_store.pool().clone())
+            rara_domain_shared::notify::client::NotifyClient::new(db_store.pool().clone())
                 .await
                 .whatever_context("Failed to initialize shared notify queue client")?,
         );

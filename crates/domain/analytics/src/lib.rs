@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # job-domain-analytics
+//! # raradomain-analytics
 //!
 //! Metrics, analytics, and reporting for the Job Automation platform.
 //!

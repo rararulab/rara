@@ -1,5 +1,5 @@
 [package]
-name = "job-workers"
+name = "rara-workers"
 version = "0.0.1"
 edition.workspace = true
 authors.workspace = true
@@ -14,20 +14,20 @@ description = "Background worker implementations for job automation"
 [dependencies]
 async-trait.workspace = true
 axum = { workspace = true }
+common-runtime = { workspace = true }
+common-worker = { workspace = true }
+crawl4ai = { workspace = true }
 jiff.workspace = true
-job-ai = { workspace = true }
-job-common-crawl4ai = { workspace = true }
-job-common-runtime = { workspace = true }
-job-common-worker = { workspace = true }
-job-domain-analytics = { workspace = true }
-job-domain-application = { workspace = true }
-job-domain-interview = { workspace = true }
-job-domain-job = { workspace = true }
-job-domain-resume = { workspace = true }
-job-domain-scheduler = { workspace = true }
-job-domain-shared = { workspace = true }
-job-server = { workspace = true }
 opendal.workspace = true
+rara-ai = { workspace = true }
+rara-domain-analytics = { workspace = true }
+rara-domain-application = { workspace = true }
+rara-domain-interview = { workspace = true }
+rara-domain-job = { workspace = true }
+rara-domain-resume = { workspace = true }
+rara-domain-scheduler = { workspace = true }
+rara-domain-shared = { workspace = true }
+rara-server = { workspace = true }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

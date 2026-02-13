@@ -1,5 +1,5 @@
 [package]
-name = "job-agents"
+name = "rara-agents"
 version = "0.0.1"
 edition.workspace = true
 license.workspace = true
@@ -13,11 +13,11 @@ categories.workspace = true
 [dependencies]
 async-trait.workspace = true
 backon.workspace = true
+base.workspace = true
 bon.workspace = true
 bytes.workspace = true
+common-telemetry.workspace = true
 futures.workspace = true
-job-base.workspace = true
-job-common-telemetry.workspace = true
 openrouter-rs = "^0.4"
 serde.workspace = true
 serde_json.workspace = true

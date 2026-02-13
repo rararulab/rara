@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use job_server::ServiceHandler;
+use rara_server::ServiceHandler;
 use teloxide::{prelude::*, types::CallbackQuery, utils::command::BotCommands};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;

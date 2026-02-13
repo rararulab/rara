@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # job-domain-job
+//! # raradomain-job
 //!
 //! Unified job domain: discovery, tracking, and pipeline management.
 
@@ -32,7 +32,7 @@ pub mod types;
 /// Wire the unified [`service::JobService`] with all dependencies.
 pub fn wire_job_service(
     pool: PgPool,
-    ai_service: job_ai::service::AiService,
+    ai_service: rara_ai::service::AiService,
 ) -> Result<service::JobService, error::SourceError> {
     let driver = jobspy::JobSpyDriver::new()?;
     let saved_job_repo: Arc<dyn repository::SavedJobRepository> =

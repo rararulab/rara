@@ -18,8 +18,8 @@
 use std::fmt::Write;
 
 use async_trait::async_trait;
-use job_domain_shared::id::{ApplicationId, InterviewId};
-use job_model::interview::InterviewPlan as StoreInterviewPlan;
+use rara_domain_shared::id::{ApplicationId, InterviewId};
+use rara_model::interview::InterviewPlan as StoreInterviewPlan;
 use sqlx::PgPool;
 
 use crate::{

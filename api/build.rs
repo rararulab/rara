@@ -23,7 +23,7 @@ fn main() {
     // const EQ_ATTR: &str = "#[derive(serde::Serialize, serde::Deserialize,  Eq)]";
 
     tonic_prost_build::configure()
-        .file_descriptor_set_path(out_dir.join("job_grpc_desc.bin"))
+        .file_descriptor_set_path(out_dir.join("rara_grpc_desc.bin"))
         // .type_attribute("job.v1.hello.Message", EQ_ATTR)
         .compile_protos(&[
             "proto/hello/v1/hello.proto",

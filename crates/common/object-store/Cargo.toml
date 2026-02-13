@@ -1,5 +1,5 @@
 [package]
-name = "job-object-store"
+name = "object-store"
 description = "S3-compatible object storage client for MinIO"
 version = "0.0.1"
 edition.workspace = true

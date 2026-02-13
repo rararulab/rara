@@ -23,12 +23,12 @@ In `crates/workers/src/notification_processor.rs`, add to the `WorkerState` stru
 ```rust
 pub struct WorkerState {
     pub notification_service: Arc<NotificationService>,
-    pub ai_service:           Option<Arc<job_ai::service::AiService>>,
-    pub job_repo:             Option<Arc<dyn job_domain_job_source::repository::JobRepository>>,
+    pub ai_service:           Option<Arc<rara_ai::service::AiService>>,
+    pub job_repo:             Option<Arc<dyn rara_domain_job_source::repository::JobRepository>>,
     pub jd_parse_tx:          mpsc::Sender<JdParseRequest>,
     pub jd_parse_notify:      Arc<tokio::sync::Mutex<Option<NotifyHandle>>>,
     pub telegram:             Arc<TelegramService>,
-    pub job_source_service:   Arc<job_domain_job_source::service::JobSourceService>,
+    pub job_source_service:   Arc<rara_domain_job_source::service::JobSourceService>,
 }
 ```
 
@@ -53,7 +53,7 @@ Note: `job_source_service` is created at line 202 and already `Arc<JobSourceServ
 ```rust
 pub struct App {
     // ... existing fields ...
-    job_source_service: Arc<job_domain_job_source::service::JobSourceService>,
+    job_source_service: Arc<rara_domain_job_source::service::JobSourceService>,
 }
 ```
 
@@ -114,7 +114,7 @@ async fn handle_search(
     msg: Message,
     args: String,
     telegram: Arc<TelegramService>,
-    job_source_service: Arc<job_domain_job_source::service::JobSourceService>,
+    job_source_service: Arc<rara_domain_job_source::service::JobSourceService>,
 ) -> ResponseResult<()> {
     if !telegram.is_primary_chat(msg.chat.id) {
         bot.send_message(msg.chat.id, "Unauthorized chat.").await?;
@@ -157,7 +157,7 @@ async fn handle_search(
     .await?;
 
     let max_results: u32 = 3;
-    let criteria = job_domain_job_source::types::DiscoveryCriteria {
+    let criteria = rara_domain_job_source::types::DiscoveryCriteria {
         keywords: keywords.clone(),
         location: location.clone(),
         max_results: Some(max_results),
@@ -220,7 +220,7 @@ async fn handle_search(
 ```rust
 /// Format job results into a Telegram message (HTML parse mode).
 fn format_job_results(
-    jobs: &[job_domain_job_source::types::NormalizedJob],
+    jobs: &[rara_domain_job_source::types::NormalizedJob],
     keywords: &[String],
     location: Option<&str>,
 ) -> String {
@@ -286,7 +286,7 @@ async fn handle_command(
     msg: Message,
     cmd: Command,
     telegram: Arc<TelegramService>,
-    job_source_service: Arc<job_domain_job_source::service::JobSourceService>,
+    job_source_service: Arc<rara_domain_job_source::service::JobSourceService>,
 ) -> ResponseResult<()> {
     match cmd {
         Command::Start => {
@@ -319,7 +319,7 @@ async fn handle_callback_query(
     bot: Bot,
     q: CallbackQuery,
     telegram: Arc<TelegramService>,
-    job_source_service: Arc<job_domain_job_source::service::JobSourceService>,
+    job_source_service: Arc<rara_domain_job_source::service::JobSourceService>,
 ) -> ResponseResult<()> {
     // Acknowledge the callback to remove the "loading" spinner.
     bot.answer_callback_query(&q.id).await?;
@@ -345,7 +345,7 @@ async fn handle_callback_query(
     let (keywords, location) = decode_search_params(parts[2]);
 
     let new_max = current_count + 3;
-    let criteria = job_domain_job_source::types::DiscoveryCriteria {
+    let criteria = rara_domain_job_source::types::DiscoveryCriteria {
         keywords: keywords.clone(),
         location: location.clone(),
         max_results: Some(new_max),

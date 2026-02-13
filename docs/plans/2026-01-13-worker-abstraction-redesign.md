@@ -2,7 +2,7 @@
 
 ## Overview
 
-重构 `job_common_worker` 模块，优化 API 人体工程学、类型安全、功能扩展和架构简化。
+重构 `common_worker` 模块，优化 API 人体工程学、类型安全、功能扩展和架构简化。
 
 ## Design Decisions
 

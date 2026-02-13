@@ -16,7 +16,7 @@
 
 use std::sync::{Arc, RwLock};
 
-use job_common_worker::NotifyHandle;
+use common_worker::NotifyHandle;
 use opendal::Operator;
 use snafu::{ResultExt, Whatever};
 use tracing::{info, warn};
@@ -26,23 +26,23 @@ use yunara_store::db::DBStore;
 #[derive(Clone)]
 pub struct AppState {
     // -- AI --
-    pub ai_service: job_ai::service::AiService,
+    pub ai_service: rara_ai::service::AiService,
 
     // -- domain services --
-    pub resume_service:      job_domain_resume::ResumeAppService,
-    pub application_service: job_domain_application::service::ApplicationService,
-    pub interview_service:   job_domain_interview::service::InterviewService,
-    pub scheduler_service:   job_domain_scheduler::service::SchedulerService,
-    pub analytics_service:   job_domain_analytics::service::AnalyticsService,
-    pub job_service:         job_domain_job::service::JobService,
+    pub resume_service:      rara_domain_resume::ResumeAppService,
+    pub application_service: rara_domain_application::service::ApplicationService,
+    pub interview_service:   rara_domain_interview::service::InterviewService,
+    pub scheduler_service:   rara_domain_scheduler::service::SchedulerService,
+    pub analytics_service:   rara_domain_analytics::service::AnalyticsService,
+    pub job_service:         rara_domain_job::service::JobService,
 
     // -- shared --
-    pub settings_svc:  job_domain_shared::settings::SettingsSvc,
-    pub notify_client: job_domain_shared::notify::client::NotifyClient,
+    pub settings_svc:  rara_domain_shared::settings::SettingsSvc,
+    pub notify_client: rara_domain_shared::notify::client::NotifyClient,
 
     // -- infra --
     pub object_store: Operator,
-    pub crawl_client: job_common_crawl4ai::Crawl4AiClient,
+    pub crawl_client: crawl4ai::Crawl4AiClient,
 
     // -- worker coordination --
     pub analyze_notify: Arc<RwLock<Option<NotifyHandle>>>,
@@ -53,21 +53,21 @@ impl AppState {
     pub async fn init(
         db_store: &DBStore,
         object_store: Operator,
-        notify_client: job_domain_shared::notify::client::NotifyClient,
+        notify_client: rara_domain_shared::notify::client::NotifyClient,
         crawl4ai_url: &str,
     ) -> Result<Self, Whatever> {
         let pool = db_store.pool().clone();
 
         // -- runtime settings ------------------------------------------------
 
-        let settings_svc = job_domain_shared::settings::SettingsSvc::load(db_store.kv_store())
+        let settings_svc = rara_domain_shared::settings::SettingsSvc::load(db_store.kv_store())
             .await
             .whatever_context("Failed to initialize runtime settings")?;
         info!("Runtime settings service loaded");
 
         // -- AI service ------------------------------------------------------
 
-        let ai_service = job_ai::service::AiService::new(settings_svc.clone());
+        let ai_service = rara_ai::service::AiService::new(settings_svc.clone());
         if settings_svc.current().ai.openrouter_api_key.is_some() {
             info!("AI service configured from runtime settings");
         } else {
@@ -76,18 +76,18 @@ impl AppState {
 
         // -- domain services -------------------------------------------------
 
-        let resume_service = job_domain_resume::wire_resume_service(pool.clone());
-        let application_service = job_domain_application::wire(pool.clone());
-        let interview_service = job_domain_interview::wire_interview_service(pool.clone());
-        let scheduler_service = job_domain_scheduler::wire_scheduler_service(pool.clone());
-        let analytics_service = job_domain_analytics::wire_analytics_service(pool.clone());
-        let job_service = job_domain_job::wire_job_service(pool, ai_service.clone())
+        let resume_service = rara_domain_resume::wire_resume_service(pool.clone());
+        let application_service = rara_domain_application::wire(pool.clone());
+        let interview_service = rara_domain_interview::wire_interview_service(pool.clone());
+        let scheduler_service = rara_domain_scheduler::wire_scheduler_service(pool.clone());
+        let analytics_service = rara_domain_analytics::wire_analytics_service(pool.clone());
+        let job_service = rara_domain_job::wire_job_service(pool, ai_service.clone())
             .whatever_context("Failed to initialize job service")?;
         info!("Job service initialized");
 
         // -- infra clients ---------------------------------------------------
 
-        let crawl_client = job_common_crawl4ai::Crawl4AiClient::new(crawl4ai_url);
+        let crawl_client = crawl4ai::Crawl4AiClient::new(crawl4ai_url);
         info!("Crawl4AI client configured");
 
         Ok(Self {
@@ -108,36 +108,36 @@ impl AppState {
 
     /// Build an [`axum::Router`] with all domain API routes.
     pub fn routes(&self) -> axum::Router {
-        use job_server::dedup_layer::{DedupLayer, DedupLayerConfig};
+        use rara_server::dedup_layer::{DedupLayer, DedupLayerConfig};
 
         axum::Router::new()
-            .merge(job_domain_resume::routes::routes(
+            .merge(rara_domain_resume::routes::routes(
                 self.resume_service.clone(),
             ))
-            .merge(job_domain_application::routes::routes(
+            .merge(rara_domain_application::routes::routes(
                 self.application_service.clone(),
             ))
-            .merge(job_domain_interview::routes::routes(
+            .merge(rara_domain_interview::routes::routes(
                 self.interview_service.clone(),
             ))
-            .merge(job_domain_scheduler::routes::routes(
+            .merge(rara_domain_scheduler::routes::routes(
                 self.scheduler_service.clone(),
             ))
-            .merge(job_domain_analytics::routes::routes(
+            .merge(rara_domain_analytics::routes::routes(
                 self.analytics_service.clone(),
             ))
-            .merge(job_domain_job::routes::management_routes(
+            .merge(rara_domain_job::routes::management_routes(
                 self.job_service.clone(),
                 self.object_store.clone(),
             ))
             .merge(
-                job_domain_job::routes::discovery_routes(self.job_service.clone())
+                rara_domain_job::routes::discovery_routes(self.job_service.clone())
                     .layer(DedupLayer::new(DedupLayerConfig::default())),
             )
-            .merge(job_domain_shared::settings::router::routes(
+            .merge(rara_domain_shared::settings::router::routes(
                 self.settings_svc.clone(),
             ))
-            .merge(job_domain_shared::notify::routes::routes(
+            .merge(rara_domain_shared::notify::routes::routes(
                 self.notify_client.clone(),
             ))
     }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # job-domain-scheduler
+//! # raradomain-scheduler
 //!
 //! Cron and task scheduling orchestration for the Job Automation platform.
 //!
@@ -23,7 +23,7 @@
 //! - Cron expression parsing and next-run calculation.
 //! - Task lifecycle tracking (pending -> running -> completed/failed).
 //!
-//! The existing `job-common-worker` crate provides low-level worker
+//! The existing `raracommon-worker` crate provides low-level worker
 //! primitives; this crate adds the domain-aware orchestration layer on top.
 use std::sync::Arc;
 

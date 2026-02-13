@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Job-fit analysis agent.
+//! rarafit analysis agent.
 
 use rig::{client::CompletionClient, completion::Prompt, providers::openrouter};
 

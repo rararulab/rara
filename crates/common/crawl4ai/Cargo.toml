@@ -1,5 +1,5 @@
 [package]
-name = "job-common-crawl4ai"
+name = "crawl4ai"
 version = "0.0.1"
 edition.workspace = true
 authors.workspace = true

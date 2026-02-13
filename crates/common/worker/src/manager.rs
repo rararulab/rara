@@ -21,7 +21,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use job_common_runtime::Runtime;
+use common_runtime::Runtime;
 use smart_default::SmartDefault;
 use tokio::{sync::Notify, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
@@ -58,7 +58,7 @@ use crate::{
 /// ```rust
 /// use std::time::Duration;
 ///
-/// use job_common_worker::{Manager, ManagerConfig};
+/// use common_worker::{Manager, ManagerConfig};
 ///
 /// let config = ManagerConfig {
 ///     runtime:          None,
@@ -105,7 +105,7 @@ struct WorkerEntry {
 /// ```rust
 /// use std::sync::Arc;
 ///
-/// use job_common_worker::Manager;
+/// use common_worker::Manager;
 ///
 /// #[derive(Clone)]
 /// struct AppState {
@@ -126,7 +126,7 @@ struct WorkerEntry {
 /// ```rust,no_run
 /// use std::time::Duration;
 ///
-/// use job_common_worker::{Manager, Worker, WorkerContext};
+/// use common_worker::{Manager, Worker, WorkerContext};
 ///
 /// struct MyWorker;
 ///
@@ -176,7 +176,7 @@ impl Manager<()> {
     /// ```rust
     /// use std::time::Duration;
     ///
-    /// use job_common_worker::{Manager, ManagerConfig};
+    /// use common_worker::{Manager, ManagerConfig};
     ///
     /// let config = ManagerConfig {
     ///     runtime:          None,
@@ -212,7 +212,7 @@ impl<S: Clone + Send + Sync + 'static> Manager<S> {
     /// ```rust
     /// use std::sync::Arc;
     ///
-    /// use job_common_worker::Manager;
+    /// use common_worker::Manager;
     ///
     /// #[derive(Clone)]
     /// struct Config {
@@ -253,7 +253,7 @@ impl<S: Clone + Send + Sync + 'static> Manager<S> {
     /// # Example
     ///
     /// ```rust,no_run
-    /// # use job_common_worker::{Manager, Worker, WorkerContext};
+    /// # use common_worker::{Manager, Worker, WorkerContext};
     /// # use std::time::Duration;
     /// # struct MyWorker;
     /// # #[async_trait::async_trait]
@@ -283,7 +283,7 @@ impl<S: Clone + Send + Sync + 'static> Manager<S> {
     /// # Example
     ///
     /// ```rust,no_run
-    /// # use job_common_worker::{Manager, FallibleWorker, WorkerContext, WorkResult, WorkError};
+    /// # use common_worker::{Manager, FallibleWorker, WorkerContext, WorkResult, WorkError};
     /// # use std::time::Duration;
     /// # #[derive(Clone)] struct AppState;
     /// struct MyWorker;
@@ -373,7 +373,7 @@ impl<S: Clone + Send + Sync + 'static> Manager<S> {
         let runtime = self
             .runtime
             .clone()
-            .unwrap_or_else(job_common_runtime::background_runtime);
+            .unwrap_or_else(common_runtime::background_runtime);
 
         let join_handle = if blocking {
             let rt_handle = runtime.handle().clone();
@@ -457,7 +457,7 @@ impl<S: Clone + Send + Sync + 'static> Manager<S> {
         let runtime = self
             .runtime
             .clone()
-            .unwrap_or_else(job_common_runtime::background_runtime);
+            .unwrap_or_else(common_runtime::background_runtime);
 
         let join_handle = if blocking {
             let rt_handle = runtime.handle().clone();
@@ -529,7 +529,7 @@ impl<S: Clone + Send + Sync + 'static> Manager<S> {
     /// # Example
     ///
     /// ```rust,no_run
-    /// # use job_common_worker::{Manager, Worker, WorkerContext};
+    /// # use common_worker::{Manager, Worker, WorkerContext};
     /// # use std::time::Duration;
     /// # struct MyWorker;
     /// # #[async_trait::async_trait]

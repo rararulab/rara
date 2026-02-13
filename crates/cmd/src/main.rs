@@ -13,18 +13,18 @@
 // limitations under the License.
 
 use clap::{Args, Parser, Subcommand};
-use job_common_telemetry;
+use common_telemetry;
 use snafu::{ResultExt, Whatever};
 
 mod build_info;
 
-use job_app::AppConfig;
-use job_telegram_bot::{BotConfig, TelegramConfig};
+use rara_app::AppConfig;
+use rara_telegram_bot::{BotConfig, TelegramConfig};
 
 #[derive(Debug, Parser)]
 #[clap(
 name = "job",
-about= "job-cli",
+about= "raracli",
 author = build_info::AUTHOR,
 version = build_info::FULL_VERSION)]
 struct Cli {
@@ -81,7 +81,7 @@ fn build_bot_config(config: &AppConfig) -> BotConfig {
 
 impl ServerArgs {
     async fn run() -> Result<(), Whatever> {
-        let _guards = job_common_telemetry::logging::init_tracing_subscriber("job");
+        let _guards = common_telemetry::logging::init_tracing_subscriber("job");
         let config = load_config()?;
         config.run().await
     }
@@ -95,7 +95,7 @@ struct BotArgs {}
 
 impl BotArgs {
     async fn run() -> Result<(), Whatever> {
-        let _guards = job_common_telemetry::logging::init_tracing_subscriber("job-bot");
+        let _guards = common_telemetry::logging::init_tracing_subscriber("rarabot");
         let config = load_config()?;
         let bot_config = build_bot_config(&config);
         let bot = bot_config.open().await?;
@@ -113,7 +113,7 @@ struct CombinedArgs {}
 
 impl CombinedArgs {
     async fn run() -> Result<(), Whatever> {
-        let _guards = job_common_telemetry::logging::init_tracing_subscriber("job-combined");
+        let _guards = common_telemetry::logging::init_tracing_subscriber("raracombined");
         let config = load_config()?;
         let bot_config = build_bot_config(&config);
         let bot = bot_config.open().await?;

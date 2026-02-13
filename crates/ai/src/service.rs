@@ -18,7 +18,7 @@
 //! on-demand from runtime settings. If the user hasn't configured an API
 //! key, agent factory methods return [`AiError::NotConfigured`].
 
-use job_domain_shared::settings::SettingsSvc;
+use rara_domain_shared::settings::SettingsSvc;
 use rig::providers::openrouter;
 
 use crate::{
@@ -63,7 +63,7 @@ impl AiService {
         Ok((client, model))
     }
 
-    /// Create a job-fit analysis agent.
+    /// Create a rarafit analysis agent.
     pub fn job_fit(&self) -> Result<JobFitAgent, AiError> {
         let (client, model) = self.client()?;
         Ok(JobFitAgent::new(client, model))

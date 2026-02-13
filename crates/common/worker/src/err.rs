@@ -52,7 +52,7 @@ pub enum ErrorSeverity {
 /// # Example
 ///
 /// ```rust
-/// use job_common_worker::{WorkError, WorkResult};
+/// use common_worker::{WorkError, WorkResult};
 ///
 /// async fn do_work() -> WorkResult {
 ///     // Transient error - worker continues
@@ -172,7 +172,7 @@ impl std::error::Error for WorkError {
 /// ```rust
 /// use std::str::FromStr;
 ///
-/// use job_common_worker::CronParseError;
+/// use common_worker::CronParseError;
 ///
 /// let result = croner::Cron::from_str("invalid cron");
 /// match result {

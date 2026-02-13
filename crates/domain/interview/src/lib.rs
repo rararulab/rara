@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # job-domain-interview
+//! # raradomain-interview
 //!
 //! Interview management and AI preparation plan generation.
 use std::sync::Arc;

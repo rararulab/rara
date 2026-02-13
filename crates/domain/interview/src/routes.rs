@@ -20,7 +20,7 @@ use axum::{
     http::StatusCode,
     routing::{delete, get, post, put},
 };
-use job_domain_shared::id::InterviewId;
+use rara_domain_shared::id::InterviewId;
 use serde::Deserialize;
 use tracing::instrument;
 use uuid::Uuid;

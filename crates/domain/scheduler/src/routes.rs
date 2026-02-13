@@ -19,7 +19,7 @@ use axum::{
     extract::{Path, Query, State},
     routing::{get, post},
 };
-use job_domain_shared::id::SchedulerTaskId;
+use rara_domain_shared::id::SchedulerTaskId;
 use serde::Deserialize;
 use tracing::instrument;
 use uuid::Uuid;

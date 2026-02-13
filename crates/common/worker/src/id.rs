@@ -28,7 +28,7 @@ use uuid::Uuid;
 /// # Example
 ///
 /// ```rust,no_run
-/// # use job_common_worker::{Handle, Manager, Worker, WorkerContext};
+/// # use common_worker::{Handle, Manager, Worker, WorkerContext};
 /// # use std::time::Duration;
 /// # struct MyWorker;
 /// # #[async_trait::async_trait]

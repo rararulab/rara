@@ -85,7 +85,7 @@ impl DatabaseConfig {
             self.database_url
         );
 
-        sqlx::migrate!("../../job-model/migrations")
+        sqlx::migrate!("../../rara-model/migrations")
             .run(&pool)
             .await?;
 

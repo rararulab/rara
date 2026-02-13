@@ -15,7 +15,7 @@
 //! Domain types for application lifecycle management.
 
 use jiff::Timestamp;
-use job_domain_shared::id::{ApplicationId, JobSourceId, ResumeId};
+use rara_domain_shared::id::{ApplicationId, JobSourceId, ResumeId};
 use serde::{Deserialize, Serialize};
 use strum_macros::{Display, EnumString, FromRepr};
 use uuid::Uuid;
@@ -262,11 +262,11 @@ pub struct ApplicationStatistics {
 // DB model conversions
 // ---------------------------------------------------------------------------
 
-use job_domain_shared::convert::{
+use rara_domain_shared::convert::{
     chrono_opt_to_timestamp, chrono_to_timestamp, timestamp_opt_to_chrono, timestamp_to_chrono,
     u8_from_i16,
 };
-use job_model::application::{Application as StoreApplication, ApplicationStatusHistory};
+use rara_model::application::{Application as StoreApplication, ApplicationStatusHistory};
 
 fn application_status_from_i16(value: i16) -> ApplicationStatus {
     let repr = u8_from_i16(value, "application.status");

@@ -15,7 +15,7 @@
 //! Domain types for scheduler task management.
 
 use jiff::Timestamp;
-use job_domain_shared::id::SchedulerTaskId;
+use rara_domain_shared::id::SchedulerTaskId;
 use serde::{Deserialize, Serialize};
 use strum_macros::FromRepr;
 use uuid::Uuid;
@@ -105,11 +105,11 @@ pub struct TaskFilter {
 // DB model conversions
 // ---------------------------------------------------------------------------
 
-use job_domain_shared::convert::{
+use rara_domain_shared::convert::{
     chrono_opt_to_timestamp, chrono_to_timestamp, timestamp_opt_to_chrono, timestamp_to_chrono,
     u8_from_i16,
 };
-use job_model::scheduler::{SchedulerTask, TaskRunHistory};
+use rara_model::scheduler::{SchedulerTask, TaskRunHistory};
 
 fn task_run_status_from_i16(value: i16) -> TaskRunStatus {
     let repr = u8_from_i16(value, "scheduler_task.last_status/task_run_history.status");

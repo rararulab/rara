@@ -19,7 +19,7 @@
 //! Implementations are expected to live in the infrastructure/store
 //! layer.
 
-use job_domain_shared::id::SchedulerTaskId;
+use rara_domain_shared::id::SchedulerTaskId;
 
 use crate::{
     error::SchedulerError,
