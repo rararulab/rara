@@ -180,16 +180,17 @@ impl ChatService {
     /// This method:
     /// 1. Ensures the session exists (creates it if `auto_create` is true).
     /// 2. Reads the existing message history.
-    /// 3. Persists the user message.
+    /// 3. Persists the user message (multimodal if `image_urls` are provided).
     /// 4. Converts history to `openrouter_rs::api::chat::Message` format.
     /// 5. Runs the agent loop.
     /// 6. Persists the assistant response.
     /// 7. Updates session metadata.
-    #[instrument(skip(self, user_text))]
+    #[instrument(skip(self, user_text, image_urls))]
     pub async fn send_message(
         &self,
         key: &SessionKey,
         user_text: String,
+        image_urls: Option<Vec<String>>,
     ) -> Result<ChatMessage, ChatError> {
         if user_text.trim().is_empty() {
             return Err(ChatError::InvalidRequest {
@@ -212,8 +213,29 @@ impl ChatService {
             .read_messages(key, None, None)
             .await?;
 
-        // 3. Persist user message
-        let user_msg = ChatMessage::user(&user_text);
+        // 3. Persist user message — multimodal if images are present
+        let has_images = image_urls
+            .as_ref()
+            .is_some_and(|urls| !urls.is_empty());
+        let user_msg = if has_images {
+            let urls = image_urls.as_ref().unwrap();
+            let mut blocks = vec![ContentBlock::Text {
+                text: user_text.clone(),
+            }];
+            for url in urls {
+                blocks.push(ContentBlock::ImageUrl { url: url.clone() });
+            }
+            ChatMessage {
+                seq:          0,
+                role:         MessageRole::User,
+                content:      MessageContent::Multimodal(blocks),
+                tool_call_id: None,
+                tool_name:    None,
+                created_at:   Utc::now(),
+            }
+        } else {
+            ChatMessage::user(&user_text)
+        };
         self.session_repo.append_message(key, &user_msg).await?;
 
         // 4. Convert history to openrouter format
@@ -222,7 +244,7 @@ impl ChatService {
             .map(to_openrouter_message)
             .collect::<Vec<_>>();
 
-        // 5. Build and run agent
+        // 5. Build and run agent — multimodal content for user message
         let model = session
             .model
             .clone()
@@ -232,11 +254,22 @@ impl ChatService {
             .clone()
             .unwrap_or_else(|| self.default_system_prompt.clone());
 
+        let user_content = if has_images {
+            let urls = image_urls.as_ref().unwrap();
+            let mut parts = vec![ContentPart::text(&user_text)];
+            for url in urls {
+                parts.push(ContentPart::image_url(url));
+            }
+            Content::Parts(parts)
+        } else {
+            Content::Text(user_text.clone())
+        };
+
         let runner = AgentRunner::builder()
             .llm_provider(self.llm_provider.clone())
             .model_name(model)
             .system_prompt(system_prompt)
-            .user_content(Content::Text(user_text.clone()))
+            .user_content(user_content)
             .history(openrouter_history)
             .build();
 
