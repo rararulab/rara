@@ -25,10 +25,15 @@ name = "job"
 path = "src/main.rs"
 
 [dependencies]
+clap = { workspace = true }
 common-telemetry.workspace = true
 rara-app = { workspace = true }
+shadow-rs = { workspace = true }
 snafu.workspace = true
 tokio.workspace = true
+
+[build-dependencies]
+shadow-rs = { workspace = true }
 
 [lints]
 workspace = true
