@@ -1,32 +1,68 @@
-//! PostgreSQL-backed implementation of [`crate::repository::SessionRepository`].
+//! PostgreSQL + JSONL file implementation of
+//! [`SessionRepository`](crate::repository::SessionRepository).
+//!
+//! Session metadata and channel bindings are stored in PostgreSQL.
+//! Messages are stored as append-only JSONL files on the local filesystem,
+//! one file per session at `{sessions_dir}/{sanitized_key}.jsonl`.
+
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::instrument;
 
 use crate::{
     error::SessionError,
-    types::{ChannelBinding, ChatMessage, MessageContent, MessageRole, SessionEntry, SessionKey},
+    types::{ChannelBinding, ChatMessage, SessionEntry, SessionKey},
 };
 
-/// PostgreSQL implementation of the session repository.
+/// Repository backed by PostgreSQL (sessions, bindings) and local JSONL files
+/// (messages).
+///
+/// # Message storage
+///
+/// Each session's messages are stored in a file at
+/// `{sessions_dir}/{sanitized_key}.jsonl`. Messages are appended one JSON
+/// object per line. Reading loads all lines, and clearing truncates the file.
 pub struct PgSessionRepository {
-    pool: PgPool,
+    pool:         PgPool,
+    sessions_dir: PathBuf,
 }
 
 impl PgSessionRepository {
-    /// Create a new repository backed by the given connection pool.
-    #[must_use]
-    pub const fn new(pool: PgPool) -> Self {
-        Self { pool }
+    /// Create a new repository.
+    ///
+    /// `sessions_dir` is the directory where JSONL message files are stored.
+    /// The directory is created if it does not exist.
+    pub async fn new(pool: PgPool, sessions_dir: impl Into<PathBuf>) -> Result<Self, SessionError> {
+        let sessions_dir = sessions_dir.into();
+        tokio::fs::create_dir_all(&sessions_dir)
+            .await
+            .map_err(|e| SessionError::FileIo { source: e })?;
+        Ok(Self { pool, sessions_dir })
     }
+
+    /// Return the JSONL file path for a session key.
+    fn message_file(&self, key: &SessionKey) -> PathBuf {
+        self.sessions_dir.join(format!("{}.jsonl", sanitize_key(key.as_str())))
+    }
+}
+
+/// Sanitize a session key for use as a filename.
+///
+/// Replaces characters that are problematic in file paths (`:`, `/`, `\`)
+/// with underscores.
+fn sanitize_key(key: &str) -> String {
+    key.replace([':', '/', '\\'], "_")
 }
 
 // ---------------------------------------------------------------------------
 // Row types for sqlx
 // ---------------------------------------------------------------------------
 
+/// Database row representation of a `chat_session` record.
 #[derive(sqlx::FromRow)]
 struct SessionRow {
     key:           String,
@@ -56,51 +92,7 @@ impl From<SessionRow> for SessionEntry {
     }
 }
 
-#[derive(sqlx::FromRow)]
-struct MessageRow {
-    #[allow(dead_code)]
-    session_key:  String,
-    seq:          i64,
-    role:         String,
-    content:      serde_json::Value,
-    tool_call_id: Option<String>,
-    tool_name:    Option<String>,
-    created_at:   DateTime<Utc>,
-}
-
-impl TryFrom<MessageRow> for ChatMessage {
-    type Error = SessionError;
-
-    fn try_from(row: MessageRow) -> Result<Self, Self::Error> {
-        let role = match row.role.as_str() {
-            "system" => MessageRole::System,
-            "user" => MessageRole::User,
-            "assistant" => MessageRole::Assistant,
-            "tool" => MessageRole::Tool,
-            "tool_result" => MessageRole::ToolResult,
-            other => {
-                return Err(SessionError::InvalidKey {
-                    message: format!("unknown role: {other}"),
-                });
-            }
-        };
-
-        let content: MessageContent =
-            serde_json::from_value(row.content).map_err(|e| SessionError::InvalidKey {
-                message: format!("invalid message content: {e}"),
-            })?;
-
-        Ok(Self {
-            seq: row.seq,
-            role,
-            content,
-            tool_call_id: row.tool_call_id,
-            tool_name: row.tool_name,
-            created_at: row.created_at,
-        })
-    }
-}
-
+/// Database row representation of a `channel_binding` record.
 #[derive(sqlx::FromRow)]
 struct ChannelBindingRow {
     channel_type: String,
@@ -125,8 +117,97 @@ impl From<ChannelBindingRow> for ChannelBinding {
 }
 
 // ---------------------------------------------------------------------------
+// JSONL file helpers
+// ---------------------------------------------------------------------------
+
+/// Append a single message as a JSON line to the given file.
+async fn append_jsonl(path: &Path, msg: &ChatMessage) -> Result<(), SessionError> {
+    let mut line = serde_json::to_string(msg).map_err(|e| SessionError::Json { source: e })?;
+    line.push('\n');
+
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .await
+        .map_err(|e| SessionError::FileIo { source: e })?;
+
+    file.write_all(line.as_bytes())
+        .await
+        .map_err(|e| SessionError::FileIo { source: e })?;
+
+    Ok(())
+}
+
+/// Read all messages from a JSONL file. Returns an empty vec if the file
+/// does not exist.
+async fn read_jsonl(path: &Path) -> Result<Vec<ChatMessage>, SessionError> {
+    let file = match tokio::fs::File::open(path).await {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(SessionError::FileIo { source: e }),
+    };
+
+    let reader = BufReader::new(file);
+    let mut lines = reader.lines();
+    let mut messages = Vec::new();
+    let mut seq: i64 = 0;
+
+    while let Some(line) = lines
+        .next_line()
+        .await
+        .map_err(|e| SessionError::FileIo { source: e })?
+    {
+        if line.trim().is_empty() {
+            continue;
+        }
+        seq += 1;
+        let mut msg: ChatMessage =
+            serde_json::from_str(&line).map_err(|e| SessionError::Json { source: e })?;
+        msg.seq = seq;
+        messages.push(msg);
+    }
+
+    Ok(messages)
+}
+
+/// Count lines in a JSONL file. Returns 0 if the file does not exist.
+async fn count_jsonl(path: &Path) -> Result<i64, SessionError> {
+    let file = match tokio::fs::File::open(path).await {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(SessionError::FileIo { source: e }),
+    };
+
+    let reader = BufReader::new(file);
+    let mut lines = reader.lines();
+    let mut count: i64 = 0;
+
+    while let Some(line) = lines
+        .next_line()
+        .await
+        .map_err(|e| SessionError::FileIo { source: e })?
+    {
+        if !line.trim().is_empty() {
+            count += 1;
+        }
+    }
+
+    Ok(count)
+}
+
+// ---------------------------------------------------------------------------
 // Repository implementation
 // ---------------------------------------------------------------------------
+
+/// Check whether a `sqlx::Error` is a PostgreSQL unique-constraint violation
+/// (SQLSTATE 23505).
+fn is_unique_violation(err: &sqlx::Error) -> bool {
+    if let sqlx::Error::Database(db_err) = err {
+        return db_err.code().as_deref() == Some("23505");
+    }
+    false
+}
 
 #[async_trait]
 impl crate::repository::SessionRepository for PgSessionRepository {
@@ -229,10 +310,15 @@ impl crate::repository::SessionRepository for PgSessionRepository {
                 key: key.as_str().to_owned(),
             });
         }
+
+        // Clean up the JSONL file (best-effort).
+        let path = self.message_file(key);
+        let _ = tokio::fs::remove_file(&path).await;
+
         Ok(())
     }
 
-    // -- messages -----------------------------------------------------------
+    // -- messages (JSONL files) ---------------------------------------------
 
     #[instrument(skip(self, message))]
     async fn append_message(
@@ -240,34 +326,15 @@ impl crate::repository::SessionRepository for PgSessionRepository {
         session_key: &SessionKey,
         message: &ChatMessage,
     ) -> Result<ChatMessage, SessionError> {
-        let content_json = serde_json::to_value(&message.content).map_err(|e| {
-            SessionError::InvalidKey {
-                message: format!("failed to serialize message content: {e}"),
-            }
-        })?;
+        let path = self.message_file(session_key);
+        let seq = count_jsonl(&path).await? + 1;
 
-        let role_str = message.role.to_string();
+        let mut msg = message.clone();
+        msg.seq = seq;
 
-        let row = sqlx::query_as::<_, MessageRow>(
-            r"INSERT INTO chat_message
-                   (session_key, seq, role, content, tool_call_id, tool_name, created_at)
-               VALUES (
-                   $1,
-                   COALESCE((SELECT MAX(seq) FROM chat_message WHERE session_key = $1), 0) + 1,
-                   $2, $3, $4, $5, $6
-               )
-               RETURNING *",
-        )
-        .bind(session_key.as_str())
-        .bind(&role_str)
-        .bind(&content_json)
-        .bind(&message.tool_call_id)
-        .bind(&message.tool_name)
-        .bind(message.created_at)
-        .fetch_one(&self.pool)
-        .await?;
+        append_jsonl(&path, &msg).await?;
 
-        row.try_into()
+        Ok(msg)
     }
 
     #[instrument(skip(self))]
@@ -277,30 +344,24 @@ impl crate::repository::SessionRepository for PgSessionRepository {
         after_seq: Option<i64>,
         limit: Option<i64>,
     ) -> Result<Vec<ChatMessage>, SessionError> {
+        let path = self.message_file(session_key);
+        let all = read_jsonl(&path).await?;
+
         let after = after_seq.unwrap_or(0);
-        let lim = limit.unwrap_or(10_000);
+        let lim = limit.unwrap_or(i64::MAX) as usize;
 
-        let rows = sqlx::query_as::<_, MessageRow>(
-            r"SELECT * FROM chat_message
-               WHERE session_key = $1 AND seq > $2
-               ORDER BY seq ASC
-               LIMIT $3",
-        )
-        .bind(session_key.as_str())
-        .bind(after)
-        .bind(lim)
-        .fetch_all(&self.pool)
-        .await?;
-
-        rows.into_iter().map(TryInto::try_into).collect()
+        Ok(all
+            .into_iter()
+            .filter(|m| m.seq > after)
+            .take(lim)
+            .collect())
     }
 
     #[instrument(skip(self))]
     async fn clear_messages(&self, session_key: &SessionKey) -> Result<(), SessionError> {
-        sqlx::query("DELETE FROM chat_message WHERE session_key = $1")
-            .bind(session_key.as_str())
-            .execute(&self.pool)
-            .await?;
+        let path = self.message_file(session_key);
+        // Truncate the file (or remove it).
+        let _ = tokio::fs::remove_file(&path).await;
         Ok(())
     }
 
@@ -313,7 +374,7 @@ impl crate::repository::SessionRepository for PgSessionRepository {
         target_key: &SessionKey,
         fork_at_seq: i64,
     ) -> Result<SessionEntry, SessionError> {
-        // Verify source exists
+        // Verify source exists.
         let source = self
             .get_session(source_key)
             .await?
@@ -321,14 +382,12 @@ impl crate::repository::SessionRepository for PgSessionRepository {
                 key: source_key.as_str().to_owned(),
             })?;
 
-        // Check fork_at_seq is valid
-        let max_seq: Option<i64> =
-            sqlx::query_scalar("SELECT MAX(seq) FROM chat_message WHERE session_key = $1")
-                .bind(source_key.as_str())
-                .fetch_one(&self.pool)
-                .await?;
+        // Read source messages and validate fork point.
+        let source_path = self.message_file(source_key);
+        let all_messages = read_jsonl(&source_path).await?;
+        let max_seq = all_messages.len() as i64;
 
-        if fork_at_seq < 1 || max_seq.is_none_or(|m| fork_at_seq > m) {
+        if fork_at_seq < 1 || fork_at_seq > max_seq {
             return Err(SessionError::InvalidForkPoint {
                 key: source_key.as_str().to_owned(),
                 seq: fork_at_seq,
@@ -337,7 +396,7 @@ impl crate::repository::SessionRepository for PgSessionRepository {
 
         let now = Utc::now();
 
-        // Create the target session
+        // Create the target session in PG.
         let new_session = SessionEntry {
             key:           target_key.clone(),
             title:         source.title.map(|t| format!("{t} (fork)")),
@@ -349,22 +408,21 @@ impl crate::repository::SessionRepository for PgSessionRepository {
             created_at:    now,
             updated_at:    now,
         };
-
         let created = self.create_session(&new_session).await?;
 
-        // Copy messages up to fork_at_seq
-        sqlx::query(
-            r"INSERT INTO chat_message (session_key, seq, role, content, tool_call_id, tool_name, created_at)
-               SELECT $2, seq, role, content, tool_call_id, tool_name, created_at
-               FROM chat_message
-               WHERE session_key = $1 AND seq <= $3
-               ORDER BY seq ASC",
-        )
-        .bind(source_key.as_str())
-        .bind(target_key.as_str())
-        .bind(fork_at_seq)
-        .execute(&self.pool)
-        .await?;
+        // Write forked messages to the target JSONL file.
+        let target_path = self.message_file(target_key);
+        let forked_messages = &all_messages[..fork_at_seq as usize];
+
+        let mut content = String::new();
+        for msg in forked_messages {
+            let line = serde_json::to_string(msg).map_err(|e| SessionError::Json { source: e })?;
+            content.push_str(&line);
+            content.push('\n');
+        }
+        tokio::fs::write(&target_path, content.as_bytes())
+            .await
+            .map_err(|e| SessionError::FileIo { source: e })?;
 
         Ok(created)
     }
@@ -414,13 +472,6 @@ impl crate::repository::SessionRepository for PgSessionRepository {
     }
 }
 
-fn is_unique_violation(err: &sqlx::Error) -> bool {
-    if let sqlx::Error::Database(db_err) = err {
-        return db_err.code().as_deref() == Some("23505");
-    }
-    false
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -434,10 +485,8 @@ mod tests {
     use super::*;
     use crate::repository::SessionRepository;
 
-    /// Set up a real PostgreSQL container and apply all migrations (including
-    /// the chat sessions tables added to the centralized rara-model migration
-    /// directory).
-    async fn setup_pool() -> (PgPool, testcontainers::ContainerAsync<Postgres>) {
+    /// Set up a real PostgreSQL container and apply migrations.
+    async fn setup() -> (PgSessionRepository, tempfile::TempDir, testcontainers::ContainerAsync<Postgres>) {
         let container = Postgres::default().start().await.unwrap();
         let host = container.get_host().await.unwrap();
         let port = container.get_host_port_ipv4(5432).await.unwrap();
@@ -449,18 +498,17 @@ mod tests {
             .await
             .unwrap();
 
-        // The centralized rara-model migrations now include the chat session
-        // tables, so a single migrate! call sets up everything we need.
         sqlx::migrate!("../rara-model/migrations")
             .run(&pool)
             .await
             .unwrap();
 
-        (pool, container)
-    }
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let repo = PgSessionRepository::new(pool, tmp_dir.path())
+            .await
+            .unwrap();
 
-    fn make_repo(pool: PgPool) -> PgSessionRepository {
-        PgSessionRepository::new(pool)
+        (repo, tmp_dir, container)
     }
 
     fn make_session(key: &str) -> SessionEntry {
@@ -484,8 +532,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_and_get_session() {
-        let (pool, _container) = setup_pool().await;
-        let repo = make_repo(pool);
+        let (repo, _tmp, _container) = setup().await;
 
         let entry = make_session("test:session1");
         let created = repo.create_session(&entry).await.unwrap();
@@ -502,8 +549,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_duplicate_session_returns_already_exists() {
-        let (pool, _container) = setup_pool().await;
-        let repo = make_repo(pool);
+        let (repo, _tmp, _container) = setup().await;
 
         let entry = make_session("dup:key");
         repo.create_session(&entry).await.unwrap();
@@ -518,8 +564,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_sessions_ordered_by_updated_at() {
-        let (pool, _container) = setup_pool().await;
-        let repo = make_repo(pool);
+        let (repo, _tmp, _container) = setup().await;
 
         repo.create_session(&make_session("list:a")).await.unwrap();
         repo.create_session(&make_session("list:b")).await.unwrap();
@@ -531,8 +576,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_session() {
-        let (pool, _container) = setup_pool().await;
-        let repo = make_repo(pool);
+        let (repo, _tmp, _container) = setup().await;
 
         let entry = make_session("upd:key");
         let mut created = repo.create_session(&entry).await.unwrap();
@@ -546,8 +590,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_session() {
-        let (pool, _container) = setup_pool().await;
-        let repo = make_repo(pool);
+        let (repo, _tmp, _container) = setup().await;
 
         repo.create_session(&make_session("del:key")).await.unwrap();
         repo.delete_session(&SessionKey::from_raw("del:key"))
@@ -563,8 +606,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_nonexistent_session_returns_not_found() {
-        let (pool, _container) = setup_pool().await;
-        let repo = make_repo(pool);
+        let (repo, _tmp, _container) = setup().await;
 
         let result = repo
             .delete_session(&SessionKey::from_raw("ghost"))
@@ -573,13 +615,12 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Messages
+    // Messages (JSONL files)
     // -----------------------------------------------------------------------
 
     #[tokio::test]
     async fn append_and_read_messages() {
-        let (pool, _container) = setup_pool().await;
-        let repo = make_repo(pool);
+        let (repo, _tmp, _container) = setup().await;
         let key = SessionKey::from_raw("msg:test");
         repo.create_session(&make_session("msg:test")).await.unwrap();
 
@@ -588,7 +629,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(m1.seq, 1);
-        assert_eq!(m1.role, MessageRole::User);
 
         let m2 = repo
             .append_message(&key, &ChatMessage::assistant("hi there"))
@@ -602,13 +642,14 @@ mod tests {
             .unwrap();
         assert_eq!(m3.seq, 3);
 
-        // Read all
+        // Read all.
         let messages = repo.read_messages(&key, None, None).await.unwrap();
         assert_eq!(messages.len(), 3);
         assert_eq!(messages[0].seq, 1);
+        assert_eq!(messages[0].content.as_text(), "hello");
         assert_eq!(messages[2].seq, 3);
 
-        // Read after seq 1
+        // Read after seq 1.
         let after = repo.read_messages(&key, Some(1), None).await.unwrap();
         assert_eq!(after.len(), 2);
         assert_eq!(after[0].seq, 2);
@@ -616,8 +657,7 @@ mod tests {
 
     #[tokio::test]
     async fn clear_messages() {
-        let (pool, _container) = setup_pool().await;
-        let repo = make_repo(pool);
+        let (repo, _tmp, _container) = setup().await;
         let key = SessionKey::from_raw("clear:test");
         repo.create_session(&make_session("clear:test"))
             .await
@@ -635,15 +675,14 @@ mod tests {
         let messages = repo.read_messages(&key, None, None).await.unwrap();
         assert!(messages.is_empty());
 
-        // Session still exists
+        // Session still exists.
         let session = repo.get_session(&key).await.unwrap();
         assert!(session.is_some());
     }
 
     #[tokio::test]
-    async fn cascade_delete_removes_messages() {
-        let (pool, _container) = setup_pool().await;
-        let repo = make_repo(pool);
+    async fn delete_session_removes_message_file() {
+        let (repo, _tmp, _container) = setup().await;
         let key = SessionKey::from_raw("cascade:test");
         repo.create_session(&make_session("cascade:test"))
             .await
@@ -653,12 +692,13 @@ mod tests {
             .await
             .unwrap();
 
+        let file_path = repo.message_file(&key);
+        assert!(file_path.exists());
+
         repo.delete_session(&key).await.unwrap();
 
-        // Messages are gone because of CASCADE
-        // (reading should fail since session doesn't exist, but messages are gone)
-        let session = repo.get_session(&key).await.unwrap();
-        assert!(session.is_none());
+        // File is cleaned up.
+        assert!(!file_path.exists());
     }
 
     // -----------------------------------------------------------------------
@@ -667,8 +707,7 @@ mod tests {
 
     #[tokio::test]
     async fn fork_session_copies_messages() {
-        let (pool, _container) = setup_pool().await;
-        let repo = make_repo(pool);
+        let (repo, _tmp, _container) = setup().await;
         let src_key = SessionKey::from_raw("fork:source");
         let tgt_key = SessionKey::from_raw("fork:target");
         repo.create_session(&make_session("fork:source"))
@@ -685,7 +724,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Fork at seq 2
+        // Fork at seq 2.
         let forked = repo.fork_session(&src_key, &tgt_key, 2).await.unwrap();
         assert_eq!(forked.message_count, 2);
         assert!(forked.title.unwrap().contains("(fork)"));
@@ -695,15 +734,14 @@ mod tests {
         assert_eq!(forked_messages[0].content.as_text(), "m1");
         assert_eq!(forked_messages[1].content.as_text(), "m2");
 
-        // Source still has all 3
+        // Source still has all 3.
         let source_messages = repo.read_messages(&src_key, None, None).await.unwrap();
         assert_eq!(source_messages.len(), 3);
     }
 
     #[tokio::test]
     async fn fork_invalid_seq_returns_error() {
-        let (pool, _container) = setup_pool().await;
-        let repo = make_repo(pool);
+        let (repo, _tmp, _container) = setup().await;
         let key = SessionKey::from_raw("fork:invalid");
         repo.create_session(&make_session("fork:invalid"))
             .await
@@ -727,8 +765,7 @@ mod tests {
 
     #[tokio::test]
     async fn bind_and_get_channel() {
-        let (pool, _container) = setup_pool().await;
-        let repo = make_repo(pool);
+        let (repo, _tmp, _container) = setup().await;
         let key = SessionKey::from_raw("chan:test");
         repo.create_session(&make_session("chan:test"))
             .await
@@ -757,10 +794,8 @@ mod tests {
 
     #[tokio::test]
     async fn bind_channel_upsert() {
-        let (pool, _container) = setup_pool().await;
-        let repo = make_repo(pool);
+        let (repo, _tmp, _container) = setup().await;
 
-        // Create two sessions
         repo.create_session(&make_session("chan:first"))
             .await
             .unwrap();
@@ -779,7 +814,6 @@ mod tests {
         };
         repo.bind_channel(&binding1).await.unwrap();
 
-        // Upsert: same (type, account, chat_id) but different session
         let binding2 = ChannelBinding {
             channel_type: "slack".to_owned(),
             account:      "team1".to_owned(),
@@ -801,8 +835,7 @@ mod tests {
 
     #[tokio::test]
     async fn cascade_delete_removes_bindings() {
-        let (pool, _container) = setup_pool().await;
-        let repo = make_repo(pool);
+        let (repo, _tmp, _container) = setup().await;
         let key = SessionKey::from_raw("cascade_bind:test");
         repo.create_session(&make_session("cascade_bind:test"))
             .await
@@ -827,5 +860,12 @@ mod tests {
             .await
             .unwrap();
         assert!(binding.is_none());
+    }
+
+    #[tokio::test]
+    async fn sanitize_key_for_filename() {
+        assert_eq!(sanitize_key("user:alice"), "user_alice");
+        assert_eq!(sanitize_key("dm:alice:bob"), "dm_alice_bob");
+        assert_eq!(sanitize_key("simple"), "simple");
     }
 }

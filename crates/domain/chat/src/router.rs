@@ -1,4 +1,23 @@
 //! HTTP API routes for the chat domain.
+//!
+//! All endpoints live under `/api/v1/chat/` and use JSON request/response
+//! bodies. The router is constructed via [`routes`] and expects a
+//! [`ChatService`] as shared axum state.
+//!
+//! ## Route table
+//!
+//! | Method   | Path                                                 | Description            |
+//! |----------|------------------------------------------------------|------------------------|
+//! | `POST`   | `/api/v1/chat/sessions`                              | Create a session       |
+//! | `GET`    | `/api/v1/chat/sessions`                              | List sessions          |
+//! | `GET`    | `/api/v1/chat/sessions/{key}`                        | Get a session          |
+//! | `DELETE` | `/api/v1/chat/sessions/{key}`                        | Delete a session       |
+//! | `POST`   | `/api/v1/chat/sessions/{key}/send`                   | Send a message         |
+//! | `GET`    | `/api/v1/chat/sessions/{key}/messages`               | Get message history    |
+//! | `DELETE` | `/api/v1/chat/sessions/{key}/messages`               | Clear messages         |
+//! | `POST`   | `/api/v1/chat/sessions/{key}/fork`                   | Fork a session         |
+//! | `PUT`    | `/api/v1/chat/channel-bindings`                      | Bind a channel         |
+//! | `GET`    | `/api/v1/chat/channel-bindings/{type}/{account}/{id}`| Get channel binding    |
 
 use axum::{
     Json, Router,
@@ -16,47 +35,70 @@ use crate::{error::ChatError, service::ChatService};
 // Request / Response types
 // ---------------------------------------------------------------------------
 
+/// Request body for `POST /sessions`.
 #[derive(Debug, Deserialize)]
 pub struct CreateSessionRequest {
+    /// Session key (e.g. `"user:alice"` or `"dm:alice:bob"`).
     pub key:           String,
+    /// Optional human-readable title.
     pub title:         Option<String>,
+    /// Optional LLM model override (e.g. `"gpt-4o"`).
     pub model:         Option<String>,
+    /// Optional system prompt override.
     pub system_prompt: Option<String>,
 }
 
+/// Query parameters for `GET /sessions`.
 #[derive(Debug, Deserialize)]
 pub struct ListSessionsQuery {
+    /// Maximum number of sessions to return (default: 50).
     pub limit:  Option<i64>,
+    /// Number of sessions to skip (default: 0).
     pub offset: Option<i64>,
 }
 
+/// Request body for `POST /sessions/{key}/send`.
 #[derive(Debug, Deserialize)]
 pub struct SendMessageRequest {
+    /// The user's message text.
     pub text: String,
 }
 
+/// Response body for `POST /sessions/{key}/send`.
 #[derive(Debug, Serialize)]
 pub struct SendMessageResponse {
+    /// The persisted assistant response message.
     pub message: ChatMessage,
 }
 
+/// Query parameters for `GET /sessions/{key}/messages`.
 #[derive(Debug, Deserialize)]
 pub struct GetMessagesQuery {
+    /// Only return messages with `seq > after_seq` (cursor-based pagination).
     pub after_seq: Option<i64>,
+    /// Maximum number of messages to return.
     pub limit:     Option<i64>,
 }
 
+/// Request body for `POST /sessions/{key}/fork`.
 #[derive(Debug, Deserialize)]
 pub struct ForkSessionRequest {
+    /// Key for the newly created forked session.
     pub target_key:  String,
+    /// Fork point — messages with `seq <= fork_at_seq` are copied.
     pub fork_at_seq: i64,
 }
 
+/// Request body for `PUT /channel-bindings`.
 #[derive(Debug, Deserialize)]
 pub struct BindChannelRequest {
+    /// Channel type identifier (e.g. `"telegram"`, `"slack"`).
     pub channel_type: String,
+    /// Account or bot identifier within the channel.
     pub account:      String,
+    /// Chat or conversation identifier within the channel.
     pub chat_id:      String,
+    /// Internal session key to bind to.
     pub session_key:  String,
 }
 
@@ -64,7 +106,8 @@ pub struct BindChannelRequest {
 // Router
 // ---------------------------------------------------------------------------
 
-/// Register all chat routes on a new router with shared state.
+/// Build an axum [`Router`] with all chat endpoints and the given
+/// [`ChatService`] as shared state.
 pub fn routes(service: ChatService) -> Router {
     Router::new()
         // Sessions
@@ -100,6 +143,7 @@ pub fn routes(service: ChatService) -> Router {
 // Handlers
 // ---------------------------------------------------------------------------
 
+/// `POST /api/v1/chat/sessions` — create a new session.
 #[instrument(skip(service, req))]
 async fn create_session(
     State(service): State<ChatService>,
@@ -112,6 +156,7 @@ async fn create_session(
     Ok((StatusCode::CREATED, Json(session)))
 }
 
+/// `GET /api/v1/chat/sessions` — list sessions with pagination.
 #[instrument(skip(service))]
 async fn list_sessions(
     State(service): State<ChatService>,
@@ -121,6 +166,7 @@ async fn list_sessions(
     Ok(Json(sessions))
 }
 
+/// `GET /api/v1/chat/sessions/{key}` — get a single session.
 #[instrument(skip(service))]
 async fn get_session(
     State(service): State<ChatService>,
@@ -130,6 +176,7 @@ async fn get_session(
     Ok(Json(session))
 }
 
+/// `DELETE /api/v1/chat/sessions/{key}` — delete a session and all its data.
 #[instrument(skip(service))]
 async fn delete_session(
     State(service): State<ChatService>,
@@ -139,6 +186,9 @@ async fn delete_session(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// `POST /api/v1/chat/sessions/{key}/send` — send a user message and receive
+/// the assistant's response (synchronous, blocks until the agent loop
+/// completes).
 #[instrument(skip(service, req))]
 async fn send_message(
     State(service): State<ChatService>,
@@ -151,6 +201,8 @@ async fn send_message(
     Ok(Json(SendMessageResponse { message }))
 }
 
+/// `GET /api/v1/chat/sessions/{key}/messages` — retrieve conversation
+/// history with optional cursor-based pagination.
 #[instrument(skip(service))]
 async fn get_messages(
     State(service): State<ChatService>,
@@ -163,6 +215,8 @@ async fn get_messages(
     Ok(Json(messages))
 }
 
+/// `DELETE /api/v1/chat/sessions/{key}/messages` — clear all messages for a
+/// session (keeps the session itself).
 #[instrument(skip(service))]
 async fn clear_messages(
     State(service): State<ChatService>,
@@ -174,6 +228,8 @@ async fn clear_messages(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// `POST /api/v1/chat/sessions/{key}/fork` — fork a session at a specific
+/// message sequence number.
 #[instrument(skip(service, req))]
 async fn fork_session(
     State(service): State<ChatService>,
@@ -190,6 +246,8 @@ async fn fork_session(
     Ok((StatusCode::CREATED, Json(forked)))
 }
 
+/// `PUT /api/v1/chat/channel-bindings` — bind an external channel to a
+/// session (upsert).
 #[instrument(skip(service, req))]
 async fn bind_channel(
     State(service): State<ChatService>,
@@ -206,6 +264,8 @@ async fn bind_channel(
     Ok(Json(binding))
 }
 
+/// `GET /api/v1/chat/channel-bindings/{type}/{account}/{chat_id}` — resolve
+/// a channel binding to its session.
 #[instrument(skip(service))]
 async fn get_channel_binding(
     State(service): State<ChatService>,

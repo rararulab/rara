@@ -1,19 +1,28 @@
 //! Repository trait for session persistence.
+//!
+//! Defines the [`SessionRepository`] trait — the sole persistence contract
+//! consumed by higher-level services. Implementations are expected to be
+//! backed by a relational database (see [`PgSessionRepository`](crate::pg_repository::PgSessionRepository)).
 
 use crate::{
     error::SessionError,
     types::{ChannelBinding, ChatMessage, SessionEntry, SessionKey},
 };
 
-/// Persistence contract for chat sessions, messages, and channel bindings.
+/// Async persistence contract for chat sessions, messages, and channel
+/// bindings.
+///
+/// All methods are `&self` (shared reference) so that implementations can
+/// be wrapped in `Arc` and shared across async tasks.
 #[async_trait::async_trait]
 pub trait SessionRepository: Send + Sync {
     // -- sessions -----------------------------------------------------------
 
-    /// Create a new session. Returns `AlreadyExists` if the key is taken.
+    /// Persist a new session. Returns [`SessionError::AlreadyExists`] if a
+    /// session with the same key already exists.
     async fn create_session(&self, entry: &SessionEntry) -> Result<SessionEntry, SessionError>;
 
-    /// Retrieve a session by key.
+    /// Retrieve a session by its key, or `None` if it does not exist.
     async fn get_session(&self, key: &SessionKey) -> Result<Option<SessionEntry>, SessionError>;
 
     /// List sessions, ordered by `updated_at` descending.
@@ -26,15 +35,22 @@ pub trait SessionRepository: Send + Sync {
     ) -> Result<Vec<SessionEntry>, SessionError>;
 
     /// Update mutable session fields (title, model, system_prompt, metadata,
-    /// message_count, preview). Bumps `updated_at`.
+    /// message_count, preview). The database trigger bumps `updated_at`
+    /// automatically. Returns [`SessionError::NotFound`] if the session does
+    /// not exist.
     async fn update_session(&self, entry: &SessionEntry) -> Result<SessionEntry, SessionError>;
 
-    /// Delete a session and its messages (cascade).
+    /// Delete a session and all associated messages and channel bindings
+    /// (cascade). Returns [`SessionError::NotFound`] if the session does not
+    /// exist.
     async fn delete_session(&self, key: &SessionKey) -> Result<(), SessionError>;
 
     // -- messages -----------------------------------------------------------
 
-    /// Append a message to the session. The repository assigns the next `seq`.
+    /// Append a message to the session's conversation history.
+    ///
+    /// The repository assigns the next monotonically increasing `seq` number.
+    /// The returned [`ChatMessage`] contains the assigned `seq`.
     async fn append_message(
         &self,
         session_key: &SessionKey,
@@ -52,13 +68,16 @@ pub trait SessionRepository: Send + Sync {
         limit: Option<i64>,
     ) -> Result<Vec<ChatMessage>, SessionError>;
 
-    /// Delete all messages for a session (but keep the session itself).
+    /// Delete all messages for a session while keeping the session row itself.
     async fn clear_messages(&self, session_key: &SessionKey) -> Result<(), SessionError>;
 
     // -- fork ---------------------------------------------------------------
 
-    /// Fork a session: create a new session and copy messages up to
-    /// `fork_at_seq` (inclusive).
+    /// Fork a session at a specific point in its conversation history.
+    ///
+    /// Creates a new session under `target_key` and copies all messages from
+    /// the source session with `seq <= fork_at_seq`. Returns
+    /// [`SessionError::InvalidForkPoint`] if `fork_at_seq` is out of range.
     async fn fork_session(
         &self,
         source_key: &SessionKey,
@@ -68,10 +87,15 @@ pub trait SessionRepository: Send + Sync {
 
     // -- channel bindings ---------------------------------------------------
 
-    /// Upsert a channel binding (ON CONFLICT update session_key).
+    /// Upsert a channel binding.
+    ///
+    /// If a binding for the same `(channel_type, account, chat_id)` already
+    /// exists, the `session_key` is updated to the new value.
     async fn bind_channel(&self, binding: &ChannelBinding) -> Result<ChannelBinding, SessionError>;
 
-    /// Resolve a channel binding.
+    /// Resolve a channel binding to its target session key.
+    ///
+    /// Returns `None` if no binding exists for the given channel coordinates.
     async fn get_channel_binding(
         &self,
         channel_type: &str,

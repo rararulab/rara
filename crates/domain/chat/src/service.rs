@@ -1,4 +1,9 @@
 //! Chat domain service — session-based conversations backed by LLM agents.
+//!
+//! [`ChatService`] is the primary entry point for all chat operations. It
+//! holds references to the session repository, LLM provider, and tool
+//! registry, and exposes high-level methods for session management and
+//! message exchange.
 
 use std::sync::Arc;
 
@@ -21,19 +26,36 @@ use tracing::{info, instrument};
 
 use crate::error::ChatError;
 
-/// The main chat service: manages sessions and delegates to the agent runner
-/// for LLM interactions.
+/// Central orchestrator for session-based AI chat.
+///
+/// `ChatService` ties together three concerns:
+///
+/// 1. **Session persistence** — CRUD operations on sessions and messages,
+///    delegated to a [`SessionRepository`] implementation.
+/// 2. **LLM execution** — Building and running an [`AgentRunner`] with the
+///    session's conversation history and registered tools.
+/// 3. **Channel routing** — Mapping external messaging channels to internal
+///    session keys via channel bindings.
+///
+/// The service is cheaply cloneable (`Arc`-wrapped internals) and safe to
+/// share across axum handler tasks.
 #[derive(Clone)]
 pub struct ChatService {
+    /// Persistence layer for sessions, messages, and channel bindings.
     session_repo:              Arc<dyn SessionRepository>,
+    /// Factory for creating OpenRouter API clients.
     llm_provider:              OpenRouterLoaderRef,
+    /// Registry of tools available to the agent during execution.
     tools:                     Arc<ToolRegistry>,
+    /// Default LLM model name used when a session does not specify one.
     pub default_model:         String,
+    /// Default system prompt prepended to every agent invocation when a
+    /// session does not specify its own.
     pub default_system_prompt: String,
 }
 
 impl ChatService {
-    /// Create a new chat service.
+    /// Create a new chat service with the given dependencies.
     #[must_use]
     pub fn new(
         session_repo: Arc<dyn SessionRepository>,
@@ -53,7 +75,10 @@ impl ChatService {
 
     // -- session CRUD -------------------------------------------------------
 
-    /// Create a new session.
+    /// Create a new session with the given key and optional overrides.
+    ///
+    /// If `model` or `system_prompt` are `None`, the service-level defaults
+    /// are used.
     #[instrument(skip(self))]
     pub async fn create_session(
         &self,
@@ -79,7 +104,7 @@ impl ChatService {
         Ok(created)
     }
 
-    /// List sessions.
+    /// List sessions ordered by most recently updated, with pagination.
     #[instrument(skip(self))]
     pub async fn list_sessions(
         &self,
@@ -93,7 +118,8 @@ impl ChatService {
         Ok(sessions)
     }
 
-    /// Get a single session.
+    /// Get a single session by key. Returns [`ChatError::SessionNotFound`]
+    /// if the key does not exist.
     #[instrument(skip(self))]
     pub async fn get_session(&self, key: &SessionKey) -> Result<SessionEntry, ChatError> {
         self.session_repo
@@ -114,7 +140,8 @@ impl ChatService {
 
     // -- messages -----------------------------------------------------------
 
-    /// Get message history for a session.
+    /// Get message history for a session, with optional cursor-based
+    /// pagination via `after_seq` and `limit`.
     #[instrument(skip(self))]
     pub async fn get_messages(
         &self,
@@ -131,7 +158,8 @@ impl ChatService {
         Ok(messages)
     }
 
-    /// Clear all messages for a session.
+    /// Clear all messages for a session and reset its `message_count` and
+    /// `preview` to their initial values.
     #[instrument(skip(self))]
     pub async fn clear_messages(&self, key: &SessionKey) -> Result<(), ChatError> {
         let _ = self.get_session(key).await?;
@@ -254,7 +282,8 @@ impl ChatService {
 
     // -- fork ---------------------------------------------------------------
 
-    /// Fork a session at a specific message sequence number.
+    /// Fork a session at a specific message sequence number, creating a new
+    /// session that shares the conversation history up to that point.
     #[instrument(skip(self))]
     pub async fn fork_session(
         &self,
@@ -277,7 +306,10 @@ impl ChatService {
 
     // -- channel bindings ---------------------------------------------------
 
-    /// Bind an external channel to a session key.
+    /// Bind an external channel (e.g. Telegram chat) to a session key.
+    ///
+    /// If a binding for the same channel already exists, the session key is
+    /// updated (upsert semantics).
     #[instrument(skip(self))]
     pub async fn bind_channel(
         &self,
@@ -299,7 +331,9 @@ impl ChatService {
         Ok(result)
     }
 
-    /// Look up which session an external channel maps to.
+    /// Look up which session an external channel is currently bound to.
+    ///
+    /// Returns `None` if no binding exists for the given channel coordinates.
     #[instrument(skip(self))]
     pub async fn get_channel_session(
         &self,
@@ -327,7 +361,11 @@ impl std::fmt::Debug for ChatService {
 // Conversion helpers
 // ---------------------------------------------------------------------------
 
-/// Convert a session `ChatMessage` to an `openrouter_rs::api::chat::Message`.
+/// Convert a session [`ChatMessage`] to an [`openrouter_rs::api::chat::Message`].
+///
+/// Maps domain roles to OpenRouter roles and converts text / multimodal
+/// content to the appropriate [`Content`] variant. Tool-related fields
+/// (`tool_call_id`, `tool_name`) are carried over when present.
 fn to_openrouter_message(msg: &ChatMessage) -> Message {
     let role = match msg.role {
         MessageRole::System => Role::System,
@@ -362,8 +400,10 @@ fn to_openrouter_message(msg: &ChatMessage) -> Message {
     message
 }
 
-/// Truncate a string to at most `max_len` characters, appending "..." if
-/// truncated.
+/// Truncate a string to at most `max_len` characters.
+///
+/// If the string exceeds the limit, it is cut and `"..."` is appended (the
+/// total length will be exactly `max_len`).
 fn truncate_preview(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_owned()
