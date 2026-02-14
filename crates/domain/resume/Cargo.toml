@@ -13,9 +13,11 @@ description = "Resume version management and tailoring"
 
 [dependencies]
 async-trait.workspace = true
-axum = { workspace = true }
+axum = { workspace = true, features = ["multipart"] }
+bytes.workspace = true
 chrono.workspace = true
 jiff.workspace = true
+opendal.workspace = true
 rara-domain-shared = { workspace = true }
 rara-model.workspace = true
 serde.workspace = true

@@ -20,6 +20,8 @@
 
 use std::sync::Arc;
 
+use bytes::Bytes;
+use opendal::Operator;
 use tracing::instrument;
 use uuid::Uuid;
 
@@ -27,11 +29,14 @@ use crate::{
     hash::content_hash,
     repository::ResumeRepository,
     types::{
-        CreateResumeRequest, InvalidContentSnafu, NotFoundSnafu, Resume, ResumeDiff, ResumeError,
-        ResumeFilter, ResumeSource, UpdateResumeRequest,
+        CreateResumeRequest, InvalidContentSnafu, NotFoundSnafu, PdfNotFoundSnafu, Resume,
+        ResumeDiff, ResumeError, ResumeFilter, ResumeSource, UpdateResumeRequest,
     },
     version::{ResumeVersionTree, compute_diff},
 };
+
+/// Maximum allowed PDF file size: 10 MiB.
+const MAX_PDF_SIZE: i64 = 10 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Service
@@ -210,6 +215,95 @@ impl<R: ResumeRepository> ResumeService<R> {
     #[instrument(skip(self))]
     pub async fn get_children(&self, parent_id: Uuid) -> Result<Vec<Resume>, ResumeError> {
         self.repo.get_children(parent_id).await
+    }
+
+    // -- PDF upload / download ----------------------------------------------
+
+    /// Upload a PDF file and create a new resume record.
+    ///
+    /// The PDF is stored in S3 under `resumes/{resume_id}/original.pdf`.
+    /// The resume record is created with `source = Manual` and no text
+    /// content (content is `None`).
+    #[instrument(skip(self, pdf_data, operator))]
+    pub async fn upload_pdf(
+        &self,
+        title: String,
+        tags: Vec<String>,
+        pdf_data: Bytes,
+        operator: &Operator,
+    ) -> Result<Resume, ResumeError> {
+        let file_size = pdf_data.len() as i64;
+
+        // Validate file size.
+        if file_size > MAX_PDF_SIZE {
+            return Err(ResumeError::FileTooLarge {
+                size: file_size,
+                max:  MAX_PDF_SIZE,
+            });
+        }
+
+        // Validate PDF magic bytes (%PDF-).
+        if pdf_data.len() < 5 || &pdf_data[..5] != b"%PDF-" {
+            return Err(ResumeError::InvalidFileType {
+                content_type: "unknown (not PDF)".to_owned(),
+            });
+        }
+
+        // Generate a unique ID for S3 key.
+        let resume_id = Uuid::new_v4();
+        let object_key = format!("resumes/{resume_id}/original.pdf");
+
+        // Upload to S3.
+        operator
+            .write(&object_key, pdf_data)
+            .await
+            .map_err(|e| ResumeError::UploadFailed {
+                message: e.to_string(),
+            })?;
+
+        // Use a hash derived from the object key for deduplication since
+        // there is no text content.
+        let req = CreateResumeRequest {
+            title,
+            content: String::new(),
+            source: ResumeSource::Manual,
+            parent_resume_id: None,
+            target_job_id: None,
+            customization_notes: None,
+            tags,
+        };
+
+        self.repo
+            .create_with_pdf(req, object_key, file_size)
+            .await
+    }
+
+    /// Download the PDF associated with a resume.
+    #[instrument(skip(self, operator))]
+    pub async fn get_pdf(
+        &self,
+        resume_id: Uuid,
+        operator: &Operator,
+    ) -> Result<Bytes, ResumeError> {
+        let resume = self
+            .repo
+            .get_by_id(resume_id)
+            .await?
+            .ok_or_else(|| NotFoundSnafu { id: resume_id }.build())?;
+
+        let object_key =
+            resume
+                .pdf_object_key
+                .ok_or_else(|| PdfNotFoundSnafu { id: resume_id }.build())?;
+
+        let data = operator
+            .read(&object_key)
+            .await
+            .map_err(|e| ResumeError::UploadFailed {
+                message: format!("failed to read PDF {object_key}: {e}"),
+            })?;
+
+        Ok(data.to_bytes())
     }
 
     // -- Internal helpers ---------------------------------------------------

@@ -33,6 +33,8 @@ pub struct Resume {
     pub customization_notes: Option<String>,
     pub tags:                Vec<String>,
     pub metadata:            Option<serde_json::Value>,
+    pub pdf_object_key:      Option<String>,
+    pub pdf_file_size:       Option<i64>,
     pub trace_id:            Option<String>,
     pub is_deleted:          bool,
     pub deleted_at:          Option<DateTime<Utc>>,
