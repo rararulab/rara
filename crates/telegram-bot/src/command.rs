@@ -24,4 +24,10 @@ pub(crate) enum Command {
     Help,
     #[command(description = "Search jobs: /search <keywords> [@ location]")]
     Search(String),
+    #[command(description = "Start a new chat session")]
+    New,
+    #[command(description = "Clear current session history")]
+    Clear,
+    #[command(description = "Parse a Job Description: /jd <text>")]
+    Jd(String),
 }

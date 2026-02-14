@@ -20,7 +20,7 @@
 use rara_domain_job::types::DiscoveryCriteria;
 pub use rara_domain_job::types::DiscoveryJobResponse;
 use reqwest::StatusCode;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
 
 /// Error model for bot -> main-service HTTP calls.
@@ -112,10 +112,216 @@ impl MainServiceHttpClient {
 
         Ok(())
     }
+
+    // -- Chat API methods ----------------------------------------------------
+
+    /// Resolve channel binding to find the associated session key.
+    ///
+    /// Maps to `GET /api/v1/chat/channel-bindings/{type}/{account}/{id}`.
+    pub async fn get_channel_session(
+        &self,
+        account: &str,
+        chat_id: &str,
+    ) -> Result<Option<ChannelBindingResponse>, MainServiceHttpError> {
+        let url = format!(
+            "{}/api/v1/chat/channel-bindings/telegram/{}/{}",
+            self.base_url, account, chat_id
+        );
+        let resp = self.client.get(url).send().await.context(RequestSnafu)?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(MainServiceHttpError::HttpStatus { status, body });
+        }
+
+        let binding = resp
+            .json::<Option<ChannelBindingResponse>>()
+            .await
+            .context(RequestSnafu)?;
+        Ok(binding)
+    }
+
+    /// Create or update a channel binding.
+    ///
+    /// Maps to `PUT /api/v1/chat/channel-bindings`.
+    pub async fn bind_channel(
+        &self,
+        channel_type: &str,
+        account: &str,
+        chat_id: &str,
+        session_key: &str,
+    ) -> Result<ChannelBindingResponse, MainServiceHttpError> {
+        let url = format!("{}/api/v1/chat/channel-bindings", self.base_url);
+        let resp = self
+            .client
+            .put(url)
+            .json(&serde_json::json!({
+                "channel_type": channel_type,
+                "account": account,
+                "chat_id": chat_id,
+                "session_key": session_key,
+            }))
+            .send()
+            .await
+            .context(RequestSnafu)?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(MainServiceHttpError::HttpStatus { status, body });
+        }
+
+        resp.json::<ChannelBindingResponse>()
+            .await
+            .context(RequestSnafu)
+    }
+
+    /// Send a message to a chat session and get the assistant's response.
+    ///
+    /// Maps to `POST /api/v1/chat/sessions/{key}/send`.
+    ///
+    /// This request may take a long time (30-60s) because it involves LLM
+    /// inference. The method uses an extended timeout to accommodate this.
+    pub async fn send_chat_message(
+        &self,
+        session_key: &str,
+        text: &str,
+    ) -> Result<ChatMessageResponse, MainServiceHttpError> {
+        let url = format!(
+            "{}/api/v1/chat/sessions/{}/send",
+            self.base_url, session_key
+        );
+
+        // Use a dedicated client with extended timeout for LLM calls.
+        let llm_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
+        let resp = llm_client
+            .post(url)
+            .json(&serde_json::json!({ "text": text }))
+            .send()
+            .await
+            .context(RequestSnafu)?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(MainServiceHttpError::HttpStatus { status, body });
+        }
+
+        resp.json::<ChatMessageResponse>()
+            .await
+            .context(RequestSnafu)
+    }
+
+    /// Create a new chat session.
+    ///
+    /// Maps to `POST /api/v1/chat/sessions`.
+    pub async fn create_session(
+        &self,
+        key: &str,
+        title: Option<&str>,
+    ) -> Result<(), MainServiceHttpError> {
+        let url = format!("{}/api/v1/chat/sessions", self.base_url);
+        let resp = self
+            .client
+            .post(url)
+            .json(&serde_json::json!({
+                "key": key,
+                "title": title,
+            }))
+            .send()
+            .await
+            .context(RequestSnafu)?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(MainServiceHttpError::HttpStatus { status, body });
+        }
+
+        Ok(())
+    }
+
+    /// Clear all messages in a session.
+    ///
+    /// Maps to `DELETE /api/v1/chat/sessions/{key}/messages`.
+    pub async fn clear_session_messages(
+        &self,
+        session_key: &str,
+    ) -> Result<(), MainServiceHttpError> {
+        let url = format!(
+            "{}/api/v1/chat/sessions/{}/messages",
+            self.base_url, session_key
+        );
+        let resp = self
+            .client
+            .delete(url)
+            .send()
+            .await
+            .context(RequestSnafu)?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(MainServiceHttpError::HttpStatus { status, body });
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct JdParseRequest {
     /// Raw JD text from telegram message.
     text: String,
+}
+
+// ---------------------------------------------------------------------------
+// Chat API response types
+// ---------------------------------------------------------------------------
+
+/// Subset of channel binding fields needed by the bot.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ChannelBindingResponse {
+    pub session_key: String,
+}
+
+/// Response from `POST /sessions/{key}/send`.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ChatMessageResponse {
+    pub message: ChatMessageData,
+}
+
+/// Minimal representation of a chat message for bot consumption.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ChatMessageData {
+    #[allow(dead_code)]
+    pub role:    String,
+    pub content: serde_json::Value,
+}
+
+impl ChatMessageData {
+    /// Extract text content from the message, handling both plain string
+    /// and multimodal content block formats.
+    pub fn text_content(&self) -> String {
+        match &self.content {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Array(blocks) => blocks
+                .iter()
+                .filter_map(|b| {
+                    if b.get("type")?.as_str()? == "text" {
+                        b.get("text")?.as_str().map(String::from)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => String::new(),
+        }
+    }
 }

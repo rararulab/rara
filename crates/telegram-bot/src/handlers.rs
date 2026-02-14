@@ -19,7 +19,7 @@ use std::sync::Arc;
 use teloxide::{
     payloads::{EditMessageTextSetters, SendMessageSetters},
     requests::Requester,
-    types::{CallbackQuery, Message, Update, UpdateKind},
+    types::{CallbackQuery, ChatAction, Message, ParseMode, Update, UpdateKind},
     utils::command::BotCommands,
 };
 use tracing::warn;
@@ -27,6 +27,7 @@ use tracing::warn;
 use crate::{
     command::Command,
     http_client::DiscoveryJobResponse,
+    markdown::{TELEGRAM_MAX_MESSAGE_LEN, chunk_message, markdown_to_telegram_html},
     state::BotState,
 };
 
@@ -46,7 +47,7 @@ pub(crate) async fn handle_update(update: Update, state: &Arc<BotState>) {
 /// Handle an incoming Telegram message.
 ///
 /// Routes to command handlers if the message matches a known command,
-/// otherwise treats it as JD text for parse submission.
+/// otherwise forwards to the chat session system for AI conversation.
 pub(crate) async fn handle_message_direct(
     msg: Message,
     state: &Arc<BotState>,
@@ -58,19 +59,6 @@ pub(crate) async fn handle_message_direct(
     // Try parsing as a bot command first.
     if let Ok(cmd) = Command::parse(text, "") {
         return handle_command(msg, cmd, state).await;
-    }
-
-    // Gate non-command messages to primary chat only.
-    if !state.is_primary_chat(msg.chat.id) {
-        warn!(
-            chat_id = msg.chat.id.0,
-            "ignoring unauthorized telegram chat"
-        );
-        state
-            .bot
-            .send_message(msg.chat.id, "Unauthorized chat.")
-            .await?;
-        return Ok(());
     }
 
     // Unknown slash commands.
@@ -85,20 +73,8 @@ pub(crate) async fn handle_message_direct(
         return Ok(());
     }
 
-    // Plain text -> treat as JD for parse.
-    state
-        .bot
-        .send_message(msg.chat.id, "Received your JD, processing...")
-        .await?;
-
-    if let Err(e) = state.http_client.submit_jd_parse(text).await {
-        state
-            .bot
-            .send_message(msg.chat.id, format!("JD parse submit failed: {e}"))
-            .await?;
-    }
-
-    Ok(())
+    // Plain text -> route to chat session.
+    handle_chat_message(&msg, text, state).await
 }
 
 /// Handle callback queries (inline keyboard button presses).
@@ -198,9 +174,13 @@ async fn handle_command(
                 .send_message(
                     msg.chat.id,
                     "Welcome! I'm the Job Assistant bot.\n\
-                     \u{2022} Send me a JD text and I'll parse it\n\
-                     \u{2022} Use /search <keywords> [@ location] to find jobs\n\
-                     \u{2022} Use /help to see all commands",
+                     Send me any message to start a conversation.\n\n\
+                     Commands:\n\
+                     /search <keywords> [@ location] - Search jobs\n\
+                     /jd <text> - Parse a Job Description\n\
+                     /new - Start a new chat session\n\
+                     /clear - Clear current session history\n\
+                     /help - Show all commands",
                 )
                 .await?;
         }
@@ -213,7 +193,230 @@ async fn handle_command(
         Command::Search(args) => {
             handle_search(msg, args, state).await?;
         }
+        Command::New => {
+            handle_new_session(&msg, state).await?;
+        }
+        Command::Clear => {
+            handle_clear_session(&msg, state).await?;
+        }
+        Command::Jd(jd_text) => {
+            handle_jd_parse(&msg, &jd_text, state).await?;
+        }
     }
+    Ok(())
+}
+
+/// Route plain text messages to the chat session system.
+///
+/// Resolves (or auto-creates) a channel binding for this Telegram chat,
+/// sends the user message to the chat service, and relays the AI response
+/// back to the user with Markdown formatting.
+async fn handle_chat_message(
+    msg: &Message,
+    text: &str,
+    state: &Arc<BotState>,
+) -> Result<(), teloxide::RequestError> {
+    let account = "default";
+    let chat_id_str = msg.chat.id.0.to_string();
+
+    // Resolve or auto-create session binding.
+    let session_key = match state
+        .http_client
+        .get_channel_session(account, &chat_id_str)
+        .await
+    {
+        Ok(Some(binding)) => binding.session_key,
+        Ok(None) => {
+            // Auto-create: generate key, create session, bind channel.
+            let key = format!("tg-{}", msg.chat.id.0);
+            let _ = state
+                .http_client
+                .create_session(&key, Some("Telegram Chat"))
+                .await;
+            let _ = state
+                .http_client
+                .bind_channel("telegram", account, &chat_id_str, &key)
+                .await;
+            key
+        }
+        Err(e) => {
+            state
+                .bot
+                .send_message(msg.chat.id, format!("Failed to resolve session: {e}"))
+                .await?;
+            return Ok(());
+        }
+    };
+
+    // Send typing indicator while waiting for LLM response.
+    let _ = state
+        .bot
+        .send_chat_action(msg.chat.id, ChatAction::Typing)
+        .await;
+
+    // Send to chat service and relay response.
+    match state
+        .http_client
+        .send_chat_message(&session_key, text)
+        .await
+    {
+        Ok(response) => {
+            let reply_text = response.message.text_content();
+            if !reply_text.is_empty() {
+                let html = markdown_to_telegram_html(&reply_text);
+                let chunks = chunk_message(&html, TELEGRAM_MAX_MESSAGE_LEN);
+                for chunk in chunks {
+                    state
+                        .bot
+                        .send_message(msg.chat.id, chunk)
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                }
+            }
+        }
+        Err(e) => {
+            state
+                .bot
+                .send_message(msg.chat.id, format!("Chat error: {e}"))
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle `/new` — start a new chat session and re-bind the channel.
+async fn handle_new_session(
+    msg: &Message,
+    state: &Arc<BotState>,
+) -> Result<(), teloxide::RequestError> {
+    let account = "default";
+    let chat_id_str = msg.chat.id.0.to_string();
+
+    // Generate a unique key using the chat id and current timestamp.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let key = format!("tg-{}-{now}", msg.chat.id.0);
+
+    match state
+        .http_client
+        .create_session(&key, Some("Telegram Chat"))
+        .await
+    {
+        Ok(()) => {
+            let _ = state
+                .http_client
+                .bind_channel("telegram", account, &chat_id_str, &key)
+                .await;
+            state
+                .bot
+                .send_message(msg.chat.id, "New chat session started.")
+                .await?;
+        }
+        Err(e) => {
+            state
+                .bot
+                .send_message(msg.chat.id, format!("Failed to create session: {e}"))
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle `/clear` — clear all messages in the current session.
+async fn handle_clear_session(
+    msg: &Message,
+    state: &Arc<BotState>,
+) -> Result<(), teloxide::RequestError> {
+    let account = "default";
+    let chat_id_str = msg.chat.id.0.to_string();
+
+    match state
+        .http_client
+        .get_channel_session(account, &chat_id_str)
+        .await
+    {
+        Ok(Some(binding)) => {
+            match state
+                .http_client
+                .clear_session_messages(&binding.session_key)
+                .await
+            {
+                Ok(()) => {
+                    state
+                        .bot
+                        .send_message(msg.chat.id, "Session history cleared.")
+                        .await?;
+                }
+                Err(e) => {
+                    state
+                        .bot
+                        .send_message(msg.chat.id, format!("Failed to clear: {e}"))
+                        .await?;
+                }
+            }
+        }
+        Ok(None) => {
+            state
+                .bot
+                .send_message(
+                    msg.chat.id,
+                    "No active session. Send a message to start one.",
+                )
+                .await?;
+        }
+        Err(e) => {
+            state
+                .bot
+                .send_message(msg.chat.id, format!("Error: {e}"))
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle `/jd <text>` — parse a Job Description (primary chat only).
+async fn handle_jd_parse(
+    msg: &Message,
+    jd_text: &str,
+    state: &Arc<BotState>,
+) -> Result<(), teloxide::RequestError> {
+    if !state.is_primary_chat(msg.chat.id) {
+        state
+            .bot
+            .send_message(msg.chat.id, "Unauthorized chat.")
+            .await?;
+        return Ok(());
+    }
+
+    let jd_text = jd_text.trim();
+    if jd_text.is_empty() {
+        state
+            .bot
+            .send_message(
+                msg.chat.id,
+                "Usage: /jd <paste job description text>",
+            )
+            .await?;
+        return Ok(());
+    }
+
+    state
+        .bot
+        .send_message(msg.chat.id, "Received your JD, processing...")
+        .await?;
+
+    if let Err(e) = state.http_client.submit_jd_parse(jd_text).await {
+        state
+            .bot
+            .send_message(msg.chat.id, format!("JD parse failed: {e}"))
+            .await?;
+    }
+
     Ok(())
 }
 

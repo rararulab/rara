@@ -16,6 +16,7 @@ rara-domain-job = { workspace = true }
 rara-domain-shared = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 smart-default = { workspace = true }
 snafu = { workspace = true }
 teloxide = { workspace = true }
