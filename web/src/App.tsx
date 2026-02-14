@@ -27,6 +27,7 @@ import Scheduler from '@/pages/Scheduler';
 import SavedJobs from '@/pages/SavedJobs';
 import SavedJobMarkdownPreview from '@/pages/SavedJobMarkdownPreview';
 import Settings from '@/pages/Settings';
+import Chat from '@/pages/Chat';
 
 const queryClient = new QueryClient();
 
@@ -45,6 +46,7 @@ export default function App() {
             <Route path="saved-jobs" element={<SavedJobs />} />
             <Route path="notifications" element={<Notifications />} />
             <Route path="scheduler" element={<Scheduler />} />
+            <Route path="chat" element={<Chat />} />
             <Route path="settings" element={<Settings />} />
           </Route>
         </Routes>

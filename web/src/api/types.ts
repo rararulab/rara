@@ -258,3 +258,33 @@ export interface RuntimeSettingsPatch {
     chat_id?: number;
   };
 }
+
+// Chat Sessions
+export interface ChatSession {
+  key: string;
+  title: string | null;
+  model: string | null;
+  system_prompt: string | null;
+  message_count: number;
+  preview: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatMessageData {
+  seq: number;
+  role: "system" | "user" | "assistant" | "tool" | "tool_result";
+  content: string | ChatContentBlock[];
+  tool_call_id?: string;
+  tool_name?: string;
+  created_at: string;
+}
+
+export type ChatContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image_url"; url: string };
+
+export interface SendMessageResponse {
+  message: ChatMessageData;
+}
