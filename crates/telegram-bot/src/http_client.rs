@@ -290,6 +290,48 @@ impl MainServiceHttpClient {
 
         Ok(())
     }
+
+    /// List chat sessions.
+    ///
+    /// Maps to `GET /api/v1/chat/sessions?limit=N`.
+    pub async fn list_sessions(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<SessionListItem>, MainServiceHttpError> {
+        let url = format!("{}/api/v1/chat/sessions?limit={}", self.base_url, limit);
+        let resp = self.client.get(url).send().await.context(RequestSnafu)?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(MainServiceHttpError::HttpStatus { status, body });
+        }
+
+        resp.json::<Vec<SessionListItem>>()
+            .await
+            .context(RequestSnafu)
+    }
+
+    /// Get session details.
+    ///
+    /// Maps to `GET /api/v1/chat/sessions/{key}`.
+    pub async fn get_session(
+        &self,
+        key: &str,
+    ) -> Result<SessionDetailResponse, MainServiceHttpError> {
+        let url = format!("{}/api/v1/chat/sessions/{}", self.base_url, key);
+        let resp = self.client.get(url).send().await.context(RequestSnafu)?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(MainServiceHttpError::HttpStatus { status, body });
+        }
+
+        resp.json::<SessionDetailResponse>()
+            .await
+            .context(RequestSnafu)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -320,6 +362,28 @@ pub(crate) struct ChatMessageData {
     #[allow(dead_code)]
     pub role:    String,
     pub content: serde_json::Value,
+}
+
+/// A single session in the list returned by `GET /api/v1/chat/sessions`.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub(crate) struct SessionListItem {
+    pub key:           String,
+    pub title:         Option<String>,
+    pub message_count: i64,
+    pub updated_at:    String,
+}
+
+/// Session detail returned by `GET /api/v1/chat/sessions/{key}`.
+#[derive(Debug, Deserialize)]
+pub(crate) struct SessionDetailResponse {
+    pub key:           String,
+    pub title:         Option<String>,
+    pub model:         Option<String>,
+    pub message_count: i64,
+    pub preview:       Option<String>,
+    pub created_at:    String,
+    pub updated_at:    String,
 }
 
 impl ChatMessageData {
