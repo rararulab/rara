@@ -117,6 +117,7 @@ shadow-rs = "1.2"
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "macros", "migrate", "chrono", "uuid"] }
 
 # Testing
+git2 = "0.20"
 tempfile = "3"
 testcontainers = "0.26"
 testcontainers-modules = { version = "0.14", features = ["postgres"] }

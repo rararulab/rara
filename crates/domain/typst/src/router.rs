@@ -8,6 +8,8 @@
 //! | `GET`    | `/api/v1/typst/projects`                      | List projects            |
 //! | `GET`    | `/api/v1/typst/projects/{id}`                 | Get project details      |
 //! | `DELETE` | `/api/v1/typst/projects/{id}`                 | Delete a project         |
+//! | `POST`   | `/api/v1/typst/projects/import-git`           | Import from Git URL      |
+//! | `POST`   | `/api/v1/typst/projects/{id}/git-sync`        | Sync Git remote updates  |
 //! | `POST`   | `/api/v1/typst/projects/{id}/files`           | Create a file            |
 //! | `GET`    | `/api/v1/typst/projects/{id}/files`           | List project files       |
 //! | `GET`    | `/api/v1/typst/projects/{id}/files/{path}`    | Get file content         |
@@ -32,8 +34,8 @@ use crate::{
     error::TypstError,
     service::TypstService,
     types::{
-        CompileRequest, CreateFileRequest, CreateProjectRequest, RenderResult, TypstFile,
-        TypstProject, UpdateFileRequest,
+        CompileRequest, CreateFileRequest, CreateProjectRequest, ImportGitRequest, RenderResult,
+        TypstFile, TypstProject, UpdateFileRequest,
     },
 };
 
@@ -45,6 +47,15 @@ pub fn routes(service: TypstService) -> Router {
         .route("/api/v1/typst/projects", get(list_projects))
         .route("/api/v1/typst/projects/{id}", get(get_project))
         .route("/api/v1/typst/projects/{id}", delete(delete_project))
+        // Git import & sync
+        .route(
+            "/api/v1/typst/projects/import-git",
+            post(import_from_git),
+        )
+        .route(
+            "/api/v1/typst/projects/{id}/git-sync",
+            post(sync_git),
+        )
         // Files
         .route("/api/v1/typst/projects/{id}/files", post(create_file))
         .route("/api/v1/typst/projects/{id}/files", get(list_files))
@@ -113,6 +124,28 @@ async fn delete_project(
 ) -> Result<StatusCode, TypstError> {
     service.delete_project(id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------------------------------------------------------
+// Git import handlers
+// ---------------------------------------------------------------------------
+
+#[instrument(skip(service, req))]
+async fn import_from_git(
+    State(service): State<TypstService>,
+    Json(req): Json<ImportGitRequest>,
+) -> Result<(StatusCode, Json<TypstProject>), TypstError> {
+    let project = service.import_from_git(req).await?;
+    Ok((StatusCode::CREATED, Json(project)))
+}
+
+#[instrument(skip(service))]
+async fn sync_git(
+    State(service): State<TypstService>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<TypstProject>, TypstError> {
+    let project = service.sync_git(id).await?;
+    Ok(Json(project))
 }
 
 // ---------------------------------------------------------------------------

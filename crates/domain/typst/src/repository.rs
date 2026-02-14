@@ -22,7 +22,14 @@ pub trait TypstRepository: Send + Sync {
         description: Option<&str>,
         main_file: &str,
         resume_id: Option<Uuid>,
+        git_url: Option<&str>,
     ) -> Result<TypstProject, TypstError>;
+
+    /// Update the git sync timestamp for a project.
+    async fn update_git_synced(&self, id: Uuid) -> Result<TypstProject, TypstError>;
+
+    /// Delete all files belonging to a project.
+    async fn delete_all_files(&self, project_id: Uuid) -> Result<(), TypstError>;
 
     /// Get a project by ID.
     async fn get_project(&self, id: Uuid) -> Result<Option<TypstProject>, TypstError>;

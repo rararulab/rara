@@ -9,6 +9,7 @@ use sqlx::PgPool;
 
 pub mod compiler;
 pub mod error;
+pub mod git;
 pub mod pg_repository;
 pub mod repository;
 pub mod router;

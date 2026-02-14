@@ -38,6 +38,22 @@ pub enum TypstError {
     /// Database error.
     #[snafu(display("repository error: {message}"))]
     Repository { message: String },
+
+    /// Git clone operation failed.
+    #[snafu(display("git clone failed: {message}"))]
+    GitCloneFailed { message: String },
+
+    /// Invalid Git URL.
+    #[snafu(display("invalid git URL: {url}"))]
+    InvalidGitUrl { url: String },
+
+    /// Project has no associated git URL.
+    #[snafu(display("project has no git URL"))]
+    NotGitProject,
+
+    /// Repository exceeds the maximum allowed size.
+    #[snafu(display("repository too large: {size} bytes"))]
+    RepositoryTooLarge { size: u64 },
 }
 
 /// Map a `sqlx::Error` into [`TypstError::Repository`].
@@ -67,7 +83,15 @@ impl axum::response::IntoResponse for TypstError {
 
             Self::CompilationError { .. } => axum::http::StatusCode::UNPROCESSABLE_ENTITY,
 
-            Self::Storage { .. } | Self::Repository { .. } => {
+            Self::InvalidGitUrl { .. } | Self::NotGitProject => {
+                axum::http::StatusCode::BAD_REQUEST
+            }
+
+            Self::RepositoryTooLarge { .. } => axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+
+            Self::GitCloneFailed { .. }
+            | Self::Storage { .. }
+            | Self::Repository { .. } => {
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR
             }
         };

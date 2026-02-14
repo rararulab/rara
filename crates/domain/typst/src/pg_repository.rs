@@ -30,11 +30,12 @@ impl crate::repository::TypstRepository for PgTypstRepository {
         description: Option<&str>,
         main_file: &str,
         resume_id: Option<Uuid>,
+        git_url: Option<&str>,
     ) -> Result<TypstProject, TypstError> {
         let id = Uuid::new_v4();
         let row = sqlx::query_as::<_, TypstProjectRow>(
-            r#"INSERT INTO typst_project (id, name, description, main_file, resume_id)
-               VALUES ($1, $2, $3, $4, $5)
+            r#"INSERT INTO typst_project (id, name, description, main_file, resume_id, git_url)
+               VALUES ($1, $2, $3, $4, $5, $6)
                RETURNING *"#,
         )
         .bind(id)
@@ -42,11 +43,37 @@ impl crate::repository::TypstRepository for PgTypstRepository {
         .bind(description)
         .bind(main_file)
         .bind(resume_id)
+        .bind(git_url)
         .fetch_one(&self.pool)
         .await
         .map_err(map_db_err)?;
 
         Ok(row.into())
+    }
+
+    async fn update_git_synced(&self, id: Uuid) -> Result<TypstProject, TypstError> {
+        let row = sqlx::query_as::<_, TypstProjectRow>(
+            r#"UPDATE typst_project SET git_last_synced_at = now()
+               WHERE id = $1
+               RETURNING *"#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_db_err)?
+        .ok_or(TypstError::ProjectNotFound { id })?;
+
+        Ok(row.into())
+    }
+
+    async fn delete_all_files(&self, project_id: Uuid) -> Result<(), TypstError> {
+        sqlx::query("DELETE FROM typst_file WHERE project_id = $1")
+            .bind(project_id)
+            .execute(&self.pool)
+            .await
+            .map_err(map_db_err)?;
+
+        Ok(())
     }
 
     async fn get_project(&self, id: Uuid) -> Result<Option<TypstProject>, TypstError> {

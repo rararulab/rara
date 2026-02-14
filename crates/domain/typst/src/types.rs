@@ -11,15 +11,19 @@ use uuid::Uuid;
 /// A Typst project groups related `.typ` files and tracks render history.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TypstProject {
-    pub id:          Uuid,
-    pub name:        String,
-    pub description: Option<String>,
+    pub id:                Uuid,
+    pub name:              String,
+    pub description:       Option<String>,
     /// Path to the main `.typ` file (relative to project root), defaults to `"main.typ"`.
-    pub main_file:   String,
+    pub main_file:         String,
     /// Optional link to a resume in the resume domain.
-    pub resume_id:   Option<Uuid>,
-    pub created_at:  Timestamp,
-    pub updated_at:  Timestamp,
+    pub resume_id:         Option<Uuid>,
+    /// If this project was imported from a Git repository, the clone URL.
+    pub git_url:           Option<String>,
+    /// Timestamp of the last successful Git sync.
+    pub git_last_synced_at: Option<Timestamp>,
+    pub created_at:        Timestamp,
+    pub updated_at:        Timestamp,
 }
 
 /// A single Typst source file belonging to a project.
@@ -76,6 +80,13 @@ pub struct UpdateFileRequest {
     pub content: String,
 }
 
+/// Body for `POST /api/v1/typst/projects/import-git`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportGitRequest {
+    pub url:  String,
+    pub name: Option<String>,
+}
+
 /// Body for `POST /api/v1/typst/projects/{id}/compile`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompileRequest {
@@ -90,13 +101,15 @@ pub struct CompileRequest {
 /// Raw database row for `typst_project`.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct TypstProjectRow {
-    pub id:          Uuid,
-    pub name:        String,
-    pub description: Option<String>,
-    pub main_file:   String,
-    pub resume_id:   Option<Uuid>,
-    pub created_at:  chrono::DateTime<chrono::Utc>,
-    pub updated_at:  chrono::DateTime<chrono::Utc>,
+    pub id:                 Uuid,
+    pub name:               String,
+    pub description:        Option<String>,
+    pub main_file:          String,
+    pub resume_id:          Option<Uuid>,
+    pub git_url:            Option<String>,
+    pub git_last_synced_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at:         chrono::DateTime<chrono::Utc>,
+    pub updated_at:         chrono::DateTime<chrono::Utc>,
 }
 
 /// Raw database row for `typst_file`.
@@ -126,18 +139,20 @@ pub struct RenderResultRow {
 // Conversions: DB row -> domain model
 // ---------------------------------------------------------------------------
 
-use rara_domain_shared::convert::chrono_to_timestamp;
+use rara_domain_shared::convert::{chrono_opt_to_timestamp, chrono_to_timestamp};
 
 impl From<TypstProjectRow> for TypstProject {
     fn from(r: TypstProjectRow) -> Self {
         Self {
-            id:          r.id,
-            name:        r.name,
-            description: r.description,
-            main_file:   r.main_file,
-            resume_id:   r.resume_id,
-            created_at:  chrono_to_timestamp(r.created_at),
-            updated_at:  chrono_to_timestamp(r.updated_at),
+            id:                 r.id,
+            name:               r.name,
+            description:        r.description,
+            main_file:          r.main_file,
+            resume_id:          r.resume_id,
+            git_url:            r.git_url,
+            git_last_synced_at: chrono_opt_to_timestamp(r.git_last_synced_at),
+            created_at:         chrono_to_timestamp(r.created_at),
+            updated_at:         chrono_to_timestamp(r.updated_at),
         }
     }
 }

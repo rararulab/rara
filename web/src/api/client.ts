@@ -83,6 +83,8 @@ async function requestBlob(path: string, options?: RequestInit & { timeoutMs?: n
   }
 }
 
+import type { TypstProject } from './types';
+
 export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body?: unknown) =>
@@ -93,4 +95,19 @@ export const api = {
     request<T>(path, { method: 'PATCH', body: body ? JSON.stringify(body) : undefined }),
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
   blob: (path: string) => requestBlob(path),
+
+  // -- Typst Git integration --
+
+  importTypstFromGit(data: { url: string; name?: string }): Promise<TypstProject> {
+    return request<TypstProject>('/api/v1/typst/projects/import-git', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  syncTypstGit(projectId: string): Promise<TypstProject> {
+    return request<TypstProject>(`/api/v1/typst/projects/${projectId}/git-sync`, {
+      method: 'POST',
+    });
+  },
 };

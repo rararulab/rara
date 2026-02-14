@@ -10,8 +10,9 @@ use uuid::Uuid;
 use crate::{
     compiler,
     error::{TypstError, map_storage_err},
+    git::GitImporter,
     repository::TypstRepository,
-    types::{RenderResult, TypstFile, TypstProject},
+    types::{ImportGitRequest, RenderResult, TypstFile, TypstProject},
 };
 
 /// High-level service for Typst project CRUD and compilation.
@@ -54,7 +55,7 @@ impl TypstService {
         }
         let main_file = main_file.unwrap_or_else(|| "main.typ".to_owned());
         self.repo
-            .create_project(&name, description.as_deref(), &main_file, resume_id)
+            .create_project(&name, description.as_deref(), &main_file, resume_id, None)
             .await
     }
 
@@ -155,6 +156,105 @@ impl TypstService {
         path: &str,
     ) -> Result<(), TypstError> {
         self.repo.delete_file(project_id, path).await
+    }
+
+    // -- Git integration --
+
+    /// Import a Typst project from a Git repository.
+    ///
+    /// Clones the repo, scans for supported files, creates a project, and
+    /// batch-inserts all discovered files.
+    #[instrument(skip(self))]
+    pub async fn import_from_git(
+        &self,
+        request: ImportGitRequest,
+    ) -> Result<TypstProject, TypstError> {
+        let importer = GitImporter;
+        let files = importer.import_from_url(&request.url).await?;
+
+        if files.is_empty() {
+            return Err(TypstError::InvalidRequest {
+                message: "no supported files found in repository".to_owned(),
+            });
+        }
+
+        // Auto-detect main file: prefer `main.typ`, otherwise the first `.typ` file.
+        let main_file = files
+            .iter()
+            .find(|f| f.path == "main.typ")
+            .or_else(|| files.iter().find(|f| f.path.ends_with(".typ")))
+            .map(|f| f.path.clone())
+            .unwrap_or_else(|| "main.typ".to_owned());
+
+        // Derive project name from request or URL.
+        let name = request.name.unwrap_or_else(|| {
+            request
+                .url
+                .rsplit('/')
+                .next()
+                .unwrap_or("imported-project")
+                .trim_end_matches(".git")
+                .to_owned()
+        });
+
+        let project = self
+            .repo
+            .create_project(&name, None, &main_file, None, Some(&request.url))
+            .await?;
+
+        // Batch-insert files.
+        for file in &files {
+            self.repo
+                .create_file(project.id, &file.path, &file.content)
+                .await?;
+        }
+
+        // Update sync timestamp.
+        let project = self.repo.update_git_synced(project.id).await?;
+
+        tracing::info!(
+            project_id = %project.id,
+            file_count = files.len(),
+            git_url = %request.url,
+            "imported project from git"
+        );
+
+        Ok(project)
+    }
+
+    /// Sync a Git-backed project by re-cloning and replacing all files.
+    #[instrument(skip(self))]
+    pub async fn sync_git(&self, project_id: Uuid) -> Result<TypstProject, TypstError> {
+        let project = self
+            .repo
+            .get_project(project_id)
+            .await?
+            .ok_or(TypstError::ProjectNotFound { id: project_id })?;
+
+        let git_url = project.git_url.as_deref().ok_or(TypstError::NotGitProject)?;
+
+        let importer = GitImporter;
+        let files = importer.sync(git_url).await?;
+
+        // Full replace: delete old files, insert new ones.
+        self.repo.delete_all_files(project_id).await?;
+
+        for file in &files {
+            self.repo
+                .create_file(project_id, &file.path, &file.content)
+                .await?;
+        }
+
+        // Update sync timestamp.
+        let project = self.repo.update_git_synced(project_id).await?;
+
+        tracing::info!(
+            project_id = %project_id,
+            file_count = files.len(),
+            "synced project from git"
+        );
+
+        Ok(project)
     }
 
     // -- Compilation --

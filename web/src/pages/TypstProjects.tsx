@@ -32,7 +32,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { FileType, Plus, Trash2 } from "lucide-react";
+import { FileType, GitBranch, Plus, RefreshCw, Trash2 } from "lucide-react";
 
 interface ProjectForm {
   name: string;
@@ -46,12 +46,19 @@ const emptyForm: ProjectForm = {
   main_file: "main.typ",
 };
 
+interface GitImportForm {
+  url: string;
+  name: string;
+}
+
 export default function TypstProjects() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState<ProjectForm>(emptyForm);
   const [deleteTarget, setDeleteTarget] = useState<TypstProject | null>(null);
+  const [gitDialogOpen, setGitDialogOpen] = useState(false);
+  const [gitForm, setGitForm] = useState<GitImportForm>({ url: "", name: "" });
 
   const { data: projects, isLoading } = useQuery({
     queryKey: ["typst-projects"],
@@ -80,6 +87,27 @@ export default function TypstProjects() {
     },
   });
 
+  const gitImportMutation = useMutation({
+    mutationFn: (data: GitImportForm) =>
+      api.importTypstFromGit({
+        url: data.url,
+        name: data.name || undefined,
+      }),
+    onSuccess: (project) => {
+      queryClient.invalidateQueries({ queryKey: ["typst-projects"] });
+      setGitDialogOpen(false);
+      setGitForm({ url: "", name: "" });
+      navigate(`/typst/${project.id}`);
+    },
+  });
+
+  const syncGitMutation = useMutation({
+    mutationFn: (id: string) => api.syncTypstGit(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["typst-projects"] });
+    },
+  });
+
   function closeDialog() {
     setDialogOpen(false);
     setForm(emptyForm);
@@ -89,6 +117,12 @@ export default function TypstProjects() {
     e.preventDefault();
     if (!form.name.trim()) return;
     createMutation.mutate(form);
+  }
+
+  function handleGitImport(e: React.FormEvent) {
+    e.preventDefault();
+    if (!gitForm.url.trim()) return;
+    gitImportMutation.mutate(gitForm);
   }
 
   function formatDate(dateStr: string) {
@@ -108,10 +142,16 @@ export default function TypstProjects() {
             Create and manage Typst document projects.
           </p>
         </div>
-        <Button onClick={() => setDialogOpen(true)}>
-          <Plus className="h-4 w-4 mr-1" />
-          New Project
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => setGitDialogOpen(true)}>
+            <GitBranch className="h-4 w-4 mr-1" />
+            Import from Git
+          </Button>
+          <Button onClick={() => setDialogOpen(true)}>
+            <Plus className="h-4 w-4 mr-1" />
+            New Project
+          </Button>
+        </div>
       </div>
 
       {isLoading ? (
@@ -153,13 +193,20 @@ export default function TypstProjects() {
               {projects.map((project) => (
                 <tr key={project.id} className="border-b last:border-b-0">
                   <td className="px-4 py-3 text-sm font-medium">
-                    <button
-                      type="button"
-                      className="text-left hover:underline cursor-pointer"
-                      onClick={() => navigate(`/typst/${project.id}`)}
-                    >
-                      {project.name}
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      {project.git_url && (
+                        <span title={project.git_url}>
+                          <GitBranch className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        className="text-left hover:underline cursor-pointer"
+                        onClick={() => navigate(`/typst/${project.id}`)}
+                      >
+                        {project.name}
+                      </button>
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">
                     {project.description ?? "-"}
@@ -172,6 +219,24 @@ export default function TypstProjects() {
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-2">
+                      {project.git_url && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={syncGitMutation.isPending}
+                          onClick={() => syncGitMutation.mutate(project.id)}
+                          title={
+                            project.git_last_synced_at
+                              ? `Last synced: ${formatDate(project.git_last_synced_at)}`
+                              : "Never synced"
+                          }
+                        >
+                          <RefreshCw
+                            className={`h-3.5 w-3.5 mr-1 ${syncGitMutation.isPending ? "animate-spin" : ""}`}
+                          />
+                          Sync
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="sm"
@@ -251,6 +316,65 @@ export default function TypstProjects() {
                 disabled={createMutation.isPending || !form.name.trim()}
               >
                 {createMutation.isPending ? "Creating..." : "Create"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Git Import Dialog */}
+      <Dialog open={gitDialogOpen} onOpenChange={setGitDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Import from Git</DialogTitle>
+            <DialogDescription>
+              Clone a Git repository and import all supported files (.typ, .bib,
+              .csv, .yaml, .json, .toml).
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleGitImport} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="git-url">Repository URL *</Label>
+              <Input
+                id="git-url"
+                value={gitForm.url}
+                onChange={(e) =>
+                  setGitForm((f) => ({ ...f, url: e.target.value }))
+                }
+                placeholder="https://github.com/user/repo.git"
+                required
+              />
+              <p className="text-xs text-muted-foreground">
+                Only HTTPS URLs are supported.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="git-name">Project Name</Label>
+              <Input
+                id="git-name"
+                value={gitForm.name}
+                onChange={(e) =>
+                  setGitForm((f) => ({ ...f, name: e.target.value }))
+                }
+                placeholder="Auto-detected from repository name"
+              />
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setGitDialogOpen(false);
+                  setGitForm({ url: "", name: "" });
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={gitImportMutation.isPending || !gitForm.url.trim()}
+              >
+                {gitImportMutation.isPending ? "Importing..." : "Import"}
               </Button>
             </DialogFooter>
           </form>

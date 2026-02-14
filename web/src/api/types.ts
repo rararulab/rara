@@ -289,6 +289,8 @@ export interface TypstProject {
   description: string | null;
   main_file: string;
   resume_id: string | null;
+  git_url: string | null;
+  git_last_synced_at: string | null;
   created_at: string;
   updated_at: string;
 }
