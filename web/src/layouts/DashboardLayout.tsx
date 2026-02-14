@@ -16,7 +16,6 @@
 
 import { useEffect, useSyncExternalStore } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router';
-import { useQuery } from '@tanstack/react-query';
 import {
   LayoutDashboard,
   Bot,
@@ -42,6 +41,7 @@ import { Separator } from '@/components/ui/separator';
 import { Button } from '@/components/ui/button';
 import { useLocalStorage } from '@/hooks/use-local-storage';
 import { useTheme } from '@/hooks/use-theme';
+import { useServerStatus } from '@/hooks/use-server-status';
 
 const THEME_META = {
   system: { icon: Monitor, label: 'System' },
@@ -63,25 +63,7 @@ const navItems = [
 ];
 
 function ServerStatus({ collapsed }: { collapsed: boolean }) {
-  const { status } = useQuery({
-    queryKey: ['health'],
-    queryFn: async () => {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 5_000);
-      try {
-        const res = await fetch('/api/v1/health', { signal: controller.signal });
-        if (!res.ok) throw new Error('unhealthy');
-        return true;
-      } finally {
-        clearTimeout(timer);
-      }
-    },
-    refetchInterval: 10_000,
-    retry: false,
-  });
-
-  const isOnline = status === 'success';
-  const isChecking = status === 'pending';
+  const { isOnline, isChecking } = useServerStatus();
 
   return (
     <div className={cn('flex items-center gap-2 py-3 text-xs text-muted-foreground', collapsed ? 'justify-center px-2' : 'px-4')}>
@@ -96,6 +78,16 @@ function ServerStatus({ collapsed }: { collapsed: boolean }) {
       {!collapsed && (
         <span>{isChecking ? 'Connecting...' : isOnline ? 'Server online' : 'Server offline'}</span>
       )}
+    </div>
+  );
+}
+
+function OfflineBanner() {
+  const { isOnline, isChecking } = useServerStatus();
+  if (isOnline || isChecking) return null;
+  return (
+    <div className="bg-destructive/10 border-b border-destructive/20 px-4 py-2 text-center text-sm text-destructive">
+      Server is currently offline. Requests are paused and will resume automatically when the server is back.
     </div>
   );
 }
@@ -228,8 +220,9 @@ export default function DashboardLayout() {
       </aside>
 
       {/* Main content */}
-      <main className={cn('flex-1', isFullBleed ? 'overflow-hidden' : 'overflow-auto')}>
-        <div className={isFullBleed ? 'h-full' : 'p-8'}>
+      <main className={cn('flex-1 flex flex-col', isFullBleed ? 'overflow-hidden' : 'overflow-auto')}>
+        <OfflineBanner />
+        <div className={isFullBleed ? 'flex-1 min-h-0' : 'p-8'}>
           <Outlet />
         </div>
       </main>

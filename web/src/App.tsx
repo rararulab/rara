@@ -16,6 +16,7 @@
 
 import { BrowserRouter, Routes, Route } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ServerStatusProvider } from '@/components/ServerStatusProvider';
 import DashboardLayout from '@/layouts/DashboardLayout';
 import Dashboard from '@/pages/Dashboard';
 import Applications from '@/pages/Applications';
@@ -34,23 +35,25 @@ const queryClient = new QueryClient();
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <Routes>
-          <Route path="saved-jobs/:id/markdown" element={<SavedJobMarkdownPreview />} />
-          <Route element={<DashboardLayout />}>
-            <Route index element={<Dashboard />} />
-            <Route path="applications" element={<Applications />} />
-            <Route path="resumes" element={<Resumes />} />
-            <Route path="interviews" element={<Interviews />} />
-            <Route path="discovery" element={<JobDiscovery />} />
-            <Route path="saved-jobs" element={<SavedJobs />} />
-            <Route path="notifications" element={<Notifications />} />
-            <Route path="scheduler" element={<Scheduler />} />
-            <Route path="chat" element={<Chat />} />
-            <Route path="settings" element={<Settings />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
+      <ServerStatusProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route path="saved-jobs/:id/markdown" element={<SavedJobMarkdownPreview />} />
+            <Route element={<DashboardLayout />}>
+              <Route index element={<Dashboard />} />
+              <Route path="applications" element={<Applications />} />
+              <Route path="resumes" element={<Resumes />} />
+              <Route path="interviews" element={<Interviews />} />
+              <Route path="discovery" element={<JobDiscovery />} />
+              <Route path="saved-jobs" element={<SavedJobs />} />
+              <Route path="notifications" element={<Notifications />} />
+              <Route path="scheduler" element={<Scheduler />} />
+              <Route path="chat" element={<Chat />} />
+              <Route path="settings" element={<Settings />} />
+            </Route>
+          </Routes>
+        </BrowserRouter>
+      </ServerStatusProvider>
     </QueryClientProvider>
   );
 }

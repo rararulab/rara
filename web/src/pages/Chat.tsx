@@ -37,6 +37,7 @@ import type {
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { useServerStatus } from "@/hooks/use-server-status";
 
 // ---------------------------------------------------------------------------
 // API helpers
@@ -330,6 +331,7 @@ function ChatThread({
   onClearMessages: () => void;
 }) {
   const queryClient = useQueryClient();
+  const { isOnline } = useServerStatus();
   const [input, setInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -354,10 +356,10 @@ function ChatThread({
 
   const handleSend = useCallback(() => {
     const text = input.trim();
-    if (!text || sendMutation.isPending) return;
+    if (!text || sendMutation.isPending || !isOnline) return;
     setInput("");
     sendMutation.mutate(text);
-  }, [input, sendMutation]);
+  }, [input, sendMutation, isOnline]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -465,23 +467,28 @@ function ChatThread({
 
       {/* Input area */}
       <div className="border-t bg-card px-4 py-3">
+        {!isOnline && (
+          <p className="mb-2 text-center text-xs text-destructive">
+            Server is offline. Sending is disabled until the connection is restored.
+          </p>
+        )}
         <div className="flex items-end gap-2">
           <textarea
             ref={textareaRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Type a message... (Enter to send, Shift+Enter for newline)"
+            placeholder={isOnline ? "Type a message... (Enter to send, Shift+Enter for newline)" : "Server offline -- sending disabled"}
             rows={1}
-            disabled={sendMutation.isPending}
+            disabled={sendMutation.isPending || !isOnline}
             className="flex-1 resize-none rounded-lg border border-input bg-background px-3 py-2.5 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
           />
           <Button
             size="icon"
             className="h-10 w-10 shrink-0"
             onClick={handleSend}
-            disabled={!input.trim() || sendMutation.isPending}
-            title="Send message"
+            disabled={!input.trim() || sendMutation.isPending || !isOnline}
+            title={isOnline ? "Send message" : "Server offline"}
           >
             {sendMutation.isPending ? (
               <Loader2 className="h-4 w-4 animate-spin" />
