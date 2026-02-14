@@ -25,7 +25,8 @@ use crate::{
     agents::{
         cover_letter::CoverLetterAgent, follow_up::FollowUpDraftAgent,
         interview_prep::InterviewPrepAgent, jd_analyzer::JdAnalyzerAgent, jd_parser::JdParserAgent,
-        job_fit::JobFitAgent, resume_optimizer::ResumeOptimizerAgent,
+        job_fit::JobFitAgent, resume_analyzer::ResumeAnalyzerAgent,
+        resume_optimizer::ResumeOptimizerAgent,
     },
     error::AiError,
 };
@@ -101,5 +102,11 @@ impl AiService {
     pub fn jd_analyzer(&self) -> Result<JdAnalyzerAgent, AiError> {
         let (client, model) = self.client(ModelScenario::Job)?;
         Ok(JdAnalyzerAgent::new(client, model))
+    }
+
+    /// Create a resume analyzer agent.
+    pub fn resume_analyzer(&self) -> Result<ResumeAnalyzerAgent, AiError> {
+        let (client, model) = self.client(ModelScenario::Job)?;
+        Ok(ResumeAnalyzerAgent::new(client, model))
     }
 }
