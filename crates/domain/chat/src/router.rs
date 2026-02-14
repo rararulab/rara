@@ -62,6 +62,9 @@ pub struct ListSessionsQuery {
 pub struct SendMessageRequest {
     /// The user's message text.
     pub text: String,
+    /// Optional list of image URLs to include as multimodal content.
+    #[serde(default)]
+    pub image_urls: Option<Vec<String>>,
 }
 
 /// Response body for `POST /sessions/{key}/send`.
@@ -196,7 +199,7 @@ async fn send_message(
     Json(req): Json<SendMessageRequest>,
 ) -> Result<Json<SendMessageResponse>, ChatError> {
     let message = service
-        .send_message(&SessionKey::from_raw(key), req.text)
+        .send_message(&SessionKey::from_raw(key), req.text, req.image_urls)
         .await?;
     Ok(Json(SendMessageResponse { message }))
 }

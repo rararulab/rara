@@ -20,6 +20,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   Bot,
+  ImagePlus,
   Loader2,
   MessageSquarePlus,
   PanelLeftClose,
@@ -27,6 +28,7 @@ import {
   Send,
   Trash2,
   User,
+  X,
 } from "lucide-react";
 import { api } from "@/api/client";
 import type {
@@ -62,10 +64,14 @@ function createSession(body: {
   return api.post<ChatSession>("/api/v1/chat/sessions", body);
 }
 
-function sendMessage(key: string, text: string) {
+function sendMessage(key: string, text: string, imageUrls?: string[]) {
+  const body: { text: string; image_urls?: string[] } = { text };
+  if (imageUrls && imageUrls.length > 0) {
+    body.image_urls = imageUrls;
+  }
   return api.post<SendMessageResponse>(
     `/api/v1/chat/sessions/${encodeURIComponent(key)}/send`,
-    { text },
+    body,
   );
 }
 
@@ -261,9 +267,31 @@ function SessionList({
 // MessageBubble
 // ---------------------------------------------------------------------------
 
+function ImageBlock({ url }: { url: string }) {
+  const [failed, setFailed] = useState(false);
+
+  if (failed) {
+    return (
+      <div className="flex h-32 w-48 items-center justify-center rounded-lg border border-dashed border-muted-foreground/30 bg-muted/30 text-xs text-muted-foreground">
+        Image failed to load
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={url}
+      alt=""
+      className="max-h-64 max-w-xs rounded-lg object-contain"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 function MessageBubble({ msg }: { msg: ChatMessageData }) {
   const isUser = msg.role === "user";
   const isSystem = msg.role === "system";
+  const isMultimodal = Array.isArray(msg.content);
   const text = extractTextContent(msg.content);
 
   if (isSystem) {
@@ -299,7 +327,34 @@ function MessageBubble({ msg }: { msg: ChatMessageData }) {
             : "bg-muted text-foreground",
         )}
       >
-        {isUser ? (
+        {isMultimodal ? (
+          <div className="space-y-2">
+            {(msg.content as import("@/api/types").ChatContentBlock[]).map(
+              (block, i) => {
+                if (block.type === "text") {
+                  return isUser ? (
+                    <p key={i} className="whitespace-pre-wrap text-sm">
+                      {block.text}
+                    </p>
+                  ) : (
+                    <div
+                      key={i}
+                      className="prose prose-sm dark:prose-invert max-w-none [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-background/50 [&_pre]:p-3 [&_code]:rounded [&_code]:bg-background/50 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs"
+                    >
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {block.text}
+                      </ReactMarkdown>
+                    </div>
+                  );
+                }
+                if (block.type === "image_url") {
+                  return <ImageBlock key={i} url={block.url} />;
+                }
+                return null;
+              },
+            )}
+          </div>
+        ) : isUser ? (
           <p className="whitespace-pre-wrap text-sm">{text}</p>
         ) : (
           <div className="prose prose-sm dark:prose-invert max-w-none [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-background/50 [&_pre]:p-3 [&_code]:rounded [&_code]:bg-background/50 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs">
@@ -333,6 +388,9 @@ function ChatThread({
   const queryClient = useQueryClient();
   const { isOnline } = useServerStatus();
   const [input, setInput] = useState("");
+  const [imageUrls, setImageUrls] = useState<string[]>([]);
+  const [imageInputVisible, setImageInputVisible] = useState(false);
+  const [imageInputValue, setImageInputValue] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -345,7 +403,8 @@ function ChatThread({
   const messages = messagesQuery.data ?? [];
 
   const sendMutation = useMutation({
-    mutationFn: (text: string) => sendMessage(sessionKey, text),
+    mutationFn: (vars: { text: string; imageUrls?: string[] }) =>
+      sendMessage(sessionKey, vars.text, vars.imageUrls),
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: ["chat-messages", sessionKey],
@@ -354,12 +413,28 @@ function ChatThread({
     },
   });
 
+  const handleAddImageUrl = useCallback(() => {
+    const url = imageInputValue.trim();
+    if (!url) return;
+    setImageUrls((prev) => [...prev, url]);
+    setImageInputValue("");
+    setImageInputVisible(false);
+  }, [imageInputValue]);
+
+  const handleRemoveImageUrl = useCallback((index: number) => {
+    setImageUrls((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
   const handleSend = useCallback(() => {
     const text = input.trim();
     if (!text || sendMutation.isPending || !isOnline) return;
+    const urls = imageUrls.length > 0 ? [...imageUrls] : undefined;
     setInput("");
-    sendMutation.mutate(text);
-  }, [input, sendMutation, isOnline]);
+    setImageUrls([]);
+    setImageInputVisible(false);
+    setImageInputValue("");
+    sendMutation.mutate({ text, imageUrls: urls });
+  }, [input, imageUrls, sendMutation, isOnline]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -472,7 +547,81 @@ function ChatThread({
             Server is offline. Sending is disabled until the connection is restored.
           </p>
         )}
+
+        {/* Attached image previews */}
+        {imageUrls.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-2">
+            {imageUrls.map((url, i) => (
+              <div
+                key={i}
+                className="group relative h-16 w-16 overflow-hidden rounded-lg border border-input bg-muted"
+              >
+                <img
+                  src={url}
+                  alt=""
+                  className="h-full w-full object-cover"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).style.display = "none";
+                  }}
+                />
+                <button
+                  type="button"
+                  className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground opacity-0 transition-opacity group-hover:opacity-100"
+                  onClick={() => handleRemoveImageUrl(i)}
+                  title="Remove image"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Image URL input */}
+        {imageInputVisible && (
+          <div className="mb-2 flex items-center gap-2">
+            <input
+              type="url"
+              value={imageInputValue}
+              onChange={(e) => setImageInputValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  handleAddImageUrl();
+                }
+                if (e.key === "Escape") {
+                  setImageInputVisible(false);
+                  setImageInputValue("");
+                }
+              }}
+              placeholder="Paste image URL and press Enter..."
+              className="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              autoFocus
+            />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setImageInputVisible(false);
+                setImageInputValue("");
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        )}
+
         <div className="flex items-end gap-2">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-10 w-10 shrink-0 text-muted-foreground hover:text-foreground"
+            onClick={() => setImageInputVisible((v) => !v)}
+            disabled={sendMutation.isPending || !isOnline}
+            title="Attach image URL"
+          >
+            <ImagePlus className="h-4 w-4" />
+          </Button>
           <textarea
             ref={textareaRef}
             value={input}
