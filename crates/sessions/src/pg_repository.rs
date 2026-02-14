@@ -3,32 +3,32 @@
 //!
 //! Session metadata and channel bindings are stored in PostgreSQL.
 //! Messages are stored as append-only JSONL files on the local filesystem,
-//! one file per session at `{sessions_dir}/{sanitized_key}.jsonl`.
+//! managed by [`SessionStore`](crate::store::SessionStore) which provides
+//! binary-indexed O(1) random access by sequence number.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::instrument;
 
 use crate::{
     error::SessionError,
+    store::SessionStore,
     types::{ChannelBinding, ChatMessage, SessionEntry, SessionKey},
 };
 
-/// Repository backed by PostgreSQL (sessions, bindings) and local JSONL files
-/// (messages).
+/// Repository backed by PostgreSQL (sessions, bindings) and
+/// [`SessionStore`](crate::store::SessionStore) (messages).
 ///
 /// # Message storage
 ///
-/// Each session's messages are stored in a file at
-/// `{sessions_dir}/{sanitized_key}.jsonl`. Messages are appended one JSON
-/// object per line. Reading loads all lines, and clearing truncates the file.
+/// Each session's messages are managed by a [`SessionStore`] that maintains
+/// JSONL files with companion binary index files for efficient random access.
 pub struct PgSessionRepository {
-    pool:         PgPool,
-    sessions_dir: PathBuf,
+    pool:  PgPool,
+    store: SessionStore,
 }
 
 impl PgSessionRepository {
@@ -37,25 +37,9 @@ impl PgSessionRepository {
     /// `sessions_dir` is the directory where JSONL message files are stored.
     /// The directory is created if it does not exist.
     pub async fn new(pool: PgPool, sessions_dir: impl Into<PathBuf>) -> Result<Self, SessionError> {
-        let sessions_dir = sessions_dir.into();
-        tokio::fs::create_dir_all(&sessions_dir)
-            .await
-            .map_err(|e| SessionError::FileIo { source: e })?;
-        Ok(Self { pool, sessions_dir })
+        let store = SessionStore::new(sessions_dir).await?;
+        Ok(Self { pool, store })
     }
-
-    /// Return the JSONL file path for a session key.
-    fn message_file(&self, key: &SessionKey) -> PathBuf {
-        self.sessions_dir.join(format!("{}.jsonl", sanitize_key(key.as_str())))
-    }
-}
-
-/// Sanitize a session key for use as a filename.
-///
-/// Replaces characters that are problematic in file paths (`:`, `/`, `\`)
-/// with underscores.
-fn sanitize_key(key: &str) -> String {
-    key.replace([':', '/', '\\'], "_")
 }
 
 // ---------------------------------------------------------------------------
@@ -114,86 +98,6 @@ impl From<ChannelBindingRow> for ChannelBinding {
             updated_at:   row.updated_at,
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// JSONL file helpers
-// ---------------------------------------------------------------------------
-
-/// Append a single message as a JSON line to the given file.
-async fn append_jsonl(path: &Path, msg: &ChatMessage) -> Result<(), SessionError> {
-    let mut line = serde_json::to_string(msg).map_err(|e| SessionError::Json { source: e })?;
-    line.push('\n');
-
-    let mut file = tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .await
-        .map_err(|e| SessionError::FileIo { source: e })?;
-
-    file.write_all(line.as_bytes())
-        .await
-        .map_err(|e| SessionError::FileIo { source: e })?;
-
-    Ok(())
-}
-
-/// Read all messages from a JSONL file. Returns an empty vec if the file
-/// does not exist.
-async fn read_jsonl(path: &Path) -> Result<Vec<ChatMessage>, SessionError> {
-    let file = match tokio::fs::File::open(path).await {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(SessionError::FileIo { source: e }),
-    };
-
-    let reader = BufReader::new(file);
-    let mut lines = reader.lines();
-    let mut messages = Vec::new();
-    let mut seq: i64 = 0;
-
-    while let Some(line) = lines
-        .next_line()
-        .await
-        .map_err(|e| SessionError::FileIo { source: e })?
-    {
-        if line.trim().is_empty() {
-            continue;
-        }
-        seq += 1;
-        let mut msg: ChatMessage =
-            serde_json::from_str(&line).map_err(|e| SessionError::Json { source: e })?;
-        msg.seq = seq;
-        messages.push(msg);
-    }
-
-    Ok(messages)
-}
-
-/// Count lines in a JSONL file. Returns 0 if the file does not exist.
-async fn count_jsonl(path: &Path) -> Result<i64, SessionError> {
-    let file = match tokio::fs::File::open(path).await {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-        Err(e) => return Err(SessionError::FileIo { source: e }),
-    };
-
-    let reader = BufReader::new(file);
-    let mut lines = reader.lines();
-    let mut count: i64 = 0;
-
-    while let Some(line) = lines
-        .next_line()
-        .await
-        .map_err(|e| SessionError::FileIo { source: e })?
-    {
-        if !line.trim().is_empty() {
-            count += 1;
-        }
-    }
-
-    Ok(count)
 }
 
 // ---------------------------------------------------------------------------
@@ -311,9 +215,8 @@ impl crate::repository::SessionRepository for PgSessionRepository {
             });
         }
 
-        // Clean up the JSONL file (best-effort).
-        let path = self.message_file(key);
-        let _ = tokio::fs::remove_file(&path).await;
+        // Clean up message files (best-effort).
+        let _ = self.store.delete(key.as_str()).await;
 
         Ok(())
     }
@@ -326,15 +229,7 @@ impl crate::repository::SessionRepository for PgSessionRepository {
         session_key: &SessionKey,
         message: &ChatMessage,
     ) -> Result<ChatMessage, SessionError> {
-        let path = self.message_file(session_key);
-        let seq = count_jsonl(&path).await? + 1;
-
-        let mut msg = message.clone();
-        msg.seq = seq;
-
-        append_jsonl(&path, &msg).await?;
-
-        Ok(msg)
+        self.store.append(session_key.as_str(), message).await
     }
 
     #[instrument(skip(self))]
@@ -344,25 +239,14 @@ impl crate::repository::SessionRepository for PgSessionRepository {
         after_seq: Option<i64>,
         limit: Option<i64>,
     ) -> Result<Vec<ChatMessage>, SessionError> {
-        let path = self.message_file(session_key);
-        let all = read_jsonl(&path).await?;
-
-        let after = after_seq.unwrap_or(0);
-        let lim = limit.unwrap_or(i64::MAX) as usize;
-
-        Ok(all
-            .into_iter()
-            .filter(|m| m.seq > after)
-            .take(lim)
-            .collect())
+        self.store
+            .read(session_key.as_str(), after_seq, limit)
+            .await
     }
 
     #[instrument(skip(self))]
     async fn clear_messages(&self, session_key: &SessionKey) -> Result<(), SessionError> {
-        let path = self.message_file(session_key);
-        // Truncate the file (or remove it).
-        let _ = tokio::fs::remove_file(&path).await;
-        Ok(())
+        self.store.clear(session_key.as_str()).await
     }
 
     // -- fork ---------------------------------------------------------------
@@ -382,17 +266,10 @@ impl crate::repository::SessionRepository for PgSessionRepository {
                 key: source_key.as_str().to_owned(),
             })?;
 
-        // Read source messages and validate fork point.
-        let source_path = self.message_file(source_key);
-        let all_messages = read_jsonl(&source_path).await?;
-        let max_seq = all_messages.len() as i64;
-
-        if fork_at_seq < 1 || fork_at_seq > max_seq {
-            return Err(SessionError::InvalidForkPoint {
-                key: source_key.as_str().to_owned(),
-                seq: fork_at_seq,
-            });
-        }
+        // Fork the message files (validates fork_at_seq internally).
+        self.store
+            .fork(source_key.as_str(), target_key.as_str(), fork_at_seq)
+            .await?;
 
         let now = Utc::now();
 
@@ -409,20 +286,6 @@ impl crate::repository::SessionRepository for PgSessionRepository {
             updated_at:    now,
         };
         let created = self.create_session(&new_session).await?;
-
-        // Write forked messages to the target JSONL file.
-        let target_path = self.message_file(target_key);
-        let forked_messages = &all_messages[..fork_at_seq as usize];
-
-        let mut content = String::new();
-        for msg in forked_messages {
-            let line = serde_json::to_string(msg).map_err(|e| SessionError::Json { source: e })?;
-            content.push_str(&line);
-            content.push('\n');
-        }
-        tokio::fs::write(&target_path, content.as_bytes())
-            .await
-            .map_err(|e| SessionError::FileIo { source: e })?;
 
         Ok(created)
     }
@@ -681,7 +544,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_session_removes_message_file() {
+    async fn delete_session_removes_messages() {
         let (repo, _tmp, _container) = setup().await;
         let key = SessionKey::from_raw("cascade:test");
         repo.create_session(&make_session("cascade:test"))
@@ -692,13 +555,15 @@ mod tests {
             .await
             .unwrap();
 
-        let file_path = repo.message_file(&key);
-        assert!(file_path.exists());
+        // Verify message exists.
+        let msgs = repo.read_messages(&key, None, None).await.unwrap();
+        assert_eq!(msgs.len(), 1);
 
         repo.delete_session(&key).await.unwrap();
 
-        // File is cleaned up.
-        assert!(!file_path.exists());
+        // Messages are cleaned up — reading returns empty.
+        let msgs = repo.read_messages(&key, None, None).await.unwrap();
+        assert!(msgs.is_empty());
     }
 
     // -----------------------------------------------------------------------
@@ -862,10 +727,4 @@ mod tests {
         assert!(binding.is_none());
     }
 
-    #[tokio::test]
-    async fn sanitize_key_for_filename() {
-        assert_eq!(sanitize_key("user:alice"), "user_alice");
-        assert_eq!(sanitize_key("dm:alice:bob"), "dm_alice_bob");
-        assert_eq!(sanitize_key("simple"), "simple");
-    }
 }
