@@ -12,14 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Layer 2 service tools: complex business workflows.
+//! Error types for the memory crate.
 
-mod job_pipeline;
-mod memory_get;
-mod memory_search;
-mod resume_tools;
+use snafu::Snafu;
 
-pub use job_pipeline::JobPipelineTool;
-pub use memory_get::MemoryGetTool;
-pub use memory_search::MemorySearchTool;
-pub use resume_tools::{AnalyzeResumeTool, GetResumeContentTool, ListResumesTool};
+pub type Result<T> = std::result::Result<T, MemoryError>;
+
+#[derive(Debug, Snafu)]
+#[snafu(visibility(pub))]
+pub enum MemoryError {
+    #[snafu(display("sqlite error: {source}"))]
+    Sqlite { source: rusqlite::Error },
+
+    #[snafu(display("io error: {source}"))]
+    Io { source: std::io::Error },
+
+    #[snafu(display("document not found: {id}"))]
+    NotFound { id: String },
+}
