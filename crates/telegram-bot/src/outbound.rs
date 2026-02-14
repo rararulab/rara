@@ -14,10 +14,13 @@
 
 //! Outbound message abstraction for sending Telegram messages.
 //!
-//! Handles:
-//! - Markdown -> Telegram HTML conversion
-//! - Automatic message chunking for long messages
-//! - Typing indicator before sends
+//! [`TelegramOutbound`] centralizes all message sending logic with two key
+//! features:
+//!
+//! - **Markdown conversion** — [`send_markdown`](TelegramOutbound::send_markdown)
+//!   automatically converts Markdown to Telegram's HTML subset before sending.
+//! - **Auto-chunking** — messages exceeding the 4096-character Telegram limit
+//!   are split at newline or space boundaries and sent as multiple messages.
 
 use std::sync::{Arc, RwLock};
 

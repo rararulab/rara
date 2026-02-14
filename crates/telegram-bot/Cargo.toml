@@ -9,7 +9,7 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Standalone Telegram bot runtime with gRPC command ingress"
+description = "Standalone Telegram bot runtime for the Job Automation Platform"
 
 [dependencies]
 rara-domain-job = { workspace = true }

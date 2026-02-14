@@ -13,6 +13,13 @@
 // limitations under the License.
 
 //! Centralized bot runtime state.
+//!
+//! [`BotState`] holds all shared dependencies needed by the polling loop and
+//! message handlers. It is wrapped in `Arc` and shared across tasks.
+//!
+//! [`TelegramRuntimeConfig`] contains credentials that can be updated at
+//! runtime via the settings sync loop without restarting the process. It is
+//! protected by an `RwLock` and read on every message to check authorization.
 
 use std::sync::{Arc, RwLock};
 

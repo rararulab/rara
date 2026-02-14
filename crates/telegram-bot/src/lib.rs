@@ -12,22 +12,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Telegram bot runtime crate.
+//! Standalone Telegram bot runtime for the Job Automation Platform.
 //!
-//! This crate provides a standalone bot process that:
-//! - receives user messages via manual `getUpdates` long polling,
-//! - calls main service HTTP APIs for search/JD parse flows,
-//! - consumes notification tasks from `pgmq` for main service -> bot delivery.
+//! This crate provides a separate process that bridges Telegram users with
+//! the main job service. It runs three concurrent loops:
 //!
-//! Internal module layout:
-//! - `config`: env/config parsing and dependency assembly
-//! - `app`: process lifecycle
-//! - `bot`: manual getUpdates polling loop
-//! - `handlers`: message and callback query handling
-//! - `state`: centralized runtime state
-//! - `outbound`: outbound message abstraction with formatting and chunking
-//! - `markdown`: Markdown -> Telegram HTML converter
-//! - `http_client`: bot -> main-service typed HTTP client
+//! 1. **Telegram polling** — manual [`getUpdates`] long-polling loop that
+//!    receives messages and dispatches them to command/message handlers.
+//! 2. **Notification consumer** — dequeues messages from a `pgmq` queue and
+//!    delivers them to Telegram chats.
+//! 3. **Settings sync** — polls the KV store and hot-updates bot credentials
+//!    without restarting.
+//!
+//! # Public API
+//!
+//! The only public types are [`BotApp`] (the process entry point) and
+//! [`BotConfig`] / [`TelegramConfig`] (configuration). All internal modules
+//! are `pub(crate)`.
+//!
+//! # Module Layout
+//!
+//! | Module          | Purpose                                               |
+//! |-----------------|-------------------------------------------------------|
+//! | [`config`]      | Environment parsing and dependency wiring              |
+//! | [`app`]         | Process lifecycle, notification consumer, settings sync|
+//! | [`bot`]         | Manual `getUpdates` long-polling loop                  |
+//! | [`handlers`]    | Message routing, command handlers, callback queries    |
+//! | [`state`]       | Shared runtime state with hot-update support           |
+//! | [`outbound`]    | Message sending with Markdown formatting and chunking  |
+//! | [`markdown`]    | Markdown-to-Telegram-HTML converter                    |
+//! | [`command`]     | Telegram command definitions                           |
+//! | [`http_client`] | Typed HTTP client for main service API calls           |
 
 mod app;
 mod bot;

@@ -12,10 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Typed HTTP client from bot runtime to main service.
+//! Typed HTTP client from the bot process to the main service.
 //!
-//! This client intentionally reuses domain request/response models for
-//! discover API to avoid payload drift between bot and main service.
+//! This client reuses domain request/response models
+//! ([`DiscoveryCriteria`], [`DiscoveryJobResponse`]) to avoid payload drift
+//! between the bot and the main service.
+//!
+//! # Endpoints
+//!
+//! | Method | Path                             | Purpose                          |
+//! |--------|----------------------------------|----------------------------------|
+//! | POST   | `/api/v1/jobs/discover`          | Search jobs with keyword filters |
+//! | POST   | `/api/v1/internal/bot/jd-parse`  | Submit raw JD text for parsing   |
 
 use rara_domain_job::types::DiscoveryCriteria;
 pub use rara_domain_job::types::DiscoveryJobResponse;

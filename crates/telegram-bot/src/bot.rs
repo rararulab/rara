@@ -14,9 +14,21 @@
 
 //! Manual `getUpdates` long-polling loop.
 //!
-//! Replaces the teloxide `Dispatcher` with a simpler, hand-rolled polling loop
-//! that gives us full control over error handling, retry logic, and graceful
-//! shutdown via `CancellationToken`.
+//! We use a hand-rolled polling loop instead of teloxide's built-in
+//! `Dispatcher` for three reasons:
+//!
+//! 1. **Error recovery** — on transient failures we sleep 5 seconds and retry,
+//!    rather than crashing the entire dispatcher.
+//! 2. **Conflict detection** — if another bot instance is running with the
+//!    same token, the `TerminatedByOtherGetUpdates` API error is caught and
+//!    the loop exits gracefully.
+//! 3. **Cancellation** — `tokio::select!` on the [`CancellationToken`] lets
+//!    the loop exit mid-wait during shutdown, instead of blocking for the
+//!    full 30-second poll timeout.
+//!
+//! The HTTP client timeout (45s) is intentionally higher than the Telegram
+//! long-poll timeout (30s) to prevent the client from aborting the request
+//! before Telegram responds.
 
 use std::sync::Arc;
 

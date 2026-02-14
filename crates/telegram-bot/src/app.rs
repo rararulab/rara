@@ -12,6 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Process lifecycle for the Telegram bot.
+//!
+//! [`BotApp::run`] is the main entry point. It spawns three concurrent tasks
+//! (polling, notification consumer, settings sync) and blocks until Ctrl+C
+//! triggers a graceful shutdown.
+
 use std::sync::Arc;
 
 use rara_domain_shared::settings::{model::Settings, service::RUNTIME_SETTINGS_KV_KEY};
@@ -24,7 +30,10 @@ use crate::{
     state::BotState,
 };
 
-/// Bot process application handle.
+/// Top-level application handle for the bot process.
+///
+/// Created by [`BotConfig::open`](crate::BotConfig::open). Call [`run`](BotApp::run)
+/// to start the polling loop, notification consumer, and settings sync.
 pub struct BotApp {
     pub(crate) state:         Arc<BotState>,
     pub(crate) outbound:      Arc<TelegramOutbound>,
@@ -35,11 +44,21 @@ pub struct BotApp {
 }
 
 impl BotApp {
+    /// Maximum number of pgmq messages to dequeue per batch.
     const NOTIFY_BATCH_SIZE: i32 = 50;
+    /// Sleep duration between poll cycles when the notification queue is empty.
     const NOTIFY_IDLE_SLEEP_SECS: u64 = 5;
+    /// pgmq visibility timeout — how long a dequeued message stays invisible
+    /// to other consumers before being re-delivered if not acked.
     const NOTIFY_VT_SECONDS: i32 = 60;
+    /// How often the settings sync loop polls the KV store for credential
+    /// updates.
     const SETTINGS_SYNC_INTERVAL_SECS: u64 = 10;
 
+    /// Format a queued notification into a Markdown message for Telegram.
+    ///
+    /// If the notification has a subject, it is rendered as bold text followed
+    /// by the body. Otherwise only the body is sent.
     fn format_notification_message(
         notification: &rara_domain_shared::notify::types::QueuedTelegramNotification,
     ) -> String {
@@ -52,6 +71,12 @@ impl BotApp {
         text
     }
 
+    /// Continuously dequeue notifications from pgmq and deliver them via
+    /// Telegram.
+    ///
+    /// On successful delivery the message is acked. On failure it is left in
+    /// the queue for retry until `max_retries` is reached, at which point it
+    /// is acked (dropped) to prevent infinite retry loops.
     async fn notify_consumer_loop(
         notify_client: Arc<rara_domain_shared::notify::client::NotifyClient>,
         outbound: Arc<TelegramOutbound>,
@@ -111,6 +136,12 @@ impl BotApp {
         }
     }
 
+    /// Poll the KV store for updated Telegram credentials and apply them
+    /// to the running bot without restart.
+    ///
+    /// This enables operators to change `bot_token` or `chat_id` via the
+    /// web settings UI. Changes take effect within
+    /// [`SETTINGS_SYNC_INTERVAL_SECS`](Self::SETTINGS_SYNC_INTERVAL_SECS).
     async fn settings_sync_loop(
         kv_store: yunara_store::KVStore,
         state: Arc<BotState>,
@@ -146,7 +177,15 @@ impl BotApp {
         }
     }
 
-    /// Start telegram polling + queue consumer and block until shutdown.
+    /// Start all concurrent loops and block until shutdown.
+    ///
+    /// Spawns three tokio tasks:
+    /// 1. `getUpdates` polling loop ([`bot::start_polling`](crate::bot::start_polling))
+    /// 2. Notification consumer loop (pgmq -> Telegram delivery)
+    /// 3. Settings sync loop (KV store -> hot credential update)
+    ///
+    /// Installs a Ctrl+C handler that cancels the shared
+    /// [`CancellationToken`], then waits for all tasks to join.
     pub async fn run(self) -> Result<(), Whatever> {
         // Start manual getUpdates polling loop.
         let polling_state = self.state.clone();

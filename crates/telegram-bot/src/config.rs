@@ -12,6 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Configuration loading and dependency wiring.
+//!
+//! [`BotConfig`] gathers all external configuration (env vars, database, KV
+//! store) and [`BotConfig::open`] assembles the fully-wired [`BotApp`]
+//! ready to run.
+
 use std::sync::Arc;
 
 use rara_domain_shared::settings::{model::Settings, service::RUNTIME_SETTINGS_KV_KEY};
@@ -27,38 +33,50 @@ use crate::{
     state::BotState,
 };
 
-/// Telegram credential/config values.
+/// Telegram bot credentials.
+///
+/// Both fields are required to start the bot. They can be supplied via
+/// environment variables or through the runtime settings API.
 #[derive(Debug, Clone)]
 pub struct TelegramConfig {
-    /// Telegram bot token.
+    /// Bot token obtained from [@BotFather](https://t.me/BotFather).
     pub bot_token: String,
-    /// Primary authorized chat id.
+    /// Telegram chat ID of the single authorized chat. Messages from all
+    /// other chats are rejected.
     pub chat_id:   i64,
 }
 
-/// Runtime configuration for the standalone bot app.
+/// Top-level configuration for the standalone bot process.
+///
+/// Use [`BotConfig::from_env`] to populate from environment variables, then
+/// call [`BotConfig::open`] to initialize all runtime dependencies and get a
+/// [`BotApp`] handle.
 #[derive(Debug, Clone, SmartDefault)]
 pub struct BotConfig {
-    /// Database configuration used to persist outgoing notification records.
+    /// Database connection settings. Used for pgmq notification queue and
+    /// KV-based settings sync.
     pub db_config:              DatabaseConfig,
-    /// Telegram configuration. Required to start bot runtime.
+    /// Telegram credentials. If `None`, the bot will attempt to read them
+    /// from the KV store at startup, failing if neither source provides them.
     pub telegram:               Option<TelegramConfig>,
-    /// Main service HTTP endpoint.
+    /// Base URL of the main HTTP service that this bot calls for job
+    /// discovery and JD parsing.
     #[default(_code = "\"http://127.0.0.1:3000\".to_owned()")]
     pub main_service_http_base: String,
 }
 
 impl BotConfig {
-    /// Build config from env vars.
+    /// Build configuration from environment variables.
     ///
-    /// Required envs:
-    /// - `TELEGRAM_BOT_TOKEN`
-    /// - `TELEGRAM_CHAT_ID`
+    /// # Environment Variables
     ///
-    /// Optional envs:
-    /// - `DATABASE_URL`
-    /// - `MIGRATION_DIRECTORY`
-    /// - `MAIN_SERVICE_HTTP_BASE`
+    /// | Variable                 | Required | Default                                          |
+    /// |--------------------------|----------|--------------------------------------------------|
+    /// | `TELEGRAM_BOT_TOKEN`     | Yes      | —                                                |
+    /// | `TELEGRAM_CHAT_ID`       | Yes      | —                                                |
+    /// | `DATABASE_URL`           | No       | `postgres://postgres:postgres@localhost:5432/job` |
+    /// | `MIGRATION_DIRECTORY`    | No       | `crates/rara-model/migrations`                   |
+    /// | `MAIN_SERVICE_HTTP_BASE` | No       | `http://127.0.0.1:3000`                          |
     pub fn from_env() -> Self {
         let db_config =
             DatabaseConfig::builder()
@@ -96,12 +114,17 @@ impl BotConfig {
         }
     }
 
-    /// Initialize concrete runtime dependencies.
+    /// Initialize all runtime dependencies and return a ready-to-run [`BotApp`].
     ///
-    /// Initializes:
-    /// - Bot state with verified token (getMe)
-    /// - HTTP client to main service
-    /// - Shared notify queue adapter (`pgmq`)
+    /// This method performs the following steps in order:
+    /// 1. Opens the database connection and runs migrations.
+    /// 2. Loads runtime settings from the KV store (falls back to env vars).
+    /// 3. Builds a `reqwest::Client` with a 45-second timeout (must exceed
+    ///    the 30-second Telegram long-poll timeout).
+    /// 4. Calls [`bot::initialize`] to delete any webhook and verify the
+    ///    token via `getMe`.
+    /// 5. Wires [`BotState`], [`TelegramOutbound`], and [`NotifyClient`]
+    ///    into a [`BotApp`].
     pub async fn open(self) -> Result<BotApp, Whatever> {
         let db_store = self
             .db_config

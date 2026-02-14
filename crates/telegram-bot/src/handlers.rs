@@ -12,7 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Message and callback query handlers extracted from the old runtime module.
+//! Telegram message and callback query handlers.
+//!
+//! This module contains all bot business logic. The entry point is
+//! [`handle_update`], which dispatches incoming Telegram updates to the
+//! appropriate handler:
+//!
+//! - **Commands** (`/start`, `/help`, `/search`) are parsed via teloxide's
+//!   `BotCommands` derive and routed to dedicated handlers.
+//! - **Plain text** is treated as a raw Job Description and submitted to the
+//!   main service for parsing via the HTTP client.
+//! - **Callback queries** handle the "Load More" pagination button for job
+//!   search results.
+//!
+//! All user-facing operations are gated by the **primary chat ID** check
+//! ([`BotState::is_primary_chat`]). Messages from unauthorized chats receive
+//! a rejection reply.
 
 use std::sync::Arc;
 
@@ -162,6 +177,7 @@ pub(crate) async fn handle_callback_query(
 // Command handlers
 // ---------------------------------------------------------------------------
 
+/// Dispatch a parsed command to the appropriate handler.
 async fn handle_command(
     msg: Message,
     cmd: Command,
@@ -420,6 +436,11 @@ async fn handle_jd_parse(
     Ok(())
 }
 
+/// Handle `/search <keywords> [@ location]`.
+///
+/// Parses keyword and optional location arguments, calls the main service
+/// discovery API, and sends results as an HTML-formatted message with an
+/// inline "Load More" button for pagination.
 async fn handle_search(
     msg: Message,
     args: String,
@@ -516,12 +537,13 @@ async fn handle_search(
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Extract text content from a Telegram message.
+/// Extract the text body from a Telegram message, if present.
 pub(crate) fn extract_text(msg: &Message) -> Option<&str> {
     msg.text()
 }
 
-/// Check if the message contains media (photo, video, document, etc.).
+/// Returns `true` if the message contains any media attachment (photo, video,
+/// document, audio, or voice).
 #[allow(dead_code)]
 pub(crate) fn has_media(msg: &Message) -> bool {
     msg.photo().is_some()
@@ -531,7 +553,8 @@ pub(crate) fn has_media(msg: &Message) -> bool {
         || msg.voice().is_some()
 }
 
-/// Classify the chat type for logging/routing.
+/// Classify the chat type as `"private"` or `"group_or_channel"` for
+/// logging and routing purposes.
 #[allow(dead_code)]
 pub(crate) fn classify_chat(msg: &Message) -> &'static str {
     match &msg.chat.kind {
@@ -540,6 +563,10 @@ pub(crate) fn classify_chat(msg: &Message) -> &'static str {
     }
 }
 
+/// Build an inline keyboard with a single "Load More" button.
+///
+/// The callback data encodes the current result count and search parameters
+/// so the handler can fetch the next page without storing server-side state.
 fn load_more_keyboard(
     current_size: usize,
     encoded_params: &str,
@@ -550,6 +577,10 @@ fn load_more_keyboard(
     ]])
 }
 
+/// Format a list of discovered jobs as an HTML message for Telegram.
+///
+/// Each job is numbered and includes title, company, location, salary range,
+/// and URL (when available).
 pub(crate) fn format_job_results(
     jobs: &[DiscoveryJobResponse],
     keywords: &[String],
@@ -586,6 +617,7 @@ pub(crate) fn format_job_results(
     text
 }
 
+/// Escape `&`, `<`, `>` for safe inclusion in Telegram HTML messages.
 pub(crate) fn html_escape(s: impl AsRef<str>) -> String {
     s.as_ref()
         .replace('&', "&amp;")
@@ -593,6 +625,11 @@ pub(crate) fn html_escape(s: impl AsRef<str>) -> String {
         .replace('>', "&gt;")
 }
 
+/// Encode search parameters into a compact string for callback data.
+///
+/// Format: `keyword1+keyword2@location` (location part omitted if `None`).
+/// This is stored in the inline keyboard callback data to enable stateless
+/// pagination.
 pub(crate) fn encode_search_params(keywords: &[String], location: Option<&str>) -> String {
     let kw = keywords.join("+");
     match location {
@@ -601,6 +638,9 @@ pub(crate) fn encode_search_params(keywords: &[String], location: Option<&str>) 
     }
 }
 
+/// Decode search parameters from the compact callback data string.
+///
+/// Inverse of [`encode_search_params`].
 pub(crate) fn decode_search_params(encoded: &str) -> (Vec<String>, Option<String>) {
     if let Some(idx) = encoded.find('@') {
         let kw = encoded[..idx].split('+').map(String::from).collect();

@@ -13,6 +13,33 @@
 // limitations under the License.
 
 //! Markdown to Telegram HTML converter with message chunking.
+//!
+//! Telegram's Bot API supports a [limited HTML subset][tg-html]: `<b>`, `<i>`,
+//! `<code>`, `<pre>`, and `<a>`. This module converts standard Markdown
+//! formatting to that subset.
+//!
+//! # Supported Conversions
+//!
+//! | Markdown              | HTML Output                         |
+//! |-----------------------|-------------------------------------|
+//! | `**bold**`            | `<b>bold</b>`                       |
+//! | `__bold__`            | `<b>bold</b>`                       |
+//! | `*italic*`            | `<i>italic</i>`                     |
+//! | `_italic_`            | `<i>italic</i>`                     |
+//! | `` `code` ``          | `<code>code</code>`                 |
+//! | ` ```lang\ncode``` `  | `<pre>code</pre>`                   |
+//! | `[text](url)`         | `<a href="url">text</a>`            |
+//!
+//! HTML special characters (`&`, `<`, `>`) are escaped before any Markdown
+//! processing to prevent injection.
+//!
+//! # Message Chunking
+//!
+//! [`chunk_message`] splits long HTML strings into pieces that fit within
+//! Telegram's 4096-character message limit. It prefers breaking at newlines,
+//! then spaces, and falls back to hard breaks as a last resort.
+//!
+//! [tg-html]: https://core.telegram.org/bots/api#html-style
 
 /// Telegram maximum message length in characters.
 pub const TELEGRAM_MAX_MESSAGE_LEN: usize = 4096;
