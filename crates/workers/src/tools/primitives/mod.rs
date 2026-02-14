@@ -14,14 +14,28 @@
 
 //! Layer 1 primitive tools: atomic, composable operations.
 
+mod bash;
 mod db_mutate;
 mod db_query;
+mod edit_file;
+mod find_files;
+mod grep;
 mod http_fetch;
+mod list_directory;
 mod notify;
+mod read_file;
 mod storage_read;
+mod write_file;
 
+pub use bash::BashTool;
 pub use db_mutate::DbMutateTool;
 pub use db_query::DbQueryTool;
+pub use edit_file::EditFileTool;
+pub use find_files::FindFilesTool;
+pub use grep::GrepTool;
 pub use http_fetch::HttpFetchTool;
+pub use list_directory::ListDirectoryTool;
 pub use notify::NotifyTool;
+pub use read_file::ReadFileTool;
 pub use storage_read::StorageReadTool;
+pub use write_file::WriteFileTool;
