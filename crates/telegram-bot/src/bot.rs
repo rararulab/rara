@@ -120,7 +120,12 @@ pub(crate) async fn start_polling(state: Arc<BotState>) {
                     #[allow(clippy::cast_possible_wrap)]
                     let next_offset = update.id.0 as i32 + 1;
                     offset = Some(next_offset);
-                    Box::pin(handlers::handle_update(update, &state)).await;
+                    // Spawn handler as a separate task so the polling loop
+                    // is never blocked by slow operations (e.g. LLM calls).
+                    let st = Arc::clone(&state);
+                    tokio::spawn(async move {
+                        handlers::handle_update(update, &st).await;
+                    });
                 }
             }
             Err(teloxide::RequestError::Api(ref api_err)) => {

@@ -246,8 +246,7 @@ async fn handle_command(
                      /jd <text> - Parse a Job Description\n\
                      /new - Start a new chat session\n\
                      /clear - Clear current session history\n\
-                     /sessions - List chat sessions\n\
-                     /switch <key> - Switch active session\n\
+                     /sessions - List & switch chat sessions\n\
                      /usage - Show current session info\n\
                      /help - Show all commands",
                 )
@@ -273,9 +272,6 @@ async fn handle_command(
         }
         Command::Sessions => {
             handle_sessions(&msg, state).await?;
-        }
-        Command::Switch(key) => {
-            handle_switch(&msg, &key, state).await?;
         }
         Command::Usage => {
             handle_usage(&msg, state).await?;
@@ -789,13 +785,14 @@ async fn handle_sessions(
     for (i, s) in sessions.iter().enumerate() {
         let title = s.title.as_deref().unwrap_or(&s.key);
         let is_active = active_key.as_deref() == Some(&s.key);
-        let marker = if is_active { " - <i>active</i>" } else { "" };
+        let marker = if is_active { " \u{2705}" } else { "" };
 
-        let _ = write!(
+        let _ = writeln!(
             text,
-            "{}. {} ({} msgs){marker}\n",
+            "{}. <b>{}</b>{marker}\n   <code>{}</code> ({} msgs)",
             i + 1,
             html_escape(title),
+            html_escape(&s.key),
             s.message_count,
         );
 
@@ -821,53 +818,6 @@ async fn handle_sessions(
         .parse_mode(ParseMode::Html)
         .reply_markup(keyboard)
         .await?;
-
-    Ok(())
-}
-
-/// Handle `/switch <key>` — switch the active session for this chat.
-async fn handle_switch(
-    msg: &Message,
-    key: &str,
-    state: &Arc<BotState>,
-) -> Result<(), teloxide::RequestError> {
-    let key = key.trim();
-    if key.is_empty() {
-        state
-            .bot
-            .send_message(
-                msg.chat.id,
-                "Usage: /switch <session_key>\n\nUse /sessions to see available keys.",
-            )
-            .await?;
-        return Ok(());
-    }
-
-    let account = "default";
-    let chat_id_str = msg.chat.id.0.to_string();
-
-    match state
-        .http_client
-        .bind_channel("telegram", account, &chat_id_str, key)
-        .await
-    {
-        Ok(_binding) => {
-            state
-                .bot
-                .send_message(
-                    msg.chat.id,
-                    format!("Switched to session: <code>{}</code>", html_escape(key)),
-                )
-                .parse_mode(ParseMode::Html)
-                .await?;
-        }
-        Err(e) => {
-            state
-                .bot
-                .send_message(msg.chat.id, format!("Failed to switch session: {e}"))
-                .await?;
-        }
-    }
 
     Ok(())
 }

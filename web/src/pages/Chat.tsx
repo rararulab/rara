@@ -983,6 +983,7 @@ export default function Chat() {
   const sessionsQuery = useQuery({
     queryKey: ["chat-sessions"],
     queryFn: fetchSessions,
+    refetchInterval: 10_000,
   });
 
   const sessions = sessionsQuery.data ?? [];

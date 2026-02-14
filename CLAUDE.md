@@ -3,14 +3,14 @@
 ## Communication
 - 用中文与用户交流
 
-## Architecture Rules
+## Architecture
 
 ### Layer Hierarchy
 ```
-Layer 4 (Entry):      job-cli, job-app
-Layer 3 (Interface):  job-server (HTTP + gRPC)
-Layer 2 (Domain):     job-domain-{job-source,ai,resume,application,interview,scheduler,notify,analytics}
-Layer 1 (Infra):      yunara-store, worker, telemetry, runtime
+Layer 4 (Entry):      rara-cmd, rara-app
+Layer 3 (Interface):  rara-server (HTTP + gRPC)
+Layer 2 (Domain):     rara-domain-{job,ai,resume,application,interview,scheduler,chat,shared,analytics}
+Layer 1 (Infra):      rara-sessions, rara-agents, rara-workers, rara-model, telegram-bot
 Layer 0 (Foundation): base, error, paths
 ```
 
@@ -18,87 +18,129 @@ Dependencies flow **downward only**. Never upward.
 
 ### Domain Crate Structure
 
-Each domain crate is **self-contained** — it owns its types, errors, repository trait, repository implementation, service, and migrations:
+Each domain crate is **self-contained** — owns types, errors, repository, service, routes, and migrations:
 
 ```
 crates/domain/{name}/
   src/
     lib.rs          # Module declarations
-    types.rs        # Domain types
-    error.rs        # Errors using snafu
-    repository.rs   # Repository trait + PostgreSQL implementation
-    service.rs      # Business logic service
-  migrations/       # SQL migrations owned by this module
-    001_init.sql
+    types.rs        # Domain types (includes From impls for DB conversion)
+    error.rs        # Errors using snafu, implements IntoResponse
+    repository.rs   # Repository trait
+    pg_repository.rs # PostgreSQL implementation
+    service.rs      # Business logic
+    router.rs       # axum routes (domain owns its HTTP layer)
+  migrations/
   Cargo.toml
 ```
 
 ### Key Design Rules
 
-1. **Repository implementations belong in domain crates** — NOT in `yunara-store`. `yunara-store` only provides `DBStore` (PgPool wrapper), KV store, and low-level database primitives. Business-layer repository impls live in their respective domain crate.
+1. **Repository impls in domain crates** — NOT in `yunara-store`. `yunara-store` only provides `DBStore` (PgPool wrapper) and KV primitives.
 
-2. **Migrations belong in domain crates** — Each domain module owns its DB schema. Migrations are in `crates/domain/{name}/migrations/`.
+2. **Routes in domain crates** — Each domain crate defines its own `router.rs` with axum routes. `rara-app` composes them.
 
-3. **Error handling uses `snafu`** — All library crates use `#[derive(Snafu)]` for error types. No manual `impl Display + impl Error`. Example:
+3. **Error handling uses `snafu`** — All library crates use `#[derive(Snafu)]`. Domain errors implement `axum::response::IntoResponse` directly.
    ```rust
-   use snafu::prelude::*;
-
    #[derive(Debug, Snafu)]
-   pub enum NotifyError {
-       #[snafu(display("notification not found: {id}"))]
-       NotFound { id: uuid::Uuid },
-
+   pub enum ChatError {
+       #[snafu(display("session not found: {key}"))]
+       NotFound { key: String },
        #[snafu(display("repository error: {source}"))]
        Repository { source: sqlx::Error },
    }
    ```
 
-4. **No re-exports** — Use full `use crate::` paths. Keep imports explicit.
+4. **`rara-app` is the composition root** — Wires services, routes, and workers via dependency injection.
 
-5. **No mock repositories in tests** — Use `testcontainers` to start real PostgreSQL containers. Tests run against real databases to catch SQL errors, type mismatches, and migration issues.
+5. **No re-exports** — Use full `use crate::` paths.
 
-6. **Domain modules communicate via trait abstraction + outbox events** — No direct cross-domain dependencies (except `scheduler` which can depend on other domain traits).
+6. **No mock repos in tests** — Use `testcontainers` with real PostgreSQL.
 
-7. **`job-app` is the composition root** — It wires repositories, services, and workers together via dependency injection.
+### Frontend (`web/`)
+
+- **Stack**: React 19 + Tailwind v4 + shadcn/ui + TanStack Query v5 + React Router v7
+- **API client**: `web/src/api/client.ts` (fetch-based), types in `web/src/api/types.ts`
+- **Layout**: `DashboardLayout.tsx` with collapsible sidebar
+- **Dev server**: Vite proxies `/api` to `localhost:3000`
+- **Build check**: `cd web && npm run build`
 
 ## Development Workflow
 
-### Git Worktrees for Subagents
+### Issue → Worktree → Subagent → Merge
 
-Subagents MUST work in isolated git worktrees, NOT directly on `main`:
+This is the standard workflow for all feature/refactor work:
 
-```bash
-# Create worktree for an issue
-git worktree add .worktrees/issue-{N}-{short-name} -b issue-{N}-{short-name}
-
-# After work is done, merge back
-git checkout main
-git merge issue-{N}-{short-name}
+```
+1. CREATE ISSUE    →  gh issue create + labels
+2. CREATE WORKTREE →  git worktree add .worktrees/issue-{N}-{name} -b issue-{N}-{name}
+3. DISPATCH        →  Task subagent works in the worktree
+4. VERIFY          →  cargo check + npm run build on worktree
+5. MERGE           →  git merge issue-{N}-{name} (resolve conflicts if needed)
+6. CLEANUP         →  git worktree remove + git branch -d + gh issue close
 ```
 
-### Issue Management
+#### Step 1: Create Issue
+```bash
+gh issue create --title "feat(chat): model selector" \
+  --label "created-by:claude" --label "enhancement" --label "ui"
+```
+Labels: `created-by:claude` (required) + category (`enhancement`, `refactor`, `ui`, `backend`, `domain`).
 
-When creating GitHub issues:
-1. Add label `created-by: claude` to identify bot-created issues
-2. Add appropriate category labels (e.g., `domain`, `infra`, `refactor`)
-3. When a subagent claims an issue, update it to `in progress` state
-4. When work is complete, the issue is closed via commit message `Closes #N`
+#### Step 2: Create Worktree
+```bash
+git worktree add .worktrees/issue-{N}-{short-name} -b issue-{N}-{short-name}
+```
+
+#### Step 3: Dispatch Subagent
+- Subagent works **exclusively** in its worktree directory
+- Independent issues can be dispatched **in parallel** (e.g., #116 and #117 ran concurrently)
+- Subagent should commit its work before finishing
+
+#### Step 4: Verify Builds
+After subagent completes, verify in the worktree:
+```bash
+cargo check -p {crate-name}   # Rust backend
+cd web && npm run build        # Frontend (if touched)
+```
+
+#### Step 5: Merge to Main
+```bash
+git checkout main
+git merge issue-{N}-{short-name}
+# If conflicts: resolve → git add → git commit --no-edit
+```
+
+#### Step 6: Cleanup
+```bash
+git worktree remove .worktrees/issue-{N}-{short-name}
+git branch -d issue-{N}-{short-name}
+gh issue close {N} --comment "Completed in {commit-hash} — {summary}."
+```
+
+**Important**: `Closes #N` in commit messages only works when pushed to remote. For local-only workflows, always close issues explicitly with `gh issue close`.
+
+### Parallel Execution
+
+When user requests involve multiple independent changes, split into separate issues and dispatch subagents in parallel:
+- Each subagent gets its own worktree and branch
+- Merge sequentially to main, resolving conflicts as they arise
+- The second merge may need conflict resolution where both branches touched the same files
 
 ### Commit Style
 - Conventional commits: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`
-- Each domain crate has: types, error, service, repository (trait + impl)
-- Tests colocated in modules with `#[cfg(test)]`
+- Scope matches crate or area: `feat(chat):`, `fix(web):`, `refactor(sessions):`
+- Include `(#N)` issue reference in commit message
+- Include `Closes #N` in commit body
 
-## Testing Strategy
+## Testing
 
 ### Unit Tests
 - Colocated in `#[cfg(test)]` modules
 - Pure logic tests (state machines, validation, type conversions)
 
 ### Integration Tests
-- Use `testcontainers` crate for real PostgreSQL
-- Test repository implementations against real DB
-- Verify migrations apply correctly
+- Use `testcontainers` for real PostgreSQL
 - Pattern:
   ```rust
   #[cfg(test)]
@@ -119,10 +161,10 @@ When creating GitHub issues:
 
 ## What NOT To Do
 
-- Do NOT put repository implementations in `yunara-store`
-- Do NOT put domain migrations in `yunara-store/migrations/`
-- Do NOT put conversion layers (`convert.rs`) in `yunara-store` — type conversions live in the domain crate that owns those types
+- Do NOT put repository impls or routes in `yunara-store` — business logic stays in domain crates
 - Do NOT use manual `impl Display` + `impl Error` — use `snafu`
 - Do NOT use mock repositories in tests — use `testcontainers`
-- Do NOT work directly on `main` — use worktrees
-- Do NOT create issues without proper labels
+- Do NOT work directly on `main` — always use worktrees for subagent work
+- Do NOT create issues without `created-by:claude` label
+- Do NOT forget to close issues after merge — `gh issue close` explicitly
+- Do NOT leave stale worktrees — clean up after every merge

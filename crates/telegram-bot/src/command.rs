@@ -43,12 +43,9 @@ pub(crate) enum Command {
     Clear,
     #[command(description = "Parse a Job Description: /jd <text>")]
     Jd(String),
-    /// List all chat sessions and show which one is active.
-    #[command(description = "List chat sessions")]
+    /// List all chat sessions with inline buttons to switch.
+    #[command(description = "List & switch chat sessions")]
     Sessions,
-    /// Switch the active session for this chat.
-    #[command(description = "Switch session: /switch <key>")]
-    Switch(String),
     /// Show details of the current active session.
     #[command(description = "Show current session usage")]
     Usage,
