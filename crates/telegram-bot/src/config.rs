@@ -21,8 +21,10 @@ use tokio_util::sync::CancellationToken;
 use yunara_store::config::DatabaseConfig;
 
 use crate::{
-    app::BotApp, http_client::MainServiceHttpClient, runtime::TelegramBotRuntime,
-    telegram_service::TelegramService,
+    app::BotApp,
+    http_client::MainServiceHttpClient,
+    outbound::TelegramOutbound,
+    state::BotState,
 };
 
 /// Telegram credential/config values.
@@ -93,7 +95,7 @@ impl BotConfig {
     /// Initialize concrete runtime dependencies.
     ///
     /// Initializes:
-    /// - Telegram adapter
+    /// - Bot state with verified token (getMe)
     /// - HTTP client to main service
     /// - Shared notify queue adapter (`pgmq`)
     pub async fn open(self) -> Result<BotApp, Whatever> {
@@ -135,13 +137,35 @@ impl BotConfig {
             }
         };
 
-        let telegram = Arc::new(TelegramService::new(bot_token, chat_id));
+        // Build reqwest client with extended timeout for long polling.
+        let http_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(45))
+            .build()
+            .whatever_context("failed to build HTTP client")?;
+
+        let bot = teloxide::Bot::with_client(&bot_token, http_client);
+
+        // Verify token and get bot info.
+        let bot_username = crate::bot::initialize(&bot)
+            .await
+            .whatever_context("failed to initialize telegram bot")?;
+
+        let cancel = CancellationToken::new();
 
         let main_http = Arc::new(MainServiceHttpClient::new(
             self.main_service_http_base.clone(),
         ));
 
-        let runtime = Arc::new(TelegramBotRuntime::new(telegram, main_http));
+        let state = Arc::new(BotState::new(
+            bot.clone(),
+            bot_username,
+            bot_token.clone(),
+            chat_id,
+            main_http,
+            cancel,
+        ));
+
+        let outbound = Arc::new(TelegramOutbound::new(bot, state.config.clone()));
 
         let notify_client = Arc::new(
             rara_domain_shared::notify::client::NotifyClient::new(db_store.pool().clone())
@@ -150,11 +174,10 @@ impl BotConfig {
         );
 
         Ok(BotApp {
-            _config: self,
-            runtime,
+            state,
+            outbound,
             notify_client,
             kv_store,
-            cancellation_token: CancellationToken::new(),
         })
     }
 }

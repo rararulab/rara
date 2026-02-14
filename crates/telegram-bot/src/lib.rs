@@ -15,22 +15,29 @@
 //! Telegram bot runtime crate.
 //!
 //! This crate provides a standalone bot process that:
-//! - receives user messages via Telegram long polling,
+//! - receives user messages via manual `getUpdates` long polling,
 //! - calls main service HTTP APIs for search/JD parse flows,
 //! - consumes notification tasks from `pgmq` for main service -> bot delivery.
 //!
 //! Internal module layout:
 //! - `config`: env/config parsing and dependency assembly
 //! - `app`: process lifecycle
-//! - `runtime`: Telegram dispatcher behavior
+//! - `bot`: manual getUpdates polling loop
+//! - `handlers`: message and callback query handling
+//! - `state`: centralized runtime state
+//! - `outbound`: outbound message abstraction with formatting and chunking
+//! - `markdown`: Markdown -> Telegram HTML converter
 //! - `http_client`: bot -> main-service typed HTTP client
 
 mod app;
+mod bot;
 mod command;
 mod config;
+mod handlers;
 mod http_client;
-mod runtime;
-mod telegram_service;
+mod markdown;
+mod outbound;
+mod state;
 
 pub use app::BotApp;
 pub use config::{BotConfig, TelegramConfig};

@@ -19,17 +19,19 @@ use snafu::{ResultExt, Whatever};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-use crate::{config::BotConfig, runtime::TelegramBotRuntime};
+use crate::{
+    outbound::TelegramOutbound,
+    state::BotState,
+};
 
 /// Bot process application handle.
 pub struct BotApp {
-    pub(crate) _config:            BotConfig,
-    pub(crate) runtime:            Arc<TelegramBotRuntime>,
+    pub(crate) state:         Arc<BotState>,
+    pub(crate) outbound:      Arc<TelegramOutbound>,
     /// Shared notification queue client (`notification_telegram_dispatch`).
-    pub(crate) notify_client:      Arc<rara_domain_shared::notify::client::NotifyClient>,
+    pub(crate) notify_client: Arc<rara_domain_shared::notify::client::NotifyClient>,
     /// KV store used for runtime settings sync.
-    pub(crate) kv_store:           yunara_store::KVStore,
-    pub(crate) cancellation_token: CancellationToken,
+    pub(crate) kv_store:      yunara_store::KVStore,
 }
 
 impl BotApp {
@@ -41,9 +43,10 @@ impl BotApp {
     fn format_notification_message(
         notification: &rara_domain_shared::notify::types::QueuedTelegramNotification,
     ) -> String {
+        use std::fmt::Write;
         let mut text = String::new();
         if let Some(subject) = &notification.subject {
-            text.push_str(&format!("*{}*\n\n", subject));
+            let _ = write!(text, "*{subject}*\n\n");
         }
         text.push_str(&notification.body);
         text
@@ -51,13 +54,13 @@ impl BotApp {
 
     async fn notify_consumer_loop(
         notify_client: Arc<rara_domain_shared::notify::client::NotifyClient>,
-        telegram: Arc<crate::telegram_service::TelegramService>,
+        outbound: Arc<TelegramOutbound>,
         cancellation_token: CancellationToken,
     ) {
         loop {
             tokio::select! {
-                _ = cancellation_token.cancelled() => break,
-                _ = tokio::time::sleep(std::time::Duration::from_secs(Self::NOTIFY_IDLE_SLEEP_SECS)) => {}
+                () = cancellation_token.cancelled() => break,
+                () = tokio::time::sleep(std::time::Duration::from_secs(Self::NOTIFY_IDLE_SLEEP_SECS)) => {}
             }
 
             let batch = match notify_client
@@ -77,17 +80,20 @@ impl BotApp {
 
             for item in batch {
                 let text = Self::format_notification_message(&item.payload);
-                let delivery = match item.payload.chat_id {
-                    Some(chat_id) => {
-                        telegram
-                            .send_message(teloxide::types::ChatId(chat_id), &text)
-                            .await
-                    }
-                    None => telegram.send_primary_message(&text).await,
-                };
+                let chat_id = item
+                    .payload
+                    .chat_id
+                    .map(teloxide::types::ChatId)
+                    .unwrap_or_else(|| {
+                        // Use primary chat when no explicit chat_id is set.
+                        let config = outbound.primary_config();
+                        teloxide::types::ChatId(config.primary_chat_id)
+                    });
+
+                let delivery = outbound.send_markdown(chat_id, &text).await;
 
                 match delivery {
-                    Ok(_) => {
+                    Ok(()) => {
                         if let Err(e) = notify_client.ack_telegram(item.msg_id).await {
                             error!(msg_id = item.msg_id, error = %e, "failed to ack delivered telegram notification");
                         }
@@ -107,13 +113,13 @@ impl BotApp {
 
     async fn settings_sync_loop(
         kv_store: yunara_store::KVStore,
-        telegram: Arc<crate::telegram_service::TelegramService>,
+        state: Arc<BotState>,
         cancellation_token: CancellationToken,
     ) {
         loop {
             tokio::select! {
-                _ = cancellation_token.cancelled() => break,
-                _ = tokio::time::sleep(std::time::Duration::from_secs(Self::SETTINGS_SYNC_INTERVAL_SECS)) => {}
+                () = cancellation_token.cancelled() => break,
+                () = tokio::time::sleep(std::time::Duration::from_secs(Self::SETTINGS_SYNC_INTERVAL_SECS)) => {}
             }
 
             let loaded = kv_store.get::<Settings>(RUNTIME_SETTINGS_KV_KEY).await;
@@ -134,35 +140,34 @@ impl BotApp {
                 continue;
             };
 
-            if telegram.update_config(bot_token, chat_id) {
+            if state.update_config(bot_token, chat_id) {
                 info!("telegram runtime settings updated from DB");
             }
         }
     }
 
-    /// Start telegram dispatcher + queue consumer and block until shutdown.
+    /// Start telegram polling + queue consumer and block until shutdown.
     pub async fn run(self) -> Result<(), Whatever> {
-        // Start Telegram long-polling dispatcher.
-        let mut telegram_handle = self.runtime.start_dispatcher();
-        telegram_handle
-            .wait_for_start()
-            .await
-            .whatever_context("telegram-bot dispatcher failed to start")?;
+        // Start manual getUpdates polling loop.
+        let polling_state = self.state.clone();
+        let polling_handle = tokio::spawn(async move {
+            Box::pin(crate::bot::start_polling(polling_state)).await;
+        });
 
         // Start notify queue consumer (pgmq) for main-service -> bot delivery.
         let notify_consumer_handle = tokio::spawn(Self::notify_consumer_loop(
             self.notify_client.clone(),
-            self.runtime.telegram.clone(),
-            self.cancellation_token.clone(),
+            self.outbound.clone(),
+            self.state.cancel.clone(),
         ));
         let settings_sync_handle = tokio::spawn(Self::settings_sync_loop(
             self.kv_store.clone(),
-            self.runtime.telegram.clone(),
-            self.cancellation_token.clone(),
+            self.state.clone(),
+            self.state.cancel.clone(),
         ));
 
         // Keep process alive until Ctrl+C.
-        let cancel = self.cancellation_token.clone();
+        let cancel = self.state.cancel.clone();
         tokio::spawn(async move {
             tokio::signal::ctrl_c()
                 .await
@@ -170,15 +175,13 @@ impl BotApp {
             cancel.cancel();
         });
 
-        self.cancellation_token.cancelled().await;
+        self.state.cancel.cancelled().await;
         info!("telegram-bot shutdown requested");
 
-        // Graceful teardown order: stop dispatcher, then wait joins.
-        telegram_handle.shutdown();
-        telegram_handle
-            .wait_for_stop()
+        // Graceful teardown: wait for all tasks.
+        polling_handle
             .await
-            .whatever_context("failed to stop telegram dispatcher")?;
+            .whatever_context("failed to join polling task")?;
         notify_consumer_handle
             .await
             .whatever_context("failed to join notify consumer task")?;
