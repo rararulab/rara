@@ -8,9 +8,11 @@
 //!
 //! | Method   | Path                                                 | Description            |
 //! |----------|------------------------------------------------------|------------------------|
+//! | `GET`    | `/api/v1/chat/models`                                | List available models  |
 //! | `POST`   | `/api/v1/chat/sessions`                              | Create a session       |
 //! | `GET`    | `/api/v1/chat/sessions`                              | List sessions          |
 //! | `GET`    | `/api/v1/chat/sessions/{key}`                        | Get a session          |
+//! | `PATCH`  | `/api/v1/chat/sessions/{key}`                        | Update session fields  |
 //! | `DELETE` | `/api/v1/chat/sessions/{key}`                        | Delete a session       |
 //! | `POST`   | `/api/v1/chat/sessions/{key}/send`                   | Send a message         |
 //! | `GET`    | `/api/v1/chat/sessions/{key}/messages`               | Get message history    |
@@ -23,13 +25,45 @@ use axum::{
     Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
 };
 use rara_sessions::types::{ChannelBinding, ChatMessage, SessionEntry, SessionKey};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::{error::ChatError, service::ChatService};
+
+// ---------------------------------------------------------------------------
+// Curated model catalogue
+// ---------------------------------------------------------------------------
+
+/// A curated entry describing an LLM model available via OpenRouter.
+///
+/// This is a static, hand-picked list of popular models kept in-process so
+/// that the `/models` endpoint returns instantly without a network round-trip
+/// to the OpenRouter API (which lists hundreds of models).
+struct CuratedModel {
+    /// OpenRouter model identifier (e.g. `"openai/gpt-4o"`).
+    id:             &'static str,
+    /// Human-friendly display name.
+    name:           &'static str,
+    /// Maximum context window in tokens.
+    context_length: u32,
+}
+
+/// Hand-picked selection of commonly used models.
+const CURATED_MODELS: &[CuratedModel] = &[
+    CuratedModel { id: "openai/gpt-4o",                          name: "GPT-4o",                  context_length: 128_000 },
+    CuratedModel { id: "openai/gpt-4o-mini",                     name: "GPT-4o Mini",              context_length: 128_000 },
+    CuratedModel { id: "openai/gpt-4.1",                         name: "GPT-4.1",                  context_length: 1_047_576 },
+    CuratedModel { id: "openai/o3-mini",                         name: "o3 Mini",                  context_length: 200_000 },
+    CuratedModel { id: "anthropic/claude-sonnet-4",              name: "Claude Sonnet 4",          context_length: 200_000 },
+    CuratedModel { id: "anthropic/claude-3.5-haiku",             name: "Claude 3.5 Haiku",         context_length: 200_000 },
+    CuratedModel { id: "google/gemini-2.5-pro-preview",          name: "Gemini 2.5 Pro",           context_length: 1_048_576 },
+    CuratedModel { id: "google/gemini-2.5-flash-preview",        name: "Gemini 2.5 Flash",         context_length: 1_048_576 },
+    CuratedModel { id: "deepseek/deepseek-chat-v3-0324:free",    name: "DeepSeek V3 (Free)",       context_length: 131_072 },
+    CuratedModel { id: "meta-llama/llama-4-maverick:free",       name: "Llama 4 Maverick (Free)",  context_length: 1_048_576 },
+];
 
 // ---------------------------------------------------------------------------
 // Request / Response types
@@ -92,6 +126,28 @@ pub struct ForkSessionRequest {
     pub fork_at_seq: i64,
 }
 
+/// Request body for `PATCH /sessions/{key}`.
+#[derive(Debug, Deserialize)]
+pub struct UpdateSessionRequest {
+    /// New human-readable title.
+    pub title:         Option<String>,
+    /// New LLM model identifier (e.g. `"openai/gpt-4o"`).
+    pub model:         Option<String>,
+    /// New system prompt override.
+    pub system_prompt: Option<String>,
+}
+
+/// A single entry in the curated model list returned by `GET /models`.
+#[derive(Debug, Serialize)]
+pub struct ChatModel {
+    /// OpenRouter model identifier.
+    pub id:             String,
+    /// Human-friendly display name.
+    pub name:           String,
+    /// Maximum context window in tokens.
+    pub context_length: u32,
+}
+
 /// Request body for `PUT /channel-bindings`.
 #[derive(Debug, Deserialize)]
 pub struct BindChannelRequest {
@@ -113,10 +169,13 @@ pub struct BindChannelRequest {
 /// [`ChatService`] as shared state.
 pub fn routes(service: ChatService) -> Router {
     Router::new()
+        // Models
+        .route("/api/v1/chat/models", get(list_models))
         // Sessions
         .route("/api/v1/chat/sessions", post(create_session))
         .route("/api/v1/chat/sessions", get(list_sessions))
         .route("/api/v1/chat/sessions/{key}", get(get_session))
+        .route("/api/v1/chat/sessions/{key}", patch(update_session))
         .route("/api/v1/chat/sessions/{key}", delete(delete_session))
         // Messages
         .route("/api/v1/chat/sessions/{key}/send", post(send_message))
@@ -145,6 +204,22 @@ pub fn routes(service: ChatService) -> Router {
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
+
+/// `GET /api/v1/chat/models` — return a curated list of available LLM models.
+///
+/// This endpoint is stateless and does not hit the OpenRouter API; it returns
+/// a hard-coded catalogue of popular models.
+async fn list_models() -> Json<Vec<ChatModel>> {
+    let models = CURATED_MODELS
+        .iter()
+        .map(|m| ChatModel {
+            id:             m.id.to_owned(),
+            name:           m.name.to_owned(),
+            context_length: m.context_length,
+        })
+        .collect();
+    Json(models)
+}
 
 /// `POST /api/v1/chat/sessions` — create a new session.
 #[instrument(skip(service, req))]
@@ -176,6 +251,25 @@ async fn get_session(
     Path(key): Path<String>,
 ) -> Result<Json<SessionEntry>, ChatError> {
     let session = service.get_session(&SessionKey::from_raw(key)).await?;
+    Ok(Json(session))
+}
+
+/// `PATCH /api/v1/chat/sessions/{key}` — partially update a session's
+/// mutable fields (title, model, system_prompt).
+#[instrument(skip(service, req))]
+async fn update_session(
+    State(service): State<ChatService>,
+    Path(key): Path<String>,
+    Json(req): Json<UpdateSessionRequest>,
+) -> Result<Json<SessionEntry>, ChatError> {
+    let session = service
+        .update_session_fields(
+            &SessionKey::from_raw(key),
+            req.title,
+            req.model,
+            req.system_prompt,
+        )
+        .await?;
     Ok(Json(session))
 }
 

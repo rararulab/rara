@@ -130,6 +130,34 @@ impl ChatService {
             })
     }
 
+    /// Partially update mutable fields of a session.
+    ///
+    /// Only the fields that are `Some` in the arguments are overwritten; the
+    /// rest are left untouched. Returns the updated [`SessionEntry`].
+    #[instrument(skip(self))]
+    pub async fn update_session_fields(
+        &self,
+        key: &SessionKey,
+        title: Option<String>,
+        model: Option<String>,
+        system_prompt: Option<String>,
+    ) -> Result<SessionEntry, ChatError> {
+        let mut session = self.get_session(key).await?;
+        if let Some(t) = title {
+            session.title = Some(t);
+        }
+        if let Some(m) = model {
+            session.model = Some(m);
+        }
+        if let Some(sp) = system_prompt {
+            session.system_prompt = Some(sp);
+        }
+        session.updated_at = Utc::now();
+        let updated = self.session_repo.update_session(&session).await?;
+        info!(key = %key, "session fields updated");
+        Ok(updated)
+    }
+
     /// Delete a session and all its messages.
     #[instrument(skip(self))]
     pub async fn delete_session(&self, key: &SessionKey) -> Result<(), ChatError> {

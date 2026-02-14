@@ -20,6 +20,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   Bot,
+  ChevronDown,
   ImagePlus,
   Loader2,
   MessageSquarePlus,
@@ -33,10 +34,29 @@ import {
 import { api } from "@/api/client";
 import type {
   ChatMessageData,
+  ChatModel,
   ChatSession,
   SendMessageResponse,
 } from "@/api/types";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { useServerStatus } from "@/hooks/use-server-status";
@@ -84,6 +104,20 @@ function deleteSession(key: string) {
 function clearMessages(key: string) {
   return api.del<void>(
     `/api/v1/chat/sessions/${encodeURIComponent(key)}/messages`,
+  );
+}
+
+function fetchModels() {
+  return api.get<ChatModel[]>("/api/v1/chat/models");
+}
+
+function updateSession(
+  key: string,
+  body: { title?: string; model?: string; system_prompt?: string },
+) {
+  return api.patch<ChatSession>(
+    `/api/v1/chat/sessions/${encodeURIComponent(key)}`,
+    body,
   );
 }
 
@@ -375,22 +409,238 @@ function MessageBubble({ msg }: { msg: ChatMessageData }) {
 }
 
 // ---------------------------------------------------------------------------
+// ModelSelect (shared model dropdown)
+// ---------------------------------------------------------------------------
+
+function ModelSelect({
+  models,
+  value,
+  onValueChange,
+}: {
+  models: ChatModel[];
+  value: string;
+  onValueChange: (value: string) => void;
+}) {
+  return (
+    <Select value={value} onValueChange={onValueChange}>
+      <SelectTrigger className="w-full">
+        <SelectValue placeholder="Select a model" />
+      </SelectTrigger>
+      <SelectContent>
+        {models.map((m) => (
+          <SelectItem key={m.id} value={m.id}>
+            <span className="font-medium">{m.name}</span>
+            <span className="ml-2 text-xs text-muted-foreground">
+              {m.context_length >= 1_000_000
+                ? `${(m.context_length / 1_000_000).toFixed(1)}M`
+                : `${(m.context_length / 1_000).toFixed(0)}K`}
+            </span>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// NewChatDialog
+// ---------------------------------------------------------------------------
+
+function NewChatDialog({
+  open,
+  onOpenChange,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: (title: string, model: string) => void;
+}) {
+  const [title, setTitle] = useState(
+    () =>
+      `Chat ${new Date().toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`,
+  );
+  const [selectedModel, setSelectedModel] = useState("");
+
+  const modelsQuery = useQuery({
+    queryKey: ["chat-models"],
+    queryFn: fetchModels,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const models = modelsQuery.data ?? [];
+
+  // Set default model when models are loaded
+  useEffect(() => {
+    if (models.length > 0 && !selectedModel) {
+      setSelectedModel(models[0].id);
+    }
+  }, [models, selectedModel]);
+
+  // Reset form when dialog opens
+  useEffect(() => {
+    if (open) {
+      setTitle(
+        `Chat ${new Date().toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`,
+      );
+      if (models.length > 0) {
+        setSelectedModel(models[0].id);
+      }
+    }
+  }, [open, models]);
+
+  const handleConfirm = useCallback(() => {
+    if (!selectedModel) return;
+    onConfirm(title.trim() || "New Chat", selectedModel);
+    onOpenChange(false);
+  }, [title, selectedModel, onConfirm, onOpenChange]);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>New Conversation</DialogTitle>
+          <DialogDescription>
+            Choose a title and model for the new conversation.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="space-y-2">
+            <Label htmlFor="chat-title">Title</Label>
+            <Input
+              id="chat-title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Conversation title"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Model</Label>
+            {modelsQuery.isLoading ? (
+              <Skeleton className="h-9 w-full" />
+            ) : (
+              <ModelSelect
+                models={models}
+                value={selectedModel}
+                onValueChange={setSelectedModel}
+              />
+            )}
+          </div>
+        </div>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+          >
+            Cancel
+          </Button>
+          <Button onClick={handleConfirm} disabled={!selectedModel}>
+            Create
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ChangeModelDialog
+// ---------------------------------------------------------------------------
+
+function ChangeModelDialog({
+  open,
+  onOpenChange,
+  currentModel,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  currentModel: string;
+  onConfirm: (model: string) => void;
+}) {
+  const [selectedModel, setSelectedModel] = useState(currentModel);
+
+  const modelsQuery = useQuery({
+    queryKey: ["chat-models"],
+    queryFn: fetchModels,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const models = modelsQuery.data ?? [];
+
+  useEffect(() => {
+    if (open) {
+      setSelectedModel(currentModel);
+    }
+  }, [open, currentModel]);
+
+  const handleConfirm = useCallback(() => {
+    if (!selectedModel) return;
+    onConfirm(selectedModel);
+    onOpenChange(false);
+  }, [selectedModel, onConfirm, onOpenChange]);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Change Model</DialogTitle>
+          <DialogDescription>
+            Select a different model for this conversation. Future messages will
+            use the new model.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="space-y-2">
+            <Label>Model</Label>
+            {modelsQuery.isLoading ? (
+              <Skeleton className="h-9 w-full" />
+            ) : (
+              <ModelSelect
+                models={models}
+                value={selectedModel}
+                onValueChange={setSelectedModel}
+              />
+            )}
+          </div>
+        </div>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={handleConfirm}
+            disabled={!selectedModel || selectedModel === currentModel}
+          >
+            Switch Model
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // ChatThread (right panel)
 // ---------------------------------------------------------------------------
 
 function ChatThread({
-  sessionKey,
+  session,
   onClearMessages,
 }: {
-  sessionKey: string;
+  session: ChatSession;
   onClearMessages: () => void;
 }) {
+  const sessionKey = session.key;
   const queryClient = useQueryClient();
   const { isOnline } = useServerStatus();
   const [input, setInput] = useState("");
   const [imageUrls, setImageUrls] = useState<string[]>([]);
   const [imageInputVisible, setImageInputVisible] = useState(false);
   const [imageInputValue, setImageInputValue] = useState("");
+  const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -425,6 +675,13 @@ function ChatThread({
     setImageUrls((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
+  const changeModelMutation = useMutation({
+    mutationFn: (model: string) => updateSession(sessionKey, { model }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
+    },
+  });
+
   const handleSend = useCallback(() => {
     const text = input.trim();
     if (!text || sendMutation.isPending || !isOnline) return;
@@ -446,6 +703,13 @@ function ChatThread({
     [handleSend],
   );
 
+  const handleChangeModel = useCallback(
+    (model: string) => {
+      changeModelMutation.mutate(model);
+    },
+    [changeModelMutation],
+  );
+
   // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -462,12 +726,35 @@ function ChatThread({
   // Visible messages (exclude system)
   const visibleMessages = messages.filter((m) => m.role !== "system");
 
+  // Extract short model name for display (e.g. "openai/gpt-4o" -> "gpt-4o")
+  const modelDisplay = session.model
+    ? session.model.split("/").pop() ?? session.model
+    : "default";
+
   return (
     <div className="flex flex-1 flex-col">
       {/* Thread header */}
       <div className="flex items-center justify-between border-b px-4 py-2.5">
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold">{sessionKey}</p>
+          <div className="flex items-center gap-2">
+            <p className="truncate text-sm font-semibold">
+              {session.title ?? sessionKey}
+            </p>
+            <button
+              type="button"
+              onClick={() => setModelDialogOpen(true)}
+              title={session.model ?? "Click to select a model"}
+              className="shrink-0"
+            >
+              <Badge
+                variant="secondary"
+                className="cursor-pointer gap-1 hover:bg-secondary/60"
+              >
+                {modelDisplay}
+                <ChevronDown className="h-3 w-3" />
+              </Badge>
+            </button>
+          </div>
           <p className="text-xs text-muted-foreground">
             {messages.length} message{messages.length !== 1 ? "s" : ""}
           </p>
@@ -482,6 +769,14 @@ function ChatThread({
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
       </div>
+
+      {/* Model change dialog */}
+      <ChangeModelDialog
+        open={modelDialogOpen}
+        onOpenChange={setModelDialogOpen}
+        currentModel={session.model ?? ""}
+        onConfirm={handleChangeModel}
+      />
 
       {/* Messages area */}
       <div className="flex-1 overflow-y-auto px-4 py-4">
@@ -683,6 +978,7 @@ export default function Chat() {
   const queryClient = useQueryClient();
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [panelCollapsed, setPanelCollapsed] = useState(false);
+  const [newChatDialogOpen, setNewChatDialogOpen] = useState(false);
 
   const sessionsQuery = useQuery({
     queryKey: ["chat-sessions"],
@@ -690,6 +986,10 @@ export default function Chat() {
   });
 
   const sessions = sessionsQuery.data ?? [];
+
+  const activeSession = activeKey
+    ? sessions.find((s) => s.key === activeKey) ?? null
+    : null;
 
   const createMutation = useMutation({
     mutationFn: createSession,
@@ -723,12 +1023,16 @@ export default function Chat() {
   });
 
   const handleCreate = useCallback(() => {
-    const key = generateKey();
-    createMutation.mutate({
-      key,
-      title: `Chat ${new Date().toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`,
-    });
-  }, [createMutation]);
+    setNewChatDialogOpen(true);
+  }, []);
+
+  const handleCreateConfirm = useCallback(
+    (title: string, model: string) => {
+      const key = generateKey();
+      createMutation.mutate({ key, title, model });
+    },
+    [createMutation],
+  );
 
   const handleDelete = useCallback(
     (key: string) => {
@@ -744,6 +1048,13 @@ export default function Chat() {
 
   return (
     <div className="flex h-full">
+      {/* New chat dialog */}
+      <NewChatDialog
+        open={newChatDialogOpen}
+        onOpenChange={setNewChatDialogOpen}
+        onConfirm={handleCreateConfirm}
+      />
+
       {/* Left panel: session list */}
       <SessionList
         sessions={sessions}
@@ -757,10 +1068,10 @@ export default function Chat() {
       />
 
       {/* Right panel: chat thread or empty state */}
-      {activeKey ? (
+      {activeSession ? (
         <ChatThread
           key={activeKey}
-          sessionKey={activeKey}
+          session={activeSession}
           onClearMessages={handleClearMessages}
         />
       ) : (
