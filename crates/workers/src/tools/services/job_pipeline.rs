@@ -12,29 +12,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Layer 2 service: job pipeline tool.
+//!
+//! High-level business workflow that saves a job URL for automated crawling
+//! and AI analysis. Migrated from the former `save_job_url` flat tool.
+
 use async_trait::async_trait;
 use rara_agents::tool_registry::AgentTool;
 use serde_json::json;
 
-/// Agent tool that saves a job posting URL for crawling and analysis.
-pub struct SaveJobUrlTool {
+/// Layer 2 service tool: save a job URL into the automated pipeline.
+pub struct JobPipelineTool {
     job_service: rara_domain_job::service::JobService,
 }
 
-impl SaveJobUrlTool {
+impl JobPipelineTool {
     pub fn new(job_service: rara_domain_job::service::JobService) -> Self {
         Self { job_service }
     }
 }
 
 #[async_trait]
-impl AgentTool for SaveJobUrlTool {
-    fn name(&self) -> &str { "save_job_url" }
+impl AgentTool for JobPipelineTool {
+    fn name(&self) -> &str { "job_pipeline" }
 
     fn description(&self) -> &str {
-        "Save a job posting URL for crawling and AI analysis. The system will automatically \
-         fetch the page content, extract the job description, and analyze it for relevance. \
-         Returns the saved job record with its ID and current pipeline status."
+        "Save a job URL for automated crawling and AI analysis pipeline. The system will \
+         automatically fetch the page content, extract the job description, analyze it for \
+         relevance, and compute a match score. Returns the saved job record with its ID and \
+         current pipeline status."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -43,7 +49,7 @@ impl AgentTool for SaveJobUrlTool {
             "properties": {
                 "url": {
                     "type": "string",
-                    "description": "The URL of the job posting to save"
+                    "description": "The URL of the job posting to save for pipeline processing"
                 }
             },
             "required": ["url"]

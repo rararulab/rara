@@ -12,13 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Agent tools organized in a layered architecture.
-//!
-//! - **Layer 1 (Primitives)**: atomic, composable operations (db, http, notify,
-//!   storage).
-//! - **Layer 2 (Services)**: complex business workflows built on top of domain
-//!   services.
-//! - **Layer 3 (Planner)**: the `AgentRunner` itself (no code changes needed).
+//! Layer 2 service tools: complex business workflows.
 
-pub mod primitives;
-pub mod services;
+mod job_pipeline;
+
+pub use job_pipeline::JobPipelineTool;
