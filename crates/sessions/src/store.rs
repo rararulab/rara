@@ -6,8 +6,8 @@
 //! - `{key}.jsonl` — one JSON-serialized [`ChatMessage`](crate::types::ChatMessage) per line
 //! - `{key}.idx` — packed array of `u64` little-endian byte offsets into the JSONL file
 //!
-//! The index enables O(1) random access by sequence number without scanning
-//! the entire JSONL file.
+//! The index enables O(1) count, O(1) append, and O(K) random access by
+//! sequence number without scanning the entire JSONL file.
 
 use std::path::PathBuf;
 
@@ -51,82 +51,14 @@ impl SessionStore {
         self.base_dir.join(format!("{}.idx", sanitize_key(key)))
     }
 
-    /// Ensure the index file is valid and return the message count.
-    ///
-    /// If the index is missing or corrupted (size not a multiple of 8), it is
-    /// rebuilt by scanning the JSONL file.
-    fn ensure_index(&self, key: &str) -> Result<u64, SessionError> {
+    /// Return the current message count by reading the index file size.
+    fn message_count(&self, key: &str) -> Result<u64, SessionError> {
         let idx = self.idx_path(key);
-        let jsonl = self.jsonl_path(key);
-
-        // If neither file exists, this is an empty session.
-        let jsonl_exists = jsonl.exists();
-        let idx_exists = idx.exists();
-
-        if !jsonl_exists && !idx_exists {
-            return Ok(0);
+        match std::fs::metadata(&idx) {
+            Ok(m) => Ok(m.len() / 8),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
+            Err(e) => Err(SessionError::FileIo { source: e }),
         }
-
-        if !jsonl_exists && idx_exists {
-            // Stale index without data — remove and report 0.
-            let _ = std::fs::remove_file(&idx);
-            return Ok(0);
-        }
-
-        // JSONL exists. Check if index is valid.
-        if idx_exists {
-            let meta =
-                std::fs::metadata(&idx).map_err(|e| SessionError::FileIo { source: e })?;
-            let size = meta.len();
-            if size % 8 == 0 {
-                // Check JSONL is not empty when idx reports 0 entries.
-                if size == 0 {
-                    let jsonl_meta = std::fs::metadata(&jsonl)
-                        .map_err(|e| SessionError::FileIo { source: e })?;
-                    if jsonl_meta.len() == 0 {
-                        return Ok(0);
-                    }
-                    // JSONL has data but idx is empty — rebuild.
-                } else {
-                    return Ok(size / 8);
-                }
-            }
-            // Size not a multiple of 8 or inconsistent — rebuild.
-        }
-
-        self.rebuild_index(key)
-    }
-
-    /// Rebuild the index by scanning the JSONL file line by line.
-    ///
-    /// Records the byte offset of each non-empty line as a `u64` LE value.
-    fn rebuild_index(&self, key: &str) -> Result<u64, SessionError> {
-        tracing::warn!(key, "rebuilding session index");
-
-        let jsonl = self.jsonl_path(key);
-        let idx = self.idx_path(key);
-
-        let data =
-            std::fs::read(&jsonl).map_err(|e| SessionError::FileIo { source: e })?;
-
-        let mut offsets: Vec<u8> = Vec::new();
-        let mut count: u64 = 0;
-        let mut pos: u64 = 0;
-
-        for line in data.split(|&b| b == b'\n') {
-            let trimmed_empty = line.iter().all(|&b| b == b' ' || b == b'\t' || b == b'\r');
-            if !line.is_empty() && !trimmed_empty {
-                offsets.extend_from_slice(&pos.to_le_bytes());
-                count += 1;
-            }
-            // +1 for the newline delimiter. split does not include it.
-            pos += line.len() as u64 + 1;
-        }
-
-        std::fs::write(&idx, &offsets)
-            .map_err(|e| SessionError::FileIo { source: e })?;
-
-        Ok(count)
     }
 
     /// Append a message to the session identified by `key`.
@@ -137,7 +69,7 @@ impl SessionStore {
         key: &str,
         msg: &ChatMessage,
     ) -> Result<ChatMessage, SessionError> {
-        let count = self.ensure_index(key)?;
+        let count = self.message_count(key)?;
         let seq = count as i64 + 1;
 
         let mut msg = msg.clone();
@@ -201,7 +133,7 @@ impl SessionStore {
         after_seq: Option<i64>,
         limit: Option<i64>,
     ) -> Result<Vec<ChatMessage>, SessionError> {
-        let total = self.ensure_index(key)?;
+        let total = self.message_count(key)?;
         if total == 0 {
             return Ok(Vec::new());
         }
@@ -292,7 +224,7 @@ impl SessionStore {
 
     /// Return the number of messages in the session identified by `key`.
     pub async fn count(&self, key: &str) -> Result<i64, SessionError> {
-        let n = self.ensure_index(key)?;
+        let n = self.message_count(key)?;
         Ok(n as i64)
     }
 
@@ -331,7 +263,7 @@ impl SessionStore {
         dst_key: &str,
         fork_at_seq: i64,
     ) -> Result<(), SessionError> {
-        let total = self.ensure_index(src_key)? as i64;
+        let total = self.message_count(src_key)? as i64;
 
         if fork_at_seq < 1 || fork_at_seq > total {
             return Err(SessionError::InvalidForkPoint {
@@ -548,48 +480,6 @@ mod tests {
             r2.unwrap_err(),
             SessionError::InvalidForkPoint { .. }
         ));
-    }
-
-    #[tokio::test]
-    async fn missing_idx_triggers_rebuild() {
-        let (store, _tmp) = test_store().await;
-
-        store.append("k", &ChatMessage::user("a")).await.unwrap();
-        store.append("k", &ChatMessage::user("b")).await.unwrap();
-        store.append("k", &ChatMessage::user("c")).await.unwrap();
-
-        // Delete idx.
-        let idx = store.idx_path("k");
-        tokio::fs::remove_file(&idx).await.unwrap();
-        assert!(!idx.exists());
-
-        // Count should still work via rebuild.
-        assert_eq!(store.count("k").await.unwrap(), 3);
-        assert!(idx.exists());
-
-        // Read should work too.
-        let msgs = store.read("k", None, None).await.unwrap();
-        assert_eq!(msgs.len(), 3);
-    }
-
-    #[tokio::test]
-    async fn corrupted_idx_triggers_rebuild() {
-        let (store, _tmp) = test_store().await;
-
-        store.append("k", &ChatMessage::user("a")).await.unwrap();
-        store.append("k", &ChatMessage::user("b")).await.unwrap();
-
-        // Write garbage to idx (not a multiple of 8 bytes).
-        let idx = store.idx_path("k");
-        tokio::fs::write(&idx, b"garbage!x").await.unwrap();
-
-        // Should rebuild and still return correct count.
-        assert_eq!(store.count("k").await.unwrap(), 2);
-
-        let msgs = store.read("k", None, None).await.unwrap();
-        assert_eq!(msgs.len(), 2);
-        assert_eq!(msgs[0].content.as_text(), "a");
-        assert_eq!(msgs[1].content.as_text(), "b");
     }
 
     #[tokio::test]

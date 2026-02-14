@@ -21,6 +21,7 @@ jiff.workspace = true
 openrouter-rs = { workspace = true }
 opendal.workspace = true
 rara-agents = { workspace = true }
+rara-paths = { workspace = true }
 rara-ai = { workspace = true }
 rara-domain-analytics = { workspace = true }
 rara-domain-chat = { workspace = true }

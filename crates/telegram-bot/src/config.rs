@@ -57,12 +57,16 @@ impl BotConfig {
     ///
     /// Optional envs:
     /// - `DATABASE_URL`
+    /// - `MIGRATION_DIRECTORY`
     /// - `MAIN_SERVICE_HTTP_BASE`
     pub fn from_env() -> Self {
         let db_config =
             DatabaseConfig::builder()
                 .database_url(std::env::var("DATABASE_URL").unwrap_or_else(|_| {
                     "postgres://postgres:postgres@localhost:5432/job".to_string()
+                }))
+                .migration_dir(std::env::var("MIGRATION_DIRECTORY").unwrap_or_else(|_| {
+                    "crates/rara-model/migrations".to_string()
                 }))
                 .build();
 

@@ -9,7 +9,8 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
+use rara_model::session::{ChannelBindingRow, ChatSessionRow};
 use sqlx::PgPool;
 use tracing::instrument;
 
@@ -46,22 +47,8 @@ impl PgSessionRepository {
 // Row types for sqlx
 // ---------------------------------------------------------------------------
 
-/// Database row representation of a `chat_session` record.
-#[derive(sqlx::FromRow)]
-struct SessionRow {
-    key:           String,
-    title:         Option<String>,
-    model:         Option<String>,
-    system_prompt: Option<String>,
-    message_count: i64,
-    preview:       Option<String>,
-    metadata:      Option<serde_json::Value>,
-    created_at:    DateTime<Utc>,
-    updated_at:    DateTime<Utc>,
-}
-
-impl From<SessionRow> for SessionEntry {
-    fn from(row: SessionRow) -> Self {
+impl From<ChatSessionRow> for SessionEntry {
+    fn from(row: ChatSessionRow) -> Self {
         Self {
             key:           SessionKey::from_raw(row.key),
             title:         row.title,
@@ -74,17 +61,6 @@ impl From<SessionRow> for SessionEntry {
             updated_at:    row.updated_at,
         }
     }
-}
-
-/// Database row representation of a `channel_binding` record.
-#[derive(sqlx::FromRow)]
-struct ChannelBindingRow {
-    channel_type: String,
-    account:      String,
-    chat_id:      String,
-    session_key:  String,
-    created_at:   DateTime<Utc>,
-    updated_at:   DateTime<Utc>,
 }
 
 impl From<ChannelBindingRow> for ChannelBinding {
@@ -119,7 +95,7 @@ impl crate::repository::SessionRepository for PgSessionRepository {
 
     #[instrument(skip(self, entry), fields(key = %entry.key))]
     async fn create_session(&self, entry: &SessionEntry) -> Result<SessionEntry, SessionError> {
-        let row = sqlx::query_as::<_, SessionRow>(
+        let row = sqlx::query_as::<_, ChatSessionRow>(
             r"INSERT INTO chat_session
                    (key, title, model, system_prompt, message_count, preview, metadata, created_at, updated_at)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -150,7 +126,7 @@ impl crate::repository::SessionRepository for PgSessionRepository {
 
     #[instrument(skip(self))]
     async fn get_session(&self, key: &SessionKey) -> Result<Option<SessionEntry>, SessionError> {
-        let row = sqlx::query_as::<_, SessionRow>(
+        let row = sqlx::query_as::<_, ChatSessionRow>(
             "SELECT * FROM chat_session WHERE key = $1",
         )
         .bind(key.as_str())
@@ -166,7 +142,7 @@ impl crate::repository::SessionRepository for PgSessionRepository {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<SessionEntry>, SessionError> {
-        let rows = sqlx::query_as::<_, SessionRow>(
+        let rows = sqlx::query_as::<_, ChatSessionRow>(
             "SELECT * FROM chat_session ORDER BY updated_at DESC LIMIT $1 OFFSET $2",
         )
         .bind(limit)
@@ -179,7 +155,7 @@ impl crate::repository::SessionRepository for PgSessionRepository {
 
     #[instrument(skip(self, entry), fields(key = %entry.key))]
     async fn update_session(&self, entry: &SessionEntry) -> Result<SessionEntry, SessionError> {
-        let row = sqlx::query_as::<_, SessionRow>(
+        let row = sqlx::query_as::<_, ChatSessionRow>(
             r"UPDATE chat_session
                SET title = $2, model = $3, system_prompt = $4,
                    message_count = $5, preview = $6, metadata = $7

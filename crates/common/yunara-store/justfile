@@ -4,8 +4,8 @@
 # helpers if you have `sqlx-cli` installed.
 
 # Database URL (PostgreSQL)
-DATABASE_URL := env('DATABASE_URL', 'postgres://postgres:postgres@localhost:5432/job')
-MIGRATION_DIRECTORY := env('MIGRATION_DIRECTORY', './migrations')
+DATABASE_URL := env('DATABASE_URL', 'postgres://postgres:postgres@localhost:5432/rara')
+MIGRATION_DIRECTORY := env('MIGRATION_DIRECTORY', '../../rara-model/migrations')
 
 [group("📒 Help")]
 [private]

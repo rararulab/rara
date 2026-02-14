@@ -247,3 +247,9 @@ pub fn global_settings_file() -> &'static PathBuf {
     static GLOBAL_SETTINGS_FILE: OnceLock<PathBuf> = OnceLock::new();
     GLOBAL_SETTINGS_FILE.get_or_init(|| config_dir().join("global_settings.json"))
 }
+
+/// Returns the path to the sessions directory used for JSONL message storage.
+pub fn sessions_dir() -> &'static PathBuf {
+    static SESSIONS_DIR: OnceLock<PathBuf> = OnceLock::new();
+    SESSIONS_DIR.get_or_init(|| data_dir().join("sessions"))
+}

@@ -1,6 +1,6 @@
 # Load environment variables from .env.local if it exists
 set dotenv-load
-set dotenv-filename := ".env.local"
+set dotenv-filename := ".env"
 
 # Environment variables with defaults
 RUST_TOOLCHAIN := `grep 'channel = ' rust-toolchain.toml | cut -d '"' -f 2`
@@ -8,6 +8,8 @@ TARGET_PLATFORM := env("TARGET_PLATFORM", "linux/arm64")
 DISTRI_PLATFORM := env("DISTRI_PLATFORM", "ubuntu")
 DOCKER_TAG := env("DOCKER_TAG", "job:latest")
 PYO3_PYTHON := `uv python find 3.10`
+RARA__DATABASE__DATABASE_URL := env("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/rara")
+RARA__DATABASE__MIGRATION_DIR := env("RARA__DATABASE__MIGRATION_DIR", "crates/rara-model/migrations")
 
 # ========================================================================================
 # Default Recipe & Help
@@ -271,6 +273,30 @@ dev:
 # ========================================================================================
 # Development Tools
 # ========================================================================================
+
+[doc("create a new reversible SQL migration via sqlx cli")]
+[group("🗄️ Database")]
+migrate-add name:
+    @command -v sqlx >/dev/null 2>&1 || (echo "❌ sqlx-cli is required. Install with: cargo install sqlx-cli --no-default-features --features rustls,postgres" && exit 1)
+    @echo "🗄️ Creating migration '{{name}}' in {{RARA__DATABASE__MIGRATION_DIR}}..."
+    DATABASE_URL={{RARA__DATABASE__DATABASE_URL}} sqlx migrate add -r --source {{RARA__DATABASE__MIGRATION_DIR}} {{name}} 
+
+[doc("run pending SQL migrations")]
+[group("🗄️ Database")]
+migrate-run:
+    DATABASE_URL={{RARA__DATABASE__DATABASE_URL}} sqlx migrate run --source {{RARA__DATABASE__MIGRATION_DIR}}
+
+[doc("revert the latest SQL migration")]
+[group("🗄️ Database")]
+migrate-revert:
+    DATABASE_URL={{RARA__DATABASE__DATABASE_URL}} sqlx migrate revert --source {{RARA__DATABASE__MIGRATION_DIR}}
+
+[doc("show migration status")]
+[group("🗄️ Database")]
+migrate-info:
+    DATABASE_URL={{RARA__DATABASE__DATABASE_URL}} sqlx migrate info --source {{RARA__DATABASE__MIGRATION_DIR}}
+
+alias ma := migrate-add
 
 [doc("update dependencies interactively")]
 [group("🔧 Development")]

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 
 use serde::Deserialize;
 use smart_default::SmartDefault;
@@ -29,6 +29,11 @@ pub struct DatabaseConfig {
     #[default(_code = "\"postgres://postgres:postgres@localhost:5432/job\".to_string()")]
     #[builder(default = "postgres://postgres:postgres@localhost:5432/job", getter)]
     pub database_url: String,
+
+    /// SQLx migration directory path.
+    #[default(_code = "\"crates/rara-model/migrations\".to_string()")]
+    #[builder(default = "crates/rara-model/migrations", getter)]
+    pub migration_dir: String,
 
     /// Maximum number of connections in the pool
     #[default = 10]
@@ -64,7 +69,12 @@ impl DatabaseConfig {
     ///
     /// # Arguments
     /// * `config` - Database configuration
-    #[tracing::instrument(level = "trace", skip(self), fields(database_url = %self.database_url), err)]
+    #[tracing::instrument(
+        level = "trace",
+        skip(self),
+        fields(database_url = %self.database_url, migration_dir = %self.migration_dir),
+        err
+    )]
     pub async fn open(&self) -> Result<DBStore> {
         let mut pool_options = PgPoolOptions::new()
             .max_connections(self.max_connections)
@@ -85,9 +95,8 @@ impl DatabaseConfig {
             self.database_url
         );
 
-        sqlx::migrate!("../../rara-model/migrations")
-            .run(&pool)
-            .await?;
+        let migrator = sqlx::migrate::Migrator::new(Path::new(&self.migration_dir)).await?;
+        migrator.run(&pool).await?;
 
         Ok(DBStore::new(pool))
     }

@@ -80,7 +80,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         let mut object_store = object_store::ObjectStoreConfig::default();
-        object_store.bucket = "raramarkdown".to_owned();
+        object_store.bucket = "rara".to_owned();
         Self {
             database: DatabaseConfig::default(),
             http: RestServerConfig::default(),
@@ -97,14 +97,14 @@ impl AppConfig {
     /// Load config from config file + environment variables.
     ///
     /// Source priority (highest first):
-    /// 1. `JOB__`-prefixed environment variables
+    /// 1. `RARA__`-prefixed environment variables
     /// 2. `config.toml` file in the working directory
     /// 3. Code defaults
     pub fn new() -> Result<Self, config::ConfigError> {
         let builder = config::Config::builder()
             .add_source(config::File::with_name("config").required(false))
             .add_source(
-                config::Environment::with_prefix("JOB")
+                config::Environment::with_prefix("RARA")
                     .separator("__")
                     .try_parsing(true),
             );
@@ -200,7 +200,7 @@ impl AppConfig {
 
         let analyze_handle = worker_manager
             .fallible_worker(rara_workers::saved_job_analyze::SavedJobAnalyzeWorker)
-            .name("saved-raraanalyze")
+            .name("saved-rara-analyze")
             .eager()
             .on_notify()
             .spawn();
@@ -211,7 +211,7 @@ impl AppConfig {
 
         let crawl_handle = worker_manager
             .fallible_worker(rara_workers::saved_job_crawl::SavedJobCrawlWorker)
-            .name("saved-raracrawl")
+            .name("saved-rara-crawl")
             .eager()
             .on_notify()
             .spawn();
@@ -222,7 +222,7 @@ impl AppConfig {
             .fallible_worker(rara_workers::saved_job_gc::SavedJobGcWorker::new(
                 rara_workers::saved_job_gc::GcConfig::default(),
             ))
-            .name("saved-raragc")
+            .name("saved-rara-gc")
             .interval(std::time::Duration::from_secs(gc_interval_secs))
             .spawn();
 

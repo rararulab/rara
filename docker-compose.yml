@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: job
+      POSTGRES_DB: rara
     ports:
       - "5432:5432"
     volumes:

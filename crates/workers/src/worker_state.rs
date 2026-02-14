@@ -96,10 +96,8 @@ impl AppState {
 
         // -- chat service ----------------------------------------------------
 
-        let sessions_dir = std::env::var("RARA_SESSIONS_DIR")
-            .unwrap_or_else(|_| "data/sessions".to_owned());
         let session_repo = Arc::new(
-            rara_sessions::pg_repository::PgSessionRepository::new(pool, &sessions_dir)
+            rara_sessions::pg_repository::PgSessionRepository::new(pool, rara_paths::sessions_dir())
                 .await
                 .whatever_context("Failed to initialize session repository")?,
         );
