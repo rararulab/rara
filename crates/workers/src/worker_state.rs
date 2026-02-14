@@ -139,6 +139,19 @@ impl AppState {
         tool_registry.register_service(Arc::new(
             crate::tools::services::JobPipelineTool::new(job_service.clone()),
         ));
+        tool_registry.register_service(Arc::new(
+            crate::tools::services::ListResumesTool::new(resume_service.clone()),
+        ));
+        tool_registry.register_service(Arc::new(
+            crate::tools::services::GetResumeContentTool::new(resume_service.clone()),
+        ));
+        tool_registry.register_service(Arc::new(
+            crate::tools::services::AnalyzeResumeTool::new(
+                resume_service.clone(),
+                job_service.clone(),
+                ai_service.clone(),
+            ),
+        ));
         let tools = Arc::new(tool_registry);
         let chat_service = rara_domain_chat::service::ChatService::new(
             session_repo,

@@ -23,4 +23,5 @@ pub mod interview_prep;
 pub mod jd_analyzer;
 pub mod jd_parser;
 pub mod job_fit;
+pub mod resume_analyzer;
 pub mod resume_optimizer;
