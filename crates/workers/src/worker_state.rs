@@ -221,6 +221,21 @@ impl AppState {
             Arc::clone(&memory_manager),
             settings_svc.clone(),
         )));
+        tool_registry.register_service(Arc::new(
+            crate::tools::services::ListTypstProjectsTool::new(typst_service.clone()),
+        ));
+        tool_registry.register_service(Arc::new(
+            crate::tools::services::ListTypstFilesTool::new(typst_service.clone()),
+        ));
+        tool_registry.register_service(Arc::new(
+            crate::tools::services::ReadTypstFileTool::new(typst_service.clone()),
+        ));
+        tool_registry.register_service(Arc::new(
+            crate::tools::services::UpdateTypstFileTool::new(typst_service.clone()),
+        ));
+        tool_registry.register_service(Arc::new(
+            crate::tools::services::CompileTypstProjectTool::new(typst_service.clone()),
+        ));
         let tools = Arc::new(tool_registry);
         let chat_service = rara_domain_chat::service::ChatService::new(
             session_repo,
