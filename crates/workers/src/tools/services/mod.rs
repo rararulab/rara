@@ -15,11 +15,9 @@
 //! Layer 2 service tools: complex business workflows.
 
 mod job_pipeline;
-mod memory_get;
-mod memory_search;
+mod memory_tools;
 mod resume_tools;
 
 pub use job_pipeline::JobPipelineTool;
-pub use memory_get::MemoryGetTool;
-pub use memory_search::MemorySearchTool;
+pub use memory_tools::{MemoryGetTool, MemorySearchTool};
 pub use resume_tools::{AnalyzeResumeTool, GetResumeContentTool, ListResumesTool};

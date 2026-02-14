@@ -32,17 +32,17 @@ pub struct AppState {
     pub ai_service: rara_ai::service::AiService,
 
     // -- domain services --
-    pub resume_service:      rara_domain_resume::ResumeAppService,
+    pub resume_service: rara_domain_resume::ResumeAppService,
     pub application_service: rara_domain_application::service::ApplicationService,
-    pub interview_service:   rara_domain_interview::service::InterviewService,
-    pub scheduler_service:   rara_domain_scheduler::service::SchedulerService,
-    pub analytics_service:   rara_domain_analytics::service::AnalyticsService,
-    pub job_service:         rara_domain_job::service::JobService,
-    pub chat_service:        rara_domain_chat::service::ChatService,
-    pub typst_service:       rara_domain_typst::service::TypstService,
+    pub interview_service: rara_domain_interview::service::InterviewService,
+    pub scheduler_service: rara_domain_scheduler::service::SchedulerService,
+    pub analytics_service: rara_domain_analytics::service::AnalyticsService,
+    pub job_service: rara_domain_job::service::JobService,
+    pub chat_service: rara_domain_chat::service::ChatService,
+    pub typst_service: rara_domain_typst::service::TypstService,
 
     // -- shared --
-    pub settings_svc:  rara_domain_shared::settings::SettingsSvc,
+    pub settings_svc: rara_domain_shared::settings::SettingsSvc,
     pub notify_client: rara_domain_shared::notify::client::NotifyClient,
 
     // -- LLM provider --
@@ -117,92 +117,110 @@ impl AppState {
         let llm_provider: rara_agents::model::OpenRouterLoaderRef =
             Arc::new(SettingsOpenRouterLoader::new(settings_svc.clone()));
         let mut tool_registry = rara_agents::tool_registry::ToolRegistry::default();
-
-        // -- memory service ---------------------------------------------------
-
-        let memory_db_path = rara_paths::data_dir().join("memory.db");
-        let memory_data_dir = rara_paths::data_dir().join("memory");
-        tokio::fs::create_dir_all(&memory_data_dir).await.ok();
-        let memory_store =
-            rara_memory::store::SqliteMemoryStore::open(&memory_db_path)
-                .whatever_context("Failed to initialize memory store")?;
-        let memory_manager = Arc::new(rara_memory::manager::MemoryManager::new(
-            memory_store,
-            memory_data_dir,
-        ));
-        // Initial sync of markdown files into the index.
-        let sync_stats = memory_manager
+        let memory_backend = settings_svc.current().agent.memory.storage_backend;
+        let memory_backend = if memory_backend.trim().is_empty() {
+            "postgres".to_owned()
+        } else {
+            memory_backend.to_ascii_lowercase()
+        };
+        let memory_manager = Arc::new(match memory_backend.as_str() {
+            "sqlite" => match crate::memory::MemoryManager::open(
+                rara_paths::memory_dir().clone(),
+                rara_paths::memory_index_db_file().clone(),
+            ) {
+                Ok(manager) => manager,
+                Err(primary_err) => {
+                    warn!(
+                        error = %primary_err,
+                        "sqlite memory manager init failed, falling back to postgres"
+                    );
+                    crate::memory::MemoryManager::open_postgres(
+                        rara_paths::memory_dir().clone(),
+                        pool.clone(),
+                    )
+                    .whatever_context(
+                        "Failed to initialize postgres memory manager after sqlite fallback",
+                    )?
+                }
+            },
+            _ => match crate::memory::MemoryManager::open_postgres(
+                rara_paths::memory_dir().clone(),
+                pool.clone(),
+            ) {
+                Ok(manager) => manager,
+                Err(primary_err) => {
+                    warn!(
+                        error = %primary_err,
+                        "postgres memory manager init failed, falling back to sqlite"
+                    );
+                    crate::memory::MemoryManager::open(
+                        rara_paths::memory_dir().clone(),
+                        rara_paths::memory_index_db_file().clone(),
+                    )
+                    .whatever_context(
+                        "Failed to initialize sqlite memory manager after postgres fallback",
+                    )?
+                }
+            },
+        });
+        memory_manager.apply_runtime_settings(&settings_svc.current().agent.memory);
+        info!(
+            storage_backend = memory_manager.storage_backend(),
+            vector_backend = memory_manager.vector_backend(),
+            "memory manager initialized"
+        );
+        let _ = memory_manager
             .sync()
             .await
-            .whatever_context("Failed to sync memory")?;
-        info!(
-            added = sync_stats.added,
-            updated = sync_stats.updated,
-            deleted = sync_stats.deleted,
-            "Memory synced"
-        );
+            .whatever_context("Failed to sync memory index")?;
 
         // Layer 1: Primitives
-        tool_registry.register_primitive(Arc::new(
-            crate::tools::primitives::DbQueryTool::new(pool.clone()),
-        ));
-        tool_registry.register_primitive(Arc::new(
-            crate::tools::primitives::DbMutateTool::new(pool.clone()),
-        ));
-        tool_registry.register_primitive(Arc::new(
-            crate::tools::primitives::NotifyTool::new(notify_client.clone(), settings_svc.clone()),
-        ));
-        tool_registry.register_primitive(Arc::new(
-            crate::tools::primitives::HttpFetchTool::new(),
-        ));
-        tool_registry.register_primitive(Arc::new(
-            crate::tools::primitives::StorageReadTool::new(object_store.clone()),
-        ));
-        tool_registry.register_primitive(Arc::new(
-            crate::tools::primitives::BashTool::new(),
-        ));
-        tool_registry.register_primitive(Arc::new(
-            crate::tools::primitives::ReadFileTool::new(),
-        ));
-        tool_registry.register_primitive(Arc::new(
-            crate::tools::primitives::WriteFileTool::new(),
-        ));
-        tool_registry.register_primitive(Arc::new(
-            crate::tools::primitives::EditFileTool::new(),
-        ));
-        tool_registry.register_primitive(Arc::new(
-            crate::tools::primitives::FindFilesTool::new(),
-        ));
-        tool_registry.register_primitive(Arc::new(
-            crate::tools::primitives::GrepTool::new(),
-        ));
-        tool_registry.register_primitive(Arc::new(
-            crate::tools::primitives::ListDirectoryTool::new(),
-        ));
+        tool_registry.register_primitive(Arc::new(crate::tools::primitives::DbQueryTool::new(
+            pool.clone(),
+        )));
+        tool_registry.register_primitive(Arc::new(crate::tools::primitives::DbMutateTool::new(
+            pool.clone(),
+        )));
+        tool_registry.register_primitive(Arc::new(crate::tools::primitives::NotifyTool::new(
+            notify_client.clone(),
+            settings_svc.clone(),
+        )));
+        tool_registry.register_primitive(Arc::new(crate::tools::primitives::HttpFetchTool::new()));
+        tool_registry.register_primitive(Arc::new(crate::tools::primitives::StorageReadTool::new(
+            object_store.clone(),
+        )));
+        tool_registry.register_primitive(Arc::new(crate::tools::primitives::BashTool::new()));
+        tool_registry.register_primitive(Arc::new(crate::tools::primitives::ReadFileTool::new()));
+        tool_registry.register_primitive(Arc::new(crate::tools::primitives::WriteFileTool::new()));
+        tool_registry.register_primitive(Arc::new(crate::tools::primitives::EditFileTool::new()));
+        tool_registry.register_primitive(Arc::new(crate::tools::primitives::FindFilesTool::new()));
+        tool_registry.register_primitive(Arc::new(crate::tools::primitives::GrepTool::new()));
+        tool_registry
+            .register_primitive(Arc::new(crate::tools::primitives::ListDirectoryTool::new()));
 
         // Layer 2: Services
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::JobPipelineTool::new(job_service.clone()),
-        ));
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::ListResumesTool::new(resume_service.clone()),
-        ));
+        tool_registry.register_service(Arc::new(crate::tools::services::JobPipelineTool::new(
+            job_service.clone(),
+        )));
+        tool_registry.register_service(Arc::new(crate::tools::services::ListResumesTool::new(
+            resume_service.clone(),
+        )));
         tool_registry.register_service(Arc::new(
             crate::tools::services::GetResumeContentTool::new(resume_service.clone()),
         ));
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::AnalyzeResumeTool::new(
-                resume_service.clone(),
-                job_service.clone(),
-                ai_service.clone(),
-            ),
-        ));
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::MemorySearchTool::new(memory_manager.clone()),
-        ));
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::MemoryGetTool::new(memory_manager.clone()),
-        ));
+        tool_registry.register_service(Arc::new(crate::tools::services::AnalyzeResumeTool::new(
+            resume_service.clone(),
+            job_service.clone(),
+            ai_service.clone(),
+        )));
+        tool_registry.register_service(Arc::new(crate::tools::services::MemorySearchTool::new(
+            Arc::clone(&memory_manager),
+            settings_svc.clone(),
+        )));
+        tool_registry.register_service(Arc::new(crate::tools::services::MemoryGetTool::new(
+            Arc::clone(&memory_manager),
+            settings_svc.clone(),
+        )));
         let tools = Arc::new(tool_registry);
         let chat_service = rara_domain_chat::service::ChatService::new(
             session_repo,
@@ -266,9 +284,7 @@ impl AppState {
             .merge(rara_domain_shared::notify::routes::routes(
                 self.notify_client.clone(),
             ))
-            .merge(rara_domain_chat::router::routes(
-                self.chat_service.clone(),
-            ))
+            .merge(rara_domain_chat::router::routes(self.chat_service.clone()))
             .merge(rara_domain_typst::router::routes(
                 self.typst_service.clone(),
             ))
@@ -287,7 +303,7 @@ impl AppState {
 /// cached for subsequent calls via [`OnceCell`].
 struct SettingsOpenRouterLoader {
     settings: rara_domain_shared::settings::SettingsSvc,
-    client:   OnceCell<OpenRouterClient>,
+    client: OnceCell<OpenRouterClient>,
 }
 
 impl SettingsOpenRouterLoader {

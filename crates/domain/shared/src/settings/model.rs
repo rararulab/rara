@@ -79,6 +79,40 @@ pub struct AgentSettings {
     /// Cron expression for proactive check schedule (5-field format).
     /// Changes take effect after service restart.
     pub proactive_cron:      Option<String>,
+    /// Memory retrieval runtime configuration.
+    #[serde(default)]
+    pub memory:              MemorySettings,
+}
+
+/// Memory runtime settings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct MemorySettings {
+    /// Storage backend preference: `postgres` or `sqlite`.
+    pub storage_backend:     String,
+    /// Enable embedding/hybrid retrieval.
+    pub embeddings_enabled:  bool,
+    /// Enable Chroma vector backend usage.
+    pub chroma_enabled:      bool,
+    /// Chroma server base URL.
+    pub chroma_url:          Option<String>,
+    /// Chroma collection name.
+    pub chroma_collection:   Option<String>,
+    /// Chroma API key/token.
+    pub chroma_api_key:      Option<String>,
+}
+
+impl Default for MemorySettings {
+    fn default() -> Self {
+        Self {
+            storage_backend: "postgres".to_owned(),
+            embeddings_enabled: true,
+            chroma_enabled: false,
+            chroma_url: None,
+            chroma_collection: Some("job-memory".to_owned()),
+            chroma_api_key: None,
+        }
+    }
 }
 
 /// Partial update payload for runtime settings writes.
@@ -113,6 +147,17 @@ pub struct AgentRuntimeSettingsPatch {
     pub chat_system_prompt: Option<String>,
     pub proactive_enabled:  Option<bool>,
     pub proactive_cron:     Option<String>,
+    pub memory:             Option<MemoryRuntimeSettingsPatch>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MemoryRuntimeSettingsPatch {
+    pub storage_backend:    Option<String>,
+    pub embeddings_enabled: Option<bool>,
+    pub chroma_enabled:     Option<bool>,
+    pub chroma_url:         Option<String>,
+    pub chroma_collection:  Option<String>,
+    pub chroma_api_key:     Option<String>,
 }
 
 impl Settings {
@@ -155,6 +200,28 @@ impl Settings {
             if let Some(cron) = agent.proactive_cron {
                 self.agent.proactive_cron = normalize_text(Some(cron));
             }
+            if let Some(memory) = agent.memory {
+                if let Some(storage_backend) = memory.storage_backend {
+                    self.agent.memory.storage_backend =
+                        normalize_text(Some(storage_backend))
+                            .unwrap_or_else(|| "postgres".to_owned());
+                }
+                if let Some(embeddings_enabled) = memory.embeddings_enabled {
+                    self.agent.memory.embeddings_enabled = embeddings_enabled;
+                }
+                if let Some(chroma_enabled) = memory.chroma_enabled {
+                    self.agent.memory.chroma_enabled = chroma_enabled;
+                }
+                if let Some(chroma_url) = memory.chroma_url {
+                    self.agent.memory.chroma_url = normalize_text(Some(chroma_url));
+                }
+                if let Some(chroma_collection) = memory.chroma_collection {
+                    self.agent.memory.chroma_collection = normalize_text(Some(chroma_collection));
+                }
+                if let Some(chroma_api_key) = memory.chroma_api_key {
+                    self.agent.memory.chroma_api_key = normalize_secret(Some(chroma_api_key));
+                }
+            }
         }
     }
 
@@ -168,6 +235,14 @@ impl Settings {
         self.agent.soul = normalize_text(self.agent.soul.take());
         self.agent.chat_system_prompt = normalize_text(self.agent.chat_system_prompt.take());
         self.agent.proactive_cron = normalize_text(self.agent.proactive_cron.take());
+        self.agent.memory.storage_backend =
+            normalize_text(Some(std::mem::take(&mut self.agent.memory.storage_backend)))
+                .unwrap_or_else(|| "postgres".to_owned());
+        self.agent.memory.chroma_url = normalize_text(self.agent.memory.chroma_url.take());
+        self.agent.memory.chroma_collection =
+            normalize_text(self.agent.memory.chroma_collection.take());
+        self.agent.memory.chroma_api_key =
+            normalize_secret(self.agent.memory.chroma_api_key.take());
     }
 }
 
@@ -283,8 +358,10 @@ mod tests {
             telegram: None,
             agent:    Some(AgentRuntimeSettingsPatch {
                 soul:              Some("You are a cheerful assistant.".to_owned()),
+                chat_system_prompt: None,
                 proactive_enabled: Some(true),
                 proactive_cron:    Some("0 9 * * *".to_owned()),
+                memory:            None,
             }),
         });
         assert_eq!(
@@ -300,8 +377,10 @@ mod tests {
         let mut settings = Settings {
             agent: AgentSettings {
                 soul:              Some("existing soul".to_owned()),
+                chat_system_prompt: None,
                 proactive_enabled: true,
                 proactive_cron:    Some("0 9 * * *".to_owned()),
+                memory:            MemorySettings::default(),
             },
             ..Default::default()
         };
@@ -311,8 +390,10 @@ mod tests {
             telegram: None,
             agent:    Some(AgentRuntimeSettingsPatch {
                 soul:              None,
+                chat_system_prompt: None,
                 proactive_enabled: Some(false),
                 proactive_cron:    None,
+                memory:            None,
             }),
         });
         assert_eq!(
@@ -328,8 +409,10 @@ mod tests {
         let mut settings = Settings {
             agent: AgentSettings {
                 soul:              Some("  ".to_owned()),
+                chat_system_prompt: None,
                 proactive_enabled: true,
                 proactive_cron:    Some("  0 9 * * *  ".to_owned()),
+                memory:            MemorySettings::default(),
             },
             ..Default::default()
         };
@@ -344,5 +427,44 @@ mod tests {
         let json = r#"{"ai":{},"telegram":{}}"#;
         let settings: Settings = serde_json::from_str(json).unwrap();
         assert_eq!(settings.agent, AgentSettings::default());
+    }
+
+    #[test]
+    fn apply_patch_memory_settings() {
+        let mut settings = Settings::default();
+        settings.apply_patch(UpdateRequest {
+            ai:       None,
+            telegram: None,
+            agent:    Some(AgentRuntimeSettingsPatch {
+                soul:               None,
+                chat_system_prompt: None,
+                proactive_enabled:  None,
+                proactive_cron:     None,
+                memory:             Some(MemoryRuntimeSettingsPatch {
+                    storage_backend:    Some("sqlite".to_owned()),
+                    embeddings_enabled: Some(false),
+                    chroma_enabled:     Some(true),
+                    chroma_url:         Some("http://localhost:8000".to_owned()),
+                    chroma_collection:  Some("team-memory".to_owned()),
+                    chroma_api_key:     Some("secret-token".to_owned()),
+                }),
+            }),
+        });
+
+        assert_eq!(settings.agent.memory.storage_backend, "sqlite");
+        assert!(!settings.agent.memory.embeddings_enabled);
+        assert!(settings.agent.memory.chroma_enabled);
+        assert_eq!(
+            settings.agent.memory.chroma_url,
+            Some("http://localhost:8000".to_owned())
+        );
+        assert_eq!(
+            settings.agent.memory.chroma_collection,
+            Some("team-memory".to_owned())
+        );
+        assert_eq!(
+            settings.agent.memory.chroma_api_key,
+            Some("secret-token".to_owned())
+        );
     }
 }
