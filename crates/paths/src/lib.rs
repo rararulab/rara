@@ -253,3 +253,15 @@ pub fn sessions_dir() -> &'static PathBuf {
     static SESSIONS_DIR: OnceLock<PathBuf> = OnceLock::new();
     SESSIONS_DIR.get_or_init(|| data_dir().join("sessions"))
 }
+
+/// Returns the path to the memory documents directory.
+pub fn memory_dir() -> &'static PathBuf {
+    static MEMORY_DIR: OnceLock<PathBuf> = OnceLock::new();
+    MEMORY_DIR.get_or_init(|| data_dir().join("memory"))
+}
+
+/// Returns the path to the local SQLite memory index file.
+pub fn memory_index_db_file() -> &'static PathBuf {
+    static MEMORY_DB_FILE: OnceLock<PathBuf> = OnceLock::new();
+    MEMORY_DB_FILE.get_or_init(|| data_dir().join("memory.sqlite3"))
+}

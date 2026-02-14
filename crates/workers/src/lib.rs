@@ -18,6 +18,7 @@
 //! domain services for background processing tasks.
 
 pub mod jd_parser;
+pub mod memory;
 pub mod proactive;
 pub mod saved_job_analyze;
 pub mod saved_job_crawl;
