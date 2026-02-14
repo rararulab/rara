@@ -145,6 +145,7 @@ impl AppState {
         axum::Router::new()
             .merge(rara_domain_resume::routes::routes(
                 self.resume_service.clone(),
+                self.object_store.clone(),
             ))
             .merge(rara_domain_application::routes::routes(
                 self.application_service.clone(),

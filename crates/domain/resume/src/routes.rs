@@ -16,10 +16,12 @@
 
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
-    http::StatusCode,
+    extract::{Multipart, Path, Query, State},
+    http::{StatusCode, header},
+    response::IntoResponse,
     routing::{delete, get, post, put},
 };
+use opendal::Operator;
 use tracing::instrument;
 use uuid::Uuid;
 
@@ -29,59 +31,191 @@ use crate::{
     types::{CreateResumeRequest, Resume, ResumeError, ResumeFilter, UpdateResumeRequest},
 };
 
+/// Shared state for resume routes that need object storage access.
+struct ResumeRouteState<R: ResumeRepository> {
+    service:      ResumeService<R>,
+    object_store: Operator,
+}
+
+impl<R: ResumeRepository> Clone for ResumeRouteState<R> {
+    fn clone(&self) -> Self {
+        Self {
+            service:      self.service.clone(),
+            object_store: self.object_store.clone(),
+        }
+    }
+}
+
 /// Register all resume routes on a new router with shared state.
-pub fn routes<R: ResumeRepository + 'static>(service: ResumeService<R>) -> Router {
+pub fn routes<R: ResumeRepository + 'static>(
+    service: ResumeService<R>,
+    object_store: Operator,
+) -> Router {
+    let state = ResumeRouteState {
+        service,
+        object_store,
+    };
     Router::new()
         .route("/api/v1/resumes", post(create_resume::<R>))
         .route("/api/v1/resumes", get(list_resumes::<R>))
+        .route("/api/v1/resumes/upload", post(upload_pdf::<R>))
         .route("/api/v1/resumes/{id}", get(get_resume::<R>))
         .route("/api/v1/resumes/{id}", put(update_resume::<R>))
         .route("/api/v1/resumes/{id}", delete(delete_resume::<R>))
-        .with_state(service)
+        .route("/api/v1/resumes/{id}/pdf", get(download_pdf::<R>))
+        .with_state(state)
 }
 
-#[instrument(skip(service, req))]
+#[instrument(skip(state, req))]
 async fn create_resume<R: ResumeRepository + 'static>(
-    State(service): State<ResumeService<R>>,
+    State(state): State<ResumeRouteState<R>>,
     Json(req): Json<CreateResumeRequest>,
 ) -> Result<(StatusCode, Json<Resume>), ResumeError> {
-    let resume = service.create(req).await?;
+    let resume = state.service.create(req).await?;
     Ok((StatusCode::CREATED, Json(resume)))
 }
 
-#[instrument(skip(service))]
+#[instrument(skip(state))]
 async fn list_resumes<R: ResumeRepository + 'static>(
-    State(service): State<ResumeService<R>>,
+    State(state): State<ResumeRouteState<R>>,
     Query(filter): Query<ResumeFilter>,
 ) -> Result<Json<Vec<Resume>>, ResumeError> {
-    let resumes = service.list(filter).await?;
+    let resumes = state.service.list(filter).await?;
     Ok(Json(resumes))
 }
 
-#[instrument(skip(service))]
+#[instrument(skip(state))]
 async fn get_resume<R: ResumeRepository + 'static>(
-    State(service): State<ResumeService<R>>,
+    State(state): State<ResumeRouteState<R>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Resume>, ResumeError> {
-    let resume = service.get(id).await?.ok_or(ResumeError::NotFound { id })?;
+    let resume = state.service.get(id).await?.ok_or(ResumeError::NotFound { id })?;
     Ok(Json(resume))
 }
 
-#[instrument(skip(service, req))]
+#[instrument(skip(state, req))]
 async fn update_resume<R: ResumeRepository + 'static>(
-    State(service): State<ResumeService<R>>,
+    State(state): State<ResumeRouteState<R>>,
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateResumeRequest>,
 ) -> Result<Json<Resume>, ResumeError> {
-    let resume = service.update(id, req).await?;
+    let resume = state.service.update(id, req).await?;
     Ok(Json(resume))
 }
 
-#[instrument(skip(service))]
+#[instrument(skip(state))]
 async fn delete_resume<R: ResumeRepository + 'static>(
-    State(service): State<ResumeService<R>>,
+    State(state): State<ResumeRouteState<R>>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ResumeError> {
-    service.delete(id).await?;
+    state.service.delete(id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Upload a PDF file as a new resume.
+///
+/// Expects `multipart/form-data` with fields:
+/// - `title` (text): resume title
+/// - `tags` (text, optional): comma-separated tags
+/// - `file` (file): the PDF file
+#[instrument(skip(state, multipart))]
+async fn upload_pdf<R: ResumeRepository + 'static>(
+    State(state): State<ResumeRouteState<R>>,
+    mut multipart: Multipart,
+) -> Result<(StatusCode, Json<Resume>), ResumeError> {
+    let mut title: Option<String> = None;
+    let mut tags: Vec<String> = Vec::new();
+    let mut file_data: Option<bytes::Bytes> = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| ResumeError::InvalidContent {
+            reason: format!("failed to read multipart field: {e}"),
+        })?
+    {
+        let name = field.name().unwrap_or("").to_owned();
+        match name.as_str() {
+            "title" => {
+                title = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| ResumeError::InvalidContent {
+                            reason: format!("failed to read title field: {e}"),
+                        })?,
+                );
+            }
+            "tags" => {
+                let raw = field
+                    .text()
+                    .await
+                    .map_err(|e| ResumeError::InvalidContent {
+                        reason: format!("failed to read tags field: {e}"),
+                    })?;
+                tags = raw
+                    .split(',')
+                    .map(|s| s.trim().to_owned())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            }
+            "file" => {
+                // Validate content type if provided.
+                if let Some(ct) = field.content_type() {
+                    if ct != "application/pdf" {
+                        return Err(ResumeError::InvalidFileType {
+                            content_type: ct.to_owned(),
+                        });
+                    }
+                }
+                file_data = Some(
+                    field
+                        .bytes()
+                        .await
+                        .map_err(|e| ResumeError::InvalidContent {
+                            reason: format!("failed to read file data: {e}"),
+                        })?,
+                );
+            }
+            _ => {
+                // Ignore unknown fields.
+            }
+        }
+    }
+
+    let title = title.ok_or_else(|| ResumeError::InvalidContent {
+        reason: "missing required field: title".to_owned(),
+    })?;
+
+    let pdf_data = file_data.ok_or_else(|| ResumeError::InvalidContent {
+        reason: "missing required field: file".to_owned(),
+    })?;
+
+    let resume = state
+        .service
+        .upload_pdf(title, tags, pdf_data, &state.object_store)
+        .await?;
+
+    Ok((StatusCode::CREATED, Json(resume)))
+}
+
+/// Download the PDF associated with a resume.
+#[instrument(skip(state))]
+async fn download_pdf<R: ResumeRepository + 'static>(
+    State(state): State<ResumeRouteState<R>>,
+    Path(id): Path<Uuid>,
+) -> Result<impl IntoResponse, ResumeError> {
+    let data = state.service.get_pdf(id, &state.object_store).await?;
+
+    Ok((
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/pdf"),
+            (
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=\"resume.pdf\"",
+            ),
+        ],
+        data,
+    ))
 }

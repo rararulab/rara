@@ -71,6 +71,8 @@ pub struct Resume {
     pub customization_notes: Option<String>,
     pub tags:                Vec<String>,
     pub metadata:            Option<serde_json::Value>,
+    pub pdf_object_key:      Option<String>,
+    pub pdf_file_size:       Option<i64>,
     pub trace_id:            Option<String>,
     pub is_deleted:          bool,
     pub deleted_at:          Option<Timestamp>,
@@ -92,6 +94,13 @@ pub struct CreateResumeRequest {
     pub target_job_id:       Option<Uuid>,
     pub customization_notes: Option<String>,
     pub tags:                Vec<String>,
+}
+
+/// Parameters for uploading a PDF resume.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadPdfRequest {
+    pub title: String,
+    pub tags:  Vec<String>,
 }
 
 /// Parameters for a partial update of an existing resume.
@@ -194,6 +203,22 @@ pub enum ResumeError {
     #[snafu(display("parent resume not found: {parent_id}"))]
     ParentNotFound { parent_id: Uuid },
 
+    /// Uploaded file exceeds the size limit.
+    #[snafu(display("file too large: {size} bytes, max {max}"))]
+    FileTooLarge { size: i64, max: i64 },
+
+    /// Uploaded file is not a valid PDF.
+    #[snafu(display("invalid file type: expected PDF, got {content_type}"))]
+    InvalidFileType { content_type: String },
+
+    /// Object storage upload/download failed.
+    #[snafu(display("upload failed: {message}"))]
+    UploadFailed { message: String },
+
+    /// The requested resume does not have an associated PDF.
+    #[snafu(display("PDF not found for resume: {id}"))]
+    PdfNotFound { id: Uuid },
+
     /// A storage/infrastructure error occurred.
     #[snafu(display("storage error: {message}"))]
     Storage { message: String },
@@ -229,6 +254,8 @@ impl From<StoreResume> for Resume {
             customization_notes: r.customization_notes,
             tags:                r.tags,
             metadata:            r.metadata,
+            pdf_object_key:      r.pdf_object_key,
+            pdf_file_size:       r.pdf_file_size,
             trace_id:            r.trace_id,
             is_deleted:          r.is_deleted,
             deleted_at:          chrono_opt_to_timestamp(r.deleted_at),
@@ -253,6 +280,8 @@ impl From<Resume> for StoreResume {
             customization_notes: r.customization_notes,
             tags:                r.tags,
             metadata:            r.metadata,
+            pdf_object_key:      r.pdf_object_key,
+            pdf_file_size:       r.pdf_file_size,
             trace_id:            r.trace_id,
             is_deleted:          r.is_deleted,
             deleted_at:          timestamp_opt_to_chrono(r.deleted_at),
@@ -269,6 +298,10 @@ impl axum::response::IntoResponse for ResumeError {
             ResumeError::InvalidContent { .. } => axum::http::StatusCode::BAD_REQUEST,
             ResumeError::ParentNotFound { .. } => axum::http::StatusCode::BAD_REQUEST,
             ResumeError::DuplicateContent { .. } => axum::http::StatusCode::CONFLICT,
+            ResumeError::FileTooLarge { .. } => axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+            ResumeError::InvalidFileType { .. } => axum::http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            ResumeError::UploadFailed { .. } => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            ResumeError::PdfNotFound { .. } => axum::http::StatusCode::NOT_FOUND,
             ResumeError::Storage { .. } => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
         };
         let message = self.to_string();

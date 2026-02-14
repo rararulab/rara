@@ -287,4 +287,52 @@ impl crate::repository::ResumeRepository for PgResumeRepository {
 
         Ok(row.map(Into::into))
     }
+
+    async fn create_with_pdf(
+        &self,
+        req: CreateResumeRequest,
+        pdf_object_key: String,
+        pdf_file_size: i64,
+    ) -> Result<Resume, ResumeError> {
+        let id = Uuid::new_v4();
+        let hash = content_hash(&req.content);
+        let version_tag = format!(
+            "v{}",
+            Zoned::now()
+                .with_time_zone(TimeZone::UTC)
+                .strftime("%Y%m%d%H%M%S")
+        );
+        let source_code = req.source as u8 as i16;
+        // For PDF-only resumes, store content as NULL.
+        let content: Option<&str> = if req.content.is_empty() {
+            None
+        } else {
+            Some(&req.content)
+        };
+
+        let row = sqlx::query_as::<_, StoreResume>(
+            r#"INSERT INTO resume (id, title, version_tag, content_hash, source, content,
+                   parent_resume_id, target_job_id, customization_notes, tags,
+                   pdf_object_key, pdf_file_size)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+               RETURNING *"#,
+        )
+        .bind(id)
+        .bind(&req.title)
+        .bind(&version_tag)
+        .bind(&hash)
+        .bind(source_code)
+        .bind(content)
+        .bind(req.parent_resume_id)
+        .bind(req.target_job_id)
+        .bind(&req.customization_notes)
+        .bind(&req.tags)
+        .bind(&pdf_object_key)
+        .bind(pdf_file_size)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        Ok(row.into())
+    }
 }

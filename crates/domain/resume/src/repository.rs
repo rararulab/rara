@@ -61,4 +61,12 @@ pub trait ResumeRepository: Send + Sync {
     /// Check whether a resume with the given content hash already exists.
     async fn find_by_content_hash(&self, content_hash: &str)
     -> Result<Option<Resume>, ResumeError>;
+
+    /// Create a resume record associated with an uploaded PDF file.
+    async fn create_with_pdf(
+        &self,
+        req: CreateResumeRequest,
+        pdf_object_key: String,
+        pdf_file_size: i64,
+    ) -> Result<Resume, ResumeError>;
 }
