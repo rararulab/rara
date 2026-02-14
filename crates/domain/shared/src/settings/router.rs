@@ -56,8 +56,16 @@ async fn update_settings(
 pub struct RuntimeSettingsView {
     pub ai:         AiSettingsView,
     pub telegram:   TgSettingsResp,
+    pub agent:      AgentSettingsView,
     // TODO: use jiff
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AgentSettingsView {
+    pub soul:              Option<String>,
+    pub proactive_enabled: bool,
+    pub proactive_cron:    Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -103,6 +111,11 @@ impl Into<RuntimeSettingsView> for Settings {
                 configured: self.telegram.bot_token.is_some() && self.telegram.chat_id.is_some(),
                 chat_id:    self.telegram.chat_id,
                 token_hint: secret_hint(self.telegram.bot_token.as_deref()),
+            },
+            agent:      AgentSettingsView {
+                soul:              self.agent.soul.clone(),
+                proactive_enabled: self.agent.proactive_enabled,
+                proactive_cron:    self.agent.proactive_cron.clone(),
             },
             updated_at: self.updated_at,
         }

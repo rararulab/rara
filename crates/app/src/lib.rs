@@ -226,6 +226,37 @@ impl AppConfig {
             .interval(std::time::Duration::from_secs(gc_interval_secs))
             .spawn();
 
+        let default_proactive_cron = "0 9,18,21 * * *";
+        let proactive_cron = app_state
+            .settings_svc
+            .current()
+            .agent
+            .proactive_cron
+            .clone()
+            .unwrap_or_else(|| default_proactive_cron.to_owned());
+
+        // Try user-supplied cron; fall back to default if invalid.
+        let _proactive_handle = match worker_manager
+            .fallible_worker(rara_workers::proactive::ProactiveAgentWorker)
+            .name("proactive-agent")
+            .cron(&proactive_cron)
+        {
+            Ok(b) => b.spawn(),
+            Err(e) => {
+                warn!(
+                    cron = %proactive_cron,
+                    error = %e,
+                    "invalid proactive cron expression, falling back to default"
+                );
+                worker_manager
+                    .fallible_worker(rara_workers::proactive::ProactiveAgentWorker)
+                    .name("proactive-agent")
+                    .cron(default_proactive_cron)
+                    .expect("hardcoded default cron must be valid")
+                    .spawn()
+            }
+        };
+
         // -- telegram bot (optional) -----------------------------------------
 
         let bot_handle = match Self::try_start_bot(

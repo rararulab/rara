@@ -44,6 +44,9 @@ pub struct AppState {
     pub settings_svc:  rara_domain_shared::settings::SettingsSvc,
     pub notify_client: rara_domain_shared::notify::client::NotifyClient,
 
+    // -- LLM provider --
+    pub llm_provider: rara_agents::model::OpenRouterLoaderRef,
+
     // -- infra --
     pub object_store: Operator,
     pub crawl_client: crawl4ai::Crawl4AiClient,
@@ -111,7 +114,7 @@ impl AppState {
             .to_owned();
         let chat_service = rara_domain_chat::service::ChatService::new(
             session_repo,
-            llm_provider,
+            llm_provider.clone(),
             tools,
             default_model,
             "You are a helpful AI assistant for job hunting. You help analyze job postings, optimize resumes, and prepare for interviews.".to_owned(),
@@ -129,6 +132,7 @@ impl AppState {
             chat_service,
             settings_svc,
             notify_client,
+            llm_provider,
             object_store,
             crawl_client,
             analyze_notify: Arc::new(RwLock::new(None)),

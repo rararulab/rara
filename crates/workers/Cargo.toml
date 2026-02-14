@@ -14,6 +14,7 @@ description = "Background worker implementations for job automation"
 [dependencies]
 async-trait.workspace = true
 axum = { workspace = true }
+chrono = { workspace = true }
 common-runtime = { workspace = true }
 common-worker = { workspace = true }
 crawl4ai = { workspace = true }

@@ -33,6 +33,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  Bot,
   ChevronRight,
   Download,
   ExternalLink,
@@ -43,8 +44,9 @@ import {
   SlidersHorizontal,
   Sparkles,
 } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
 
-type SettingKey = "ai" | "telegram";
+type SettingKey = "ai" | "agent" | "telegram";
 type ToastState = { kind: "success" | "error"; message: string } | null;
 type OpenRouterModel = {
   id: string;
@@ -75,6 +77,9 @@ export default function Settings() {
   const [models, setModels] = useState<OpenRouterModel[]>([]);
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramChatId, setTelegramChatId] = useState("");
+  const [agentSoul, setAgentSoul] = useState("");
+  const [agentProactiveEnabled, setAgentProactiveEnabled] = useState(false);
+  const [agentProactiveCron, setAgentProactiveCron] = useState("");
   const [selectedSetting, setSelectedSetting] = useState<SettingKey | null>(null);
   const [toast, setToast] = useState<ToastState>(null);
 
@@ -94,6 +99,9 @@ export default function Settings() {
         ? ""
         : String(settingsQuery.data.telegram.chat_id),
     );
+    setAgentSoul(settingsQuery.data.agent.soul ?? "");
+    setAgentProactiveEnabled(settingsQuery.data.agent.proactive_enabled);
+    setAgentProactiveCron(settingsQuery.data.agent.proactive_cron ?? "");
   }, [settingsQuery.data]);
 
   /** The effective model for a scenario — resolves "use default" to the actual default model. */
@@ -170,8 +178,26 @@ export default function Settings() {
       next.telegram = telegramPatch;
     }
 
+    const agentPatch: NonNullable<RuntimeSettingsPatch["agent"]> = {};
+    const trimmedSoul = agentSoul.trim();
+    const currentSoul = current.agent.soul ?? "";
+    if (trimmedSoul !== currentSoul) {
+      agentPatch.soul = trimmedSoul || null;
+    }
+    if (agentProactiveEnabled !== current.agent.proactive_enabled) {
+      agentPatch.proactive_enabled = agentProactiveEnabled;
+    }
+    const trimmedCron = agentProactiveCron.trim();
+    const currentCron = current.agent.proactive_cron ?? "";
+    if (trimmedCron !== currentCron) {
+      agentPatch.proactive_cron = trimmedCron || null;
+    }
+    if (Object.keys(agentPatch).length > 0) {
+      next.agent = agentPatch;
+    }
+
     return Object.keys(next).length > 0 ? next : null;
-  }, [aiApiKey, defaultModel, jobModel, chatModel, settingsQuery.data, telegramChatId, telegramToken]);
+  }, [aiApiKey, defaultModel, jobModel, chatModel, settingsQuery.data, telegramChatId, telegramToken, agentSoul, agentProactiveEnabled, agentProactiveCron]);
 
   const updateMutation = useMutation({
     mutationFn: (payload: RuntimeSettingsPatch) =>
@@ -301,7 +327,11 @@ export default function Settings() {
   const isDialogOpen = selectedSetting !== null;
 
   const dialogTitle =
-    selectedSetting === "ai" ? "AI (OpenRouter)" : "Telegram Bot";
+    selectedSetting === "ai"
+      ? "AI (OpenRouter)"
+      : selectedSetting === "agent"
+        ? "Agent Personality"
+        : "Telegram Bot";
 
   /** Render a model selector section (shared UI for default, job, chat) */
   const renderModelSelector = (
@@ -409,6 +439,29 @@ export default function Settings() {
           <div className="flex items-center gap-3">
             <Badge variant={current.ai.configured ? "default" : "secondary"}>
               {current.ai.configured ? "Configured" : "Not configured"}
+            </Badge>
+            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+          </div>
+        </button>
+
+        <button
+          type="button"
+          className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
+          onClick={() => openSetting("agent")}
+        >
+          <div className="flex items-center gap-3">
+            <Bot className="h-4 w-4 text-muted-foreground" />
+            <div className="space-y-1">
+              <p className="font-medium">Agent Personality</p>
+              <p className="text-xs text-muted-foreground">
+                Soul: {current.agent.soul ? (current.agent.soul.length > 40 ? `${current.agent.soul.slice(0, 40)}...` : current.agent.soul) : "Default"} · Proactive:{" "}
+                {current.agent.proactive_enabled ? "On" : "Off"}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <Badge variant={current.agent.proactive_enabled ? "default" : "secondary"}>
+              {current.agent.proactive_enabled ? "Active" : "Inactive"}
             </Badge>
             <ChevronRight className="h-4 w-4 text-muted-foreground" />
           </div>
@@ -543,6 +596,62 @@ export default function Settings() {
                   (id) => setChatModel(id),
                   true,
                 )}
+              </div>
+            </div>
+          )}
+
+          {selectedSetting === "agent" && (
+            <div className="space-y-6 px-6 py-5">
+              <div className="space-y-3 rounded-xl border bg-card p-4">
+                <Label htmlFor="agent-soul" className="text-base font-semibold">
+                  Soul Prompt
+                </Label>
+                <Textarea
+                  id="agent-soul"
+                  value={agentSoul}
+                  onChange={(e) => setAgentSoul(e.target.value)}
+                  placeholder="You are a proactive job search companion. You're encouraging, data-driven, and concise..."
+                  rows={6}
+                  className="resize-y"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Defines the agent's personality for proactive messages. Leave empty to use the built-in default.
+                </p>
+              </div>
+
+              <div className="space-y-3 rounded-xl border bg-card p-4">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="agent-proactive" className="text-base font-semibold">
+                    Proactive Messaging
+                  </Label>
+                  <Switch
+                    id="agent-proactive"
+                    checked={agentProactiveEnabled}
+                    onCheckedChange={setAgentProactiveEnabled}
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  When enabled, the agent periodically reviews recent chat activity and sends
+                  encouraging Telegram messages when it spots something worth mentioning.
+                </p>
+              </div>
+
+              <div className="space-y-3 rounded-xl border bg-card p-4">
+                <Label htmlFor="agent-cron" className="text-base font-semibold">
+                  Proactive Schedule (Cron)
+                </Label>
+                <Input
+                  id="agent-cron"
+                  value={agentProactiveCron}
+                  onChange={(e) => setAgentProactiveCron(e.target.value)}
+                  placeholder="0 9,18,21 * * *"
+                />
+                <p className="text-xs text-muted-foreground">
+                  5-field cron expression. Changes take effect after service restart.
+                  Common values: <code className="rounded bg-muted px-1">0 9 * * *</code> (daily 9 AM),{" "}
+                  <code className="rounded bg-muted px-1">0 9,18,21 * * *</code> (3x daily),{" "}
+                  <code className="rounded bg-muted px-1">0 */6 * * *</code> (every 6 hours).
+                </p>
               </div>
             </div>
           )}
