@@ -21,8 +21,8 @@
 //!    receives messages and dispatches them to command/message handlers.
 //! 2. **Notification consumer** — dequeues messages from a `pgmq` queue and
 //!    delivers them to Telegram chats.
-//! 3. **Settings sync** — polls the KV store and hot-updates bot credentials
-//!    without restarting.
+//! 3. **Settings watch** — watches a `tokio::sync::watch` channel and
+//!    hot-updates bot credentials without restarting.
 //!
 //! # Public API
 //!

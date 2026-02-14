@@ -18,6 +18,7 @@ use std::sync::{Arc, RwLock};
 
 use chrono::Utc;
 use snafu::{ResultExt, Whatever, whatever};
+use tokio::sync::watch;
 use yunara_store::KVStore;
 
 use crate::settings::model::{Settings, UpdateRequest};
@@ -26,10 +27,15 @@ use crate::settings::model::{Settings, UpdateRequest};
 pub const RUNTIME_SETTINGS_KV_KEY: &str = "runtime_settings.v1";
 
 /// Service that manages runtime settings with KV persistence + in-memory cache.
+///
+/// Subscribers can call [`subscribe`](SettingsSvc::subscribe) to receive a
+/// [`watch::Receiver<Settings>`] that is notified immediately whenever
+/// [`update`](SettingsSvc::update) persists new settings.
 #[derive(Clone)]
 pub struct SettingsSvc {
     kv:    KVStore,
     cache: Arc<RwLock<Settings>>,
+    tx:    Arc<watch::Sender<Settings>>,
 }
 
 impl SettingsSvc {
@@ -41,9 +47,11 @@ impl SettingsSvc {
             .whatever_context("failed to load runtime settings from kv")?
             .unwrap_or_default();
         stored.normalize();
+        let (tx, _rx) = watch::channel(stored.clone());
         Ok(Self {
             kv,
             cache: Arc::new(RwLock::new(stored)),
+            tx: Arc::new(tx),
         })
     }
 
@@ -73,6 +81,16 @@ impl SettingsSvc {
             }
         };
         *guard = next.clone();
+        drop(guard);
+
+        // Push to watch channel so subscribers see the update immediately.
+        let _ = self.tx.send(next.clone());
+
         Ok(next)
     }
+
+    /// Obtain a [`watch::Receiver`] that is notified on every settings update.
+    ///
+    /// The receiver's current value is always the latest committed snapshot.
+    pub fn subscribe(&self) -> watch::Receiver<Settings> { self.tx.subscribe() }
 }

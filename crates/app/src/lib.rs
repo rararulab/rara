@@ -229,9 +229,9 @@ impl AppConfig {
         // -- telegram bot (optional) -----------------------------------------
 
         let bot_handle = match Self::try_start_bot(
-            &db_store,
             &cancellation_token,
             &notify_client,
+            app_state.settings_svc.subscribe(),
             &self.main_service_http_base,
         )
         .await
@@ -294,9 +294,11 @@ impl AppConfig {
     /// Returns `Ok(Some(handle))` if the bot started successfully,
     /// `Ok(None)` if Telegram is not configured, or `Err` on failure.
     async fn try_start_bot(
-        db_store: &DBStore,
         cancel: &CancellationToken,
         notify_client: &NotifyClient,
+        settings_rx: tokio::sync::watch::Receiver<
+            rara_domain_shared::settings::model::Settings,
+        >,
         main_service_http_base: &str,
     ) -> Result<Option<rara_telegram_bot::BotHandle>, Whatever> {
         let telegram_config = std::env::var("TELEGRAM_BOT_TOKEN")
@@ -311,7 +313,7 @@ impl AppConfig {
 
         let bot_app = rara_telegram_bot::BotApp::from_shared(
             cancel.child_token(),
-            db_store.kv_store(),
+            settings_rx,
             Arc::new(notify_client.clone()),
             telegram_config,
             main_service_http_base.to_owned(),

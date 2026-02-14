@@ -20,7 +20,7 @@
 
 use std::sync::Arc;
 
-use rara_domain_shared::settings::{model::Settings, service::RUNTIME_SETTINGS_KV_KEY};
+use rara_domain_shared::settings::SettingsSvc;
 use smart_default::SmartDefault;
 use snafu::{ResultExt, Whatever, whatever};
 use tokio_util::sync::CancellationToken;
@@ -133,12 +133,11 @@ impl BotConfig {
             .whatever_context("Failed to initialize database for bot")?;
         let kv_store = db_store.kv_store();
 
-        let mut runtime_settings = kv_store
-            .get::<Settings>(RUNTIME_SETTINGS_KV_KEY)
+        let settings_svc = SettingsSvc::load(kv_store)
             .await
-            .whatever_context("Failed to load runtime settings for bot")?
-            .unwrap_or_default();
-        runtime_settings.normalize();
+            .whatever_context("Failed to load runtime settings for bot")?;
+        let runtime_settings = settings_svc.current();
+        let settings_rx = settings_svc.subscribe();
 
         let env_telegram = self.telegram.clone();
         let bot_token = match runtime_settings
@@ -204,7 +203,7 @@ impl BotConfig {
             state,
             outbound,
             notify_client,
-            kv_store,
+            settings_rx,
         })
     }
 }

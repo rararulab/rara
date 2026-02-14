@@ -21,8 +21,9 @@
 
 use std::sync::Arc;
 
-use rara_domain_shared::settings::{model::Settings, service::RUNTIME_SETTINGS_KV_KEY};
+use rara_domain_shared::settings::model::Settings;
 use snafu::{ResultExt, Whatever};
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
@@ -43,8 +44,8 @@ pub struct BotApp {
     pub(crate) outbound:      Arc<TelegramOutbound>,
     /// Shared notification queue client (`notification_telegram_dispatch`).
     pub(crate) notify_client: Arc<rara_domain_shared::notify::client::NotifyClient>,
-    /// KV store used for runtime settings sync.
-    pub(crate) kv_store:      yunara_store::KVStore,
+    /// Watch receiver for instant settings propagation.
+    pub(crate) settings_rx:   watch::Receiver<Settings>,
 }
 
 /// Handle returned by [`BotApp::spawn`] for non-blocking operation.
@@ -72,34 +73,27 @@ impl BotApp {
     /// pgmq visibility timeout — how long a dequeued message stays invisible
     /// to other consumers before being re-delivered if not acked.
     const NOTIFY_VT_SECONDS: i32 = 60;
-    /// How often the settings sync loop polls the KV store for credential
-    /// updates.
-    const SETTINGS_SYNC_INTERVAL_SECS: u64 = 10;
 
     /// Construct from shared infrastructure (used when running inside the app
     /// process).
     ///
-    /// The caller supplies a [`CancellationToken`], [`KVStore`], and
+    /// The caller supplies a [`CancellationToken`], a
+    /// [`watch::Receiver<Settings>`] for instant settings propagation, and a
     /// [`NotifyClient`] that are already initialized by the app crate.
     /// This avoids creating a second DB pool.
     ///
     /// Returns `Ok(Some(bot))` if Telegram credentials are available (from
-    /// `telegram_config` or the KV store). Returns `Ok(None)` if Telegram is
-    /// not configured. Returns `Err` on initialization failure.
+    /// `telegram_config` or the current settings snapshot). Returns `Ok(None)`
+    /// if Telegram is not configured. Returns `Err` on initialization failure.
     pub async fn from_shared(
         cancel: CancellationToken,
-        kv_store: yunara_store::KVStore,
+        settings_rx: watch::Receiver<Settings>,
         notify_client: Arc<rara_domain_shared::notify::client::NotifyClient>,
         telegram_config: Option<TelegramConfig>,
         main_service_http_base: String,
     ) -> Result<Option<Self>, Whatever> {
-        // Try to resolve credentials: env config first, then KV store.
-        let mut runtime_settings = kv_store
-            .get::<Settings>(RUNTIME_SETTINGS_KV_KEY)
-            .await
-            .whatever_context("Failed to load runtime settings for bot")?
-            .unwrap_or_default();
-        runtime_settings.normalize();
+        // Read the current settings snapshot from the watch channel.
+        let runtime_settings = settings_rx.borrow().clone();
 
         let bot_token = runtime_settings
             .telegram
@@ -111,7 +105,7 @@ impl BotApp {
             .or_else(|| telegram_config.as_ref().map(|cfg| cfg.chat_id));
 
         let (Some(bot_token), Some(chat_id)) = (bot_token, chat_id) else {
-            // Neither env var nor KV store has Telegram credentials — skip.
+            // Neither env var nor watch channel has Telegram credentials — skip.
             return Ok(None);
         };
 
@@ -145,7 +139,7 @@ impl BotApp {
             state,
             outbound,
             notify_client,
-            kv_store,
+            settings_rx,
         }))
     }
 
@@ -168,8 +162,8 @@ impl BotApp {
             self.state.cancel.clone(),
         ));
 
-        let settings_sync_handle = tokio::spawn(Self::settings_sync_loop(
-            self.kv_store.clone(),
+        let settings_sync_handle = tokio::spawn(Self::settings_watch_loop(
+            self.settings_rx,
             self.state.clone(),
             self.state.cancel.clone(),
         ));
@@ -260,43 +254,38 @@ impl BotApp {
         }
     }
 
-    /// Poll the KV store for updated Telegram credentials and apply them
-    /// to the running bot without restart.
+    /// Watch for settings changes via the [`watch::Receiver`] and apply
+    /// updated Telegram credentials to the running bot without restart.
     ///
     /// This enables operators to change `bot_token` or `chat_id` via the
-    /// web settings UI. Changes take effect within
-    /// [`SETTINGS_SYNC_INTERVAL_SECS`](Self::SETTINGS_SYNC_INTERVAL_SECS).
-    async fn settings_sync_loop(
-        kv_store: yunara_store::KVStore,
+    /// web settings UI. Changes propagate instantly through the watch channel
+    /// rather than being polled on a timer.
+    async fn settings_watch_loop(
+        mut settings_rx: watch::Receiver<Settings>,
         state: Arc<BotState>,
         cancellation_token: CancellationToken,
     ) {
         loop {
             tokio::select! {
                 () = cancellation_token.cancelled() => break,
-                () = tokio::time::sleep(std::time::Duration::from_secs(Self::SETTINGS_SYNC_INTERVAL_SECS)) => {}
-            }
+                result = settings_rx.changed() => {
+                    if result.is_err() {
+                        // Sender dropped — service is shutting down.
+                        break;
+                    }
+                    let settings = settings_rx.borrow_and_update().clone();
 
-            let loaded = kv_store.get::<Settings>(RUNTIME_SETTINGS_KV_KEY).await;
-            let mut settings = match loaded {
-                Ok(Some(settings)) => settings,
-                Ok(None) => continue,
-                Err(e) => {
-                    warn!(error = %e, "failed to load runtime settings in bot sync loop");
-                    continue;
+                    let (Some(bot_token), Some(chat_id)) = (
+                        settings.telegram.bot_token.clone(),
+                        settings.telegram.chat_id,
+                    ) else {
+                        continue;
+                    };
+
+                    if state.update_config(bot_token, chat_id) {
+                        info!("telegram runtime settings updated via watch channel");
+                    }
                 }
-            };
-            settings.normalize();
-
-            let (Some(bot_token), Some(chat_id)) = (
-                settings.telegram.bot_token.clone(),
-                settings.telegram.chat_id,
-            ) else {
-                continue;
-            };
-
-            if state.update_config(bot_token, chat_id) {
-                info!("telegram runtime settings updated from DB");
             }
         }
     }
@@ -306,7 +295,7 @@ impl BotApp {
     /// Spawns three tokio tasks:
     /// 1. `getUpdates` polling loop ([`bot::start_polling`](crate::bot::start_polling))
     /// 2. Notification consumer loop (pgmq -> Telegram delivery)
-    /// 3. Settings sync loop (KV store -> hot credential update)
+    /// 3. Settings watch loop (watch channel -> hot credential update)
     ///
     /// Installs a Ctrl+C handler that cancels the shared
     /// [`CancellationToken`], then waits for all tasks to join.
