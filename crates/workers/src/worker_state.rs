@@ -106,7 +106,12 @@ impl AppState {
         );
         let llm_provider: rara_agents::model::OpenRouterLoaderRef =
             Arc::new(SettingsOpenRouterLoader::new(settings_svc.clone()));
-        let tools = Arc::new(rara_agents::tool_registry::ToolRegistry::default());
+        let mut tool_registry = rara_agents::tool_registry::ToolRegistry::default();
+        tool_registry
+            .register_builtin(Arc::new(crate::tools::SaveJobUrlTool::new(job_service.clone())));
+        tool_registry
+            .register_builtin(Arc::new(crate::tools::ListSavedJobsTool::new(job_service.clone())));
+        let tools = Arc::new(tool_registry);
         let chat_service = rara_domain_chat::service::ChatService::new(
             session_repo,
             llm_provider.clone(),
