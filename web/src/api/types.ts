@@ -263,6 +263,13 @@ export interface RuntimeSettingsPatch {
   };
 }
 
+// Chat Models
+export interface ChatModel {
+  id: string;
+  name: string;
+  context_length: number;
+}
+
 // Chat Sessions
 export interface ChatSession {
   key: string;
