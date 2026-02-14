@@ -78,6 +78,7 @@ export default function Settings() {
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramChatId, setTelegramChatId] = useState("");
   const [agentSoul, setAgentSoul] = useState("");
+  const [agentChatSystemPrompt, setAgentChatSystemPrompt] = useState("");
   const [agentProactiveEnabled, setAgentProactiveEnabled] = useState(false);
   const [agentProactiveCron, setAgentProactiveCron] = useState("");
   const [selectedSetting, setSelectedSetting] = useState<SettingKey | null>(null);
@@ -100,6 +101,7 @@ export default function Settings() {
         : String(settingsQuery.data.telegram.chat_id),
     );
     setAgentSoul(settingsQuery.data.agent.soul ?? "");
+    setAgentChatSystemPrompt(settingsQuery.data.agent.chat_system_prompt ?? "");
     setAgentProactiveEnabled(settingsQuery.data.agent.proactive_enabled);
     setAgentProactiveCron(settingsQuery.data.agent.proactive_cron ?? "");
   }, [settingsQuery.data]);
@@ -184,6 +186,11 @@ export default function Settings() {
     if (trimmedSoul !== currentSoul) {
       agentPatch.soul = trimmedSoul || null;
     }
+    const trimmedChatSystemPrompt = agentChatSystemPrompt.trim();
+    const currentChatSystemPrompt = current.agent.chat_system_prompt ?? "";
+    if (trimmedChatSystemPrompt !== currentChatSystemPrompt) {
+      agentPatch.chat_system_prompt = trimmedChatSystemPrompt || null;
+    }
     if (agentProactiveEnabled !== current.agent.proactive_enabled) {
       agentPatch.proactive_enabled = agentProactiveEnabled;
     }
@@ -197,7 +204,7 @@ export default function Settings() {
     }
 
     return Object.keys(next).length > 0 ? next : null;
-  }, [aiApiKey, defaultModel, jobModel, chatModel, settingsQuery.data, telegramChatId, telegramToken, agentSoul, agentProactiveEnabled, agentProactiveCron]);
+  }, [aiApiKey, defaultModel, jobModel, chatModel, settingsQuery.data, telegramChatId, telegramToken, agentSoul, agentChatSystemPrompt, agentProactiveEnabled, agentProactiveCron]);
 
   const updateMutation = useMutation({
     mutationFn: (payload: RuntimeSettingsPatch) =>
@@ -602,6 +609,23 @@ export default function Settings() {
 
           {selectedSetting === "agent" && (
             <div className="space-y-6 px-6 py-5">
+              <div className="space-y-3 rounded-xl border bg-card p-4">
+                <Label htmlFor="agent-chat-system-prompt" className="text-base font-semibold">
+                  Chat System Prompt
+                </Label>
+                <Textarea
+                  id="agent-chat-system-prompt"
+                  value={agentChatSystemPrompt}
+                  onChange={(e) => setAgentChatSystemPrompt(e.target.value)}
+                  placeholder="You are a helpful career assistant..."
+                  rows={6}
+                  className="resize-y"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Default system prompt for new chat sessions. Leave empty to use the built-in default.
+                </p>
+              </div>
+
               <div className="space-y-3 rounded-xl border bg-card p-4">
                 <Label htmlFor="agent-soul" className="text-base font-semibold">
                   Soul Prompt
