@@ -18,9 +18,13 @@ common-runtime = { workspace = true }
 common-worker = { workspace = true }
 crawl4ai = { workspace = true }
 jiff.workspace = true
+openrouter-rs = { workspace = true }
 opendal.workspace = true
+rara-agents = { workspace = true }
 rara-ai = { workspace = true }
 rara-domain-analytics = { workspace = true }
+rara-domain-chat = { workspace = true }
+rara-sessions = { workspace = true }
 rara-domain-application = { workspace = true }
 rara-domain-interview = { workspace = true }
 rara-domain-job = { workspace = true }

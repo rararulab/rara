@@ -16,9 +16,12 @@
 
 use std::sync::{Arc, RwLock};
 
+use async_trait::async_trait;
 use common_worker::NotifyHandle;
 use opendal::Operator;
+use openrouter_rs::client::OpenRouterClient;
 use snafu::{ResultExt, Whatever};
+use tokio::sync::OnceCell;
 use tracing::{info, warn};
 use yunara_store::db::DBStore;
 
@@ -35,6 +38,7 @@ pub struct AppState {
     pub scheduler_service:   rara_domain_scheduler::service::SchedulerService,
     pub analytics_service:   rara_domain_analytics::service::AnalyticsService,
     pub job_service:         rara_domain_job::service::JobService,
+    pub chat_service:        rara_domain_chat::service::ChatService,
 
     // -- shared --
     pub settings_svc:  rara_domain_shared::settings::SettingsSvc,
@@ -81,7 +85,7 @@ impl AppState {
         let interview_service = rara_domain_interview::wire_interview_service(pool.clone());
         let scheduler_service = rara_domain_scheduler::wire_scheduler_service(pool.clone());
         let analytics_service = rara_domain_analytics::wire_analytics_service(pool.clone());
-        let job_service = rara_domain_job::wire_job_service(pool, ai_service.clone())
+        let job_service = rara_domain_job::wire_job_service(pool.clone(), ai_service.clone())
             .whatever_context("Failed to initialize job service")?;
         info!("Job service initialized");
 
@@ -89,6 +93,33 @@ impl AppState {
 
         let crawl_client = crawl4ai::Crawl4AiClient::new(crawl4ai_url);
         info!("Crawl4AI client configured");
+
+        // -- chat service ----------------------------------------------------
+
+        let sessions_dir = std::env::var("RARA_SESSIONS_DIR")
+            .unwrap_or_else(|_| "data/sessions".to_owned());
+        let session_repo = Arc::new(
+            rara_sessions::pg_repository::PgSessionRepository::new(pool, &sessions_dir)
+                .await
+                .whatever_context("Failed to initialize session repository")?,
+        );
+        let llm_provider: rara_agents::model::OpenRouterLoaderRef =
+            Arc::new(SettingsOpenRouterLoader::new(settings_svc.clone()));
+        let tools = Arc::new(rara_agents::tool_registry::ToolRegistry::default());
+        let default_model = settings_svc
+            .current()
+            .ai
+            .model
+            .clone()
+            .unwrap_or_else(|| "openai/gpt-4o-mini".to_owned());
+        let chat_service = rara_domain_chat::service::ChatService::new(
+            session_repo,
+            llm_provider,
+            tools,
+            default_model,
+            "You are a helpful AI assistant for job hunting. You help analyze job postings, optimize resumes, and prepare for interviews.".to_owned(),
+        );
+        info!("Chat service initialized");
 
         Ok(Self {
             ai_service,
@@ -98,6 +129,7 @@ impl AppState {
             scheduler_service,
             analytics_service,
             job_service,
+            chat_service,
             settings_svc,
             notify_client,
             object_store,
@@ -140,5 +172,54 @@ impl AppState {
             .merge(rara_domain_shared::notify::routes::routes(
                 self.notify_client.clone(),
             ))
+            .merge(rara_domain_chat::router::routes(
+                self.chat_service.clone(),
+            ))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SettingsOpenRouterLoader
+// ---------------------------------------------------------------------------
+
+/// [`OpenRouterLoader`](rara_agents::model::OpenRouterLoader) implementation
+/// that reads the API key from [`SettingsSvc`](rara_domain_shared::settings::SettingsSvc)
+/// runtime settings rather than from environment variables.
+///
+/// The client is lazily initialized on the first `acquire_client` call and
+/// cached for subsequent calls via [`OnceCell`].
+struct SettingsOpenRouterLoader {
+    settings: rara_domain_shared::settings::SettingsSvc,
+    client:   OnceCell<OpenRouterClient>,
+}
+
+impl SettingsOpenRouterLoader {
+    fn new(settings: rara_domain_shared::settings::SettingsSvc) -> Self {
+        Self {
+            settings,
+            client: OnceCell::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl rara_agents::model::OpenRouterLoader for SettingsOpenRouterLoader {
+    async fn acquire_client(&self) -> rara_agents::err::Result<OpenRouterClient> {
+        let client_ref = self
+            .client
+            .get_or_try_init(|| async {
+                let api_key = self
+                    .settings
+                    .current()
+                    .ai
+                    .openrouter_api_key
+                    .clone()
+                    .ok_or(rara_agents::err::OpenRouterNotConfiguredSnafu.build())?;
+
+                Self::build_client(api_key)
+            })
+            .await?;
+
+        Ok(client_ref.clone())
     }
 }
