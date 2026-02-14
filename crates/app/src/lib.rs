@@ -30,7 +30,7 @@ use serde::Deserialize;
 use snafu::{ResultExt, Whatever};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use yunara_store::{config::DatabaseConfig, db::DBStore};
 
 // ---------------------------------------------------------------------------
@@ -136,7 +136,7 @@ impl AppConfig {
         let app_state = rara_workers::worker_state::AppState::init(
             &db_store,
             object_store,
-            notify_client,
+            notify_client.clone(),
             &self.crawl4ai.url,
         )
         .await
@@ -226,6 +226,30 @@ impl AppConfig {
             .interval(std::time::Duration::from_secs(gc_interval_secs))
             .spawn();
 
+        // -- telegram bot (optional) -----------------------------------------
+
+        let bot_handle = match Self::try_start_bot(
+            &db_store,
+            &cancellation_token,
+            &notify_client,
+            &self.main_service_http_base,
+        )
+        .await
+        {
+            Ok(Some(handle)) => {
+                info!("Telegram bot started");
+                Some(handle)
+            }
+            Ok(None) => {
+                info!("Telegram bot not configured, skipping");
+                None
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to start telegram bot, skipping");
+                None
+            }
+        };
+
         info!("Application started successfully");
 
         // -- shutdown loop ---------------------------------------------------
@@ -250,6 +274,11 @@ impl AppConfig {
                 error!("Worker manager shutdown timed out; continuing shutdown");
             }
 
+            if let Some(bot) = bot_handle {
+                info!("Shutting down telegram bot");
+                bot.shutdown().await;
+            }
+
             info!("Shutting down servers");
             grpc_handle.shutdown();
             http_handle.shutdown();
@@ -258,6 +287,39 @@ impl AppConfig {
         });
 
         Ok(app_handle)
+    }
+
+    /// Try to start the Telegram bot using shared infrastructure.
+    ///
+    /// Returns `Ok(Some(handle))` if the bot started successfully,
+    /// `Ok(None)` if Telegram is not configured, or `Err` on failure.
+    async fn try_start_bot(
+        db_store: &DBStore,
+        cancel: &CancellationToken,
+        notify_client: &NotifyClient,
+        main_service_http_base: &str,
+    ) -> Result<Option<rara_telegram_bot::BotHandle>, Whatever> {
+        let telegram_config = std::env::var("TELEGRAM_BOT_TOKEN")
+            .ok()
+            .and_then(|token| {
+                let chat_id: i64 = std::env::var("TELEGRAM_CHAT_ID").ok()?.parse().ok()?;
+                Some(rara_telegram_bot::TelegramConfig {
+                    bot_token: token,
+                    chat_id,
+                })
+            });
+
+        let bot_app = rara_telegram_bot::BotApp::from_shared(
+            cancel.child_token(),
+            db_store.kv_store(),
+            Arc::new(notify_client.clone()),
+            telegram_config,
+            main_service_http_base.to_owned(),
+        )
+        .await
+        .whatever_context("Failed to initialize telegram bot")?;
+
+        Ok(bot_app.map(rara_telegram_bot::BotApp::spawn))
     }
 
     async fn init_infra(&self) -> Result<(Operator, DBStore, NotifyClient), Whatever> {

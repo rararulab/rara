@@ -26,9 +26,12 @@
 //!
 //! # Public API
 //!
-//! The only public types are [`BotApp`] (the process entry point) and
-//! [`BotConfig`] / [`TelegramConfig`] (configuration). All internal modules
-//! are `pub(crate)`.
+//! | Type                | Purpose                                               |
+//! |---------------------|-------------------------------------------------------|
+//! | [`BotApp`]          | Process entry point (standalone or embedded)           |
+//! | [`BotHandle`]       | Non-blocking handle returned by [`BotApp::spawn`]     |
+//! | [`TelegramConfig`]  | Telegram credentials (bot token + chat id)            |
+//! | [`BotConfig`]       | Standalone config for [`BotConfig::open`]              |
 //!
 //! # Module Layout
 //!
@@ -54,5 +57,5 @@ mod markdown;
 mod outbound;
 mod state;
 
-pub use app::BotApp;
+pub use app::{BotApp, BotHandle};
 pub use config::{BotConfig, TelegramConfig};

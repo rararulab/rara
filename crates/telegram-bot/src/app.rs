@@ -14,9 +14,10 @@
 
 //! Process lifecycle for the Telegram bot.
 //!
-//! [`BotApp::run`] is the main entry point. It spawns three concurrent tasks
-//! (polling, notification consumer, settings sync) and blocks until Ctrl+C
-//! triggers a graceful shutdown.
+//! [`BotApp::run`] is the standalone entry point that installs a Ctrl+C
+//! handler and blocks until shutdown. [`BotApp::spawn`] is the non-blocking
+//! variant used when the bot runs inside the app process — it returns a
+//! [`BotHandle`] that the parent can use to await graceful shutdown.
 
 use std::sync::Arc;
 
@@ -26,14 +27,17 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::{
+    config::TelegramConfig,
+    http_client::MainServiceHttpClient,
     outbound::TelegramOutbound,
     state::BotState,
 };
 
 /// Top-level application handle for the bot process.
 ///
-/// Created by [`BotConfig::open`](crate::BotConfig::open). Call [`run`](BotApp::run)
-/// to start the polling loop, notification consumer, and settings sync.
+/// Created by [`BotConfig::open`](crate::BotConfig::open) (standalone) or
+/// [`BotApp::from_shared`] (embedded). Call [`run`](BotApp::run) to block
+/// until shutdown, or [`spawn`](BotApp::spawn) for non-blocking operation.
 pub struct BotApp {
     pub(crate) state:         Arc<BotState>,
     pub(crate) outbound:      Arc<TelegramOutbound>,
@@ -41,6 +45,23 @@ pub struct BotApp {
     pub(crate) notify_client: Arc<rara_domain_shared::notify::client::NotifyClient>,
     /// KV store used for runtime settings sync.
     pub(crate) kv_store:      yunara_store::KVStore,
+}
+
+/// Handle returned by [`BotApp::spawn`] for non-blocking operation.
+///
+/// The parent process holds this handle and calls [`shutdown`](BotHandle::shutdown)
+/// during its own teardown sequence.
+pub struct BotHandle {
+    handles: Vec<tokio::task::JoinHandle<()>>,
+}
+
+impl BotHandle {
+    /// Wait for all bot tasks to finish.
+    pub async fn shutdown(self) {
+        for h in self.handles {
+            let _ = h.await;
+        }
+    }
 }
 
 impl BotApp {
@@ -54,6 +75,109 @@ impl BotApp {
     /// How often the settings sync loop polls the KV store for credential
     /// updates.
     const SETTINGS_SYNC_INTERVAL_SECS: u64 = 10;
+
+    /// Construct from shared infrastructure (used when running inside the app
+    /// process).
+    ///
+    /// The caller supplies a [`CancellationToken`], [`KVStore`], and
+    /// [`NotifyClient`] that are already initialized by the app crate.
+    /// This avoids creating a second DB pool.
+    ///
+    /// Returns `Ok(Some(bot))` if Telegram credentials are available (from
+    /// `telegram_config` or the KV store). Returns `Ok(None)` if Telegram is
+    /// not configured. Returns `Err` on initialization failure.
+    pub async fn from_shared(
+        cancel: CancellationToken,
+        kv_store: yunara_store::KVStore,
+        notify_client: Arc<rara_domain_shared::notify::client::NotifyClient>,
+        telegram_config: Option<TelegramConfig>,
+        main_service_http_base: String,
+    ) -> Result<Option<Self>, Whatever> {
+        // Try to resolve credentials: env config first, then KV store.
+        let mut runtime_settings = kv_store
+            .get::<Settings>(RUNTIME_SETTINGS_KV_KEY)
+            .await
+            .whatever_context("Failed to load runtime settings for bot")?
+            .unwrap_or_default();
+        runtime_settings.normalize();
+
+        let bot_token = runtime_settings
+            .telegram
+            .bot_token
+            .or_else(|| telegram_config.as_ref().map(|cfg| cfg.bot_token.clone()));
+        let chat_id = runtime_settings
+            .telegram
+            .chat_id
+            .or_else(|| telegram_config.as_ref().map(|cfg| cfg.chat_id));
+
+        let (Some(bot_token), Some(chat_id)) = (bot_token, chat_id) else {
+            // Neither env var nor KV store has Telegram credentials — skip.
+            return Ok(None);
+        };
+
+        // Build reqwest client with extended timeout for long polling.
+        let http_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(45))
+            .build()
+            .whatever_context("failed to build HTTP client")?;
+
+        let bot = teloxide::Bot::with_client(&bot_token, http_client);
+
+        // Verify token and get bot info.
+        let bot_username = crate::bot::initialize(&bot)
+            .await
+            .whatever_context("failed to initialize telegram bot")?;
+
+        let main_http = Arc::new(MainServiceHttpClient::new(main_service_http_base));
+
+        let state = Arc::new(BotState::new(
+            bot.clone(),
+            bot_username,
+            bot_token,
+            chat_id,
+            main_http,
+            cancel,
+        ));
+
+        let outbound = Arc::new(TelegramOutbound::new(bot, state.config.clone()));
+
+        Ok(Some(Self {
+            state,
+            outbound,
+            notify_client,
+            kv_store,
+        }))
+    }
+
+    /// Spawn all concurrent loops and return a [`BotHandle`] immediately.
+    ///
+    /// Unlike [`run`](BotApp::run), this method does **not** install a
+    /// Ctrl+C handler and does **not** block. The parent process is
+    /// responsible for cancelling the token and calling
+    /// [`BotHandle::shutdown`].
+    #[must_use]
+    pub fn spawn(self) -> BotHandle {
+        let polling_state = self.state.clone();
+        let polling_handle = tokio::spawn(async move {
+            Box::pin(crate::bot::start_polling(polling_state)).await;
+        });
+
+        let notify_consumer_handle = tokio::spawn(Self::notify_consumer_loop(
+            self.notify_client.clone(),
+            self.outbound.clone(),
+            self.state.cancel.clone(),
+        ));
+
+        let settings_sync_handle = tokio::spawn(Self::settings_sync_loop(
+            self.kv_store.clone(),
+            self.state.clone(),
+            self.state.cancel.clone(),
+        ));
+
+        BotHandle {
+            handles: vec![polling_handle, notify_consumer_handle, settings_sync_handle],
+        }
+    }
 
     /// Format a queued notification into a Markdown message for Telegram.
     ///
@@ -177,7 +301,7 @@ impl BotApp {
         }
     }
 
-    /// Start all concurrent loops and block until shutdown.
+    /// Start all concurrent loops and block until shutdown (standalone mode).
     ///
     /// Spawns three tokio tasks:
     /// 1. `getUpdates` polling loop ([`bot::start_polling`](crate::bot::start_polling))
@@ -187,26 +311,12 @@ impl BotApp {
     /// Installs a Ctrl+C handler that cancels the shared
     /// [`CancellationToken`], then waits for all tasks to join.
     pub async fn run(self) -> Result<(), Whatever> {
-        // Start manual getUpdates polling loop.
-        let polling_state = self.state.clone();
-        let polling_handle = tokio::spawn(async move {
-            Box::pin(crate::bot::start_polling(polling_state)).await;
-        });
-
-        // Start notify queue consumer (pgmq) for main-service -> bot delivery.
-        let notify_consumer_handle = tokio::spawn(Self::notify_consumer_loop(
-            self.notify_client.clone(),
-            self.outbound.clone(),
-            self.state.cancel.clone(),
-        ));
-        let settings_sync_handle = tokio::spawn(Self::settings_sync_loop(
-            self.kv_store.clone(),
-            self.state.clone(),
-            self.state.cancel.clone(),
-        ));
-
-        // Keep process alive until Ctrl+C.
         let cancel = self.state.cancel.clone();
+
+        // Spawn the three loops via `spawn()`.
+        let bot_handle = self.spawn();
+
+        // Install Ctrl+C handler for standalone mode.
         tokio::spawn(async move {
             tokio::signal::ctrl_c()
                 .await
@@ -214,19 +324,9 @@ impl BotApp {
             cancel.cancel();
         });
 
-        self.state.cancel.cancelled().await;
-        info!("telegram-bot shutdown requested");
-
-        // Graceful teardown: wait for all tasks.
-        polling_handle
-            .await
-            .whatever_context("failed to join polling task")?;
-        notify_consumer_handle
-            .await
-            .whatever_context("failed to join notify consumer task")?;
-        settings_sync_handle
-            .await
-            .whatever_context("failed to join settings sync task")?;
+        // Wait for cancellation then join all tasks.
+        bot_handle.shutdown().await;
+        info!("telegram-bot shutdown complete");
 
         Ok(())
     }

@@ -25,21 +25,10 @@ name = "job"
 path = "src/main.rs"
 
 [dependencies]
-chrono = { workspace = true }
-clap = { version = "4.4.16", features = ["derive"] }
-common-runtime = { workspace = true }
 common-telemetry.workspace = true
-ctrlc = "3.4.2"
-human-panic = "2.0.0"
 rara-app = { workspace = true }
-rara-telegram-bot = { workspace = true }
-shadow-rs = "1.2.1"
 snafu.workspace = true
 tokio.workspace = true
-yunara-store = { workspace = true }
-
-[build-dependencies]
-shadow-rs = "1.2.1"
 
 [lints]
 workspace = true
