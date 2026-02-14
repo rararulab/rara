@@ -21,6 +21,8 @@ use serde::{Deserialize, Serialize};
 pub struct Settings {
     pub ai:         AISettings,
     pub telegram:   TelegramSettings,
+    #[serde(default)]
+    pub agent:      AgentSettings,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -64,11 +66,25 @@ pub struct TelegramSettings {
     pub chat_id:   Option<i64>,
 }
 
+/// Agent personality and proactive messaging settings.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct AgentSettings {
+    /// The agent's personality/soul prompt. `None` uses the built-in default.
+    pub soul:              Option<String>,
+    /// Whether proactive messaging is enabled.
+    pub proactive_enabled: bool,
+    /// Cron expression for proactive check schedule (5-field format).
+    /// Changes take effect after service restart.
+    pub proactive_cron:    Option<String>,
+}
+
 /// Partial update payload for runtime settings writes.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UpdateRequest {
     pub ai:       Option<AiRuntimeSettingsPatch>,
     pub telegram: Option<TelegramRuntimeSettingsPatch>,
+    pub agent:    Option<AgentRuntimeSettingsPatch>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -87,6 +103,13 @@ pub struct AiRuntimeSettingsPatch {
 pub struct TelegramRuntimeSettingsPatch {
     pub bot_token: Option<String>,
     pub chat_id:   Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentRuntimeSettingsPatch {
+    pub soul:              Option<String>,
+    pub proactive_enabled: Option<bool>,
+    pub proactive_cron:    Option<String>,
 }
 
 impl Settings {
@@ -115,6 +138,18 @@ impl Settings {
                 self.telegram.chat_id = Some(chat_id);
             }
         }
+
+        if let Some(agent) = patch.agent {
+            if let Some(soul) = agent.soul {
+                self.agent.soul = normalize_text(Some(soul));
+            }
+            if let Some(enabled) = agent.proactive_enabled {
+                self.agent.proactive_enabled = enabled;
+            }
+            if let Some(cron) = agent.proactive_cron {
+                self.agent.proactive_cron = normalize_text(Some(cron));
+            }
+        }
     }
 
     /// Sanitize values by trimming and dropping empty strings.
@@ -124,6 +159,8 @@ impl Settings {
         self.ai.job_model = normalize_text(self.ai.job_model.take());
         self.ai.chat_model = normalize_text(self.ai.chat_model.take());
         self.telegram.bot_token = normalize_secret(self.telegram.bot_token.take());
+        self.agent.soul = normalize_text(self.agent.soul.take());
+        self.agent.proactive_cron = normalize_text(self.agent.proactive_cron.take());
     }
 }
 
@@ -201,6 +238,7 @@ mod tests {
                 ..Default::default()
             }),
             telegram: None,
+            agent:    None,
         });
         assert_eq!(settings.ai.job_model, None);
     }
@@ -220,5 +258,84 @@ mod tests {
         assert_eq!(settings.ai.default_model, None);
         assert_eq!(settings.ai.job_model, Some("openai/gpt-4o".to_owned()));
         assert_eq!(settings.ai.chat_model, None);
+    }
+
+    #[test]
+    fn agent_settings_default_values() {
+        let settings = Settings::default();
+        assert_eq!(settings.agent.soul, None);
+        assert!(!settings.agent.proactive_enabled);
+        assert_eq!(settings.agent.proactive_cron, None);
+    }
+
+    #[test]
+    fn apply_patch_agent_settings() {
+        let mut settings = Settings::default();
+        settings.apply_patch(UpdateRequest {
+            ai:       None,
+            telegram: None,
+            agent:    Some(AgentRuntimeSettingsPatch {
+                soul:              Some("You are a cheerful assistant.".to_owned()),
+                proactive_enabled: Some(true),
+                proactive_cron:    Some("0 9 * * *".to_owned()),
+            }),
+        });
+        assert_eq!(
+            settings.agent.soul,
+            Some("You are a cheerful assistant.".to_owned())
+        );
+        assert!(settings.agent.proactive_enabled);
+        assert_eq!(settings.agent.proactive_cron, Some("0 9 * * *".to_owned()));
+    }
+
+    #[test]
+    fn apply_patch_agent_partial() {
+        let mut settings = Settings {
+            agent: AgentSettings {
+                soul:              Some("existing soul".to_owned()),
+                proactive_enabled: true,
+                proactive_cron:    Some("0 9 * * *".to_owned()),
+            },
+            ..Default::default()
+        };
+        // Only update proactive_enabled, leave soul and cron unchanged
+        settings.apply_patch(UpdateRequest {
+            ai:       None,
+            telegram: None,
+            agent:    Some(AgentRuntimeSettingsPatch {
+                soul:              None,
+                proactive_enabled: Some(false),
+                proactive_cron:    None,
+            }),
+        });
+        assert_eq!(
+            settings.agent.soul,
+            Some("existing soul".to_owned())
+        );
+        assert!(!settings.agent.proactive_enabled);
+        assert_eq!(settings.agent.proactive_cron, Some("0 9 * * *".to_owned()));
+    }
+
+    #[test]
+    fn normalize_agent_settings() {
+        let mut settings = Settings {
+            agent: AgentSettings {
+                soul:              Some("  ".to_owned()),
+                proactive_enabled: true,
+                proactive_cron:    Some("  0 9 * * *  ".to_owned()),
+            },
+            ..Default::default()
+        };
+        settings.normalize();
+        assert_eq!(settings.agent.soul, None);
+        assert_eq!(settings.agent.proactive_cron, Some("0 9 * * *".to_owned()));
+    }
+
+    #[test]
+    fn agent_settings_serde_default() {
+        // Deserialization of old JSON without agent field should give defaults
+        let json = r#"{"ai":{},"telegram":{}}"#;
+        let settings: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.agent, AgentSettings::default());
     }
 }

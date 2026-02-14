@@ -247,6 +247,11 @@ export interface RuntimeSettingsView {
     chat_id: number | null;
     token_hint: string | null;
   };
+  agent: {
+    soul: string | null;
+    proactive_enabled: boolean;
+    proactive_cron: string | null;
+  };
   updated_at: string | null;
 }
 
@@ -260,6 +265,11 @@ export interface RuntimeSettingsPatch {
   telegram?: {
     bot_token?: string;
     chat_id?: number;
+  };
+  agent?: {
+    soul?: string | null;
+    proactive_enabled?: boolean;
+    proactive_cron?: string | null;
   };
 }
 
