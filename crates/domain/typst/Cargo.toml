@@ -1,0 +1,38 @@
+[package]
+name = "rara-domain-typst"
+version = "0.0.1"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Typst compilation service — project management, file editing, and PDF rendering"
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+chrono.workspace = true
+jiff.workspace = true
+opendal.workspace = true
+rara-domain-shared = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+snafu.workspace = true
+sqlx = { workspace = true }
+tracing.workspace = true
+typst = "0.14"
+typst-as-lib = "0.15"
+typst-pdf = "0.14"
+uuid.workspace = true
+
+[dev-dependencies]
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true, features = ["postgres"] }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

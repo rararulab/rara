@@ -58,6 +58,7 @@ members = [
     "crates/agents",
     "crates/sessions",
     "crates/domain/chat",
+    "crates/domain/typst",
 ]
 
 [workspace.dependencies]
@@ -141,6 +142,7 @@ rara-domain-job = { path = "crates/domain/job" }
 rara-domain-resume = { path = "crates/domain/resume" }
 rara-domain-scheduler = { path = "crates/domain/scheduler" }
 rara-domain-shared = { path = "crates/domain/shared" }
+rara-domain-typst = { path = "crates/domain/typst" }
 rara-error = { path = "crates/common/error" }
 rara-paths = { path = "crates/paths" }
 rara-model = { path = "crates/rara-model" }
