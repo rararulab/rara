@@ -15,10 +15,11 @@
  */
 
 import { useEffect, useSyncExternalStore } from 'react';
-import { NavLink, Outlet } from 'react-router';
+import { NavLink, Outlet, useLocation } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import {
   LayoutDashboard,
+  Bot,
   Briefcase,
   FileText,
   MessageSquare,
@@ -50,6 +51,7 @@ const THEME_META = {
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/chat', icon: Bot, label: 'Chat' },
   { to: '/applications', icon: Briefcase, label: 'Applications' },
   { to: '/resumes', icon: FileText, label: 'Resumes' },
   { to: '/interviews', icon: MessageSquare, label: 'Interviews' },
@@ -130,9 +132,14 @@ function useIsWide(): boolean {
   );
 }
 
+/** Routes that need zero padding in the main content area. */
+const FULL_BLEED_ROUTES = new Set(['/chat']);
+
 export default function DashboardLayout() {
   const [collapsed, setCollapsed] = useLocalStorage('sidebar-collapsed', false);
   const isWide = useIsWide();
+  const location = useLocation();
+  const isFullBleed = FULL_BLEED_ROUTES.has(location.pathname);
 
   useEffect(() => {
     setCollapsed(!isWide);
@@ -221,8 +228,8 @@ export default function DashboardLayout() {
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 overflow-auto">
-        <div className="p-8">
+      <main className={cn('flex-1', isFullBleed ? 'overflow-hidden' : 'overflow-auto')}>
+        <div className={isFullBleed ? 'h-full' : 'p-8'}>
           <Outlet />
         </div>
       </main>
