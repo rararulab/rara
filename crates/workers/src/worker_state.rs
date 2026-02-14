@@ -118,6 +118,30 @@ impl AppState {
             Arc::new(SettingsOpenRouterLoader::new(settings_svc.clone()));
         let mut tool_registry = rara_agents::tool_registry::ToolRegistry::default();
 
+        // -- memory service ---------------------------------------------------
+
+        let memory_db_path = rara_paths::data_dir().join("memory.db");
+        let memory_data_dir = rara_paths::data_dir().join("memory");
+        tokio::fs::create_dir_all(&memory_data_dir).await.ok();
+        let memory_store =
+            rara_memory::store::SqliteMemoryStore::open(&memory_db_path)
+                .whatever_context("Failed to initialize memory store")?;
+        let memory_manager = Arc::new(rara_memory::manager::MemoryManager::new(
+            memory_store,
+            memory_data_dir,
+        ));
+        // Initial sync of markdown files into the index.
+        let sync_stats = memory_manager
+            .sync()
+            .await
+            .whatever_context("Failed to sync memory")?;
+        info!(
+            added = sync_stats.added,
+            updated = sync_stats.updated,
+            deleted = sync_stats.deleted,
+            "Memory synced"
+        );
+
         // Layer 1: Primitives
         tool_registry.register_primitive(Arc::new(
             crate::tools::primitives::DbQueryTool::new(pool.clone()),
@@ -172,6 +196,12 @@ impl AppState {
                 job_service.clone(),
                 ai_service.clone(),
             ),
+        ));
+        tool_registry.register_service(Arc::new(
+            crate::tools::services::MemorySearchTool::new(memory_manager.clone()),
+        ));
+        tool_registry.register_service(Arc::new(
+            crate::tools::services::MemoryGetTool::new(memory_manager.clone()),
         ));
         let tools = Arc::new(tool_registry);
         let chat_service = rara_domain_chat::service::ChatService::new(
