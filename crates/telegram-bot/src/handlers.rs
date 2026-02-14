@@ -46,6 +46,9 @@ use crate::{
     state::BotState,
 };
 
+/// Maximum number of sessions to display in the `/sessions` list.
+const SESSIONS_LIST_LIMIT: u32 = 10;
+
 /// Top-level update dispatcher: routes to message or callback query handlers.
 pub(crate) async fn handle_update(update: Update, state: &Arc<BotState>) {
     let result = match update.kind {
@@ -103,6 +106,44 @@ pub(crate) async fn handle_callback_query(
     let Some(data) = q.data.as_deref() else {
         return Ok(());
     };
+
+    // Handle session switching from inline keyboard buttons.
+    if data.starts_with("switch:") {
+        let key = &data["switch:".len()..];
+        if let Some(ref msg) = q.message {
+            let chat_id = msg.chat().id;
+            let account = "default";
+            let chat_id_str = chat_id.0.to_string();
+
+            match state
+                .http_client
+                .bind_channel("telegram", account, &chat_id_str, key)
+                .await
+            {
+                Ok(_) => {
+                    state
+                        .bot
+                        .send_message(
+                            chat_id,
+                            format!(
+                                "Switched to session: <code>{}</code>",
+                                html_escape(key)
+                            ),
+                        )
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                }
+                Err(e) => {
+                    state
+                        .bot
+                        .send_message(chat_id, format!("Failed to switch session: {e}"))
+                        .await?;
+                }
+            }
+        }
+        return Ok(());
+    }
+
     if !data.starts_with("search_more:") {
         return Ok(());
     }
@@ -196,6 +237,9 @@ async fn handle_command(
                      /jd <text> - Parse a Job Description\n\
                      /new - Start a new chat session\n\
                      /clear - Clear current session history\n\
+                     /sessions - List chat sessions\n\
+                     /switch <key> - Switch active session\n\
+                     /usage - Show current session info\n\
                      /help - Show all commands",
                 )
                 .await?;
@@ -217,6 +261,15 @@ async fn handle_command(
         }
         Command::Jd(jd_text) => {
             handle_jd_parse(&msg, &jd_text, state).await?;
+        }
+        Command::Sessions => {
+            handle_sessions(&msg, state).await?;
+        }
+        Command::Switch(key) => {
+            handle_switch(&msg, &key, state).await?;
+        }
+        Command::Usage => {
+            handle_usage(&msg, state).await?;
         }
     }
     Ok(())
@@ -533,6 +586,230 @@ async fn handle_search(
     Ok(())
 }
 
+/// Handle `/sessions` — list all sessions, marking the active one.
+///
+/// Also sends an inline keyboard so the user can tap a button to switch
+/// sessions without typing the key manually.
+async fn handle_sessions(
+    msg: &Message,
+    state: &Arc<BotState>,
+) -> Result<(), teloxide::RequestError> {
+    let account = "default";
+    let chat_id_str = msg.chat.id.0.to_string();
+
+    // Find the currently active session key (if any).
+    let active_key = match state
+        .http_client
+        .get_channel_session(account, &chat_id_str)
+        .await
+    {
+        Ok(Some(binding)) => Some(binding.session_key),
+        Ok(None) => None,
+        Err(e) => {
+            state
+                .bot
+                .send_message(msg.chat.id, format!("Failed to resolve session: {e}"))
+                .await?;
+            return Ok(());
+        }
+    };
+
+    // Fetch the list of sessions.
+    let sessions = match state.http_client.list_sessions(SESSIONS_LIST_LIMIT).await {
+        Ok(s) => s,
+        Err(e) => {
+            state
+                .bot
+                .send_message(msg.chat.id, format!("Failed to list sessions: {e}"))
+                .await?;
+            return Ok(());
+        }
+    };
+
+    if sessions.is_empty() {
+        state
+            .bot
+            .send_message(
+                msg.chat.id,
+                "No sessions found. Send a message to create one.",
+            )
+            .await?;
+        return Ok(());
+    }
+
+    // Build the text listing.
+    use std::fmt::Write;
+    let mut text = String::from("<b>Your sessions:</b>\n\n");
+    let mut buttons: Vec<Vec<teloxide::types::InlineKeyboardButton>> = Vec::new();
+
+    for (i, s) in sessions.iter().enumerate() {
+        let title = s.title.as_deref().unwrap_or(&s.key);
+        let is_active = active_key.as_deref() == Some(&s.key);
+        let marker = if is_active { " - <i>active</i>" } else { "" };
+
+        let _ = write!(
+            text,
+            "{}. {} ({} msgs){marker}\n",
+            i + 1,
+            html_escape(title),
+            s.message_count,
+        );
+
+        // Add an inline button for each non-active session to allow switching.
+        if !is_active {
+            let label = format!(
+                "Switch to: {}",
+                truncate_str(title, 30),
+            );
+            // Callback data limit is 64 bytes; prefix "switch:" is 7 bytes.
+            let cb_data = format!("switch:{}", truncate_str(&s.key, 56));
+            buttons.push(vec![teloxide::types::InlineKeyboardButton::callback(
+                label, cb_data,
+            )]);
+        }
+    }
+
+    let keyboard = teloxide::types::InlineKeyboardMarkup::new(buttons);
+
+    state
+        .bot
+        .send_message(msg.chat.id, text)
+        .parse_mode(ParseMode::Html)
+        .reply_markup(keyboard)
+        .await?;
+
+    Ok(())
+}
+
+/// Handle `/switch <key>` — switch the active session for this chat.
+async fn handle_switch(
+    msg: &Message,
+    key: &str,
+    state: &Arc<BotState>,
+) -> Result<(), teloxide::RequestError> {
+    let key = key.trim();
+    if key.is_empty() {
+        state
+            .bot
+            .send_message(
+                msg.chat.id,
+                "Usage: /switch <session_key>\n\nUse /sessions to see available keys.",
+            )
+            .await?;
+        return Ok(());
+    }
+
+    let account = "default";
+    let chat_id_str = msg.chat.id.0.to_string();
+
+    match state
+        .http_client
+        .bind_channel("telegram", account, &chat_id_str, key)
+        .await
+    {
+        Ok(_binding) => {
+            state
+                .bot
+                .send_message(
+                    msg.chat.id,
+                    format!("Switched to session: <code>{}</code>", html_escape(key)),
+                )
+                .parse_mode(ParseMode::Html)
+                .await?;
+        }
+        Err(e) => {
+            state
+                .bot
+                .send_message(msg.chat.id, format!("Failed to switch session: {e}"))
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle `/usage` — show details about the current active session.
+async fn handle_usage(
+    msg: &Message,
+    state: &Arc<BotState>,
+) -> Result<(), teloxide::RequestError> {
+    let account = "default";
+    let chat_id_str = msg.chat.id.0.to_string();
+
+    let session_key = match state
+        .http_client
+        .get_channel_session(account, &chat_id_str)
+        .await
+    {
+        Ok(Some(binding)) => binding.session_key,
+        Ok(None) => {
+            state
+                .bot
+                .send_message(
+                    msg.chat.id,
+                    "No active session. Send a message to create one.",
+                )
+                .await?;
+            return Ok(());
+        }
+        Err(e) => {
+            state
+                .bot
+                .send_message(msg.chat.id, format!("Failed to resolve session: {e}"))
+                .await?;
+            return Ok(());
+        }
+    };
+
+    match state.http_client.get_session(&session_key).await {
+        Ok(detail) => {
+            use std::fmt::Write;
+            let mut text = String::new();
+
+            let title = detail.title.as_deref().unwrap_or("Untitled");
+            let _ = writeln!(text, "<b>Session:</b> {}", html_escape(title));
+            let _ = writeln!(
+                text,
+                "<b>Key:</b> <code>{}</code>",
+                html_escape(&detail.key)
+            );
+            let _ = writeln!(text, "<b>Messages:</b> {}", detail.message_count);
+            if let Some(ref model) = detail.model {
+                let _ = writeln!(text, "<b>Model:</b> {}", html_escape(model));
+            }
+            let _ = writeln!(
+                text,
+                "<b>Created:</b> {}",
+                format_timestamp(&detail.created_at)
+            );
+            let _ = writeln!(
+                text,
+                "<b>Last active:</b> {}",
+                format_timestamp(&detail.updated_at)
+            );
+
+            if let Some(ref preview) = detail.preview {
+                let truncated = truncate_str(preview, 200);
+                let _ = writeln!(text, "\n<b>Last message:</b>\n{}", html_escape(truncated));
+            }
+
+            state
+                .bot
+                .send_message(msg.chat.id, text)
+                .parse_mode(ParseMode::Html)
+                .await?;
+        }
+        Err(e) => {
+            state
+                .bot
+                .send_message(msg.chat.id, format!("Failed to get session details: {e}"))
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -652,6 +929,42 @@ pub(crate) fn decode_search_params(encoded: &str) -> (Vec<String>, Option<String
     }
 }
 
+/// Truncate a string to at most `max_len` characters, appending "..." if
+/// truncation occurs. Works on char boundaries to avoid panics on
+/// multi-byte strings.
+fn truncate_str(s: &str, max_len: usize) -> &str {
+    if s.len() <= max_len {
+        return s;
+    }
+    // Find the last char boundary at or before max_len - 3 (room for "...").
+    let limit = max_len.saturating_sub(3);
+    let end = s
+        .char_indices()
+        .take_while(|(i, _)| *i <= limit)
+        .last()
+        .map_or(0, |(i, c)| i + c.len_utf8());
+    &s[..end]
+}
+
+/// Format an ISO-8601 / RFC-3339 timestamp string into a short
+/// human-readable date-time. Falls back to the raw string on parse failure.
+fn format_timestamp(raw: &str) -> String {
+    // Try to parse as RFC-3339 (e.g. "2026-02-14T10:30:00Z").
+    if raw.len() >= 16 {
+        // Return "YYYY-MM-DD HH:MM" for brevity.
+        let date_part = &raw[..10];
+        let time_part = if raw.len() >= 16 {
+            &raw[11..16]
+        } else {
+            ""
+        };
+        if !time_part.is_empty() {
+            return format!("{date_part} {time_part}");
+        }
+    }
+    raw.to_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -691,5 +1004,45 @@ mod tests {
     fn test_format_job_results_empty() {
         let text = format_job_results(&[], &["rust".to_string()], Some("remote"));
         assert!(text.contains("Found <b>0</b> jobs"));
+    }
+
+    #[test]
+    fn test_truncate_str_short() {
+        assert_eq!(truncate_str("hello", 10), "hello");
+    }
+
+    #[test]
+    fn test_truncate_str_exact() {
+        assert_eq!(truncate_str("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_truncate_str_long() {
+        let result = truncate_str("hello world, this is long", 10);
+        // max_len=10, limit=7, last char at or before index 7 is 'o' (index 7),
+        // so end = 8, result is "hello wo".
+        assert!(result.len() <= 10);
+        assert_eq!(result, "hello wo");
+    }
+
+    #[test]
+    fn test_format_timestamp_rfc3339() {
+        assert_eq!(
+            format_timestamp("2026-02-14T10:30:00Z"),
+            "2026-02-14 10:30"
+        );
+    }
+
+    #[test]
+    fn test_format_timestamp_with_offset() {
+        assert_eq!(
+            format_timestamp("2026-02-14T10:30:45+08:00"),
+            "2026-02-14 10:30"
+        );
+    }
+
+    #[test]
+    fn test_format_timestamp_short_fallback() {
+        assert_eq!(format_timestamp("2026-02"), "2026-02");
     }
 }
