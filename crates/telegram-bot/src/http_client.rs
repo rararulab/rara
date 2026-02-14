@@ -191,10 +191,15 @@ impl MainServiceHttpClient {
     ///
     /// This request may take a long time (30-60s) because it involves LLM
     /// inference. The method uses an extended timeout to accommodate this.
+    ///
+    /// When `image_urls` is non-empty, the request body includes an
+    /// `image_urls` array so the chat service can forward them to the LLM
+    /// as multimodal content (e.g. base64 data URLs).
     pub async fn send_chat_message(
         &self,
         session_key: &str,
         text: &str,
+        image_urls: Vec<String>,
     ) -> Result<ChatMessageResponse, MainServiceHttpError> {
         let url = format!(
             "{}/api/v1/chat/sessions/{}/send",
@@ -207,9 +212,14 @@ impl MainServiceHttpClient {
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
+        let mut body = serde_json::json!({ "text": text });
+        if !image_urls.is_empty() {
+            body["image_urls"] = serde_json::json!(image_urls);
+        }
+
         let resp = llm_client
             .post(url)
-            .json(&serde_json::json!({ "text": text }))
+            .json(&body)
             .send()
             .await
             .context(RequestSnafu)?;

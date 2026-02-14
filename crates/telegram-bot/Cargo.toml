@@ -12,6 +12,7 @@ categories.workspace = true
 description = "Standalone Telegram bot runtime for the Job Automation Platform"
 
 [dependencies]
+base64 = { workspace = true }
 rara-domain-job = { workspace = true }
 rara-domain-shared = { workspace = true }
 reqwest = { workspace = true }

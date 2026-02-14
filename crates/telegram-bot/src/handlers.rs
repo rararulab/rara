@@ -31,13 +31,16 @@
 
 use std::sync::Arc;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use teloxide::{
+    net::Download,
     payloads::{EditMessageTextSetters, SendMessageSetters},
     requests::Requester,
-    types::{CallbackQuery, ChatAction, Message, ParseMode, Update, UpdateKind},
+    types::{CallbackQuery, ChatAction, Message, ParseMode, PhotoSize, Update, UpdateKind},
     utils::command::BotCommands,
 };
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{
     command::Command,
@@ -67,6 +70,12 @@ pub(crate) async fn handle_message_direct(
     msg: Message,
     state: &Arc<BotState>,
 ) -> Result<(), teloxide::RequestError> {
+    // Photo messages — download and forward to chat as multimodal content.
+    if let Some(photos) = msg.photo() {
+        let caption = msg.caption().unwrap_or("");
+        return handle_photo_message(&msg, photos, caption, state).await;
+    }
+
     let Some(text) = extract_text(&msg) else {
         return Ok(());
     };
@@ -273,7 +282,142 @@ async fn handle_chat_message(
     // Send to chat service and relay response.
     match state
         .http_client
-        .send_chat_message(&session_key, text)
+        .send_chat_message(&session_key, text, vec![])
+        .await
+    {
+        Ok(response) => {
+            let reply_text = response.message.text_content();
+            if !reply_text.is_empty() {
+                let html = markdown_to_telegram_html(&reply_text);
+                let chunks = chunk_message(&html, TELEGRAM_MAX_MESSAGE_LEN);
+                for chunk in chunks {
+                    state
+                        .bot
+                        .send_message(msg.chat.id, chunk)
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                }
+            }
+        }
+        Err(e) => {
+            state
+                .bot
+                .send_message(msg.chat.id, format!("Chat error: {e}"))
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle a photo message by downloading the image and forwarding it to the
+/// chat service as multimodal content (base64 data URL).
+///
+/// Selects the highest-resolution variant from the `PhotoSize` array (the
+/// last element), downloads the file via the Bot API, converts it to a
+/// `data:image/jpeg;base64,...` URL, and sends it alongside the caption text
+/// to the chat service.
+async fn handle_photo_message(
+    msg: &Message,
+    photos: &[PhotoSize],
+    caption: &str,
+    state: &Arc<BotState>,
+) -> Result<(), teloxide::RequestError> {
+    let account = "default";
+    let chat_id_str = msg.chat.id.0.to_string();
+
+    // Resolve or auto-create session binding (same logic as text messages).
+    let session_key = match state
+        .http_client
+        .get_channel_session(account, &chat_id_str)
+        .await
+    {
+        Ok(Some(binding)) => binding.session_key,
+        Ok(None) => {
+            let key = format!("tg-{}", msg.chat.id.0);
+            let _ = state
+                .http_client
+                .create_session(&key, Some("Telegram Chat"))
+                .await;
+            let _ = state
+                .http_client
+                .bind_channel("telegram", account, &chat_id_str, &key)
+                .await;
+            key
+        }
+        Err(e) => {
+            state
+                .bot
+                .send_message(msg.chat.id, format!("Failed to resolve session: {e}"))
+                .await?;
+            return Ok(());
+        }
+    };
+
+    // Send typing indicator — download + LLM inference may take a while.
+    let _ = state
+        .bot
+        .send_chat_action(msg.chat.id, ChatAction::Typing)
+        .await;
+
+    // Select the highest-resolution photo (last element in the array).
+    let photo = match photos.last() {
+        Some(p) => p,
+        None => {
+            state
+                .bot
+                .send_message(msg.chat.id, "Could not read photo data.")
+                .await?;
+            return Ok(());
+        }
+    };
+
+    // Download the photo via the Bot API.
+    let file = match state.bot.get_file(&photo.file.id).await {
+        Ok(f) => f,
+        Err(e) => {
+            warn!(error = %e, "failed to get file info for photo");
+            state
+                .bot
+                .send_message(
+                    msg.chat.id,
+                    format!("Failed to download photo: {e}"),
+                )
+                .await?;
+            return Ok(());
+        }
+    };
+
+    let mut buf = Vec::new();
+    if let Err(e) = state.bot.download_file(&file.path, &mut buf).await {
+        warn!(error = %e, "failed to download photo file");
+        state
+            .bot
+            .send_message(msg.chat.id, format!("Failed to download photo: {e}"))
+            .await?;
+        return Ok(());
+    }
+
+    info!(
+        file_id = %photo.file.id,
+        size_bytes = buf.len(),
+        "photo downloaded from Telegram"
+    );
+
+    // Convert to base64 data URL for multimodal LLM input.
+    let data_url = format!("data:image/jpeg;base64,{}", BASE64.encode(&buf));
+
+    // Use caption as text; fall back to a generic prompt if empty.
+    let text = if caption.is_empty() {
+        "What do you see in this image?"
+    } else {
+        caption
+    };
+
+    // Send to chat service with multimodal content.
+    match state
+        .http_client
+        .send_chat_message(&session_key, text, vec![data_url])
         .await
     {
         Ok(response) => {

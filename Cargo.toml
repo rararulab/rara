@@ -63,6 +63,7 @@ members = [
 [workspace.dependencies]
 async-trait = "^0.1"
 axum = "^0.8"
+base64 = "^0.22"
 axum-tracing-opentelemetry = "0.33.0"
 backon = "^1.3"
 bon = "^3.6"
