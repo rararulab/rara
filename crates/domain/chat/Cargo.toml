@@ -17,6 +17,7 @@ axum.workspace = true
 chrono.workspace = true
 openrouter-rs = "^0.4"
 rara-agents.workspace = true
+rara-domain-shared.workspace = true
 rara-sessions.workspace = true
 serde.workspace = true
 serde_json.workspace = true

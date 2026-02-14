@@ -63,9 +63,10 @@ pub struct RuntimeSettingsView {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AgentSettingsView {
-    pub soul:              Option<String>,
-    pub proactive_enabled: bool,
-    pub proactive_cron:    Option<String>,
+    pub soul:               Option<String>,
+    pub chat_system_prompt: Option<String>,
+    pub proactive_enabled:  bool,
+    pub proactive_cron:     Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -113,9 +114,10 @@ impl Into<RuntimeSettingsView> for Settings {
                 token_hint: secret_hint(self.telegram.bot_token.as_deref()),
             },
             agent:      AgentSettingsView {
-                soul:              self.agent.soul.clone(),
-                proactive_enabled: self.agent.proactive_enabled,
-                proactive_cron:    self.agent.proactive_cron.clone(),
+                soul:               self.agent.soul.clone(),
+                chat_system_prompt: self.agent.chat_system_prompt.clone(),
+                proactive_enabled:  self.agent.proactive_enabled,
+                proactive_cron:     self.agent.proactive_cron.clone(),
             },
             updated_at: self.updated_at,
         }

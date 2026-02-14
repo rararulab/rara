@@ -107,17 +107,11 @@ impl AppState {
         let llm_provider: rara_agents::model::OpenRouterLoaderRef =
             Arc::new(SettingsOpenRouterLoader::new(settings_svc.clone()));
         let tools = Arc::new(rara_agents::tool_registry::ToolRegistry::default());
-        let default_model = settings_svc
-            .current()
-            .ai
-            .model_for(rara_domain_shared::settings::model::ModelScenario::Chat)
-            .to_owned();
         let chat_service = rara_domain_chat::service::ChatService::new(
             session_repo,
             llm_provider.clone(),
             tools,
-            default_model,
-            "You are a helpful AI assistant for job hunting. You help analyze job postings, optimize resumes, and prepare for interviews.".to_owned(),
+            settings_svc.subscribe(),
         );
         info!("Chat service initialized");
 

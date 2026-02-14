@@ -15,6 +15,7 @@ use rara_agents::{
     runner::AgentRunner,
     tool_registry::ToolRegistry,
 };
+use rara_domain_shared::settings::model::{ModelScenario, Settings};
 use rara_sessions::{
     repository::SessionRepository,
     types::{
@@ -22,9 +23,17 @@ use rara_sessions::{
         SessionKey,
     },
 };
+use tokio::sync::watch;
 use tracing::{info, instrument};
 
 use crate::error::ChatError;
+
+/// Default system prompt used when no custom prompt is configured in settings
+/// and no session-level override is provided.
+const DEFAULT_SYSTEM_PROMPT: &str = "You are my personal AI assistant. You help me with everything \
+    — job hunting, resume optimization, interview prep, daily tasks, analysis, brainstorming, \
+    coding, and any other questions or tasks I bring to you. Be concise, practical, and proactive. \
+    Respond in the same language as my message.";
 
 /// Central orchestrator for session-based AI chat.
 ///
@@ -42,35 +51,54 @@ use crate::error::ChatError;
 #[derive(Clone)]
 pub struct ChatService {
     /// Persistence layer for sessions, messages, and channel bindings.
-    session_repo:              Arc<dyn SessionRepository>,
+    session_repo: Arc<dyn SessionRepository>,
     /// Factory for creating OpenRouter API clients.
-    llm_provider:              OpenRouterLoaderRef,
+    llm_provider: OpenRouterLoaderRef,
     /// Registry of tools available to the agent during execution.
-    tools:                     Arc<ToolRegistry>,
-    /// Default LLM model name used when a session does not specify one.
-    pub default_model:         String,
-    /// Default system prompt prepended to every agent invocation when a
-    /// session does not specify its own.
-    pub default_system_prompt: String,
+    tools:        Arc<ToolRegistry>,
+    /// Watch receiver for runtime settings — provides dynamic model and
+    /// system prompt configuration.
+    settings_rx:  watch::Receiver<Settings>,
 }
 
 impl ChatService {
     /// Create a new chat service with the given dependencies.
+    ///
+    /// The `settings_rx` watch receiver supplies the current runtime settings,
+    /// from which the default model and system prompt are read dynamically.
     #[must_use]
     pub fn new(
         session_repo: Arc<dyn SessionRepository>,
         llm_provider: OpenRouterLoaderRef,
         tools: Arc<ToolRegistry>,
-        default_model: String,
-        default_system_prompt: String,
+        settings_rx: watch::Receiver<Settings>,
     ) -> Self {
         Self {
             session_repo,
             llm_provider,
             tools,
-            default_model,
-            default_system_prompt,
+            settings_rx,
         }
+    }
+
+    /// Read the current default model from runtime settings.
+    fn current_default_model(&self) -> String {
+        self.settings_rx
+            .borrow()
+            .ai
+            .model_for(ModelScenario::Chat)
+            .to_owned()
+    }
+
+    /// Read the current system prompt from runtime settings, falling back
+    /// to [`DEFAULT_SYSTEM_PROMPT`] when no custom prompt is configured.
+    fn current_system_prompt(&self) -> String {
+        self.settings_rx
+            .borrow()
+            .agent
+            .chat_system_prompt
+            .clone()
+            .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_owned())
     }
 
     // -- session CRUD -------------------------------------------------------
@@ -91,8 +119,8 @@ impl ChatService {
         let entry = SessionEntry {
             key,
             title,
-            model: model.or_else(|| Some(self.default_model.clone())),
-            system_prompt: system_prompt.or_else(|| Some(self.default_system_prompt.clone())),
+            model: model.or_else(|| Some(self.current_default_model())),
+            system_prompt: system_prompt.or_else(|| Some(self.current_system_prompt())),
             message_count: 0,
             preview: None,
             metadata: None,
@@ -276,11 +304,11 @@ impl ChatService {
         let model = session
             .model
             .clone()
-            .unwrap_or_else(|| self.default_model.clone());
+            .unwrap_or_else(|| self.current_default_model());
         let system_prompt = session
             .system_prompt
             .clone()
-            .unwrap_or_else(|| self.default_system_prompt.clone());
+            .unwrap_or_else(|| self.current_system_prompt());
 
         let user_content = if has_images {
             let urls = image_urls.as_ref().unwrap();
@@ -413,7 +441,7 @@ impl ChatService {
 impl std::fmt::Debug for ChatService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ChatService")
-            .field("default_model", &self.default_model)
+            .field("default_model", &self.current_default_model())
             .finish_non_exhaustive()
     }
 }

@@ -71,12 +71,14 @@ pub struct TelegramSettings {
 #[serde(default)]
 pub struct AgentSettings {
     /// The agent's personality/soul prompt. `None` uses the built-in default.
-    pub soul:              Option<String>,
+    pub soul:                Option<String>,
+    /// Custom system prompt for chat sessions. `None` uses the built-in default.
+    pub chat_system_prompt:  Option<String>,
     /// Whether proactive messaging is enabled.
-    pub proactive_enabled: bool,
+    pub proactive_enabled:   bool,
     /// Cron expression for proactive check schedule (5-field format).
     /// Changes take effect after service restart.
-    pub proactive_cron:    Option<String>,
+    pub proactive_cron:      Option<String>,
 }
 
 /// Partial update payload for runtime settings writes.
@@ -107,9 +109,10 @@ pub struct TelegramRuntimeSettingsPatch {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentRuntimeSettingsPatch {
-    pub soul:              Option<String>,
-    pub proactive_enabled: Option<bool>,
-    pub proactive_cron:    Option<String>,
+    pub soul:               Option<String>,
+    pub chat_system_prompt: Option<String>,
+    pub proactive_enabled:  Option<bool>,
+    pub proactive_cron:     Option<String>,
 }
 
 impl Settings {
@@ -143,6 +146,9 @@ impl Settings {
             if let Some(soul) = agent.soul {
                 self.agent.soul = normalize_text(Some(soul));
             }
+            if let Some(prompt) = agent.chat_system_prompt {
+                self.agent.chat_system_prompt = normalize_text(Some(prompt));
+            }
             if let Some(enabled) = agent.proactive_enabled {
                 self.agent.proactive_enabled = enabled;
             }
@@ -160,6 +166,7 @@ impl Settings {
         self.ai.chat_model = normalize_text(self.ai.chat_model.take());
         self.telegram.bot_token = normalize_secret(self.telegram.bot_token.take());
         self.agent.soul = normalize_text(self.agent.soul.take());
+        self.agent.chat_system_prompt = normalize_text(self.agent.chat_system_prompt.take());
         self.agent.proactive_cron = normalize_text(self.agent.proactive_cron.take());
     }
 }

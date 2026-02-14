@@ -249,6 +249,7 @@ export interface RuntimeSettingsView {
   };
   agent: {
     soul: string | null;
+    chat_system_prompt: string | null;
     proactive_enabled: boolean;
     proactive_cron: string | null;
   };
@@ -268,6 +269,7 @@ export interface RuntimeSettingsPatch {
   };
   agent?: {
     soul?: string | null;
+    chat_system_prompt?: string | null;
     proactive_enabled?: boolean;
     proactive_cron?: string | null;
   };
