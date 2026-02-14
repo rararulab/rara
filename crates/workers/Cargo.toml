@@ -33,6 +33,7 @@ rara-domain-job = { workspace = true }
 rara-domain-resume = { workspace = true }
 rara-domain-scheduler = { workspace = true }
 rara-domain-shared = { workspace = true }
+rara-domain-typst = { workspace = true }
 rara-server = { workspace = true }
 reqwest.workspace = true
 serde.workspace = true

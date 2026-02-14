@@ -39,6 +39,7 @@ pub struct AppState {
     pub analytics_service:   rara_domain_analytics::service::AnalyticsService,
     pub job_service:         rara_domain_job::service::JobService,
     pub chat_service:        rara_domain_chat::service::ChatService,
+    pub typst_service:       rara_domain_typst::service::TypstService,
 
     // -- shared --
     pub settings_svc:  rara_domain_shared::settings::SettingsSvc,
@@ -92,6 +93,12 @@ impl AppState {
             .whatever_context("Failed to initialize job service")?;
         info!("Job service initialized");
 
+        // -- typst service ---------------------------------------------------
+
+        let typst_service =
+            rara_domain_typst::wire_typst_service(pool.clone(), object_store.clone());
+        info!("Typst service initialized");
+
         // -- infra clients ---------------------------------------------------
 
         let crawl_client = crawl4ai::Crawl4AiClient::new(crawl4ai_url);
@@ -129,6 +136,7 @@ impl AppState {
             analytics_service,
             job_service,
             chat_service,
+            typst_service,
             settings_svc,
             notify_client,
             llm_provider,
@@ -174,6 +182,9 @@ impl AppState {
             ))
             .merge(rara_domain_chat::router::routes(
                 self.chat_service.clone(),
+            ))
+            .merge(rara_domain_typst::router::routes(
+                self.typst_service.clone(),
             ))
     }
 }
