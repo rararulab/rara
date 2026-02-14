@@ -134,6 +134,27 @@ impl AppState {
         tool_registry.register_primitive(Arc::new(
             crate::tools::primitives::StorageReadTool::new(object_store.clone()),
         ));
+        tool_registry.register_primitive(Arc::new(
+            crate::tools::primitives::BashTool::new(),
+        ));
+        tool_registry.register_primitive(Arc::new(
+            crate::tools::primitives::ReadFileTool::new(),
+        ));
+        tool_registry.register_primitive(Arc::new(
+            crate::tools::primitives::WriteFileTool::new(),
+        ));
+        tool_registry.register_primitive(Arc::new(
+            crate::tools::primitives::EditFileTool::new(),
+        ));
+        tool_registry.register_primitive(Arc::new(
+            crate::tools::primitives::FindFilesTool::new(),
+        ));
+        tool_registry.register_primitive(Arc::new(
+            crate::tools::primitives::GrepTool::new(),
+        ));
+        tool_registry.register_primitive(Arc::new(
+            crate::tools::primitives::ListDirectoryTool::new(),
+        ));
 
         // Layer 2: Services
         tool_registry.register_service(Arc::new(
