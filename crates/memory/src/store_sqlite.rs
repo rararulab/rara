@@ -24,7 +24,7 @@ use std::path::PathBuf;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::memory::{
+use crate::{
     manager::{ChunkDetail, MemoryResult},
     store::{ChunkInput, EmbeddedChunkRow, IndexedFileMeta, MemorySearchRow, MemoryStore},
 };

@@ -14,7 +14,7 @@
 
 //! Search strategies for memory retrieval.
 
-use crate::memory::manager::{MemoryManager, MemoryResult, SearchResult};
+use crate::manager::{MemoryManager, MemoryResult, SearchResult};
 
 /// Execute keyword-only retrieval.
 ///

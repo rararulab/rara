@@ -21,7 +21,7 @@ use rara_agents::tool_registry::AgentTool;
 use rara_domain_shared::settings::SettingsSvc;
 use serde_json::json;
 
-use crate::memory::MemoryManager;
+use rara_memory::MemoryManager;
 
 /// Search local memory index (keyword/hybrid depending on runtime settings).
 pub struct MemorySearchTool {

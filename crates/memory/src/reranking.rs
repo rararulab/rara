@@ -16,7 +16,7 @@
 
 use std::collections::HashSet;
 
-use crate::memory::manager::SearchResult;
+use crate::manager::SearchResult;
 
 /// Re-rank candidates using token overlap with query.
 ///

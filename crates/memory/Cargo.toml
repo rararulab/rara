@@ -9,21 +9,25 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Local memory index service with SQLite FTS5 search"
+description = "Local memory index with hybrid search (keyword + vector), Postgres/SQLite backends, and optional Chroma integration"
 
 [dependencies]
-async-trait.workspace = true
+rara-domain-shared = { workspace = true }
+reqwest.workspace = true
 rusqlite = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2 = { workspace = true }
 snafu.workspace = true
+sqlx.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+walkdir = "2.5"
 
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
+sqlx = { workspace = true }
 
 [lints]
 workspace = true

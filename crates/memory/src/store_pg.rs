@@ -25,7 +25,7 @@ use std::future::Future;
 
 use sqlx::{PgPool, Row};
 
-use crate::memory::{
+use crate::{
     manager::{ChunkDetail, MemoryError, MemoryResult},
     store::{ChunkInput, EmbeddedChunkRow, IndexedFileMeta, MemorySearchRow, MemoryStore},
 };

@@ -124,7 +124,7 @@ impl AppState {
             memory_backend.to_ascii_lowercase()
         };
         let memory_manager = Arc::new(match memory_backend.as_str() {
-            "sqlite" => match crate::memory::MemoryManager::open(
+            "sqlite" => match rara_memory::MemoryManager::open(
                 rara_paths::memory_dir().clone(),
                 rara_paths::memory_index_db_file().clone(),
             ) {
@@ -134,7 +134,7 @@ impl AppState {
                         error = %primary_err,
                         "sqlite memory manager init failed, falling back to postgres"
                     );
-                    crate::memory::MemoryManager::open_postgres(
+                    rara_memory::MemoryManager::open_postgres(
                         rara_paths::memory_dir().clone(),
                         pool.clone(),
                     )
@@ -143,7 +143,7 @@ impl AppState {
                     )?
                 }
             },
-            _ => match crate::memory::MemoryManager::open_postgres(
+            _ => match rara_memory::MemoryManager::open_postgres(
                 rara_paths::memory_dir().clone(),
                 pool.clone(),
             ) {
@@ -153,7 +153,7 @@ impl AppState {
                         error = %primary_err,
                         "postgres memory manager init failed, falling back to sqlite"
                     );
-                    crate::memory::MemoryManager::open(
+                    rara_memory::MemoryManager::open(
                         rara_paths::memory_dir().clone(),
                         rara_paths::memory_index_db_file().clone(),
                     )

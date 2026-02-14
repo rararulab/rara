@@ -16,7 +16,7 @@
 
 use sha2::{Digest, Sha256};
 
-use crate::memory::manager::MemoryResult;
+use crate::manager::MemoryResult;
 
 /// Embedding provider abstraction.
 pub trait Embedder: Send + Sync {
