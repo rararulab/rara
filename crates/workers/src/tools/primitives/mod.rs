@@ -12,13 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Agent tools organized in a layered architecture.
-//!
-//! - **Layer 1 (Primitives)**: atomic, composable operations (db, http, notify,
-//!   storage).
-//! - **Layer 2 (Services)**: complex business workflows built on top of domain
-//!   services.
-//! - **Layer 3 (Planner)**: the `AgentRunner` itself (no code changes needed).
+//! Layer 1 primitive tools: atomic, composable operations.
 
-pub mod primitives;
-pub mod services;
+mod db_mutate;
+mod db_query;
+mod http_fetch;
+mod notify;
+mod storage_read;
+
+pub use db_mutate::DbMutateTool;
+pub use db_query::DbQueryTool;
+pub use http_fetch::HttpFetchTool;
+pub use notify::NotifyTool;
+pub use storage_read::StorageReadTool;

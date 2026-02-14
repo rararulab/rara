@@ -100,17 +100,38 @@ impl AppState {
         // -- chat service ----------------------------------------------------
 
         let session_repo = Arc::new(
-            rara_sessions::pg_repository::PgSessionRepository::new(pool, rara_paths::sessions_dir())
-                .await
-                .whatever_context("Failed to initialize session repository")?,
+            rara_sessions::pg_repository::PgSessionRepository::new(
+                pool.clone(),
+                rara_paths::sessions_dir(),
+            )
+            .await
+            .whatever_context("Failed to initialize session repository")?,
         );
         let llm_provider: rara_agents::model::OpenRouterLoaderRef =
             Arc::new(SettingsOpenRouterLoader::new(settings_svc.clone()));
         let mut tool_registry = rara_agents::tool_registry::ToolRegistry::default();
-        tool_registry
-            .register_builtin(Arc::new(crate::tools::SaveJobUrlTool::new(job_service.clone())));
-        tool_registry
-            .register_builtin(Arc::new(crate::tools::ListSavedJobsTool::new(job_service.clone())));
+
+        // Layer 1: Primitives
+        tool_registry.register_primitive(Arc::new(
+            crate::tools::primitives::DbQueryTool::new(pool.clone()),
+        ));
+        tool_registry.register_primitive(Arc::new(
+            crate::tools::primitives::DbMutateTool::new(pool.clone()),
+        ));
+        tool_registry.register_primitive(Arc::new(
+            crate::tools::primitives::NotifyTool::new(notify_client.clone(), settings_svc.clone()),
+        ));
+        tool_registry.register_primitive(Arc::new(
+            crate::tools::primitives::HttpFetchTool::new(),
+        ));
+        tool_registry.register_primitive(Arc::new(
+            crate::tools::primitives::StorageReadTool::new(object_store.clone()),
+        ));
+
+        // Layer 2: Services
+        tool_registry.register_service(Arc::new(
+            crate::tools::services::JobPipelineTool::new(job_service.clone()),
+        ));
         let tools = Arc::new(tool_registry);
         let chat_service = rara_domain_chat::service::ChatService::new(
             session_repo,

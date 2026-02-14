@@ -39,10 +39,20 @@ pub enum ToolSource {
     Mcp { server: String },
 }
 
-/// Internal entry pairing a tool with its source metadata.
+/// Architectural layer a tool belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolLayer {
+    /// Atomic primitive operation (db, http, notify, storage).
+    Primitive,
+    /// Complex business workflow (MCP service).
+    Service,
+}
+
+/// Internal entry pairing a tool with its source and layer metadata.
 struct ToolEntry {
     tool:   AgentToolRef,
     source: ToolSource,
+    layer:  ToolLayer,
 }
 
 /// Registry of available tools for an agent run.
@@ -58,10 +68,22 @@ impl ToolRegistry {
         }
     }
 
-    pub fn register_builtin(&mut self, tool: AgentToolRef) -> Option<AgentToolRef> {
-        self.register(tool, ToolSource::Builtin)
+    /// Register a built-in primitive tool (Layer 1).
+    pub fn register_primitive(&mut self, tool: AgentToolRef) -> Option<AgentToolRef> {
+        self.register(tool, ToolSource::Builtin, ToolLayer::Primitive)
     }
 
+    /// Register a built-in service tool (Layer 2).
+    pub fn register_service(&mut self, tool: AgentToolRef) -> Option<AgentToolRef> {
+        self.register(tool, ToolSource::Builtin, ToolLayer::Service)
+    }
+
+    /// Register a built-in tool. Defaults to [`ToolLayer::Primitive`].
+    pub fn register_builtin(&mut self, tool: AgentToolRef) -> Option<AgentToolRef> {
+        self.register(tool, ToolSource::Builtin, ToolLayer::Primitive)
+    }
+
+    /// Register an MCP-provided tool. Defaults to [`ToolLayer::Service`].
     pub fn register_mcp(
         &mut self,
         tool: AgentToolRef,
@@ -72,6 +94,7 @@ impl ToolRegistry {
             ToolSource::Mcp {
                 server: server.into(),
             },
+            ToolLayer::Service,
         )
     }
 
@@ -83,16 +106,20 @@ impl ToolRegistry {
         self.tools.get(name).map(|entry| &entry.source)
     }
 
+    pub fn layer_of(&self, name: &str) -> Option<ToolLayer> {
+        self.tools.get(name).map(|entry| entry.layer)
+    }
+
     #[must_use]
     pub fn is_empty(&self) -> bool { self.tools.is_empty() }
 
     #[must_use]
     pub fn len(&self) -> usize { self.tools.len() }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&str, &AgentToolRef, &ToolSource)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &AgentToolRef, &ToolSource, ToolLayer)> {
         self.tools
             .iter()
-            .map(|(name, entry)| (name.as_str(), &entry.tool, &entry.source))
+            .map(|(name, entry)| (name.as_str(), &entry.tool, &entry.source, entry.layer))
     }
 
     pub fn to_openrouter_tools(&self) -> Result<Vec<openrouter_rs::types::Tool>> {
@@ -109,10 +136,15 @@ impl ToolRegistry {
             .collect()
     }
 
-    fn register(&mut self, tool: AgentToolRef, source: ToolSource) -> Option<AgentToolRef> {
+    fn register(
+        &mut self,
+        tool: AgentToolRef,
+        source: ToolSource,
+        layer: ToolLayer,
+    ) -> Option<AgentToolRef> {
         let name = tool.name().to_owned();
         self.tools
-            .insert(name, ToolEntry { tool, source })
+            .insert(name, ToolEntry { tool, source, layer })
             .map(|entry| entry.tool)
     }
 }
