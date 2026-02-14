@@ -63,7 +63,9 @@ pub struct RuntimeSettingsView {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AiSettingsView {
     pub configured:         bool,
-    pub model:              Option<String>,
+    pub default_model:      Option<String>,
+    pub job_model:          Option<String>,
+    pub chat_model:         Option<String>,
     pub openrouter_api_key: Option<String>,
 }
 
@@ -92,7 +94,9 @@ impl Into<RuntimeSettingsView> for Settings {
         RuntimeSettingsView {
             ai:         AiSettingsView {
                 configured:         self.ai.openrouter_api_key.is_some(),
-                model:              self.ai.model.clone(),
+                default_model:      self.ai.default_model.clone(),
+                job_model:          self.ai.job_model.clone(),
+                chat_model:         self.ai.chat_model.clone(),
                 openrouter_api_key: self.ai.openrouter_api_key.clone(),
             },
             telegram:   TgSettingsResp {

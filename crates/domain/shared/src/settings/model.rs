@@ -24,11 +24,37 @@ pub struct Settings {
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+/// Which scenario an AI model will be used for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelScenario {
+    /// Job analysis tasks (fit scoring, JD parsing, resume optimization, etc.)
+    Job,
+    /// Interactive chat conversations
+    Chat,
+}
+
 /// AI-specific runtime settings.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AISettings {
     pub openrouter_api_key: Option<String>,
-    pub model:              Option<String>,
+    pub default_model:      Option<String>,
+    pub job_model:          Option<String>,
+    pub chat_model:         Option<String>,
+}
+
+impl AISettings {
+    /// Resolve the model identifier for a given scenario.
+    ///
+    /// Falls back to `default_model`, then to `"openai/gpt-4o"`.
+    pub fn model_for(&self, scenario: ModelScenario) -> &str {
+        let specific = match scenario {
+            ModelScenario::Job => self.job_model.as_deref(),
+            ModelScenario::Chat => self.chat_model.as_deref(),
+        };
+        specific
+            .or(self.default_model.as_deref())
+            .unwrap_or("openai/gpt-4o")
+    }
 }
 
 /// Telegram-specific runtime settings.
@@ -48,7 +74,13 @@ pub struct UpdateRequest {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AiRuntimeSettingsPatch {
     pub openrouter_api_key: Option<String>,
-    pub model:              Option<String>,
+    pub default_model:      Option<String>,
+    /// `Some(model)` to set, `None` to leave unchanged.
+    /// Use `Some("")` or send an empty string to clear (revert to default).
+    pub job_model:          Option<String>,
+    /// `Some(model)` to set, `None` to leave unchanged.
+    /// Use `Some("")` or send an empty string to clear (revert to default).
+    pub chat_model:         Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -64,8 +96,14 @@ impl Settings {
             if let Some(key) = ai.openrouter_api_key {
                 self.ai.openrouter_api_key = normalize_secret(Some(key));
             }
-            if let Some(model) = ai.model {
-                self.ai.model = normalize_text(Some(model));
+            if let Some(model) = ai.default_model {
+                self.ai.default_model = normalize_text(Some(model));
+            }
+            if let Some(model) = ai.job_model {
+                self.ai.job_model = normalize_text(Some(model));
+            }
+            if let Some(model) = ai.chat_model {
+                self.ai.chat_model = normalize_text(Some(model));
             }
         }
 
@@ -82,7 +120,9 @@ impl Settings {
     /// Sanitize values by trimming and dropping empty strings.
     pub fn normalize(&mut self) {
         self.ai.openrouter_api_key = normalize_secret(self.ai.openrouter_api_key.take());
-        self.ai.model = normalize_text(self.ai.model.take());
+        self.ai.default_model = normalize_text(self.ai.default_model.take());
+        self.ai.job_model = normalize_text(self.ai.job_model.take());
+        self.ai.chat_model = normalize_text(self.ai.chat_model.take());
         self.telegram.bot_token = normalize_secret(self.telegram.bot_token.take());
     }
 }
@@ -99,3 +139,86 @@ fn normalize_text(value: Option<String>) -> Option<String> {
 }
 
 fn normalize_secret(value: Option<String>) -> Option<String> { normalize_text(value) }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_for_falls_back_to_hardcoded_default() {
+        let ai = AISettings::default();
+        assert_eq!(ai.model_for(ModelScenario::Job), "openai/gpt-4o");
+        assert_eq!(ai.model_for(ModelScenario::Chat), "openai/gpt-4o");
+    }
+
+    #[test]
+    fn model_for_uses_default_model_when_no_specific() {
+        let ai = AISettings {
+            default_model: Some("anthropic/claude-sonnet-4".to_owned()),
+            ..Default::default()
+        };
+        assert_eq!(ai.model_for(ModelScenario::Job), "anthropic/claude-sonnet-4");
+        assert_eq!(ai.model_for(ModelScenario::Chat), "anthropic/claude-sonnet-4");
+    }
+
+    #[test]
+    fn model_for_uses_scenario_specific_model() {
+        let ai = AISettings {
+            default_model: Some("anthropic/claude-sonnet-4".to_owned()),
+            job_model:     Some("openai/gpt-4o".to_owned()),
+            chat_model:    Some("openai/gpt-4o-mini".to_owned()),
+            ..Default::default()
+        };
+        assert_eq!(ai.model_for(ModelScenario::Job), "openai/gpt-4o");
+        assert_eq!(ai.model_for(ModelScenario::Chat), "openai/gpt-4o-mini");
+    }
+
+    #[test]
+    fn model_for_partial_override() {
+        let ai = AISettings {
+            default_model: Some("anthropic/claude-sonnet-4".to_owned()),
+            job_model:     Some("openai/gpt-4o".to_owned()),
+            chat_model:    None,
+            ..Default::default()
+        };
+        assert_eq!(ai.model_for(ModelScenario::Job), "openai/gpt-4o");
+        // Chat falls back to default_model
+        assert_eq!(ai.model_for(ModelScenario::Chat), "anthropic/claude-sonnet-4");
+    }
+
+    #[test]
+    fn apply_patch_clears_scenario_model_with_empty_string() {
+        let mut settings = Settings {
+            ai: AISettings {
+                job_model: Some("openai/gpt-4o".to_owned()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        settings.apply_patch(UpdateRequest {
+            ai:       Some(AiRuntimeSettingsPatch {
+                job_model: Some("".to_owned()), // empty string clears
+                ..Default::default()
+            }),
+            telegram: None,
+        });
+        assert_eq!(settings.ai.job_model, None);
+    }
+
+    #[test]
+    fn normalize_clears_whitespace_only_models() {
+        let mut settings = Settings {
+            ai: AISettings {
+                default_model: Some("  ".to_owned()),
+                job_model:     Some("  openai/gpt-4o  ".to_owned()),
+                chat_model:    Some("".to_owned()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        settings.normalize();
+        assert_eq!(settings.ai.default_model, None);
+        assert_eq!(settings.ai.job_model, Some("openai/gpt-4o".to_owned()));
+        assert_eq!(settings.ai.chat_model, None);
+    }
+}

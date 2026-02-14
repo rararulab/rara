@@ -237,7 +237,9 @@ export type SavedJobStatus = (typeof SAVED_JOB_STATUSES)[number];
 export interface RuntimeSettingsView {
   ai: {
     configured: boolean;
-    model: string | null;
+    default_model: string | null;
+    job_model: string | null;
+    chat_model: string | null;
     openrouter_api_key: string | null;
   };
   telegram: {
@@ -251,7 +253,9 @@ export interface RuntimeSettingsView {
 export interface RuntimeSettingsPatch {
   ai?: {
     openrouter_api_key?: string;
-    model?: string;
+    default_model?: string;
+    job_model?: string | null;
+    chat_model?: string | null;
   };
   telegram?: {
     bot_token?: string;

@@ -52,6 +52,9 @@ type OpenRouterModel = {
   contextLength: number | null;
 };
 
+/** Sentinel value meaning "use default model" for scenario-specific selectors */
+const USE_DEFAULT = "__use_default__";
+
 function formatUpdatedAt(value: string | null): string {
   if (!value) return "Never";
   const d = new Date(value);
@@ -61,7 +64,9 @@ function formatUpdatedAt(value: string | null): string {
 
 export default function Settings() {
   const queryClient = useQueryClient();
-  const [aiModel, setAiModel] = useState("");
+  const [defaultModel, setDefaultModel] = useState("");
+  const [jobModel, setJobModel] = useState(USE_DEFAULT);
+  const [chatModel, setChatModel] = useState(USE_DEFAULT);
   const [aiApiKey, setAiApiKey] = useState("");
   const [showAiApiKey, setShowAiApiKey] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -80,7 +85,9 @@ export default function Settings() {
 
   useEffect(() => {
     if (!settingsQuery.data) return;
-    setAiModel(settingsQuery.data.ai.model ?? "");
+    setDefaultModel(settingsQuery.data.ai.default_model ?? "");
+    setJobModel(settingsQuery.data.ai.job_model ?? USE_DEFAULT);
+    setChatModel(settingsQuery.data.ai.chat_model ?? USE_DEFAULT);
     setAiApiKey(settingsQuery.data.ai.openrouter_api_key ?? "");
     setTelegramChatId(
       settingsQuery.data.telegram.chat_id == null
@@ -89,15 +96,24 @@ export default function Settings() {
     );
   }, [settingsQuery.data]);
 
+  /** The effective model for a scenario — resolves "use default" to the actual default model. */
+  const effectiveModel = useCallback(
+    (scenarioValue: string): string => {
+      if (scenarioValue === USE_DEFAULT || scenarioValue === "") {
+        return defaultModel || "openai/gpt-4o";
+      }
+      return scenarioValue;
+    },
+    [defaultModel],
+  );
+
   const filteredModels = useMemo(() => {
     const q = modelSearch.trim().toLowerCase();
     const filtered = !q
       ? models
       : models.filter((m) => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q));
-    return [...filtered].sort((a, b) => Number(b.id === aiModel) - Number(a.id === aiModel));
+    return filtered;
   }, [modelSearch, models]);
-
-  const selectedModelForSave = useMemo(() => aiModel.trim(), [aiModel]);
 
   const patch = useMemo<RuntimeSettingsPatch | null>(() => {
     const current = settingsQuery.data;
@@ -105,9 +121,31 @@ export default function Settings() {
     const next: RuntimeSettingsPatch = {};
 
     const aiPatch: NonNullable<RuntimeSettingsPatch["ai"]> = {};
-    if (selectedModelForSave !== "" && selectedModelForSave !== (current.ai.model ?? "")) {
-      aiPatch.model = selectedModelForSave;
+    const trimmedDefault = defaultModel.trim();
+    if (trimmedDefault !== "" && trimmedDefault !== (current.ai.default_model ?? "")) {
+      aiPatch.default_model = trimmedDefault;
     }
+
+    // Job model: USE_DEFAULT means send empty string (clear), otherwise send the model id
+    const currentJobModel = current.ai.job_model ?? USE_DEFAULT;
+    if (jobModel !== currentJobModel) {
+      if (jobModel === USE_DEFAULT) {
+        aiPatch.job_model = ""; // empty string clears it on the backend
+      } else {
+        aiPatch.job_model = jobModel;
+      }
+    }
+
+    // Chat model: same logic
+    const currentChatModel = current.ai.chat_model ?? USE_DEFAULT;
+    if (chatModel !== currentChatModel) {
+      if (chatModel === USE_DEFAULT) {
+        aiPatch.chat_model = "";
+      } else {
+        aiPatch.chat_model = chatModel;
+      }
+    }
+
     if (aiApiKey.trim() !== "") {
       aiPatch.openrouter_api_key = aiApiKey.trim();
     }
@@ -133,7 +171,7 @@ export default function Settings() {
     }
 
     return Object.keys(next).length > 0 ? next : null;
-  }, [aiApiKey, selectedModelForSave, settingsQuery.data, telegramChatId, telegramToken]);
+  }, [aiApiKey, defaultModel, jobModel, chatModel, settingsQuery.data, telegramChatId, telegramToken]);
 
   const updateMutation = useMutation({
     mutationFn: (payload: RuntimeSettingsPatch) =>
@@ -210,13 +248,6 @@ export default function Settings() {
         })
         .filter((m): m is OpenRouterModel => Boolean(m));
       setModels(loaded);
-      if (loaded.length > 0) {
-        if (aiModel && loaded.some((m) => m.id === aiModel)) {
-          setAiModel(aiModel);
-        } else {
-          setAiModel(loaded[0].id);
-        }
-      }
       setToast({ kind: "success", message: `Fetched ${loaded.length} models.` });
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Failed to fetch models";
@@ -224,12 +255,7 @@ export default function Settings() {
     } finally {
       setModelsLoading(false);
     }
-  }, [aiApiKey, aiModel, settingsQuery.data?.ai.openrouter_api_key]);
-
-  const toggleModel = (id: string, checked: boolean) => {
-    if (!checked) return;
-    setAiModel(id);
-  };
+  }, [aiApiKey, settingsQuery.data?.ai.openrouter_api_key]);
 
   useEffect(() => {
     if (!toast) return;
@@ -277,6 +303,81 @@ export default function Settings() {
   const dialogTitle =
     selectedSetting === "ai" ? "AI (OpenRouter)" : "Telegram Bot";
 
+  /** Render a model selector section (shared UI for default, job, chat) */
+  const renderModelSelector = (
+    label: string,
+    value: string,
+    onChange: (id: string) => void,
+    showUseDefault: boolean,
+  ) => {
+    const isDefault = value === USE_DEFAULT;
+    const activeModelId = isDefault ? effectiveModel(value) : value;
+
+    // Sort so the currently selected model appears first
+    const sorted = [...filteredModels].sort(
+      (a, b) => Number(b.id === activeModelId) - Number(a.id === activeModelId),
+    );
+
+    return (
+      <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-semibold">{label}</p>
+          <span className="text-xs text-muted-foreground">
+            Active: {activeModelId || "openai/gpt-4o"}
+          </span>
+        </div>
+
+        {showUseDefault && (
+          <div className="flex items-center justify-between gap-3 rounded border bg-background px-3 py-2">
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium">Use default model</p>
+              <p className="text-xs text-muted-foreground">
+                Falls back to: {defaultModel || "openai/gpt-4o"}
+              </p>
+            </div>
+            <Switch
+              checked={isDefault}
+              onCheckedChange={(checked) => {
+                if (checked) onChange(USE_DEFAULT);
+              }}
+            />
+          </div>
+        )}
+
+        <div className="max-h-48 overflow-y-auto rounded border bg-background">
+          {sorted.length === 0 && (
+            <div className="p-3 text-sm text-muted-foreground">
+              No models loaded. Fetch models above.
+            </div>
+          )}
+          {sorted.map((model) => (
+            <div
+              key={model.id}
+              className="flex items-center justify-between gap-3 border-b px-3 py-2 last:border-b-0"
+            >
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium">{model.name}</p>
+                <p className="truncate text-xs text-muted-foreground">
+                  {model.id}
+                  {model.contextLength ? ` -- ${Math.round(model.contextLength / 1000)}K` : ""}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <SlidersHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
+                <Switch
+                  checked={!isDefault && model.id === value}
+                  onCheckedChange={(checked) => {
+                    if (checked) onChange(model.id);
+                  }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -300,7 +401,7 @@ export default function Settings() {
             <div className="space-y-1">
               <p className="font-medium">AI (OpenRouter)</p>
               <p className="text-xs text-muted-foreground">
-                Model: {current.ai.model ?? "Not set"} · Key:{" "}
+                Default: {current.ai.default_model ?? "Not set"} · Key:{" "}
                 {current.ai.openrouter_api_key ? "Set" : "Not set"}
               </p>
             </div>
@@ -416,57 +517,32 @@ export default function Settings() {
                   />
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  Showing {filteredModels.length} models (enabled first)
-                </p>
-                <p className="text-sm">
-                  Selected model:{" "}
-                  <span className="font-medium">
-                    {selectedModelForSave || current.ai.model || "Not set"}
-                  </span>
+                  Showing {filteredModels.length} models
                 </p>
                 {modelsError && (
                   <p className="text-sm text-destructive">{modelsError}</p>
                 )}
-                <div className="max-h-80 overflow-y-auto rounded-lg border bg-background">
-                  {filteredModels.length === 0 && !selectedModelForSave && !current.ai.model && (
-                    <div className="p-4 text-sm text-muted-foreground">
-                      No models yet. Enter API key and click Fetch.
-                    </div>
-                  )}
-                  {filteredModels.length === 0 && (selectedModelForSave || current.ai.model) && (
-                    <div className="flex items-center justify-between gap-3 border-b px-3 py-2.5 last:border-b-0">
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold">
-                          Current Saved Model
-                        </p>
-                        <p className="truncate text-xs text-muted-foreground">
-                          {selectedModelForSave || current.ai.model}
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                  {filteredModels.map((model) => (
-                    <div
-                      key={model.id}
-                      className="flex items-center justify-between gap-3 border-b px-3 py-2.5 last:border-b-0"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold">{model.name}</p>
-                        <p className="truncate text-xs text-muted-foreground">
-                          {model.id}
-                          {model.contextLength ? ` · ${Math.round(model.contextLength / 1000)}K` : ""}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <SlidersHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
-                        <Switch
-                          checked={model.id === aiModel}
-                          onCheckedChange={(checked) => toggleModel(model.id, checked)}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
+
+                {renderModelSelector(
+                  "Default Model",
+                  defaultModel,
+                  (id) => setDefaultModel(id),
+                  false,
+                )}
+
+                {renderModelSelector(
+                  "Job Analysis Model",
+                  jobModel,
+                  (id) => setJobModel(id),
+                  true,
+                )}
+
+                {renderModelSelector(
+                  "Chat Model",
+                  chatModel,
+                  (id) => setChatModel(id),
+                  true,
+                )}
               </div>
             </div>
           )}

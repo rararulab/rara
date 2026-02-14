@@ -107,9 +107,8 @@ impl AppState {
         let default_model = settings_svc
             .current()
             .ai
-            .model
-            .clone()
-            .unwrap_or_else(|| "openai/gpt-4o-mini".to_owned());
+            .model_for(rara_domain_shared::settings::model::ModelScenario::Chat)
+            .to_owned();
         let chat_service = rara_domain_chat::service::ChatService::new(
             session_repo,
             llm_provider,
