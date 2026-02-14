@@ -21,6 +21,7 @@ import {
   Bot,
   Briefcase,
   FileText,
+  FileType,
   MessageSquare,
   Search,
   Bookmark,
@@ -54,6 +55,7 @@ const navItems = [
   { to: '/chat', icon: Bot, label: 'Chat' },
   { to: '/applications', icon: Briefcase, label: 'Applications' },
   { to: '/resumes', icon: FileText, label: 'Resumes' },
+  { to: '/typst', icon: FileType, label: 'Typst' },
   { to: '/interviews', icon: MessageSquare, label: 'Interviews' },
   { to: '/discovery', icon: Search, label: 'Job Discovery' },
   { to: '/saved-jobs', icon: Bookmark, label: 'Saved Jobs' },
@@ -127,11 +129,14 @@ function useIsWide(): boolean {
 /** Routes that need zero padding in the main content area. */
 const FULL_BLEED_ROUTES = new Set(['/chat']);
 
+/** Routes that need full bleed when they match as a prefix (e.g. /typst/:id). */
+const FULL_BLEED_PREFIXES = ['/typst/'];
+
 export default function DashboardLayout() {
   const [collapsed, setCollapsed] = useLocalStorage('sidebar-collapsed', false);
   const isWide = useIsWide();
   const location = useLocation();
-  const isFullBleed = FULL_BLEED_ROUTES.has(location.pathname);
+  const isFullBleed = FULL_BLEED_ROUTES.has(location.pathname) || FULL_BLEED_PREFIXES.some(p => location.pathname.startsWith(p));
 
   useEffect(() => {
     setCollapsed(!isWide);

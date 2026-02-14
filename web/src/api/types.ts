@@ -282,6 +282,36 @@ export interface ChatModel {
   context_length: number;
 }
 
+// Typst
+export interface TypstProject {
+  id: string;
+  name: string;
+  description: string | null;
+  main_file: string;
+  resume_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TypstFile {
+  id: string;
+  project_id: string;
+  path: string;
+  content: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RenderResult {
+  id: string;
+  project_id: string;
+  pdf_object_key: string;
+  source_hash: string;
+  page_count: number;
+  file_size: number;
+  created_at: string;
+}
+
 // Chat Sessions
 export interface ChatSession {
   key: string;
