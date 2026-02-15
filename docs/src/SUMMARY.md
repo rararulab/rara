@@ -15,3 +15,7 @@
 - [API Guide](api-guide.md)
 - [Buf Integration](buf-integration.md)
 - [OpenTelemetry Integration](opentelemetry.md)
+
+# Diary
+
+- [Rara's Diary](diary/README.md)

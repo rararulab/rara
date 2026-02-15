@@ -67,15 +67,38 @@ impl AgentScheduler {
     }
 
     /// Load jobs from the backing JSON file. Tolerates missing files.
+    ///
+    /// If no jobs exist after loading (file missing or empty), a default
+    /// daily diary cron job is seeded so the agent writes a diary entry
+    /// every evening at 22:00.
     pub async fn load(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let path = &self.jobs_path;
-        if !path.exists() {
-            return Ok(());
+        if path.exists() {
+            let data = tokio::fs::read_to_string(path).await?;
+            let loaded: Vec<AgentJob> = serde_json::from_str(&data)?;
+            let mut jobs = self.jobs.write().await;
+            *jobs = loaded;
         }
-        let data = tokio::fs::read_to_string(path).await?;
-        let loaded: Vec<AgentJob> = serde_json::from_str(&data)?;
-        let mut jobs = self.jobs.write().await;
-        *jobs = loaded;
+
+        // Seed a default daily-diary job when no jobs exist.
+        let needs_seed = self.jobs.read().await.is_empty();
+        if needs_seed {
+            let diary_job = AgentJob {
+                id:          ulid::Ulid::new().to_string(),
+                message:     "写今天的日记。回顾今天的用户活动和你的工作，写一篇日记到 docs/src/diary/ 目录。".to_string(),
+                trigger:     AgentTrigger::Cron {
+                    expr: "0 22 * * *".to_string(),
+                },
+                session_key: "agent:proactive".to_string(),
+                created_at:  jiff::Timestamp::now(),
+                last_run_at: None,
+                enabled:     true,
+            };
+            let mut jobs = self.jobs.write().await;
+            jobs.push(diary_job);
+            drop(jobs);
+            self.save().await?;
+        }
         Ok(())
     }
 
