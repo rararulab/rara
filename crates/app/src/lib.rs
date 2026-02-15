@@ -230,7 +230,7 @@ impl AppConfig {
             .fallible_worker(rara_workers::proactive::ProactiveAgentWorker)
             .name("proactive-agent")
             .eager()
-            .interval_or_notify(Duration::from_secs(60))
+            .interval_or_notify(Duration::from_secs(30 * 60))
             .spawn();
         if let Ok(mut guard) = app_state.proactive_notify.write() {
             *guard = Some(proactive_handle);

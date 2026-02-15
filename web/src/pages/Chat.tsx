@@ -1208,7 +1208,10 @@ export default function Chat() {
     refetchInterval: 10_000,
   });
 
-  const sessions = sessionsQuery.data ?? [];
+  // Hide internal agent sessions (e.g. "agent:proactive") from the UI
+  const sessions = (sessionsQuery.data ?? []).filter(
+    (s) => !s.key.startsWith("agent:"),
+  );
 
   const activeSession = activeKey
     ? sessions.find((s) => s.key === activeKey) ?? null

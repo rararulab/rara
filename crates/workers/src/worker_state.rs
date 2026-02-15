@@ -225,8 +225,7 @@ impl AppState {
 
         // -- codex agent dispatch ----------------------------------------
         let task_store = crate::tools::services::AgentTaskStore::new();
-        let project_root =
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         tool_registry.register_service(Arc::new(crate::tools::services::CodexRunTool::new(
             task_store.clone(),
             notify_client.clone(),

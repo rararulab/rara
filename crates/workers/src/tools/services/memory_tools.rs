@@ -283,11 +283,13 @@ impl AgentTool for MemoryUpdateProfileTool {
             })?;
 
         // Read current profile (empty string if not yet created).
-        let mut profile = self.manager.read_core_profile().await.map_err(|e| {
-            rara_agents::err::Error::Other {
-                message: format!("failed to read profile: {e}").into(),
-            }
-        })?;
+        let mut profile =
+            self.manager
+                .read_core_profile()
+                .await
+                .map_err(|e| rara_agents::err::Error::Other {
+                    message: format!("failed to read profile: {e}").into(),
+                })?;
 
         // Initialize with template if empty.
         if profile.trim().is_empty() {

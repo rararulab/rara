@@ -36,11 +36,7 @@ pub struct ScreenshotTool {
 }
 
 impl ScreenshotTool {
-    pub fn new(
-        notify: NotifyClient,
-        settings_svc: SettingsSvc,
-        project_root: PathBuf,
-    ) -> Self {
+    pub fn new(notify: NotifyClient, settings_svc: SettingsSvc, project_root: PathBuf) -> Self {
         Self {
             notify,
             settings_svc,
@@ -99,33 +95,23 @@ impl AgentTool for ScreenshotTool {
         &self,
         params: serde_json::Value,
     ) -> rara_agents::err::Result<serde_json::Value> {
-        let url = params
-            .get("url")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
+        let url = params.get("url").and_then(|v| v.as_str()).ok_or_else(|| {
+            rara_agents::err::Error::Other {
                 message: "missing required parameter: url".into(),
-            })?;
+            }
+        })?;
 
         let selector = params
             .get("selector")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let width = params
-            .get("width")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(1280);
-        let height = params
-            .get("height")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(720);
+        let width = params.get("width").and_then(|v| v.as_u64()).unwrap_or(1280);
+        let height = params.get("height").and_then(|v| v.as_u64()).unwrap_or(720);
         let full_page = params
             .get("full_page")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let send = params
-            .get("send")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
+        let send = params.get("send").and_then(|v| v.as_bool()).unwrap_or(true);
         let caption = params
             .get("caption")
             .and_then(|v| v.as_str())

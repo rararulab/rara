@@ -289,10 +289,11 @@ impl Into<RuntimeSettingsView> for Settings {
                 favorite_models:    self.ai.favorite_models.clone(),
             },
             telegram:   TgSettingsResp {
-                configured: self.telegram.bot_token.is_some() && self.telegram.chat_id.is_some(),
-                chat_id: self.telegram.chat_id,
+                configured:            self.telegram.bot_token.is_some()
+                    && self.telegram.chat_id.is_some(),
+                chat_id:               self.telegram.chat_id,
                 allowed_group_chat_id: self.telegram.allowed_group_chat_id,
-                token_hint: secret_hint(self.telegram.bot_token.as_deref()),
+                token_hint:            secret_hint(self.telegram.bot_token.as_deref()),
             },
             agent:      AgentSettingsView {
                 soul:               self.agent.soul.clone(),

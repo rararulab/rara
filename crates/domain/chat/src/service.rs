@@ -39,8 +39,10 @@ use rara_sessions::{
 use tokio::sync::watch;
 use tracing::{info, instrument};
 
-use crate::error::ChatError;
-use crate::model_catalog::{ChatModel, ModelCatalog};
+use crate::{
+    error::ChatError,
+    model_catalog::{ChatModel, ModelCatalog},
+};
 
 /// Default system prompt used when no custom prompt is configured in settings
 /// and no session-level override is provided.
@@ -177,11 +179,12 @@ impl ChatService {
             telegram: None,
             agent:    None,
         };
-        self.settings_svc.update(patch).await.map_err(|e| {
-            ChatError::SessionError {
+        self.settings_svc
+            .update(patch)
+            .await
+            .map_err(|e| ChatError::SessionError {
                 message: format!("failed to update favorite models: {e}"),
-            }
-        })?;
+            })?;
         Ok(())
     }
 
@@ -457,10 +460,7 @@ impl ChatService {
                     Ok(results) if !results.is_empty() => {
                         system_prompt.push_str("\n\n## Relevant Memory Context\n");
                         for hit in &results {
-                            system_prompt.push_str(&format!(
-                                "- [{}] {}\n",
-                                hit.path, hit.snippet,
-                            ));
+                            system_prompt.push_str(&format!("- [{}] {}\n", hit.path, hit.snippet,));
                         }
                         info!(
                             hits = results.len(),
@@ -801,20 +801,22 @@ async fn memory_reflection(
 
     let reflection_prompt = format!(
         "You are a memory maintenance agent. Based on the following exchange, extract any new \
-         facts about the user (name, role, location, preferences, goals, important context). \
-         If you learned something new, use memory_update_profile to update the relevant section \
-         (\"Basic Info\", \"Preferences\", \"Current Goals\", or \"Key Context\"). \
-         If nothing new was learned, do nothing — do NOT call any tools.\n\n\
-         Keep updates concise (3-5 bullet points per section max). \
-         Only add genuinely useful information.\n\n\
-         ## User Message\n{user_text}\n\n\
-         ## Assistant Response\n{assistant_text}"
+         facts about the user (name, role, location, preferences, goals, important context). If \
+         you learned something new, use memory_update_profile to update the relevant section \
+         (\"Basic Info\", \"Preferences\", \"Current Goals\", or \"Key Context\"). If nothing new \
+         was learned, do nothing — do NOT call any tools.\n\nKeep updates concise (3-5 bullet \
+         points per section max). Only add genuinely useful information.\n\n## User \
+         Message\n{user_text}\n\n## Assistant Response\n{assistant_text}"
     );
 
     let runner = AgentRunner::builder()
         .llm_provider(llm.clone())
         .model_name(model.to_owned())
-        .system_prompt("You are a silent memory maintenance agent. Your only job is to update the user profile if new facts were learned. Never produce conversational output.".to_owned())
+        .system_prompt(
+            "You are a silent memory maintenance agent. Your only job is to update the user \
+             profile if new facts were learned. Never produce conversational output."
+                .to_owned(),
+        )
         .user_content(openrouter_rs::api::chat::Content::Text(reflection_prompt))
         .max_iterations(1_usize)
         .build();

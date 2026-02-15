@@ -12,14 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Layer 2 service tools for dispatching CLI coding agents (Claude Code / Codex).
+//! Layer 2 service tools for dispatching CLI coding agents (Claude Code /
+//! Codex).
 
 use std::{
     fmt,
     path::PathBuf,
     sync::{
-        atomic::{AtomicU32, Ordering},
         Arc,
+        atomic::{AtomicU32, Ordering},
     },
     time::Instant,
 };
@@ -127,9 +128,7 @@ impl AgentTaskStore {
     }
 
     /// Get the most recently added task.
-    pub async fn get_latest(&self) -> Option<AgentTask> {
-        self.tasks.read().await.last().cloned()
-    }
+    pub async fn get_latest(&self) -> Option<AgentTask> { self.tasks.read().await.last().cloned() }
 
     /// Return summaries of all tasks.
     pub async fn list(&self) -> Vec<serde_json::Value> {

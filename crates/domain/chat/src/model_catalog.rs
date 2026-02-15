@@ -18,8 +18,10 @@
 //! caches them for a configurable TTL. When no API key is available (or on
 //! fetch failure) it falls back to a hand-picked [`CURATED_MODELS`] list.
 
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -224,7 +226,10 @@ impl ModelCatalog {
                 // Try stale cache
                 let guard = self.cache.lock().await;
                 if let Some(ref entry) = *guard {
-                    debug!("using stale cache ({:.0}s old)", entry.fetched_at.elapsed().as_secs_f64());
+                    debug!(
+                        "using stale cache ({:.0}s old)",
+                        entry.fetched_at.elapsed().as_secs_f64()
+                    );
                     return Self::materialize(&entry.models, favorite_ids);
                 }
                 drop(guard);

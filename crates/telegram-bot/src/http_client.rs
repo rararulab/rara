@@ -307,6 +307,38 @@ impl MainServiceHttpClient {
             .context(RequestSnafu)
     }
 
+    /// Update session fields (e.g. model, title).
+    ///
+    /// Maps to `PATCH /api/v1/chat/sessions/{key}`.
+    pub async fn update_session(
+        &self,
+        key: &str,
+        model: Option<&str>,
+    ) -> Result<SessionDetailResponse, MainServiceHttpError> {
+        let url = format!("{}/api/v1/chat/sessions/{}", self.base_url, key);
+        let mut body = serde_json::Map::new();
+        if let Some(m) = model {
+            body.insert("model".to_owned(), serde_json::json!(m));
+        }
+        let resp = self
+            .client
+            .patch(url)
+            .json(&body)
+            .send()
+            .await
+            .context(RequestSnafu)?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(MainServiceHttpError::HttpStatus { status, body });
+        }
+
+        resp.json::<SessionDetailResponse>()
+            .await
+            .context(RequestSnafu)
+    }
+
     /// Get session details.
     ///
     /// Maps to `GET /api/v1/chat/sessions/{key}`.

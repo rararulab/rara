@@ -46,9 +46,7 @@ use rara_sessions::types::{ChannelBinding, ChatMessage, SessionEntry, SessionKey
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-use crate::{error::ChatError, service::ChatService};
-
-use crate::model_catalog::ChatModel;
+use crate::{error::ChatError, model_catalog::ChatModel, service::ChatService};
 
 // ---------------------------------------------------------------------------
 // Request / Response types

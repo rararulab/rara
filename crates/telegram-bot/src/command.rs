@@ -49,4 +49,9 @@ pub(crate) enum Command {
     /// Show details of the current active session.
     #[command(description = "Show current session usage")]
     Usage,
+    /// Show or switch the model for the current session.
+    /// Without arguments, shows the current model.
+    /// With an argument, switches to the specified model.
+    #[command(description = "Show/switch model: /model [name]")]
+    Model(String),
 }

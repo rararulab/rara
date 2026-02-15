@@ -85,7 +85,9 @@ impl AgentScheduler {
         if needs_seed {
             let diary_job = AgentJob {
                 id:          ulid::Ulid::new().to_string(),
-                message:     "写今天的日记。回顾今天的用户活动和你的工作，写一篇日记到 docs/src/diary/ 目录。".to_string(),
+                message:     "写今天的日记。回顾今天的用户活动和你的工作，写一篇日记到 \
+                              docs/src/diary/ 目录。"
+                    .to_string(),
                 trigger:     AgentTrigger::Cron {
                     expr: "0 22 * * *".to_string(),
                 },

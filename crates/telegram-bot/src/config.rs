@@ -136,10 +136,7 @@ impl BotConfig {
                 )
             }
         };
-        let chat_id = match runtime_settings
-            .telegram
-            .chat_id
-        {
+        let chat_id = match runtime_settings.telegram.chat_id {
             Some(chat_id) => chat_id,
             None => {
                 whatever!("Telegram chat_id is required: set it via /api/v1/settings")

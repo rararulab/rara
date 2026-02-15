@@ -36,9 +36,7 @@ use teloxide::{
     net::Download,
     payloads::{EditMessageTextSetters, SendMessageSetters},
     requests::Requester,
-    types::{
-        CallbackQuery, ChatAction, ChatId, Message, ParseMode, PhotoSize, Update, UpdateKind,
-    },
+    types::{CallbackQuery, ChatAction, ChatId, Message, ParseMode, PhotoSize, Update, UpdateKind},
     utils::command::BotCommands,
 };
 use tokio_util::sync::CancellationToken;
@@ -343,6 +341,9 @@ async fn handle_command(
         Command::Usage => {
             handle_usage(&msg, state).await?;
         }
+        Command::Model(args) => {
+            handle_model(&msg, &args, state).await?;
+        }
     }
     Ok(())
 }
@@ -483,7 +484,8 @@ async fn handle_photo_message(
         }
     };
 
-    // Start continuous typing indicator — download + LLM inference may take a while.
+    // Start continuous typing indicator — download + LLM inference may take a
+    // while.
     let (typing_handle, typing_cancel) = start_typing_loop(state.bot.clone(), msg.chat.id);
 
     // Select the highest-resolution photo (last element in the array).
@@ -971,6 +973,105 @@ async fn handle_usage(msg: &Message, state: &Arc<BotState>) -> Result<(), teloxi
                 .bot
                 .send_message(msg.chat.id, format!("Failed to get session details: {e}"))
                 .await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle `/model [name]` — show or switch the model for the current session.
+///
+/// Without arguments, displays the current model. With an argument, updates
+/// the session model to the specified value.
+async fn handle_model(
+    msg: &Message,
+    args: &str,
+    state: &Arc<BotState>,
+) -> Result<(), teloxide::RequestError> {
+    let account = "default";
+    let chat_id_str = msg.chat.id.0.to_string();
+
+    let session_key = match state
+        .http_client
+        .get_channel_session(account, &chat_id_str)
+        .await
+    {
+        Ok(Some(binding)) => binding.session_key,
+        Ok(None) => {
+            state
+                .bot
+                .send_message(
+                    msg.chat.id,
+                    "No active session. Send a message to create one.",
+                )
+                .await?;
+            return Ok(());
+        }
+        Err(e) => {
+            state
+                .bot
+                .send_message(msg.chat.id, format!("Failed to resolve session: {e}"))
+                .await?;
+            return Ok(());
+        }
+    };
+
+    let new_model = args.trim();
+
+    if new_model.is_empty() {
+        // Show current model.
+        match state.http_client.get_session(&session_key).await {
+            Ok(detail) => {
+                let model = detail.model.as_deref().unwrap_or("(default)");
+                state
+                    .bot
+                    .send_message(
+                        msg.chat.id,
+                        format!(
+                            "Session <code>{}</code>\nModel: <b>{}</b>\n\nSwitch: <code>/model \
+                             model-name</code>",
+                            html_escape(&detail.key),
+                            html_escape(model),
+                        ),
+                    )
+                    .parse_mode(ParseMode::Html)
+                    .await?;
+            }
+            Err(e) => {
+                state
+                    .bot
+                    .send_message(msg.chat.id, format!("Failed to get session details: {e}"))
+                    .await?;
+            }
+        }
+    } else {
+        // Switch model.
+        match state
+            .http_client
+            .update_session(&session_key, Some(new_model))
+            .await
+        {
+            Ok(detail) => {
+                let model = detail.model.as_deref().unwrap_or("(default)");
+                state
+                    .bot
+                    .send_message(
+                        msg.chat.id,
+                        format!(
+                            "Model updated.\nSession <code>{}</code>\nModel: <b>{}</b>",
+                            html_escape(&detail.key),
+                            html_escape(model),
+                        ),
+                    )
+                    .parse_mode(ParseMode::Html)
+                    .await?;
+            }
+            Err(e) => {
+                state
+                    .bot
+                    .send_message(msg.chat.id, format!("Failed to update model: {e}"))
+                    .await?;
+            }
         }
     }
 

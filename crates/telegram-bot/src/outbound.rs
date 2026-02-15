@@ -29,7 +29,11 @@ use std::{
 };
 
 use snafu::{ResultExt, Snafu};
-use teloxide::{payloads::{SendMessageSetters, SendPhotoSetters}, requests::Requester, types::{ChatId, InputFile}};
+use teloxide::{
+    payloads::{SendMessageSetters, SendPhotoSetters},
+    requests::Requester,
+    types::{ChatId, InputFile},
+};
 use tracing::instrument;
 
 use crate::{
