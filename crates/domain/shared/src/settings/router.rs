@@ -72,9 +72,6 @@ pub struct AgentSettingsView {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MemorySettingsView {
-    pub storage_backend:    String,
-    pub embeddings_enabled: bool,
-    pub chroma_enabled:     bool,
     pub chroma_url:         Option<String>,
     pub chroma_collection:  Option<String>,
     pub chroma_api_key_hint: Option<String>,
@@ -130,9 +127,6 @@ impl Into<RuntimeSettingsView> for Settings {
                 proactive_enabled:  self.agent.proactive_enabled,
                 proactive_cron:     self.agent.proactive_cron.clone(),
                 memory:             MemorySettingsView {
-                    storage_backend:    self.agent.memory.storage_backend.clone(),
-                    embeddings_enabled: self.agent.memory.embeddings_enabled,
-                    chroma_enabled:     self.agent.memory.chroma_enabled,
                     chroma_url:         self.agent.memory.chroma_url.clone(),
                     chroma_collection:  self.agent.memory.chroma_collection.clone(),
                     chroma_api_key_hint: secret_hint(self.agent.memory.chroma_api_key.as_deref()),

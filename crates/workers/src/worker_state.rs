@@ -117,58 +117,24 @@ impl AppState {
         let llm_provider: rara_agents::model::OpenRouterLoaderRef =
             Arc::new(SettingsOpenRouterLoader::new(settings_svc.clone()));
         let mut tool_registry = rara_agents::tool_registry::ToolRegistry::with_defaults();
-        let memory_backend = settings_svc.current().agent.memory.storage_backend;
-        let memory_backend = if memory_backend.trim().is_empty() {
-            "postgres".to_owned()
-        } else {
-            memory_backend.to_ascii_lowercase()
-        };
-        let memory_manager = Arc::new(match memory_backend.as_str() {
-            "sqlite" => match rara_memory::MemoryManager::open(
-                rara_paths::memory_dir().clone(),
-                rara_paths::memory_index_db_file().clone(),
-            ) {
-                Ok(manager) => manager,
-                Err(primary_err) => {
-                    warn!(
-                        error = %primary_err,
-                        "sqlite memory manager init failed, falling back to postgres"
-                    );
-                    rara_memory::MemoryManager::open_postgres(
-                        rara_paths::memory_dir().clone(),
-                        pool.clone(),
-                    )
-                    .whatever_context(
-                        "Failed to initialize postgres memory manager after sqlite fallback",
-                    )?
-                }
-            },
-            _ => match rara_memory::MemoryManager::open_postgres(
+        let memory_settings = settings_svc.current().agent.memory;
+        let chroma_url = memory_settings.chroma_url.clone()
+            .unwrap_or_else(|| "http://localhost:8000".to_owned());
+        let chroma = rara_memory::ChromaClient::new(
+            chroma_url,
+            memory_settings.chroma_collection.clone(),
+            memory_settings.chroma_api_key.clone(),
+        )
+        .expect("chroma URL should not be empty after defaulting");
+        let memory_manager = Arc::new(
+            rara_memory::MemoryManager::new(
                 rara_paths::memory_dir().clone(),
                 pool.clone(),
-            ) {
-                Ok(manager) => manager,
-                Err(primary_err) => {
-                    warn!(
-                        error = %primary_err,
-                        "postgres memory manager init failed, falling back to sqlite"
-                    );
-                    rara_memory::MemoryManager::open(
-                        rara_paths::memory_dir().clone(),
-                        rara_paths::memory_index_db_file().clone(),
-                    )
-                    .whatever_context(
-                        "Failed to initialize sqlite memory manager after postgres fallback",
-                    )?
-                }
-            },
-        });
-        memory_manager.apply_runtime_settings(&settings_svc.current().agent.memory);
-        info!(
-            storage_backend = memory_manager.storage_backend(),
-            vector_backend = memory_manager.vector_backend(),
-            "memory manager initialized"
+                chroma,
+            )
+            .whatever_context("Failed to initialize memory manager")?,
         );
+        info!("memory manager initialized");
         let _ = memory_manager
             .sync()
             .await
@@ -206,11 +172,9 @@ impl AppState {
         )));
         tool_registry.register_service(Arc::new(crate::tools::services::MemorySearchTool::new(
             Arc::clone(&memory_manager),
-            settings_svc.clone(),
         )));
         tool_registry.register_service(Arc::new(crate::tools::services::MemoryGetTool::new(
             Arc::clone(&memory_manager),
-            settings_svc.clone(),
         )));
         tool_registry.register_service(Arc::new(
             crate::tools::services::ListTypstProjectsTool::new(typst_service.clone()),

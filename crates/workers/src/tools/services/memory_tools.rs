@@ -18,24 +18,19 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rara_agents::tool_registry::AgentTool;
-use rara_domain_shared::settings::SettingsSvc;
 use serde_json::json;
 
 use rara_memory::MemoryManager;
 
 /// Search local memory index (keyword/hybrid depending on runtime settings).
 pub struct MemorySearchTool {
-    manager:      Arc<MemoryManager>,
-    settings_svc: SettingsSvc,
+    manager: Arc<MemoryManager>,
 }
 
 impl MemorySearchTool {
     /// Create a `memory_search` tool.
-    pub fn new(manager: Arc<MemoryManager>, settings_svc: SettingsSvc) -> Self {
-        Self {
-            manager,
-            settings_svc,
-        }
+    pub fn new(manager: Arc<MemoryManager>) -> Self {
+        Self { manager }
     }
 }
 
@@ -70,11 +65,6 @@ impl AgentTool for MemorySearchTool {
         &self,
         params: serde_json::Value,
     ) -> rara_agents::err::Result<serde_json::Value> {
-        // Apply latest runtime memory settings before every request so changes
-        // in `/api/v1/settings` are reflected immediately.
-        let settings = self.settings_svc.current();
-        self.manager.apply_runtime_settings(&settings.agent.memory);
-
         let query = params
             .get("query")
             .and_then(|v| v.as_str())
@@ -103,8 +93,6 @@ impl AgentTool for MemorySearchTool {
 
         Ok(json!({
             "query": query,
-            "storage_backend": self.manager.storage_backend(),
-            "vector_backend": self.manager.vector_backend(),
             "count": results.len(),
             "results": results
                 .iter()
@@ -122,17 +110,13 @@ impl AgentTool for MemorySearchTool {
 
 /// Retrieve full chunk content by chunk ID.
 pub struct MemoryGetTool {
-    manager:      Arc<MemoryManager>,
-    settings_svc: SettingsSvc,
+    manager: Arc<MemoryManager>,
 }
 
 impl MemoryGetTool {
     /// Create a `memory_get` tool.
-    pub fn new(manager: Arc<MemoryManager>, settings_svc: SettingsSvc) -> Self {
-        Self {
-            manager,
-            settings_svc,
-        }
+    pub fn new(manager: Arc<MemoryManager>) -> Self {
+        Self { manager }
     }
 }
 
@@ -163,9 +147,6 @@ impl AgentTool for MemoryGetTool {
         &self,
         params: serde_json::Value,
     ) -> rara_agents::err::Result<serde_json::Value> {
-        let settings = self.settings_svc.current();
-        self.manager.apply_runtime_settings(&settings.agent.memory);
-
         let chunk_id = params
             .get("chunk_id")
             .and_then(|v| v.as_i64())

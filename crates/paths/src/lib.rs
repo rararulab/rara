@@ -260,8 +260,3 @@ pub fn memory_dir() -> &'static PathBuf {
     MEMORY_DIR.get_or_init(|| data_dir().join("memory"))
 }
 
-/// Returns the path to the local SQLite memory index file.
-pub fn memory_index_db_file() -> &'static PathBuf {
-    static MEMORY_DB_FILE: OnceLock<PathBuf> = OnceLock::new();
-    MEMORY_DB_FILE.get_or_init(|| data_dir().join("memory.sqlite3"))
-}

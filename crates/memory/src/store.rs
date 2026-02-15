@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Storage abstraction for local memory indexing.
-
-use crate::manager::{ChunkDetail, MemoryResult};
+//! Data types for memory storage operations.
 
 /// File-level index metadata.
 #[derive(Debug, Clone)]
@@ -36,34 +34,6 @@ pub struct ChunkInput {
     pub chunk_index: i64,
     /// Raw text content of this chunk.
     pub content:     String,
-}
-
-/// Persistence contract for memory index backends.
-pub trait MemoryStore: Send + Sync {
-    /// Ensure all required tables/indexes exist.
-    fn ensure_schema(&self) -> MemoryResult<()>;
-
-    /// List currently indexed files with metadata used for incremental sync.
-    fn list_files(&self) -> MemoryResult<Vec<IndexedFileMeta>>;
-
-    /// Replace all chunks for a file with the given payload.
-    fn upsert_file_chunks(
-        &self,
-        path: &str,
-        hash: &str,
-        mtime: i64,
-        size: i64,
-        chunks: &[ChunkInput],
-    ) -> MemoryResult<()>;
-
-    /// Delete file entries (and cascaded chunks) for the given paths.
-    fn delete_files(&self, paths: &[String]) -> MemoryResult<()>;
-
-    /// Execute keyword-only retrieval.
-    fn keyword_search(&self, query: &str, limit: usize) -> MemoryResult<Vec<MemorySearchRow>>;
-
-    /// Fetch full chunk payload by identifier.
-    fn get_chunk(&self, chunk_id: i64) -> MemoryResult<Option<ChunkDetail>>;
 }
 
 /// Low-level search row returned by store backend.

@@ -17,8 +17,6 @@
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
-    sync::RwLock,
     sync::Arc,
     time::UNIX_EPOCH,
 };
@@ -30,9 +28,8 @@ use walkdir::WalkDir;
 use crate::{
     chroma::{ChromaChunk, ChromaClient},
     reranking::rerank_results,
-    store::{ChunkInput, IndexedFileMeta, MemoryStore},
+    store::ChunkInput,
     store_pg::PgMemoryStore,
-    store_sqlite::SqliteMemoryStore,
 };
 
 /// Unified memory error.
@@ -41,9 +38,6 @@ use crate::{
 pub enum MemoryError {
     #[snafu(display("I/O error: {source}"))]
     Io { source: std::io::Error },
-
-    #[snafu(display("SQLite error: {source}"), context(false))]
-    Db { source: rusqlite::Error },
 
     #[snafu(display("task join error: {source}"))]
     TaskJoin { source: tokio::task::JoinError },
@@ -88,306 +82,211 @@ pub struct SyncStats {
 
 /// High-level memory orchestrator.
 ///
-/// This type owns the end-to-end indexing and retrieval flow:
-/// 1. Incremental markdown sync.
-/// 2. Chunk generation.
-/// 3. Optional Chroma upsert/query (server-side embeddings).
-/// 4. Hybrid fusion and reranking.
+/// Owns the end-to-end indexing and retrieval flow:
+/// 1. Incremental markdown sync (PG metadata + chunks).
+/// 2. Chroma upsert (server-side embeddings).
+/// 3. Hybrid search (Chroma vector + PG keyword fusion).
+/// 4. Token-overlap reranking.
 #[derive(Clone)]
 pub struct MemoryManager {
-    storage_backend: &'static str,
     memory_dir:    PathBuf,
-    store:         Arc<dyn MemoryStore>,
-    embeddings_enabled: Arc<AtomicBool>,
-    chroma:        Arc<RwLock<Option<Arc<ChromaClient>>>>,
+    store:         Arc<PgMemoryStore>,
+    chroma:        Arc<ChromaClient>,
     chunk_chars:   usize,
     chunk_overlap: usize,
 }
 
 impl MemoryManager {
-    /// Create a manager with SQLite storage.
-    ///
-    /// Intended for local/dev environments and fallback scenarios.
-    pub fn open(memory_dir: PathBuf, db_path: PathBuf) -> MemoryResult<Self> {
+    /// Create a new memory manager backed by PostgreSQL + Chroma.
+    pub fn new(
+        memory_dir: PathBuf,
+        pool: sqlx::PgPool,
+        chroma: ChromaClient,
+    ) -> MemoryResult<Self> {
         if !memory_dir.exists() {
             std::fs::create_dir_all(&memory_dir).context(IoSnafu)?;
         }
 
-        if let Some(parent) = db_path.parent()
-            && !parent.exists()
-        {
-            std::fs::create_dir_all(parent).context(IoSnafu)?;
-        }
-
-        let store = SqliteMemoryStore::new(db_path);
-        store.ensure_schema()?;
-
         Ok(Self {
-            storage_backend: "sqlite",
             memory_dir,
-            store: Arc::new(store),
-            embeddings_enabled: Arc::new(AtomicBool::new(true)),
-            chroma: Arc::new(RwLock::new(ChromaClient::from_env().map(Arc::new))),
+            store: Arc::new(PgMemoryStore::new(pool)),
+            chroma: Arc::new(chroma),
             chunk_chars: 1200,
             chunk_overlap: 200,
         })
     }
 
-    /// Create a manager backed by PostgreSQL.
-    ///
-    /// This is the preferred production backend in the current architecture.
-    pub fn open_postgres(memory_dir: PathBuf, pool: sqlx::PgPool) -> MemoryResult<Self> {
-        if !memory_dir.exists() {
-            std::fs::create_dir_all(&memory_dir).context(IoSnafu)?;
-        }
-
-        let store = PgMemoryStore::new(pool);
-        store.ensure_schema()?;
-
-        Ok(Self {
-            storage_backend: "postgres",
-            memory_dir,
-            store: Arc::new(store),
-            embeddings_enabled: Arc::new(AtomicBool::new(true)),
-            chroma: Arc::new(RwLock::new(ChromaClient::from_env().map(Arc::new))),
-            chunk_chars: 1200,
-            chunk_overlap: 200,
-        })
-    }
-
-    /// Active vector retrieval backend.
-    pub fn vector_backend(&self) -> &'static str {
-        if !self.embeddings_enabled.load(Ordering::Relaxed) {
-            "disabled"
-        } else if self.chroma.read().ok().and_then(|g| g.clone()).is_some() {
-            "chroma"
-        } else {
-            "disabled"
-        }
-    }
-
-    /// Active metadata/index backend.
-    pub fn storage_backend(&self) -> &'static str { self.storage_backend }
-
-    /// Apply runtime memory settings (hot-refresh on every tool invocation).
-    ///
-    /// This intentionally mutates only runtime behavior switches and does not
-    /// rebuild the underlying storage backend.
-    pub fn apply_runtime_settings(&self, memory: &rara_domain_shared::settings::model::MemorySettings) {
-        self.embeddings_enabled
-            .store(memory.embeddings_enabled, Ordering::Relaxed);
-
-        let chroma = if memory.chroma_enabled {
-            memory
-                .chroma_url
-                .clone()
-                .and_then(|url| ChromaClient::new(
-                    url,
-                    memory.chroma_collection.clone(),
-                    memory.chroma_api_key.clone(),
-                ))
-                .map(Arc::new)
-        } else {
-            None
-        };
-
-        if let Ok(mut guard) = self.chroma.write() {
-            *guard = chroma;
-        }
-    }
-
-    /// Run incremental sync from markdown files into the configured store.
-    ///
-    /// Files are selected by `(path, mtime, size, hash)` checks and only
-    /// changed files are re-indexed. When Chroma is available, chunks are
-    /// upserted with document text for server-side embedding.
+    /// Run incremental sync from markdown files into PG + Chroma.
     pub async fn sync(&self) -> MemoryResult<SyncStats> {
+        // Phase 1: async — fetch current index from PG.
+        let indexed = self.store.list_files().await?;
+        let indexed_map: HashMap<String, _> = indexed
+            .into_iter()
+            .map(|meta| (meta.path.clone(), meta))
+            .collect();
+
+        // Phase 2: blocking — filesystem walk, diff, chunk.
         let memory_dir = self.memory_dir.clone();
-        let store = Arc::clone(&self.store);
-        let embeddings_enabled = self.embeddings_enabled.load(Ordering::Relaxed);
-        let chroma = self.chroma.read().ok().and_then(|g| g.clone());
-        let chroma_enabled = chroma.is_some();
         let chunk_chars = self.chunk_chars;
         let chunk_overlap = self.chunk_overlap;
 
-        let sync_result: MemoryResult<(SyncStats, Vec<ChromaChunk>)> =
-            tokio::task::spawn_blocking(move || -> MemoryResult<(SyncStats, Vec<ChromaChunk>)> {
-            let indexed = store.list_files()?;
-            let indexed_map: HashMap<String, IndexedFileMeta> = indexed
-                .into_iter()
-                .map(|meta| (meta.path.clone(), meta))
-                .collect();
+        let (changed, to_delete) = tokio::task::spawn_blocking(move || {
+            scan_filesystem(&memory_dir, &indexed_map, chunk_chars, chunk_overlap)
+        })
+        .await
+        .context(TaskJoinSnafu)??;
 
-            let mut seen_paths = HashSet::new();
-            let mut changed_files = Vec::new();
+        // Phase 3: async — upsert changed files + delete stale ones.
+        let mut stats = SyncStats::default();
+        let mut chroma_chunks = Vec::new();
 
-            for entry in WalkDir::new(&memory_dir)
-                .into_iter()
-                .filter_map(Result::ok)
-                .filter(|entry| entry.file_type().is_file())
-            {
-                let path = entry.path();
-                if !is_markdown_file(path) {
-                    continue;
-                }
+        for change in &changed {
+            self.store
+                .upsert_file_chunks(
+                    &change.relative,
+                    &change.hash,
+                    change.mtime,
+                    change.size,
+                    &change.chunks,
+                )
+                .await?;
+            stats.indexed_files += 1;
+            stats.total_chunks += change.chunks.len();
 
-                let relative = relative_path(&memory_dir, path);
-                seen_paths.insert(relative.clone());
-
-                let metadata = std::fs::metadata(path).context(IoSnafu)?;
-                let mtime = metadata
-                    .modified()
-                    .context(IoSnafu)?
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as i64;
-                let size = metadata.len() as i64;
-
-                if let Some(existing) = indexed_map.get(&relative)
-                    && existing.mtime == mtime
-                    && existing.size == size
-                {
-                    continue;
-                }
-
-                let bytes = std::fs::read(path).context(IoSnafu)?;
-                let hash = format!("{:x}", Sha256::digest(&bytes));
-
-                if let Some(existing) = indexed_map.get(&relative)
-                    && existing.hash == hash
-                {
-                    continue;
-                }
-
-                let content = String::from_utf8_lossy(&bytes).to_string();
-                changed_files.push((relative, hash, mtime, size, content));
+            for (idx, chunk) in change.chunks.iter().enumerate() {
+                chroma_chunks.push(ChromaChunk {
+                    id: format!("{}:{idx}", change.relative),
+                    document: chunk.content.clone(),
+                    path: change.relative.clone(),
+                    chunk_index: chunk.chunk_index,
+                });
             }
+        }
 
-            let mut stats = SyncStats::default();
-            let mut chroma_chunks = Vec::new();
+        if !to_delete.is_empty() {
+            self.store.delete_files(&to_delete).await?;
+            stats.deleted_files = to_delete.len();
+        }
 
-            for (relative, hash, mtime, size, content) in changed_files {
-                let chunks = chunk_text(&content, chunk_chars, chunk_overlap);
-
-                stats.total_chunks += chunks.len();
-                store.upsert_file_chunks(&relative, &hash, mtime, size, &chunks)?;
-                stats.indexed_files += 1;
-
-                // Build Chroma upsert payload when embeddings are enabled and
-                // a Chroma backend is configured.
-                if embeddings_enabled && chroma_enabled {
-                    for (idx, chunk) in chunks.iter().enumerate() {
-                        chroma_chunks.push(ChromaChunk {
-                            id: format!("{relative}:{idx}"),
-                            document: chunk.content.clone(),
-                            path: relative.clone(),
-                            chunk_index: chunk.chunk_index,
-                        });
-                    }
-                }
-            }
-
-            let to_delete = indexed_map
-                .keys()
-                .filter(|path| !seen_paths.contains(*path))
-                .cloned()
-                .collect::<Vec<_>>();
-
-            if !to_delete.is_empty() {
-                store.delete_files(&to_delete)?;
-                stats.deleted_files = to_delete.len();
-            }
-
-                Ok((stats, chroma_chunks))
-            })
-            .await
-            .context(TaskJoinSnafu)?;
-        let (stats, chroma_chunks) = sync_result?;
-
-        // Chroma is best-effort: retrieval still works with keyword fallback if
-        // remote upsert fails.
-        if let Some(chroma) = chroma
-            && let Err(err) = chroma.upsert_chunks(&chroma_chunks).await
-        {
-            tracing::warn!(error = %err, "failed to upsert chunks to chroma, fallback remains available");
+        // Phase 4: async — Chroma upsert.
+        if !chroma_chunks.is_empty() {
+            self.chroma.upsert_chunks(&chroma_chunks).await?;
         }
 
         Ok(stats)
     }
 
-    /// Search memory with automatic strategy selection.
-    ///
-    /// Strategy order:
-    /// 1. Hybrid via Chroma (server-side embeddings) + keyword fusion.
-    /// 2. Keyword-only fallback.
+    /// Search memory using hybrid Chroma vector + PG keyword fusion.
     pub async fn search(&self, query: &str, limit: usize) -> MemoryResult<Vec<SearchResult>> {
-        let store = Arc::clone(&self.store);
-        let chroma = self.chroma.read().ok().and_then(|g| g.clone());
-        let embeddings_enabled = self.embeddings_enabled.load(Ordering::Relaxed);
-        let query = query.to_owned();
         let limit = limit.clamp(1, 50);
+        let fetch_limit = (limit * 4).max(20);
 
-        // Try Chroma vector search + keyword fusion
-        if embeddings_enabled {
-            if let Some(chroma_ref) = chroma {
-                let chroma_hits = chroma_ref.query(&query, (limit * 4).max(20)).await;
-                if let Ok(hits) = chroma_hits {
-                    return tokio::task::spawn_blocking(move || {
-                        hybrid_search_with_chroma_hits(&*store, &query, limit, hits)
-                    })
-                    .await
-                    .context(TaskJoinSnafu)?;
-                }
-            }
-        }
+        // Parallel: PG keyword + Chroma vector.
+        let (keyword_rows, chroma_hits) = tokio::try_join!(
+            self.store.keyword_search(query, fetch_limit),
+            self.chroma.query(query, fetch_limit),
+        )?;
 
-        // Fallback: keyword-only
-        tokio::task::spawn_blocking(move || keyword_only_search_blocking(&*store, &query, limit))
-            .await
-            .context(TaskJoinSnafu)?
+        Ok(hybrid_fuse(query, limit, keyword_rows, chroma_hits))
     }
 
     /// Fetch full chunk by id.
     pub async fn get_chunk(&self, chunk_id: i64) -> MemoryResult<Option<ChunkDetail>> {
-        let store = Arc::clone(&self.store);
-        tokio::task::spawn_blocking(move || store.get_chunk(chunk_id))
-            .await
-            .context(TaskJoinSnafu)?
+        self.store.get_chunk(chunk_id).await
     }
 }
 
-fn keyword_only_search_blocking(
-    store: &dyn MemoryStore,
-    query: &str,
-    limit: usize,
-) -> MemoryResult<Vec<SearchResult>> {
-    // Convert backend ranking to reciprocal-rank style score so result shape
-    // is consistent with hybrid flows.
-    let rows = store.keyword_search(query, limit)?;
-    Ok(rows
-        .into_iter()
-        .enumerate()
-        .map(|(rank, row)| SearchResult {
-            chunk_id: row.chunk_id,
-            path: row.path,
-            chunk_index: row.chunk_index,
-            snippet: make_snippet(&row.content, 220),
-            score: reciprocal_rank(rank),
-        })
-        .collect())
+// ---------------------------------------------------------------------------
+// Filesystem scan (blocking)
+// ---------------------------------------------------------------------------
+
+struct FileChange {
+    relative: String,
+    hash:     String,
+    mtime:    i64,
+    size:     i64,
+    chunks:   Vec<ChunkInput>,
 }
 
-fn hybrid_search_with_chroma_hits(
-    store: &dyn MemoryStore,
+/// Walk `memory_dir`, compare with `indexed_map`, and return changed files
+/// (with pre-computed chunks) plus a list of stale paths to delete.
+fn scan_filesystem(
+    memory_dir: &Path,
+    indexed_map: &HashMap<String, crate::store::IndexedFileMeta>,
+    chunk_chars: usize,
+    chunk_overlap: usize,
+) -> MemoryResult<(Vec<FileChange>, Vec<String>)> {
+    let mut seen_paths = HashSet::new();
+    let mut changes = Vec::new();
+
+    for entry in WalkDir::new(memory_dir)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+    {
+        let path = entry.path();
+        if !is_markdown_file(path) {
+            continue;
+        }
+
+        let relative = relative_path(memory_dir, path);
+        seen_paths.insert(relative.clone());
+
+        let metadata = std::fs::metadata(path).context(IoSnafu)?;
+        let mtime = metadata
+            .modified()
+            .context(IoSnafu)?
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let size = metadata.len() as i64;
+
+        if let Some(existing) = indexed_map.get(&relative)
+            && existing.mtime == mtime
+            && existing.size == size
+        {
+            continue;
+        }
+
+        let bytes = std::fs::read(path).context(IoSnafu)?;
+        let hash = format!("{:x}", Sha256::digest(&bytes));
+
+        if let Some(existing) = indexed_map.get(&relative)
+            && existing.hash == hash
+        {
+            continue;
+        }
+
+        let content = String::from_utf8_lossy(&bytes).to_string();
+        let chunks = chunk_text(&content, chunk_chars, chunk_overlap);
+        changes.push(FileChange {
+            relative,
+            hash,
+            mtime,
+            size,
+            chunks,
+        });
+    }
+
+    let to_delete = indexed_map
+        .keys()
+        .filter(|path| !seen_paths.contains(*path))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    Ok((changes, to_delete))
+}
+
+// ---------------------------------------------------------------------------
+// Hybrid fusion (pure CPU)
+// ---------------------------------------------------------------------------
+
+fn hybrid_fuse(
     query: &str,
     limit: usize,
+    keyword_rows: Vec<crate::store::MemorySearchRow>,
     chroma_hits: Vec<crate::chroma::ChromaHit>,
-) -> MemoryResult<Vec<SearchResult>> {
-    // Fuse Chroma vector results with keyword results using reciprocal-rank
-    // fusion and channel-specific weights.
-    let keyword_limit = (limit * 4).max(20);
-    let keyword_rows = store.keyword_search(query, keyword_limit)?;
-
+) -> Vec<SearchResult> {
     let mut fused: HashMap<i64, SearchResult> = HashMap::new();
 
     for (rank, row) in keyword_rows.into_iter().enumerate() {
@@ -428,7 +327,7 @@ fn hybrid_search_with_chroma_hits(
     });
     candidates.truncate((limit * 3).max(limit));
 
-    Ok(rerank_results(query, candidates, limit))
+    rerank_results(query, candidates, limit)
 }
 
 fn reciprocal_rank(rank: usize) -> f64 {
@@ -495,37 +394,7 @@ fn make_snippet(content: &str, max_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use sqlx::postgres::PgPoolOptions;
-    use tempfile::tempdir;
-
     use super::*;
-
-    #[tokio::test]
-    async fn sync_and_search_markdown_files() {
-        let temp = tempdir().expect("tempdir");
-        let memory_dir = temp.path().join("memory");
-        let db_file = temp.path().join("memory.db");
-        std::fs::create_dir_all(&memory_dir).expect("create memory dir");
-
-        std::fs::write(
-            memory_dir.join("MEMORY.md"),
-            "# User profile\nPrefers Rust backend roles in Tokyo.",
-        )
-        .expect("write markdown");
-
-        let manager = MemoryManager::open(memory_dir, db_file).expect("open manager");
-        let stats = manager.sync().await.expect("sync");
-        assert_eq!(stats.indexed_files, 1);
-
-        let hits = manager.search("Rust Tokyo", 5).await.expect("search");
-        assert!(!hits.is_empty());
-
-        let chunk = manager
-            .get_chunk(hits[0].chunk_id)
-            .await
-            .expect("get chunk");
-        assert!(chunk.is_some());
-    }
 
     #[test]
     fn chunking_produces_overlapping_windows() {
@@ -536,50 +405,25 @@ mod tests {
         assert_eq!(chunks[1].chunk_index, 1);
     }
 
-    #[tokio::test]
-    async fn pg_chroma_smoke_when_env_configured() {
-        let Some(database_url) = std::env::var("MEMORY_SMOKE_PG_URL").ok() else {
-            return;
-        };
-        let Some(chroma_url) = std::env::var("MEMORY_SMOKE_CHROMA_URL").ok() else {
-            return;
-        };
+    #[test]
+    fn chunking_single_small_file() {
+        let text = "hello world";
+        let chunks = chunk_text(text, 1200, 200);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].content, "hello world");
+    }
 
-        let pool = PgPoolOptions::new()
-            .max_connections(2)
-            .connect(&database_url)
-            .await
-            .expect("connect pg");
+    #[test]
+    fn chunking_empty_input() {
+        let chunks = chunk_text("", 1200, 200);
+        assert!(chunks.is_empty());
+    }
 
-        let temp = tempdir().expect("tempdir");
-        let memory_dir = temp.path().join("memory");
-        std::fs::create_dir_all(&memory_dir).expect("create memory dir");
-        std::fs::write(
-            memory_dir.join("MEMORY.md"),
-            "# Team memory\nChroma smoke test for rust backend job assistant.",
-        )
-        .expect("write markdown");
-
-        let manager =
-            MemoryManager::open_postgres(memory_dir, pool).expect("open postgres manager");
-
-        let mut runtime_memory =
-            rara_domain_shared::settings::model::MemorySettings::default();
-        runtime_memory.chroma_enabled = true;
-        runtime_memory.chroma_url = Some(chroma_url);
-        runtime_memory.chroma_collection = std::env::var("MEMORY_SMOKE_CHROMA_COLLECTION")
-            .ok()
-            .or_else(|| Some("job-memory-smoke".to_owned()));
-        runtime_memory.chroma_api_key =
-            std::env::var("MEMORY_SMOKE_CHROMA_API_KEY").ok();
-        manager.apply_runtime_settings(&runtime_memory);
-
-        manager.sync().await.expect("sync");
-        let hits = manager
-            .search("chroma rust assistant", 5)
-            .await
-            .expect("search");
-        assert!(!hits.is_empty());
-        assert_eq!(manager.storage_backend(), "postgres");
+    #[test]
+    fn snippet_truncation() {
+        let text = "a".repeat(300);
+        let snippet = make_snippet(&text, 220);
+        assert!(snippet.ends_with("..."));
+        assert!(snippet.len() < 300);
     }
 }

@@ -12,36 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Local memory index service for markdown-backed agent memory.
+//! Memory index service for markdown-backed agent memory.
 //!
 //! # Overview
-//! The memory subsystem provides:
-//! - Incremental indexing of Markdown files.
-//! - Hybrid retrieval (keyword + vector) with optional Chroma acceleration.
-//! - Pluggable persistence backends (SQLite or PostgreSQL).
-//! - Agent-facing tools (`memory_search`, `memory_get`) built on top of
-//!   [`MemoryManager`].
+//! - Incremental indexing of Markdown files into PostgreSQL.
+//! - Hybrid retrieval (Chroma vector + PG keyword) with token-overlap reranking.
+//! - Server-side embeddings via Chroma (all-MiniLM-L6-v2).
 //!
-//! # Runtime Behavior
-//! - Storage backend is selected by runtime settings (`agent.memory`).
-//! - Vector retrieval can be disabled at runtime (`embeddings_enabled = false`).
-//! - Chroma is optional; when unavailable, retrieval falls back to local vector
-//!   search without failing the user request.
+//! # Infrastructure
+//! - **PostgreSQL** — file metadata + chunk content + full-text index.
+//! - **Chroma** — vector embeddings + nearest-neighbor search.
+//! - Schema managed via migrations in `crates/rara-model/migrations/`.
 
-pub mod embedder;
 pub mod chroma;
 pub mod manager;
 pub mod reranking;
-pub mod search;
 pub mod store;
 pub mod store_pg;
-pub mod store_sqlite;
 
-pub use embedder::Embedder;
-pub use manager::{ChunkDetail, MemoryManager, MemoryResult, SyncStats};
-pub use reranking::rerank_results;
-pub use search::{hybrid_search, keyword_only_search};
-pub use store::{ChunkInput, IndexedFileMeta, MemoryStore};
-pub use store_pg::PgMemoryStore;
-pub use store_sqlite::SqliteMemoryStore;
 pub use chroma::ChromaClient;
+pub use manager::{ChunkDetail, MemoryManager, MemoryResult, SyncStats};
+pub use store::{ChunkInput, IndexedFileMeta};
+pub use store_pg::PgMemoryStore;
