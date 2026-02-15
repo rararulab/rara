@@ -26,7 +26,9 @@ import {
   MessageSquarePlus,
   PanelLeftClose,
   PanelLeftOpen,
+  Search,
   Send,
+  Star,
   Trash2,
   User,
   X,
@@ -51,13 +53,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { useServerStatus } from "@/hooks/use-server-status";
@@ -110,6 +105,12 @@ function clearMessages(key: string) {
 
 function fetchModels() {
   return api.get<ChatModel[]>("/api/v1/chat/models");
+}
+
+function setFavoriteModels(modelIds: string[]) {
+  return api.put<string[]>("/api/v1/chat/models/favorites", {
+    model_ids: modelIds,
+  });
 }
 
 function updateSession(
@@ -410,36 +411,166 @@ function MessageBubble({ msg }: { msg: ChatMessageData }) {
 }
 
 // ---------------------------------------------------------------------------
-// ModelSelect (shared model dropdown)
+// ModelListPicker (searchable model list with favorites)
 // ---------------------------------------------------------------------------
 
-function ModelSelect({
+function formatContextLength(ctx: number): string {
+  if (ctx >= 1_000_000) return `${(ctx / 1_000_000).toFixed(1)}M`;
+  return `${(ctx / 1_000).toFixed(0)}K`;
+}
+
+function ModelListPicker({
   models,
   value,
   onValueChange,
+  onToggleFavorite,
 }: {
   models: ChatModel[];
   value: string;
   onValueChange: (value: string) => void;
+  onToggleFavorite: (modelId: string, isFavorite: boolean) => void;
+}) {
+  const [search, setSearch] = useState("");
+
+  const filtered = models.filter((m) => {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase();
+    return (
+      m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q)
+    );
+  });
+
+  const favorites = filtered.filter((m) => m.is_favorite);
+  const others = filtered.filter((m) => !m.is_favorite);
+
+  return (
+    <div className="flex flex-col rounded-md border border-input">
+      {/* Search */}
+      <div className="flex items-center gap-2 border-b px-3 py-2">
+        <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search models..."
+          className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+        />
+        {search && (
+          <button
+            type="button"
+            onClick={() => setSearch("")}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        )}
+      </div>
+
+      {/* List */}
+      <div className="max-h-60 overflow-y-auto">
+        <div className="py-1">
+          {favorites.length > 0 && (
+            <>
+              <p className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Favorites
+              </p>
+              {favorites.map((m) => (
+                <ModelRow
+                  key={m.id}
+                  model={m}
+                  isSelected={m.id === value}
+                  onSelect={() => onValueChange(m.id)}
+                  onToggleFavorite={() =>
+                    onToggleFavorite(m.id, m.is_favorite)
+                  }
+                />
+              ))}
+            </>
+          )}
+          {favorites.length > 0 && others.length > 0 && (
+            <div className="my-1 border-t" />
+          )}
+          {others.length > 0 && (
+            <>
+              {favorites.length > 0 && (
+                <p className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  All Models
+                </p>
+              )}
+              {others.map((m) => (
+                <ModelRow
+                  key={m.id}
+                  model={m}
+                  isSelected={m.id === value}
+                  onSelect={() => onValueChange(m.id)}
+                  onToggleFavorite={() =>
+                    onToggleFavorite(m.id, m.is_favorite)
+                  }
+                />
+              ))}
+            </>
+          )}
+          {filtered.length === 0 && (
+            <p className="px-3 py-4 text-center text-sm text-muted-foreground">
+              No models found.
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ModelRow({
+  model,
+  isSelected,
+  onSelect,
+  onToggleFavorite,
+}: {
+  model: ChatModel;
+  isSelected: boolean;
+  onSelect: () => void;
+  onToggleFavorite: () => void;
 }) {
   return (
-    <Select value={value} onValueChange={onValueChange}>
-      <SelectTrigger className="w-full">
-        <SelectValue placeholder="Select a model" />
-      </SelectTrigger>
-      <SelectContent>
-        {models.map((m) => (
-          <SelectItem key={m.id} value={m.id}>
-            <span className="font-medium">{m.name}</span>
-            <span className="ml-2 text-xs text-muted-foreground">
-              {m.context_length >= 1_000_000
-                ? `${(m.context_length / 1_000_000).toFixed(1)}M`
-                : `${(m.context_length / 1_000).toFixed(0)}K`}
-            </span>
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <div
+      className={cn(
+        "group flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm transition-colors hover:bg-accent/50",
+        isSelected && "bg-accent text-accent-foreground",
+      )}
+    >
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleFavorite();
+        }}
+        className="shrink-0"
+        title={model.is_favorite ? "Remove from favorites" : "Add to favorites"}
+      >
+        <Star
+          className={cn(
+            "h-3.5 w-3.5 transition-colors",
+            model.is_favorite
+              ? "fill-yellow-400 text-yellow-400"
+              : "text-muted-foreground/40 hover:text-yellow-400",
+          )}
+        />
+      </button>
+      <button
+        type="button"
+        className="flex min-w-0 flex-1 items-center gap-2 text-left"
+        onClick={onSelect}
+      >
+        <span className="truncate font-medium">{model.name}</span>
+        <span className="shrink-0 text-xs text-muted-foreground">
+          {formatContextLength(model.context_length)}
+        </span>
+      </button>
+      <span className="hidden shrink-0 truncate text-[10px] text-muted-foreground group-hover:inline max-w-[180px]">
+        {model.id}
+      </span>
+    </div>
   );
 }
 
@@ -456,6 +587,7 @@ function NewChatDialog({
   onOpenChange: (open: boolean) => void;
   onConfirm: (title: string, model: string) => void;
 }) {
+  const queryClient = useQueryClient();
   const [title, setTitle] = useState(
     () =>
       `Chat ${new Date().toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`,
@@ -469,6 +601,26 @@ function NewChatDialog({
   });
 
   const models = modelsQuery.data ?? [];
+
+  const favoriteMutation = useMutation({
+    mutationFn: setFavoriteModels,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["chat-models"] });
+    },
+  });
+
+  const handleToggleFavorite = useCallback(
+    (modelId: string, currentlyFavorite: boolean) => {
+      const currentFavorites = models
+        .filter((m) => m.is_favorite)
+        .map((m) => m.id);
+      const next = currentlyFavorite
+        ? currentFavorites.filter((id) => id !== modelId)
+        : [...currentFavorites, modelId];
+      favoriteMutation.mutate(next);
+    },
+    [models, favoriteMutation],
+  );
 
   // Set default model when models are loaded
   useEffect(() => {
@@ -497,7 +649,7 @@ function NewChatDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New Conversation</DialogTitle>
           <DialogDescription>
@@ -519,10 +671,11 @@ function NewChatDialog({
             {modelsQuery.isLoading ? (
               <Skeleton className="h-9 w-full" />
             ) : (
-              <ModelSelect
+              <ModelListPicker
                 models={models}
                 value={selectedModel}
                 onValueChange={setSelectedModel}
+                onToggleFavorite={handleToggleFavorite}
               />
             )}
           </div>
@@ -558,6 +711,7 @@ function ChangeModelDialog({
   currentModel: string;
   onConfirm: (model: string) => void;
 }) {
+  const queryClient = useQueryClient();
   const [selectedModel, setSelectedModel] = useState(currentModel);
 
   const modelsQuery = useQuery({
@@ -567,6 +721,26 @@ function ChangeModelDialog({
   });
 
   const models = modelsQuery.data ?? [];
+
+  const favoriteMutation = useMutation({
+    mutationFn: setFavoriteModels,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["chat-models"] });
+    },
+  });
+
+  const handleToggleFavorite = useCallback(
+    (modelId: string, currentlyFavorite: boolean) => {
+      const currentFavorites = models
+        .filter((m) => m.is_favorite)
+        .map((m) => m.id);
+      const next = currentlyFavorite
+        ? currentFavorites.filter((id) => id !== modelId)
+        : [...currentFavorites, modelId];
+      favoriteMutation.mutate(next);
+    },
+    [models, favoriteMutation],
+  );
 
   useEffect(() => {
     if (open) {
@@ -582,7 +756,7 @@ function ChangeModelDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Change Model</DialogTitle>
           <DialogDescription>
@@ -596,10 +770,11 @@ function ChangeModelDialog({
             {modelsQuery.isLoading ? (
               <Skeleton className="h-9 w-full" />
             ) : (
-              <ModelSelect
+              <ModelListPicker
                 models={models}
                 value={selectedModel}
                 onValueChange={setSelectedModel}
+                onToggleFavorite={handleToggleFavorite}
               />
             )}
           </div>

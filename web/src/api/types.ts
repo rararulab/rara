@@ -288,6 +288,7 @@ export interface ChatModel {
   id: string;
   name: string;
   context_length: number;
+  is_favorite: boolean;
 }
 
 // Typst

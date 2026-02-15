@@ -23,6 +23,7 @@
 //! | Method   | Path                                                 | Description            |
 //! |----------|------------------------------------------------------|------------------------|
 //! | `GET`    | `/api/v1/chat/models`                                | List available models  |
+//! | `PUT`    | `/api/v1/chat/models/favorites`                      | Set favorite models    |
 //! | `POST`   | `/api/v1/chat/sessions`                              | Create a session       |
 //! | `GET`    | `/api/v1/chat/sessions`                              | List sessions          |
 //! | `GET`    | `/api/v1/chat/sessions/{key}`                        | Get a session          |
@@ -47,77 +48,7 @@ use tracing::instrument;
 
 use crate::{error::ChatError, service::ChatService};
 
-// ---------------------------------------------------------------------------
-// Curated model catalogue
-// ---------------------------------------------------------------------------
-
-/// A curated entry describing an LLM model available via OpenRouter.
-///
-/// This is a static, hand-picked list of popular models kept in-process so
-/// that the `/models` endpoint returns instantly without a network round-trip
-/// to the OpenRouter API (which lists hundreds of models).
-struct CuratedModel {
-    /// OpenRouter model identifier (e.g. `"openai/gpt-4o"`).
-    id:             &'static str,
-    /// Human-friendly display name.
-    name:           &'static str,
-    /// Maximum context window in tokens.
-    context_length: u32,
-}
-
-/// Hand-picked selection of commonly used models.
-const CURATED_MODELS: &[CuratedModel] = &[
-    CuratedModel {
-        id:             "openai/gpt-4o",
-        name:           "GPT-4o",
-        context_length: 128_000,
-    },
-    CuratedModel {
-        id:             "openai/gpt-4o-mini",
-        name:           "GPT-4o Mini",
-        context_length: 128_000,
-    },
-    CuratedModel {
-        id:             "openai/gpt-4.1",
-        name:           "GPT-4.1",
-        context_length: 1_047_576,
-    },
-    CuratedModel {
-        id:             "openai/o3-mini",
-        name:           "o3 Mini",
-        context_length: 200_000,
-    },
-    CuratedModel {
-        id:             "anthropic/claude-sonnet-4",
-        name:           "Claude Sonnet 4",
-        context_length: 200_000,
-    },
-    CuratedModel {
-        id:             "anthropic/claude-3.5-haiku",
-        name:           "Claude 3.5 Haiku",
-        context_length: 200_000,
-    },
-    CuratedModel {
-        id:             "google/gemini-2.5-pro-preview",
-        name:           "Gemini 2.5 Pro",
-        context_length: 1_048_576,
-    },
-    CuratedModel {
-        id:             "google/gemini-2.5-flash-preview",
-        name:           "Gemini 2.5 Flash",
-        context_length: 1_048_576,
-    },
-    CuratedModel {
-        id:             "deepseek/deepseek-chat-v3-0324:free",
-        name:           "DeepSeek V3 (Free)",
-        context_length: 131_072,
-    },
-    CuratedModel {
-        id:             "meta-llama/llama-4-maverick:free",
-        name:           "Llama 4 Maverick (Free)",
-        context_length: 1_048_576,
-    },
-];
+use crate::model_catalog::ChatModel;
 
 // ---------------------------------------------------------------------------
 // Request / Response types
@@ -191,15 +122,11 @@ pub struct UpdateSessionRequest {
     pub system_prompt: Option<String>,
 }
 
-/// A single entry in the curated model list returned by `GET /models`.
-#[derive(Debug, Serialize)]
-pub struct ChatModel {
-    /// OpenRouter model identifier.
-    pub id:             String,
-    /// Human-friendly display name.
-    pub name:           String,
-    /// Maximum context window in tokens.
-    pub context_length: u32,
+/// Request body for `PUT /models/favorites`.
+#[derive(Debug, Deserialize)]
+pub struct SetFavoritesRequest {
+    /// Model IDs to mark as favorites.
+    pub model_ids: Vec<String>,
 }
 
 /// Request body for `PUT /channel-bindings`.
@@ -225,6 +152,7 @@ pub fn routes(service: ChatService) -> Router {
     Router::new()
         // Models
         .route("/api/v1/chat/models", get(list_models))
+        .route("/api/v1/chat/models/favorites", put(set_favorites))
         // Sessions
         .route("/api/v1/chat/sessions", post(create_session))
         .route("/api/v1/chat/sessions", get(list_sessions))
@@ -259,20 +187,26 @@ pub fn routes(service: ChatService) -> Router {
 // Handlers
 // ---------------------------------------------------------------------------
 
-/// `GET /api/v1/chat/models` — return a curated list of available LLM models.
+/// `GET /api/v1/chat/models` — return available LLM models.
 ///
-/// This endpoint is stateless and does not hit the OpenRouter API; it returns
-/// a hard-coded catalogue of popular models.
-async fn list_models() -> Json<Vec<ChatModel>> {
-    let models = CURATED_MODELS
-        .iter()
-        .map(|m| ChatModel {
-            id:             m.id.to_owned(),
-            name:           m.name.to_owned(),
-            context_length: m.context_length,
-        })
-        .collect();
+/// When an OpenRouter API key is configured, this endpoint dynamically fetches
+/// the full model list from OpenRouter (cached for 5 minutes). Without a key,
+/// a curated fallback list is returned.
+async fn list_models(State(service): State<ChatService>) -> Json<Vec<ChatModel>> {
+    let models = service.list_models().await;
     Json(models)
+}
+
+/// `PUT /api/v1/chat/models/favorites` — replace the user's favorite model
+/// list.
+#[instrument(skip(service, req))]
+async fn set_favorites(
+    State(service): State<ChatService>,
+    Json(req): Json<SetFavoritesRequest>,
+) -> Result<Json<Vec<String>>, ChatError> {
+    let ids = req.model_ids;
+    service.set_favorite_models(ids.clone()).await?;
+    Ok(Json(ids))
 }
 
 /// `POST /api/v1/chat/sessions` — create a new session.

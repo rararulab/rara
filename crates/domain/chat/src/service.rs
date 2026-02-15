@@ -40,6 +40,7 @@ use tokio::sync::watch;
 use tracing::{info, instrument};
 
 use crate::error::ChatError;
+use crate::model_catalog::{ChatModel, ModelCatalog};
 
 /// Default system prompt used when no custom prompt is configured in settings
 /// and no session-level override is provided.
@@ -101,6 +102,10 @@ pub struct ChatService {
     /// Optional memory manager for pre-fetching relevant context on first
     /// turn of a session.
     memory_manager: Option<Arc<MemoryManager>>,
+    /// Cached catalog of models fetched from OpenRouter.
+    model_catalog:  ModelCatalog,
+    /// Settings service for persisting favorite models.
+    settings_svc:   rara_domain_shared::settings::SettingsSvc,
 }
 
 impl ChatService {
@@ -117,6 +122,7 @@ impl ChatService {
         tools: Arc<ToolRegistry>,
         settings_rx: watch::Receiver<Settings>,
         memory_manager: Option<Arc<MemoryManager>>,
+        settings_svc: rara_domain_shared::settings::SettingsSvc,
     ) -> Self {
         Self {
             session_repo,
@@ -124,6 +130,8 @@ impl ChatService {
             tools,
             settings_rx,
             memory_manager,
+            model_catalog: ModelCatalog::new(),
+            settings_svc,
         }
     }
 
@@ -144,6 +152,37 @@ impl ChatService {
             rara_paths::load_prompt_markdown(SYSTEM_PROMPT_FILE, DEFAULT_SYSTEM_PROMPT);
         let soul_prompt = resolve_soul_prompt(&settings);
         compose_system_prompt(&base_prompt, soul_prompt.as_deref())
+    }
+
+    // -- model catalog ------------------------------------------------------
+
+    /// List available models, dynamically fetching from OpenRouter when an
+    /// API key is configured. Favorites are marked and sorted to the top.
+    pub async fn list_models(&self) -> Vec<ChatModel> {
+        let settings = self.settings_rx.borrow().clone();
+        let api_key = settings.ai.openrouter_api_key.as_deref();
+        let favorites = &settings.ai.favorite_models;
+        self.model_catalog.list_models(api_key, favorites).await
+    }
+
+    /// Replace the user's favorite model list and persist to settings.
+    pub async fn set_favorite_models(&self, ids: Vec<String>) -> Result<(), ChatError> {
+        use rara_domain_shared::settings::model::{AiRuntimeSettingsPatch, UpdateRequest};
+
+        let patch = UpdateRequest {
+            ai:       Some(AiRuntimeSettingsPatch {
+                favorite_models: Some(ids),
+                ..Default::default()
+            }),
+            telegram: None,
+            agent:    None,
+        };
+        self.settings_svc.update(patch).await.map_err(|e| {
+            ChatError::SessionError {
+                message: format!("failed to update favorite models: {e}"),
+            }
+        })?;
+        Ok(())
     }
 
     // -- session CRUD -------------------------------------------------------

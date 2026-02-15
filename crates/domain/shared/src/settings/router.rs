@@ -253,6 +253,7 @@ pub struct AiSettingsView {
     pub job_model:          Option<String>,
     pub chat_model:         Option<String>,
     pub openrouter_api_key: Option<String>,
+    pub favorite_models:    Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -285,6 +286,7 @@ impl Into<RuntimeSettingsView> for Settings {
                 job_model:          self.ai.job_model.clone(),
                 chat_model:         self.ai.chat_model.clone(),
                 openrouter_api_key: self.ai.openrouter_api_key.clone(),
+                favorite_models:    self.ai.favorite_models.clone(),
             },
             telegram:   TgSettingsResp {
                 configured: self.telegram.bot_token.is_some() && self.telegram.chat_id.is_some(),

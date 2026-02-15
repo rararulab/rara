@@ -34,5 +34,6 @@
 //! See [`router::routes`] for the full route table.
 
 pub mod error;
+pub mod model_catalog;
 pub mod router;
 pub mod service;

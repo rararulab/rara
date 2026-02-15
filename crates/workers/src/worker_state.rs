@@ -227,6 +227,7 @@ impl AppState {
             tools,
             settings_svc.subscribe(),
             Some(Arc::clone(&memory_manager)),
+            settings_svc.clone(),
         );
         info!("Chat service initialized");
 

@@ -42,6 +42,9 @@ pub struct AISettings {
     pub default_model:      Option<String>,
     pub job_model:          Option<String>,
     pub chat_model:         Option<String>,
+    /// User-pinned model IDs shown at the top of the model picker.
+    #[serde(default)]
+    pub favorite_models:    Vec<String>,
 }
 
 impl AISettings {
@@ -126,6 +129,8 @@ pub struct AiRuntimeSettingsPatch {
     /// `Some(model)` to set, `None` to leave unchanged.
     /// Use `Some("")` or send an empty string to clear (revert to default).
     pub chat_model:         Option<String>,
+    /// Replace the entire favorite models list. `None` to leave unchanged.
+    pub favorite_models:    Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -166,6 +171,9 @@ impl Settings {
             }
             if let Some(model) = ai.chat_model {
                 self.ai.chat_model = normalize_text(Some(model));
+            }
+            if let Some(favorites) = ai.favorite_models {
+                self.ai.favorite_models = favorites;
             }
         }
 
@@ -214,6 +222,8 @@ impl Settings {
         self.ai.default_model = normalize_text(self.ai.default_model.take());
         self.ai.job_model = normalize_text(self.ai.job_model.take());
         self.ai.chat_model = normalize_text(self.ai.chat_model.take());
+        self.ai.favorite_models.retain(|s| !s.trim().is_empty());
+        self.ai.favorite_models.dedup();
         self.telegram.bot_token = normalize_secret(self.telegram.bot_token.take());
         self.agent.soul = normalize_text(self.agent.soul.take());
         self.agent.chat_system_prompt = normalize_text(self.agent.chat_system_prompt.take());
