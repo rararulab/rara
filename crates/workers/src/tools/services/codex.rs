@@ -339,7 +339,7 @@ impl AgentTool for CodexRunTool {
                 }
                 AgentKind::Codex => {
                     let mut c = tokio::process::Command::new("codex");
-                    c.args(["-q", &prompt_clone, "--auto-edit"]);
+                    c.args(["exec", "--full-auto", &prompt_clone]);
                     c
                 }
             };
