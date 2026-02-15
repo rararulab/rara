@@ -37,7 +37,7 @@ pub mod store;
 pub mod store_pg;
 pub mod store_sqlite;
 
-pub use embedder::{Embedder, HashEmbedder};
+pub use embedder::Embedder;
 pub use manager::{ChunkDetail, MemoryManager, MemoryResult, SyncStats};
 pub use reranking::rerank_results;
 pub use search::{hybrid_search, keyword_only_search};

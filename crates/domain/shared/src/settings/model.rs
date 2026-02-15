@@ -107,8 +107,8 @@ impl Default for MemorySettings {
         Self {
             storage_backend: "postgres".to_owned(),
             embeddings_enabled: true,
-            chroma_enabled: false,
-            chroma_url: None,
+            chroma_enabled: true,
+            chroma_url: Some("http://localhost:8000".to_owned()),
             chroma_collection: Some("job-memory".to_owned()),
             chroma_api_key: None,
         }

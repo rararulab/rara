@@ -18,7 +18,10 @@
 //! It combines:
 //! - Relational metadata/chunk storage.
 //! - FTS5 (`chunks_fts`) for keyword search.
-//! - A local embedding cache table.
+//!
+//! Note: The `chunks.embedding` column and `embedding_cache` table are
+//! retained in the schema for backward compatibility but are no longer
+//! written to. Chroma handles embeddings server-side.
 
 use std::path::PathBuf;
 
@@ -26,7 +29,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::{
     manager::{ChunkDetail, MemoryResult},
-    store::{ChunkInput, EmbeddedChunkRow, IndexedFileMeta, MemorySearchRow, MemoryStore},
+    store::{ChunkInput, IndexedFileMeta, MemorySearchRow, MemoryStore},
 };
 
 const INIT_SQL: &str = r#"
@@ -167,12 +170,11 @@ impl MemoryStore for SqliteMemoryStore {
 
         for chunk in chunks {
             tx.execute(
-                "INSERT INTO chunks(file_id, chunk_index, content, embedding) VALUES(?1, ?2, ?3, ?4)",
+                "INSERT INTO chunks(file_id, chunk_index, content) VALUES(?1, ?2, ?3)",
                 params![
                     file_id,
                     chunk.chunk_index,
                     chunk.content,
-                    chunk.embedding.as_ref().map(|it| f32_vec_to_blob(it)),
                 ],
             )?;
             let chunk_id = tx.last_insert_rowid();
@@ -229,114 +231,6 @@ impl MemoryStore for SqliteMemoryStore {
         Ok(rows)
     }
 
-    fn list_embedded_chunks(&self, limit: usize) -> MemoryResult<Vec<EmbeddedChunkRow>> {
-        let conn = self.open()?;
-        let mut stmt = conn.prepare(
-            r#"
-            SELECT c.id, f.path, c.chunk_index, c.content, c.embedding
-            FROM chunks c
-            JOIN files f ON f.id = c.file_id
-            WHERE c.embedding IS NOT NULL
-            ORDER BY c.id DESC
-            LIMIT ?1
-            "#,
-        )?;
-
-        let rows = stmt
-            .query_map(params![i64::try_from(limit).unwrap_or(5000)], |row| {
-                let blob: Vec<u8> = row.get(4)?;
-                Ok(EmbeddedChunkRow {
-                    chunk_id: row.get(0)?,
-                    path: row.get(1)?,
-                    chunk_index: row.get(2)?,
-                    content: row.get(3)?,
-                    embedding: blob_to_f32_vec(&blob),
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(rows)
-    }
-
-    fn list_embedded_chunks_by_path(&self, path: &str) -> MemoryResult<Vec<EmbeddedChunkRow>> {
-        let conn = self.open()?;
-        let mut stmt = conn.prepare(
-            r#"
-            SELECT c.id, f.path, c.chunk_index, c.content, c.embedding
-            FROM chunks c
-            JOIN files f ON f.id = c.file_id
-            WHERE f.path = ?1 AND c.embedding IS NOT NULL
-            ORDER BY c.chunk_index ASC
-            "#,
-        )?;
-
-        let rows = stmt
-            .query_map(params![path], |row| {
-                let blob: Vec<u8> = row.get(4)?;
-                Ok(EmbeddedChunkRow {
-                    chunk_id: row.get(0)?,
-                    path: row.get(1)?,
-                    chunk_index: row.get(2)?,
-                    content: row.get(3)?,
-                    embedding: blob_to_f32_vec(&blob),
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(rows)
-    }
-
-    fn get_cached_embedding(
-        &self,
-        provider: &str,
-        model: &str,
-        text_hash: &str,
-    ) -> MemoryResult<Option<Vec<f32>>> {
-        let conn = self.open()?;
-        let result = conn
-            .query_row(
-                r#"
-                SELECT embedding
-                FROM embedding_cache
-                WHERE provider = ?1 AND model = ?2 AND text_hash = ?3
-                "#,
-                params![provider, model, text_hash],
-                |row| {
-                    let blob: Vec<u8> = row.get(0)?;
-                    Ok(blob_to_f32_vec(&blob))
-                },
-            )
-            .optional()?;
-
-        Ok(result)
-    }
-
-    fn put_cached_embedding(
-        &self,
-        provider: &str,
-        model: &str,
-        text_hash: &str,
-        embedding: &[f32],
-    ) -> MemoryResult<()> {
-        let conn = self.open()?;
-        conn.execute(
-            r#"
-            INSERT INTO embedding_cache(provider, model, text_hash, dim, embedding)
-            VALUES(?1, ?2, ?3, ?4, ?5)
-            ON CONFLICT(provider, model, text_hash)
-            DO UPDATE SET dim = excluded.dim, embedding = excluded.embedding
-            "#,
-            params![
-                provider,
-                model,
-                text_hash,
-                i64::try_from(embedding.len()).unwrap_or(0),
-                f32_vec_to_blob(embedding),
-            ],
-        )?;
-        Ok(())
-    }
-
     fn get_chunk(&self, chunk_id: i64) -> MemoryResult<Option<ChunkDetail>> {
         let conn = self.open()?;
         let detail = conn
@@ -361,18 +255,4 @@ impl MemoryStore for SqliteMemoryStore {
 
         Ok(detail)
     }
-}
-
-fn f32_vec_to_blob(values: &[f32]) -> Vec<u8> {
-    values
-        .iter()
-        .flat_map(|value| value.to_le_bytes())
-        .collect::<Vec<u8>>()
-}
-
-/// Decode little-endian f32 bytes into a vector.
-fn blob_to_f32_vec(blob: &[u8]) -> Vec<f32> {
-    blob.chunks_exact(4)
-        .map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-        .collect()
 }

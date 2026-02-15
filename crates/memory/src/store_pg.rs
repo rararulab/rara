@@ -17,9 +17,12 @@
 //! This backend is the production-default in the current deployment model.
 //! It uses:
 //! - `memory_files` for file metadata.
-//! - `memory_chunks` for chunk content and optional embeddings.
-//! - `memory_embedding_cache` for embedding reuse.
+//! - `memory_chunks` for chunk content.
 //! - PostgreSQL full-text search (`tsvector/tsquery`) for keyword retrieval.
+//!
+//! Note: The `memory_chunks.embedding` column and `memory_embedding_cache`
+//! table are retained in the schema for backward compatibility but are no
+//! longer written to. Chroma handles embeddings server-side.
 
 use std::future::Future;
 
@@ -27,7 +30,7 @@ use sqlx::{PgPool, Row};
 
 use crate::{
     manager::{ChunkDetail, MemoryError, MemoryResult},
-    store::{ChunkInput, EmbeddedChunkRow, IndexedFileMeta, MemorySearchRow, MemoryStore},
+    store::{ChunkInput, IndexedFileMeta, MemorySearchRow, MemoryStore},
 };
 
 const INIT_SQL: &str = r#"
@@ -145,12 +148,11 @@ impl MemoryStore for PgMemoryStore {
 
             for chunk in chunks {
                 sqlx::query(
-                    "INSERT INTO memory_chunks(file_id, chunk_index, content, embedding) VALUES($1, $2, $3, $4)",
+                    "INSERT INTO memory_chunks(file_id, chunk_index, content) VALUES($1, $2, $3)",
                 )
                 .bind(file_id)
                 .bind(chunk.chunk_index)
                 .bind(&chunk.content)
-                .bind(chunk.embedding.as_ref().map(|v| f32_vec_to_blob(v)))
                 .execute(&mut *tx)
                 .await?;
             }
@@ -206,120 +208,6 @@ impl MemoryStore for PgMemoryStore {
             .collect())
     }
 
-    fn list_embedded_chunks(&self, limit: usize) -> MemoryResult<Vec<EmbeddedChunkRow>> {
-        let rows = self.block_on(
-            sqlx::query(
-                r#"
-                SELECT c.id, f.path, c.chunk_index, c.content, c.embedding
-                FROM memory_chunks c
-                JOIN memory_files f ON f.id = c.file_id
-                WHERE c.embedding IS NOT NULL
-                ORDER BY c.id DESC
-                LIMIT $1
-                "#,
-            )
-            .bind(i64::try_from(limit).unwrap_or(5000))
-            .fetch_all(&self.pool),
-        )?;
-
-        Ok(rows
-            .into_iter()
-            .map(|row| {
-                let blob: Vec<u8> = row.get("embedding");
-                EmbeddedChunkRow {
-                    chunk_id: row.get::<i64, _>("id"),
-                    path: row.get::<String, _>("path"),
-                    chunk_index: row.get::<i64, _>("chunk_index"),
-                    content: row.get::<String, _>("content"),
-                    embedding: blob_to_f32_vec(&blob),
-                }
-            })
-            .collect())
-    }
-
-    fn list_embedded_chunks_by_path(&self, path: &str) -> MemoryResult<Vec<EmbeddedChunkRow>> {
-        let rows = self.block_on(
-            sqlx::query(
-                r#"
-                SELECT c.id, f.path, c.chunk_index, c.content, c.embedding
-                FROM memory_chunks c
-                JOIN memory_files f ON f.id = c.file_id
-                WHERE f.path = $1 AND c.embedding IS NOT NULL
-                ORDER BY c.chunk_index ASC
-                "#,
-            )
-            .bind(path)
-            .fetch_all(&self.pool),
-        )?;
-
-        Ok(rows
-            .into_iter()
-            .map(|row| {
-                let blob: Vec<u8> = row.get("embedding");
-                EmbeddedChunkRow {
-                    chunk_id: row.get::<i64, _>("id"),
-                    path: row.get::<String, _>("path"),
-                    chunk_index: row.get::<i64, _>("chunk_index"),
-                    content: row.get::<String, _>("content"),
-                    embedding: blob_to_f32_vec(&blob),
-                }
-            })
-            .collect())
-    }
-
-    fn get_cached_embedding(
-        &self,
-        provider: &str,
-        model: &str,
-        text_hash: &str,
-    ) -> MemoryResult<Option<Vec<f32>>> {
-        let row = self.block_on(
-            sqlx::query(
-                r#"
-                SELECT embedding
-                FROM memory_embedding_cache
-                WHERE provider = $1 AND model = $2 AND text_hash = $3
-                "#,
-            )
-            .bind(provider)
-            .bind(model)
-            .bind(text_hash)
-            .fetch_optional(&self.pool),
-        )?;
-
-        Ok(row.map(|row| {
-            let blob: Vec<u8> = row.get("embedding");
-            blob_to_f32_vec(&blob)
-        }))
-    }
-
-    fn put_cached_embedding(
-        &self,
-        provider: &str,
-        model: &str,
-        text_hash: &str,
-        embedding: &[f32],
-    ) -> MemoryResult<()> {
-        self.block_on(
-            sqlx::query(
-                r#"
-                INSERT INTO memory_embedding_cache(provider, model, text_hash, dim, embedding)
-                VALUES($1, $2, $3, $4, $5)
-                ON CONFLICT(provider, model, text_hash)
-                DO UPDATE SET dim = EXCLUDED.dim, embedding = EXCLUDED.embedding
-                "#,
-            )
-            .bind(provider)
-            .bind(model)
-            .bind(text_hash)
-            .bind(i32::try_from(embedding.len()).unwrap_or(0))
-            .bind(f32_vec_to_blob(embedding))
-            .execute(&self.pool),
-        )?;
-
-        Ok(())
-    }
-
     fn get_chunk(&self, chunk_id: i64) -> MemoryResult<Option<ChunkDetail>> {
         let row = self.block_on(
             sqlx::query(
@@ -341,18 +229,4 @@ impl MemoryStore for PgMemoryStore {
             content: row.get::<String, _>("content"),
         }))
     }
-}
-
-fn f32_vec_to_blob(values: &[f32]) -> Vec<u8> {
-    values
-        .iter()
-        .flat_map(|value| value.to_le_bytes())
-        .collect::<Vec<u8>>()
-}
-
-/// Decode little-endian f32 bytes into a vector.
-fn blob_to_f32_vec(blob: &[u8]) -> Vec<f32> {
-    blob.chunks_exact(4)
-        .map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-        .collect()
 }

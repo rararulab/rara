@@ -34,7 +34,6 @@ pub struct ChromaClient {
 pub struct ChromaChunk {
     pub id:         String,
     pub document:   String,
-    pub embedding:  Vec<f32>,
     pub path:       String,
     pub chunk_index: i64,
 }
@@ -138,7 +137,6 @@ impl ChromaClient {
         let (_client, collection) = self.get_collection().await?;
 
         let ids: Vec<&str> = chunks.iter().map(|c| c.id.as_str()).collect();
-        let embeddings: Vec<Vec<f32>> = chunks.iter().map(|c| c.embedding.clone()).collect();
         let documents: Vec<&str> = chunks.iter().map(|c| c.document.as_str()).collect();
         let metadatas: Vec<Map<String, serde_json::Value>> = chunks
             .iter()
@@ -155,7 +153,7 @@ impl ChromaClient {
 
         let entries = CollectionEntries {
             ids,
-            embeddings: Some(embeddings),
+            embeddings: None, // Chroma auto-embeds via built-in model
             documents: Some(documents),
             metadatas: Some(metadatas),
         };
@@ -170,15 +168,17 @@ impl ChromaClient {
         Ok(())
     }
 
-    /// Execute a nearest-neighbor query in Chroma.
+    /// Execute a nearest-neighbor query in Chroma using server-side embeddings.
     ///
+    /// Chroma embeds the query text using its built-in model (all-MiniLM-L6-v2).
     /// Distances are converted to a normalized score (`1 - distance`) for
     /// fusion with keyword retrieval.
-    pub async fn query(&self, embedding: &[f32], n_results: usize) -> MemoryResult<Vec<ChromaHit>> {
+    pub async fn query(&self, query_text: &str, n_results: usize) -> MemoryResult<Vec<ChromaHit>> {
         let (_client, collection) = self.get_collection().await?;
 
         let query_options = QueryOptions {
-            query_embeddings: Some(vec![embedding.to_vec()]),
+            query_texts: Some(vec![query_text]),
+            query_embeddings: None, // Chroma auto-embeds the query
             n_results: Some(n_results),
             include: Some(vec!["metadatas", "documents", "distances"]),
             ..Default::default()

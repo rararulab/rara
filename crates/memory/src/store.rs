@@ -36,8 +36,6 @@ pub struct ChunkInput {
     pub chunk_index: i64,
     /// Raw text content of this chunk.
     pub content:     String,
-    /// Optional embedding payload for vector retrieval.
-    pub embedding:   Option<Vec<f32>>,
 }
 
 /// Persistence contract for memory index backends.
@@ -64,29 +62,6 @@ pub trait MemoryStore: Send + Sync {
     /// Execute keyword-only retrieval.
     fn keyword_search(&self, query: &str, limit: usize) -> MemoryResult<Vec<MemorySearchRow>>;
 
-    /// Read embedded chunks for local vector fallback retrieval.
-    fn list_embedded_chunks(&self, limit: usize) -> MemoryResult<Vec<EmbeddedChunkRow>>;
-
-    /// Read embedded chunks for a specific source path.
-    fn list_embedded_chunks_by_path(&self, path: &str) -> MemoryResult<Vec<EmbeddedChunkRow>>;
-
-    /// Lookup cached embedding by `(provider, model, text_hash)`.
-    fn get_cached_embedding(
-        &self,
-        provider: &str,
-        model: &str,
-        text_hash: &str,
-    ) -> MemoryResult<Option<Vec<f32>>>;
-
-    /// Store/update cached embedding by `(provider, model, text_hash)`.
-    fn put_cached_embedding(
-        &self,
-        provider: &str,
-        model: &str,
-        text_hash: &str,
-        embedding: &[f32],
-    ) -> MemoryResult<()>;
-
     /// Fetch full chunk payload by identifier.
     fn get_chunk(&self, chunk_id: i64) -> MemoryResult<Option<ChunkDetail>>;
 }
@@ -104,19 +79,4 @@ pub struct MemorySearchRow {
     pub content:     String,
     /// Backend-native keyword score.
     pub score:       f64,
-}
-
-/// Chunk row carrying an embedding vector.
-#[derive(Debug, Clone)]
-pub struct EmbeddedChunkRow {
-    /// Unique chunk identifier.
-    pub chunk_id:    i64,
-    /// Source path of the chunk.
-    pub path:        String,
-    /// Per-file chunk index.
-    pub chunk_index: i64,
-    /// Chunk text content.
-    pub content:     String,
-    /// Decoded embedding vector.
-    pub embedding:   Vec<f32>,
 }
