@@ -16,6 +16,7 @@ use crate::{
     fs::{self, FileEntry},
     git::GitImporter,
     repository::TypstRepository,
+    runner::{self, JustRecipe, RunOutput},
     types::{ImportGitRequest, RegisterProjectRequest, RenderResult, TypstProject},
 };
 
@@ -235,6 +236,45 @@ impl TypstService {
         );
 
         Ok(project)
+    }
+
+    // -- Runner (just / shell commands) --
+
+    /// Check whether a project has a justfile.
+    pub fn has_justfile(&self, project: &TypstProject) -> bool {
+        runner::has_justfile(Path::new(&project.local_path))
+    }
+
+    /// List available just recipes for a project.
+    #[instrument(skip(self))]
+    pub async fn list_recipes(
+        &self,
+        project_id: Uuid,
+    ) -> Result<Vec<JustRecipe>, TypstError> {
+        let project = self.get_project(project_id).await?;
+        runner::list_recipes(Path::new(&project.local_path)).await
+    }
+
+    /// Run a just recipe in the project directory.
+    #[instrument(skip(self))]
+    pub async fn run_recipe(
+        &self,
+        project_id: Uuid,
+        recipe: &str,
+    ) -> Result<RunOutput, TypstError> {
+        let project = self.get_project(project_id).await?;
+        runner::run_recipe(Path::new(&project.local_path), recipe).await
+    }
+
+    /// Run an arbitrary shell command in the project directory.
+    #[instrument(skip(self))]
+    pub async fn run_command(
+        &self,
+        project_id: Uuid,
+        command: &str,
+    ) -> Result<RunOutput, TypstError> {
+        let project = self.get_project(project_id).await?;
+        runner::run_command(Path::new(&project.local_path), command).await
     }
 
     // -- Compilation --

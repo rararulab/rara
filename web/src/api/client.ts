@@ -83,7 +83,7 @@ async function requestBlob(path: string, options?: RequestInit & { timeoutMs?: n
   }
 }
 
-import type { TypstProject, BrowseResult } from './types';
+import type { TypstProject, BrowseResult, JustRecipe, RunOutput } from './types';
 
 export const api = {
   get: <T>(path: string) => request<T>(path),
@@ -115,6 +115,17 @@ export const api = {
   syncTypstGit(projectId: string): Promise<TypstProject> {
     return request<TypstProject>(`/api/v1/typst/projects/${projectId}/git-sync`, {
       method: 'POST',
+    });
+  },
+
+  listRecipes(projectId: string): Promise<JustRecipe[]> {
+    return request<JustRecipe[]>(`/api/v1/typst/projects/${projectId}/recipes`);
+  },
+
+  runProjectCommand(projectId: string, data: { recipe?: string; command?: string }): Promise<RunOutput> {
+    return request<RunOutput>(`/api/v1/typst/projects/${projectId}/run`, {
+      method: 'POST',
+      body: JSON.stringify(data),
     });
   },
 };

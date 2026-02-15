@@ -70,6 +70,10 @@ pub enum TypstError {
     /// Repository exceeds the maximum allowed size.
     #[snafu(display("repository too large: {size} bytes"))]
     RepositoryTooLarge { size: u64 },
+
+    /// Command execution failed.
+    #[snafu(display("command execution failed: {message}"))]
+    CommandFailed { message: String },
 }
 
 /// Map a `sqlx::Error` into [`TypstError::Repository`].
@@ -111,7 +115,8 @@ impl axum::response::IntoResponse for TypstError {
             Self::GitCloneFailed { .. }
             | Self::Storage { .. }
             | Self::Repository { .. }
-            | Self::FileIo { .. } => {
+            | Self::FileIo { .. }
+            | Self::CommandFailed { .. } => {
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR
             }
         };

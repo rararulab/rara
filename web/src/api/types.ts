@@ -315,6 +315,17 @@ export interface RenderResult {
   created_at: string;
 }
 
+export interface JustRecipe {
+  name: string;
+  description: string | null;
+}
+
+export interface RunOutput {
+  exit_code: number;
+  stdout: string;
+  stderr: string;
+}
+
 // System / Directory Browser
 export interface BrowseResult {
   current_path: string;

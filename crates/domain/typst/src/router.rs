@@ -16,6 +16,8 @@
 //! | `POST`   | `/api/v1/typst/projects/{id}/compile`         | Compile project to PDF   |
 //! | `GET`    | `/api/v1/typst/projects/{id}/renders`         | List render history      |
 //! | `GET`    | `/api/v1/typst/renders/{id}/pdf`              | Download rendered PDF    |
+//! | `GET`    | `/api/v1/typst/projects/{id}/recipes`         | List just recipes        |
+//! | `POST`   | `/api/v1/typst/projects/{id}/run`             | Run recipe or command    |
 
 use axum::{
     Json, Router,
@@ -25,12 +27,14 @@ use axum::{
     response::IntoResponse,
     routing::{delete, get, post, put},
 };
+use serde::Deserialize;
 use tracing::instrument;
 use uuid::Uuid;
 
 use crate::{
     error::TypstError,
     fs::FileEntry,
+    runner::{JustRecipe, RunOutput},
     service::TypstService,
     types::{
         CompileRequest, ImportGitRequest, RegisterProjectRequest, RenderResult, TypstProject,
@@ -76,6 +80,15 @@ pub fn routes(service: TypstService) -> Router {
             get(list_renders),
         )
         .route("/api/v1/typst/renders/{id}/pdf", get(get_render_pdf))
+        // Runner (just recipes / shell commands)
+        .route(
+            "/api/v1/typst/projects/{id}/recipes",
+            get(list_recipes),
+        )
+        .route(
+            "/api/v1/typst/projects/{id}/run",
+            post(run_project_command),
+        )
         .with_state(service)
 }
 
@@ -224,4 +237,44 @@ async fn get_render_pdf(
     ];
 
     Ok((headers, Body::from(pdf_bytes)))
+}
+
+// ---------------------------------------------------------------------------
+// Runner handlers (just recipes / shell commands)
+// ---------------------------------------------------------------------------
+
+#[instrument(skip(service))]
+async fn list_recipes(
+    State(service): State<TypstService>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<JustRecipe>>, TypstError> {
+    let recipes = service.list_recipes(id).await?;
+    Ok(Json(recipes))
+}
+
+/// Request body for `POST /api/v1/typst/projects/{id}/run`.
+///
+/// Exactly one of `recipe` or `command` must be provided.
+#[derive(Debug, Deserialize)]
+struct RunRequest {
+    recipe:  Option<String>,
+    command: Option<String>,
+}
+
+#[instrument(skip(service, req))]
+async fn run_project_command(
+    State(service): State<TypstService>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<RunRequest>,
+) -> Result<Json<RunOutput>, TypstError> {
+    let output = match (req.recipe, req.command) {
+        (Some(recipe), None) => service.run_recipe(id, &recipe).await?,
+        (None, Some(command)) => service.run_command(id, &command).await?,
+        _ => {
+            return Err(TypstError::InvalidRequest {
+                message: "exactly one of 'recipe' or 'command' must be provided".to_owned(),
+            });
+        }
+    };
+    Ok(Json(output))
 }

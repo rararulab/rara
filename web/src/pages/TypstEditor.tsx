@@ -22,7 +22,7 @@ import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLi
 import { markdown } from "@codemirror/lang-markdown";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { api } from "@/api/client";
-import type { TypstProject, FileEntry, FileContent, RenderResult } from "@/api/types";
+import type { TypstProject, FileEntry, FileContent, RenderResult, JustRecipe, RunOutput } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -37,6 +37,9 @@ import {
   History,
   Download,
   Save,
+  Terminal,
+  CheckCircle,
+  XCircle,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -345,7 +348,7 @@ function PdfPreview({
   }
 
   return (
-    <div className="flex flex-col border-l w-[400px] shrink-0">
+    <div className="flex flex-col flex-1 min-h-0">
       <div className="flex items-center justify-between border-b px-3 py-1.5">
         <span className="text-xs text-muted-foreground">Preview</span>
         <div className="flex items-center gap-1">
@@ -460,6 +463,179 @@ function PdfPreview({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Tasks Panel (bottom of the right column)
+// ---------------------------------------------------------------------------
+
+function TasksPanel({ projectId }: { projectId: string }) {
+  const [expanded, setExpanded] = useState(true);
+  const [customCommand, setCustomCommand] = useState("");
+  const [lastOutput, setLastOutput] = useState<RunOutput | null>(null);
+  const [isRunning, setIsRunning] = useState(false);
+
+  const recipesQuery = useQuery({
+    queryKey: ["typst-recipes", projectId],
+    queryFn: () => api.listRecipes(projectId),
+    enabled: !!projectId,
+    // Don't error on 500 (no justfile) — treat as empty
+    retry: false,
+  });
+
+  const recipes: JustRecipe[] = recipesQuery.data ?? [];
+  const hasRecipes = recipes.length > 0;
+
+  async function handleRunRecipe(recipeName: string) {
+    setIsRunning(true);
+    try {
+      const output = await api.runProjectCommand(projectId, {
+        recipe: recipeName,
+      });
+      setLastOutput(output);
+    } catch (err) {
+      setLastOutput({
+        exit_code: -1,
+        stdout: "",
+        stderr: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setIsRunning(false);
+    }
+  }
+
+  async function handleRunCommand() {
+    if (!customCommand.trim()) return;
+    setIsRunning(true);
+    try {
+      const output = await api.runProjectCommand(projectId, {
+        command: customCommand,
+      });
+      setLastOutput(output);
+    } catch (err) {
+      setLastOutput({
+        exit_code: -1,
+        stdout: "",
+        stderr: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setIsRunning(false);
+    }
+  }
+
+  return (
+    <div className="border-t flex flex-col">
+      {/* Header */}
+      <button
+        type="button"
+        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground hover:bg-accent/50 transition-colors"
+        onClick={() => setExpanded((v) => !v)}
+      >
+        {expanded ? (
+          <ChevronDown className="h-3 w-3" />
+        ) : (
+          <ChevronRight className="h-3 w-3" />
+        )}
+        <Terminal className="h-3.5 w-3.5" />
+        Tasks
+      </button>
+
+      {expanded && (
+        <div className="flex flex-col gap-2 px-3 pb-3 max-h-72 overflow-y-auto">
+          {/* Just recipes list */}
+          {hasRecipes && (
+            <div className="space-y-0.5">
+              {recipes.map((recipe) => (
+                <button
+                  key={recipe.name}
+                  type="button"
+                  className="flex items-center gap-2 w-full rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent/50 transition-colors disabled:opacity-50"
+                  onClick={() => handleRunRecipe(recipe.name)}
+                  disabled={isRunning}
+                >
+                  <Play className="h-3 w-3 shrink-0 text-green-500" />
+                  <span className="font-mono font-medium">{recipe.name}</span>
+                  {recipe.description && (
+                    <span className="text-muted-foreground truncate">
+                      # {recipe.description}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* No justfile message */}
+          {!recipesQuery.isLoading && !hasRecipes && (
+            <p className="text-xs text-muted-foreground">
+              No justfile found. Use the command input below.
+            </p>
+          )}
+
+          {/* Custom command input */}
+          <div className="flex items-center gap-1.5">
+            <input
+              type="text"
+              value={customCommand}
+              onChange={(e) => setCustomCommand(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !isRunning) handleRunCommand();
+              }}
+              placeholder="Custom command..."
+              className="flex-1 rounded-md border bg-background px-2 py-1 text-xs font-mono placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              disabled={isRunning}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={handleRunCommand}
+              disabled={isRunning || !customCommand.trim()}
+            >
+              {isRunning ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                "Run"
+              )}
+            </Button>
+          </div>
+
+          {/* Output area */}
+          {lastOutput && (
+            <div className="rounded-md border bg-zinc-950 p-2 text-xs font-mono">
+              {lastOutput.stdout && (
+                <pre className="whitespace-pre-wrap text-zinc-300 max-h-32 overflow-y-auto">
+                  {lastOutput.stdout}
+                </pre>
+              )}
+              {lastOutput.stderr && (
+                <pre className="whitespace-pre-wrap text-red-400 max-h-32 overflow-y-auto">
+                  {lastOutput.stderr}
+                </pre>
+              )}
+              <div className="mt-1.5 flex items-center gap-1 border-t border-zinc-800 pt-1.5">
+                {lastOutput.exit_code === 0 ? (
+                  <CheckCircle className="h-3 w-3 text-green-500" />
+                ) : (
+                  <XCircle className="h-3 w-3 text-red-500" />
+                )}
+                <span
+                  className={cn(
+                    "text-xs",
+                    lastOutput.exit_code === 0
+                      ? "text-green-500"
+                      : "text-red-500"
+                  )}
+                >
+                  Exit code: {lastOutput.exit_code}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -747,14 +923,17 @@ export default function TypstEditor() {
           </div>
         )}
 
-        {/* Right: PDF preview */}
-        <PdfPreview
-          projectId={projectId}
-          renders={renders}
-          isCompiling={compileMutation.isPending}
-          onCompile={handleCompile}
-          isRendersLoading={rendersQuery.isLoading}
-        />
+        {/* Right: PDF preview + Tasks */}
+        <div className="flex flex-col border-l w-[400px] shrink-0">
+          <PdfPreview
+            projectId={projectId}
+            renders={renders}
+            isCompiling={compileMutation.isPending}
+            onCompile={handleCompile}
+            isRendersLoading={rendersQuery.isLoading}
+          />
+          <TasksPanel projectId={projectId} />
+        </div>
       </div>
     </div>
   );

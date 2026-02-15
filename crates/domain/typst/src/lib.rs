@@ -15,6 +15,7 @@ pub mod git;
 pub mod pg_repository;
 pub mod repository;
 pub mod router;
+pub mod runner;
 pub mod service;
 pub mod types;
 
