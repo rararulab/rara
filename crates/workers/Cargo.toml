@@ -18,6 +18,7 @@ chrono = { workspace = true }
 common-runtime = { workspace = true }
 common-worker = { workspace = true }
 crawl4ai = { workspace = true }
+croner.workspace = true
 jiff.workspace = true
 openrouter-rs = { workspace = true }
 opendal.workspace = true
@@ -44,6 +45,7 @@ sqlx.workspace = true
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing.workspace = true
+ulid.workspace = true
 uuid.workspace = true
 yunara-store = { workspace = true }
 

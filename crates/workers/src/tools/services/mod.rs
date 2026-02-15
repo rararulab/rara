@@ -17,11 +17,13 @@
 mod job_pipeline;
 mod memory_tools;
 mod resume_tools;
+mod schedule_tools;
 mod typst_tools;
 
 pub use job_pipeline::JobPipelineTool;
 pub use memory_tools::{MemoryGetTool, MemorySearchTool, MemoryWriteTool};
 pub use resume_tools::{AnalyzeResumeTool, GetResumeContentTool, ListResumesTool};
+pub use schedule_tools::{ScheduleAddTool, ScheduleListTool, ScheduleRemoveTool};
 pub use typst_tools::{
     CompileTypstProjectTool, ListTypstFilesTool, ListTypstProjectsTool, ReadTypstFileTool,
     UpdateTypstFileTool,

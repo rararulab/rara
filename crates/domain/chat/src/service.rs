@@ -492,6 +492,41 @@ impl ChatService {
             .await?;
         Ok(binding)
     }
+
+    // -- accessors for background workers -----------------------------------
+
+    /// Get a reference to the tool registry.
+    pub fn tools(&self) -> &Arc<ToolRegistry> {
+        &self.tools
+    }
+
+    /// Append a user message and an assistant response to a session,
+    /// auto-creating the session if it does not exist.
+    ///
+    /// This is intended for background workers (e.g. the scheduled agent)
+    /// that produce messages outside the normal `send_message` flow.
+    #[instrument(skip(self, user_text, assistant_text))]
+    pub async fn append_messages(
+        &self,
+        key: &SessionKey,
+        user_text: &str,
+        assistant_text: &str,
+    ) -> Result<(), ChatError> {
+        // Ensure session exists.
+        if self.session_repo.get_session(key).await?.is_none() {
+            self.create_session(key.clone(), None, None, None).await?;
+        }
+
+        let user_msg = ChatMessage::user(user_text);
+        self.session_repo.append_message(key, &user_msg).await?;
+
+        let assistant_msg = ChatMessage::assistant(assistant_text);
+        self.session_repo
+            .append_message(key, &assistant_msg)
+            .await?;
+
+        Ok(())
+    }
 }
 
 impl std::fmt::Debug for ChatService {
