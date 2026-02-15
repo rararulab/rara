@@ -117,6 +117,24 @@ impl AppState {
         let crawl_client = crawl4ai::Crawl4AiClient::new(crawl4ai_url);
         info!("Crawl4AI client configured");
 
+        // -- skills ----------------------------------------------------------
+
+        let skill_registry = {
+            let user_dir = rara_paths::skills_dir();
+            let bundled_dir = std::env::current_dir()
+                .unwrap_or_default()
+                .join("skills");
+            rara_skills::registry::SkillRegistry::load_from_dirs(&[
+                bundled_dir.as_path(),
+                user_dir.as_path(),
+            ])
+            .unwrap_or_else(|e| {
+                warn!(error = %e, "Failed to load skills, using empty registry");
+                rara_skills::registry::SkillRegistry::new()
+            })
+        };
+        let skill_registry = Arc::new(RwLock::new(skill_registry));
+
         // -- chat service ----------------------------------------------------
 
         let session_repo = Arc::new(
@@ -349,6 +367,9 @@ impl AppState {
                 self.notify_client.clone(),
             ))
             .merge(rara_domain_chat::router::routes(self.chat_service.clone()))
+            .merge(rara_domain_chat::skill_router::skill_routes(
+                self.skill_registry.clone(),
+            ))
             .merge(rara_domain_typst::router::routes(
                 self.typst_service.clone(),
             ))
