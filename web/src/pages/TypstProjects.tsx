@@ -31,7 +31,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { FileType, FolderOpen, GitBranch, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { FileType, FolderOpen, FolderSearch, GitBranch, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { FolderPicker } from "@/components/FolderPicker";
 
 interface RegisterForm {
   name: string;
@@ -57,6 +58,8 @@ export default function TypstProjects() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState<RegisterForm>(emptyForm);
   const [deleteTarget, setDeleteTarget] = useState<TypstProject | null>(null);
+  const [folderPickerOpen, setFolderPickerOpen] = useState(false);
+  const [folderPickerTarget, setFolderPickerTarget] = useState<"add" | "git">("add");
   const [gitDialogOpen, setGitDialogOpen] = useState(false);
   const [gitForm, setGitForm] = useState<GitImportForm>({
     url: "",
@@ -293,15 +296,30 @@ export default function TypstProjects() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="local_path">Local Directory Path *</Label>
-              <Input
-                id="local_path"
-                value={form.local_path}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, local_path: e.target.value }))
-                }
-                placeholder="/Users/you/Documents/my-resume"
-                required
-              />
+              <div className="flex gap-2">
+                <Input
+                  id="local_path"
+                  value={form.local_path}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, local_path: e.target.value }))
+                  }
+                  placeholder="/Users/you/Documents/my-resume"
+                  required
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  onClick={() => {
+                    setFolderPickerTarget("add");
+                    setFolderPickerOpen(true);
+                  }}
+                >
+                  <FolderSearch className="h-4 w-4 mr-1" />
+                  Browse
+                </Button>
+              </div>
               <p className="text-xs text-muted-foreground">
                 Absolute path to the directory containing your .typ files.
               </p>
@@ -364,15 +382,30 @@ export default function TypstProjects() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="git-target-dir">Target Directory *</Label>
-              <Input
-                id="git-target-dir"
-                value={gitForm.target_dir}
-                onChange={(e) =>
-                  setGitForm((f) => ({ ...f, target_dir: e.target.value }))
-                }
-                placeholder="/Users/you/Documents/imported-project"
-                required
-              />
+              <div className="flex gap-2">
+                <Input
+                  id="git-target-dir"
+                  value={gitForm.target_dir}
+                  onChange={(e) =>
+                    setGitForm((f) => ({ ...f, target_dir: e.target.value }))
+                  }
+                  placeholder="/Users/you/Documents/imported-project"
+                  required
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  onClick={() => {
+                    setFolderPickerTarget("git");
+                    setFolderPickerOpen(true);
+                  }}
+                >
+                  <FolderSearch className="h-4 w-4 mr-1" />
+                  Browse
+                </Button>
+              </div>
               <p className="text-xs text-muted-foreground">
                 Local directory to clone the repository into.
               </p>
@@ -413,6 +446,29 @@ export default function TypstProjects() {
           </form>
         </DialogContent>
       </Dialog>
+
+      {/* Folder Picker (shared by Add Project & Git Import dialogs) */}
+      <FolderPicker
+        open={folderPickerOpen}
+        onClose={() => setFolderPickerOpen(false)}
+        onSelect={(path) => {
+          if (folderPickerTarget === "add") {
+            const folderName = path.split("/").pop() ?? "";
+            setForm((f) => ({
+              ...f,
+              local_path: path,
+              name: f.name || folderName,
+            }));
+          } else {
+            setGitForm((f) => ({ ...f, target_dir: path }));
+          }
+        }}
+        initialPath={
+          folderPickerTarget === "add"
+            ? form.local_path || undefined
+            : gitForm.target_dir || undefined
+        }
+      />
 
       {/* Delete Confirmation Dialog */}
       <Dialog

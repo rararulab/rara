@@ -83,7 +83,7 @@ async function requestBlob(path: string, options?: RequestInit & { timeoutMs?: n
   }
 }
 
-import type { TypstProject } from './types';
+import type { TypstProject, BrowseResult } from './types';
 
 export const api = {
   get: <T>(path: string) => request<T>(path),
@@ -95,6 +95,13 @@ export const api = {
     request<T>(path, { method: 'PATCH', body: body ? JSON.stringify(body) : undefined }),
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
   blob: (path: string) => requestBlob(path),
+
+  // -- System --
+
+  browseDirectory(path?: string): Promise<BrowseResult> {
+    const params = path ? `?path=${encodeURIComponent(path)}` : '';
+    return request<BrowseResult>(`/api/v1/system/browse${params}`);
+  },
 
   // -- Typst --
 

@@ -22,6 +22,7 @@ pub mod proactive;
 pub mod saved_job_analyze;
 pub mod saved_job_crawl;
 pub mod saved_job_gc;
+pub mod system_routes;
 pub mod tools;
 pub mod types;
 pub mod worker_state;

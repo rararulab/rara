@@ -315,6 +315,19 @@ export interface RenderResult {
   created_at: string;
 }
 
+// System / Directory Browser
+export interface BrowseResult {
+  current_path: string;
+  parent_path: string | null;
+  entries: BrowseDirEntry[];
+}
+
+export interface BrowseDirEntry {
+  name: string;
+  path: string;
+  has_typ_files: boolean;
+}
+
 // Chat Sessions
 export interface ChatSession {
   key: string;

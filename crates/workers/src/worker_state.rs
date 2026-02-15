@@ -294,6 +294,7 @@ impl AppState {
             .merge(rara_domain_typst::router::routes(
                 self.typst_service.clone(),
             ))
+            .merge(crate::system_routes::routes())
     }
 }
 
