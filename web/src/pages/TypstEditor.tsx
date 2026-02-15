@@ -21,6 +21,10 @@ import { EditorState } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
 import { oneDark } from "@codemirror/theme-one-dark";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
+import "highlight.js/styles/github-dark.css";
 import { api } from "@/api/client";
 import type { TypstProject, FileEntry, FileContent, RenderResult, JustRecipe, RunOutput } from "@/api/types";
 import { Button } from "@/components/ui/button";
@@ -31,6 +35,7 @@ import {
   ChevronDown,
   ChevronRight,
   File,
+  FileText,
   Folder,
   Loader2,
   Play,
@@ -41,6 +46,18 @@ import {
   CheckCircle,
   XCircle,
 } from "lucide-react";
+
+// ---------------------------------------------------------------------------
+// File type detection
+// ---------------------------------------------------------------------------
+
+type FileType = "typst" | "markdown" | "other";
+
+function getFileType(path: string): FileType {
+  if (path.endsWith(".typ")) return "typst";
+  if (path.endsWith(".md") || path.endsWith(".markdown")) return "markdown";
+  return "other";
+}
 
 // ---------------------------------------------------------------------------
 // Recursive File Tree (left column)
@@ -468,6 +485,52 @@ function PdfPreview({
 }
 
 // ---------------------------------------------------------------------------
+// Markdown Preview (right column — shown for .md files)
+// ---------------------------------------------------------------------------
+
+function MarkdownPreview({ content }: { content: string }) {
+  return (
+    <div className="flex flex-col flex-1 min-h-0">
+      <div className="flex items-center justify-between border-b px-3 py-1.5">
+        <span className="text-xs text-muted-foreground">Markdown Preview</span>
+      </div>
+      <div className="flex-1 min-h-0 overflow-auto bg-muted/30">
+        <div className="prose prose-invert prose-sm max-w-none p-6 prose-headings:text-foreground prose-p:text-foreground/90 prose-a:text-blue-400 prose-strong:text-foreground prose-code:text-pink-400 prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-border prose-blockquote:border-l-accent prose-blockquote:text-muted-foreground prose-th:text-foreground prose-td:text-foreground/90 prose-li:text-foreground/90">
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            rehypePlugins={[rehypeHighlight]}
+          >
+            {content}
+          </ReactMarkdown>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// No Preview placeholder (right column — shown for non-typst/non-md files)
+// ---------------------------------------------------------------------------
+
+function NoPreview() {
+  return (
+    <div className="flex flex-col flex-1 min-h-0">
+      <div className="flex items-center justify-between border-b px-3 py-1.5">
+        <span className="text-xs text-muted-foreground">Preview</span>
+      </div>
+      <div className="flex-1 min-h-0 bg-muted/30">
+        <div className="flex h-full items-center justify-center">
+          <div className="flex flex-col items-center gap-2 text-muted-foreground">
+            <FileText className="h-12 w-12 opacity-20" />
+            <p className="text-sm">No preview available for this file type.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Tasks Panel (bottom of the right column)
 // ---------------------------------------------------------------------------
 
@@ -667,7 +730,12 @@ export default function TypstEditor() {
 
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
   const [editorContent, setEditorContent] = useState<string>("");
+  const [liveContent, setLiveContent] = useState<string>("");
   const [editorKey, setEditorKey] = useState(0);
+
+  const activeFileType: FileType = activeFilePath
+    ? getFileType(activeFilePath)
+    : "other";
 
   // Debounce auto-save timer
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -735,6 +803,7 @@ export default function TypstEditor() {
       )
       .then((fc) => {
         setEditorContent(fc.content);
+        setLiveContent(fc.content);
         setEditorKey((k) => k + 1);
       });
   }
@@ -788,6 +857,7 @@ export default function TypstEditor() {
   const handleContentChange = useCallback(
     (value: string) => {
       pendingContentRef.current = value;
+      setLiveContent(value);
 
       if (autoSaveTimerRef.current) {
         clearTimeout(autoSaveTimerRef.current);
@@ -923,15 +993,21 @@ export default function TypstEditor() {
           </div>
         )}
 
-        {/* Right: PDF preview + Tasks */}
+        {/* Right: Preview (type-dependent) + Tasks */}
         <div className="flex flex-col border-l w-[400px] shrink-0">
-          <PdfPreview
-            projectId={projectId}
-            renders={renders}
-            isCompiling={compileMutation.isPending}
-            onCompile={handleCompile}
-            isRendersLoading={rendersQuery.isLoading}
-          />
+          {activeFileType === "typst" && (
+            <PdfPreview
+              projectId={projectId}
+              renders={renders}
+              isCompiling={compileMutation.isPending}
+              onCompile={handleCompile}
+              isRendersLoading={rendersQuery.isLoading}
+            />
+          )}
+          {activeFileType === "markdown" && (
+            <MarkdownPreview content={liveContent} />
+          )}
+          {activeFileType === "other" && <NoPreview />}
           <TasksPanel projectId={projectId} />
         </div>
       </div>

@@ -15,6 +15,7 @@
  */
 
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
 
 @theme {
   --color-background: oklch(1 0 0);
