@@ -5,6 +5,7 @@
 //! and returns PDF bytes (or a compilation error).
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use typst_as_lib::TypstEngine;
 
@@ -40,7 +41,40 @@ pub fn compile(
         .with_static_source_file_resolver(source_files)
         .build();
 
-    // Compile the document. We specify the main file by its path.
+    compile_engine(&engine, main_file)
+}
+
+/// Compile a Typst project from a local directory.
+///
+/// Uses the filesystem resolver so that `#import` and package references
+/// (e.g. `@preview/...`) are resolved naturally by Typst.
+///
+/// # Arguments
+///
+/// * `root` - The project root directory on disk.
+/// * `main_file` - The entry-point file path relative to root.
+pub fn compile_from_dir(
+    root: &Path,
+    main_file: &str,
+) -> Result<(Vec<u8>, usize), TypstError> {
+    let main_path = root.join(main_file);
+    if !main_path.exists() {
+        return Err(TypstError::InvalidRequest {
+            message: format!("main file not found: {}", main_path.display()),
+        });
+    }
+
+    let engine = TypstEngine::builder()
+        .with_file_system_resolver(root)
+        .build();
+
+    compile_engine(&engine, main_file)
+}
+
+fn compile_engine(
+    engine: &TypstEngine,
+    main_file: &str,
+) -> Result<(Vec<u8>, usize), TypstError> {
     let result = engine.compile::<_, typst::layout::PagedDocument>(main_file);
 
     let document = result.output.map_err(|e| TypstError::CompilationError {

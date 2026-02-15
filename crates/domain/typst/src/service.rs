@@ -284,8 +284,10 @@ impl TypstService {
             return Ok(cached);
         }
 
-        // Compile.
-        let (pdf_bytes, page_count) = compiler::compile(&file_map, &main_file)?;
+        // Compile from the project directory so that the filesystem resolver
+        // can handle `#import` and package references (e.g. `@preview/...`).
+        let local_path = Path::new(&project.local_path);
+        let (pdf_bytes, page_count) = compiler::compile_from_dir(local_path, &main_file)?;
         let file_size = pdf_bytes.len() as i64;
 
         // Upload to S3.
