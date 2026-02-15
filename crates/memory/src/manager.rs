@@ -194,6 +194,25 @@ impl MemoryManager {
     pub async fn get_chunk(&self, chunk_id: i64) -> MemoryResult<Option<ChunkDetail>> {
         self.store.get_chunk(chunk_id).await
     }
+
+    /// Read the core user profile from `memory_dir/user_profile.md`.
+    ///
+    /// Returns an empty string if the file does not exist yet.
+    pub async fn read_core_profile(&self) -> MemoryResult<String> {
+        let path = self.memory_dir.join("user_profile.md");
+        match tokio::fs::read_to_string(&path).await {
+            Ok(content) => Ok(content),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+            Err(e) => Err(MemoryError::Io { source: e }),
+        }
+    }
+
+    /// Write the full user profile back to disk.
+    pub async fn write_core_profile(&self, content: &str) -> MemoryResult<()> {
+        let path = self.memory_dir.join("user_profile.md");
+        tokio::fs::write(&path, content).await.context(IoSnafu)?;
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
