@@ -247,8 +247,6 @@ impl AppState {
             task_store.clone(),
         )));
 
-        let tools = Arc::new(tool_registry);
-
         // -- skills registry ------------------------------------------------
         let skill_registry = {
             let user_dir = rara_paths::skills_dir();
@@ -266,6 +264,21 @@ impl AppState {
         };
         let skill_registry = Arc::new(RwLock::new(skill_registry));
         info!(count = skill_registry.read().unwrap().list_all().len(), "Skills registry initialized");
+
+        tool_registry.register_service(Arc::new(crate::tools::services::ListSkillsTool::new(
+            skill_registry.clone(),
+        )));
+        tool_registry.register_service(Arc::new(crate::tools::services::CreateSkillTool::new(
+            skill_registry.clone(),
+        )));
+        tool_registry.register_service(Arc::new(crate::tools::services::UpdateSkillTool::new(
+            skill_registry.clone(),
+        )));
+        tool_registry.register_service(Arc::new(crate::tools::services::DeleteSkillTool::new(
+            skill_registry.clone(),
+        )));
+
+        let tools = Arc::new(tool_registry);
 
         let chat_service = rara_domain_chat::service::ChatService::new(
             session_repo,

@@ -20,6 +20,7 @@ mod memory_tools;
 mod resume_tools;
 mod schedule_tools;
 mod screenshot;
+mod skill_tools;
 mod typst_tools;
 
 pub use codex::{AgentTaskStore, CodexListTool, CodexRunTool, CodexStatusTool};
@@ -28,6 +29,7 @@ pub use memory_tools::{MemoryGetTool, MemorySearchTool, MemoryUpdateProfileTool,
 pub use resume_tools::{AnalyzeResumeTool, GetResumeContentTool, ListResumesTool};
 pub use schedule_tools::{ScheduleAddTool, ScheduleListTool, ScheduleRemoveTool};
 pub use screenshot::ScreenshotTool;
+pub use skill_tools::{CreateSkillTool, DeleteSkillTool, ListSkillsTool, UpdateSkillTool};
 pub use typst_tools::{
     CompileTypstProjectTool, ListTypstFilesTool, ListTypstProjectsTool, ReadTypstFileTool,
     UpdateTypstFileTool,
