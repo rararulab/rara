@@ -19,8 +19,9 @@
 //! not installed.
 
 use async_trait::async_trait;
-use rara_agents::tool_registry::AgentTool;
 use serde_json::json;
+
+use crate::tool_registry::AgentTool;
 
 /// Maximum output size in bytes (50 KB).
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;
@@ -77,11 +78,11 @@ impl AgentTool for GrepTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> crate::err::Result<serde_json::Value> {
         let pattern = params
             .get("pattern")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
+            .ok_or_else(|| crate::err::Error::Other {
                 message: "missing required parameter: pattern".into(),
             })?;
 
@@ -121,7 +122,7 @@ async fn try_ripgrep(
     glob_filter: Option<&str>,
     context: u64,
     ignore_case: bool,
-) -> rara_agents::err::Result<serde_json::Value> {
+) -> crate::err::Result<serde_json::Value> {
     let mut cmd = tokio::process::Command::new("rg");
     cmd.arg("-n"); // line numbers
     cmd.arg("--max-count").arg(MAX_MATCHES.to_string());
@@ -143,7 +144,7 @@ async fn try_ripgrep(
     cmd.stderr(std::process::Stdio::piped());
 
     let output = cmd.output().await.map_err(|e| {
-        rara_agents::err::Error::Other {
+        crate::err::Error::Other {
             message: format!("failed to run rg: {e}").into(),
         }
     })?;
@@ -153,7 +154,7 @@ async fn try_ripgrep(
 
     // rg returns exit code 1 when no matches found, which is fine.
     if output.status.code() == Some(2) {
-        return Err(rara_agents::err::Error::Other {
+        return Err(crate::err::Error::Other {
             message: format!("rg error: {stderr}").into(),
         });
     }
@@ -165,7 +166,7 @@ async fn try_grep_fallback(
     pattern: &str,
     path: &str,
     ignore_case: bool,
-) -> rara_agents::err::Result<serde_json::Value> {
+) -> crate::err::Result<serde_json::Value> {
     let mut cmd = tokio::process::Command::new("grep");
     cmd.arg("-rn");
 
@@ -178,7 +179,7 @@ async fn try_grep_fallback(
     cmd.stderr(std::process::Stdio::piped());
 
     let output = cmd.output().await.map_err(|e| {
-        rara_agents::err::Error::Other {
+        crate::err::Error::Other {
             message: format!("failed to run grep: {e}").into(),
         }
     })?;
@@ -187,7 +188,7 @@ async fn try_grep_fallback(
     format_grep_output(&stdout)
 }
 
-fn format_grep_output(stdout: &str) -> rara_agents::err::Result<serde_json::Value> {
+fn format_grep_output(stdout: &str) -> crate::err::Result<serde_json::Value> {
     let lines: Vec<&str> = stdout.lines().collect();
     let match_count = lines.len();
     let mut truncated = false;

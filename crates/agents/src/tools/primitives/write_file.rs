@@ -20,8 +20,9 @@
 use std::path::Path;
 
 use async_trait::async_trait;
-use rara_agents::tool_registry::AgentTool;
 use serde_json::json;
+
+use crate::tool_registry::AgentTool;
 
 /// Layer 1 primitive: write content to a file.
 pub struct WriteFileTool;
@@ -59,18 +60,18 @@ impl AgentTool for WriteFileTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> crate::err::Result<serde_json::Value> {
         let file_path = params
             .get("file_path")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
+            .ok_or_else(|| crate::err::Error::Other {
                 message: "missing required parameter: file_path".into(),
             })?;
 
         let content = params
             .get("content")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
+            .ok_or_else(|| crate::err::Error::Other {
                 message: "missing required parameter: content".into(),
             })?;
 
@@ -78,7 +79,7 @@ impl AgentTool for WriteFileTool {
         if let Some(parent) = Path::new(file_path).parent() {
             if !parent.as_os_str().is_empty() {
                 tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                    rara_agents::err::Error::Other {
+                    crate::err::Error::Other {
                         message: format!(
                             "failed to create parent directories for {file_path}: {e}"
                         )
@@ -91,7 +92,7 @@ impl AgentTool for WriteFileTool {
         let bytes = content.as_bytes();
         tokio::fs::write(file_path, bytes)
             .await
-            .map_err(|e| rara_agents::err::Error::Other {
+            .map_err(|e| crate::err::Error::Other {
                 message: format!("failed to write file {file_path}: {e}").into(),
             })?;
 

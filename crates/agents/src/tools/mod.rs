@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod err;
-pub mod model;
-pub mod runner;
-pub mod tool_registry;
-pub mod tools;
+//! Built-in agent tools.
+
+pub mod primitives;

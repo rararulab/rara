@@ -18,8 +18,9 @@
 //! number prefixes, and truncates long lines at 2000 characters.
 
 use async_trait::async_trait;
-use rara_agents::tool_registry::AgentTool;
 use serde_json::json;
+
+use crate::tool_registry::AgentTool;
 
 /// Maximum total output size in bytes (50 KB).
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;
@@ -74,11 +75,11 @@ impl AgentTool for ReadFileTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> crate::err::Result<serde_json::Value> {
         let file_path = params
             .get("file_path")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
+            .ok_or_else(|| crate::err::Error::Other {
                 message: "missing required parameter: file_path".into(),
             })?;
 
@@ -95,7 +96,7 @@ impl AgentTool for ReadFileTool {
             .unwrap_or(DEFAULT_LIMIT);
 
         let raw_bytes = tokio::fs::read(file_path).await.map_err(|e| {
-            rara_agents::err::Error::Other {
+            crate::err::Error::Other {
                 message: format!("failed to read file {file_path}: {e}").into(),
             }
         })?;

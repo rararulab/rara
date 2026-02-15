@@ -17,8 +17,9 @@
 //! Lists entries in a directory with name, type, and size metadata.
 
 use async_trait::async_trait;
-use rara_agents::tool_registry::AgentTool;
 use serde_json::json;
+
+use crate::tool_registry::AgentTool;
 
 /// Maximum number of directory entries to return.
 const MAX_ENTRIES: usize = 1000;
@@ -55,18 +56,18 @@ impl AgentTool for ListDirectoryTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> crate::err::Result<serde_json::Value> {
         let path = params
             .get("path")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
+            .ok_or_else(|| crate::err::Error::Other {
                 message: "missing required parameter: path".into(),
             })?;
 
         let mut read_dir =
             tokio::fs::read_dir(path)
                 .await
-                .map_err(|e| rara_agents::err::Error::Other {
+                .map_err(|e| crate::err::Error::Other {
                     message: format!("failed to read directory {path}: {e}").into(),
                 })?;
 
@@ -74,7 +75,7 @@ impl AgentTool for ListDirectoryTool {
         let mut total = 0usize;
 
         while let Some(entry) = read_dir.next_entry().await.map_err(|e| {
-            rara_agents::err::Error::Other {
+            crate::err::Error::Other {
                 message: format!("failed to read directory entry: {e}").into(),
             }
         })? {
@@ -87,7 +88,7 @@ impl AgentTool for ListDirectoryTool {
             let name = entry.file_name().to_string_lossy().into_owned();
 
             let file_type = entry.file_type().await.map_err(|e| {
-                rara_agents::err::Error::Other {
+                crate::err::Error::Other {
                     message: format!("failed to get file type for {name}: {e}").into(),
                 }
             })?;
