@@ -46,6 +46,8 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing.workspace = true
 ulid.workspace = true
+utoipa.workspace = true
+utoipa-axum.workspace = true
 uuid.workspace = true
 yunara-store = { workspace = true }
 

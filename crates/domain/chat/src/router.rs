@@ -37,11 +37,12 @@
 //! | `GET`    | `/api/v1/chat/channel-bindings/{type}/{account}/{id}`| Get channel binding    |
 
 use axum::{
-    Json, Router,
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
     routing::{delete, get, patch, post, put},
 };
+use utoipa_axum::router::OpenApiRouter;
 use rara_sessions::types::{ChannelBinding, ChatMessage, SessionEntry, SessionKey};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -148,8 +149,8 @@ pub struct BindChannelRequest {
 
 /// Build an axum [`Router`] with all chat endpoints and the given
 /// [`ChatService`] as shared state.
-pub fn routes(service: ChatService) -> Router {
-    Router::new()
+pub fn routes(service: ChatService) -> OpenApiRouter {
+    OpenApiRouter::new()
         // Models
         .route("/api/v1/chat/models", get(list_models))
         .route("/api/v1/chat/models/favorites", put(set_favorites))

@@ -28,6 +28,7 @@ use uuid::Uuid;
 #[repr(u8)]
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString, FromRepr,
+    utoipa::ToSchema,
 )]
 #[strum(serialize_all = "snake_case")]
 pub enum ApplicationStatus {
@@ -55,7 +56,8 @@ pub enum ApplicationStatus {
 
 /// The channel through which an application was submitted.
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, FromRepr)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, FromRepr,
+    utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ApplicationChannel {
     /// Applied directly on the company website.
@@ -81,7 +83,8 @@ pub enum ApplicationChannel {
 
 /// Priority level assigned to an application.
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, FromRepr)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, FromRepr,
+    utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum Priority {
@@ -105,7 +108,8 @@ impl Default for Priority {
 
 /// How a status change was triggered.
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, FromRepr)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, FromRepr,
+    utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum ChangeSource {
@@ -125,7 +129,7 @@ pub enum ChangeSource {
 ///
 /// Represents the full lifecycle of a single application, from draft
 /// through submission, review, interview rounds, and final outcome.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Application {
     /// Unique identifier.
     pub id:           ApplicationId,
@@ -150,10 +154,13 @@ pub struct Application {
     /// Whether this application has been soft-deleted.
     pub is_deleted:   bool,
     /// When the application was submitted (if it has been).
+    #[schema(value_type = Option<String>)]
     pub submitted_at: Option<Timestamp>,
     /// When the application was created.
+    #[schema(value_type = String)]
     pub created_at:   Timestamp,
     /// When the application was last updated.
+    #[schema(value_type = String)]
     pub updated_at:   Timestamp,
 }
 
@@ -162,7 +169,7 @@ pub struct Application {
 // ---------------------------------------------------------------------------
 
 /// A record of a single status transition in an application's history.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct StatusChangeRecord {
     /// Unique identifier for this history entry.
     pub id:             Uuid,
@@ -177,6 +184,7 @@ pub struct StatusChangeRecord {
     /// Optional note describing why the transition occurred.
     pub note:           Option<String>,
     /// When the transition happened.
+    #[schema(value_type = String)]
     pub created_at:     Timestamp,
 }
 
@@ -185,7 +193,7 @@ pub struct StatusChangeRecord {
 // ---------------------------------------------------------------------------
 
 /// Parameters for creating a new application.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateApplicationRequest {
     /// The job source to apply for.
     pub job_id:       JobSourceId,
@@ -206,7 +214,7 @@ pub struct CreateApplicationRequest {
 /// Parameters for a partial update of an existing application.
 ///
 /// Only the fields set to `Some` will be applied.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct UpdateApplicationRequest {
     /// Update the cover letter.
     pub cover_letter: Option<Option<String>>,
@@ -225,7 +233,7 @@ pub struct UpdateApplicationRequest {
 // ---------------------------------------------------------------------------
 
 /// Criteria for listing/searching applications.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ApplicationFilter {
     /// Filter by status.
     pub status:         Option<ApplicationStatus>,
@@ -240,8 +248,10 @@ pub struct ApplicationFilter {
     /// Applications must contain *all* of these tags.
     pub tags:           Option<Vec<String>>,
     /// Created at or after this timestamp.
+    #[schema(value_type = Option<String>)]
     pub created_after:  Option<Timestamp>,
     /// Created at or before this timestamp.
+    #[schema(value_type = Option<String>)]
     pub created_before: Option<Timestamp>,
 }
 

@@ -144,9 +144,15 @@ impl AppConfig {
 
         // -- HTTP routes -----------------------------------------------------
 
-        let domain_routes = app_state.routes();
+        let (domain_routes, openapi) = app_state.routes();
+        let swagger_ui = utoipa_swagger_ui::SwaggerUi::new("/swagger-ui")
+            .url("/api/openapi.json", openapi);
         let routes_fn: Box<dyn Fn(axum::Router) -> axum::Router + Send + Sync> =
-            Box::new(move |router| health_routes(router).merge(domain_routes.clone()));
+            Box::new(move |router| {
+                health_routes(router)
+                    .merge(domain_routes.clone())
+                    .merge(swagger_ui.clone())
+            });
 
         info!("Application initialized successfully");
 

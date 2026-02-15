@@ -15,10 +15,11 @@
 //! HTTP API routes for analytics metrics snapshots.
 
 use axum::{
-    Json, Router,
+    Json,
     extract::{Path, Query, State},
     routing::{delete, get, post},
 };
+use utoipa_axum::router::OpenApiRouter;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use uuid::Uuid;
@@ -51,8 +52,8 @@ pub struct DerivedRates {
 }
 
 /// Register all analytics routes on a new router with shared state.
-pub fn routes(service: AnalyticsService) -> Router {
-    Router::new()
+pub fn routes(service: AnalyticsService) -> OpenApiRouter {
+    OpenApiRouter::new()
         .route("/api/v1/analytics/snapshots", post(create_snapshot))
         .route("/api/v1/analytics/snapshots", get(list_snapshots))
         .route("/api/v1/analytics/snapshots/latest", get(get_latest))

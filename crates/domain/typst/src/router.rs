@@ -34,13 +34,14 @@
 //! | `POST`   | `/api/v1/typst/projects/{id}/run`             | Run recipe or command    |
 
 use axum::{
-    Json, Router,
+    Json,
     body::Body,
     extract::{Path, State},
     http::{StatusCode, header},
     response::IntoResponse,
     routing::{delete, get, post, put},
 };
+use utoipa_axum::router::OpenApiRouter;
 use serde::Deserialize;
 use tracing::instrument;
 use uuid::Uuid;
@@ -57,8 +58,8 @@ use crate::{
 };
 
 /// Build an axum [`Router`] with all Typst endpoints.
-pub fn routes(service: TypstService) -> Router {
-    Router::new()
+pub fn routes(service: TypstService) -> OpenApiRouter {
+    OpenApiRouter::new()
         // Projects
         .route("/api/v1/typst/projects", post(register_project))
         .route("/api/v1/typst/projects", get(list_projects))

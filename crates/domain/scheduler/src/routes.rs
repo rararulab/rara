@@ -15,10 +15,11 @@
 //! HTTP API routes for scheduler task management.
 
 use axum::{
-    Json, Router,
+    Json,
     extract::{Path, Query, State},
     routing::{get, post},
 };
+use utoipa_axum::router::OpenApiRouter;
 use rara_domain_shared::id::SchedulerTaskId;
 use serde::Deserialize;
 use tracing::instrument;
@@ -41,8 +42,8 @@ pub struct HistoryQuery {
 }
 
 /// Register all scheduler routes on a new router with shared state.
-pub fn routes(service: SchedulerService) -> Router {
-    Router::new()
+pub fn routes(service: SchedulerService) -> OpenApiRouter {
+    OpenApiRouter::new()
         .route("/api/v1/scheduler/tasks", get(list_tasks))
         .route("/api/v1/scheduler/tasks/{id}", get(get_task))
         .route("/api/v1/scheduler/tasks/{id}/enable", post(enable_task))

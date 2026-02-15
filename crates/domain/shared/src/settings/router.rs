@@ -15,11 +15,12 @@
 //! HTTP routes for runtime settings.
 
 use axum::{
-    Json, Router,
+    Json,
     extract::{Path, State},
     http::StatusCode,
     routing::get,
 };
+use utoipa_axum::router::OpenApiRouter;
 use serde::Deserialize;
 use tokio::fs;
 
@@ -105,11 +106,11 @@ fn prompt_spec(name: &str) -> Option<&'static PromptSpec> {
 }
 
 /// Build `/api/v1/settings` routes.
-pub fn routes(svc: SettingsSvc) -> Router {
-    Router::new()
+pub fn routes(svc: SettingsSvc) -> OpenApiRouter {
+    OpenApiRouter::new()
         .nest(
             "/api/v1",
-            Router::new()
+            OpenApiRouter::new()
                 .route("/settings", get(get_settings).post(update_settings))
                 .route("/settings/prompts", get(list_prompts))
                 .route(

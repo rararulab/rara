@@ -16,14 +16,15 @@
 
 use std::path::PathBuf;
 
-use axum::{Json, Router, extract::Query, http::StatusCode, routing::get};
+use axum::{Json, extract::Query, http::StatusCode, routing::get};
+use utoipa_axum::router::OpenApiRouter;
 use serde::{Deserialize, Serialize};
 
 /// Build `/api/v1/system/...` routes.
-pub fn routes() -> Router {
-    Router::new().nest(
+pub fn routes() -> OpenApiRouter {
+    OpenApiRouter::new().nest(
         "/api/v1/system",
-        Router::new().route("/browse", get(browse_directory)),
+        OpenApiRouter::new().route("/browse", get(browse_directory)),
     )
 }
 

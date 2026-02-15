@@ -15,11 +15,12 @@
 //! HTTP API routes for interview plan management.
 
 use axum::{
-    Json, Router,
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
     routing::{delete, get, post, put},
 };
+use utoipa_axum::router::OpenApiRouter;
 use rara_domain_shared::id::InterviewId;
 use serde::Deserialize;
 use tracing::instrument;
@@ -40,8 +41,8 @@ struct UpdateStatusRequest {
 }
 
 /// Register all interview routes on a new router with shared state.
-pub fn routes(service: InterviewService) -> Router {
-    Router::new()
+pub fn routes(service: InterviewService) -> OpenApiRouter {
+    OpenApiRouter::new()
         .route("/api/v1/interviews", post(create_interview))
         .route("/api/v1/interviews", get(list_interviews))
         .route("/api/v1/interviews/{id}", get(get_interview))

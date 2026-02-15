@@ -28,6 +28,8 @@ teloxide.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
+utoipa.workspace = true
+utoipa-axum.workspace = true
 uuid = { version = "1", features = ["v4", "serde"] }
 yunara-store = { workspace = true }
 

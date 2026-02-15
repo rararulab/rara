@@ -15,12 +15,13 @@
 //! HTTP API routes for resume management.
 
 use axum::{
-    Json, Router,
+    Json,
     extract::{Multipart, Path, Query, State},
     http::{StatusCode, header},
     response::IntoResponse,
     routing::{delete, get, post, put},
 };
+use utoipa_axum::router::OpenApiRouter;
 use opendal::Operator;
 use tracing::instrument;
 use uuid::Uuid;
@@ -50,12 +51,12 @@ impl<R: ResumeRepository> Clone for ResumeRouteState<R> {
 pub fn routes<R: ResumeRepository + 'static>(
     service: ResumeService<R>,
     object_store: Operator,
-) -> Router {
+) -> OpenApiRouter {
     let state = ResumeRouteState {
         service,
         object_store,
     };
-    Router::new()
+    OpenApiRouter::new()
         .route("/api/v1/resumes", post(create_resume::<R>))
         .route("/api/v1/resumes", get(list_resumes::<R>))
         .route("/api/v1/resumes/upload", post(upload_pdf::<R>))

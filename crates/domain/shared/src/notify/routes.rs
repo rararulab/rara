@@ -15,10 +15,11 @@
 //! HTTP routes for notification queue observability.
 
 use axum::{
-    Json, Router,
+    Json,
     extract::{Query, State},
     http::StatusCode,
 };
+use utoipa_axum::router::OpenApiRouter;
 use serde::Deserialize;
 
 use crate::notify::{
@@ -51,8 +52,8 @@ struct QueueMessagesQuery {
 }
 
 /// Build notification observability routes.
-pub fn routes(client: NotifyClient) -> Router {
-    Router::new()
+pub fn routes(client: NotifyClient) -> OpenApiRouter {
+    OpenApiRouter::new()
         .route(
             "/api/v1/notifications/queues/telegram/overview",
             axum::routing::get(get_telegram_queue_overview),
