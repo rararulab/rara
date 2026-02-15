@@ -17,8 +17,9 @@
 //! [`TelegramOutbound`] centralizes all message sending logic with two key
 //! features:
 //!
-//! - **Markdown conversion** — [`send_markdown`](TelegramOutbound::send_markdown)
-//!   automatically converts Markdown to Telegram's HTML subset before sending.
+//! - **Markdown conversion** —
+//!   [`send_markdown`](TelegramOutbound::send_markdown) automatically converts
+//!   Markdown to Telegram's HTML subset before sending.
 //! - **Auto-chunking** — messages exceeding the 4096-character Telegram limit
 //!   are split at newline or space boundaries and sent as multiple messages.
 
@@ -58,11 +59,7 @@ impl TelegramOutbound {
     /// Send a plain text message (no markdown conversion).
     #[allow(dead_code)]
     #[instrument(level = "info", skip(self, text), fields(chat_id = chat_id.0, text_len = text.len()), err)]
-    pub(crate) async fn send_text(
-        &self,
-        chat_id: ChatId,
-        text: &str,
-    ) -> Result<(), OutboundError> {
+    pub(crate) async fn send_text(&self, chat_id: ChatId, text: &str) -> Result<(), OutboundError> {
         let chunks = chunk_message(text, TELEGRAM_MAX_MESSAGE_LEN);
         for chunk in chunks {
             self.bot
@@ -113,10 +110,7 @@ impl TelegramOutbound {
     /// Send a markdown message to the configured primary chat.
     #[allow(dead_code)]
     #[instrument(level = "info", skip(self, markdown), fields(md_len = markdown.len()), err)]
-    pub(crate) async fn send_primary_markdown(
-        &self,
-        markdown: &str,
-    ) -> Result<(), OutboundError> {
+    pub(crate) async fn send_primary_markdown(&self, markdown: &str) -> Result<(), OutboundError> {
         let chat_id = self.primary_chat_id();
         self.send_markdown(chat_id, markdown).await
     }
@@ -129,7 +123,5 @@ impl TelegramOutbound {
         }
     }
 
-    fn primary_chat_id(&self) -> ChatId {
-        ChatId(self.primary_config().primary_chat_id)
-    }
+    fn primary_chat_id(&self) -> ChatId { ChatId(self.primary_config().primary_chat_id) }
 }

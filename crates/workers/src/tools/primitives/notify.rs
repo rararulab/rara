@@ -19,9 +19,13 @@
 
 use async_trait::async_trait;
 use rara_agents::tool_registry::AgentTool;
-use rara_domain_shared::notify::client::NotifyClient;
-use rara_domain_shared::notify::types::{NotificationPriority, SendTelegramNotificationRequest};
-use rara_domain_shared::settings::SettingsSvc;
+use rara_domain_shared::{
+    notify::{
+        client::NotifyClient,
+        types::{NotificationPriority, SendTelegramNotificationRequest},
+    },
+    settings::SettingsSvc,
+};
 use serde_json::json;
 
 /// Layer 1 primitive: enqueue a notification message.
@@ -44,8 +48,8 @@ impl AgentTool for NotifyTool {
     fn name(&self) -> &str { "notify" }
 
     fn description(&self) -> &str {
-        "Send a notification message. Currently supports the telegram channel. The chat_id is \
-         read from runtime settings automatically. Returns the queued notification id."
+        "Send a notification message. Currently supports the telegram channel. The chat_id is read \
+         from runtime settings automatically. Returns the queued notification id."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -66,7 +70,10 @@ impl AgentTool for NotifyTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value) -> rara_agents::err::Result<serde_json::Value> {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+    ) -> rara_agents::err::Result<serde_json::Value> {
         let channel = params
             .get("channel")
             .and_then(|v| v.as_str())

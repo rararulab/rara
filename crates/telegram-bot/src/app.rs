@@ -28,9 +28,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::{
-    config::TelegramConfig,
-    http_client::MainServiceHttpClient,
-    outbound::TelegramOutbound,
+    config::TelegramConfig, http_client::MainServiceHttpClient, outbound::TelegramOutbound,
     state::BotState,
 };
 
@@ -50,8 +48,8 @@ pub struct BotApp {
 
 /// Handle returned by [`BotApp::spawn`] for non-blocking operation.
 ///
-/// The parent process holds this handle and calls [`shutdown`](BotHandle::shutdown)
-/// during its own teardown sequence.
+/// The parent process holds this handle and calls
+/// [`shutdown`](BotHandle::shutdown) during its own teardown sequence.
 pub struct BotHandle {
     handles: Vec<tokio::task::JoinHandle<()>>,
 }
@@ -293,7 +291,8 @@ impl BotApp {
     /// Start all concurrent loops and block until shutdown (standalone mode).
     ///
     /// Spawns three tokio tasks:
-    /// 1. `getUpdates` polling loop ([`bot::start_polling`](crate::bot::start_polling))
+    /// 1. `getUpdates` polling loop
+    ///    ([`bot::start_polling`](crate::bot::start_polling))
     /// 2. Notification consumer loop (pgmq -> Telegram delivery)
     /// 3. Settings watch loop (watch channel -> hot credential update)
     ///

@@ -47,7 +47,8 @@ impl AgentTool for ListTypstProjectsTool {
     fn name(&self) -> &str { "list_typst_projects" }
 
     fn description(&self) -> &str {
-        "List all Typst projects. Returns project id, name, local_path, main file, and git URL if imported from Git."
+        "List all Typst projects. Returns project id, name, local_path, main file, and git URL if \
+         imported from Git."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -58,7 +59,10 @@ impl AgentTool for ListTypstProjectsTool {
         })
     }
 
-    async fn execute(&self, _params: serde_json::Value) -> rara_agents::err::Result<serde_json::Value> {
+    async fn execute(
+        &self,
+        _params: serde_json::Value,
+    ) -> rara_agents::err::Result<serde_json::Value> {
         match self.typst_service.list_projects().await {
             Ok(projects) => {
                 let items: Vec<serde_json::Value> = projects
@@ -116,7 +120,10 @@ impl AgentTool for ListTypstFilesTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value) -> rara_agents::err::Result<serde_json::Value> {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+    ) -> rara_agents::err::Result<serde_json::Value> {
         let project_id = parse_uuid(&params, "project_id")?;
 
         let project = match self.typst_service.get_project(project_id).await {
@@ -125,9 +132,7 @@ impl AgentTool for ListTypstFilesTool {
         };
 
         match self.typst_service.list_files(&project) {
-            Ok(entries) => {
-                Ok(json!({ "files": entries }))
-            }
+            Ok(entries) => Ok(json!({ "files": entries })),
             Err(e) => Ok(json!({ "error": format!("{e}") })),
         }
     }
@@ -173,7 +178,10 @@ impl AgentTool for ReadTypstFileTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value) -> rara_agents::err::Result<serde_json::Value> {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+    ) -> rara_agents::err::Result<serde_json::Value> {
         let project_id = parse_uuid(&params, "project_id")?;
         let file_path = parse_string(&params, "file_path")?;
 
@@ -237,7 +245,10 @@ impl AgentTool for UpdateTypstFileTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value) -> rara_agents::err::Result<serde_json::Value> {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+    ) -> rara_agents::err::Result<serde_json::Value> {
         let project_id = parse_uuid(&params, "project_id")?;
         let file_path = parse_string(&params, "file_path")?;
         let content = parse_string(&params, "content")?;
@@ -247,7 +258,10 @@ impl AgentTool for UpdateTypstFileTool {
             Err(e) => return Ok(json!({ "error": format!("{e}") })),
         };
 
-        match self.typst_service.write_file(&project, &file_path, &content) {
+        match self
+            .typst_service
+            .write_file(&project, &file_path, &content)
+        {
             Ok(()) => Ok(json!({
                 "project_id": project_id.to_string(),
                 "path": file_path,
@@ -278,7 +292,8 @@ impl AgentTool for CompileTypstProjectTool {
     fn name(&self) -> &str { "compile_typst_project" }
 
     fn description(&self) -> &str {
-        "Compile a Typst project to PDF. Reads files from the local filesystem. Returns compilation result including page count and file size."
+        "Compile a Typst project to PDF. Reads files from the local filesystem. Returns \
+         compilation result including page count and file size."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -294,7 +309,10 @@ impl AgentTool for CompileTypstProjectTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value) -> rara_agents::err::Result<serde_json::Value> {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+    ) -> rara_agents::err::Result<serde_json::Value> {
         let project_id = parse_uuid(&params, "project_id")?;
 
         match self.typst_service.compile(project_id, None).await {
@@ -317,12 +335,11 @@ impl AgentTool for CompileTypstProjectTool {
 
 /// Extract a required UUID parameter from JSON.
 fn parse_uuid(params: &serde_json::Value, field: &str) -> rara_agents::err::Result<Uuid> {
-    let s = params
-        .get(field)
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| rara_agents::err::Error::Other {
+    let s = params.get(field).and_then(|v| v.as_str()).ok_or_else(|| {
+        rara_agents::err::Error::Other {
             message: format!("missing required parameter: {field}").into(),
-        })?;
+        }
+    })?;
 
     Uuid::parse_str(s).map_err(|e| rara_agents::err::Error::Other {
         message: format!("invalid UUID for {field}: {e}").into(),

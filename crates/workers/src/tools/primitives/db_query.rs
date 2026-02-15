@@ -133,7 +133,10 @@ impl AgentTool for DbQueryTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value) -> rara_agents::err::Result<serde_json::Value> {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+    ) -> rara_agents::err::Result<serde_json::Value> {
         let table = params
             .get("table")
             .and_then(|v| v.as_str())
@@ -216,10 +219,7 @@ impl AgentTool for DbQueryTool {
                             } else if let Ok(v) =
                                 row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>(*col)
                             {
-                                obj.insert(
-                                    col.to_string(),
-                                    json!(v.map(|dt| dt.to_rfc3339())),
-                                );
+                                obj.insert(col.to_string(), json!(v.map(|dt| dt.to_rfc3339())));
                             } else if let Ok(v) = row.try_get::<Option<f32>, _>(*col) {
                                 obj.insert(col.to_string(), json!(v));
                             } else if let Ok(v) = row.try_get::<serde_json::Value, _>(*col) {

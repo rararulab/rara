@@ -273,9 +273,7 @@ impl<R: ResumeRepository> ResumeService<R> {
             tags,
         };
 
-        self.repo
-            .create_with_pdf(req, object_key, file_size)
-            .await
+        self.repo.create_with_pdf(req, object_key, file_size).await
     }
 
     /// Download the PDF associated with a resume.
@@ -291,10 +289,9 @@ impl<R: ResumeRepository> ResumeService<R> {
             .await?
             .ok_or_else(|| NotFoundSnafu { id: resume_id }.build())?;
 
-        let object_key =
-            resume
-                .pdf_object_key
-                .ok_or_else(|| PdfNotFoundSnafu { id: resume_id }.build())?;
+        let object_key = resume
+            .pdf_object_key
+            .ok_or_else(|| PdfNotFoundSnafu { id: resume_id }.build())?;
 
         let data = operator
             .read(&object_key)

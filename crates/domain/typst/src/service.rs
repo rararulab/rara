@@ -1,3 +1,17 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! Application-level service for Typst project management and compilation.
 //!
 //! Files are read from and written to the local filesystem. The database stores
@@ -85,7 +99,11 @@ impl TypstService {
             if typ_files.contains_key("main.typ") {
                 "main.typ".to_owned()
             } else {
-                typ_files.keys().next().cloned().unwrap_or_else(|| "main.typ".to_owned())
+                typ_files
+                    .keys()
+                    .next()
+                    .cloned()
+                    .unwrap_or_else(|| "main.typ".to_owned())
             }
         });
 
@@ -109,17 +127,14 @@ impl TypstService {
         self.repo.list_projects().await
     }
 
-    /// Delete a project (database record and S3 renders only; local files are NOT deleted).
+    /// Delete a project (database record and S3 renders only; local files are
+    /// NOT deleted).
     #[instrument(skip(self))]
     pub async fn delete_project(&self, id: Uuid) -> Result<(), TypstError> {
         // Clean up S3 objects for all renders.
         let renders = self.repo.list_renders(id).await?;
         for render in &renders {
-            if let Err(e) = self
-                .object_store
-                .delete(&render.pdf_object_key)
-                .await
-            {
+            if let Err(e) = self.object_store.delete(&render.pdf_object_key).await {
                 tracing::warn!(
                     key = %render.pdf_object_key,
                     error = %e,
@@ -180,7 +195,11 @@ impl TypstService {
         let main_file = if typ_files.contains_key("main.typ") {
             "main.typ".to_owned()
         } else {
-            typ_files.keys().next().cloned().unwrap_or_else(|| "main.typ".to_owned())
+            typ_files
+                .keys()
+                .next()
+                .cloned()
+                .unwrap_or_else(|| "main.typ".to_owned())
         };
 
         // Derive project name from request or URL.
@@ -221,11 +240,16 @@ impl TypstService {
             .await?
             .ok_or(TypstError::ProjectNotFound { id: project_id })?;
 
-        let git_url = project.git_url.as_deref().ok_or(TypstError::NotGitProject)?;
+        let git_url = project
+            .git_url
+            .as_deref()
+            .ok_or(TypstError::NotGitProject)?;
 
         // Re-clone into the same directory (the importer handles this).
         let importer = GitImporter;
-        importer.clone_to(git_url, Path::new(&project.local_path)).await?;
+        importer
+            .clone_to(git_url, Path::new(&project.local_path))
+            .await?;
 
         // Update sync timestamp.
         let project = self.repo.update_git_synced(project_id).await?;
@@ -247,10 +271,7 @@ impl TypstService {
 
     /// List available just recipes for a project.
     #[instrument(skip(self))]
-    pub async fn list_recipes(
-        &self,
-        project_id: Uuid,
-    ) -> Result<Vec<JustRecipe>, TypstError> {
+    pub async fn list_recipes(&self, project_id: Uuid) -> Result<Vec<JustRecipe>, TypstError> {
         let project = self.get_project(project_id).await?;
         runner::list_recipes(Path::new(&project.local_path)).await
     }
@@ -362,10 +383,7 @@ impl TypstService {
 
     /// List render history for a project.
     #[instrument(skip(self))]
-    pub async fn list_renders(
-        &self,
-        project_id: Uuid,
-    ) -> Result<Vec<RenderResult>, TypstError> {
+    pub async fn list_renders(&self, project_id: Uuid) -> Result<Vec<RenderResult>, TypstError> {
         self.repo.list_renders(project_id).await
     }
 

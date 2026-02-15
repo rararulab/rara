@@ -1,10 +1,26 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! Append-only JSONL message store with binary `.idx` index files.
 //!
 //! [`SessionStore`] manages per-session message files on the local filesystem.
 //! Each session key maps to two files:
 //!
-//! - `{key}.jsonl` — one JSON-serialized [`ChatMessage`](crate::types::ChatMessage) per line
-//! - `{key}.idx` — packed array of `u64` little-endian byte offsets into the JSONL file
+//! - `{key}.jsonl` — one JSON-serialized
+//!   [`ChatMessage`](crate::types::ChatMessage) per line
+//! - `{key}.idx` — packed array of `u64` little-endian byte offsets into the
+//!   JSONL file
 //!
 //! The index enables O(1) count, O(1) append, and O(K) random access by
 //! sequence number without scanning the entire JSONL file.
@@ -24,9 +40,7 @@ pub struct SessionStore {
 ///
 /// Replaces characters that are problematic in file paths (`:`, `/`, `\`)
 /// with underscores.
-fn sanitize_key(key: &str) -> String {
-    key.replace([':', '/', '\\'], "_")
-}
+fn sanitize_key(key: &str) -> String { key.replace([':', '/', '\\'], "_") }
 
 impl SessionStore {
     /// Create a new store rooted at `base_dir`.
@@ -42,8 +56,7 @@ impl SessionStore {
 
     /// Return the path to the JSONL message file for `key`.
     fn jsonl_path(&self, key: &str) -> PathBuf {
-        self.base_dir
-            .join(format!("{}.jsonl", sanitize_key(key)))
+        self.base_dir.join(format!("{}.jsonl", sanitize_key(key)))
     }
 
     /// Return the path to the binary index file for `key`.
@@ -64,19 +77,14 @@ impl SessionStore {
     /// Append a message to the session identified by `key`.
     ///
     /// Assigns the next sequence number and returns the message with `seq` set.
-    pub async fn append(
-        &self,
-        key: &str,
-        msg: &ChatMessage,
-    ) -> Result<ChatMessage, SessionError> {
+    pub async fn append(&self, key: &str, msg: &ChatMessage) -> Result<ChatMessage, SessionError> {
         let count = self.message_count(key)?;
         let seq = count as i64 + 1;
 
         let mut msg = msg.clone();
         msg.seq = seq;
 
-        let mut line =
-            serde_json::to_string(&msg).map_err(|e| SessionError::Json { source: e })?;
+        let mut line = serde_json::to_string(&msg).map_err(|e| SessionError::Json { source: e })?;
         line.push('\n');
 
         let jsonl = self.jsonl_path(key);
@@ -249,9 +257,7 @@ impl SessionStore {
 
     /// Delete all files for the session identified by `key`. Alias for
     /// [`clear`](Self::clear).
-    pub async fn delete(&self, key: &str) -> Result<(), SessionError> {
-        self.clear(key).await
-    }
+    pub async fn delete(&self, key: &str) -> Result<(), SessionError> { self.clear(key).await }
 
     /// Fork the messages of `src_key` up to `fork_at_seq` into `dst_key`.
     ///
@@ -273,9 +279,7 @@ impl SessionStore {
         }
 
         // Read source messages up to fork_at_seq.
-        let messages = self
-            .read(src_key, None, Some(fork_at_seq))
-            .await?;
+        let messages = self.read(src_key, None, Some(fork_at_seq)).await?;
 
         // Clear destination.
         self.clear(dst_key).await?;
@@ -288,8 +292,7 @@ impl SessionStore {
             let offset = jsonl_content.len() as u64;
             idx_data.extend_from_slice(&offset.to_le_bytes());
 
-            let line =
-                serde_json::to_string(msg).map_err(|e| SessionError::Json { source: e })?;
+            let line = serde_json::to_string(msg).map_err(|e| SessionError::Json { source: e })?;
             jsonl_content.extend_from_slice(line.as_bytes());
             jsonl_content.push(b'\n');
         }
@@ -355,7 +358,10 @@ mod tests {
         let (store, _tmp) = test_store().await;
 
         store.append("k", &ChatMessage::user("a")).await.unwrap();
-        store.append("k", &ChatMessage::assistant("b")).await.unwrap();
+        store
+            .append("k", &ChatMessage::assistant("b"))
+            .await
+            .unwrap();
         store.append("k", &ChatMessage::user("c")).await.unwrap();
 
         let msgs = store.read("k", None, None).await.unwrap();

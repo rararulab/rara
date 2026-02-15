@@ -14,19 +14,108 @@
 
 //! HTTP routes for runtime settings.
 
-use axum::{Json, Router, extract::State, http::StatusCode, routing::get};
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    http::StatusCode,
+    routing::get,
+};
+use serde::Deserialize;
+use tokio::fs;
 
 use crate::settings::{
     model::{Settings, UpdateRequest},
     service::SettingsSvc,
 };
 
+#[derive(Debug, Clone, Copy)]
+struct PromptSpec {
+    name:            &'static str,
+    description:     &'static str,
+    default_content: &'static str,
+}
+
+const PROMPT_SPECS: &[PromptSpec] = &[
+    PromptSpec {
+        name:            "agent/soul.md",
+        description:     "Global personality / soul prompt",
+        default_content: rara_paths::default_agent_soul_prompt(),
+    },
+    PromptSpec {
+        name:            "chat/default_system.md",
+        description:     "Default chat system prompt",
+        default_content: include_str!("../../../../../prompts/chat/default_system.md"),
+    },
+    PromptSpec {
+        name:            "workers/agent_policy.md",
+        description:     "Proactive/scheduled agent operating policy",
+        default_content: include_str!("../../../../../prompts/workers/agent_policy.md"),
+    },
+    PromptSpec {
+        name:            "workers/resume_analysis_instructions.md",
+        description:     "Resume analysis tool instructions",
+        default_content: include_str!(
+            "../../../../../prompts/workers/resume_analysis_instructions.md"
+        ),
+    },
+    PromptSpec {
+        name:            "ai/cover_letter.system.md",
+        description:     "Cover letter agent system prompt",
+        default_content: include_str!("../../../../../prompts/ai/cover_letter.system.md"),
+    },
+    PromptSpec {
+        name:            "ai/follow_up.system.md",
+        description:     "Follow-up email agent system prompt",
+        default_content: include_str!("../../../../../prompts/ai/follow_up.system.md"),
+    },
+    PromptSpec {
+        name:            "ai/interview_prep.system.md",
+        description:     "Interview prep agent system prompt",
+        default_content: include_str!("../../../../../prompts/ai/interview_prep.system.md"),
+    },
+    PromptSpec {
+        name:            "ai/jd_analyzer.system.md",
+        description:     "Job description analyzer system prompt",
+        default_content: include_str!("../../../../../prompts/ai/jd_analyzer.system.md"),
+    },
+    PromptSpec {
+        name:            "ai/jd_parser.system.md",
+        description:     "Job description parser system prompt",
+        default_content: include_str!("../../../../../prompts/ai/jd_parser.system.md"),
+    },
+    PromptSpec {
+        name:            "ai/job_fit.system.md",
+        description:     "Job fit agent system prompt",
+        default_content: include_str!("../../../../../prompts/ai/job_fit.system.md"),
+    },
+    PromptSpec {
+        name:            "ai/resume_analyzer.system.md",
+        description:     "Resume analyzer system prompt",
+        default_content: include_str!("../../../../../prompts/ai/resume_analyzer.system.md"),
+    },
+    PromptSpec {
+        name:            "ai/resume_optimizer.system.md",
+        description:     "Resume optimizer system prompt",
+        default_content: include_str!("../../../../../prompts/ai/resume_optimizer.system.md"),
+    },
+];
+
+fn prompt_spec(name: &str) -> Option<&'static PromptSpec> {
+    PROMPT_SPECS.iter().find(|spec| spec.name == name)
+}
+
 /// Build `/api/v1/settings` routes.
 pub fn routes(svc: SettingsSvc) -> Router {
     Router::new()
         .nest(
             "/api/v1",
-            Router::new().route("/settings", get(get_settings).post(update_settings)),
+            Router::new()
+                .route("/settings", get(get_settings).post(update_settings))
+                .route("/settings/prompts", get(list_prompts))
+                .route(
+                    "/settings/prompts/{*name}",
+                    get(get_prompt_content).put(update_prompt_content),
+                ),
         )
         .with_state(svc)
 }
@@ -53,6 +142,88 @@ async fn update_settings(
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+pub struct PromptFileView {
+    pub name:        String,
+    pub description: String,
+    pub content:     String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PromptListView {
+    pub prompts: Vec<PromptFileView>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PromptUpdateRequest {
+    pub content: String,
+}
+
+async fn list_prompts() -> Result<Json<PromptListView>, (StatusCode, String)> {
+    let prompts = PROMPT_SPECS
+        .iter()
+        .map(|spec| PromptFileView {
+            name:        spec.name.to_owned(),
+            description: spec.description.to_owned(),
+            content:     rara_paths::load_prompt_markdown(spec.name, spec.default_content),
+        })
+        .collect();
+
+    Ok(Json(PromptListView { prompts }))
+}
+
+async fn get_prompt_content(
+    Path(name): Path<String>,
+) -> Result<Json<PromptFileView>, (StatusCode, String)> {
+    let name = name.trim_start_matches('/');
+    let spec = prompt_spec(name)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("prompt not found: {name}")))?;
+
+    Ok(Json(PromptFileView {
+        name:        spec.name.to_owned(),
+        description: spec.description.to_owned(),
+        content:     rara_paths::load_prompt_markdown(spec.name, spec.default_content),
+    }))
+}
+
+async fn update_prompt_content(
+    Path(name): Path<String>,
+    Json(req): Json<PromptUpdateRequest>,
+) -> Result<Json<PromptFileView>, (StatusCode, String)> {
+    let name = name.trim_start_matches('/');
+    let spec = prompt_spec(name)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("prompt not found: {name}")))?;
+
+    let path = rara_paths::prompt_markdown_file(spec.name);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to create prompt directory: {e}"),
+            )
+        })?;
+    }
+
+    let content = if req.content.trim().is_empty() {
+        spec.default_content.to_owned()
+    } else {
+        req.content
+    };
+
+    fs::write(path, &content).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to write prompt markdown: {e}"),
+        )
+    })?;
+
+    Ok(Json(PromptFileView {
+        name: spec.name.to_owned(),
+        description: spec.description.to_owned(),
+        content,
+    }))
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct RuntimeSettingsView {
     pub ai:         AiSettingsView,
     pub telegram:   TgSettingsResp,
@@ -65,15 +236,13 @@ pub struct RuntimeSettingsView {
 pub struct AgentSettingsView {
     pub soul:               Option<String>,
     pub chat_system_prompt: Option<String>,
-    pub proactive_enabled:  bool,
-    pub proactive_cron:     Option<String>,
     pub memory:             MemorySettingsView,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MemorySettingsView {
-    pub chroma_url:         Option<String>,
-    pub chroma_collection:  Option<String>,
+    pub chroma_url:          Option<String>,
+    pub chroma_collection:   Option<String>,
     pub chroma_api_key_hint: Option<String>,
 }
 
@@ -124,11 +293,9 @@ impl Into<RuntimeSettingsView> for Settings {
             agent:      AgentSettingsView {
                 soul:               self.agent.soul.clone(),
                 chat_system_prompt: self.agent.chat_system_prompt.clone(),
-                proactive_enabled:  self.agent.proactive_enabled,
-                proactive_cron:     self.agent.proactive_cron.clone(),
                 memory:             MemorySettingsView {
-                    chroma_url:         self.agent.memory.chroma_url.clone(),
-                    chroma_collection:  self.agent.memory.chroma_collection.clone(),
+                    chroma_url:          self.agent.memory.chroma_url.clone(),
+                    chroma_collection:   self.agent.memory.chroma_collection.clone(),
                     chroma_api_key_hint: secret_hint(self.agent.memory.chroma_api_key.as_deref()),
                 },
             },

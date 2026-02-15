@@ -36,8 +36,8 @@ impl AgentTool for ListDirectoryTool {
     fn name(&self) -> &str { "list_directory" }
 
     fn description(&self) -> &str {
-        "List the contents of a directory. Returns each entry's name, type (file/dir/symlink), \
-         and size in bytes (for files). Maximum 1000 entries."
+        "List the contents of a directory. Returns each entry's name, type (file/dir/symlink), and \
+         size in bytes (for files). Maximum 1000 entries."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -53,16 +53,12 @@ impl AgentTool for ListDirectoryTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-    ) -> crate::err::Result<serde_json::Value> {
-        let path = params
-            .get("path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| crate::err::Error::Other {
+    async fn execute(&self, params: serde_json::Value) -> crate::err::Result<serde_json::Value> {
+        let path = params.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
+            crate::err::Error::Other {
                 message: "missing required parameter: path".into(),
-            })?;
+            }
+        })?;
 
         let mut read_dir =
             tokio::fs::read_dir(path)
@@ -74,11 +70,14 @@ impl AgentTool for ListDirectoryTool {
         let mut entries = Vec::new();
         let mut total = 0usize;
 
-        while let Some(entry) = read_dir.next_entry().await.map_err(|e| {
-            crate::err::Error::Other {
-                message: format!("failed to read directory entry: {e}").into(),
-            }
-        })? {
+        while let Some(entry) =
+            read_dir
+                .next_entry()
+                .await
+                .map_err(|e| crate::err::Error::Other {
+                    message: format!("failed to read directory entry: {e}").into(),
+                })?
+        {
             total += 1;
 
             if entries.len() >= MAX_ENTRIES {
@@ -87,11 +86,12 @@ impl AgentTool for ListDirectoryTool {
 
             let name = entry.file_name().to_string_lossy().into_owned();
 
-            let file_type = entry.file_type().await.map_err(|e| {
-                crate::err::Error::Other {
+            let file_type = entry
+                .file_type()
+                .await
+                .map_err(|e| crate::err::Error::Other {
                     message: format!("failed to get file type for {name}: {e}").into(),
-                }
-            })?;
+                })?;
 
             let type_str = if file_type.is_dir() {
                 "dir"
@@ -102,11 +102,7 @@ impl AgentTool for ListDirectoryTool {
             };
 
             let size = if file_type.is_file() {
-                entry
-                    .metadata()
-                    .await
-                    .map(|m| m.len())
-                    .unwrap_or(0)
+                entry.metadata().await.map(|m| m.len()).unwrap_or(0)
             } else {
                 0
             };

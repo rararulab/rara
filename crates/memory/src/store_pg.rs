@@ -42,10 +42,10 @@ impl PgMemoryStore {
         Ok(rows
             .into_iter()
             .map(|row| IndexedFileMeta {
-                path: row.get::<String, _>("path"),
-                hash: row.get::<String, _>("hash"),
+                path:  row.get::<String, _>("path"),
+                hash:  row.get::<String, _>("hash"),
                 mtime: row.get::<i64, _>("mtime"),
-                size: row.get::<i64, _>("size"),
+                size:  row.get::<i64, _>("size"),
             })
             .collect())
     }
@@ -128,11 +128,11 @@ impl PgMemoryStore {
         Ok(rows
             .into_iter()
             .map(|row| MemorySearchRow {
-                chunk_id: row.get::<i64, _>("id"),
-                path: row.get::<String, _>("path"),
+                chunk_id:    row.get::<i64, _>("id"),
+                path:        row.get::<String, _>("path"),
                 chunk_index: row.get::<i64, _>("chunk_index"),
-                content: row.get::<String, _>("content"),
-                score: row.get::<f64, _>("score"),
+                content:     row.get::<String, _>("content"),
+                score:       row.get::<f64, _>("score"),
             })
             .collect())
     }
@@ -151,10 +151,10 @@ impl PgMemoryStore {
         .await?;
 
         Ok(row.map(|row| ChunkDetail {
-            chunk_id: row.get::<i64, _>("id"),
-            path: row.get::<String, _>("path"),
+            chunk_id:    row.get::<i64, _>("id"),
+            path:        row.get::<String, _>("path"),
             chunk_index: row.get::<i64, _>("chunk_index"),
-            content: row.get::<String, _>("content"),
+            content:     row.get::<String, _>("content"),
         }))
     }
 }

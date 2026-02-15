@@ -19,31 +19,43 @@
 
 use rig::{client::CompletionClient, completion::Prompt, providers::openrouter};
 
-use crate::error::AiError;
+use crate::{agents::prompt::compose_system_prompt, error::AiError};
 
-const SYSTEM_PROMPT: &str = "\
-You are an expert resume consultant with deep knowledge of ATS (Applicant Tracking Systems), \
-hiring practices, and professional resume writing. Analyze resumes thoroughly and provide \
-actionable, specific feedback. Be constructive but honest about weaknesses. Format your \
-response in clear markdown with scores and bullet points.";
+const SYSTEM_PROMPT_FILE: &str = "ai/resume_analyzer.system.md";
+const DEFAULT_SYSTEM_PROMPT: &str =
+    include_str!("../../../../prompts/ai/resume_analyzer.system.md");
 
 /// Analyzes a resume and provides a structured report with scores and
 /// improvement suggestions.
 pub struct ResumeAnalyzerAgent {
-    client: openrouter::Client,
-    model:  String,
+    client:      openrouter::Client,
+    model:       String,
+    soul_prompt: Option<String>,
 }
 
 impl ResumeAnalyzerAgent {
-    pub(crate) fn new(client: openrouter::Client, model: String) -> Self { Self { client, model } }
+    pub(crate) fn new(
+        client: openrouter::Client,
+        model: String,
+        soul_prompt: Option<String>,
+    ) -> Self {
+        Self {
+            client,
+            model,
+            soul_prompt,
+        }
+    }
 
     /// Analyze a resume (with optional job context) and return a structured
     /// report.
     pub async fn analyze(&self, prompt: &str) -> Result<String, AiError> {
+        let base_prompt =
+            rara_paths::load_prompt_markdown(SYSTEM_PROMPT_FILE, DEFAULT_SYSTEM_PROMPT);
+        let system_prompt = compose_system_prompt(&base_prompt, self.soul_prompt.as_deref());
         let agent = self
             .client
             .agent(&self.model)
-            .preamble(SYSTEM_PROMPT)
+            .preamble(&system_prompt)
             .build();
 
         agent

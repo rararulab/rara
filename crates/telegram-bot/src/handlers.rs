@@ -31,8 +31,7 @@
 
 use std::sync::Arc;
 
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use teloxide::{
     net::Download,
     payloads::{EditMessageTextSetters, SendMessageSetters},
@@ -134,10 +133,7 @@ pub(crate) async fn handle_callback_query(
                         .bot
                         .send_message(
                             chat_id,
-                            format!(
-                                "Switched to session: <code>{}</code>",
-                                html_escape(key)
-                            ),
+                            format!("Switched to session: <code>{}</code>", html_escape(key)),
                         )
                         .parse_mode(ParseMode::Html)
                         .await?;
@@ -239,16 +235,11 @@ async fn handle_command(
                 .bot
                 .send_message(
                     msg.chat.id,
-                    "Welcome! I'm the Job Assistant bot.\n\
-                     Send me any message to start a conversation.\n\n\
-                     Commands:\n\
-                     /search <keywords> [@ location] - Search jobs\n\
-                     /jd <text> - Parse a Job Description\n\
-                     /new - Start a new chat session\n\
-                     /clear - Clear current session history\n\
-                     /sessions - List & switch chat sessions\n\
-                     /usage - Show current session info\n\
-                     /help - Show all commands",
+                    "Welcome! I'm the Job Assistant bot.\nSend me any message to start a \
+                     conversation.\n\nCommands:\n/search <keywords> [@ location] - Search \
+                     jobs\n/jd <text> - Parse a Job Description\n/new - Start a new chat \
+                     session\n/clear - Clear current session history\n/sessions - List & switch \
+                     chat sessions\n/usage - Show current session info\n/help - Show all commands",
                 )
                 .await?;
         }
@@ -428,10 +419,7 @@ async fn handle_photo_message(
             warn!(error = %e, "failed to get file info for photo");
             state
                 .bot
-                .send_message(
-                    msg.chat.id,
-                    format!("Failed to download photo: {e}"),
-                )
+                .send_message(msg.chat.id, format!("Failed to download photo: {e}"))
                 .await?;
             return Ok(());
         }
@@ -606,10 +594,7 @@ async fn handle_jd_parse(
     if jd_text.is_empty() {
         state
             .bot
-            .send_message(
-                msg.chat.id,
-                "Usage: /jd <paste job description text>",
-            )
+            .send_message(msg.chat.id, "Usage: /jd <paste job description text>")
             .await?;
         return Ok(());
     }
@@ -798,10 +783,7 @@ async fn handle_sessions(
 
         // Add an inline button for each non-active session to allow switching.
         if !is_active {
-            let label = format!(
-                "Switch to: {}",
-                truncate_str(title, 30),
-            );
+            let label = format!("Switch to: {}", truncate_str(title, 30),);
             // Callback data limit is 64 bytes; prefix "switch:" is 7 bytes.
             let cb_data = format!("switch:{}", truncate_str(&s.key, 56));
             buttons.push(vec![teloxide::types::InlineKeyboardButton::callback(
@@ -823,10 +805,7 @@ async fn handle_sessions(
 }
 
 /// Handle `/usage` — show details about the current active session.
-async fn handle_usage(
-    msg: &Message,
-    state: &Arc<BotState>,
-) -> Result<(), teloxide::RequestError> {
+async fn handle_usage(msg: &Message, state: &Arc<BotState>) -> Result<(), teloxide::RequestError> {
     let account = "default";
     let chat_id_str = msg.chat.id.0.to_string();
 
@@ -909,9 +888,7 @@ async fn handle_usage(
 // ---------------------------------------------------------------------------
 
 /// Extract the text body from a Telegram message, if present.
-pub(crate) fn extract_text(msg: &Message) -> Option<&str> {
-    msg.text()
-}
+pub(crate) fn extract_text(msg: &Message) -> Option<&str> { msg.text() }
 
 /// Returns `true` if the message contains any media attachment (photo, video,
 /// document, audio, or voice).
@@ -1047,11 +1024,7 @@ fn format_timestamp(raw: &str) -> String {
     if raw.len() >= 16 {
         // Return "YYYY-MM-DD HH:MM" for brevity.
         let date_part = &raw[..10];
-        let time_part = if raw.len() >= 16 {
-            &raw[11..16]
-        } else {
-            ""
-        };
+        let time_part = if raw.len() >= 16 { &raw[11..16] } else { "" };
         if !time_part.is_empty() {
             return format!("{date_part} {time_part}");
         }
@@ -1087,10 +1060,7 @@ mod tests {
 
     #[test]
     fn test_html_escape() {
-        assert_eq!(
-            html_escape("a < b & c > d"),
-            "a &lt; b &amp; c &gt; d"
-        );
+        assert_eq!(html_escape("a < b & c > d"), "a &lt; b &amp; c &gt; d");
         assert_eq!(html_escape("normal text"), "normal text");
     }
 
@@ -1121,10 +1091,7 @@ mod tests {
 
     #[test]
     fn test_format_timestamp_rfc3339() {
-        assert_eq!(
-            format_timestamp("2026-02-14T10:30:00Z"),
-            "2026-02-14 10:30"
-        );
+        assert_eq!(format_timestamp("2026-02-14T10:30:00Z"), "2026-02-14 10:30");
     }
 
     #[test]

@@ -46,8 +46,8 @@ impl AgentTool for HttpFetchTool {
     fn name(&self) -> &str { "http_fetch" }
 
     fn description(&self) -> &str {
-        "Fetch a URL via HTTP GET or POST. Returns status code, content type, and body \
-         (truncated to 100KB). Useful for checking job posting pages or external APIs."
+        "Fetch a URL via HTTP GET or POST. Returns status code, content type, and body (truncated \
+         to 100KB). Useful for checking job posting pages or external APIs."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -69,12 +69,13 @@ impl AgentTool for HttpFetchTool {
     }
 
     async fn execute(&self, params: serde_json::Value) -> crate::err::Result<serde_json::Value> {
-        let url = params
-            .get("url")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| crate::err::Error::Other {
-                message: "missing required parameter: url".into(),
-            })?;
+        let url =
+            params
+                .get("url")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| crate::err::Error::Other {
+                    message: "missing required parameter: url".into(),
+                })?;
 
         let method = params
             .get("method")

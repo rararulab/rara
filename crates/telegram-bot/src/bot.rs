@@ -19,12 +19,12 @@
 //!
 //! 1. **Error recovery** — on transient failures we sleep 5 seconds and retry,
 //!    rather than crashing the entire dispatcher.
-//! 2. **Conflict detection** — if another bot instance is running with the
-//!    same token, the `TerminatedByOtherGetUpdates` API error is caught and
-//!    the loop exits gracefully.
-//! 3. **Cancellation** — `tokio::select!` on the [`CancellationToken`] lets
-//!    the loop exit mid-wait during shutdown, instead of blocking for the
-//!    full 30-second poll timeout.
+//! 2. **Conflict detection** — if another bot instance is running with the same
+//!    token, the `TerminatedByOtherGetUpdates` API error is caught and the loop
+//!    exits gracefully.
+//! 3. **Cancellation** — `tokio::select!` on the [`CancellationToken`] lets the
+//!    loop exit mid-wait during shutdown, instead of blocking for the full
+//!    30-second poll timeout.
 //!
 //! The HTTP client timeout (45s) is intentionally higher than the Telegram
 //! long-poll timeout (30s) to prevent the client from aborting the request
@@ -132,9 +132,7 @@ pub(crate) async fn start_polling(state: Arc<BotState>) {
                 // Check for conflict with another getUpdates instance.
                 let err_str = format!("{api_err}");
                 if err_str.contains("terminated by other getUpdates request") {
-                    warn!(
-                        "another bot instance is running — this instance will exit"
-                    );
+                    warn!("another bot instance is running — this instance will exit");
                     break;
                 }
                 error!(error = %api_err, "telegram API error in getUpdates");

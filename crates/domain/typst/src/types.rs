@@ -1,3 +1,17 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! Domain types for the Typst compilation service.
 
 use jiff::Timestamp;
@@ -15,7 +29,8 @@ pub struct TypstProject {
     pub name:               String,
     /// Absolute path to the local project directory.
     pub local_path:         String,
-    /// Path to the main `.typ` file (relative to project root), defaults to `"main.typ"`.
+    /// Path to the main `.typ` file (relative to project root), defaults to
+    /// `"main.typ"`.
     pub main_file:          String,
     /// If this project was imported from a Git repository, the clone URL.
     pub git_url:            Option<String>,

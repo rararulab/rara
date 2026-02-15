@@ -36,8 +36,8 @@ impl AgentTool for WriteFileTool {
     fn name(&self) -> &str { "write_file" }
 
     fn description(&self) -> &str {
-        "Write content to a file on the filesystem. Automatically creates parent directories \
-         if they do not exist. Overwrites the file if it already exists."
+        "Write content to a file on the filesystem. Automatically creates parent directories if \
+         they do not exist. Overwrites the file if it already exists."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -57,10 +57,7 @@ impl AgentTool for WriteFileTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-    ) -> crate::err::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> crate::err::Result<serde_json::Value> {
         let file_path = params
             .get("file_path")
             .and_then(|v| v.as_str())
@@ -78,14 +75,14 @@ impl AgentTool for WriteFileTool {
         // Create parent directories if necessary.
         if let Some(parent) = Path::new(file_path).parent() {
             if !parent.as_os_str().is_empty() {
-                tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                    crate::err::Error::Other {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| crate::err::Error::Other {
                         message: format!(
                             "failed to create parent directories for {file_path}: {e}"
                         )
                         .into(),
-                    }
-                })?;
+                    })?;
             }
         }
 

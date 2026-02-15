@@ -1,3 +1,17 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! PostgreSQL-backed implementation of [`crate::repository::TypstRepository`].
 
 use async_trait::async_trait;
@@ -65,13 +79,11 @@ impl crate::repository::TypstRepository for PgTypstRepository {
     }
 
     async fn get_project(&self, id: Uuid) -> Result<Option<TypstProject>, TypstError> {
-        let row = sqlx::query_as::<_, TypstProjectRow>(
-            "SELECT * FROM typst_project WHERE id = $1",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(map_db_err)?;
+        let row = sqlx::query_as::<_, TypstProjectRow>("SELECT * FROM typst_project WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(map_db_err)?;
 
         Ok(row.map(Into::into))
     }
@@ -88,12 +100,11 @@ impl crate::repository::TypstRepository for PgTypstRepository {
     }
 
     async fn delete_project(&self, id: Uuid) -> Result<(), TypstError> {
-        let result =
-            sqlx::query("DELETE FROM typst_project WHERE id = $1")
-                .bind(id)
-                .execute(&self.pool)
-                .await
-                .map_err(map_db_err)?;
+        let result = sqlx::query("DELETE FROM typst_project WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(map_db_err)?;
 
         if result.rows_affected() == 0 {
             return Err(TypstError::ProjectNotFound { id });
@@ -131,13 +142,11 @@ impl crate::repository::TypstRepository for PgTypstRepository {
     }
 
     async fn get_render(&self, id: Uuid) -> Result<Option<RenderResult>, TypstError> {
-        let row = sqlx::query_as::<_, RenderResultRow>(
-            "SELECT * FROM typst_render WHERE id = $1",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(map_db_err)?;
+        let row = sqlx::query_as::<_, RenderResultRow>("SELECT * FROM typst_render WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(map_db_err)?;
 
         Ok(row.map(Into::into))
     }
@@ -160,7 +169,8 @@ impl crate::repository::TypstRepository for PgTypstRepository {
         source_hash: &str,
     ) -> Result<Option<RenderResult>, TypstError> {
         let row = sqlx::query_as::<_, RenderResultRow>(
-            "SELECT * FROM typst_render WHERE project_id = $1 AND source_hash = $2 ORDER BY created_at DESC LIMIT 1",
+            "SELECT * FROM typst_render WHERE project_id = $1 AND source_hash = $2 ORDER BY \
+             created_at DESC LIMIT 1",
         )
         .bind(project_id)
         .bind(source_hash)

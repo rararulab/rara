@@ -18,9 +18,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rara_agents::tool_registry::AgentTool;
-use serde_json::json;
-
 use rara_memory::MemoryManager;
+use serde_json::json;
 
 /// Search local memory index (keyword/hybrid depending on runtime settings).
 ///
@@ -32,19 +31,16 @@ pub struct MemorySearchTool {
 
 impl MemorySearchTool {
     /// Create a `memory_search` tool.
-    pub fn new(manager: Arc<MemoryManager>) -> Self {
-        Self { manager }
-    }
+    pub fn new(manager: Arc<MemoryManager>) -> Self { Self { manager } }
 }
 
 #[async_trait]
 impl AgentTool for MemorySearchTool {
-    fn name(&self) -> &str {
-        "memory_search"
-    }
+    fn name(&self) -> &str { "memory_search" }
 
     fn description(&self) -> &str {
-        "Search long-term memory documents (Markdown index). Returns relevant chunk IDs and snippets."
+        "Search long-term memory documents (Markdown index). Returns relevant chunk IDs and \
+         snippets."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -111,16 +107,12 @@ pub struct MemoryGetTool {
 
 impl MemoryGetTool {
     /// Create a `memory_get` tool.
-    pub fn new(manager: Arc<MemoryManager>) -> Self {
-        Self { manager }
-    }
+    pub fn new(manager: Arc<MemoryManager>) -> Self { Self { manager } }
 }
 
 #[async_trait]
 impl AgentTool for MemoryGetTool {
-    fn name(&self) -> &str {
-        "memory_get"
-    }
+    fn name(&self) -> &str { "memory_get" }
 
     fn description(&self) -> &str {
         "Get full memory chunk content by chunk_id from local memory index."
@@ -178,19 +170,16 @@ pub struct MemoryWriteTool {
 
 impl MemoryWriteTool {
     /// Create a `memory_write` tool.
-    pub fn new(manager: Arc<MemoryManager>) -> Self {
-        Self { manager }
-    }
+    pub fn new(manager: Arc<MemoryManager>) -> Self { Self { manager } }
 }
 
 #[async_trait]
 impl AgentTool for MemoryWriteTool {
-    fn name(&self) -> &str {
-        "memory_write"
-    }
+    fn name(&self) -> &str { "memory_write" }
 
     fn description(&self) -> &str {
-        "Write markdown content to long-term memory. The file will be indexed and searchable via memory_search."
+        "Write markdown content to long-term memory. The file will be indexed and searchable via \
+         memory_search."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -241,18 +230,18 @@ impl AgentTool for MemoryWriteTool {
 
         // Ensure parent directory exists (in case filename contains subdirectories).
         if let Some(parent) = file_path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|e| rara_agents::err::Error::Other {
+            tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                rara_agents::err::Error::Other {
                     message: format!("failed to create directory: {e}").into(),
-                })?;
+                }
+            })?;
         }
 
-        tokio::fs::write(&file_path, content)
-            .await
-            .map_err(|e| rara_agents::err::Error::Other {
+        tokio::fs::write(&file_path, content).await.map_err(|e| {
+            rara_agents::err::Error::Other {
                 message: format!("failed to write memory file: {e}").into(),
-            })?;
+            }
+        })?;
 
         // Trigger sync so the new file is immediately indexed.
         self.manager

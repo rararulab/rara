@@ -17,6 +17,7 @@ chrono.workspace = true
 derive_more.workspace = true
 jiff.workspace = true
 pgmq = "0.31.2"
+rara-paths.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true

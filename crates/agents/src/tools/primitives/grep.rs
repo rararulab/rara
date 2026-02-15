@@ -41,9 +41,9 @@ impl AgentTool for GrepTool {
     fn name(&self) -> &str { "grep" }
 
     fn description(&self) -> &str {
-        "Search file contents using a regex pattern via ripgrep (rg). Supports file type \
-         filtering with glob patterns, context lines, and case-insensitive search. \
-         Output is truncated to 50KB / 100 matches."
+        "Search file contents using a regex pattern via ripgrep (rg). Supports file type filtering \
+         with glob patterns, context lines, and case-insensitive search. Output is truncated to \
+         50KB / 100 matches."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -75,10 +75,7 @@ impl AgentTool for GrepTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-    ) -> crate::err::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> crate::err::Result<serde_json::Value> {
         let pattern = params
             .get("pattern")
             .and_then(|v| v.as_str())
@@ -86,17 +83,11 @@ impl AgentTool for GrepTool {
                 message: "missing required parameter: pattern".into(),
             })?;
 
-        let path = params
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or(".");
+        let path = params.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
         let glob_filter = params.get("glob").and_then(|v| v.as_str());
 
-        let context = params
-            .get("context")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
+        let context = params.get("context").and_then(|v| v.as_u64()).unwrap_or(0);
 
         let ignore_case = params
             .get("ignore_case")
@@ -143,10 +134,8 @@ async fn try_ripgrep(
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 
-    let output = cmd.output().await.map_err(|e| {
-        crate::err::Error::Other {
-            message: format!("failed to run rg: {e}").into(),
-        }
+    let output = cmd.output().await.map_err(|e| crate::err::Error::Other {
+        message: format!("failed to run rg: {e}").into(),
     })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -178,10 +167,8 @@ async fn try_grep_fallback(
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 
-    let output = cmd.output().await.map_err(|e| {
-        crate::err::Error::Other {
-            message: format!("failed to run grep: {e}").into(),
-        }
+    let output = cmd.output().await.map_err(|e| crate::err::Error::Other {
+        message: format!("failed to run grep: {e}").into(),
     })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);

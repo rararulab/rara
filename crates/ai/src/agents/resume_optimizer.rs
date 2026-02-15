@@ -16,34 +16,44 @@
 
 use rig::{client::CompletionClient, completion::Prompt, providers::openrouter};
 
-use crate::error::AiError;
+use crate::{agents::prompt::compose_system_prompt, error::AiError};
 
-const SYSTEM_PROMPT: &str = "\
-You are a professional resume writer. Rewrite the resume to better match the target job \
-                             description while keeping all facts accurate. Focus on:
-- Highlighting relevant experience and skills
-- Using keywords from the job description
-- Improving clarity and impact of bullet points
-- Maintaining professional formatting";
+const SYSTEM_PROMPT_FILE: &str = "ai/resume_optimizer.system.md";
+const DEFAULT_SYSTEM_PROMPT: &str =
+    include_str!("../../../../prompts/ai/resume_optimizer.system.md");
 
 /// Optimizes a resume for a specific job posting.
 pub struct ResumeOptimizerAgent {
-    client: openrouter::Client,
-    model:  String,
+    client:      openrouter::Client,
+    model:       String,
+    soul_prompt: Option<String>,
 }
 
 impl ResumeOptimizerAgent {
-    pub(crate) fn new(client: openrouter::Client, model: String) -> Self { Self { client, model } }
+    pub(crate) fn new(
+        client: openrouter::Client,
+        model: String,
+        soul_prompt: Option<String>,
+    ) -> Self {
+        Self {
+            client,
+            model,
+            soul_prompt,
+        }
+    }
 
     /// Optimize a resume to better match a job description.
     pub async fn optimize(&self, resume: &str, job_description: &str) -> Result<String, AiError> {
         let user_input =
             format!("## Current Resume\n{resume}\n\n## Target Job Description\n{job_description}");
+        let base_prompt =
+            rara_paths::load_prompt_markdown(SYSTEM_PROMPT_FILE, DEFAULT_SYSTEM_PROMPT);
+        let system_prompt = compose_system_prompt(&base_prompt, self.soul_prompt.as_deref());
 
         let agent = self
             .client
             .agent(&self.model)
-            .preamble(SYSTEM_PROMPT)
+            .preamble(&system_prompt)
             .build();
 
         agent

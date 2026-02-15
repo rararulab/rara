@@ -62,51 +62,94 @@ impl AiService {
         Ok((client, model))
     }
 
+    fn current_soul_prompt(&self) -> Option<String> {
+        let settings_soul = self.settings.current().agent.soul;
+        if settings_soul
+            .as_deref()
+            .is_some_and(|s| !s.trim().is_empty())
+        {
+            return settings_soul;
+        }
+        let markdown_soul = rara_paths::load_agent_soul_prompt();
+        if markdown_soul.trim().is_empty() {
+            return None;
+        }
+        Some(markdown_soul)
+    }
+
     /// Create a job-fit analysis agent.
     pub fn job_fit(&self) -> Result<JobFitAgent, AiError> {
         let (client, model) = self.client(ModelScenario::Job)?;
-        Ok(JobFitAgent::new(client, model))
+        Ok(JobFitAgent::new(client, model, self.current_soul_prompt()))
     }
 
     /// Create a resume optimization agent.
     pub fn resume_optimizer(&self) -> Result<ResumeOptimizerAgent, AiError> {
         let (client, model) = self.client(ModelScenario::Job)?;
-        Ok(ResumeOptimizerAgent::new(client, model))
+        Ok(ResumeOptimizerAgent::new(
+            client,
+            model,
+            self.current_soul_prompt(),
+        ))
     }
 
     /// Create an interview preparation agent.
     pub fn interview_prep(&self) -> Result<InterviewPrepAgent, AiError> {
         let (client, model) = self.client(ModelScenario::Job)?;
-        Ok(InterviewPrepAgent::new(client, model))
+        Ok(InterviewPrepAgent::new(
+            client,
+            model,
+            self.current_soul_prompt(),
+        ))
     }
 
     /// Create a follow-up email drafting agent.
     pub fn follow_up(&self) -> Result<FollowUpDraftAgent, AiError> {
         let (client, model) = self.client(ModelScenario::Job)?;
-        Ok(FollowUpDraftAgent::new(client, model))
+        Ok(FollowUpDraftAgent::new(
+            client,
+            model,
+            self.current_soul_prompt(),
+        ))
     }
 
     /// Create a cover letter generation agent.
     pub fn cover_letter(&self) -> Result<CoverLetterAgent, AiError> {
         let (client, model) = self.client(ModelScenario::Job)?;
-        Ok(CoverLetterAgent::new(client, model))
+        Ok(CoverLetterAgent::new(
+            client,
+            model,
+            self.current_soul_prompt(),
+        ))
     }
 
     /// Create a job description parser agent.
     pub fn jd_parser(&self) -> Result<JdParserAgent, AiError> {
         let (client, model) = self.client(ModelScenario::Job)?;
-        Ok(JdParserAgent::new(client, model))
+        Ok(JdParserAgent::new(
+            client,
+            model,
+            self.current_soul_prompt(),
+        ))
     }
 
     /// Create a job description analyzer agent.
     pub fn jd_analyzer(&self) -> Result<JdAnalyzerAgent, AiError> {
         let (client, model) = self.client(ModelScenario::Job)?;
-        Ok(JdAnalyzerAgent::new(client, model))
+        Ok(JdAnalyzerAgent::new(
+            client,
+            model,
+            self.current_soul_prompt(),
+        ))
     }
 
     /// Create a resume analyzer agent.
     pub fn resume_analyzer(&self) -> Result<ResumeAnalyzerAgent, AiError> {
         let (client, model) = self.client(ModelScenario::Job)?;
-        Ok(ResumeAnalyzerAgent::new(client, model))
+        Ok(ResumeAnalyzerAgent::new(
+            client,
+            model,
+            self.current_soul_prompt(),
+        ))
     }
 }

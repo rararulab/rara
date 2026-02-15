@@ -144,7 +144,14 @@ impl ToolRegistry {
     ) -> Option<AgentToolRef> {
         let name = tool.name().to_owned();
         self.tools
-            .insert(name, ToolEntry { tool, source, layer })
+            .insert(
+                name,
+                ToolEntry {
+                    tool,
+                    source,
+                    layer,
+                },
+            )
             .map(|entry| entry.tool)
     }
 }

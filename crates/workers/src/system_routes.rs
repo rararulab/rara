@@ -36,14 +36,14 @@ struct BrowseParams {
 #[derive(Debug, Serialize)]
 struct BrowseResult {
     current_path: String,
-    parent_path: Option<String>,
-    entries: Vec<DirEntry>,
+    parent_path:  Option<String>,
+    entries:      Vec<DirEntry>,
 }
 
 #[derive(Debug, Serialize)]
 struct DirEntry {
-    name: String,
-    path: String,
+    name:          String,
+    path:          String,
     has_typ_files: bool,
 }
 

@@ -1,3 +1,17 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! Chat domain service — session-based conversations backed by LLM agents.
 //!
 //! [`ChatService`] is the primary entry point for all chat operations. It
@@ -8,13 +22,11 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use openrouter_rs::api::chat::{Content, ContentPart, Message};
-use openrouter_rs::types::Role;
-use rara_agents::{
-    model::OpenRouterLoaderRef,
-    runner::AgentRunner,
-    tool_registry::ToolRegistry,
+use openrouter_rs::{
+    api::chat::{Content, ContentPart, Message},
+    types::Role,
 };
+use rara_agents::{model::OpenRouterLoaderRef, runner::AgentRunner, tool_registry::ToolRegistry};
 use rara_domain_shared::settings::model::{ModelScenario, Settings};
 use rara_sessions::{
     repository::SessionRepository,
@@ -30,10 +42,31 @@ use crate::error::ChatError;
 
 /// Default system prompt used when no custom prompt is configured in settings
 /// and no session-level override is provided.
-const DEFAULT_SYSTEM_PROMPT: &str = "You are my personal AI assistant. You help me with everything \
-    — job hunting, resume optimization, interview prep, daily tasks, analysis, brainstorming, \
-    coding, and any other questions or tasks I bring to you. Be concise, practical, and proactive. \
-    Respond in the same language as my message.";
+const SYSTEM_PROMPT_FILE: &str = "chat/default_system.md";
+const DEFAULT_SYSTEM_PROMPT: &str = include_str!("../../../../prompts/chat/default_system.md");
+
+fn compose_system_prompt(base_prompt: &str, soul_prompt: Option<&str>) -> String {
+    if let Some(soul) = soul_prompt.filter(|s| !s.trim().is_empty()) {
+        return format!("{soul}\n\n# Chat Instructions\n{base_prompt}");
+    }
+    base_prompt.to_owned()
+}
+
+fn resolve_soul_prompt(settings: &Settings) -> Option<String> {
+    if settings
+        .agent
+        .soul
+        .as_deref()
+        .is_some_and(|s| !s.trim().is_empty())
+    {
+        return settings.agent.soul.clone();
+    }
+    let markdown_soul = rara_paths::load_agent_soul_prompt();
+    if markdown_soul.trim().is_empty() {
+        return None;
+    }
+    Some(markdown_soul)
+}
 
 /// Central orchestrator for session-based AI chat.
 ///
@@ -93,12 +126,11 @@ impl ChatService {
     /// Read the current system prompt from runtime settings, falling back
     /// to [`DEFAULT_SYSTEM_PROMPT`] when no custom prompt is configured.
     fn current_system_prompt(&self) -> String {
-        self.settings_rx
-            .borrow()
-            .agent
-            .chat_system_prompt
-            .clone()
-            .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_owned())
+        let settings = self.settings_rx.borrow();
+        let base_prompt =
+            rara_paths::load_prompt_markdown(SYSTEM_PROMPT_FILE, DEFAULT_SYSTEM_PROMPT);
+        let soul_prompt = resolve_soul_prompt(&settings);
+        compose_system_prompt(&base_prompt, soul_prompt.as_deref())
     }
 
     // -- session CRUD -------------------------------------------------------
@@ -274,9 +306,7 @@ impl ChatService {
     }
 
     /// Return a reference to the tools registry shared by this service.
-    pub fn tools(&self) -> &Arc<ToolRegistry> {
-        &self.tools
-    }
+    pub fn tools(&self) -> &Arc<ToolRegistry> { &self.tools }
 
     // -- send message (LLM) -------------------------------------------------
 
@@ -313,15 +343,10 @@ impl ChatService {
         };
 
         // 2. Read existing history
-        let history = self
-            .session_repo
-            .read_messages(key, None, None)
-            .await?;
+        let history = self.session_repo.read_messages(key, None, None).await?;
 
         // 3. Persist user message — multimodal if images are present
-        let has_images = image_urls
-            .as_ref()
-            .is_some_and(|urls| !urls.is_empty());
+        let has_images = image_urls.as_ref().is_some_and(|urls| !urls.is_empty());
         let user_msg = if has_images {
             let urls = image_urls.as_ref().unwrap();
             let mut blocks = vec![ContentBlock::Text {
@@ -378,11 +403,12 @@ impl ChatService {
             .history(openrouter_history)
             .build();
 
-        let result = runner.run(&self.tools, None).await.map_err(|e| {
-            ChatError::AgentError {
+        let result = runner
+            .run(&self.tools, None)
+            .await
+            .map_err(|e| ChatError::AgentError {
                 message: e.to_string(),
-            }
-        })?;
+            })?;
 
         // 6. Extract assistant text from response
         let assistant_text = result
@@ -423,8 +449,9 @@ impl ChatService {
     /// Export a session's message history to the memory directory as markdown.
     ///
     /// Reads all messages for the given session key, formats them as a
-    /// markdown document, and writes it to `rara_paths::memory_sessions_dir()/{key}.md`.
-    /// Returns the path of the written file.
+    /// markdown document, and writes it to
+    /// `rara_paths::memory_sessions_dir()/{key}.md`. Returns the path of
+    /// the written file.
     #[instrument(skip(self))]
     pub async fn export_session_to_memory(
         &self,
@@ -585,7 +612,8 @@ impl std::fmt::Debug for ChatService {
 // Conversion helpers
 // ---------------------------------------------------------------------------
 
-/// Convert a session [`ChatMessage`] to an [`openrouter_rs::api::chat::Message`].
+/// Convert a session [`ChatMessage`] to an
+/// [`openrouter_rs::api::chat::Message`].
 ///
 /// Maps domain roles to OpenRouter roles and converts text / multimodal
 /// content to the appropriate [`Content`] variant. Tool-related fields

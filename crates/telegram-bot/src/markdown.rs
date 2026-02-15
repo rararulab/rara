@@ -232,7 +232,8 @@ fn try_parse_link(chars: &[char], pos: usize) -> Option<(String, String, usize)>
     Some((text, url, i))
 }
 
-/// Try to parse content between matching delimiters (e.g., `**`, `*`, `__`, `_`).
+/// Try to parse content between matching delimiters (e.g., `**`, `*`, `__`,
+/// `_`).
 ///
 /// Returns `(content, end_position_after_closing_delimiter)` if successful.
 fn try_parse_delimited(chars: &[char], pos: usize, delim: &str) -> Option<(String, usize)> {
@@ -254,7 +255,8 @@ fn try_parse_delimited(chars: &[char], pos: usize, delim: &str) -> Option<(Strin
     let content_start = pos + delim_len;
     let mut i = content_start;
 
-    // Find closing delimiter (must not be at the very start — empty content not allowed)
+    // Find closing delimiter (must not be at the very start — empty content not
+    // allowed)
     while i + delim_len <= len {
         let mut matched = true;
         for (j, dc) in delim_chars.iter().enumerate() {

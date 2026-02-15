@@ -19,7 +19,7 @@
 //! job is set to `Failed`.
 
 use async_trait::async_trait;
-use common_worker::{FallibleWorker, WorkError, WorkResult, WorkerContext};
+use common_worker::{FallibleWorker, Notifiable, WorkError, WorkResult, WorkerContext};
 use rara_ai::error::AiError;
 use rara_domain_job::types::{PipelineEventKind, PipelineStage, SavedJobStatus};
 use tracing::{info, warn};
@@ -212,6 +212,12 @@ impl FallibleWorker<AppState> for SavedJobAnalyzeWorker {
 
         if analyzed_count > 0 {
             info!(analyzed = analyzed_count, "analyze batch complete");
+            // Nudge proactive worker to send timely follow-up when new results land.
+            if let Ok(guard) = state.proactive_notify.read() {
+                if let Some(handle) = guard.as_ref() {
+                    handle.notify();
+                }
+            }
         }
 
         Ok(())

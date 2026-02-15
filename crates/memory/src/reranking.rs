@@ -22,7 +22,11 @@ use crate::manager::SearchResult;
 ///
 /// This lightweight reranker is deterministic and avoids additional model
 /// calls, making it safe to run on every request.
-pub fn rerank_results(query: &str, mut candidates: Vec<SearchResult>, limit: usize) -> Vec<SearchResult> {
+pub fn rerank_results(
+    query: &str,
+    mut candidates: Vec<SearchResult>,
+    limit: usize,
+) -> Vec<SearchResult> {
     let query_tokens = tokenize(query);
 
     candidates.sort_by(|a, b| {

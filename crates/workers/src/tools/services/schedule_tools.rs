@@ -14,13 +14,11 @@
 
 //! Layer 2 service tools for managing the agent scheduler.
 
-use std::sync::Arc;
+use std::{str::FromStr, sync::Arc};
 
 use async_trait::async_trait;
 use rara_agents::tool_registry::AgentTool;
 use serde_json::json;
-
-use std::str::FromStr;
 
 use crate::agent_scheduler::{AgentJob, AgentScheduler, AgentTrigger};
 
@@ -34,19 +32,16 @@ pub struct ScheduleAddTool {
 }
 
 impl ScheduleAddTool {
-    pub fn new(scheduler: Arc<AgentScheduler>) -> Self {
-        Self { scheduler }
-    }
+    pub fn new(scheduler: Arc<AgentScheduler>) -> Self { Self { scheduler } }
 }
 
 #[async_trait]
 impl AgentTool for ScheduleAddTool {
-    fn name(&self) -> &str {
-        "schedule_add"
-    }
+    fn name(&self) -> &str { "schedule_add" }
 
     fn description(&self) -> &str {
-        "Schedule a new agent job. The message will be executed as a user prompt when the trigger fires."
+        "Schedule a new agent job. The message will be executed as a user prompt when the trigger \
+         fires."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -141,13 +136,13 @@ impl AgentTool for ScheduleAddTool {
 
         let id = ulid::Ulid::new().to_string();
         let job = AgentJob {
-            id:          id.clone(),
+            id: id.clone(),
             message,
             trigger,
             session_key: "agent:proactive".to_owned(),
-            created_at:  jiff::Timestamp::now(),
+            created_at: jiff::Timestamp::now(),
             last_run_at: None,
-            enabled:     true,
+            enabled: true,
         };
 
         self.scheduler
@@ -171,16 +166,12 @@ pub struct ScheduleListTool {
 }
 
 impl ScheduleListTool {
-    pub fn new(scheduler: Arc<AgentScheduler>) -> Self {
-        Self { scheduler }
-    }
+    pub fn new(scheduler: Arc<AgentScheduler>) -> Self { Self { scheduler } }
 }
 
 #[async_trait]
 impl AgentTool for ScheduleListTool {
-    fn name(&self) -> &str {
-        "schedule_list"
-    }
+    fn name(&self) -> &str { "schedule_list" }
 
     fn description(&self) -> &str {
         "List all scheduled agent jobs with their triggers and status."
@@ -226,20 +217,14 @@ pub struct ScheduleRemoveTool {
 }
 
 impl ScheduleRemoveTool {
-    pub fn new(scheduler: Arc<AgentScheduler>) -> Self {
-        Self { scheduler }
-    }
+    pub fn new(scheduler: Arc<AgentScheduler>) -> Self { Self { scheduler } }
 }
 
 #[async_trait]
 impl AgentTool for ScheduleRemoveTool {
-    fn name(&self) -> &str {
-        "schedule_remove"
-    }
+    fn name(&self) -> &str { "schedule_remove" }
 
-    fn description(&self) -> &str {
-        "Remove a scheduled agent job by its ID."
-    }
+    fn description(&self) -> &str { "Remove a scheduled agent job by its ID." }
 
     fn parameters_schema(&self) -> serde_json::Value {
         json!({
@@ -258,20 +243,19 @@ impl AgentTool for ScheduleRemoveTool {
         &self,
         params: serde_json::Value,
     ) -> rara_agents::err::Result<serde_json::Value> {
-        let id = params
-            .get("id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
+        let id = params.get("id").and_then(|v| v.as_str()).ok_or_else(|| {
+            rara_agents::err::Error::Other {
                 message: "missing required parameter: id".into(),
-            })?;
+            }
+        })?;
 
-        let removed = self
-            .scheduler
-            .remove(id)
-            .await
-            .map_err(|e| rara_agents::err::Error::Other {
-                message: format!("failed to remove job: {e}").into(),
-            })?;
+        let removed =
+            self.scheduler
+                .remove(id)
+                .await
+                .map_err(|e| rara_agents::err::Error::Other {
+                    message: format!("failed to remove job: {e}").into(),
+                })?;
 
         if removed {
             Ok(json!({ "status": "ok", "removed": true }))

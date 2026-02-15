@@ -18,13 +18,13 @@
 #[derive(Debug, Clone)]
 pub struct IndexedFileMeta {
     /// Workspace-relative path of the source markdown file.
-    pub path: String,
+    pub path:  String,
     /// SHA-256 digest of file bytes.
-    pub hash: String,
+    pub hash:  String,
     /// Last modification timestamp (unix seconds).
     pub mtime: i64,
     /// File size in bytes.
-    pub size: i64,
+    pub size:  i64,
 }
 
 /// Input payload for one memory chunk.

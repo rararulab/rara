@@ -24,6 +24,10 @@ use rara_agents::tool_registry::AgentTool;
 use serde_json::json;
 use uuid::Uuid;
 
+const ANALYZE_PROMPT_FILE: &str = "workers/resume_analysis_instructions.md";
+const DEFAULT_ANALYZE_PROMPT_INSTRUCTIONS: &str =
+    include_str!("../../../../../prompts/workers/resume_analysis_instructions.md");
+
 // ---------------------------------------------------------------------------
 // list_resumes
 // ---------------------------------------------------------------------------
@@ -43,9 +47,7 @@ impl ListResumesTool {
 impl AgentTool for ListResumesTool {
     fn name(&self) -> &str { "list_resumes" }
 
-    fn description(&self) -> &str {
-        "List all resumes. Optionally filter by source type."
-    }
+    fn description(&self) -> &str { "List all resumes. Optionally filter by source type." }
 
     fn parameters_schema(&self) -> serde_json::Value {
         json!({
@@ -60,7 +62,10 @@ impl AgentTool for ListResumesTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value) -> rara_agents::err::Result<serde_json::Value> {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+    ) -> rara_agents::err::Result<serde_json::Value> {
         let source_filter = params
             .get("source")
             .and_then(|v| v.as_str())
@@ -119,9 +124,7 @@ impl GetResumeContentTool {
 impl AgentTool for GetResumeContentTool {
     fn name(&self) -> &str { "get_resume_content" }
 
-    fn description(&self) -> &str {
-        "Get the full content of a resume by its ID"
-    }
+    fn description(&self) -> &str { "Get the full content of a resume by its ID" }
 
     fn parameters_schema(&self) -> serde_json::Value {
         json!({
@@ -136,7 +139,10 @@ impl AgentTool for GetResumeContentTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value) -> rara_agents::err::Result<serde_json::Value> {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+    ) -> rara_agents::err::Result<serde_json::Value> {
         let resume_id_str = params
             .get("resume_id")
             .and_then(|v| v.as_str())
@@ -144,11 +150,10 @@ impl AgentTool for GetResumeContentTool {
                 message: "missing required parameter: resume_id".into(),
             })?;
 
-        let resume_id = Uuid::parse_str(resume_id_str).map_err(|e| {
-            rara_agents::err::Error::Other {
+        let resume_id =
+            Uuid::parse_str(resume_id_str).map_err(|e| rara_agents::err::Error::Other {
                 message: format!("invalid UUID: {e}").into(),
-            }
-        })?;
+            })?;
 
         match self.resume_service.get(resume_id).await {
             Ok(Some(resume)) => Ok(json!({
@@ -202,36 +207,24 @@ impl AnalyzeResumeTool {
     /// Build the analysis prompt based on resume content and optional job
     /// description.
     fn build_analysis_prompt(resume_content: &str, job_info: Option<&str>) -> String {
-        let mut prompt = String::from(
-            "You are an expert resume consultant. Analyze the following resume and provide \
-             a detailed report. Evaluate the resume on these dimensions:\n\n\
-             1. **Content Completeness**: Does the resume include contact information, \
-                work experience, education background, skills list, and other essential \
-                sections?\n\
-             2. **Wording Quality**: Does it use strong action verbs (led, implemented, \
-                designed, optimized)? Are achievements quantified with numbers and metrics?\n\
-             3. **Structure and Format**: Are sections clearly divided? Is the overall \
-                length appropriate (1-2 pages)? Is the layout logical?\n\
-             4. **ATS Compatibility**: Does it contain appropriate keywords? Does it avoid \
-                complex formatting (tables, images, headers/footers) that ATS systems \
-                cannot parse?\n",
+        let instructions = rara_paths::load_prompt_markdown(
+            ANALYZE_PROMPT_FILE,
+            DEFAULT_ANALYZE_PROMPT_INSTRUCTIONS,
         );
+        let mut prompt = instructions.trim().to_owned();
+        prompt.push('\n');
 
         if job_info.is_some() {
             prompt.push_str(
-                "5. **Job Match**: How well do the candidate's skills and experience match \
-                 the target job requirements? What gaps exist?\n",
+                "5. **Job Match**: How well do the candidate's skills and experience match the \
+                 target job requirements? What gaps exist?\n",
             );
         }
 
         prompt.push_str(
-            "\nFor each dimension, provide:\n\
-             - A score from 1-10\n\
-             - Key strengths\n\
-             - Specific improvement suggestions\n\n\
-             Finally, provide an overall score and a prioritized list of the top 3 \
-             improvements the candidate should make.\n\n\
-             --- RESUME ---\n",
+            "\nFor each dimension, provide:\n- A score from 1-10\n- Key strengths\n- Specific \
+             improvement suggestions\n\nFinally, provide an overall score and a prioritized list \
+             of the top 3 improvements the candidate should make.\n\n--- RESUME ---\n",
         );
         prompt.push_str(resume_content);
 
@@ -249,9 +242,8 @@ impl AgentTool for AnalyzeResumeTool {
     fn name(&self) -> &str { "analyze_resume" }
 
     fn description(&self) -> &str {
-        "Analyze a resume and provide optimization suggestions. Evaluates content \
-         completeness, wording quality, structure, ATS compatibility, and job match \
-         (if target job is specified)."
+        "Analyze a resume and provide optimization suggestions. Evaluates content completeness, \
+         wording quality, structure, ATS compatibility, and job match (if target job is specified)."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -267,7 +259,10 @@ impl AgentTool for AnalyzeResumeTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value) -> rara_agents::err::Result<serde_json::Value> {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+    ) -> rara_agents::err::Result<serde_json::Value> {
         // -- parse resume_id ----------------------------------------------------
         let resume_id_str = params
             .get("resume_id")
@@ -276,11 +271,10 @@ impl AgentTool for AnalyzeResumeTool {
                 message: "missing required parameter: resume_id".into(),
             })?;
 
-        let resume_id = Uuid::parse_str(resume_id_str).map_err(|e| {
-            rara_agents::err::Error::Other {
+        let resume_id =
+            Uuid::parse_str(resume_id_str).map_err(|e| rara_agents::err::Error::Other {
                 message: format!("invalid UUID: {e}").into(),
-            }
-        })?;
+            })?;
 
         // -- fetch resume -------------------------------------------------------
         let resume = match self.resume_service.get(resume_id).await {
@@ -328,8 +322,7 @@ impl AgentTool for AnalyzeResumeTool {
         };
 
         // -- build prompt and call AI -------------------------------------------
-        let prompt =
-            Self::build_analysis_prompt(resume_content, job_description.as_deref());
+        let prompt = Self::build_analysis_prompt(resume_content, job_description.as_deref());
 
         let agent = match self.ai_service.resume_analyzer() {
             Ok(agent) => agent,

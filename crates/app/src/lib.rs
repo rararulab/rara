@@ -226,36 +226,15 @@ impl AppConfig {
             .interval(std::time::Duration::from_secs(gc_interval_secs))
             .spawn();
 
-        let default_proactive_cron = "0 9,18,21 * * *";
-        let proactive_cron = app_state
-            .settings_svc
-            .current()
-            .agent
-            .proactive_cron
-            .clone()
-            .unwrap_or_else(|| default_proactive_cron.to_owned());
-
-        // Try user-supplied cron; fall back to default if invalid.
-        let _proactive_handle = match worker_manager
+        let proactive_handle = worker_manager
             .fallible_worker(rara_workers::proactive::ProactiveAgentWorker)
             .name("proactive-agent")
-            .cron(&proactive_cron)
-        {
-            Ok(b) => b.spawn(),
-            Err(e) => {
-                warn!(
-                    cron = %proactive_cron,
-                    error = %e,
-                    "invalid proactive cron expression, falling back to default"
-                );
-                worker_manager
-                    .fallible_worker(rara_workers::proactive::ProactiveAgentWorker)
-                    .name("proactive-agent")
-                    .cron(default_proactive_cron)
-                    .expect("hardcoded default cron must be valid")
-                    .spawn()
-            }
-        };
+            .eager()
+            .interval_or_notify(Duration::from_secs(60))
+            .spawn();
+        if let Ok(mut guard) = app_state.proactive_notify.write() {
+            *guard = Some(proactive_handle);
+        }
 
         // -- memory sync worker (every 5 minutes) -----------------------------
 
@@ -269,11 +248,9 @@ impl AppConfig {
         // -- agent scheduler worker (every 60s) --------------------------------
 
         let _scheduler_handle = worker_manager
-            .fallible_worker(
-                rara_workers::scheduled_agent::AgentSchedulerWorker::new(
-                    app_state.agent_scheduler.clone(),
-                ),
-            )
+            .fallible_worker(rara_workers::scheduled_agent::AgentSchedulerWorker::new(
+                app_state.agent_scheduler.clone(),
+            ))
             .name("agent-scheduler")
             .interval(Duration::from_secs(60))
             .spawn();
@@ -348,20 +325,16 @@ impl AppConfig {
     async fn try_start_bot(
         cancel: &CancellationToken,
         notify_client: &NotifyClient,
-        settings_rx: tokio::sync::watch::Receiver<
-            rara_domain_shared::settings::model::Settings,
-        >,
+        settings_rx: tokio::sync::watch::Receiver<rara_domain_shared::settings::model::Settings>,
         main_service_http_base: &str,
     ) -> Result<Option<rara_telegram_bot::BotHandle>, Whatever> {
-        let telegram_config = std::env::var("TELEGRAM_BOT_TOKEN")
-            .ok()
-            .and_then(|token| {
-                let chat_id: i64 = std::env::var("TELEGRAM_CHAT_ID").ok()?.parse().ok()?;
-                Some(rara_telegram_bot::TelegramConfig {
-                    bot_token: token,
-                    chat_id,
-                })
-            });
+        let telegram_config = std::env::var("TELEGRAM_BOT_TOKEN").ok().and_then(|token| {
+            let chat_id: i64 = std::env::var("TELEGRAM_CHAT_ID").ok()?.parse().ok()?;
+            Some(rara_telegram_bot::TelegramConfig {
+                bot_token: token,
+                chat_id,
+            })
+        });
 
         let bot_app = rara_telegram_bot::BotApp::from_shared(
             cancel.child_token(),

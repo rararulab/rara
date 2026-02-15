@@ -16,43 +16,41 @@
 
 use rig::{client::CompletionClient, completion::Prompt, providers::openrouter};
 
-use crate::error::AiError;
+use crate::{agents::prompt::compose_system_prompt, error::AiError};
 
-const SYSTEM_PROMPT: &str = "\
-You are a job posting analyzer. Given a job posting in markdown format, analyze it and return ONLY \
-                             a valid JSON object with these fields:
-- title (string, required - the job title)
-- company (string, required - the company name)
-- location (string or null - work location)
-- employment_type (string or null - e.g. \"full-time\", \"contract\")
-- experience_level (string or null - e.g. \"senior\", \"mid\", \"junior\")
-- salary_range (string or null - salary info if mentioned)
-- required_skills (array of strings - required skills/technologies)
-- preferred_skills (array of strings - nice-to-have skills)
-- responsibilities (array of strings - key responsibilities, max 5)
-- requirements (array of strings - key requirements, max 5)
-- benefits (array of strings - benefits mentioned, max 5)
-- summary (string - a 2-3 sentence summary of the role)
-- match_score (integer 0-100 - estimated attractiveness for a senior software engineer)
-
-Return ONLY the JSON object, no other text.";
+const SYSTEM_PROMPT_FILE: &str = "ai/jd_analyzer.system.md";
+const DEFAULT_SYSTEM_PROMPT: &str = include_str!("../../../../prompts/ai/jd_analyzer.system.md");
 
 /// Analyzes a job posting in markdown format and extracts structured
 /// information using AI.
 pub struct JdAnalyzerAgent {
-    client: openrouter::Client,
-    model:  String,
+    client:      openrouter::Client,
+    model:       String,
+    soul_prompt: Option<String>,
 }
 
 impl JdAnalyzerAgent {
-    pub(crate) fn new(client: openrouter::Client, model: String) -> Self { Self { client, model } }
+    pub(crate) fn new(
+        client: openrouter::Client,
+        model: String,
+        soul_prompt: Option<String>,
+    ) -> Self {
+        Self {
+            client,
+            model,
+            soul_prompt,
+        }
+    }
 
     /// Analyze a job posting markdown and return structured JSON.
     pub async fn analyze(&self, markdown: &str) -> Result<String, AiError> {
+        let base_prompt =
+            rara_paths::load_prompt_markdown(SYSTEM_PROMPT_FILE, DEFAULT_SYSTEM_PROMPT);
+        let system_prompt = compose_system_prompt(&base_prompt, self.soul_prompt.as_deref());
         let agent = self
             .client
             .agent(&self.model)
-            .preamble(SYSTEM_PROMPT)
+            .preamble(&system_prompt)
             .build();
 
         agent

@@ -155,9 +155,9 @@ impl MemoryManager {
 
             for (idx, chunk) in change.chunks.iter().enumerate() {
                 chroma_chunks.push(ChromaChunk {
-                    id: format!("{}:{idx}", change.relative),
-                    document: chunk.content.clone(),
-                    path: change.relative.clone(),
+                    id:          format!("{}:{idx}", change.relative),
+                    document:    chunk.content.clone(),
+                    path:        change.relative.clone(),
                     chunk_index: chunk.chunk_index,
                 });
             }
@@ -292,11 +292,11 @@ fn hybrid_fuse(
     for (rank, row) in keyword_rows.into_iter().enumerate() {
         let kw_score = reciprocal_rank(rank);
         let entry = fused.entry(row.chunk_id).or_insert_with(|| SearchResult {
-            chunk_id: row.chunk_id,
-            path: row.path.clone(),
+            chunk_id:    row.chunk_id,
+            path:        row.path.clone(),
             chunk_index: row.chunk_index,
-            snippet: make_snippet(&row.content, 220),
-            score: 0.0,
+            snippet:     make_snippet(&row.content, 220),
+            score:       0.0,
         });
         entry.score += kw_score * 0.65;
     }
@@ -330,9 +330,7 @@ fn hybrid_fuse(
     rerank_results(query, candidates, limit)
 }
 
-fn reciprocal_rank(rank: usize) -> f64 {
-    1.0 / (rank as f64 + 1.0)
-}
+fn reciprocal_rank(rank: usize) -> f64 { 1.0 / (rank as f64 + 1.0) }
 
 fn is_markdown_file(path: &Path) -> bool {
     path.extension()
@@ -360,7 +358,11 @@ fn chunk_text(input: &str, chunk_chars: usize, overlap_chars: usize) -> Vec<Chun
     let mut chunk_index = 0_i64;
     while start < chars.len() {
         let end = (start + chunk_chars).min(chars.len());
-        let chunk = chars[start..end].iter().collect::<String>().trim().to_owned();
+        let chunk = chars[start..end]
+            .iter()
+            .collect::<String>()
+            .trim()
+            .to_owned();
 
         if !chunk.is_empty() {
             out.push(ChunkInput {

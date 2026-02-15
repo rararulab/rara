@@ -27,9 +27,7 @@ pub struct JobPipelineTool {
 }
 
 impl JobPipelineTool {
-    pub fn new(job_service: rara_domain_job::service::JobService) -> Self {
-        Self { job_service }
-    }
+    pub fn new(job_service: rara_domain_job::service::JobService) -> Self { Self { job_service } }
 }
 
 #[async_trait]
@@ -56,13 +54,15 @@ impl AgentTool for JobPipelineTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value) -> rara_agents::err::Result<serde_json::Value> {
-        let url = params
-            .get("url")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+    ) -> rara_agents::err::Result<serde_json::Value> {
+        let url = params.get("url").and_then(|v| v.as_str()).ok_or_else(|| {
+            rara_agents::err::Error::Other {
                 message: "missing required parameter: url".into(),
-            })?;
+            }
+        })?;
 
         match self.job_service.create(url).await {
             Ok(job) => Ok(json!({

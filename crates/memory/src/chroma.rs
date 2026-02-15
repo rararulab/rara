@@ -15,7 +15,7 @@
 //! Optional Chroma vector index integration.
 
 use chromadb::{
-    client::{ChromaAuthMethod, ChromaClientOptions, ChromaClient as SdkClient, ChromaTokenHeader},
+    client::{ChromaAuthMethod, ChromaClient as SdkClient, ChromaClientOptions, ChromaTokenHeader},
     collection::{ChromaCollection, CollectionEntries, QueryOptions},
 };
 use serde_json::Map;
@@ -32,9 +32,9 @@ pub struct ChromaClient {
 /// Chunk payload sent to Chroma upsert endpoints.
 #[derive(Debug, Clone)]
 pub struct ChromaChunk {
-    pub id:         String,
-    pub document:   String,
-    pub path:       String,
+    pub id:          String,
+    pub document:    String,
+    pub path:        String,
     pub chunk_index: i64,
 }
 
@@ -52,7 +52,11 @@ impl ChromaClient {
     /// Build a client from explicit values.
     ///
     /// Returns `None` when `base_url` is empty.
-    pub fn new(base_url: String, collection: Option<String>, api_key: Option<String>) -> Option<Self> {
+    pub fn new(
+        base_url: String,
+        collection: Option<String>,
+        api_key: Option<String>,
+    ) -> Option<Self> {
         let base_url = base_url.trim().trim_end_matches('/').to_owned();
         if base_url.is_empty() {
             return None;
@@ -98,9 +102,11 @@ impl ChromaClient {
         let auth = self
             .api_key
             .clone()
-            .map_or(ChromaAuthMethod::None, |token| ChromaAuthMethod::TokenAuth {
-                token,
-                header: ChromaTokenHeader::Authorization,
+            .map_or(ChromaAuthMethod::None, |token| {
+                ChromaAuthMethod::TokenAuth {
+                    token,
+                    header: ChromaTokenHeader::Authorization,
+                }
             });
 
         ChromaClientOptions {
@@ -112,17 +118,21 @@ impl ChromaClient {
 
     /// Create the SDK client and get-or-create the target collection.
     async fn get_collection(&self) -> MemoryResult<(SdkClient, ChromaCollection)> {
-        let client = SdkClient::new(self.build_options())
-            .await
-            .map_err(|e| MemoryError::Other {
-                message: format!("failed to create chroma client: {e}"),
-            })?;
+        let client =
+            SdkClient::new(self.build_options())
+                .await
+                .map_err(|e| MemoryError::Other {
+                    message: format!("failed to create chroma client: {e}"),
+                })?;
 
         let collection = client
             .get_or_create_collection(&self.collection_name, None)
             .await
             .map_err(|e| MemoryError::Other {
-                message: format!("failed to get/create collection '{}': {e}", self.collection_name),
+                message: format!(
+                    "failed to get/create collection '{}': {e}",
+                    self.collection_name
+                ),
             })?;
 
         Ok((client, collection))
@@ -170,9 +180,9 @@ impl ChromaClient {
 
     /// Execute a nearest-neighbor query in Chroma using server-side embeddings.
     ///
-    /// Chroma embeds the query text using its built-in model (all-MiniLM-L6-v2).
-    /// Distances are converted to a normalized score (`1 - distance`) for
-    /// fusion with keyword retrieval.
+    /// Chroma embeds the query text using its built-in model
+    /// (all-MiniLM-L6-v2). Distances are converted to a normalized score
+    /// (`1 - distance`) for fusion with keyword retrieval.
     pub async fn query(&self, query_text: &str, n_results: usize) -> MemoryResult<Vec<ChromaHit>> {
         let (_client, collection) = self.get_collection().await?;
 
@@ -184,18 +194,15 @@ impl ChromaClient {
             ..Default::default()
         };
 
-        let result = collection
-            .query(query_options, None)
-            .await
-            .map_err(|e| MemoryError::Other {
-                message: format!("chroma query failed: {e}"),
-            })?;
+        let result =
+            collection
+                .query(query_options, None)
+                .await
+                .map_err(|e| MemoryError::Other {
+                    message: format!("chroma query failed: {e}"),
+                })?;
 
-        let ids = result
-            .ids
-            .first()
-            .cloned()
-            .unwrap_or_default();
+        let ids = result.ids.first().cloned().unwrap_or_default();
         let docs: Vec<String> = result
             .documents
             .as_ref()

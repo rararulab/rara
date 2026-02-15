@@ -16,32 +16,40 @@
 
 use rig::{client::CompletionClient, completion::Prompt, providers::openrouter};
 
-use crate::error::AiError;
+use crate::{agents::prompt::compose_system_prompt, error::AiError};
 
-const SYSTEM_PROMPT: &str =
-    "\
-You are a job description parser. Given a raw job description text, extract structured information \
-     and return ONLY a valid JSON object with these fields:\n- title (string, required)\n- \
-     company (string, required)\n- location (string or null)\n- description (string or null - a \
-     clean summary)\n- url (string or null)\n- salary_min (integer or null)\n- salary_max \
-     (integer or null)\n- salary_currency (string or null, e.g. \"USD\")\n- tags (array of \
-     strings - relevant skills/keywords)\n\nReturn ONLY the JSON object, no other text.";
+const SYSTEM_PROMPT_FILE: &str = "ai/jd_parser.system.md";
+const DEFAULT_SYSTEM_PROMPT: &str = include_str!("../../../../prompts/ai/jd_parser.system.md");
 
 /// Parses raw job description text into structured JSON using AI.
 pub struct JdParserAgent {
-    client: openrouter::Client,
-    model:  String,
+    client:      openrouter::Client,
+    model:       String,
+    soul_prompt: Option<String>,
 }
 
 impl JdParserAgent {
-    pub(crate) fn new(client: openrouter::Client, model: String) -> Self { Self { client, model } }
+    pub(crate) fn new(
+        client: openrouter::Client,
+        model: String,
+        soul_prompt: Option<String>,
+    ) -> Self {
+        Self {
+            client,
+            model,
+            soul_prompt,
+        }
+    }
 
     /// Parse a raw job description into a structured JSON string.
     pub async fn parse(&self, jd_text: &str) -> Result<String, AiError> {
+        let base_prompt =
+            rara_paths::load_prompt_markdown(SYSTEM_PROMPT_FILE, DEFAULT_SYSTEM_PROMPT);
+        let system_prompt = compose_system_prompt(&base_prompt, self.soul_prompt.as_deref());
         let agent = self
             .client
             .agent(&self.model)
-            .preamble(SYSTEM_PROMPT)
+            .preamble(&system_prompt)
             .build();
 
         agent

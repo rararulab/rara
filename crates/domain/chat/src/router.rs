@@ -1,3 +1,17 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! HTTP API routes for the chat domain.
 //!
 //! All endpoints live under `/api/v1/chat/` and use JSON request/response
@@ -53,16 +67,56 @@ struct CuratedModel {
 
 /// Hand-picked selection of commonly used models.
 const CURATED_MODELS: &[CuratedModel] = &[
-    CuratedModel { id: "openai/gpt-4o",                          name: "GPT-4o",                  context_length: 128_000 },
-    CuratedModel { id: "openai/gpt-4o-mini",                     name: "GPT-4o Mini",              context_length: 128_000 },
-    CuratedModel { id: "openai/gpt-4.1",                         name: "GPT-4.1",                  context_length: 1_047_576 },
-    CuratedModel { id: "openai/o3-mini",                         name: "o3 Mini",                  context_length: 200_000 },
-    CuratedModel { id: "anthropic/claude-sonnet-4",              name: "Claude Sonnet 4",          context_length: 200_000 },
-    CuratedModel { id: "anthropic/claude-3.5-haiku",             name: "Claude 3.5 Haiku",         context_length: 200_000 },
-    CuratedModel { id: "google/gemini-2.5-pro-preview",          name: "Gemini 2.5 Pro",           context_length: 1_048_576 },
-    CuratedModel { id: "google/gemini-2.5-flash-preview",        name: "Gemini 2.5 Flash",         context_length: 1_048_576 },
-    CuratedModel { id: "deepseek/deepseek-chat-v3-0324:free",    name: "DeepSeek V3 (Free)",       context_length: 131_072 },
-    CuratedModel { id: "meta-llama/llama-4-maverick:free",       name: "Llama 4 Maverick (Free)",  context_length: 1_048_576 },
+    CuratedModel {
+        id:             "openai/gpt-4o",
+        name:           "GPT-4o",
+        context_length: 128_000,
+    },
+    CuratedModel {
+        id:             "openai/gpt-4o-mini",
+        name:           "GPT-4o Mini",
+        context_length: 128_000,
+    },
+    CuratedModel {
+        id:             "openai/gpt-4.1",
+        name:           "GPT-4.1",
+        context_length: 1_047_576,
+    },
+    CuratedModel {
+        id:             "openai/o3-mini",
+        name:           "o3 Mini",
+        context_length: 200_000,
+    },
+    CuratedModel {
+        id:             "anthropic/claude-sonnet-4",
+        name:           "Claude Sonnet 4",
+        context_length: 200_000,
+    },
+    CuratedModel {
+        id:             "anthropic/claude-3.5-haiku",
+        name:           "Claude 3.5 Haiku",
+        context_length: 200_000,
+    },
+    CuratedModel {
+        id:             "google/gemini-2.5-pro-preview",
+        name:           "Gemini 2.5 Pro",
+        context_length: 1_048_576,
+    },
+    CuratedModel {
+        id:             "google/gemini-2.5-flash-preview",
+        name:           "Gemini 2.5 Flash",
+        context_length: 1_048_576,
+    },
+    CuratedModel {
+        id:             "deepseek/deepseek-chat-v3-0324:free",
+        name:           "DeepSeek V3 (Free)",
+        context_length: 131_072,
+    },
+    CuratedModel {
+        id:             "meta-llama/llama-4-maverick:free",
+        name:           "Llama 4 Maverick (Free)",
+        context_length: 1_048_576,
+    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -95,7 +149,7 @@ pub struct ListSessionsQuery {
 #[derive(Debug, Deserialize)]
 pub struct SendMessageRequest {
     /// The user's message text.
-    pub text: String,
+    pub text:       String,
     /// Optional list of image URLs to include as multimodal content.
     #[serde(default)]
     pub image_urls: Option<Vec<String>>,
@@ -319,9 +373,7 @@ async fn clear_messages(
     State(service): State<ChatService>,
     Path(key): Path<String>,
 ) -> Result<StatusCode, ChatError> {
-    service
-        .clear_messages(&SessionKey::from_raw(key))
-        .await?;
+    service.clear_messages(&SessionKey::from_raw(key)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

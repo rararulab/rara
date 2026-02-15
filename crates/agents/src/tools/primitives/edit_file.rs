@@ -63,10 +63,7 @@ impl AgentTool for EditFileTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-    ) -> crate::err::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> crate::err::Result<serde_json::Value> {
         let file_path = params
             .get("file_path")
             .and_then(|v| v.as_str())
@@ -93,11 +90,12 @@ impl AgentTool for EditFileTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let content = tokio::fs::read_to_string(file_path)
-            .await
-            .map_err(|e| crate::err::Error::Other {
-                message: format!("failed to read file {file_path}: {e}").into(),
-            })?;
+        let content =
+            tokio::fs::read_to_string(file_path)
+                .await
+                .map_err(|e| crate::err::Error::Other {
+                    message: format!("failed to read file {file_path}: {e}").into(),
+                })?;
 
         let count = content.matches(old_string).count();
 

@@ -16,7 +16,8 @@
 //!
 //! # Overview
 //! - Incremental indexing of Markdown files into PostgreSQL.
-//! - Hybrid retrieval (Chroma vector + PG keyword) with token-overlap reranking.
+//! - Hybrid retrieval (Chroma vector + PG keyword) with token-overlap
+//!   reranking.
 //! - Server-side embeddings via Chroma (all-MiniLM-L6-v2).
 //!
 //! # Infrastructure

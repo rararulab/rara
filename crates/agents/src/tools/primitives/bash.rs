@@ -43,8 +43,8 @@ impl AgentTool for BashTool {
     fn name(&self) -> &str { "bash" }
 
     fn description(&self) -> &str {
-        "Execute a shell command via /bin/bash -c. Returns exit code, combined stdout/stderr, \
-         and whether the command timed out. Output is truncated to 50KB / 2000 lines."
+        "Execute a shell command via /bin/bash -c. Returns exit code, combined stdout/stderr, and \
+         whether the command timed out. Output is truncated to 50KB / 2000 lines."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -68,10 +68,7 @@ impl AgentTool for BashTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-    ) -> crate::err::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> crate::err::Result<serde_json::Value> {
         let command = params
             .get("command")
             .and_then(|v| v.as_str())

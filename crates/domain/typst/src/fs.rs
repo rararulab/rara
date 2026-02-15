@@ -1,9 +1,25 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! Local filesystem operations for Typst projects.
 //!
 //! All file reads/writes go directly to the user's local disk.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -13,9 +29,9 @@ use crate::error::TypstError;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileEntry {
     /// Relative path within the project root.
-    pub path: String,
+    pub path:     String,
     /// Whether this entry is a directory.
-    pub is_dir: bool,
+    pub is_dir:   bool,
     /// Child entries (present only for directories).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub children: Option<Vec<FileEntry>>,
@@ -42,7 +58,8 @@ pub fn validate_path(root: &Path, relative: &str) -> Result<PathBuf, TypstError>
 
     // For files that do not yet exist we need to check the parent.
     let check_path = if full.exists() {
-        full.canonicalize().map_err(|e| TypstError::FileIo { source: e })?
+        full.canonicalize()
+            .map_err(|e| TypstError::FileIo { source: e })?
     } else {
         // Ensure parent directory exists.
         let parent = full.parent().ok_or_else(|| TypstError::PathTraversal {
@@ -51,8 +68,9 @@ pub fn validate_path(root: &Path, relative: &str) -> Result<PathBuf, TypstError>
         if !parent.exists() {
             std::fs::create_dir_all(parent).map_err(|e| TypstError::FileIo { source: e })?;
         }
-        let canonical_parent =
-            parent.canonicalize().map_err(|e| TypstError::FileIo { source: e })?;
+        let canonical_parent = parent
+            .canonicalize()
+            .map_err(|e| TypstError::FileIo { source: e })?;
         canonical_parent.join(full.file_name().ok_or_else(|| TypstError::PathTraversal {
             path: relative.to_owned(),
         })?)
@@ -94,9 +112,7 @@ fn scan_recursive(root: &Path, dir: &Path) -> Result<Vec<FileEntry>, TypstError>
 
     let read_dir = std::fs::read_dir(dir).map_err(|e| TypstError::FileIo { source: e })?;
 
-    let mut dir_entries: Vec<_> = read_dir
-        .filter_map(|e| e.ok())
-        .collect();
+    let mut dir_entries: Vec<_> = read_dir.filter_map(|e| e.ok()).collect();
     dir_entries.sort_by_key(|e| e.file_name());
 
     for entry in dir_entries {
@@ -118,14 +134,14 @@ fn scan_recursive(root: &Path, dir: &Path) -> Result<Vec<FileEntry>, TypstError>
         if path.is_dir() {
             let children = scan_recursive(root, &path)?;
             entries.push(FileEntry {
-                path: relative,
-                is_dir: true,
+                path:     relative,
+                is_dir:   true,
                 children: Some(children),
             });
         } else if path.is_file() {
             entries.push(FileEntry {
-                path: relative,
-                is_dir: false,
+                path:     relative,
+                is_dir:   false,
                 children: None,
             });
         }
@@ -205,8 +221,9 @@ fn collect_recursive(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
+
+    use super::*;
 
     #[test]
     fn test_scan_directory() {

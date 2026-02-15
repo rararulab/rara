@@ -71,17 +71,18 @@ pub struct TelegramSettings {
 #[serde(default)]
 pub struct AgentSettings {
     /// The agent's personality/soul prompt. `None` uses the built-in default.
-    pub soul:                Option<String>,
-    /// Custom system prompt for chat sessions. `None` uses the built-in default.
-    pub chat_system_prompt:  Option<String>,
+    pub soul:               Option<String>,
+    /// Custom system prompt for chat sessions. `None` uses the built-in
+    /// default.
+    pub chat_system_prompt: Option<String>,
     /// Whether proactive messaging is enabled.
-    pub proactive_enabled:   bool,
+    pub proactive_enabled:  bool,
     /// Cron expression for proactive check schedule (5-field format).
     /// Changes take effect after service restart.
-    pub proactive_cron:      Option<String>,
+    pub proactive_cron:     Option<String>,
     /// Memory retrieval runtime configuration.
     #[serde(default)]
-    pub memory:              MemorySettings,
+    pub memory:             MemorySettings,
 }
 
 /// Memory runtime settings.
@@ -89,19 +90,19 @@ pub struct AgentSettings {
 #[serde(default)]
 pub struct MemorySettings {
     /// Chroma server base URL.
-    pub chroma_url:          Option<String>,
+    pub chroma_url:        Option<String>,
     /// Chroma collection name.
-    pub chroma_collection:   Option<String>,
+    pub chroma_collection: Option<String>,
     /// Chroma API key/token.
-    pub chroma_api_key:      Option<String>,
+    pub chroma_api_key:    Option<String>,
 }
 
 impl Default for MemorySettings {
     fn default() -> Self {
         Self {
-            chroma_url: Some("http://localhost:8000".to_owned()),
+            chroma_url:        Some("http://localhost:8000".to_owned()),
             chroma_collection: Some("job-memory".to_owned()),
-            chroma_api_key: None,
+            chroma_api_key:    None,
         }
     }
 }
@@ -143,9 +144,9 @@ pub struct AgentRuntimeSettingsPatch {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MemoryRuntimeSettingsPatch {
-    pub chroma_url:         Option<String>,
-    pub chroma_collection:  Option<String>,
-    pub chroma_api_key:     Option<String>,
+    pub chroma_url:        Option<String>,
+    pub chroma_collection: Option<String>,
+    pub chroma_api_key:    Option<String>,
 }
 
 impl Settings {
@@ -250,16 +251,22 @@ mod tests {
             default_model: Some("anthropic/claude-sonnet-4".to_owned()),
             ..Default::default()
         };
-        assert_eq!(ai.model_for(ModelScenario::Job), "anthropic/claude-sonnet-4");
-        assert_eq!(ai.model_for(ModelScenario::Chat), "anthropic/claude-sonnet-4");
+        assert_eq!(
+            ai.model_for(ModelScenario::Job),
+            "anthropic/claude-sonnet-4"
+        );
+        assert_eq!(
+            ai.model_for(ModelScenario::Chat),
+            "anthropic/claude-sonnet-4"
+        );
     }
 
     #[test]
     fn model_for_uses_scenario_specific_model() {
         let ai = AISettings {
             default_model: Some("anthropic/claude-sonnet-4".to_owned()),
-            job_model:     Some("openai/gpt-4o".to_owned()),
-            chat_model:    Some("openai/gpt-4o-mini".to_owned()),
+            job_model: Some("openai/gpt-4o".to_owned()),
+            chat_model: Some("openai/gpt-4o-mini".to_owned()),
             ..Default::default()
         };
         assert_eq!(ai.model_for(ModelScenario::Job), "openai/gpt-4o");
@@ -270,13 +277,16 @@ mod tests {
     fn model_for_partial_override() {
         let ai = AISettings {
             default_model: Some("anthropic/claude-sonnet-4".to_owned()),
-            job_model:     Some("openai/gpt-4o".to_owned()),
-            chat_model:    None,
+            job_model: Some("openai/gpt-4o".to_owned()),
+            chat_model: None,
             ..Default::default()
         };
         assert_eq!(ai.model_for(ModelScenario::Job), "openai/gpt-4o");
         // Chat falls back to default_model
-        assert_eq!(ai.model_for(ModelScenario::Chat), "anthropic/claude-sonnet-4");
+        assert_eq!(
+            ai.model_for(ModelScenario::Chat),
+            "anthropic/claude-sonnet-4"
+        );
     }
 
     #[test]
@@ -304,8 +314,8 @@ mod tests {
         let mut settings = Settings {
             ai: AISettings {
                 default_model: Some("  ".to_owned()),
-                job_model:     Some("  openai/gpt-4o  ".to_owned()),
-                chat_model:    Some("".to_owned()),
+                job_model: Some("  openai/gpt-4o  ".to_owned()),
+                chat_model: Some("".to_owned()),
                 ..Default::default()
             },
             ..Default::default()
@@ -331,11 +341,11 @@ mod tests {
             ai:       None,
             telegram: None,
             agent:    Some(AgentRuntimeSettingsPatch {
-                soul:              Some("You are a cheerful assistant.".to_owned()),
+                soul:               Some("You are a cheerful assistant.".to_owned()),
                 chat_system_prompt: None,
-                proactive_enabled: Some(true),
-                proactive_cron:    Some("0 9 * * *".to_owned()),
-                memory:            None,
+                proactive_enabled:  Some(true),
+                proactive_cron:     Some("0 9 * * *".to_owned()),
+                memory:             None,
             }),
         });
         assert_eq!(
@@ -350,11 +360,11 @@ mod tests {
     fn apply_patch_agent_partial() {
         let mut settings = Settings {
             agent: AgentSettings {
-                soul:              Some("existing soul".to_owned()),
+                soul:               Some("existing soul".to_owned()),
                 chat_system_prompt: None,
-                proactive_enabled: true,
-                proactive_cron:    Some("0 9 * * *".to_owned()),
-                memory:            MemorySettings::default(),
+                proactive_enabled:  true,
+                proactive_cron:     Some("0 9 * * *".to_owned()),
+                memory:             MemorySettings::default(),
             },
             ..Default::default()
         };
@@ -363,17 +373,14 @@ mod tests {
             ai:       None,
             telegram: None,
             agent:    Some(AgentRuntimeSettingsPatch {
-                soul:              None,
+                soul:               None,
                 chat_system_prompt: None,
-                proactive_enabled: Some(false),
-                proactive_cron:    None,
-                memory:            None,
+                proactive_enabled:  Some(false),
+                proactive_cron:     None,
+                memory:             None,
             }),
         });
-        assert_eq!(
-            settings.agent.soul,
-            Some("existing soul".to_owned())
-        );
+        assert_eq!(settings.agent.soul, Some("existing soul".to_owned()));
         assert!(!settings.agent.proactive_enabled);
         assert_eq!(settings.agent.proactive_cron, Some("0 9 * * *".to_owned()));
     }
@@ -382,11 +389,11 @@ mod tests {
     fn normalize_agent_settings() {
         let mut settings = Settings {
             agent: AgentSettings {
-                soul:              Some("  ".to_owned()),
+                soul:               Some("  ".to_owned()),
                 chat_system_prompt: None,
-                proactive_enabled: true,
-                proactive_cron:    Some("  0 9 * * *  ".to_owned()),
-                memory:            MemorySettings::default(),
+                proactive_enabled:  true,
+                proactive_cron:     Some("  0 9 * * *  ".to_owned()),
+                memory:             MemorySettings::default(),
             },
             ..Default::default()
         };
@@ -415,9 +422,9 @@ mod tests {
                 proactive_enabled:  None,
                 proactive_cron:     None,
                 memory:             Some(MemoryRuntimeSettingsPatch {
-                    chroma_url:         Some("http://localhost:8000".to_owned()),
-                    chroma_collection:  Some("team-memory".to_owned()),
-                    chroma_api_key:     Some("secret-token".to_owned()),
+                    chroma_url:        Some("http://localhost:8000".to_owned()),
+                    chroma_collection: Some("team-memory".to_owned()),
+                    chroma_api_key:    Some("secret-token".to_owned()),
                 }),
             }),
         });

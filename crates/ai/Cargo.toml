@@ -13,6 +13,7 @@ description = "AI agents powered by rig-core for job automation tasks"
 
 [dependencies]
 rara-domain-shared = { workspace = true }
+rara-paths = { workspace = true }
 rig-core.workspace = true
 snafu.workspace = true
 

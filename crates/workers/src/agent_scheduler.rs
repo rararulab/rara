@@ -14,8 +14,7 @@
 
 //! Persistent scheduler for agent jobs backed by a local JSON file.
 
-use std::path::PathBuf;
-use std::str::FromStr;
+use std::{path::PathBuf, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
@@ -102,10 +101,7 @@ impl AgentScheduler {
     }
 
     /// Remove a job by ID. Returns `true` if a job was removed.
-    pub async fn remove(
-        &self,
-        id: &str,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn remove(&self, id: &str) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
         let removed = {
             let mut jobs = self.jobs.write().await;
             let before = jobs.len();
@@ -119,9 +115,7 @@ impl AgentScheduler {
     }
 
     /// List all jobs (enabled and disabled).
-    pub async fn list(&self) -> Vec<AgentJob> {
-        self.jobs.read().await.clone()
-    }
+    pub async fn list(&self) -> Vec<AgentJob> { self.jobs.read().await.clone() }
 
     /// Return all enabled jobs whose triggers indicate they should run now.
     pub async fn get_due_jobs(&self) -> Vec<AgentJob> {
@@ -181,8 +175,8 @@ impl AgentScheduler {
         };
 
         // Convert jiff Timestamp to chrono DateTime for croner.
-        let now_chrono = chrono::DateTime::from_timestamp(now.as_second(), 0)
-            .unwrap_or_else(chrono::Utc::now);
+        let now_chrono =
+            chrono::DateTime::from_timestamp(now.as_second(), 0).unwrap_or_else(chrono::Utc::now);
 
         let window_start = now_chrono - chrono::Duration::seconds(60);
 

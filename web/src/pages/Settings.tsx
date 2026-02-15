@@ -17,7 +17,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
-import type { RuntimeSettingsPatch, RuntimeSettingsView } from "@/api/types";
+import type {
+  PromptFileView,
+  PromptListView,
+  RuntimeSettingsPatch,
+  RuntimeSettingsView,
+} from "@/api/types";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -45,6 +50,13 @@ import {
   Sparkles,
 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 type SettingKey = "ai" | "agent" | "telegram";
 type ToastState = { kind: "success" | "error"; message: string } | null;
@@ -77,16 +89,20 @@ export default function Settings() {
   const [models, setModels] = useState<OpenRouterModel[]>([]);
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramChatId, setTelegramChatId] = useState("");
-  const [agentSoul, setAgentSoul] = useState("");
-  const [agentChatSystemPrompt, setAgentChatSystemPrompt] = useState("");
-  const [agentProactiveEnabled, setAgentProactiveEnabled] = useState(false);
-  const [agentProactiveCron, setAgentProactiveCron] = useState("");
+  const [selectedPromptName, setSelectedPromptName] = useState("");
+  const [selectedPromptContent, setSelectedPromptContent] = useState("");
+  const [promptDirty, setPromptDirty] = useState(false);
   const [selectedSetting, setSelectedSetting] = useState<SettingKey | null>(null);
   const [toast, setToast] = useState<ToastState>(null);
 
   const settingsQuery = useQuery({
     queryKey: ["settings"],
     queryFn: () => api.get<RuntimeSettingsView>("/api/v1/settings"),
+  });
+
+  const promptsQuery = useQuery({
+    queryKey: ["settings-prompts"],
+    queryFn: () => api.get<PromptListView>("/api/v1/settings/prompts"),
   });
 
   useEffect(() => {
@@ -100,11 +116,28 @@ export default function Settings() {
         ? ""
         : String(settingsQuery.data.telegram.chat_id),
     );
-    setAgentSoul(settingsQuery.data.agent.soul ?? "");
-    setAgentChatSystemPrompt(settingsQuery.data.agent.chat_system_prompt ?? "");
-    setAgentProactiveEnabled(settingsQuery.data.agent.proactive_enabled);
-    setAgentProactiveCron(settingsQuery.data.agent.proactive_cron ?? "");
   }, [settingsQuery.data]);
+
+  useEffect(() => {
+    const prompts = promptsQuery.data?.prompts ?? [];
+    if (prompts.length === 0) return;
+
+    if (!selectedPromptName || !prompts.some((p) => p.name === selectedPromptName)) {
+      const preferred = prompts.find((p) => p.name === "agent/soul.md");
+      const initial = preferred ?? prompts[0];
+      setSelectedPromptName(initial.name);
+      setSelectedPromptContent(initial.content);
+      setPromptDirty(false);
+      return;
+    }
+
+    if (!promptDirty) {
+      const matched = prompts.find((p) => p.name === selectedPromptName);
+      if (matched) {
+        setSelectedPromptContent(matched.content);
+      }
+    }
+  }, [promptsQuery.data, promptDirty, selectedPromptName]);
 
   /** The effective model for a scenario — resolves "use default" to the actual default model. */
   const effectiveModel = useCallback(
@@ -180,31 +213,8 @@ export default function Settings() {
       next.telegram = telegramPatch;
     }
 
-    const agentPatch: NonNullable<RuntimeSettingsPatch["agent"]> = {};
-    const trimmedSoul = agentSoul.trim();
-    const currentSoul = current.agent.soul ?? "";
-    if (trimmedSoul !== currentSoul) {
-      agentPatch.soul = trimmedSoul || null;
-    }
-    const trimmedChatSystemPrompt = agentChatSystemPrompt.trim();
-    const currentChatSystemPrompt = current.agent.chat_system_prompt ?? "";
-    if (trimmedChatSystemPrompt !== currentChatSystemPrompt) {
-      agentPatch.chat_system_prompt = trimmedChatSystemPrompt || null;
-    }
-    if (agentProactiveEnabled !== current.agent.proactive_enabled) {
-      agentPatch.proactive_enabled = agentProactiveEnabled;
-    }
-    const trimmedCron = agentProactiveCron.trim();
-    const currentCron = current.agent.proactive_cron ?? "";
-    if (trimmedCron !== currentCron) {
-      agentPatch.proactive_cron = trimmedCron || null;
-    }
-    if (Object.keys(agentPatch).length > 0) {
-      next.agent = agentPatch;
-    }
-
     return Object.keys(next).length > 0 ? next : null;
-  }, [aiApiKey, defaultModel, jobModel, chatModel, settingsQuery.data, telegramChatId, telegramToken, agentSoul, agentChatSystemPrompt, agentProactiveEnabled, agentProactiveCron]);
+  }, [aiApiKey, defaultModel, jobModel, chatModel, settingsQuery.data, telegramChatId, telegramToken]);
 
   const updateMutation = useMutation({
     mutationFn: (payload: RuntimeSettingsPatch) =>
@@ -223,6 +233,33 @@ export default function Settings() {
     },
   });
 
+  const promptUpdateMutation = useMutation({
+    mutationFn: ({ name, content }: { name: string; content: string }) =>
+      api.put<PromptFileView>(`/api/v1/settings/prompts/${name}`, { content }),
+    onSuccess: (updated) => {
+      queryClient.setQueryData<PromptListView>(["settings-prompts"], (prev) => {
+        if (!prev) {
+          return { prompts: [updated] };
+        }
+        const next = prev.prompts.map((prompt) =>
+          prompt.name === updated.name ? updated : prompt,
+        );
+        if (!next.some((prompt) => prompt.name === updated.name)) {
+          next.push(updated);
+        }
+        return { prompts: next };
+      });
+      setSelectedPromptName(updated.name);
+      setSelectedPromptContent(updated.content);
+      setPromptDirty(false);
+      setToast({ kind: "success", message: `Prompt saved: ${updated.name}` });
+    },
+    onError: (e: unknown) => {
+      const message = e instanceof Error ? e.message : "Failed to update prompt";
+      setToast({ kind: "error", message });
+    },
+  });
+
   const handleSave = () => {
     if (!settingsQuery.data) return;
     if (!patch) {
@@ -230,6 +267,17 @@ export default function Settings() {
       return;
     }
     updateMutation.mutate(patch);
+  };
+
+  const handleSavePrompt = () => {
+    if (!selectedPromptName) {
+      setToast({ kind: "error", message: "Please select a prompt file." });
+      return;
+    }
+    promptUpdateMutation.mutate({
+      name: selectedPromptName,
+      content: selectedPromptContent,
+    });
   };
 
   const openSetting = (setting: SettingKey) => {
@@ -331,6 +379,8 @@ export default function Settings() {
   }
 
   const current = settingsQuery.data;
+  const availablePrompts = promptsQuery.data?.prompts ?? [];
+  const selectedPromptMeta = availablePrompts.find((p) => p.name === selectedPromptName);
   const isDialogOpen = selectedSetting !== null;
 
   const dialogTitle =
@@ -461,15 +511,12 @@ export default function Settings() {
             <div className="space-y-1">
               <p className="font-medium">Agent Personality</p>
               <p className="text-xs text-muted-foreground">
-                Soul: {current.agent.soul ? (current.agent.soul.length > 40 ? `${current.agent.soul.slice(0, 40)}...` : current.agent.soul) : "Default"} · Proactive:{" "}
-                {current.agent.proactive_enabled ? "On" : "Off"}
+                Soul: agent/soul.md
               </p>
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <Badge variant={current.agent.proactive_enabled ? "default" : "secondary"}>
-              {current.agent.proactive_enabled ? "Active" : "Inactive"}
-            </Badge>
+            <Badge variant="default">Active</Badge>
             <ChevronRight className="h-4 w-4 text-muted-foreground" />
           </div>
         </button>
@@ -610,73 +657,67 @@ export default function Settings() {
           {selectedSetting === "agent" && (
             <div className="space-y-6 px-6 py-5">
               <div className="space-y-3 rounded-xl border bg-card p-4">
-                <Label htmlFor="agent-chat-system-prompt" className="text-base font-semibold">
-                  Chat System Prompt
-                </Label>
-                <Textarea
-                  id="agent-chat-system-prompt"
-                  value={agentChatSystemPrompt}
-                  onChange={(e) => setAgentChatSystemPrompt(e.target.value)}
-                  placeholder="You are a helpful career assistant..."
-                  rows={6}
-                  className="resize-y"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Default system prompt for new chat sessions. Leave empty to use the built-in default.
-                </p>
-              </div>
-
-              <div className="space-y-3 rounded-xl border bg-card p-4">
-                <Label htmlFor="agent-soul" className="text-base font-semibold">
-                  Soul Prompt
-                </Label>
-                <Textarea
-                  id="agent-soul"
-                  value={agentSoul}
-                  onChange={(e) => setAgentSoul(e.target.value)}
-                  placeholder="You are a proactive job search companion. You're encouraging, data-driven, and concise..."
-                  rows={6}
-                  className="resize-y"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Defines the agent's personality for proactive messages. Leave empty to use the built-in default.
-                </p>
-              </div>
-
-              <div className="space-y-3 rounded-xl border bg-card p-4">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="agent-proactive" className="text-base font-semibold">
-                    Proactive Messaging
-                  </Label>
-                  <Switch
-                    id="agent-proactive"
-                    checked={agentProactiveEnabled}
-                    onCheckedChange={setAgentProactiveEnabled}
-                  />
+                  <Label className="text-base font-semibold">Prompt Markdown</Label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => promptsQuery.refetch()}
+                    disabled={promptsQuery.isFetching}
+                  >
+                    {promptsQuery.isFetching ? "Refreshing..." : "Refresh"}
+                  </Button>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  When enabled, the agent periodically reviews recent chat activity and sends
-                  encouraging Telegram messages when it spots something worth mentioning.
-                </p>
-              </div>
-
-              <div className="space-y-3 rounded-xl border bg-card p-4">
-                <Label htmlFor="agent-cron" className="text-base font-semibold">
-                  Proactive Schedule (Cron)
-                </Label>
-                <Input
-                  id="agent-cron"
-                  value={agentProactiveCron}
-                  onChange={(e) => setAgentProactiveCron(e.target.value)}
-                  placeholder="0 9,18,21 * * *"
+                <Select
+                  value={selectedPromptName}
+                  onValueChange={(value) => {
+                    const prompt = availablePrompts.find((p) => p.name === value);
+                    setSelectedPromptName(value);
+                    setSelectedPromptContent(prompt?.content ?? "");
+                    setPromptDirty(false);
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select prompt file" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availablePrompts.map((prompt) => (
+                      <SelectItem key={prompt.name} value={prompt.name}>
+                        {prompt.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Textarea
+                  value={selectedPromptContent}
+                  onChange={(e) => {
+                    setSelectedPromptContent(e.target.value);
+                    setPromptDirty(true);
+                  }}
+                  rows={14}
+                  className="font-mono text-xs"
+                  placeholder="Prompt markdown content..."
+                  disabled={!selectedPromptName}
                 />
                 <p className="text-xs text-muted-foreground">
-                  5-field cron expression. Changes take effect after service restart.
-                  Common values: <code className="rounded bg-muted px-1">0 9 * * *</code> (daily 9 AM),{" "}
-                  <code className="rounded bg-muted px-1">0 9,18,21 * * *</code> (3x daily),{" "}
-                  <code className="rounded bg-muted px-1">0 */6 * * *</code> (every 6 hours).
+                  {selectedPromptMeta?.description ??
+                    "Select a prompt file to edit."}
                 </p>
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    onClick={handleSavePrompt}
+                    disabled={
+                      !selectedPromptName ||
+                      !promptDirty ||
+                      promptUpdateMutation.isPending
+                    }
+                  >
+                    {promptUpdateMutation.isPending ? "Saving..." : "Save Prompt Markdown"}
+                  </Button>
+                </div>
               </div>
+
             </div>
           )}
 

@@ -17,7 +17,7 @@
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
-use common_worker::NotifyHandle;
+use common_worker::{IntervalOrNotifyHandle, NotifyHandle};
 use opendal::Operator;
 use openrouter_rs::client::OpenRouterClient;
 use snafu::{ResultExt, Whatever};
@@ -32,17 +32,17 @@ pub struct AppState {
     pub ai_service: rara_ai::service::AiService,
 
     // -- domain services --
-    pub resume_service: rara_domain_resume::ResumeAppService,
+    pub resume_service:      rara_domain_resume::ResumeAppService,
     pub application_service: rara_domain_application::service::ApplicationService,
-    pub interview_service: rara_domain_interview::service::InterviewService,
-    pub scheduler_service: rara_domain_scheduler::service::SchedulerService,
-    pub analytics_service: rara_domain_analytics::service::AnalyticsService,
-    pub job_service: rara_domain_job::service::JobService,
-    pub chat_service: rara_domain_chat::service::ChatService,
-    pub typst_service: rara_domain_typst::service::TypstService,
+    pub interview_service:   rara_domain_interview::service::InterviewService,
+    pub scheduler_service:   rara_domain_scheduler::service::SchedulerService,
+    pub analytics_service:   rara_domain_analytics::service::AnalyticsService,
+    pub job_service:         rara_domain_job::service::JobService,
+    pub chat_service:        rara_domain_chat::service::ChatService,
+    pub typst_service:       rara_domain_typst::service::TypstService,
 
     // -- shared --
-    pub settings_svc: rara_domain_shared::settings::SettingsSvc,
+    pub settings_svc:  rara_domain_shared::settings::SettingsSvc,
     pub notify_client: rara_domain_shared::notify::client::NotifyClient,
 
     // -- LLM provider --
@@ -59,7 +59,8 @@ pub struct AppState {
     pub agent_scheduler: Arc<crate::agent_scheduler::AgentScheduler>,
 
     // -- worker coordination --
-    pub analyze_notify: Arc<RwLock<Option<NotifyHandle>>>,
+    pub analyze_notify:   Arc<RwLock<Option<NotifyHandle>>>,
+    pub proactive_notify: Arc<RwLock<Option<IntervalOrNotifyHandle>>>,
 }
 
 impl AppState {
@@ -124,7 +125,9 @@ impl AppState {
             Arc::new(SettingsOpenRouterLoader::new(settings_svc.clone()));
         let mut tool_registry = rara_agents::tool_registry::ToolRegistry::with_defaults();
         let memory_settings = settings_svc.current().agent.memory;
-        let chroma_url = memory_settings.chroma_url.clone()
+        let chroma_url = memory_settings
+            .chroma_url
+            .clone()
             .unwrap_or_else(|| "http://localhost:8000".to_owned());
         let chroma = rara_memory::ChromaClient::new(
             chroma_url,
@@ -133,12 +136,8 @@ impl AppState {
         )
         .expect("chroma URL should not be empty after defaulting");
         let memory_manager = Arc::new(
-            rara_memory::MemoryManager::new(
-                rara_paths::memory_dir().clone(),
-                pool.clone(),
-                chroma,
-            )
-            .whatever_context("Failed to initialize memory manager")?,
+            rara_memory::MemoryManager::new(rara_paths::memory_dir().clone(), pool.clone(), chroma)
+                .whatever_context("Failed to initialize memory manager")?,
         );
         info!("memory manager initialized");
         let _ = memory_manager
@@ -188,15 +187,15 @@ impl AppState {
         tool_registry.register_service(Arc::new(
             crate::tools::services::ListTypstProjectsTool::new(typst_service.clone()),
         ));
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::ListTypstFilesTool::new(typst_service.clone()),
-        ));
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::ReadTypstFileTool::new(typst_service.clone()),
-        ));
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::UpdateTypstFileTool::new(typst_service.clone()),
-        ));
+        tool_registry.register_service(Arc::new(crate::tools::services::ListTypstFilesTool::new(
+            typst_service.clone(),
+        )));
+        tool_registry.register_service(Arc::new(crate::tools::services::ReadTypstFileTool::new(
+            typst_service.clone(),
+        )));
+        tool_registry.register_service(Arc::new(crate::tools::services::UpdateTypstFileTool::new(
+            typst_service.clone(),
+        )));
         tool_registry.register_service(Arc::new(
             crate::tools::services::CompileTypstProjectTool::new(typst_service.clone()),
         ));
@@ -208,15 +207,15 @@ impl AppState {
         agent_scheduler.load().await.ok(); // tolerate missing file
         info!("Agent scheduler loaded");
 
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::ScheduleAddTool::new(agent_scheduler.clone()),
-        ));
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::ScheduleListTool::new(agent_scheduler.clone()),
-        ));
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::ScheduleRemoveTool::new(agent_scheduler.clone()),
-        ));
+        tool_registry.register_service(Arc::new(crate::tools::services::ScheduleAddTool::new(
+            agent_scheduler.clone(),
+        )));
+        tool_registry.register_service(Arc::new(crate::tools::services::ScheduleListTool::new(
+            agent_scheduler.clone(),
+        )));
+        tool_registry.register_service(Arc::new(crate::tools::services::ScheduleRemoveTool::new(
+            agent_scheduler.clone(),
+        )));
 
         let tools = Arc::new(tool_registry);
         let chat_service = rara_domain_chat::service::ChatService::new(
@@ -245,6 +244,7 @@ impl AppState {
             memory_manager,
             agent_scheduler,
             analyze_notify: Arc::new(RwLock::new(None)),
+            proactive_notify: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -296,14 +296,15 @@ impl AppState {
 // ---------------------------------------------------------------------------
 
 /// [`OpenRouterLoader`](rara_agents::model::OpenRouterLoader) implementation
-/// that reads the API key from [`SettingsSvc`](rara_domain_shared::settings::SettingsSvc)
-/// runtime settings rather than from environment variables.
+/// that reads the API key from
+/// [`SettingsSvc`](rara_domain_shared::settings::SettingsSvc) runtime settings
+/// rather than from environment variables.
 ///
 /// The client is lazily initialized on the first `acquire_client` call and
 /// cached for subsequent calls via [`OnceCell`].
 struct SettingsOpenRouterLoader {
     settings: rara_domain_shared::settings::SettingsSvc,
-    client: OnceCell<OpenRouterClient>,
+    client:   OnceCell<OpenRouterClient>,
 }
 
 impl SettingsOpenRouterLoader {

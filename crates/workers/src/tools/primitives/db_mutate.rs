@@ -108,8 +108,8 @@ impl AgentTool for DbMutateTool {
 
     fn description(&self) -> &str {
         "Create or update records in database tables. Allowed tables: saved_job, application, \
-         resume, interview_plan. Actions: \"create\" (INSERT) or \"update\" (UPDATE by id). \
-         DELETE is not supported. Returns the created/updated record id."
+         resume, interview_plan. Actions: \"create\" (INSERT) or \"update\" (UPDATE by id). DELETE \
+         is not supported. Returns the created/updated record id."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -138,7 +138,10 @@ impl AgentTool for DbMutateTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value) -> rara_agents::err::Result<serde_json::Value> {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+    ) -> rara_agents::err::Result<serde_json::Value> {
         let table = params
             .get("table")
             .and_then(|v| v.as_str())
@@ -180,12 +183,11 @@ impl AgentTool for DbMutateTool {
         match action {
             "create" => execute_insert(&self.pool, table, data).await,
             "update" => {
-                let id = params
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| rara_agents::err::Error::Other {
+                let id = params.get("id").and_then(|v| v.as_str()).ok_or_else(|| {
+                    rara_agents::err::Error::Other {
                         message: "missing required parameter: id (for update)".into(),
-                    })?;
+                    }
+                })?;
                 execute_update(&self.pool, table, id, data).await
             }
             other => Ok(json!({ "error": format!("unknown action: {other}") })),

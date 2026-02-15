@@ -1,3 +1,17 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! PostgreSQL + JSONL file implementation of
 //! [`SessionRepository`](crate::repository::SessionRepository).
 //!
@@ -126,12 +140,10 @@ impl crate::repository::SessionRepository for PgSessionRepository {
 
     #[instrument(skip(self))]
     async fn get_session(&self, key: &SessionKey) -> Result<Option<SessionEntry>, SessionError> {
-        let row = sqlx::query_as::<_, ChatSessionRow>(
-            "SELECT * FROM chat_session WHERE key = $1",
-        )
-        .bind(key.as_str())
-        .fetch_optional(&self.pool)
-        .await?;
+        let row = sqlx::query_as::<_, ChatSessionRow>("SELECT * FROM chat_session WHERE key = $1")
+            .bind(key.as_str())
+            .fetch_optional(&self.pool)
+            .await?;
 
         Ok(row.map(Into::into))
     }
@@ -325,7 +337,11 @@ mod tests {
     use crate::repository::SessionRepository;
 
     /// Set up a real PostgreSQL container and apply migrations.
-    async fn setup() -> (PgSessionRepository, tempfile::TempDir, testcontainers::ContainerAsync<Postgres>) {
+    async fn setup() -> (
+        PgSessionRepository,
+        tempfile::TempDir,
+        testcontainers::ContainerAsync<Postgres>,
+    ) {
         let container = Postgres::default().start().await.unwrap();
         let host = container.get_host().await.unwrap();
         let port = container.get_host_port_ipv4(5432).await.unwrap();
@@ -447,9 +463,7 @@ mod tests {
     async fn delete_nonexistent_session_returns_not_found() {
         let (repo, _tmp, _container) = setup().await;
 
-        let result = repo
-            .delete_session(&SessionKey::from_raw("ghost"))
-            .await;
+        let result = repo.delete_session(&SessionKey::from_raw("ghost")).await;
         assert!(matches!(result.unwrap_err(), SessionError::NotFound { .. }));
     }
 
@@ -461,7 +475,9 @@ mod tests {
     async fn append_and_read_messages() {
         let (repo, _tmp, _container) = setup().await;
         let key = SessionKey::from_raw("msg:test");
-        repo.create_session(&make_session("msg:test")).await.unwrap();
+        repo.create_session(&make_session("msg:test"))
+            .await
+            .unwrap();
 
         let m1 = repo
             .append_message(&key, &ChatMessage::user("hello"))
@@ -702,5 +718,4 @@ mod tests {
             .unwrap();
         assert!(binding.is_none());
     }
-
 }

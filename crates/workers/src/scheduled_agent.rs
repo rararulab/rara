@@ -25,14 +25,33 @@ use rara_domain_shared::settings::model::Settings;
 use rara_sessions::types::{MessageRole, SessionKey};
 use tracing::{info, warn};
 
-use crate::agent_scheduler::AgentScheduler;
-use crate::worker_state::AppState;
+use crate::{agent_scheduler::AgentScheduler, worker_state::AppState};
 
 /// Default behavioural policy used when no custom policy is configured.
-const DEFAULT_AGENT_POLICY: &str = "\
-You are a proactive job search companion. You're encouraging, data-driven, and concise.
-You have access to tools for searching jobs, managing resumes, scheduling tasks, and more.
-Execute the user's intent thoroughly using the available tools, then summarize what you did.";
+const DEFAULT_AGENT_POLICY: &str = include_str!("../../../prompts/workers/agent_policy.md");
+
+fn compose_policy(base_policy: &str, soul_prompt: Option<&str>) -> String {
+    if let Some(soul) = soul_prompt.filter(|s| !s.trim().is_empty()) {
+        return format!("{soul}\n\n# Operational Policy\n{base_policy}");
+    }
+    base_policy.to_owned()
+}
+
+fn resolve_soul_prompt(settings: &Settings) -> Option<String> {
+    if settings
+        .agent
+        .soul
+        .as_deref()
+        .is_some_and(|s| !s.trim().is_empty())
+    {
+        return settings.agent.soul.clone();
+    }
+    let markdown_soul = rara_paths::load_agent_soul_prompt();
+    if markdown_soul.trim().is_empty() {
+        return None;
+    }
+    Some(markdown_soul)
+}
 
 /// Worker that periodically checks the agent scheduler for due jobs and
 /// executes each one through the full agent runner pipeline.
@@ -41,9 +60,7 @@ pub struct AgentSchedulerWorker {
 }
 
 impl AgentSchedulerWorker {
-    pub fn new(scheduler: Arc<AgentScheduler>) -> Self {
-        Self { scheduler }
-    }
+    pub fn new(scheduler: Arc<AgentScheduler>) -> Self { Self { scheduler } }
 }
 
 #[async_trait]
@@ -51,11 +68,6 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
     async fn work(&mut self, ctx: WorkerContext<AppState>) -> WorkResult {
         let state = ctx.state();
         let settings = state.settings_svc.current();
-
-        // Guard: proactive agent must be enabled.
-        if !settings.agent.proactive_enabled {
-            return Ok(());
-        }
 
         // Guard: AI must be configured.
         if settings.ai.openrouter_api_key.is_none() {
@@ -68,7 +80,10 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
             return Ok(());
         }
 
-        info!(count = due_jobs.len(), "agent-scheduler: executing due jobs");
+        info!(
+            count = due_jobs.len(),
+            "agent-scheduler: executing due jobs"
+        );
 
         let policy = load_agent_policy(&settings).await;
         let model = settings
@@ -149,11 +164,7 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
                     // Append user + assistant messages to session.
                     if let Err(e) = state
                         .chat_service
-                        .append_messages(
-                            &session_key,
-                            &job.message,
-                            &response_text,
-                        )
+                        .append_messages(&session_key, &job.message, &response_text)
                         .await
                     {
                         warn!(
@@ -188,22 +199,22 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
 
 /// Load the agent behavioural policy from settings or file system.
 async fn load_agent_policy(settings: &Settings) -> String {
-    // 1. Use configured soul if present.
-    if let Some(soul) = &settings.agent.soul {
-        if !soul.is_empty() {
-            return soul.clone();
-        }
-    }
-
-    // 2. Try reading from the policy file.
+    let soul_prompt = resolve_soul_prompt(settings);
+    // 1. Try reading from the policy file.
     let policy_path = rara_paths::agent_policy_file();
     if let Ok(content) = tokio::fs::read_to_string(policy_path).await {
         let trimmed = content.trim();
         if !trimmed.is_empty() {
-            return trimmed.to_owned();
+            return compose_policy(trimmed, soul_prompt.as_deref());
         }
     }
 
-    // 3. Fall back to built-in default.
-    DEFAULT_AGENT_POLICY.to_owned()
+    let prompt_content =
+        rara_paths::load_prompt_markdown("workers/agent_policy.md", DEFAULT_AGENT_POLICY);
+    if !prompt_content.trim().is_empty() {
+        return compose_policy(&prompt_content, soul_prompt.as_deref());
+    }
+
+    // 2. Fall back to built-in default.
+    compose_policy(DEFAULT_AGENT_POLICY, soul_prompt.as_deref())
 }

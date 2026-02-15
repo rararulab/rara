@@ -89,7 +89,11 @@ async fn get_resume<R: ResumeRepository + 'static>(
     State(state): State<ResumeRouteState<R>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Resume>, ResumeError> {
-    let resume = state.service.get(id).await?.ok_or(ResumeError::NotFound { id })?;
+    let resume = state
+        .service
+        .get(id)
+        .await?
+        .ok_or(ResumeError::NotFound { id })?;
     Ok(Json(resume))
 }
 
@@ -127,12 +131,13 @@ async fn upload_pdf<R: ResumeRepository + 'static>(
     let mut tags: Vec<String> = Vec::new();
     let mut file_data: Option<bytes::Bytes> = None;
 
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| ResumeError::InvalidContent {
-            reason: format!("failed to read multipart field: {e}"),
-        })?
+    while let Some(field) =
+        multipart
+            .next_field()
+            .await
+            .map_err(|e| ResumeError::InvalidContent {
+                reason: format!("failed to read multipart field: {e}"),
+            })?
     {
         let name = field.name().unwrap_or("").to_owned();
         match name.as_str() {

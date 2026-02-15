@@ -47,8 +47,8 @@ impl AgentTool for ReadFileTool {
 
     fn description(&self) -> &str {
         "Read a file from the filesystem. Returns content with line number prefixes (like cat -n). \
-         Supports offset and limit for paginated reading. Detects binary files. \
-         Long lines are truncated at 2000 characters."
+         Supports offset and limit for paginated reading. Detects binary files. Long lines are \
+         truncated at 2000 characters."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -72,10 +72,7 @@ impl AgentTool for ReadFileTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-    ) -> crate::err::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> crate::err::Result<serde_json::Value> {
         let file_path = params
             .get("file_path")
             .and_then(|v| v.as_str())
@@ -95,11 +92,11 @@ impl AgentTool for ReadFileTool {
             .map(|v| v as usize)
             .unwrap_or(DEFAULT_LIMIT);
 
-        let raw_bytes = tokio::fs::read(file_path).await.map_err(|e| {
-            crate::err::Error::Other {
+        let raw_bytes = tokio::fs::read(file_path)
+            .await
+            .map_err(|e| crate::err::Error::Other {
                 message: format!("failed to read file {file_path}: {e}").into(),
-            }
-        })?;
+            })?;
 
         // Binary detection: check for null bytes in the first BINARY_CHECK_BYTES.
         let check_len = raw_bytes.len().min(BINARY_CHECK_BYTES);

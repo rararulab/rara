@@ -1,3 +1,17 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! Core types for the sessions crate.
 //!
 //! This module defines the data model for chat sessions, messages, content
@@ -41,9 +55,7 @@ pub struct SessionKey(String);
 impl SessionKey {
     /// Create a main session key with the format `<scope>:<owner>`.
     #[must_use]
-    pub fn main(scope: &str, owner: &str) -> Self {
-        Self(format!("{scope}:{owner}"))
-    }
+    pub fn main(scope: &str, owner: &str) -> Self { Self(format!("{scope}:{owner}")) }
 
     /// Create a peer/DM session key with the format `<scope>:<lo>:<hi>`.
     ///
@@ -62,33 +74,23 @@ impl SessionKey {
     /// Use this when the key originates from a trusted source (e.g. the
     /// database) and is known to be well-formed.
     #[must_use]
-    pub fn from_raw(raw: impl Into<String>) -> Self {
-        Self(raw.into())
-    }
+    pub fn from_raw(raw: impl Into<String>) -> Self { Self(raw.into()) }
 
     /// Return the underlying string slice.
     #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
+    pub fn as_str(&self) -> &str { &self.0 }
 }
 
 impl std::fmt::Display for SessionKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(&self.0) }
 }
 
 impl From<String> for SessionKey {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
+    fn from(s: String) -> Self { Self(s) }
 }
 
 impl From<&str> for SessionKey {
-    fn from(s: &str) -> Self {
-        Self(s.to_owned())
-    }
+    fn from(s: &str) -> Self { Self(s.to_owned()) }
 }
 
 // ---------------------------------------------------------------------------
@@ -140,7 +142,8 @@ pub struct SessionEntry {
     pub key:           SessionKey,
     /// Human-readable title / label shown in session lists.
     pub title:         Option<String>,
-    /// LLM model name used for this session (e.g. `"gpt-4o"`, `"claude-sonnet-4-5-20250929"`).
+    /// LLM model name used for this session (e.g. `"gpt-4o"`,
+    /// `"claude-sonnet-4-5-20250929"`).
     pub model:         Option<String>,
     /// Optional system prompt override. When `None`, the service-level
     /// default system prompt is used.
@@ -199,20 +202,20 @@ impl std::fmt::Display for MessageRole {
 pub struct ChatMessage {
     /// Sequence number within the session (1-based, monotonically increasing).
     /// Set to `0` before persistence; the repository assigns the real value.
-    pub seq:     i64,
+    pub seq:          i64,
     /// The role that produced this message.
-    pub role:    MessageRole,
+    pub role:         MessageRole,
     /// Message content — either plain text or a list of multimodal blocks.
-    pub content: MessageContent,
+    pub content:      MessageContent,
     /// Identifier linking a tool invocation to its result. Present on
     /// [`MessageRole::Tool`] and [`MessageRole::ToolResult`] messages.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
     /// Name of the tool that was invoked.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_name: Option<String>,
+    pub tool_name:    Option<String>,
     /// Timestamp when the message was persisted.
-    pub created_at: DateTime<Utc>,
+    pub created_at:   DateTime<Utc>,
 }
 
 /// Content payload for a [`ChatMessage`].
@@ -312,7 +315,11 @@ impl ChatMessage {
 
     /// Create a tool-call message representing a tool invocation by the LLM.
     #[must_use]
-    pub fn tool(tool_call_id: impl Into<String>, tool_name: impl Into<String>, content: impl Into<String>) -> Self {
+    pub fn tool(
+        tool_call_id: impl Into<String>,
+        tool_name: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
         Self {
             seq:          0,
             role:         MessageRole::Tool,
@@ -325,7 +332,11 @@ impl ChatMessage {
 
     /// Create a tool-result message carrying the output of a tool execution.
     #[must_use]
-    pub fn tool_result(tool_call_id: impl Into<String>, tool_name: impl Into<String>, content: impl Into<String>) -> Self {
+    pub fn tool_result(
+        tool_call_id: impl Into<String>,
+        tool_name: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
         Self {
             seq:          0,
             role:         MessageRole::ToolResult,
@@ -391,9 +402,15 @@ mod tests {
         assert_eq!(text.as_text(), "hello");
 
         let multi = MessageContent::Multimodal(vec![
-            ContentBlock::Text { text: "line1".to_owned() },
-            ContentBlock::ImageUrl { url: "http://img".to_owned() },
-            ContentBlock::Text { text: "line2".to_owned() },
+            ContentBlock::Text {
+                text: "line1".to_owned(),
+            },
+            ContentBlock::ImageUrl {
+                url: "http://img".to_owned(),
+            },
+            ContentBlock::Text {
+                text: "line2".to_owned(),
+            },
         ]);
         assert_eq!(multi.as_text(), "line1\nline2");
     }

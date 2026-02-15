@@ -27,10 +27,7 @@ use tokio_util::sync::CancellationToken;
 use yunara_store::config::DatabaseConfig;
 
 use crate::{
-    app::BotApp,
-    http_client::MainServiceHttpClient,
-    outbound::TelegramOutbound,
-    state::BotState,
+    app::BotApp, http_client::MainServiceHttpClient, outbound::TelegramOutbound, state::BotState,
 };
 
 /// Telegram bot credentials.
@@ -83,9 +80,10 @@ impl BotConfig {
                 .database_url(std::env::var("DATABASE_URL").unwrap_or_else(|_| {
                     "postgres://postgres:postgres@localhost:5432/job".to_string()
                 }))
-                .migration_dir(std::env::var("MIGRATION_DIRECTORY").unwrap_or_else(|_| {
-                    "crates/rara-model/migrations".to_string()
-                }))
+                .migration_dir(
+                    std::env::var("MIGRATION_DIRECTORY")
+                        .unwrap_or_else(|_| "crates/rara-model/migrations".to_string()),
+                )
                 .build();
 
         let telegram = match (
@@ -114,17 +112,18 @@ impl BotConfig {
         }
     }
 
-    /// Initialize all runtime dependencies and return a ready-to-run [`BotApp`].
+    /// Initialize all runtime dependencies and return a ready-to-run
+    /// [`BotApp`].
     ///
     /// This method performs the following steps in order:
     /// 1. Opens the database connection and runs migrations.
     /// 2. Loads runtime settings from the KV store (falls back to env vars).
-    /// 3. Builds a `reqwest::Client` with a 45-second timeout (must exceed
-    ///    the 30-second Telegram long-poll timeout).
-    /// 4. Calls [`bot::initialize`] to delete any webhook and verify the
-    ///    token via `getMe`.
-    /// 5. Wires [`BotState`], [`TelegramOutbound`], and [`NotifyClient`]
-    ///    into a [`BotApp`].
+    /// 3. Builds a `reqwest::Client` with a 45-second timeout (must exceed the
+    ///    30-second Telegram long-poll timeout).
+    /// 4. Calls [`bot::initialize`] to delete any webhook and verify the token
+    ///    via `getMe`.
+    /// 5. Wires [`BotState`], [`TelegramOutbound`], and [`NotifyClient`] into a
+    ///    [`BotApp`].
     pub async fn open(self) -> Result<BotApp, Whatever> {
         let db_store = self
             .db_config

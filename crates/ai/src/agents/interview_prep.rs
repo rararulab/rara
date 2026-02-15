@@ -16,33 +16,42 @@
 
 use rig::{client::CompletionClient, completion::Prompt, providers::openrouter};
 
-use crate::error::AiError;
+use crate::{agents::prompt::compose_system_prompt, error::AiError};
 
-const SYSTEM_PROMPT: &str = "\
-You are an interview coach. Generate likely interview questions and suggested answers based on the \
-                             job description and resume. Include:
-- Technical questions relevant to the role
-- Behavioral questions (STAR format answers)
-- Questions the candidate should ask the interviewer
-- Tips for preparation";
+const SYSTEM_PROMPT_FILE: &str = "ai/interview_prep.system.md";
+const DEFAULT_SYSTEM_PROMPT: &str = include_str!("../../../../prompts/ai/interview_prep.system.md");
 
 /// Generates interview preparation materials.
 pub struct InterviewPrepAgent {
-    client: openrouter::Client,
-    model:  String,
+    client:      openrouter::Client,
+    model:       String,
+    soul_prompt: Option<String>,
 }
 
 impl InterviewPrepAgent {
-    pub(crate) fn new(client: openrouter::Client, model: String) -> Self { Self { client, model } }
+    pub(crate) fn new(
+        client: openrouter::Client,
+        model: String,
+        soul_prompt: Option<String>,
+    ) -> Self {
+        Self {
+            client,
+            model,
+            soul_prompt,
+        }
+    }
 
     /// Generate interview preparation materials.
     pub async fn prepare(&self, job_description: &str, resume: &str) -> Result<String, AiError> {
         let user_input = format!("## Job Description\n{job_description}\n\n## My Resume\n{resume}");
+        let base_prompt =
+            rara_paths::load_prompt_markdown(SYSTEM_PROMPT_FILE, DEFAULT_SYSTEM_PROMPT);
+        let system_prompt = compose_system_prompt(&base_prompt, self.soul_prompt.as_deref());
 
         let agent = self
             .client
             .agent(&self.model)
-            .preamble(SYSTEM_PROMPT)
+            .preamble(&system_prompt)
             .build();
 
         agent

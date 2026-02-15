@@ -18,6 +18,7 @@ use std::{
 };
 
 static HOME_DIR: OnceLock<PathBuf> = OnceLock::new();
+const DEFAULT_AGENT_SOUL_PROMPT: &str = include_str!("../../../prompts/agent/soul.md");
 
 /// A custom data directory override, set only by `set_custom_data_dir`.
 /// This is used to override the default data directory location.
@@ -260,6 +261,56 @@ pub fn agent_policy_file() -> &'static PathBuf {
     AGENT_POLICY.get_or_init(|| config_dir().join("agent-policy.md"))
 }
 
+/// Returns the directory containing editable markdown prompt files.
+pub fn prompts_dir() -> &'static PathBuf {
+    static PROMPTS_DIR: OnceLock<PathBuf> = OnceLock::new();
+    PROMPTS_DIR.get_or_init(|| config_dir().join("prompts"))
+}
+
+/// Returns the full path of a markdown prompt file under [`prompts_dir`].
+///
+/// The `name` can include subdirectories, for example:
+/// `ai/job_fit.system.md`.
+#[must_use]
+pub fn prompt_markdown_file(name: &str) -> PathBuf { prompts_dir().join(name) }
+
+/// Loads a markdown prompt from disk and falls back to the provided default.
+///
+/// If the prompt file does not exist, this function attempts to create parent
+/// directories and write `default_markdown` to disk for later editing.
+#[must_use]
+pub fn load_prompt_markdown(name: &str, default_markdown: &str) -> String {
+    let path = prompt_markdown_file(name);
+    if let Ok(content) = std::fs::read_to_string(&path)
+        && !content.trim().is_empty()
+    {
+        return content;
+    }
+
+    if !path.exists() {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&path, default_markdown);
+    }
+
+    default_markdown.to_owned()
+}
+
+/// Returns the prompt file key used to store the global agent soul prompt.
+#[must_use]
+pub const fn agent_soul_prompt_name() -> &'static str { "agent/soul.md" }
+
+/// Returns the built-in default global soul prompt content.
+#[must_use]
+pub const fn default_agent_soul_prompt() -> &'static str { DEFAULT_AGENT_SOUL_PROMPT }
+
+/// Loads the global agent soul prompt from markdown config.
+#[must_use]
+pub fn load_agent_soul_prompt() -> String {
+    load_prompt_markdown(agent_soul_prompt_name(), default_agent_soul_prompt())
+}
+
 /// Returns the path to the memory documents directory.
 pub fn memory_dir() -> &'static PathBuf {
     static MEMORY_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -277,4 +328,3 @@ pub fn agent_jobs_file() -> &'static PathBuf {
     static AGENT_JOBS: OnceLock<PathBuf> = OnceLock::new();
     AGENT_JOBS.get_or_init(|| data_dir().join("agent_jobs.json"))
 }
-

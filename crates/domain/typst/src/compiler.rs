@@ -1,11 +1,24 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! Typst compilation engine.
 //!
 //! Wraps `typst-as-lib` to compile a set of in-memory `.typ` files into a
 //! PDF document. The compiler is stateless: each call receives a file map
 //! and returns PDF bytes (or a compilation error).
 
-use std::collections::HashMap;
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 
 use typst_as_lib::TypstEngine;
 
@@ -15,7 +28,8 @@ use crate::error::TypstError;
 ///
 /// # Arguments
 ///
-/// * `files` - Map of relative path -> file content (e.g. `"main.typ" -> "..."`).
+/// * `files` - Map of relative path -> file content (e.g. `"main.typ" ->
+///   "..."`).
 /// * `main_file` - The entry-point file path (must exist in `files`).
 ///
 /// # Returns
@@ -53,10 +67,7 @@ pub fn compile(
 ///
 /// * `root` - The project root directory on disk.
 /// * `main_file` - The entry-point file path relative to root.
-pub fn compile_from_dir(
-    root: &Path,
-    main_file: &str,
-) -> Result<(Vec<u8>, usize), TypstError> {
+pub fn compile_from_dir(root: &Path, main_file: &str) -> Result<(Vec<u8>, usize), TypstError> {
     let main_path = root.join(main_file);
     if !main_path.exists() {
         return Err(TypstError::InvalidRequest {
@@ -71,10 +82,7 @@ pub fn compile_from_dir(
     compile_engine(&engine, main_file)
 }
 
-fn compile_engine(
-    engine: &TypstEngine,
-    main_file: &str,
-) -> Result<(Vec<u8>, usize), TypstError> {
+fn compile_engine(engine: &TypstEngine, main_file: &str) -> Result<(Vec<u8>, usize), TypstError> {
     let result = engine.compile::<_, typst::layout::PagedDocument>(main_file);
 
     let document = result.output.map_err(|e| TypstError::CompilationError {
@@ -89,15 +97,16 @@ fn compile_engine(
     let page_count = document.pages.len();
 
     // Render PDF.
-    let pdf_bytes = typst_pdf::pdf(&document, &typst_pdf::PdfOptions::default()).map_err(|diagnostics| {
-        let messages: Vec<String> = diagnostics
-            .iter()
-            .map(|d| format!("{:?}: {:?}", d.severity, d.message))
-            .collect();
-        TypstError::CompilationError {
-            message: format!("PDF generation failed: {}", messages.join("; ")),
-        }
-    })?;
+    let pdf_bytes =
+        typst_pdf::pdf(&document, &typst_pdf::PdfOptions::default()).map_err(|diagnostics| {
+            let messages: Vec<String> = diagnostics
+                .iter()
+                .map(|d| format!("{:?}: {:?}", d.severity, d.message))
+                .collect();
+            TypstError::CompilationError {
+                message: format!("PDF generation failed: {}", messages.join("; ")),
+            }
+        })?;
 
     Ok((pdf_bytes, page_count))
 }

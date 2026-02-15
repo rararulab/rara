@@ -36,8 +36,8 @@ impl AgentTool for StorageReadTool {
     fn name(&self) -> &str { "storage_read" }
 
     fn description(&self) -> &str {
-        "Read a file from object storage by key. Returns the UTF-8 text content. \
-         Useful for reading stored markdown, crawl results, or analysis outputs."
+        "Read a file from object storage by key. Returns the UTF-8 text content. Useful for \
+         reading stored markdown, crawl results, or analysis outputs."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -53,13 +53,15 @@ impl AgentTool for StorageReadTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value) -> rara_agents::err::Result<serde_json::Value> {
-        let key = params
-            .get("key")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+    ) -> rara_agents::err::Result<serde_json::Value> {
+        let key = params.get("key").and_then(|v| v.as_str()).ok_or_else(|| {
+            rara_agents::err::Error::Other {
                 message: "missing required parameter: key".into(),
-            })?;
+            }
+        })?;
 
         match self.operator.read(key).await {
             Ok(buf) => {

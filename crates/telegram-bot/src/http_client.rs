@@ -275,12 +275,7 @@ impl MainServiceHttpClient {
             "{}/api/v1/chat/sessions/{}/messages",
             self.base_url, session_key
         );
-        let resp = self
-            .client
-            .delete(url)
-            .send()
-            .await
-            .context(RequestSnafu)?;
+        let resp = self.client.delete(url).send().await.context(RequestSnafu)?;
 
         if !resp.status().is_success() {
             let status = resp.status();

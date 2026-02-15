@@ -37,61 +37,56 @@ const PROACTIVE_MAX_ITERATIONS: usize = 15;
 const PROACTIVE_HISTORY_LIMIT: i64 = 50;
 
 /// Default agent behavior policy embedded into the binary.
-const DEFAULT_AGENT_POLICY: &str = r#"# Agent Behavior Policy
+const DEFAULT_AGENT_POLICY: &str = include_str!("../../../prompts/workers/agent_policy.md");
 
-You are the user's personal job search assistant. You are warm, data-driven, and concise.
+fn compose_policy(base_policy: &str, soul_prompt: Option<&str>) -> String {
+    if let Some(soul) = soul_prompt.filter(|s| !s.trim().is_empty()) {
+        return format!("{soul}\n\n# Operational Policy\n{base_policy}");
+    }
+    base_policy.to_owned()
+}
 
-## Proactive Behavior Rules
-
-### When to Reach Out
-- User shared a JD but did not follow up
-- Application status has updates (interview invitation, rejection)
-- Upcoming interview needs preparation
-- Long period of inactivity, send encouragement
-
-### When to Stay Silent
-- Activity is normal, nothing unusual
-- User explicitly asked not to be disturbed
-- A message was already sent recently
-
-### Communication Style
-- Brief and warm, 300 words max
-- Provide actionable advice, not just greetings
-- Use concrete data ("you have 3 applications awaiting response")
-
-### Autonomous Scheduling
-- When follow-up items are found, use schedule.add to arrange subsequent checks
-- Example: schedule a status check 3 days after submitting a resume
-- Remind user one day before an interview
-
-## Tool Usage Guide
-- Query the database to understand application status, do not guess
-- Use the notify tool when you need to notify the user
-- Use schedule.add when follow-up is needed
-"#;
+fn resolve_soul_prompt(settings: &Settings) -> Option<String> {
+    if settings
+        .agent
+        .soul
+        .as_deref()
+        .is_some_and(|s| !s.trim().is_empty())
+    {
+        return settings.agent.soul.clone();
+    }
+    let markdown_soul = rara_paths::load_agent_soul_prompt();
+    if markdown_soul.trim().is_empty() {
+        return None;
+    }
+    Some(markdown_soul)
+}
 
 /// Load the agent behavior policy from settings, file, or built-in default.
 ///
 /// Priority order:
-/// 1. `settings.agent.soul` — user-configured custom soul prompt
-/// 2. `{config_dir}/agent-policy.md` — markdown policy file on disk
+/// 1. `{config_dir}/agent-policy.md` — markdown policy file on disk
+/// 2. `config/prompts/workers/agent_policy.md` — managed prompt markdown
 /// 3. [`DEFAULT_AGENT_POLICY`] — built-in fallback
+///
+/// If `settings.agent.soul` is set, it is prepended to the chosen policy.
 pub async fn load_agent_policy(settings: &Settings) -> String {
-    // 1. User-configured soul prompt
-    if let Some(soul) = &settings.agent.soul {
-        if !soul.is_empty() {
-            return soul.clone();
-        }
-    }
-    // 2. On-disk policy file
+    let soul_prompt = resolve_soul_prompt(settings);
+    // 1. On-disk policy file
     let policy_path = rara_paths::agent_policy_file();
-    if let Ok(content) = tokio::fs::read_to_string(policy_path).await {
-        if !content.trim().is_empty() {
-            return content;
-        }
+    if let Ok(content) = tokio::fs::read_to_string(policy_path).await
+        && !content.trim().is_empty()
+    {
+        return compose_policy(&content, soul_prompt.as_deref());
     }
-    // 3. Built-in default
-    DEFAULT_AGENT_POLICY.to_string()
+
+    let prompt_content =
+        rara_paths::load_prompt_markdown("workers/agent_policy.md", DEFAULT_AGENT_POLICY);
+    if !prompt_content.trim().is_empty() {
+        return compose_policy(&prompt_content, soul_prompt.as_deref());
+    }
+    // 2. Built-in default
+    compose_policy(DEFAULT_AGENT_POLICY, soul_prompt.as_deref())
 }
 
 /// Background worker that reviews recent chat sessions and proactively
@@ -103,11 +98,6 @@ impl FallibleWorker<AppState> for ProactiveAgentWorker {
     async fn work(&mut self, ctx: WorkerContext<AppState>) -> WorkResult {
         let state = ctx.state();
         let settings = state.settings_svc.current();
-
-        // Guard: proactive disabled
-        if !settings.agent.proactive_enabled {
-            return Ok(());
-        }
 
         // Guard: AI not configured
         if settings.ai.openrouter_api_key.is_none() {
@@ -145,10 +135,9 @@ impl FallibleWorker<AppState> for ProactiveAgentWorker {
 
         // 4. Build user prompt with activity summary
         let user_prompt = format!(
-            "以下是最近24小时的用户活动摘要：\n\n{}\n\n\
-             根据你的行为策略，决定是否需要主动联系用户。\n\
-             你可以使用工具查询更多信息、发送通知、或安排后续任务。\n\
-             如果没有值得做的事情，直接回复 DONE。",
+            "以下是最近24小时的用户活动摘要：\n\n{}\n\n根据你的行为策略，\
+             决定是否需要主动联系用户。\n你可以使用工具查询更多信息、发送通知、或安排后续任务。\\
+             n如果没有值得做的事情，直接回复 DONE。",
             activity_summary
         );
 
@@ -173,9 +162,10 @@ impl FallibleWorker<AppState> for ProactiveAgentWorker {
             .max_iterations(PROACTIVE_MAX_ITERATIONS)
             .build();
 
-        let result = runner.run(&tools, None).await.map_err(|e| {
-            WorkError::transient(format!("agent run failed: {e}"))
-        })?;
+        let result = runner
+            .run(&tools, None)
+            .await
+            .map_err(|e| WorkError::transient(format!("agent run failed: {e}")))?;
 
         // 8. Extract assistant response
         let response_text = result
@@ -263,10 +253,7 @@ async fn collect_activity_summary(state: &AppState) -> Result<String, WorkError>
             }
         };
 
-        activity_summary.push_str(&format!(
-            "\nSession \"{}\" ({} messages):\n",
-            title, count
-        ));
+        activity_summary.push_str(&format!("\nSession \"{}\" ({} messages):\n", title, count));
         for msg in &messages {
             let role = msg.role.to_string();
             let text = msg.content.as_text();

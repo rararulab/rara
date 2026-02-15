@@ -37,9 +37,8 @@ impl AgentTool for FindFilesTool {
     fn name(&self) -> &str { "find_files" }
 
     fn description(&self) -> &str {
-        "Find files matching a glob pattern (e.g. '*.rs', '**/*.toml'). \
-         Results are sorted by modification time (newest first). \
-         Respects .gitignore when inside a git repository."
+        "Find files matching a glob pattern (e.g. '*.rs', '**/*.toml'). Results are sorted by \
+         modification time (newest first). Respects .gitignore when inside a git repository."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -63,10 +62,7 @@ impl AgentTool for FindFilesTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-    ) -> crate::err::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> crate::err::Result<serde_json::Value> {
         let pattern = params
             .get("pattern")
             .and_then(|v| v.as_str())
@@ -74,10 +70,7 @@ impl AgentTool for FindFilesTool {
                 message: "missing required parameter: pattern".into(),
             })?;
 
-        let path = params
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or(".");
+        let path = params.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
         let limit = params
             .get("limit")
