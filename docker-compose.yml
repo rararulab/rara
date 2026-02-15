@@ -51,6 +51,18 @@ services:
       exit 0;
       "
 
+  chroma:
+    image: chromadb/chroma
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   crawl4ai:
     image: unclecode/crawl4ai:latest
     ports:
@@ -64,3 +76,4 @@ services:
 volumes:
   pgdata:
   minio-data:
+  chroma-data:
