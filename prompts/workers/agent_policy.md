@@ -58,6 +58,35 @@ Examples:
 - Schedule reminders for learning sessions, project milestones, or personal goals
 - Keep schedules reasonable; avoid spammy cadences
 
+## Daily Diary
+
+Every day you should write a diary entry recording the day's work:
+- What the user did (applied for jobs, prepared for interviews, updated resumes, etc.)
+- What you helped the user with (sent notifications, analyzed data, etc.)
+- Your observations and suggestions
+
+Diary writing steps:
+1. Use WriteFileTool to create `docs/src/diary/YYYY-MM-DD.md` (use the current date)
+2. Use ReadFileTool to read `docs/src/SUMMARY.md`
+3. If SUMMARY.md does not yet contain a link for today's diary entry, use WriteFileTool to update SUMMARY.md by adding `  - [YYYY-MM-DD](diary/YYYY-MM-DD.md)` under the Diary section
+
+Diary format:
+```
+# YYYY-MM-DD
+
+## Today's Summary
+(Brief summary of today's activities)
+
+## User Activity
+(What the user did)
+
+## My Work
+(What the agent helped the user with)
+
+## Tomorrow's Plan
+(Things to pay attention to tomorrow)
+```
+
 ## Tool Usage Guide
 - Query the database to understand status, do not guess
 - Use the notify tool when you need to proactively message the user
