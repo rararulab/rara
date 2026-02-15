@@ -47,6 +47,11 @@ const DEFAULT_SYSTEM_PROMPT: &str = include_str!("../../../../prompts/chat/defau
 
 fn compose_system_prompt(base_prompt: &str, soul_prompt: Option<&str>) -> String {
     if let Some(soul) = soul_prompt.filter(|s| !s.trim().is_empty()) {
+        // Avoid duplicating soul when a persisted session prompt already
+        // contains it (e.g. prompt was previously composed and stored).
+        if base_prompt.contains(soul.trim()) {
+            return base_prompt.to_owned();
+        }
         return format!("{soul}\n\n# Chat Instructions\n{base_prompt}");
     }
     base_prompt.to_owned()
@@ -379,10 +384,15 @@ impl ChatService {
             .model
             .clone()
             .unwrap_or_else(|| self.current_default_model());
-        let system_prompt = session
+        let base_system_prompt = session
             .system_prompt
             .clone()
             .unwrap_or_else(|| self.current_system_prompt());
+        let soul_prompt = {
+            let settings = self.settings_rx.borrow();
+            resolve_soul_prompt(&settings)
+        };
+        let system_prompt = compose_system_prompt(&base_system_prompt, soul_prompt.as_deref());
 
         let user_content = if has_images {
             let urls = image_urls.as_ref().unwrap();
