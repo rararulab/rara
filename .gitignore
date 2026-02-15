@@ -60,3 +60,7 @@ public/
 .worktrees/
 
 .cargo/
+
+# Node (Playwright screenshot script)
+node_modules/
+package-lock.json

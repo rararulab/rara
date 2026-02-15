@@ -231,6 +231,11 @@ impl AppState {
             task_store.clone(),
             notify_client.clone(),
             settings_svc.clone(),
+            project_root.clone(),
+        )));
+        tool_registry.register_service(Arc::new(crate::tools::services::ScreenshotTool::new(
+            notify_client.clone(),
+            settings_svc.clone(),
             project_root,
         )));
         tool_registry.register_service(Arc::new(crate::tools::services::CodexStatusTool::new(

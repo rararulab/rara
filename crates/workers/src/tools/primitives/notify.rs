@@ -102,6 +102,7 @@ impl AgentTool for NotifyTool {
                     reference_type: None,
                     reference_id: None,
                     metadata: None,
+                    photo_path: None,
                 };
 
                 match self.client.send_telegram(request).await {

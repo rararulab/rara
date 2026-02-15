@@ -229,7 +229,23 @@ impl BotApp {
                         teloxide::types::ChatId(config.primary_chat_id)
                     });
 
-                let delivery = outbound.send_markdown(chat_id, &text).await;
+                // Send photo if present, otherwise send text.
+                let delivery = if let Some(ref photo_path) = item.payload.photo_path {
+                    let path = std::path::Path::new(photo_path);
+                    if path.exists() {
+                        let caption = if text.trim().is_empty() {
+                            None
+                        } else {
+                            Some(text.as_str())
+                        };
+                        outbound.send_photo(chat_id, path, caption).await
+                    } else {
+                        warn!(photo_path, "photo file not found, falling back to text");
+                        outbound.send_markdown(chat_id, &text).await
+                    }
+                } else {
+                    outbound.send_markdown(chat_id, &text).await
+                };
 
                 match delivery {
                     Ok(()) => {

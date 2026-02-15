@@ -54,9 +54,9 @@ impl NotifyClient {
         &self,
         request: SendTelegramNotificationRequest,
     ) -> Result<QueuedTelegramNotification, NotifyError> {
-        if request.body.trim().is_empty() {
+        if request.body.trim().is_empty() && request.photo_path.is_none() {
             return Err(NotifyError::ValidationError {
-                message: "body must not be empty".to_owned(),
+                message: "body must not be empty (unless photo_path is provided)".to_owned(),
             });
         }
 
@@ -74,6 +74,7 @@ impl NotifyClient {
             reference_type: request.reference_type,
             reference_id:   request.reference_id,
             metadata:       request.metadata,
+            photo_path:     request.photo_path,
             created_at:     Timestamp::now(),
         };
 
