@@ -36,9 +36,12 @@ use teloxide::{
     net::Download,
     payloads::{EditMessageTextSetters, SendMessageSetters},
     requests::Requester,
-    types::{CallbackQuery, ChatAction, Message, ParseMode, PhotoSize, Update, UpdateKind},
+    types::{
+        CallbackQuery, ChatAction, ChatId, Message, ParseMode, PhotoSize, Update, UpdateKind,
+    },
     utils::command::BotCommands,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::{
@@ -269,6 +272,29 @@ pub(crate) async fn handle_callback_query(
     Ok(())
 }
 
+/// Start a background loop that sends `ChatAction::Typing` every 4 seconds.
+///
+/// Returns a join handle and a [`CancellationToken`]. Cancel the token to
+/// stop the loop (e.g. once the LLM response is ready), then optionally
+/// await the handle to ensure clean shutdown.
+fn start_typing_loop(
+    bot: teloxide::Bot,
+    chat_id: ChatId,
+) -> (tokio::task::JoinHandle<()>, CancellationToken) {
+    let cancel = CancellationToken::new();
+    let token = cancel.clone();
+    let handle = tokio::spawn(async move {
+        loop {
+            let _ = bot.send_chat_action(chat_id, ChatAction::Typing).await;
+            tokio::select! {
+                () = tokio::time::sleep(std::time::Duration::from_secs(4)) => {}
+                () = token.cancelled() => break,
+            }
+        }
+    });
+    (handle, cancel)
+}
+
 // ---------------------------------------------------------------------------
 // Command handlers
 // ---------------------------------------------------------------------------
@@ -363,18 +389,20 @@ async fn handle_chat_message(
         }
     };
 
-    // Send typing indicator while waiting for LLM response.
-    let _ = state
-        .bot
-        .send_chat_action(msg.chat.id, ChatAction::Typing)
-        .await;
+    // Start continuous typing indicator while waiting for LLM response.
+    let (typing_handle, typing_cancel) = start_typing_loop(state.bot.clone(), msg.chat.id);
 
     // Send to chat service and relay response.
-    match state
+    let result = state
         .http_client
         .send_chat_message(&session_key, text, vec![])
-        .await
-    {
+        .await;
+
+    // Stop the typing indicator loop.
+    typing_cancel.cancel();
+    let _ = typing_handle.await;
+
+    match result {
         Ok(response) => {
             let reply_text = response.message.text_content();
             if !reply_text.is_empty() {
@@ -455,28 +483,26 @@ async fn handle_photo_message(
         }
     };
 
-    // Send typing indicator — download + LLM inference may take a while.
-    let _ = state
-        .bot
-        .send_chat_action(msg.chat.id, ChatAction::Typing)
-        .await;
+    // Start continuous typing indicator — download + LLM inference may take a while.
+    let (typing_handle, typing_cancel) = start_typing_loop(state.bot.clone(), msg.chat.id);
 
     // Select the highest-resolution photo (last element in the array).
-    let photo = match photos.last() {
-        Some(p) => p,
-        None => {
-            state
-                .bot
-                .send_message(msg.chat.id, "Could not read photo data.")
-                .await?;
-            return Ok(());
-        }
+    let Some(photo) = photos.last() else {
+        typing_cancel.cancel();
+        let _ = typing_handle.await;
+        state
+            .bot
+            .send_message(msg.chat.id, "Could not read photo data.")
+            .await?;
+        return Ok(());
     };
 
     // Download the photo via the Bot API.
     let file = match state.bot.get_file(&photo.file.id).await {
         Ok(f) => f,
         Err(e) => {
+            typing_cancel.cancel();
+            let _ = typing_handle.await;
             warn!(error = %e, "failed to get file info for photo");
             state
                 .bot
@@ -488,6 +514,8 @@ async fn handle_photo_message(
 
     let mut buf = Vec::new();
     if let Err(e) = state.bot.download_file(&file.path, &mut buf).await {
+        typing_cancel.cancel();
+        let _ = typing_handle.await;
         warn!(error = %e, "failed to download photo file");
         state
             .bot
@@ -513,11 +541,16 @@ async fn handle_photo_message(
     };
 
     // Send to chat service with multimodal content.
-    match state
+    let result = state
         .http_client
         .send_chat_message(&session_key, text, vec![data_url])
-        .await
-    {
+        .await;
+
+    // Stop the typing indicator loop.
+    typing_cancel.cancel();
+    let _ = typing_handle.await;
+
+    match result {
         Ok(response) => {
             let reply_text = response.message.text_content();
             if !reply_text.is_empty() {
