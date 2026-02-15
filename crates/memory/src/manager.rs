@@ -24,7 +24,7 @@ use std::{
 };
 
 use sha2::{Digest, Sha256};
-use snafu::Snafu;
+use snafu::prelude::*;
 use walkdir::WalkDir;
 
 use crate::{
@@ -38,29 +38,22 @@ use crate::{
 
 /// Unified memory error.
 #[derive(Debug, Snafu)]
+#[snafu(visibility(pub(crate)))]
 pub enum MemoryError {
     #[snafu(display("I/O error: {source}"))]
     Io { source: std::io::Error },
-    #[snafu(display("SQLite error: {source}"))]
+
+    #[snafu(display("SQLite error: {source}"), context(false))]
     Db { source: rusqlite::Error },
-    #[snafu(display("Task join error: {source}"))]
+
+    #[snafu(display("task join error: {source}"))]
     TaskJoin { source: tokio::task::JoinError },
-    #[snafu(display("Database error: {source}"))]
+
+    #[snafu(display("database error: {source}"), context(false))]
     Sqlx { source: sqlx::Error },
-    #[snafu(display("Memory error: {message}"))]
+
+    #[snafu(display("{message}"))]
     Other { message: String },
-}
-
-impl From<std::io::Error> for MemoryError {
-    fn from(source: std::io::Error) -> Self { Self::Io { source } }
-}
-
-impl From<rusqlite::Error> for MemoryError {
-    fn from(source: rusqlite::Error) -> Self { Self::Db { source } }
-}
-
-impl From<sqlx::Error> for MemoryError {
-    fn from(source: sqlx::Error) -> Self { Self::Sqlx { source } }
 }
 
 /// Result alias for memory operations.
@@ -119,13 +112,13 @@ impl MemoryManager {
     /// Intended for local/dev environments and fallback scenarios.
     pub fn open(memory_dir: PathBuf, db_path: PathBuf) -> MemoryResult<Self> {
         if !memory_dir.exists() {
-            std::fs::create_dir_all(&memory_dir).map_err(|source| MemoryError::Io { source })?;
+            std::fs::create_dir_all(&memory_dir).context(IoSnafu)?;
         }
 
         if let Some(parent) = db_path.parent()
             && !parent.exists()
         {
-            std::fs::create_dir_all(parent).map_err(|source| MemoryError::Io { source })?;
+            std::fs::create_dir_all(parent).context(IoSnafu)?;
         }
 
         let store = SqliteMemoryStore::new(db_path);
@@ -148,7 +141,7 @@ impl MemoryManager {
     /// This is the preferred production backend in the current architecture.
     pub fn open_postgres(memory_dir: PathBuf, pool: sqlx::PgPool) -> MemoryResult<Self> {
         if !memory_dir.exists() {
-            std::fs::create_dir_all(&memory_dir).map_err(|source| MemoryError::Io { source })?;
+            std::fs::create_dir_all(&memory_dir).context(IoSnafu)?;
         }
 
         let store = PgMemoryStore::new(pool);
@@ -254,10 +247,10 @@ impl MemoryManager {
                 let relative = relative_path(&memory_dir, path);
                 seen_paths.insert(relative.clone());
 
-                let metadata = std::fs::metadata(path).map_err(|source| MemoryError::Io { source })?;
+                let metadata = std::fs::metadata(path).context(IoSnafu)?;
                 let mtime = metadata
                     .modified()
-                    .map_err(|source| MemoryError::Io { source })?
+                    .context(IoSnafu)?
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs() as i64;
@@ -270,7 +263,7 @@ impl MemoryManager {
                     continue;
                 }
 
-                let bytes = std::fs::read(path).map_err(|source| MemoryError::Io { source })?;
+                let bytes = std::fs::read(path).context(IoSnafu)?;
                 let hash = format!("{:x}", Sha256::digest(&bytes));
 
                 if let Some(existing) = indexed_map.get(&relative)
@@ -348,7 +341,7 @@ impl MemoryManager {
                 Ok((stats, chroma_chunks))
             })
             .await
-            .map_err(|source| MemoryError::TaskJoin { source })?;
+            .context(TaskJoinSnafu)?;
         let (stats, chroma_chunks) = sync_result?;
 
         // Chroma is best-effort: retrieval still works with local fallback if
@@ -385,7 +378,7 @@ impl MemoryManager {
                         hybrid_search_with_chroma_hits(&*store, &query, limit, hits)
                     })
                     .await
-                    .map_err(|source| MemoryError::TaskJoin { source })?;
+                    .context(TaskJoinSnafu)?;
                 }
             }
 
@@ -393,12 +386,12 @@ impl MemoryManager {
                 hybrid_search_blocking(&*store, &*embedder_ref, &query, limit)
             })
             .await
-            .map_err(|source| MemoryError::TaskJoin { source })?;
+            .context(TaskJoinSnafu)?;
         }
 
         tokio::task::spawn_blocking(move || keyword_only_search_blocking(&*store, &query, limit))
             .await
-            .map_err(|source| MemoryError::TaskJoin { source })?
+            .context(TaskJoinSnafu)?
     }
 
     /// Fetch full chunk by id.
@@ -406,7 +399,7 @@ impl MemoryManager {
         let store = Arc::clone(&self.store);
         tokio::task::spawn_blocking(move || store.get_chunk(chunk_id))
             .await
-            .map_err(|source| MemoryError::TaskJoin { source })?
+            .context(TaskJoinSnafu)?
     }
 }
 

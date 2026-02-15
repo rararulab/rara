@@ -86,10 +86,9 @@ impl PgMemoryStore {
     where
         F: Future<Output = Result<T, sqlx::Error>>,
     {
-        let handle = tokio::runtime::Handle::try_current().map_err(|e| MemoryError::Other {
-            message: format!("tokio runtime not available for pg memory store: {e}"),
-        })?;
-        let result = handle.block_on(future)?;
+        let handle = tokio::runtime::Handle::try_current()
+            .map_err(|e| MemoryError::Other { message: e.to_string() })?;
+        let result = tokio::task::block_in_place(|| handle.block_on(future))?;
         Ok(result)
     }
 }
