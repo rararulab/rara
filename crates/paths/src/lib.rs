@@ -328,3 +328,9 @@ pub fn agent_jobs_file() -> &'static PathBuf {
     static AGENT_JOBS: OnceLock<PathBuf> = OnceLock::new();
     AGENT_JOBS.get_or_init(|| data_dir().join("agent_jobs.json"))
 }
+
+/// Returns the path to the user skills directory.
+pub fn skills_dir() -> &'static PathBuf {
+    static SKILLS_DIR: OnceLock<PathBuf> = OnceLock::new();
+    SKILLS_DIR.get_or_init(|| config_dir().join("skills"))
+}

@@ -60,6 +60,7 @@ members = [
     "crates/domain/chat",
     "crates/domain/typst",
     "crates/memory",
+    "crates/skills",
 ]
 
 [workspace.dependencies]
@@ -153,6 +154,7 @@ rara-memory = { path = "crates/memory" }
 rara-model = { path = "crates/rara-model" }
 rara-paths = { path = "crates/paths" }
 rara-server = { path = "crates/server" }
+rara-skills = { path = "crates/skills" }
 rara-sessions = { path = "crates/sessions" }
 rara-telegram-bot = { path = "crates/telegram-bot" }
 rara-workers = { path = "crates/workers" }
