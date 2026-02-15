@@ -257,6 +257,15 @@ impl AppConfig {
             }
         };
 
+        // -- memory sync worker (every 5 minutes) -----------------------------
+
+        let _memory_sync_handle = worker_manager
+            .fallible_worker(rara_workers::memory_sync::MemorySyncWorker)
+            .name("memory-sync")
+            .cron("0 */5 * * * *")
+            .expect("hardcoded memory sync cron must be valid")
+            .spawn();
+
         // -- telegram bot (optional) -----------------------------------------
 
         let bot_handle = match Self::try_start_bot(

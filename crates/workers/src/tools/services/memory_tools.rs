@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Layer 2 service tools for memory retrieval.
+//! Layer 2 service tools for memory retrieval and writing.
 
 use std::sync::Arc;
 
@@ -23,6 +23,9 @@ use serde_json::json;
 use rara_memory::MemoryManager;
 
 /// Search local memory index (keyword/hybrid depending on runtime settings).
+///
+/// Sync is handled by the background `MemorySyncWorker`; this tool only
+/// queries the already-indexed data.
 pub struct MemorySearchTool {
     manager: Arc<MemoryManager>,
 }
@@ -77,13 +80,6 @@ impl AgentTool for MemorySearchTool {
             .and_then(|v| v.as_u64())
             .map_or(8_usize, |v| v as usize)
             .clamp(1, 50);
-
-        self.manager
-            .sync()
-            .await
-            .map_err(|e| rara_agents::err::Error::Other {
-                message: format!("memory sync failed: {e}").into(),
-            })?;
 
         let results = self.manager.search(query, limit).await.map_err(|e| {
             rara_agents::err::Error::Other {
@@ -169,5 +165,107 @@ impl AgentTool for MemoryGetTool {
                 "error": format!("chunk not found: {chunk_id}")
             })),
         }
+    }
+}
+
+/// Write markdown content to the memory directory and trigger a sync.
+///
+/// This allows agents to persist notes, summaries, or any markdown document
+/// into long-term memory so it becomes searchable via `memory_search`.
+pub struct MemoryWriteTool {
+    manager: Arc<MemoryManager>,
+}
+
+impl MemoryWriteTool {
+    /// Create a `memory_write` tool.
+    pub fn new(manager: Arc<MemoryManager>) -> Self {
+        Self { manager }
+    }
+}
+
+#[async_trait]
+impl AgentTool for MemoryWriteTool {
+    fn name(&self) -> &str {
+        "memory_write"
+    }
+
+    fn description(&self) -> &str {
+        "Write markdown content to long-term memory. The file will be indexed and searchable via memory_search."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "filename": {
+                    "type": "string",
+                    "description": "Filename for the memory document (e.g. 'meeting-notes.md'). Auto-generated if omitted."
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Markdown content to write to memory"
+                }
+            },
+            "required": ["content"]
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+    ) -> rara_agents::err::Result<serde_json::Value> {
+        let content = params
+            .get("content")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| rara_agents::err::Error::Other {
+                message: "missing required parameter: content".into(),
+            })?;
+
+        let filename = match params.get("filename").and_then(|v| v.as_str()) {
+            Some(name) => {
+                // Ensure .md extension
+                if name.ends_with(".md") {
+                    name.to_owned()
+                } else {
+                    format!("{name}.md")
+                }
+            }
+            None => {
+                let ts = jiff::Timestamp::now().as_second();
+                format!("agent-{ts}.md")
+            }
+        };
+
+        let memory_dir = rara_paths::memory_dir();
+        let file_path = memory_dir.join(&filename);
+
+        // Ensure parent directory exists (in case filename contains subdirectories).
+        if let Some(parent) = file_path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| rara_agents::err::Error::Other {
+                    message: format!("failed to create directory: {e}").into(),
+                })?;
+        }
+
+        tokio::fs::write(&file_path, content)
+            .await
+            .map_err(|e| rara_agents::err::Error::Other {
+                message: format!("failed to write memory file: {e}").into(),
+            })?;
+
+        // Trigger sync so the new file is immediately indexed.
+        self.manager
+            .sync()
+            .await
+            .map_err(|e| rara_agents::err::Error::Other {
+                message: format!("memory sync failed: {e}").into(),
+            })?;
+
+        Ok(json!({
+            "status": "ok",
+            "filename": filename,
+            "path": file_path.to_string_lossy(),
+        }))
     }
 }

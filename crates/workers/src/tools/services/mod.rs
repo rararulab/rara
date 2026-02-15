@@ -20,7 +20,7 @@ mod resume_tools;
 mod typst_tools;
 
 pub use job_pipeline::JobPipelineTool;
-pub use memory_tools::{MemoryGetTool, MemorySearchTool};
+pub use memory_tools::{MemoryGetTool, MemorySearchTool, MemoryWriteTool};
 pub use resume_tools::{AnalyzeResumeTool, GetResumeContentTool, ListResumesTool};
 pub use typst_tools::{
     CompileTypstProjectTool, ListTypstFilesTool, ListTypstProjectsTool, ReadTypstFileTool,

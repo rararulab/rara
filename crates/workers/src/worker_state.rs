@@ -52,6 +52,9 @@ pub struct AppState {
     pub object_store: Operator,
     pub crawl_client: crawl4ai::Crawl4AiClient,
 
+    // -- memory --
+    pub memory_manager: Arc<rara_memory::MemoryManager>,
+
     // -- worker coordination --
     pub analyze_notify: Arc<RwLock<Option<NotifyHandle>>>,
 }
@@ -176,6 +179,9 @@ impl AppState {
         tool_registry.register_service(Arc::new(crate::tools::services::MemoryGetTool::new(
             Arc::clone(&memory_manager),
         )));
+        tool_registry.register_service(Arc::new(crate::tools::services::MemoryWriteTool::new(
+            Arc::clone(&memory_manager),
+        )));
         tool_registry.register_service(Arc::new(
             crate::tools::services::ListTypstProjectsTool::new(typst_service.clone()),
         ));
@@ -215,6 +221,7 @@ impl AppState {
             llm_provider,
             object_store,
             crawl_client,
+            memory_manager,
             analyze_notify: Arc::new(RwLock::new(None)),
         })
     }

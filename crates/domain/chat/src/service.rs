@@ -369,6 +369,62 @@ impl ChatService {
         Ok(persisted)
     }
 
+    // -- export to memory ---------------------------------------------------
+
+    /// Export a session's message history to the memory directory as markdown.
+    ///
+    /// Reads all messages for the given session key, formats them as a
+    /// markdown document, and writes it to `rara_paths::memory_dir()/sessions/{key}.md`.
+    /// Returns the path of the written file.
+    #[instrument(skip(self))]
+    pub async fn export_session_to_memory(
+        &self,
+        key: &SessionKey,
+    ) -> Result<std::path::PathBuf, ChatError> {
+        let session = self.get_session(key).await?;
+        let messages = self.get_messages(key, None, None).await?;
+
+        let mut md = String::new();
+        md.push_str(&format!("# Session: {}\n\n", key.as_str()));
+        if let Some(title) = &session.title {
+            md.push_str(&format!("**Title:** {title}\n\n"));
+        }
+        md.push_str(&format!(
+            "**Exported at:** {}\n\n",
+            Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+        ));
+        md.push_str("---\n\n");
+
+        for msg in &messages {
+            let role = &msg.role;
+            let text = msg.content.as_text();
+            md.push_str(&format!("### {role}\n\n{text}\n\n"));
+        }
+
+        let sessions_dir = rara_paths::memory_dir().join("sessions");
+        tokio::fs::create_dir_all(&sessions_dir)
+            .await
+            .map_err(|e| ChatError::SessionError {
+                message: format!("failed to create sessions memory dir: {e}"),
+            })?;
+
+        // Sanitize the key for use as a filename (replace ':' and '/' with '-').
+        let safe_name: String = key
+            .as_str()
+            .chars()
+            .map(|c| if c == ':' || c == '/' { '-' } else { c })
+            .collect();
+        let file_path = sessions_dir.join(format!("{safe_name}.md"));
+        tokio::fs::write(&file_path, &md)
+            .await
+            .map_err(|e| ChatError::SessionError {
+                message: format!("failed to write session export: {e}"),
+            })?;
+
+        info!(key = %key, path = %file_path.display(), "session exported to memory");
+        Ok(file_path)
+    }
+
     // -- fork ---------------------------------------------------------------
 
     /// Fork a session at a specific message sequence number, creating a new
