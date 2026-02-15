@@ -23,10 +23,13 @@
 //! - **Auto-chunking** — messages exceeding the 4096-character Telegram limit
 //!   are split at newline or space boundaries and sent as multiple messages.
 
-use std::sync::{Arc, RwLock};
+use std::{
+    path::Path,
+    sync::{Arc, RwLock},
+};
 
 use snafu::{ResultExt, Snafu};
-use teloxide::{payloads::SendMessageSetters, requests::Requester, types::ChatId};
+use teloxide::{payloads::{SendMessageSetters, SendPhotoSetters}, requests::Requester, types::{ChatId, InputFile}};
 use tracing::instrument;
 
 use crate::{
@@ -121,6 +124,34 @@ impl TelegramOutbound {
             Ok(g) => g.clone(),
             Err(e) => e.into_inner().clone(),
         }
+    }
+
+    /// Send a photo from a local file path with an optional caption.
+    #[instrument(level = "info", skip(self), fields(chat_id = chat_id.0), err)]
+    pub(crate) async fn send_photo(
+        &self,
+        chat_id: ChatId,
+        photo_path: &Path,
+        caption: Option<&str>,
+    ) -> Result<(), OutboundError> {
+        let input_file = InputFile::file(photo_path);
+        let mut request = self.bot.send_photo(chat_id, input_file);
+        if let Some(cap) = caption {
+            request = request.caption(cap);
+        }
+        request.await.context(SendSnafu)?;
+        Ok(())
+    }
+
+    /// Send a photo to the configured primary chat.
+    #[allow(dead_code)]
+    pub(crate) async fn send_primary_photo(
+        &self,
+        photo_path: &Path,
+        caption: Option<&str>,
+    ) -> Result<(), OutboundError> {
+        let chat_id = self.primary_chat_id();
+        self.send_photo(chat_id, photo_path, caption).await
     }
 
     fn primary_chat_id(&self) -> ChatId { ChatId(self.primary_config().primary_chat_id) }

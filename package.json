@@ -1,0 +1,19 @@
+{
+  "name": "issue-157-screenshot",
+  "version": "1.0.0",
+  "description": "后端服务项目，用于自动化职位发现、投递追踪、AI 简历优化与面试准备。",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "playwright": "^1.58.2"
+  }
+}

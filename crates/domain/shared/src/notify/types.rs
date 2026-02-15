@@ -72,6 +72,9 @@ pub struct SendTelegramNotificationRequest {
     pub reference_type: Option<String>,
     pub reference_id:   Option<Uuid>,
     pub metadata:       Option<serde_json::Value>,
+    /// Optional local file path of a photo to send instead of (or alongside)
+    /// text.
+    pub photo_path:     Option<String>,
 }
 
 /// Canonical queued telegram notification payload.
@@ -86,6 +89,7 @@ pub struct QueuedTelegramNotification {
     pub reference_type: Option<String>,
     pub reference_id:   Option<Uuid>,
     pub metadata:       Option<serde_json::Value>,
+    pub photo_path:     Option<String>,
     pub created_at:     Timestamp,
 }
 

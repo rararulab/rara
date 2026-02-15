@@ -418,6 +418,7 @@ impl AgentTool for CodexRunTool {
                 reference_type: None,
                 reference_id: None,
                 metadata: None,
+                photo_path: None,
             };
             if let Err(e) = notify.send_telegram(request).await {
                 warn!(id, "failed to send codex task notification: {e}");

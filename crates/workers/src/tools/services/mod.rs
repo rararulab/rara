@@ -19,6 +19,7 @@ mod job_pipeline;
 mod memory_tools;
 mod resume_tools;
 mod schedule_tools;
+mod screenshot;
 mod typst_tools;
 
 pub use codex::{AgentTaskStore, CodexListTool, CodexRunTool, CodexStatusTool};
@@ -26,6 +27,7 @@ pub use job_pipeline::JobPipelineTool;
 pub use memory_tools::{MemoryGetTool, MemorySearchTool, MemoryUpdateProfileTool, MemoryWriteTool};
 pub use resume_tools::{AnalyzeResumeTool, GetResumeContentTool, ListResumesTool};
 pub use schedule_tools::{ScheduleAddTool, ScheduleListTool, ScheduleRemoveTool};
+pub use screenshot::ScreenshotTool;
 pub use typst_tools::{
     CompileTypstProjectTool, ListTypstFilesTool, ListTypstProjectsTool, ReadTypstFileTool,
     UpdateTypstFileTool,
