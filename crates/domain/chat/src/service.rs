@@ -229,6 +229,55 @@ impl ChatService {
         Ok(())
     }
 
+    // -- ensure session -----------------------------------------------------
+
+    /// Ensure a session exists, creating it if it does not.
+    ///
+    /// Returns the existing or newly created [`SessionEntry`].
+    #[instrument(skip(self))]
+    pub async fn ensure_session(
+        &self,
+        key: &SessionKey,
+        title: Option<&str>,
+        model: Option<&str>,
+        system_prompt: Option<&str>,
+    ) -> Result<SessionEntry, ChatError> {
+        match self.session_repo.get_session(key).await? {
+            Some(existing) => Ok(existing),
+            None => {
+                self.create_session(
+                    key.clone(),
+                    title.map(ToOwned::to_owned),
+                    model.map(ToOwned::to_owned),
+                    system_prompt.map(ToOwned::to_owned),
+                )
+                .await
+            }
+        }
+    }
+
+    // -- append raw message -------------------------------------------------
+
+    /// Append a pre-built message to a session without invoking the LLM.
+    ///
+    /// This is useful for background workers that run their own
+    /// [`AgentRunner`] loop and need to persist the conversation turns
+    /// after the fact.
+    #[instrument(skip(self, message))]
+    pub async fn append_message_raw(
+        &self,
+        key: &SessionKey,
+        message: &ChatMessage,
+    ) -> Result<ChatMessage, ChatError> {
+        let persisted = self.session_repo.append_message(key, message).await?;
+        Ok(persisted)
+    }
+
+    /// Return a reference to the tools registry shared by this service.
+    pub fn tools(&self) -> &Arc<ToolRegistry> {
+        &self.tools
+    }
+
     // -- send message (LLM) -------------------------------------------------
 
     /// Send a user message and get an assistant response.
@@ -455,7 +504,7 @@ impl std::fmt::Debug for ChatService {
 /// Maps domain roles to OpenRouter roles and converts text / multimodal
 /// content to the appropriate [`Content`] variant. Tool-related fields
 /// (`tool_call_id`, `tool_name`) are carried over when present.
-fn to_openrouter_message(msg: &ChatMessage) -> Message {
+pub fn to_openrouter_message(msg: &ChatMessage) -> Message {
     let role = match msg.role {
         MessageRole::System => Role::System,
         MessageRole::User => Role::User,
