@@ -14,7 +14,10 @@
 
 //! Unified application state shared by workers and routes.
 
-use std::sync::{Arc, RwLock};
+use std::{
+    path::PathBuf,
+    sync::{Arc, RwLock},
+};
 
 use async_trait::async_trait;
 use common_worker::{IntervalOrNotifyHandle, NotifyHandle};
@@ -218,6 +221,23 @@ impl AppState {
         )));
         tool_registry.register_service(Arc::new(crate::tools::services::ScheduleRemoveTool::new(
             agent_scheduler.clone(),
+        )));
+
+        // -- codex agent dispatch ----------------------------------------
+        let task_store = crate::tools::services::AgentTaskStore::new();
+        let project_root =
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        tool_registry.register_service(Arc::new(crate::tools::services::CodexRunTool::new(
+            task_store.clone(),
+            notify_client.clone(),
+            settings_svc.clone(),
+            project_root,
+        )));
+        tool_registry.register_service(Arc::new(crate::tools::services::CodexStatusTool::new(
+            task_store.clone(),
+        )));
+        tool_registry.register_service(Arc::new(crate::tools::services::CodexListTool::new(
+            task_store.clone(),
         )));
 
         let tools = Arc::new(tool_registry);
