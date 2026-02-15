@@ -17,11 +17,13 @@
 //! This crate contains concrete worker implementations that orchestrate
 //! domain services for background processing tasks.
 
+pub mod agent_scheduler;
 pub mod jd_parser;
 pub mod proactive;
 pub mod saved_job_analyze;
 pub mod saved_job_crawl;
 pub mod saved_job_gc;
+pub mod scheduled_agent;
 pub mod system_routes;
 pub mod tools;
 pub mod types;

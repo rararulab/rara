@@ -52,6 +52,9 @@ pub struct AppState {
     pub object_store: Operator,
     pub crawl_client: crawl4ai::Crawl4AiClient,
 
+    // -- agent scheduler --
+    pub agent_scheduler: Arc<crate::agent_scheduler::AgentScheduler>,
+
     // -- worker coordination --
     pub analyze_notify: Arc<RwLock<Option<NotifyHandle>>>,
 }
@@ -227,6 +230,24 @@ impl AppState {
         tool_registry.register_service(Arc::new(
             crate::tools::services::CompileTypstProjectTool::new(typst_service.clone()),
         ));
+
+        // -- agent scheduler -------------------------------------------------
+        let agent_scheduler = Arc::new(crate::agent_scheduler::AgentScheduler::new(
+            rara_paths::agent_jobs_file().clone(),
+        ));
+        agent_scheduler.load().await.ok(); // tolerate missing file
+        info!("Agent scheduler loaded");
+
+        tool_registry.register_service(Arc::new(
+            crate::tools::services::ScheduleAddTool::new(agent_scheduler.clone()),
+        ));
+        tool_registry.register_service(Arc::new(
+            crate::tools::services::ScheduleListTool::new(agent_scheduler.clone()),
+        ));
+        tool_registry.register_service(Arc::new(
+            crate::tools::services::ScheduleRemoveTool::new(agent_scheduler.clone()),
+        ));
+
         let tools = Arc::new(tool_registry);
         let chat_service = rara_domain_chat::service::ChatService::new(
             session_repo,
@@ -251,6 +272,7 @@ impl AppState {
             llm_provider,
             object_store,
             crawl_client,
+            agent_scheduler,
             analyze_notify: Arc::new(RwLock::new(None)),
         })
     }

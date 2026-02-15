@@ -257,6 +257,16 @@ impl AppConfig {
             }
         };
 
+        let _scheduler_handle = worker_manager
+            .fallible_worker(
+                rara_workers::scheduled_agent::AgentSchedulerWorker::new(
+                    app_state.agent_scheduler.clone(),
+                ),
+            )
+            .name("agent-scheduler")
+            .interval(Duration::from_secs(60))
+            .spawn();
+
         // -- telegram bot (optional) -----------------------------------------
 
         let bot_handle = match Self::try_start_bot(

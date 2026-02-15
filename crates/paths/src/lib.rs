@@ -265,3 +265,15 @@ pub fn memory_index_db_file() -> &'static PathBuf {
     static MEMORY_DB_FILE: OnceLock<PathBuf> = OnceLock::new();
     MEMORY_DB_FILE.get_or_init(|| data_dir().join("memory.sqlite3"))
 }
+
+/// Returns the path to the agent scheduled jobs JSON file.
+pub fn agent_jobs_file() -> &'static PathBuf {
+    static AGENT_JOBS: OnceLock<PathBuf> = OnceLock::new();
+    AGENT_JOBS.get_or_init(|| data_dir().join("agent_jobs.json"))
+}
+
+/// Returns the path to the agent behaviour policy Markdown file.
+pub fn agent_policy_file() -> &'static PathBuf {
+    static AGENT_POLICY: OnceLock<PathBuf> = OnceLock::new();
+    AGENT_POLICY.get_or_init(|| config_dir().join("agent-policy.md"))
+}
