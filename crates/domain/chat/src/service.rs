@@ -450,8 +450,8 @@ impl ChatService {
             md.push_str(&format!("### {role}\n\n{text}\n\n"));
         }
 
-        let sessions_dir = rara_paths::memory_dir().join("sessions");
-        tokio::fs::create_dir_all(&sessions_dir)
+        let sessions_dir = rara_paths::memory_sessions_dir();
+        tokio::fs::create_dir_all(sessions_dir)
             .await
             .map_err(|e| ChatError::SessionError {
                 message: format!("failed to create sessions memory dir: {e}"),
@@ -543,11 +543,6 @@ impl ChatService {
     }
 
     // -- accessors for background workers -----------------------------------
-
-    /// Get a reference to the tool registry.
-    pub fn tools(&self) -> &Arc<ToolRegistry> {
-        &self.tools
-    }
 
     /// Append a user message and an assistant response to a session,
     /// auto-creating the session if it does not exist.
