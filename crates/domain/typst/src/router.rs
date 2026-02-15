@@ -4,17 +4,15 @@
 //!
 //! | Method   | Path                                          | Description              |
 //! |----------|-----------------------------------------------|--------------------------|
-//! | `POST`   | `/api/v1/typst/projects`                      | Create a project         |
+//! | `POST`   | `/api/v1/typst/projects`                      | Register a local project |
 //! | `GET`    | `/api/v1/typst/projects`                      | List projects            |
 //! | `GET`    | `/api/v1/typst/projects/{id}`                 | Get project details      |
 //! | `DELETE` | `/api/v1/typst/projects/{id}`                 | Delete a project         |
 //! | `POST`   | `/api/v1/typst/projects/import-git`           | Import from Git URL      |
 //! | `POST`   | `/api/v1/typst/projects/{id}/git-sync`        | Sync Git remote updates  |
-//! | `POST`   | `/api/v1/typst/projects/{id}/files`           | Create a file            |
-//! | `GET`    | `/api/v1/typst/projects/{id}/files`           | List project files       |
-//! | `GET`    | `/api/v1/typst/projects/{id}/files/{path}`    | Get file content         |
-//! | `PUT`    | `/api/v1/typst/projects/{id}/files/{path}`    | Update file content      |
-//! | `DELETE` | `/api/v1/typst/projects/{id}/files/{path}`    | Delete a file            |
+//! | `GET`    | `/api/v1/typst/projects/{id}/files`           | List project file tree   |
+//! | `GET`    | `/api/v1/typst/projects/{id}/files/{path}`    | Read file content        |
+//! | `PUT`    | `/api/v1/typst/projects/{id}/files/{path}`    | Write file content       |
 //! | `POST`   | `/api/v1/typst/projects/{id}/compile`         | Compile project to PDF   |
 //! | `GET`    | `/api/v1/typst/projects/{id}/renders`         | List render history      |
 //! | `GET`    | `/api/v1/typst/renders/{id}/pdf`              | Download rendered PDF    |
@@ -32,10 +30,11 @@ use uuid::Uuid;
 
 use crate::{
     error::TypstError,
+    fs::FileEntry,
     service::TypstService,
     types::{
-        CompileRequest, CreateFileRequest, CreateProjectRequest, ImportGitRequest, RenderResult,
-        TypstFile, TypstProject, UpdateFileRequest,
+        CompileRequest, ImportGitRequest, RegisterProjectRequest, RenderResult, TypstProject,
+        UpdateFileRequest,
     },
 };
 
@@ -43,7 +42,7 @@ use crate::{
 pub fn routes(service: TypstService) -> Router {
     Router::new()
         // Projects
-        .route("/api/v1/typst/projects", post(create_project))
+        .route("/api/v1/typst/projects", post(register_project))
         .route("/api/v1/typst/projects", get(list_projects))
         .route("/api/v1/typst/projects/{id}", get(get_project))
         .route("/api/v1/typst/projects/{id}", delete(delete_project))
@@ -56,20 +55,15 @@ pub fn routes(service: TypstService) -> Router {
             "/api/v1/typst/projects/{id}/git-sync",
             post(sync_git),
         )
-        // Files
-        .route("/api/v1/typst/projects/{id}/files", post(create_file))
+        // Files (local filesystem)
         .route("/api/v1/typst/projects/{id}/files", get(list_files))
         .route(
             "/api/v1/typst/projects/{id}/files/{*path}",
-            get(get_file),
+            get(read_file),
         )
         .route(
             "/api/v1/typst/projects/{id}/files/{*path}",
-            put(update_file),
-        )
-        .route(
-            "/api/v1/typst/projects/{id}/files/{*path}",
-            delete(delete_file),
+            put(write_file),
         )
         // Compile
         .route(
@@ -90,13 +84,11 @@ pub fn routes(service: TypstService) -> Router {
 // ---------------------------------------------------------------------------
 
 #[instrument(skip(service, req))]
-async fn create_project(
+async fn register_project(
     State(service): State<TypstService>,
-    Json(req): Json<CreateProjectRequest>,
+    Json(req): Json<RegisterProjectRequest>,
 ) -> Result<(StatusCode, Json<TypstProject>), TypstError> {
-    let project = service
-        .create_project(req.name, req.description, req.main_file, req.resume_id)
-        .await?;
+    let project = service.register_project(req).await?;
     Ok((StatusCode::CREATED, Json(project)))
 }
 
@@ -149,54 +141,48 @@ async fn sync_git(
 }
 
 // ---------------------------------------------------------------------------
-// File handlers
+// File handlers (local filesystem)
 // ---------------------------------------------------------------------------
-
-#[instrument(skip(service, req))]
-async fn create_file(
-    State(service): State<TypstService>,
-    Path(id): Path<Uuid>,
-    Json(req): Json<CreateFileRequest>,
-) -> Result<(StatusCode, Json<TypstFile>), TypstError> {
-    let file = service.create_file(id, req.path, req.content).await?;
-    Ok((StatusCode::CREATED, Json(file)))
-}
 
 #[instrument(skip(service))]
 async fn list_files(
     State(service): State<TypstService>,
     Path(id): Path<Uuid>,
-) -> Result<Json<Vec<TypstFile>>, TypstError> {
-    let files = service.list_files(id).await?;
-    Ok(Json(files))
+) -> Result<Json<Vec<FileEntry>>, TypstError> {
+    let project = service.get_project(id).await?;
+    let entries = service.list_files(&project)?;
+    Ok(Json(entries))
 }
 
 #[instrument(skip(service))]
-async fn get_file(
+async fn read_file(
     State(service): State<TypstService>,
     Path((id, path)): Path<(Uuid, String)>,
-) -> Result<Json<TypstFile>, TypstError> {
-    let file = service.get_file(id, &path).await?;
-    Ok(Json(file))
+) -> Result<Json<FileContent>, TypstError> {
+    let project = service.get_project(id).await?;
+    let content = service.read_file(&project, &path)?;
+    Ok(Json(FileContent { path, content }))
 }
 
 #[instrument(skip(service, req))]
-async fn update_file(
+async fn write_file(
     State(service): State<TypstService>,
     Path((id, path)): Path<(Uuid, String)>,
     Json(req): Json<UpdateFileRequest>,
-) -> Result<Json<TypstFile>, TypstError> {
-    let file = service.update_file(id, &path, req.content).await?;
-    Ok(Json(file))
+) -> Result<Json<FileContent>, TypstError> {
+    let project = service.get_project(id).await?;
+    service.write_file(&project, &path, &req.content)?;
+    Ok(Json(FileContent {
+        path,
+        content: req.content,
+    }))
 }
 
-#[instrument(skip(service))]
-async fn delete_file(
-    State(service): State<TypstService>,
-    Path((id, path)): Path<(Uuid, String)>,
-) -> Result<StatusCode, TypstError> {
-    service.delete_file(id, &path).await?;
-    Ok(StatusCode::NO_CONTENT)
+/// JSON response body for file content endpoints.
+#[derive(serde::Serialize)]
+struct FileContent {
+    path:    String,
+    content: String,
 }
 
 // ---------------------------------------------------------------------------

@@ -96,9 +96,9 @@ export const api = {
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
   blob: (path: string) => requestBlob(path),
 
-  // -- Typst Git integration --
+  // -- Typst --
 
-  importTypstFromGit(data: { url: string; name?: string }): Promise<TypstProject> {
+  importTypstFromGit(data: { url: string; name?: string; target_dir: string }): Promise<TypstProject> {
     return request<TypstProject>('/api/v1/typst/projects/import-git', {
       method: 'POST',
       body: JSON.stringify(data),

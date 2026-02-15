@@ -31,46 +31,50 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { FileType, GitBranch, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { FileType, FolderOpen, GitBranch, Plus, RefreshCw, Trash2 } from "lucide-react";
 
-interface ProjectForm {
+interface RegisterForm {
   name: string;
-  description: string;
+  local_path: string;
   main_file: string;
 }
 
-const emptyForm: ProjectForm = {
+const emptyForm: RegisterForm = {
   name: "",
-  description: "",
-  main_file: "main.typ",
+  local_path: "",
+  main_file: "",
 };
 
 interface GitImportForm {
   url: string;
   name: string;
+  target_dir: string;
 }
 
 export default function TypstProjects() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [form, setForm] = useState<ProjectForm>(emptyForm);
+  const [form, setForm] = useState<RegisterForm>(emptyForm);
   const [deleteTarget, setDeleteTarget] = useState<TypstProject | null>(null);
   const [gitDialogOpen, setGitDialogOpen] = useState(false);
-  const [gitForm, setGitForm] = useState<GitImportForm>({ url: "", name: "" });
+  const [gitForm, setGitForm] = useState<GitImportForm>({
+    url: "",
+    name: "",
+    target_dir: "",
+  });
 
   const { data: projects, isLoading } = useQuery({
     queryKey: ["typst-projects"],
     queryFn: () => api.get<TypstProject[]>("/api/v1/typst/projects"),
   });
 
-  const createMutation = useMutation({
-    mutationFn: (data: ProjectForm) =>
+  const registerMutation = useMutation({
+    mutationFn: (data: RegisterForm) =>
       api.post<TypstProject>("/api/v1/typst/projects", {
         name: data.name,
-        description: data.description || null,
-        main_file: data.main_file || "main.typ",
+        local_path: data.local_path,
+        main_file: data.main_file || undefined,
       }),
     onSuccess: (project) => {
       queryClient.invalidateQueries({ queryKey: ["typst-projects"] });
@@ -92,11 +96,12 @@ export default function TypstProjects() {
       api.importTypstFromGit({
         url: data.url,
         name: data.name || undefined,
+        target_dir: data.target_dir,
       }),
     onSuccess: (project) => {
       queryClient.invalidateQueries({ queryKey: ["typst-projects"] });
       setGitDialogOpen(false);
-      setGitForm({ url: "", name: "" });
+      setGitForm({ url: "", name: "", target_dir: "" });
       navigate(`/typst/${project.id}`);
     },
   });
@@ -115,13 +120,13 @@ export default function TypstProjects() {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.name.trim()) return;
-    createMutation.mutate(form);
+    if (!form.name.trim() || !form.local_path.trim()) return;
+    registerMutation.mutate(form);
   }
 
   function handleGitImport(e: React.FormEvent) {
     e.preventDefault();
-    if (!gitForm.url.trim()) return;
+    if (!gitForm.url.trim() || !gitForm.target_dir.trim()) return;
     gitImportMutation.mutate(gitForm);
   }
 
@@ -139,7 +144,7 @@ export default function TypstProjects() {
         <div>
           <h1 className="text-2xl font-bold">Typst Projects</h1>
           <p className="text-muted-foreground mt-1">
-            Create and manage Typst document projects.
+            Register local Typst project directories.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -149,7 +154,7 @@ export default function TypstProjects() {
           </Button>
           <Button onClick={() => setDialogOpen(true)}>
             <Plus className="h-4 w-4 mr-1" />
-            New Project
+            Add Project
           </Button>
         </div>
       </div>
@@ -164,7 +169,7 @@ export default function TypstProjects() {
         <div className="rounded-lg border border-dashed p-8 text-center">
           <FileType className="mx-auto h-12 w-12 text-muted-foreground/30 mb-3" />
           <p className="text-muted-foreground">
-            No projects yet. Create your first Typst project to get started.
+            No projects yet. Add a local Typst project directory to get started.
           </p>
         </div>
       ) : (
@@ -176,7 +181,7 @@ export default function TypstProjects() {
                   Name
                 </th>
                 <th className="px-4 py-3 text-left text-sm font-medium">
-                  Description
+                  Local Path
                 </th>
                 <th className="px-4 py-3 text-left text-sm font-medium">
                   Main File
@@ -194,10 +199,12 @@ export default function TypstProjects() {
                 <tr key={project.id} className="border-b last:border-b-0">
                   <td className="px-4 py-3 text-sm font-medium">
                     <div className="flex items-center gap-1.5">
-                      {project.git_url && (
+                      {project.git_url ? (
                         <span title={project.git_url}>
                           <GitBranch className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                         </span>
+                      ) : (
+                        <FolderOpen className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                       )}
                       <button
                         type="button"
@@ -208,8 +215,8 @@ export default function TypstProjects() {
                       </button>
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground">
-                    {project.description ?? "-"}
+                  <td className="px-4 py-3 text-sm text-muted-foreground font-mono text-xs max-w-xs truncate">
+                    {project.local_path}
                   </td>
                   <td className="px-4 py-3 text-sm text-muted-foreground font-mono">
                     {project.main_file}
@@ -261,14 +268,14 @@ export default function TypstProjects() {
         </div>
       )}
 
-      {/* Create Project Dialog */}
+      {/* Add Project Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>New Typst Project</DialogTitle>
+            <DialogTitle>Add Typst Project</DialogTitle>
             <DialogDescription>
-              Create a new Typst project. A main file will be created
-              automatically.
+              Register an existing local directory as a Typst project. The
+              directory must contain at least one .typ file.
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -285,26 +292,29 @@ export default function TypstProjects() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="description">Description</Label>
-              <Textarea
-                id="description"
-                value={form.description}
+              <Label htmlFor="local_path">Local Directory Path *</Label>
+              <Input
+                id="local_path"
+                value={form.local_path}
                 onChange={(e) =>
-                  setForm((f) => ({ ...f, description: e.target.value }))
+                  setForm((f) => ({ ...f, local_path: e.target.value }))
                 }
-                placeholder="Optional project description..."
-                rows={3}
+                placeholder="/Users/you/Documents/my-resume"
+                required
               />
+              <p className="text-xs text-muted-foreground">
+                Absolute path to the directory containing your .typ files.
+              </p>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="main_file">Main File</Label>
+              <Label htmlFor="main_file">Main File (optional)</Label>
               <Input
                 id="main_file"
                 value={form.main_file}
                 onChange={(e) =>
                   setForm((f) => ({ ...f, main_file: e.target.value }))
                 }
-                placeholder="main.typ"
+                placeholder="Auto-detected (defaults to main.typ)"
               />
             </div>
             <DialogFooter>
@@ -313,9 +323,13 @@ export default function TypstProjects() {
               </Button>
               <Button
                 type="submit"
-                disabled={createMutation.isPending || !form.name.trim()}
+                disabled={
+                  registerMutation.isPending ||
+                  !form.name.trim() ||
+                  !form.local_path.trim()
+                }
               >
-                {createMutation.isPending ? "Creating..." : "Create"}
+                {registerMutation.isPending ? "Adding..." : "Add Project"}
               </Button>
             </DialogFooter>
           </form>
@@ -328,8 +342,8 @@ export default function TypstProjects() {
           <DialogHeader>
             <DialogTitle>Import from Git</DialogTitle>
             <DialogDescription>
-              Clone a Git repository and import all supported files (.typ, .bib,
-              .csv, .yaml, .json, .toml).
+              Clone a Git repository into a local directory and register it as a
+              Typst project.
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleGitImport} className="space-y-4">
@@ -349,7 +363,22 @@ export default function TypstProjects() {
               </p>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="git-name">Project Name</Label>
+              <Label htmlFor="git-target-dir">Target Directory *</Label>
+              <Input
+                id="git-target-dir"
+                value={gitForm.target_dir}
+                onChange={(e) =>
+                  setGitForm((f) => ({ ...f, target_dir: e.target.value }))
+                }
+                placeholder="/Users/you/Documents/imported-project"
+                required
+              />
+              <p className="text-xs text-muted-foreground">
+                Local directory to clone the repository into.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="git-name">Project Name (optional)</Label>
               <Input
                 id="git-name"
                 value={gitForm.name}
@@ -365,14 +394,18 @@ export default function TypstProjects() {
                 variant="outline"
                 onClick={() => {
                   setGitDialogOpen(false);
-                  setGitForm({ url: "", name: "" });
+                  setGitForm({ url: "", name: "", target_dir: "" });
                 }}
               >
                 Cancel
               </Button>
               <Button
                 type="submit"
-                disabled={gitImportMutation.isPending || !gitForm.url.trim()}
+                disabled={
+                  gitImportMutation.isPending ||
+                  !gitForm.url.trim() ||
+                  !gitForm.target_dir.trim()
+                }
               >
                 {gitImportMutation.isPending ? "Importing..." : "Import"}
               </Button>
@@ -393,8 +426,8 @@ export default function TypstProjects() {
             <DialogTitle>Delete Project</DialogTitle>
             <DialogDescription>
               Are you sure you want to delete &quot;{deleteTarget?.name}&quot;?
-              This will delete all files and render history. This action cannot
-              be undone.
+              This will remove the project registration and render history. Your
+              local files will NOT be deleted.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

@@ -1,6 +1,7 @@
 //! # rara-domain-typst
 //!
-//! Typst compilation service — project management, file editing, and PDF rendering.
+//! Typst compilation service — project management, local filesystem file
+//! editing, and PDF rendering.
 
 use std::sync::Arc;
 
@@ -9,6 +10,7 @@ use sqlx::PgPool;
 
 pub mod compiler;
 pub mod error;
+pub mod fs;
 pub mod git;
 pub mod pg_repository;
 pub mod repository;

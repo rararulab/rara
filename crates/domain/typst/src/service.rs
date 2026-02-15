@@ -1,6 +1,9 @@
 //! Application-level service for Typst project management and compilation.
+//!
+//! Files are read from and written to the local filesystem. The database stores
+//! only project metadata and render history.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 use opendal::Operator;
 use sha2::{Digest, Sha256};
@@ -10,9 +13,10 @@ use uuid::Uuid;
 use crate::{
     compiler,
     error::{TypstError, map_storage_err},
+    fs::{self, FileEntry},
     git::GitImporter,
     repository::TypstRepository,
-    types::{ImportGitRequest, RenderResult, TypstFile, TypstProject},
+    types::{ImportGitRequest, RegisterProjectRequest, RenderResult, TypstProject},
 };
 
 /// High-level service for Typst project CRUD and compilation.
@@ -39,23 +43,53 @@ impl TypstService {
 
     // -- Projects --
 
-    /// Create a new Typst project.
+    /// Register a local project directory.
+    ///
+    /// Validates that the path exists, is a directory, and contains at least
+    /// one `.typ` file.
     #[instrument(skip(self))]
-    pub async fn create_project(
+    pub async fn register_project(
         &self,
-        name: String,
-        description: Option<String>,
-        main_file: Option<String>,
-        resume_id: Option<Uuid>,
+        req: RegisterProjectRequest,
     ) -> Result<TypstProject, TypstError> {
-        if name.trim().is_empty() {
+        if req.name.trim().is_empty() {
             return Err(TypstError::InvalidRequest {
                 message: "project name must not be empty".to_owned(),
             });
         }
-        let main_file = main_file.unwrap_or_else(|| "main.typ".to_owned());
+
+        let local_path = Path::new(&req.local_path);
+
+        if !local_path.exists() {
+            return Err(TypstError::DirectoryNotFound {
+                path: req.local_path.clone(),
+            });
+        }
+        if !local_path.is_dir() {
+            return Err(TypstError::NotADirectory {
+                path: req.local_path.clone(),
+            });
+        }
+
+        // Check that there is at least one .typ file.
+        let typ_files = fs::collect_typ_files(local_path)?;
+        if typ_files.is_empty() {
+            return Err(TypstError::NoTypstFiles {
+                path: req.local_path.clone(),
+            });
+        }
+
+        // Auto-detect main file.
+        let main_file = req.main_file.unwrap_or_else(|| {
+            if typ_files.contains_key("main.typ") {
+                "main.typ".to_owned()
+            } else {
+                typ_files.keys().next().cloned().unwrap_or_else(|| "main.typ".to_owned())
+            }
+        });
+
         self.repo
-            .create_project(&name, description.as_deref(), &main_file, resume_id, None)
+            .create_project(&req.name, &req.local_path, &main_file, None)
             .await
     }
 
@@ -74,7 +108,7 @@ impl TypstService {
         self.repo.list_projects().await
     }
 
-    /// Delete a project and all associated data.
+    /// Delete a project (database record and S3 renders only; local files are NOT deleted).
     #[instrument(skip(self))]
     pub async fn delete_project(&self, id: Uuid) -> Result<(), TypstError> {
         // Clean up S3 objects for all renders.
@@ -95,96 +129,58 @@ impl TypstService {
         self.repo.delete_project(id).await
     }
 
-    // -- Files --
+    // -- File operations (local filesystem) --
 
-    /// Create a file in a project.
-    #[instrument(skip(self, content))]
-    pub async fn create_file(
-        &self,
-        project_id: Uuid,
-        path: String,
-        content: String,
-    ) -> Result<TypstFile, TypstError> {
-        // Ensure the project exists.
-        self.repo
-            .get_project(project_id)
-            .await?
-            .ok_or(TypstError::ProjectNotFound { id: project_id })?;
-
-        validate_file_path(&path)?;
-        self.repo.create_file(project_id, &path, &content).await
+    /// List the file tree for a project by scanning its local directory.
+    pub fn list_files(&self, project: &TypstProject) -> Result<Vec<FileEntry>, TypstError> {
+        fs::scan_directory(Path::new(&project.local_path))
     }
 
-    /// Get a file's content.
-    #[instrument(skip(self))]
-    pub async fn get_file(
+    /// Read a file's content from disk.
+    pub fn read_file(&self, project: &TypstProject, path: &str) -> Result<String, TypstError> {
+        fs::read_file(Path::new(&project.local_path), path)
+    }
+
+    /// Write content to a file on disk.
+    pub fn write_file(
         &self,
-        project_id: Uuid,
+        project: &TypstProject,
         path: &str,
-    ) -> Result<TypstFile, TypstError> {
-        self.repo
-            .get_file(project_id, path)
-            .await?
-            .ok_or_else(|| TypstError::FileNotFound {
-                project_id,
-                path: path.to_owned(),
-            })
-    }
-
-    /// List all files in a project.
-    #[instrument(skip(self))]
-    pub async fn list_files(&self, project_id: Uuid) -> Result<Vec<TypstFile>, TypstError> {
-        self.repo.list_files(project_id).await
-    }
-
-    /// Update a file's content.
-    #[instrument(skip(self, content))]
-    pub async fn update_file(
-        &self,
-        project_id: Uuid,
-        path: &str,
-        content: String,
-    ) -> Result<TypstFile, TypstError> {
-        self.repo.update_file(project_id, path, &content).await
-    }
-
-    /// Delete a file.
-    #[instrument(skip(self))]
-    pub async fn delete_file(
-        &self,
-        project_id: Uuid,
-        path: &str,
+        content: &str,
     ) -> Result<(), TypstError> {
-        self.repo.delete_file(project_id, path).await
+        fs::write_file(Path::new(&project.local_path), path, content)
     }
 
     // -- Git integration --
 
     /// Import a Typst project from a Git repository.
     ///
-    /// Clones the repo, scans for supported files, creates a project, and
-    /// batch-inserts all discovered files.
+    /// Clones the repo into `target_dir`, then registers it as a local project.
     #[instrument(skip(self))]
     pub async fn import_from_git(
         &self,
         request: ImportGitRequest,
     ) -> Result<TypstProject, TypstError> {
-        let importer = GitImporter;
-        let files = importer.import_from_url(&request.url).await?;
+        let target = Path::new(&request.target_dir);
 
-        if files.is_empty() {
-            return Err(TypstError::InvalidRequest {
-                message: "no supported files found in repository".to_owned(),
+        // Clone into target directory.
+        let importer = GitImporter;
+        importer.clone_to(&request.url, target).await?;
+
+        // Verify there are .typ files.
+        let typ_files = fs::collect_typ_files(target)?;
+        if typ_files.is_empty() {
+            return Err(TypstError::NoTypstFiles {
+                path: request.target_dir.clone(),
             });
         }
 
-        // Auto-detect main file: prefer `main.typ`, otherwise the first `.typ` file.
-        let main_file = files
-            .iter()
-            .find(|f| f.path == "main.typ")
-            .or_else(|| files.iter().find(|f| f.path.ends_with(".typ")))
-            .map(|f| f.path.clone())
-            .unwrap_or_else(|| "main.typ".to_owned());
+        // Auto-detect main file.
+        let main_file = if typ_files.contains_key("main.typ") {
+            "main.typ".to_owned()
+        } else {
+            typ_files.keys().next().cloned().unwrap_or_else(|| "main.typ".to_owned())
+        };
 
         // Derive project name from request or URL.
         let name = request.name.unwrap_or_else(|| {
@@ -199,22 +195,15 @@ impl TypstService {
 
         let project = self
             .repo
-            .create_project(&name, None, &main_file, None, Some(&request.url))
+            .create_project(&name, &request.target_dir, &main_file, Some(&request.url))
             .await?;
-
-        // Batch-insert files.
-        for file in &files {
-            self.repo
-                .create_file(project.id, &file.path, &file.content)
-                .await?;
-        }
 
         // Update sync timestamp.
         let project = self.repo.update_git_synced(project.id).await?;
 
         tracing::info!(
             project_id = %project.id,
-            file_count = files.len(),
+            file_count = typ_files.len(),
             git_url = %request.url,
             "imported project from git"
         );
@@ -222,7 +211,7 @@ impl TypstService {
         Ok(project)
     }
 
-    /// Sync a Git-backed project by re-cloning and replacing all files.
+    /// Sync a Git-backed project by pulling the latest changes.
     #[instrument(skip(self))]
     pub async fn sync_git(&self, project_id: Uuid) -> Result<TypstProject, TypstError> {
         let project = self
@@ -233,24 +222,15 @@ impl TypstService {
 
         let git_url = project.git_url.as_deref().ok_or(TypstError::NotGitProject)?;
 
+        // Re-clone into the same directory (the importer handles this).
         let importer = GitImporter;
-        let files = importer.sync(git_url).await?;
-
-        // Full replace: delete old files, insert new ones.
-        self.repo.delete_all_files(project_id).await?;
-
-        for file in &files {
-            self.repo
-                .create_file(project_id, &file.path, &file.content)
-                .await?;
-        }
+        importer.clone_to(git_url, Path::new(&project.local_path)).await?;
 
         // Update sync timestamp.
         let project = self.repo.update_git_synced(project_id).await?;
 
         tracing::info!(
             project_id = %project_id,
-            file_count = files.len(),
             "synced project from git"
         );
 
@@ -261,6 +241,7 @@ impl TypstService {
 
     /// Compile a project to PDF.
     ///
+    /// Reads all `.typ` files from the local filesystem and compiles them.
     /// If a cached render exists with the same source hash, it is returned
     /// instead of recompiling.
     #[instrument(skip(self))]
@@ -277,18 +258,13 @@ impl TypstService {
 
         let main_file = main_file_override.unwrap_or(project.main_file);
 
-        // Gather all files.
-        let files = self.repo.list_files(project_id).await?;
-        if files.is_empty() {
+        // Gather all .typ files from disk.
+        let file_map = fs::collect_typ_files(Path::new(&project.local_path))?;
+        if file_map.is_empty() {
             return Err(TypstError::InvalidRequest {
-                message: "project has no files".to_owned(),
+                message: "project has no .typ files".to_owned(),
             });
         }
-
-        let file_map: HashMap<String, String> = files
-            .iter()
-            .map(|f| (f.path.clone(), f.content.clone()))
-            .collect();
 
         // Compute source hash for caching.
         let source_hash = compute_source_hash(&file_map, &main_file);
@@ -369,21 +345,6 @@ impl TypstService {
 
         Ok((pdf_bytes, render.pdf_object_key))
     }
-}
-
-/// Validate that a file path is relative and doesn't contain path traversal.
-fn validate_file_path(path: &str) -> Result<(), TypstError> {
-    if path.trim().is_empty() {
-        return Err(TypstError::InvalidRequest {
-            message: "file path must not be empty".to_owned(),
-        });
-    }
-    if path.starts_with('/') || path.contains("..") {
-        return Err(TypstError::InvalidRequest {
-            message: "file path must be relative and must not contain '..'".to_owned(),
-        });
-    }
-    Ok(())
 }
 
 /// Compute a deterministic SHA-256 hash over all source files and the main

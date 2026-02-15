@@ -2,15 +2,20 @@
 //!
 //! The trait is defined in the domain crate so that the service layer can
 //! depend on it without pulling in any infrastructure code.
+//!
+//! File operations have been removed — files are now read/written directly
+//! from the local filesystem via the `fs` module.
 
 use uuid::Uuid;
 
 use crate::{
     error::TypstError,
-    types::{RenderResult, TypstFile, TypstProject},
+    types::{RenderResult, TypstProject},
 };
 
-/// Persistence contract for Typst projects, files, and renders.
+/// Persistence contract for Typst projects and renders.
+///
+/// File storage has been moved to the local filesystem; see `crate::fs`.
 #[async_trait::async_trait]
 pub trait TypstRepository: Send + Sync {
     // -- Projects --
@@ -19,17 +24,13 @@ pub trait TypstRepository: Send + Sync {
     async fn create_project(
         &self,
         name: &str,
-        description: Option<&str>,
+        local_path: &str,
         main_file: &str,
-        resume_id: Option<Uuid>,
         git_url: Option<&str>,
     ) -> Result<TypstProject, TypstError>;
 
     /// Update the git sync timestamp for a project.
     async fn update_git_synced(&self, id: Uuid) -> Result<TypstProject, TypstError>;
-
-    /// Delete all files belonging to a project.
-    async fn delete_all_files(&self, project_id: Uuid) -> Result<(), TypstError>;
 
     /// Get a project by ID.
     async fn get_project(&self, id: Uuid) -> Result<Option<TypstProject>, TypstError>;
@@ -37,39 +38,8 @@ pub trait TypstRepository: Send + Sync {
     /// List all projects (newest first).
     async fn list_projects(&self) -> Result<Vec<TypstProject>, TypstError>;
 
-    /// Delete a project and all associated files and renders.
+    /// Delete a project and all associated renders.
     async fn delete_project(&self, id: Uuid) -> Result<(), TypstError>;
-
-    // -- Files --
-
-    /// Create a file in a project.
-    async fn create_file(
-        &self,
-        project_id: Uuid,
-        path: &str,
-        content: &str,
-    ) -> Result<TypstFile, TypstError>;
-
-    /// Get a file by project ID and path.
-    async fn get_file(
-        &self,
-        project_id: Uuid,
-        path: &str,
-    ) -> Result<Option<TypstFile>, TypstError>;
-
-    /// List all files in a project.
-    async fn list_files(&self, project_id: Uuid) -> Result<Vec<TypstFile>, TypstError>;
-
-    /// Update a file's content.
-    async fn update_file(
-        &self,
-        project_id: Uuid,
-        path: &str,
-        content: &str,
-    ) -> Result<TypstFile, TypstError>;
-
-    /// Delete a file by project ID and path.
-    async fn delete_file(&self, project_id: Uuid, path: &str) -> Result<(), TypstError>;
 
     // -- Renders --
 

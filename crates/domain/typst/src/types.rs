@@ -8,35 +8,21 @@ use uuid::Uuid;
 // Domain models
 // ---------------------------------------------------------------------------
 
-/// A Typst project groups related `.typ` files and tracks render history.
+/// A Typst project that points to a local directory on disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TypstProject {
-    pub id:                Uuid,
-    pub name:              String,
-    pub description:       Option<String>,
+    pub id:                 Uuid,
+    pub name:               String,
+    /// Absolute path to the local project directory.
+    pub local_path:         String,
     /// Path to the main `.typ` file (relative to project root), defaults to `"main.typ"`.
-    pub main_file:         String,
-    /// Optional link to a resume in the resume domain.
-    pub resume_id:         Option<Uuid>,
+    pub main_file:          String,
     /// If this project was imported from a Git repository, the clone URL.
-    pub git_url:           Option<String>,
+    pub git_url:            Option<String>,
     /// Timestamp of the last successful Git sync.
     pub git_last_synced_at: Option<Timestamp>,
-    pub created_at:        Timestamp,
-    pub updated_at:        Timestamp,
-}
-
-/// A single Typst source file belonging to a project.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TypstFile {
-    pub id:         Uuid,
-    pub project_id: Uuid,
-    /// Relative path within the project, e.g. `"main.typ"` or `"template/header.typ"`.
-    pub path:       String,
-    /// Full text content of the file.
-    pub content:    String,
-    pub created_at: Timestamp,
-    pub updated_at: Timestamp,
+    pub created_at:         Timestamp,
+    pub updated_at:         Timestamp,
 }
 
 /// A completed PDF render, stored in object storage.
@@ -58,20 +44,14 @@ pub struct RenderResult {
 // Request types
 // ---------------------------------------------------------------------------
 
-/// Body for `POST /api/v1/typst/projects`.
+/// Body for `POST /api/v1/typst/projects` — register a local project.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateProjectRequest {
-    pub name:        String,
-    pub description: Option<String>,
-    pub main_file:   Option<String>,
-    pub resume_id:   Option<Uuid>,
-}
-
-/// Body for `POST /api/v1/typst/projects/{id}/files`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateFileRequest {
-    pub path:    String,
-    pub content: String,
+pub struct RegisterProjectRequest {
+    pub name:       String,
+    /// Absolute path to the local project directory.
+    pub local_path: String,
+    /// Main file relative path; defaults to `"main.typ"`.
+    pub main_file:  Option<String>,
 }
 
 /// Body for `PUT /api/v1/typst/projects/{id}/files/{path}`.
@@ -83,8 +63,10 @@ pub struct UpdateFileRequest {
 /// Body for `POST /api/v1/typst/projects/import-git`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportGitRequest {
-    pub url:  String,
-    pub name: Option<String>,
+    pub url:        String,
+    pub name:       Option<String>,
+    /// Target directory to clone into.
+    pub target_dir: String,
 }
 
 /// Body for `POST /api/v1/typst/projects/{id}/compile`.
@@ -103,24 +85,14 @@ pub struct CompileRequest {
 pub struct TypstProjectRow {
     pub id:                 Uuid,
     pub name:               String,
-    pub description:        Option<String>,
+    pub local_path:         String,
     pub main_file:          String,
+    pub description:        Option<String>,
     pub resume_id:          Option<Uuid>,
     pub git_url:            Option<String>,
     pub git_last_synced_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at:         chrono::DateTime<chrono::Utc>,
     pub updated_at:         chrono::DateTime<chrono::Utc>,
-}
-
-/// Raw database row for `typst_file`.
-#[derive(Debug, Clone, sqlx::FromRow)]
-pub struct TypstFileRow {
-    pub id:         Uuid,
-    pub project_id: Uuid,
-    pub path:       String,
-    pub content:    String,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// Raw database row for `typst_render`.
@@ -146,26 +118,12 @@ impl From<TypstProjectRow> for TypstProject {
         Self {
             id:                 r.id,
             name:               r.name,
-            description:        r.description,
+            local_path:         r.local_path,
             main_file:          r.main_file,
-            resume_id:          r.resume_id,
             git_url:            r.git_url,
             git_last_synced_at: chrono_opt_to_timestamp(r.git_last_synced_at),
             created_at:         chrono_to_timestamp(r.created_at),
             updated_at:         chrono_to_timestamp(r.updated_at),
-        }
-    }
-}
-
-impl From<TypstFileRow> for TypstFile {
-    fn from(r: TypstFileRow) -> Self {
-        Self {
-            id:         r.id,
-            project_id: r.project_id,
-            path:       r.path,
-            content:    r.content,
-            created_at: chrono_to_timestamp(r.created_at),
-            updated_at: chrono_to_timestamp(r.updated_at),
         }
     }
 }
