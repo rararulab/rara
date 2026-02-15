@@ -136,6 +136,63 @@ impl ToolRegistry {
             .collect()
     }
 
+    /// Convert only the named tools to OpenRouter format.
+    /// If `tool_names` is empty, include ALL tools (no filtering).
+    pub fn to_openrouter_tools_filtered(
+        &self,
+        tool_names: &[String],
+    ) -> Result<Vec<openrouter_rs::types::Tool>> {
+        if tool_names.is_empty() {
+            return self.to_openrouter_tools();
+        }
+        self.tools
+            .values()
+            .filter(|entry| tool_names.iter().any(|n| n == entry.tool.name()))
+            .map(|entry| {
+                openrouter_rs::types::Tool::builder()
+                    .name(entry.tool.name())
+                    .description(entry.tool.description())
+                    .parameters(entry.tool.parameters_schema())
+                    .build()
+                    .context(OpenRouterSnafu)
+            })
+            .collect()
+    }
+
+    /// Return the names of all registered tools.
+    #[must_use]
+    pub fn tool_names(&self) -> Vec<String> {
+        self.tools.keys().cloned().collect()
+    }
+
+    /// Create a new registry containing only the named tools.
+    /// If `tool_names` is empty, returns a clone of all tools.
+    #[must_use]
+    pub fn filtered(&self, tool_names: &[String]) -> Self {
+        if tool_names.is_empty() {
+            let mut new = Self::new();
+            for entry in self.tools.values() {
+                new.register(
+                    Arc::clone(&entry.tool),
+                    entry.source.clone(),
+                    entry.layer,
+                );
+            }
+            return new;
+        }
+        let mut new = Self::new();
+        for (name, entry) in &self.tools {
+            if tool_names.iter().any(|n| n == name) {
+                new.register(
+                    Arc::clone(&entry.tool),
+                    entry.source.clone(),
+                    entry.layer,
+                );
+            }
+        }
+        new
+    }
+
     fn register(
         &mut self,
         tool: AgentToolRef,
