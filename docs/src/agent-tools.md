@@ -1,133 +1,72 @@
 # Agent Tools
 
-This page explains how the agent uses the `workers::memory` crate in the agent loop.
+The agent tool system is organized into two layers registered in the `ToolRegistry`:
 
-## Memory Integration Flow
+- **Layer 1 — Primitives**: low-level database, notification, and storage operations.
+- **Layer 2 — Services**: higher-level tools built on top of primitives (memory, resume, job pipeline, typst).
 
-At runtime, memory is wired in `AppState::init`:
+Tools are wired in `AppState::init` (`crates/workers/src/worker_state.rs`) and made available to the `AgentRunner` during chat.
 
-1. Build `MemoryManager` with the selected storage backend (`postgres` or `sqlite`).
-2. Apply runtime memory settings from `SettingsSvc` (`agent.memory`).
-3. Run an initial `sync()` to index markdown files.
-4. Register `memory_search` and `memory_get` as service tools in the tool registry.
-5. Pass the tool registry to `ChatService`, so the model can call memory tools during chat.
+## Primitive Tools
 
-Relevant implementation:
+| Tool | Description |
+|------|-------------|
+| `db_query` | Read-only SQL query against whitelisted tables |
+| `db_mutate` | INSERT/UPDATE/DELETE against whitelisted tables |
+| `notify` | Send Telegram notifications |
+| `storage_read` | Read files from object storage (S3/local) |
 
-- `crates/workers/src/worker_state.rs`
-- `crates/workers/src/tools/services/memory_tools.rs`
-- `crates/workers/src/memory/manager.rs`
+## Service Tools
 
-## Data Source
+### Memory Tools
 
-The memory index scans markdown files under the configured memory directory:
+| Tool | Description |
+|------|-------------|
+| `memory_search` | Hybrid search (PG keyword + Chroma vector) across indexed markdown files |
+| `memory_get` | Fetch full chunk content by `chunk_id` |
+| `memory_write` | Write markdown to `memory_dir/`, triggers immediate sync |
+| `memory_update_profile` | Update a section of the persistent user profile |
 
-- `MEMORY.md`
-- `*.md` files in the same memory tree
+### Resume & Job Tools
 
-The manager performs incremental sync based on file metadata and content hash.
+| Tool | Description |
+|------|-------------|
+| `list_resumes` | List all resumes |
+| `get_resume_content` | Get resume text content |
+| `analyze_resume` | AI-powered resume analysis against a job description |
+| `job_pipeline` | Create and manage job applications |
 
-## Agent-Facing Tools
+### Typst Tools
 
-### `memory_search`
+| Tool | Description |
+|------|-------------|
+| `list_typst_projects` | List Typst document projects |
+| `list_typst_files` | List files in a Typst project |
+| `read_typst_file` | Read a Typst source file |
+| `update_typst_file` | Update a Typst source file |
+| `compile_typst_project` | Compile a Typst project to PDF |
 
-Purpose:
-- Retrieve relevant memory chunks for a user query.
+## Tool Registration
 
-Behavior:
-- Refreshes runtime memory settings before each call.
-- Runs `sync()` before searching.
-- Uses hybrid retrieval when embeddings are enabled.
-- Falls back to keyword search when embeddings are disabled or vector path is unavailable.
+Tools are registered in `AppState::init`:
 
-Input:
+```rust
+// Layer 1: Primitives
+tool_registry.register_primitive(Arc::new(DbQueryTool::new(pool.clone())));
+tool_registry.register_primitive(Arc::new(DbMutateTool::new(pool.clone())));
+tool_registry.register_primitive(Arc::new(NotifyTool::new(notify_client, settings_svc)));
+tool_registry.register_primitive(Arc::new(StorageReadTool::new(object_store)));
 
-```json
-{
-  "query": "rust engineer tokyo",
-  "limit": 8
-}
+// Layer 2: Services
+tool_registry.register_service(Arc::new(MemorySearchTool::new(memory_manager)));
+tool_registry.register_service(Arc::new(MemoryWriteTool::new(memory_manager)));
+tool_registry.register_service(Arc::new(MemoryUpdateProfileTool::new(memory_manager)));
+// ... and more
 ```
 
-Output (shape):
+## Relevant Files
 
-```json
-{
-  "query": "rust engineer tokyo",
-  "storage_backend": "postgres",
-  "vector_backend": "local|chroma|none",
-  "count": 2,
-  "results": [
-    {
-      "chunk_id": 101,
-      "path": "MEMORY.md",
-      "chunk_index": 0,
-      "score": 0.82,
-      "snippet": "..."
-    }
-  ]
-}
-```
-
-### `memory_get`
-
-Purpose:
-- Fetch full chunk content by `chunk_id` returned from `memory_search`.
-
-Input:
-
-```json
-{
-  "chunk_id": 101
-}
-```
-
-Output (shape):
-
-```json
-{
-  "chunk_id": 101,
-  "path": "MEMORY.md",
-  "chunk_index": 0,
-  "content": "full chunk text"
-}
-```
-
-## Runtime Configuration (`/api/v1/settings`)
-
-Memory behavior is controlled by `agent.memory` in runtime settings:
-
-```json
-{
-  "agent": {
-    "memory": {
-      "storage_backend": "postgres",
-      "embeddings_enabled": true,
-      "chroma_enabled": true,
-      "chroma_url": "http://localhost:8000",
-      "chroma_collection": "job-memory",
-      "chroma_api_key": ""
-    }
-  }
-}
-```
-
-Field notes:
-
-- `storage_backend`: `postgres` (recommended for this project) or `sqlite`.
-- `embeddings_enabled`: enables hybrid retrieval path.
-- `chroma_enabled`: enables remote vector retrieval via Chroma.
-- `chroma_*`: Chroma connection settings.
-
-Settings are hot-applied in tool execution, so updates take effect without restarting the agent process.
-
-## Recommended Agent Loop Pattern
-
-For memory-grounded responses, the model/tool loop should follow:
-
-1. Call `memory_search` with the user request.
-2. Select top chunk IDs.
-3. Call `memory_get` for the selected chunks.
-4. Answer using retrieved content as grounding context.
-
-This pattern avoids losing context between turns and keeps responses tied to indexed memory documents.
+- `crates/workers/src/worker_state.rs` — tool registration and `AppState`
+- `crates/workers/src/tools/primitives/` — primitive tool implementations
+- `crates/workers/src/tools/services/` — service tool implementations
+- `crates/agents/src/tool_registry.rs` — `ToolRegistry` and `AgentTool` trait

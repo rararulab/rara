@@ -1,7 +1,7 @@
 [book]
-title = "job"
+title = "Rara"
 authors = ["crrow"]
-description = "Documentation for job - A Rust project template with gRPC and multi-language code generation"
+description = "Documentation for Rara — Personal AI assistant platform"
 src = "src"
 
 [build]
