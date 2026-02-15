@@ -27,6 +27,7 @@ snafu = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
+utoipa-swagger-ui = { workspace = true }
 yunara-store = { workspace = true }
 
 [lints]

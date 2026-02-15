@@ -277,11 +277,11 @@ impl AppState {
         })
     }
 
-    /// Build an [`axum::Router`] with all domain API routes.
-    pub fn routes(&self) -> axum::Router {
-        use rara_server::dedup_layer::{DedupLayer, DedupLayerConfig};
+    /// Build all domain API routes and the OpenAPI spec.
+    pub fn routes(&self) -> (axum::Router, utoipa::openapi::OpenApi) {
+        use utoipa_axum::router::OpenApiRouter;
 
-        axum::Router::new()
+        let (router, api) = OpenApiRouter::with_openapi(Self::api_doc())
             .merge(rara_domain_resume::routes::routes(
                 self.resume_service.clone(),
                 self.object_store.clone(),
@@ -302,10 +302,9 @@ impl AppState {
                 self.job_service.clone(),
                 self.object_store.clone(),
             ))
-            .merge(
-                rara_domain_job::routes::discovery_routes(self.job_service.clone())
-                    .layer(DedupLayer::new(DedupLayerConfig::default())),
-            )
+            .merge(rara_domain_job::routes::discovery_routes(
+                self.job_service.clone(),
+            ))
             .merge(rara_domain_shared::settings::router::routes(
                 self.settings_svc.clone(),
             ))
@@ -317,6 +316,36 @@ impl AppState {
                 self.typst_service.clone(),
             ))
             .merge(crate::system_routes::routes())
+            .split_for_parts();
+
+        (router, api)
+    }
+
+    fn api_doc() -> utoipa::openapi::OpenApi {
+        use utoipa::OpenApi;
+        #[derive(OpenApi)]
+        #[openapi(
+            info(
+                title = "Rara API",
+                description = "AI Job Automation Platform API",
+                version = "0.0.17"
+            ),
+            tags(
+                (name = "applications", description = "Application lifecycle management"),
+                (name = "chat", description = "Chat sessions and messaging"),
+                (name = "resumes", description = "Resume management"),
+                (name = "interviews", description = "Interview management"),
+                (name = "jobs", description = "Job discovery and management"),
+                (name = "scheduler", description = "Task scheduling"),
+                (name = "analytics", description = "Analytics and metrics"),
+                (name = "settings", description = "Runtime settings"),
+                (name = "notifications", description = "Notification queue"),
+                (name = "typst", description = "Typst document management"),
+                (name = "system", description = "System utilities")
+            )
+        )]
+        struct ApiDoc;
+        ApiDoc::openapi()
     }
 }
 

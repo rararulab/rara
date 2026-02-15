@@ -34,8 +34,10 @@ macro_rules! define_id {
             Deserialize,
             derive_more::Display,
             derive_more::From,
+            utoipa::ToSchema,
         )]
         #[display("{_0}")]
+        #[schema(value_type = String, format = "uuid")]
         pub struct $name(pub Uuid);
 
         impl $name {

@@ -24,6 +24,8 @@ snafu.workspace = true
 sqlx = { workspace = true }
 strum_macros.workspace = true
 tracing.workspace = true
+utoipa.workspace = true
+utoipa-axum.workspace = true
 uuid = { workspace = true }
 
 [dev-dependencies]

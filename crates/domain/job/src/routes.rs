@@ -18,12 +18,13 @@
 use std::collections::HashSet;
 
 use axum::{
-    Json, Router,
+    Json,
     extract::{Path, Query, State},
     http::{StatusCode, header},
     response::IntoResponse,
     routing::{delete, get, post},
 };
+use utoipa_axum::router::OpenApiRouter;
 use opendal::Operator;
 use tracing::instrument;
 use uuid::Uuid;
@@ -42,8 +43,8 @@ use crate::{
 // ===========================================================================
 
 /// Discovery routes (caller may apply DedupLayer).
-pub fn discovery_routes(service: JobService) -> Router {
-    Router::new()
+pub fn discovery_routes(service: JobService) -> OpenApiRouter {
+    OpenApiRouter::new()
         .route("/api/v1/jobs/discover", post(discover_jobs))
         .with_state(service)
 }
@@ -95,12 +96,12 @@ async fn discover_jobs(
 // ===========================================================================
 
 /// Saved-job CRUD and bot internal routes.
-pub fn management_routes(service: JobService, object_store: Operator) -> Router {
+pub fn management_routes(service: JobService, object_store: Operator) -> OpenApiRouter {
     let state = ManagementState {
         service,
         object_store,
     };
-    Router::new()
+    OpenApiRouter::new()
         // Tracker
         .route("/api/v1/saved-jobs", post(create_saved_job))
         .route("/api/v1/saved-jobs", get(list_saved_jobs))
