@@ -18,6 +18,7 @@ chrono.workspace = true
 openrouter-rs = "^0.4"
 rara-agents.workspace = true
 rara-domain-shared.workspace = true
+rara-memory.workspace = true
 rara-paths.workspace = true
 rara-sessions.workspace = true
 serde.workspace = true

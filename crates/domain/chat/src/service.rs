@@ -28,6 +28,7 @@ use openrouter_rs::{
 };
 use rara_agents::{model::OpenRouterLoaderRef, runner::AgentRunner, tool_registry::ToolRegistry};
 use rara_domain_shared::settings::model::{ModelScenario, Settings};
+use rara_memory::MemoryManager;
 use rara_sessions::{
     repository::SessionRepository,
     types::{
@@ -89,14 +90,17 @@ fn resolve_soul_prompt(settings: &Settings) -> Option<String> {
 #[derive(Clone)]
 pub struct ChatService {
     /// Persistence layer for sessions, messages, and channel bindings.
-    session_repo: Arc<dyn SessionRepository>,
+    session_repo:   Arc<dyn SessionRepository>,
     /// Factory for creating OpenRouter API clients.
-    llm_provider: OpenRouterLoaderRef,
+    llm_provider:   OpenRouterLoaderRef,
     /// Registry of tools available to the agent during execution.
-    tools:        Arc<ToolRegistry>,
+    tools:          Arc<ToolRegistry>,
     /// Watch receiver for runtime settings — provides dynamic model and
     /// system prompt configuration.
-    settings_rx:  watch::Receiver<Settings>,
+    settings_rx:    watch::Receiver<Settings>,
+    /// Optional memory manager for pre-fetching relevant context on first
+    /// turn of a session.
+    memory_manager: Option<Arc<MemoryManager>>,
 }
 
 impl ChatService {
@@ -104,18 +108,22 @@ impl ChatService {
     ///
     /// The `settings_rx` watch receiver supplies the current runtime settings,
     /// from which the default model and system prompt are read dynamically.
+    /// The optional `memory_manager` enables automatic memory pre-fetch on
+    /// the first turn of a session.
     #[must_use]
     pub fn new(
         session_repo: Arc<dyn SessionRepository>,
         llm_provider: OpenRouterLoaderRef,
         tools: Arc<ToolRegistry>,
         settings_rx: watch::Receiver<Settings>,
+        memory_manager: Option<Arc<MemoryManager>>,
     ) -> Self {
         Self {
             session_repo,
             llm_provider,
             tools,
             settings_rx,
+            memory_manager,
         }
     }
 
@@ -392,7 +400,32 @@ impl ChatService {
             let settings = self.settings_rx.borrow();
             resolve_soul_prompt(&settings)
         };
-        let system_prompt = compose_system_prompt(&base_system_prompt, soul_prompt.as_deref());
+        let mut system_prompt = compose_system_prompt(&base_system_prompt, soul_prompt.as_deref());
+
+        // Pre-fetch relevant memory context for new / short sessions.
+        if history.len() < 3 {
+            if let Some(ref mm) = self.memory_manager {
+                match mm.search(&user_text, 5).await {
+                    Ok(results) if !results.is_empty() => {
+                        system_prompt.push_str("\n\n## Relevant Memory Context\n");
+                        for hit in &results {
+                            system_prompt.push_str(&format!(
+                                "- [{}] {}\n",
+                                hit.path, hit.snippet,
+                            ));
+                        }
+                        info!(
+                            hits = results.len(),
+                            "memory pre-fetch injected into system prompt"
+                        );
+                    }
+                    Ok(_) => {} // no results — nothing to inject
+                    Err(e) => {
+                        tracing::warn!(error = %e, "memory pre-fetch failed, continuing without context");
+                    }
+                }
+            }
+        }
 
         let user_content = if has_images {
             let urls = image_urls.as_ref().unwrap();
