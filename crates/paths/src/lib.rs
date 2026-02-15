@@ -254,6 +254,12 @@ pub fn sessions_dir() -> &'static PathBuf {
     SESSIONS_DIR.get_or_init(|| data_dir().join("sessions"))
 }
 
+/// Returns the path to the agent policy markdown file.
+pub fn agent_policy_file() -> &'static PathBuf {
+    static AGENT_POLICY: OnceLock<PathBuf> = OnceLock::new();
+    AGENT_POLICY.get_or_init(|| config_dir().join("agent-policy.md"))
+}
+
 /// Returns the path to the memory documents directory.
 pub fn memory_dir() -> &'static PathBuf {
     static MEMORY_DIR: OnceLock<PathBuf> = OnceLock::new();
