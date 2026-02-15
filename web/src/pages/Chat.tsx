@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import { api } from "@/api/client";
 import type {
+  ChatContentBlock,
   ChatMessageData,
   ChatModel,
   ChatSession,
@@ -655,7 +656,53 @@ function ChatThread({
   const sendMutation = useMutation({
     mutationFn: (vars: { text: string; imageUrls?: string[] }) =>
       sendMessage(sessionKey, vars.text, vars.imageUrls),
-    onSuccess: () => {
+    onMutate: async (vars) => {
+      // Cancel in-flight fetches so they don't overwrite optimistic update
+      await queryClient.cancelQueries({
+        queryKey: ["chat-messages", sessionKey],
+      });
+
+      const previous = queryClient.getQueryData<ChatMessageData[]>([
+        "chat-messages",
+        sessionKey,
+      ]);
+
+      // Build optimistic user message
+      const content: ChatContentBlock[] | string = vars.imageUrls?.length
+        ? [
+            { type: "text" as const, text: vars.text },
+            ...vars.imageUrls.map((url) => ({
+              type: "image_url" as const,
+              url,
+            })),
+          ]
+        : vars.text;
+
+      const optimisticMsg: ChatMessageData = {
+        seq: (previous?.length ?? 0) + 1,
+        role: "user",
+        content,
+        created_at: new Date().toISOString(),
+      };
+
+      queryClient.setQueryData<ChatMessageData[]>(
+        ["chat-messages", sessionKey],
+        (old) => [...(old ?? []), optimisticMsg],
+      );
+
+      return { previous };
+    },
+    onError: (_err, _vars, context) => {
+      // Roll back to previous messages on error
+      if (context?.previous) {
+        queryClient.setQueryData(
+          ["chat-messages", sessionKey],
+          context.previous,
+        );
+      }
+    },
+    onSettled: () => {
+      // Always refetch to get the real server data (including assistant reply)
       queryClient.invalidateQueries({
         queryKey: ["chat-messages", sessionKey],
       });

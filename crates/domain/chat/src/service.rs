@@ -423,7 +423,7 @@ impl ChatService {
     /// Export a session's message history to the memory directory as markdown.
     ///
     /// Reads all messages for the given session key, formats them as a
-    /// markdown document, and writes it to `rara_paths::memory_dir()/sessions/{key}.md`.
+    /// markdown document, and writes it to `rara_paths::memory_sessions_dir()/{key}.md`.
     /// Returns the path of the written file.
     #[instrument(skip(self))]
     pub async fn export_session_to_memory(
