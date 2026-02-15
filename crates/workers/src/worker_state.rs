@@ -61,6 +61,9 @@ pub struct AppState {
     // -- agent scheduler --
     pub agent_scheduler: Arc<crate::agent_scheduler::AgentScheduler>,
 
+    // -- skills --
+    pub skill_registry: Arc<RwLock<rara_skills::registry::SkillRegistry>>,
+
     // -- worker coordination --
     pub analyze_notify:   Arc<RwLock<Option<NotifyHandle>>>,
     pub proactive_notify: Arc<RwLock<Option<IntervalOrNotifyHandle>>>,
@@ -245,6 +248,25 @@ impl AppState {
         )));
 
         let tools = Arc::new(tool_registry);
+
+        // -- skills registry ------------------------------------------------
+        let skill_registry = {
+            let user_dir = rara_paths::skills_dir();
+            let bundled_dir = std::env::current_dir()
+                .unwrap_or_default()
+                .join("skills");
+            rara_skills::registry::SkillRegistry::load_from_dirs(&[
+                bundled_dir.as_path(),
+                user_dir.as_path(),
+            ])
+            .unwrap_or_else(|e| {
+                warn!(error = %e, "Failed to load skills, using empty registry");
+                rara_skills::registry::SkillRegistry::new()
+            })
+        };
+        let skill_registry = Arc::new(RwLock::new(skill_registry));
+        info!(count = skill_registry.read().unwrap().list_all().len(), "Skills registry initialized");
+
         let chat_service = rara_domain_chat::service::ChatService::new(
             session_repo,
             llm_provider.clone(),
@@ -252,6 +274,7 @@ impl AppState {
             settings_svc.subscribe(),
             Some(Arc::clone(&memory_manager)),
             settings_svc.clone(),
+            skill_registry.clone(),
         );
         info!("Chat service initialized");
 
@@ -272,6 +295,7 @@ impl AppState {
             crawl_client,
             memory_manager,
             agent_scheduler,
+            skill_registry,
             analyze_notify: Arc::new(RwLock::new(None)),
             proactive_notify: Arc::new(RwLock::new(None)),
         })

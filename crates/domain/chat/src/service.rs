@@ -93,21 +93,23 @@ fn resolve_soul_prompt(settings: &Settings) -> Option<String> {
 #[derive(Clone)]
 pub struct ChatService {
     /// Persistence layer for sessions, messages, and channel bindings.
-    session_repo:   Arc<dyn SessionRepository>,
+    session_repo:    Arc<dyn SessionRepository>,
     /// Factory for creating OpenRouter API clients.
-    llm_provider:   OpenRouterLoaderRef,
+    llm_provider:    OpenRouterLoaderRef,
     /// Registry of tools available to the agent during execution.
-    tools:          Arc<ToolRegistry>,
+    tools:           Arc<ToolRegistry>,
     /// Watch receiver for runtime settings — provides dynamic model and
     /// system prompt configuration.
-    settings_rx:    watch::Receiver<Settings>,
+    settings_rx:     watch::Receiver<Settings>,
     /// Optional memory manager for pre-fetching relevant context on first
     /// turn of a session.
-    memory_manager: Option<Arc<MemoryManager>>,
+    memory_manager:  Option<Arc<MemoryManager>>,
     /// Cached catalog of models fetched from OpenRouter.
-    model_catalog:  ModelCatalog,
+    model_catalog:   ModelCatalog,
     /// Settings service for persisting favorite models.
-    settings_svc:   rara_domain_shared::settings::SettingsSvc,
+    settings_svc:    rara_domain_shared::settings::SettingsSvc,
+    /// Skills registry for trigger matching and tool filtering.
+    skill_registry:  Arc<std::sync::RwLock<rara_skills::registry::SkillRegistry>>,
 }
 
 impl ChatService {
@@ -125,6 +127,7 @@ impl ChatService {
         settings_rx: watch::Receiver<Settings>,
         memory_manager: Option<Arc<MemoryManager>>,
         settings_svc: rara_domain_shared::settings::SettingsSvc,
+        skill_registry: Arc<std::sync::RwLock<rara_skills::registry::SkillRegistry>>,
     ) -> Self {
         Self {
             session_repo,
@@ -134,6 +137,7 @@ impl ChatService {
             memory_manager,
             model_catalog: ModelCatalog::new(),
             settings_svc,
+            skill_registry,
         }
     }
 
@@ -475,6 +479,48 @@ impl ChatService {
             }
         }
 
+        // -- skill matching + injection --
+        let tool_whitelist = {
+            let registry = self.skill_registry.read().unwrap();
+
+            // Match user message against skill triggers
+            let matched = registry.match_triggers(&user_text);
+
+            let mut prompt_parts = String::new();
+            let mut tools: Vec<String> = Vec::new();
+
+            for skill in &matched {
+                prompt_parts.push_str(&format!(
+                    "\n\n## Active Skill: {}\n\n{}",
+                    skill.name(),
+                    skill.prompt
+                ));
+                tools.extend(skill.tools().iter().cloned());
+            }
+
+            // Add available skills listing to system prompt
+            let skills_xml = registry.to_prompt_xml();
+            if !skills_xml.is_empty() {
+                prompt_parts.push_str(&format!("\n\n{skills_xml}"));
+            }
+
+            if !prompt_parts.is_empty() {
+                system_prompt.push_str(&prompt_parts);
+            }
+
+            tools
+        };
+
+        // Build effective tool registry: filtered when skills specify tools,
+        // otherwise use the full registry.
+        let filtered_tools;
+        let effective_tools: &ToolRegistry = if tool_whitelist.is_empty() {
+            &self.tools
+        } else {
+            filtered_tools = self.tools.filtered(&tool_whitelist);
+            &filtered_tools
+        };
+
         let user_content = if has_images {
             let urls = image_urls.as_ref().unwrap();
             let mut parts = vec![ContentPart::text(&user_text)];
@@ -495,7 +541,7 @@ impl ChatService {
             .build();
 
         let result = runner
-            .run(&self.tools, None)
+            .run(effective_tools, None)
             .await
             .map_err(|e| ChatError::AgentError {
                 message: e.to_string(),

@@ -35,6 +35,7 @@ rara-domain-shared = { workspace = true }
 rara-domain-typst = { workspace = true }
 rara-memory = { workspace = true }
 rara-paths = { workspace = true }
+rara-skills = { workspace = true }
 rara-server = { workspace = true }
 rara-sessions = { workspace = true }
 reqwest.workspace = true
