@@ -12,20 +12,36 @@ pub enum TypstError {
     ProjectNotFound { id: Uuid },
 
     /// The requested file was not found.
-    #[snafu(display("file not found: {path} in project {project_id}"))]
-    FileNotFound { project_id: Uuid, path: String },
+    #[snafu(display("file not found: {path}"))]
+    FileNotFound { path: String },
 
     /// The requested render was not found.
     #[snafu(display("render not found: {id}"))]
     RenderNotFound { id: Uuid },
 
-    /// A file with the same path already exists in the project.
-    #[snafu(display("file already exists: {path} in project {project_id}"))]
-    FileAlreadyExists { project_id: Uuid, path: String },
-
     /// Invalid request data.
     #[snafu(display("invalid request: {message}"))]
     InvalidRequest { message: String },
+
+    /// Path traversal detected.
+    #[snafu(display("path traversal detected: {path}"))]
+    PathTraversal { path: String },
+
+    /// Directory not found.
+    #[snafu(display("directory not found: {path}"))]
+    DirectoryNotFound { path: String },
+
+    /// Path is not a directory.
+    #[snafu(display("not a directory: {path}"))]
+    NotADirectory { path: String },
+
+    /// No .typ files found in directory.
+    #[snafu(display("no .typ files found in: {path}"))]
+    NoTypstFiles { path: String },
+
+    /// File I/O error.
+    #[snafu(display("file I/O error: {source}"))]
+    FileIo { source: std::io::Error },
 
     /// Typst compilation failed.
     #[snafu(display("compilation error: {message}"))]
@@ -77,9 +93,12 @@ impl axum::response::IntoResponse for TypstError {
             | Self::FileNotFound { .. }
             | Self::RenderNotFound { .. } => axum::http::StatusCode::NOT_FOUND,
 
-            Self::FileAlreadyExists { .. } => axum::http::StatusCode::CONFLICT,
+            Self::InvalidRequest { .. }
+            | Self::PathTraversal { .. }
+            | Self::NotADirectory { .. }
+            | Self::NoTypstFiles { .. } => axum::http::StatusCode::BAD_REQUEST,
 
-            Self::InvalidRequest { .. } => axum::http::StatusCode::BAD_REQUEST,
+            Self::DirectoryNotFound { .. } => axum::http::StatusCode::NOT_FOUND,
 
             Self::CompilationError { .. } => axum::http::StatusCode::UNPROCESSABLE_ENTITY,
 
@@ -91,7 +110,8 @@ impl axum::response::IntoResponse for TypstError {
 
             Self::GitCloneFailed { .. }
             | Self::Storage { .. }
-            | Self::Repository { .. } => {
+            | Self::Repository { .. }
+            | Self::FileIo { .. } => {
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR
             }
         };

@@ -14,11 +14,13 @@
 
 //! Layer 2 service tools for Typst project management and compilation.
 //!
+//! All file operations now go through the local filesystem via TypstService.
+//!
 //! - [`ListTypstProjectsTool`]: list all Typst projects.
-//! - [`ListTypstFilesTool`]: list files in a project.
-//! - [`ReadTypstFileTool`]: read file content from a project.
-//! - [`UpdateTypstFileTool`]: update file content in a project.
-//! - [`CompileTypstProjectTool`]: compile a project to PDF.
+//! - [`ListTypstFilesTool`]: list files in a project (from disk).
+//! - [`ReadTypstFileTool`]: read file content from disk.
+//! - [`UpdateTypstFileTool`]: write file content to disk.
+//! - [`CompileTypstProjectTool`]: compile a project to PDF (reading from disk).
 
 use async_trait::async_trait;
 use rara_agents::tool_registry::AgentTool;
@@ -45,7 +47,7 @@ impl AgentTool for ListTypstProjectsTool {
     fn name(&self) -> &str { "list_typst_projects" }
 
     fn description(&self) -> &str {
-        "List all Typst projects. Returns project id, name, main file, and git URL if imported from Git."
+        "List all Typst projects. Returns project id, name, local_path, main file, and git URL if imported from Git."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -65,6 +67,7 @@ impl AgentTool for ListTypstProjectsTool {
                         json!({
                             "id": p.id.to_string(),
                             "name": p.name,
+                            "local_path": p.local_path,
                             "main_file": p.main_file,
                             "git_url": p.git_url,
                         })
@@ -81,7 +84,7 @@ impl AgentTool for ListTypstProjectsTool {
 // list_typst_files
 // ---------------------------------------------------------------------------
 
-/// Layer 2 service tool: list all files in a Typst project.
+/// Layer 2 service tool: list all files in a Typst project (from local disk).
 pub struct ListTypstFilesTool {
     typst_service: rara_domain_typst::service::TypstService,
 }
@@ -97,7 +100,7 @@ impl AgentTool for ListTypstFilesTool {
     fn name(&self) -> &str { "list_typst_files" }
 
     fn description(&self) -> &str {
-        "List all files in a Typst project."
+        "List all files in a Typst project by scanning the local directory."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -116,13 +119,14 @@ impl AgentTool for ListTypstFilesTool {
     async fn execute(&self, params: serde_json::Value) -> rara_agents::err::Result<serde_json::Value> {
         let project_id = parse_uuid(&params, "project_id")?;
 
-        match self.typst_service.list_files(project_id).await {
-            Ok(files) => {
-                let items: Vec<serde_json::Value> = files
-                    .iter()
-                    .map(|f| json!({ "path": f.path }))
-                    .collect();
-                Ok(json!({ "files": items, "count": items.len() }))
+        let project = match self.typst_service.get_project(project_id).await {
+            Ok(p) => p,
+            Err(e) => return Ok(json!({ "error": format!("{e}") })),
+        };
+
+        match self.typst_service.list_files(&project) {
+            Ok(entries) => {
+                Ok(json!({ "files": entries }))
             }
             Err(e) => Ok(json!({ "error": format!("{e}") })),
         }
@@ -133,7 +137,7 @@ impl AgentTool for ListTypstFilesTool {
 // read_typst_file
 // ---------------------------------------------------------------------------
 
-/// Layer 2 service tool: read the content of a file in a Typst project.
+/// Layer 2 service tool: read the content of a file from the local filesystem.
 pub struct ReadTypstFileTool {
     typst_service: rara_domain_typst::service::TypstService,
 }
@@ -149,7 +153,7 @@ impl AgentTool for ReadTypstFileTool {
     fn name(&self) -> &str { "read_typst_file" }
 
     fn description(&self) -> &str {
-        "Read the content of a file in a Typst project."
+        "Read the content of a file in a Typst project from the local filesystem."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -173,11 +177,16 @@ impl AgentTool for ReadTypstFileTool {
         let project_id = parse_uuid(&params, "project_id")?;
         let file_path = parse_string(&params, "file_path")?;
 
-        match self.typst_service.get_file(project_id, &file_path).await {
-            Ok(file) => Ok(json!({
+        let project = match self.typst_service.get_project(project_id).await {
+            Ok(p) => p,
+            Err(e) => return Ok(json!({ "error": format!("{e}") })),
+        };
+
+        match self.typst_service.read_file(&project, &file_path) {
+            Ok(content) => Ok(json!({
                 "project_id": project_id.to_string(),
-                "path": file.path,
-                "content": file.content,
+                "path": file_path,
+                "content": content,
             })),
             Err(e) => Ok(json!({ "error": format!("{e}") })),
         }
@@ -188,7 +197,7 @@ impl AgentTool for ReadTypstFileTool {
 // update_typst_file
 // ---------------------------------------------------------------------------
 
-/// Layer 2 service tool: update the content of a file in a Typst project.
+/// Layer 2 service tool: write content to a file on the local filesystem.
 pub struct UpdateTypstFileTool {
     typst_service: rara_domain_typst::service::TypstService,
 }
@@ -204,7 +213,7 @@ impl AgentTool for UpdateTypstFileTool {
     fn name(&self) -> &str { "update_typst_file" }
 
     fn description(&self) -> &str {
-        "Update the content of a file in a Typst project. Use this to modify resume content."
+        "Update the content of a file in a Typst project. Writes directly to the local filesystem."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -233,11 +242,15 @@ impl AgentTool for UpdateTypstFileTool {
         let file_path = parse_string(&params, "file_path")?;
         let content = parse_string(&params, "content")?;
 
-        match self.typst_service.update_file(project_id, &file_path, content).await {
-            Ok(file) => Ok(json!({
+        let project = match self.typst_service.get_project(project_id).await {
+            Ok(p) => p,
+            Err(e) => return Ok(json!({ "error": format!("{e}") })),
+        };
+
+        match self.typst_service.write_file(&project, &file_path, &content) {
+            Ok(()) => Ok(json!({
                 "project_id": project_id.to_string(),
-                "path": file.path,
-                "updated_at": file.updated_at.to_string(),
+                "path": file_path,
                 "message": "file updated successfully",
             })),
             Err(e) => Ok(json!({ "error": format!("{e}") })),
@@ -265,7 +278,7 @@ impl AgentTool for CompileTypstProjectTool {
     fn name(&self) -> &str { "compile_typst_project" }
 
     fn description(&self) -> &str {
-        "Compile a Typst project to PDF. Returns compilation result including page count and file size."
+        "Compile a Typst project to PDF. Reads files from the local filesystem. Returns compilation result including page count and file size."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {

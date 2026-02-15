@@ -286,22 +286,23 @@ export interface ChatModel {
 export interface TypstProject {
   id: string;
   name: string;
-  description: string | null;
+  local_path: string;
   main_file: string;
-  resume_id: string | null;
   git_url: string | null;
   git_last_synced_at: string | null;
   created_at: string;
   updated_at: string;
 }
 
-export interface TypstFile {
-  id: string;
-  project_id: string;
+export interface FileEntry {
+  path: string;
+  is_dir: boolean;
+  children?: FileEntry[];
+}
+
+export interface FileContent {
   path: string;
   content: string;
-  created_at: string;
-  updated_at: string;
 }
 
 export interface RenderResult {
