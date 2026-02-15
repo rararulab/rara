@@ -61,6 +61,9 @@ pub struct AppState {
     // -- agent scheduler --
     pub agent_scheduler: Arc<crate::agent_scheduler::AgentScheduler>,
 
+    // -- skills --
+    pub skill_registry: Arc<std::sync::RwLock<rara_skills::registry::SkillRegistry>>,
+
     // -- worker coordination --
     pub analyze_notify:   Arc<RwLock<Option<NotifyHandle>>>,
     pub proactive_notify: Arc<RwLock<Option<IntervalOrNotifyHandle>>>,
@@ -244,6 +247,36 @@ impl AppState {
             task_store.clone(),
         )));
 
+        // -- skills registry ------------------------------------------------
+        let skill_registry = {
+            let user_dir = rara_paths::skills_dir();
+            let bundled_dir = std::env::current_dir()
+                .unwrap_or_default()
+                .join("skills");
+            rara_skills::registry::SkillRegistry::load_from_dirs(&[
+                bundled_dir.as_path(),
+                user_dir.as_path(),
+            ])
+            .unwrap_or_else(|e| {
+                warn!(error = %e, "Failed to load skills, using empty registry");
+                rara_skills::registry::SkillRegistry::new()
+            })
+        };
+        let skill_registry = Arc::new(std::sync::RwLock::new(skill_registry));
+
+        tool_registry.register_service(Arc::new(crate::tools::services::ListSkillsTool::new(
+            skill_registry.clone(),
+        )));
+        tool_registry.register_service(Arc::new(crate::tools::services::CreateSkillTool::new(
+            skill_registry.clone(),
+        )));
+        tool_registry.register_service(Arc::new(crate::tools::services::UpdateSkillTool::new(
+            skill_registry.clone(),
+        )));
+        tool_registry.register_service(Arc::new(crate::tools::services::DeleteSkillTool::new(
+            skill_registry.clone(),
+        )));
+
         let tools = Arc::new(tool_registry);
         let chat_service = rara_domain_chat::service::ChatService::new(
             session_repo,
@@ -272,6 +305,7 @@ impl AppState {
             crawl_client,
             memory_manager,
             agent_scheduler,
+            skill_registry,
             analyze_notify: Arc::new(RwLock::new(None)),
             proactive_notify: Arc::new(RwLock::new(None)),
         })
