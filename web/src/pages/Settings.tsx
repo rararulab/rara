@@ -681,28 +681,36 @@ export default function Settings() {
           )}
 
           {selectedSetting === "telegram" && (
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="telegram-chat-id">Chat ID</Label>
-                <Input
-                  id="telegram-chat-id"
-                  value={telegramChatId}
-                  onChange={(e) => setTelegramChatId(e.target.value)}
-                  placeholder="123456789"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="telegram-token">Bot Token</Label>
-                <Input
-                  id="telegram-token"
-                  type="password"
-                  value={telegramToken}
-                  onChange={(e) => setTelegramToken(e.target.value)}
-                  placeholder={current.telegram.token_hint ?? "123456:ABC..."}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Current token hint: {current.telegram.token_hint ?? "Not set"}
-                </p>
+            <div className="space-y-6 px-6 py-5">
+              <div className="space-y-4 rounded-xl border bg-card p-4">
+                <div className="space-y-2">
+                  <Label htmlFor="telegram-chat-id" className="text-base font-semibold">
+                    Chat ID
+                  </Label>
+                  <Input
+                    id="telegram-chat-id"
+                    value={telegramChatId}
+                    onChange={(e) => setTelegramChatId(e.target.value)}
+                    placeholder="123456789"
+                    className="h-11"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="telegram-token" className="text-base font-semibold">
+                    Bot Token
+                  </Label>
+                  <Input
+                    id="telegram-token"
+                    type="password"
+                    value={telegramToken}
+                    onChange={(e) => setTelegramToken(e.target.value)}
+                    placeholder={current.telegram.token_hint ?? "123456:ABC..."}
+                    className="h-11"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Current token hint: {current.telegram.token_hint ?? "Not set"}
+                  </p>
+                </div>
               </div>
             </div>
           )}
