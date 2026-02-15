@@ -14,12 +14,14 @@
 
 //! Layer 2 service tools: complex business workflows.
 
+mod codex;
 mod job_pipeline;
 mod memory_tools;
 mod resume_tools;
 mod schedule_tools;
 mod typst_tools;
 
+pub use codex::{AgentTaskStore, CodexListTool, CodexRunTool, CodexStatusTool};
 pub use job_pipeline::JobPipelineTool;
 pub use memory_tools::{MemoryGetTool, MemorySearchTool, MemoryUpdateProfileTool, MemoryWriteTool};
 pub use resume_tools::{AnalyzeResumeTool, GetResumeContentTool, ListResumesTool};
