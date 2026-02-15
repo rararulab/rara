@@ -185,6 +185,9 @@ impl AppState {
             Arc::clone(&memory_manager),
         )));
         tool_registry.register_service(Arc::new(
+            crate::tools::services::MemoryUpdateProfileTool::new(Arc::clone(&memory_manager)),
+        ));
+        tool_registry.register_service(Arc::new(
             crate::tools::services::ListTypstProjectsTool::new(typst_service.clone()),
         ));
         tool_registry.register_service(Arc::new(crate::tools::services::ListTypstFilesTool::new(

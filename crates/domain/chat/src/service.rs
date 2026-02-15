@@ -402,6 +402,15 @@ impl ChatService {
         };
         let mut system_prompt = compose_system_prompt(&base_system_prompt, soul_prompt.as_deref());
 
+        // Inject core user profile into system prompt.
+        if let Some(ref mm) = self.memory_manager {
+            if let Ok(profile) = mm.read_core_profile().await {
+                if !profile.trim().is_empty() {
+                    system_prompt = format!("{profile}\n\n---\n\n{system_prompt}");
+                }
+            }
+        }
+
         // Pre-fetch relevant memory context for new / short sessions.
         if history.len() < 3 {
             if let Some(ref mm) = self.memory_manager {
@@ -483,6 +492,31 @@ impl ChatService {
             tool_calls = result.tool_calls_made,
             "message exchange complete"
         );
+
+        // Fire-and-forget: reflect on what was learned and update memory.
+        if let Some(ref mm) = self.memory_manager {
+            let mm = Arc::clone(mm);
+            let user_text_clone = user_text.clone();
+            let assistant_text_clone = assistant_text.clone();
+            let llm = self.llm_provider.clone();
+            let tools = Arc::clone(&self.tools);
+            let model = self.current_default_model();
+
+            tokio::spawn(async move {
+                if let Err(e) = memory_reflection(
+                    &mm,
+                    &llm,
+                    &tools,
+                    &model,
+                    &user_text_clone,
+                    &assistant_text_clone,
+                )
+                .await
+                {
+                    tracing::warn!(error = %e, "memory reflection failed");
+                }
+            });
+        }
 
         Ok(persisted)
     }
@@ -693,6 +727,68 @@ pub fn to_openrouter_message(msg: &ChatMessage) -> Message {
     }
 
     message
+}
+
+/// Run a lightweight memory reflection after a conversation turn.
+///
+/// This function examines the user message and assistant response to extract
+/// any new facts about the user. If something new was learned, it uses the
+/// `memory_update_profile` or `memory_write` tools to persist it.
+///
+/// The reflection uses a single-turn agent with `max_iterations = 1` to keep
+/// cost and latency low. It is designed to be called via `tokio::spawn` so
+/// it does not block the response.
+async fn memory_reflection(
+    _mm: &Arc<MemoryManager>,
+    llm: &OpenRouterLoaderRef,
+    tools: &Arc<ToolRegistry>,
+    model: &str,
+    user_text: &str,
+    assistant_text: &str,
+) -> Result<(), ChatError> {
+    // Only expose memory-related tools for the reflection agent.
+    let mut reflection_tools = ToolRegistry::default();
+    if let Some(tool) = tools.get("memory_update_profile") {
+        reflection_tools.register_service(Arc::clone(tool));
+    }
+    if let Some(tool) = tools.get("memory_write") {
+        reflection_tools.register_service(Arc::clone(tool));
+    }
+
+    // If neither tool is available, skip reflection entirely.
+    if reflection_tools.is_empty() {
+        return Ok(());
+    }
+
+    let reflection_prompt = format!(
+        "You are a memory maintenance agent. Based on the following exchange, extract any new \
+         facts about the user (name, role, location, preferences, goals, important context). \
+         If you learned something new, use memory_update_profile to update the relevant section \
+         (\"Basic Info\", \"Preferences\", \"Current Goals\", or \"Key Context\"). \
+         If nothing new was learned, do nothing — do NOT call any tools.\n\n\
+         Keep updates concise (3-5 bullet points per section max). \
+         Only add genuinely useful information.\n\n\
+         ## User Message\n{user_text}\n\n\
+         ## Assistant Response\n{assistant_text}"
+    );
+
+    let runner = AgentRunner::builder()
+        .llm_provider(llm.clone())
+        .model_name(model.to_owned())
+        .system_prompt("You are a silent memory maintenance agent. Your only job is to update the user profile if new facts were learned. Never produce conversational output.".to_owned())
+        .user_content(openrouter_rs::api::chat::Content::Text(reflection_prompt))
+        .max_iterations(1_usize)
+        .build();
+
+    let _result = runner
+        .run(&reflection_tools, None)
+        .await
+        .map_err(|e| ChatError::AgentError {
+            message: format!("memory reflection agent: {e}"),
+        })?;
+
+    tracing::debug!("memory reflection complete");
+    Ok(())
 }
 
 /// Truncate a string to at most `max_len` characters.

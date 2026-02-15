@@ -21,7 +21,7 @@ mod schedule_tools;
 mod typst_tools;
 
 pub use job_pipeline::JobPipelineTool;
-pub use memory_tools::{MemoryGetTool, MemorySearchTool, MemoryWriteTool};
+pub use memory_tools::{MemoryGetTool, MemorySearchTool, MemoryUpdateProfileTool, MemoryWriteTool};
 pub use resume_tools::{AnalyzeResumeTool, GetResumeContentTool, ListResumesTool};
 pub use schedule_tools::{ScheduleAddTool, ScheduleListTool, ScheduleRemoveTool};
 pub use typst_tools::{
