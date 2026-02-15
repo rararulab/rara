@@ -62,8 +62,9 @@ impl AISettings {
 /// Telegram-specific runtime settings.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TelegramSettings {
-    pub bot_token: Option<String>,
-    pub chat_id:   Option<i64>,
+    pub bot_token:             Option<String>,
+    pub chat_id:               Option<i64>,
+    pub allowed_group_chat_id: Option<i64>,
 }
 
 /// Agent personality and proactive messaging settings.
@@ -129,8 +130,9 @@ pub struct AiRuntimeSettingsPatch {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TelegramRuntimeSettingsPatch {
-    pub bot_token: Option<String>,
-    pub chat_id:   Option<i64>,
+    pub bot_token:             Option<String>,
+    pub chat_id:               Option<i64>,
+    pub allowed_group_chat_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -173,6 +175,9 @@ impl Settings {
             }
             if let Some(chat_id) = telegram.chat_id {
                 self.telegram.chat_id = Some(chat_id);
+            }
+            if let Some(allowed_group_chat_id) = telegram.allowed_group_chat_id {
+                self.telegram.allowed_group_chat_id = Some(allowed_group_chat_id);
             }
         }
 

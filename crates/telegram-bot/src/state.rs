@@ -48,8 +48,9 @@ pub(crate) struct BotState {
 /// Runtime configuration that can be updated without restarting the bot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TelegramRuntimeConfig {
-    pub(crate) bot_token:       String,
-    pub(crate) primary_chat_id: i64,
+    pub(crate) bot_token:             String,
+    pub(crate) primary_chat_id:       i64,
+    pub(crate) allowed_group_chat_id: Option<i64>,
 }
 
 impl BotState {
@@ -59,6 +60,7 @@ impl BotState {
         bot_username: Option<String>,
         bot_token: String,
         primary_chat_id: i64,
+        allowed_group_chat_id: Option<i64>,
         http_client: Arc<MainServiceHttpClient>,
         cancel: CancellationToken,
     ) -> Self {
@@ -68,6 +70,7 @@ impl BotState {
             config: Arc::new(RwLock::new(TelegramRuntimeConfig {
                 bot_token,
                 primary_chat_id,
+                allowed_group_chat_id,
             })),
             http_client,
             cancel,
@@ -80,6 +83,12 @@ impl BotState {
         chat_id.0 == config.primary_chat_id
     }
 
+    /// Check whether this group chat is allowed for bot interaction.
+    pub(crate) fn is_allowed_group_chat(&self, chat_id: ChatId) -> bool {
+        let config = self.current_config();
+        config.allowed_group_chat_id == Some(chat_id.0)
+    }
+
     /// Read current runtime config snapshot.
     pub(crate) fn current_config(&self) -> TelegramRuntimeConfig {
         match self.config.read() {
@@ -90,10 +99,16 @@ impl BotState {
 
     /// Update runtime credentials and primary chat id.
     /// Returns `true` if the config actually changed.
-    pub(crate) fn update_config(&self, bot_token: String, primary_chat_id: i64) -> bool {
+    pub(crate) fn update_config(
+        &self,
+        bot_token: String,
+        primary_chat_id: i64,
+        allowed_group_chat_id: Option<i64>,
+    ) -> bool {
         let next = TelegramRuntimeConfig {
             bot_token,
             primary_chat_id,
+            allowed_group_chat_id,
         };
         if let Ok(mut guard) = self.config.write() {
             if *guard == next {

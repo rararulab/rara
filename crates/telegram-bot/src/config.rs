@@ -32,15 +32,12 @@ use crate::{
 
 /// Telegram bot credentials.
 ///
-/// Both fields are required to start the bot. They can be supplied via
-/// environment variables or through the runtime settings API.
+/// `bot_token` is required to start the bot. `chat_id` is loaded only from
+/// runtime settings.
 #[derive(Debug, Clone)]
 pub struct TelegramConfig {
     /// Bot token obtained from [@BotFather](https://t.me/BotFather).
     pub bot_token: String,
-    /// Telegram chat ID of the single authorized chat. Messages from all
-    /// other chats are rejected.
-    pub chat_id:   i64,
 }
 
 /// Top-level configuration for the standalone bot process.
@@ -70,7 +67,7 @@ impl BotConfig {
     /// | Variable                 | Required | Default                                          |
     /// |--------------------------|----------|--------------------------------------------------|
     /// | `TELEGRAM_BOT_TOKEN`     | Yes      | —                                                |
-    /// | `TELEGRAM_CHAT_ID`       | Yes      | —                                                |
+    /// | `TELEGRAM_CHAT_ID`       | No       | (loaded from runtime settings)                   |
     /// | `DATABASE_URL`           | No       | `postgres://postgres:postgres@localhost:5432/job` |
     /// | `MIGRATION_DIRECTORY`    | No       | `crates/rara-model/migrations`                   |
     /// | `MAIN_SERVICE_HTTP_BASE` | No       | `http://127.0.0.1:3000`                          |
@@ -86,21 +83,9 @@ impl BotConfig {
                 )
                 .build();
 
-        let telegram = match (
-            std::env::var("TELEGRAM_BOT_TOKEN"),
-            std::env::var("TELEGRAM_CHAT_ID"),
-        ) {
-            (Ok(token), Ok(chat_id)) => {
-                let chat_id: i64 = chat_id
-                    .parse()
-                    .expect("TELEGRAM_CHAT_ID must be an integer");
-                Some(TelegramConfig {
-                    bot_token: token,
-                    chat_id,
-                })
-            }
-            _ => None,
-        };
+        let telegram = std::env::var("TELEGRAM_BOT_TOKEN")
+            .ok()
+            .map(|token| TelegramConfig { bot_token: token });
 
         let main_service_http_base = std::env::var("MAIN_SERVICE_HTTP_BASE")
             .unwrap_or_else(|_| "http://127.0.0.1:3000".to_owned());
@@ -154,11 +139,10 @@ impl BotConfig {
         let chat_id = match runtime_settings
             .telegram
             .chat_id
-            .or_else(|| env_telegram.as_ref().map(|cfg| cfg.chat_id))
         {
             Some(chat_id) => chat_id,
             None => {
-                whatever!("Telegram chat_id is required: set TELEGRAM_CHAT_ID or /api/v1/settings")
+                whatever!("Telegram chat_id is required: set it via /api/v1/settings")
             }
         };
 
@@ -186,6 +170,7 @@ impl BotConfig {
             bot_username,
             bot_token.clone(),
             chat_id,
+            runtime_settings.telegram.allowed_group_chat_id,
             main_http,
             cancel,
         ));

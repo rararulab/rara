@@ -97,10 +97,7 @@ impl BotApp {
             .telegram
             .bot_token
             .or_else(|| telegram_config.as_ref().map(|cfg| cfg.bot_token.clone()));
-        let chat_id = runtime_settings
-            .telegram
-            .chat_id
-            .or_else(|| telegram_config.as_ref().map(|cfg| cfg.chat_id));
+        let chat_id = runtime_settings.telegram.chat_id;
 
         let (Some(bot_token), Some(chat_id)) = (bot_token, chat_id) else {
             // Neither env var nor watch channel has Telegram credentials — skip.
@@ -127,6 +124,7 @@ impl BotApp {
             bot_username,
             bot_token,
             chat_id,
+            runtime_settings.telegram.allowed_group_chat_id,
             main_http,
             cancel,
         ));
@@ -280,7 +278,11 @@ impl BotApp {
                         continue;
                     };
 
-                    if state.update_config(bot_token, chat_id) {
+                    if state.update_config(
+                        bot_token,
+                        chat_id,
+                        settings.telegram.allowed_group_chat_id,
+                    ) {
                         info!("telegram runtime settings updated via watch channel");
                     }
                 }

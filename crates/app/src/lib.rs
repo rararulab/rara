@@ -328,13 +328,9 @@ impl AppConfig {
         settings_rx: tokio::sync::watch::Receiver<rara_domain_shared::settings::model::Settings>,
         main_service_http_base: &str,
     ) -> Result<Option<rara_telegram_bot::BotHandle>, Whatever> {
-        let telegram_config = std::env::var("TELEGRAM_BOT_TOKEN").ok().and_then(|token| {
-            let chat_id: i64 = std::env::var("TELEGRAM_CHAT_ID").ok()?.parse().ok()?;
-            Some(rara_telegram_bot::TelegramConfig {
-                bot_token: token,
-                chat_id,
-            })
-        });
+        let telegram_config = std::env::var("TELEGRAM_BOT_TOKEN")
+            .ok()
+            .map(|token| rara_telegram_bot::TelegramConfig { bot_token: token });
 
         let bot_app = rara_telegram_bot::BotApp::from_shared(
             cancel.child_token(),

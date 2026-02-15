@@ -25,9 +25,9 @@
 //! - **Callback queries** handle the "Load More" pagination button for job
 //!   search results.
 //!
-//! All user-facing operations are gated by the **primary chat ID** check
-//! ([`BotState::is_primary_chat`]). Messages from unauthorized chats receive
-//! a rejection reply.
+//! Group chats are handled in mention mode: the bot responds only when
+//! explicitly mentioned (e.g. `@botname ...`). Private chats remain fully
+//! interactive.
 
 use std::sync::Arc;
 
@@ -51,6 +51,10 @@ use crate::{
 /// Maximum number of sessions to display in the `/sessions` list.
 const SESSIONS_LIST_LIMIT: u32 = 10;
 
+/// Groups with this many members or fewer are treated like private chats —
+/// the bot responds to every message without requiring an @mention or keyword.
+const SMALL_GROUP_THRESHOLD: u32 = 3;
+
 /// Top-level update dispatcher: routes to message or callback query handlers.
 pub(crate) async fn handle_update(update: Update, state: &Arc<BotState>) {
     let result = match update.kind {
@@ -72,6 +76,44 @@ pub(crate) async fn handle_message_direct(
     msg: Message,
     state: &Arc<BotState>,
 ) -> Result<(), teloxide::RequestError> {
+    let chat_is_public = matches!(msg.chat.kind, teloxide::types::ChatKind::Public(..));
+    let bot_username = state.bot_username.as_deref();
+    info!("receive message: {:?}", msg);
+    if chat_is_public {
+        // In small groups (≤ SMALL_GROUP_THRESHOLD members), respond to all
+        // messages like a private chat. In larger groups, require @mention or
+        // keyword trigger.
+        let is_small_group = matches!(
+            state.bot.get_chat_member_count(msg.chat.id).await,
+            Ok(n) if n <= SMALL_GROUP_THRESHOLD
+        );
+
+        if !is_small_group {
+            let trigger_text = msg.text().or_else(|| msg.caption()).unwrap_or_default();
+            let bubble = should_bubble_in_group(&msg, trigger_text, bot_username);
+            if !bubble {
+                return Ok(());
+            }
+        }
+
+        if !state.is_allowed_group_chat(msg.chat.id) {
+            warn!(
+                chat_id = msg.chat.id.0,
+                allowed_group_chat_id = ?state.current_config().allowed_group_chat_id,
+                "dropping group message: group is not authorized"
+            );
+            state
+                .bot
+                .send_message(
+                    msg.chat.id,
+                    "这个群还没授权给我。请在 Settings -> Telegram Bot 里把 Allowed Group Chat ID \
+                     设置为当前群的 chat id（通常是 -100 开头）。",
+                )
+                .await?;
+            return Ok(());
+        }
+    }
+
     // Photo messages — download and forward to chat as multimodal content.
     if let Some(photos) = msg.photo() {
         let caption = msg.caption().unwrap_or("");
@@ -82,13 +124,15 @@ pub(crate) async fn handle_message_direct(
         return Ok(());
     };
 
+    let user_text = strip_group_mention(text, bot_username);
+
     // Try parsing as a bot command first.
-    if let Ok(cmd) = Command::parse(text, "") {
+    if let Ok(cmd) = Command::parse(&user_text, bot_username.unwrap_or("")) {
         return handle_command(msg, cmd, state).await;
     }
 
     // Unknown slash commands.
-    if text.trim_start().starts_with('/') {
+    if user_text.trim_start().starts_with('/') {
         state
             .bot
             .send_message(
@@ -100,7 +144,7 @@ pub(crate) async fn handle_message_direct(
     }
 
     // Plain text -> route to chat session.
-    handle_chat_message(&msg, text, state).await
+    handle_chat_message(&msg, &user_text, state).await
 }
 
 /// Handle callback queries (inline keyboard button presses).
@@ -114,6 +158,12 @@ pub(crate) async fn handle_callback_query(
     let Some(data) = q.data.as_deref() else {
         return Ok(());
     };
+    if let Some(ref msg) = q.message
+        && matches!(msg.chat().kind, teloxide::types::ChatKind::Public(..))
+        && !state.is_allowed_group_chat(msg.chat().id)
+    {
+        return Ok(());
+    }
 
     // Handle session switching from inline keyboard buttons.
     if data.starts_with("switch:") {
@@ -328,6 +378,17 @@ async fn handle_chat_message(
         Ok(response) => {
             let reply_text = response.message.text_content();
             if !reply_text.is_empty() {
+                let reply_text = if matches!(msg.chat.kind, teloxide::types::ChatKind::Public(..)) {
+                    let mention = mention_sender(msg);
+                    if mention.is_empty() {
+                        reply_text
+                    } else {
+                        format!("{mention}\n{reply_text}")
+                    }
+                } else {
+                    reply_text
+                };
+
                 let html = markdown_to_telegram_html(&reply_text);
                 let chunks = chunk_message(&html, TELEGRAM_MAX_MESSAGE_LEN);
                 for chunk in chunks {
@@ -445,8 +506,8 @@ async fn handle_photo_message(
     let data_url = format!("data:image/jpeg;base64,{}", BASE64.encode(&buf));
 
     // Use caption as text; fall back to a generic prompt if empty.
-    let text = if caption.is_empty() {
-        "What do you see in this image?"
+    let text = if caption.trim().is_empty() {
+        "Please analyze this image and reply in the same language and tone as this conversation."
     } else {
         caption
     };
@@ -889,6 +950,56 @@ async fn handle_usage(msg: &Message, state: &Arc<BotState>) -> Result<(), teloxi
 
 /// Extract the text body from a Telegram message, if present.
 pub(crate) fn extract_text(msg: &Message) -> Option<&str> { msg.text() }
+
+fn is_group_mention(msg: &Message, text: &str, bot_username: Option<&str>) -> bool {
+    let Some(username) = bot_username else {
+        return false;
+    };
+    let expected = username.to_lowercase();
+    if let Some(entities) = msg.parse_entities() {
+        for entity in entities {
+            if matches!(entity.kind(), teloxide::types::MessageEntityKind::Mention) {
+                let mention = entity.text().trim().trim_start_matches('@').to_lowercase();
+                if mention == expected {
+                    return true;
+                }
+            }
+        }
+    }
+
+    let mention = format!("@{expected}");
+    text.to_lowercase().contains(&mention)
+}
+
+fn contains_rara_keyword(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("rara")
+        || lower.contains("らら")
+        || lower.contains("ララ")
+        || lower.contains("拉拉")
+}
+
+fn should_bubble_in_group(msg: &Message, text: &str, bot_username: Option<&str>) -> bool {
+    is_group_mention(msg, text, bot_username) || contains_rara_keyword(text)
+}
+
+fn strip_group_mention(text: &str, bot_username: Option<&str>) -> String {
+    let Some(username) = bot_username else {
+        return text.trim().to_owned();
+    };
+    let mention = format!("@{username}");
+    text.replace(&mention, "").trim().to_owned()
+}
+
+fn mention_sender(msg: &Message) -> String {
+    let Some(sender) = msg.from.as_ref() else {
+        return String::new();
+    };
+    if let Some(username) = &sender.username {
+        return format!("@{username}");
+    }
+    sender.first_name.clone()
+}
 
 /// Returns `true` if the message contains any media attachment (photo, video,
 /// document, audio, or voice).

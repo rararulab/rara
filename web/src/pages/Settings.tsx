@@ -89,6 +89,7 @@ export default function Settings() {
   const [models, setModels] = useState<OpenRouterModel[]>([]);
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramChatId, setTelegramChatId] = useState("");
+  const [telegramAllowedGroupChatId, setTelegramAllowedGroupChatId] = useState("");
   const [selectedPromptName, setSelectedPromptName] = useState("");
   const [selectedPromptContent, setSelectedPromptContent] = useState("");
   const [promptDirty, setPromptDirty] = useState(false);
@@ -115,6 +116,11 @@ export default function Settings() {
       settingsQuery.data.telegram.chat_id == null
         ? ""
         : String(settingsQuery.data.telegram.chat_id),
+    );
+    setTelegramAllowedGroupChatId(
+      settingsQuery.data.telegram.allowed_group_chat_id == null
+        ? ""
+        : String(settingsQuery.data.telegram.allowed_group_chat_id),
     );
   }, [settingsQuery.data]);
 
@@ -209,12 +215,30 @@ export default function Settings() {
         telegramPatch.chat_id = parsed;
       }
     }
+    if (telegramAllowedGroupChatId.trim() !== "") {
+      const parsed = Number.parseInt(telegramAllowedGroupChatId.trim(), 10);
+      if (!Number.isFinite(parsed)) {
+        return null;
+      }
+      if (parsed !== current.telegram.allowed_group_chat_id) {
+        telegramPatch.allowed_group_chat_id = parsed;
+      }
+    }
     if (Object.keys(telegramPatch).length > 0) {
       next.telegram = telegramPatch;
     }
 
     return Object.keys(next).length > 0 ? next : null;
-  }, [aiApiKey, defaultModel, jobModel, chatModel, settingsQuery.data, telegramChatId, telegramToken]);
+  }, [
+    aiApiKey,
+    defaultModel,
+    jobModel,
+    chatModel,
+    settingsQuery.data,
+    telegramAllowedGroupChatId,
+    telegramChatId,
+    telegramToken,
+  ]);
 
   const updateMutation = useMutation({
     mutationFn: (payload: RuntimeSettingsPatch) =>
@@ -532,7 +556,8 @@ export default function Settings() {
               <p className="font-medium">Telegram Bot</p>
               <p className="text-xs text-muted-foreground">
                 Chat ID: {current.telegram.chat_id ?? "Not set"} · Token:{" "}
-                {current.telegram.token_hint ?? "Not set"}
+                {current.telegram.token_hint ?? "Not set"} · Group:{" "}
+                {current.telegram.allowed_group_chat_id ?? "Not set"}
               </p>
             </div>
           </div>
@@ -735,6 +760,24 @@ export default function Settings() {
                     placeholder="123456789"
                     className="h-11"
                   />
+                </div>
+                <div className="space-y-2">
+                  <Label
+                    htmlFor="telegram-allowed-group-chat-id"
+                    className="text-base font-semibold"
+                  >
+                    Allowed Group Chat ID
+                  </Label>
+                  <Input
+                    id="telegram-allowed-group-chat-id"
+                    value={telegramAllowedGroupChatId}
+                    onChange={(e) => setTelegramAllowedGroupChatId(e.target.value)}
+                    placeholder="-1001234567890"
+                    className="h-11"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Bot only responds in this group when mentioned. Private chats still work.
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="telegram-token" className="text-base font-semibold">
