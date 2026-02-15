@@ -116,7 +116,7 @@ impl AppState {
         );
         let llm_provider: rara_agents::model::OpenRouterLoaderRef =
             Arc::new(SettingsOpenRouterLoader::new(settings_svc.clone()));
-        let mut tool_registry = rara_agents::tool_registry::ToolRegistry::default();
+        let mut tool_registry = rara_agents::tool_registry::ToolRegistry::with_defaults();
         let memory_backend = settings_svc.current().agent.memory.storage_backend;
         let memory_backend = if memory_backend.trim().is_empty() {
             "postgres".to_owned()
@@ -185,18 +185,9 @@ impl AppState {
             notify_client.clone(),
             settings_svc.clone(),
         )));
-        tool_registry.register_primitive(Arc::new(crate::tools::primitives::HttpFetchTool::new()));
         tool_registry.register_primitive(Arc::new(crate::tools::primitives::StorageReadTool::new(
             object_store.clone(),
         )));
-        tool_registry.register_primitive(Arc::new(crate::tools::primitives::BashTool::new()));
-        tool_registry.register_primitive(Arc::new(crate::tools::primitives::ReadFileTool::new()));
-        tool_registry.register_primitive(Arc::new(crate::tools::primitives::WriteFileTool::new()));
-        tool_registry.register_primitive(Arc::new(crate::tools::primitives::EditFileTool::new()));
-        tool_registry.register_primitive(Arc::new(crate::tools::primitives::FindFilesTool::new()));
-        tool_registry.register_primitive(Arc::new(crate::tools::primitives::GrepTool::new()));
-        tool_registry
-            .register_primitive(Arc::new(crate::tools::primitives::ListDirectoryTool::new()));
 
         // Layer 2: Services
         tool_registry.register_service(Arc::new(crate::tools::services::JobPipelineTool::new(

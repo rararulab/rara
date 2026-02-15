@@ -18,8 +18,9 @@
 //! Supports single (unique) replacement and replace-all modes.
 
 use async_trait::async_trait;
-use rara_agents::tool_registry::AgentTool;
 use serde_json::json;
+
+use crate::tool_registry::AgentTool;
 
 /// Layer 1 primitive: edit a file by exact string replacement.
 pub struct EditFileTool;
@@ -65,25 +66,25 @@ impl AgentTool for EditFileTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> crate::err::Result<serde_json::Value> {
         let file_path = params
             .get("file_path")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
+            .ok_or_else(|| crate::err::Error::Other {
                 message: "missing required parameter: file_path".into(),
             })?;
 
         let old_string = params
             .get("old_string")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
+            .ok_or_else(|| crate::err::Error::Other {
                 message: "missing required parameter: old_string".into(),
             })?;
 
         let new_string = params
             .get("new_string")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
+            .ok_or_else(|| crate::err::Error::Other {
                 message: "missing required parameter: new_string".into(),
             })?;
 
@@ -94,14 +95,14 @@ impl AgentTool for EditFileTool {
 
         let content = tokio::fs::read_to_string(file_path)
             .await
-            .map_err(|e| rara_agents::err::Error::Other {
+            .map_err(|e| crate::err::Error::Other {
                 message: format!("failed to read file {file_path}: {e}").into(),
             })?;
 
         let count = content.matches(old_string).count();
 
         if count == 0 {
-            return Err(rara_agents::err::Error::Other {
+            return Err(crate::err::Error::Other {
                 message: format!(
                     "old_string not found in {file_path}. Make sure the string matches exactly."
                 )
@@ -110,7 +111,7 @@ impl AgentTool for EditFileTool {
         }
 
         if !replace_all && count > 1 {
-            return Err(rara_agents::err::Error::Other {
+            return Err(crate::err::Error::Other {
                 message: format!(
                     "old_string found {count} times in {file_path}. Use replace_all=true to \
                      replace all occurrences, or provide a more specific old_string."
@@ -127,7 +128,7 @@ impl AgentTool for EditFileTool {
 
         tokio::fs::write(file_path, &new_content)
             .await
-            .map_err(|e| rara_agents::err::Error::Other {
+            .map_err(|e| crate::err::Error::Other {
                 message: format!("failed to write file {file_path}: {e}").into(),
             })?;
 

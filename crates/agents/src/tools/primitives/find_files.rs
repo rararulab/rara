@@ -18,8 +18,9 @@
 //! sorted by modification time (newest first).
 
 use async_trait::async_trait;
-use rara_agents::tool_registry::AgentTool;
 use serde_json::json;
+
+use crate::tool_registry::AgentTool;
 
 /// Default maximum number of file entries to return.
 const DEFAULT_LIMIT: usize = 500;
@@ -65,11 +66,11 @@ impl AgentTool for FindFilesTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> crate::err::Result<serde_json::Value> {
         let pattern = params
             .get("pattern")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
+            .ok_or_else(|| crate::err::Error::Other {
                 message: "missing required parameter: pattern".into(),
             })?;
 
@@ -101,7 +102,7 @@ impl AgentTool for FindFilesTool {
             .stderr(std::process::Stdio::piped())
             .output()
             .await
-            .map_err(|e| rara_agents::err::Error::Other {
+            .map_err(|e| crate::err::Error::Other {
                 message: format!("failed to run find: {e}").into(),
             })?;
 

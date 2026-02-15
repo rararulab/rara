@@ -18,8 +18,9 @@
 //! type, and body (truncated to 100 KB).
 
 use async_trait::async_trait;
-use rara_agents::tool_registry::AgentTool;
 use serde_json::json;
+
+use crate::tool_registry::AgentTool;
 
 /// Maximum response body size in bytes (100 KB).
 const MAX_BODY_BYTES: usize = 100 * 1024;
@@ -67,11 +68,11 @@ impl AgentTool for HttpFetchTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value) -> rara_agents::err::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> crate::err::Result<serde_json::Value> {
         let url = params
             .get("url")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
+            .ok_or_else(|| crate::err::Error::Other {
                 message: "missing required parameter: url".into(),
             })?;
 

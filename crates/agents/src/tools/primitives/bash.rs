@@ -18,8 +18,9 @@
 //! directory.  Output is truncated to 50 KB / 2000 lines.
 
 use async_trait::async_trait;
-use rara_agents::tool_registry::AgentTool;
 use serde_json::json;
+
+use crate::tool_registry::AgentTool;
 
 /// Maximum output size in bytes (50 KB).
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;
@@ -70,11 +71,11 @@ impl AgentTool for BashTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> crate::err::Result<serde_json::Value> {
         let command = params
             .get("command")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
+            .ok_or_else(|| crate::err::Error::Other {
                 message: "missing required parameter: command".into(),
             })?;
 
