@@ -14,16 +14,19 @@
 
 //! Optional Chroma vector index integration.
 
-use reqwest::StatusCode;
-use serde_json::json;
+use chromadb::{
+    client::{ChromaAuthMethod, ChromaClientOptions, ChromaClient as SdkClient, ChromaTokenHeader},
+    collection::{ChromaCollection, CollectionEntries, QueryOptions},
+};
+use serde_json::Map;
+
+use crate::manager::{MemoryError, MemoryResult};
 
 #[derive(Debug, Clone)]
 pub struct ChromaClient {
-    base_url:       String,
-    collection:     String,
-    api_key:        Option<String>,
-    http:           reqwest::Client,
-    collection_url: String,
+    base_url:        String,
+    collection_name: String,
+    api_key:         Option<String>,
 }
 
 /// Chunk payload sent to Chroma upsert endpoints.
@@ -55,7 +58,7 @@ impl ChromaClient {
         if base_url.is_empty() {
             return None;
         }
-        let collection = collection
+        let collection_name = collection
             .and_then(|v| {
                 let t = v.trim().to_owned();
                 if t.is_empty() { None } else { Some(t) }
@@ -67,17 +70,10 @@ impl ChromaClient {
             if t.is_empty() { None } else { Some(t) }
         });
 
-        let collection_url = format!("{base_url}/api/v1/collections/{collection}");
-
         Some(Self {
             base_url,
-            collection,
+            collection_name,
             api_key,
-            http: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new()),
-            collection_url,
         })
     }
 
@@ -98,219 +94,152 @@ impl ChromaClient {
         Self::new(base_url, Some(collection), api_key)
     }
 
-    fn authed(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        if let Some(token) = &self.api_key {
-            req.bearer_auth(token)
-        } else {
-            req
+    /// Build SDK client options from stored config.
+    fn build_options(&self) -> ChromaClientOptions {
+        let auth = self
+            .api_key
+            .clone()
+            .map_or(ChromaAuthMethod::None, |token| ChromaAuthMethod::TokenAuth {
+                token,
+                header: ChromaTokenHeader::Authorization,
+            });
+
+        ChromaClientOptions {
+            url: Some(self.base_url.clone()),
+            auth,
+            ..Default::default()
         }
     }
 
-    /// Ensure the target collection exists.
-    ///
-    /// The implementation accepts deployment differences where collection
-    /// creation may return non-success for already-existing collections.
-    pub async fn ensure_collection(&self) -> Result<(), String> {
-        let body = json!({"name": self.collection});
-        let create_url = format!("{}/api/v1/collections", self.base_url);
-
-        let resp = self
-            .authed(self.http.post(&create_url))
-            .json(&body)
-            .send()
+    /// Create the SDK client and get-or-create the target collection.
+    async fn get_collection(&self) -> MemoryResult<(SdkClient, ChromaCollection)> {
+        let client = SdkClient::new(self.build_options())
             .await
-            .map_err(|e| format!("create collection request failed: {e}"))?;
+            .map_err(|e| MemoryError::Other {
+                message: format!("failed to create chroma client: {e}"),
+            })?;
 
-        if resp.status().is_success() || resp.status() == StatusCode::CONFLICT {
-            return Ok(());
-        }
-
-        // Some deployments return 400 for existing collection. Try get to verify.
-        let get_resp = self
-            .authed(self.http.get(&self.collection_url))
-            .send()
+        let collection = client
+            .get_or_create_collection(&self.collection_name, None)
             .await
-            .map_err(|e| format!("verify collection request failed: {e}"))?;
+            .map_err(|e| MemoryError::Other {
+                message: format!("failed to get/create collection '{}': {e}", self.collection_name),
+            })?;
 
-        if get_resp.status().is_success() {
-            Ok(())
-        } else {
-            Err(format!(
-                "ensure collection failed: status={} body={}",
-                resp.status(),
-                resp.text().await.unwrap_or_default()
-            ))
-        }
+        Ok((client, collection))
     }
 
     /// Insert or update chunks in the configured collection.
-    ///
-    /// Tries `/upsert` first and falls back to `/add` for compatibility with
-    /// older deployments.
-    pub async fn upsert_chunks(&self, chunks: &[ChromaChunk]) -> Result<(), String> {
+    pub async fn upsert_chunks(&self, chunks: &[ChromaChunk]) -> MemoryResult<()> {
         if chunks.is_empty() {
             return Ok(());
         }
 
-        self.ensure_collection().await?;
+        let (_client, collection) = self.get_collection().await?;
 
-        let ids = chunks.iter().map(|c| c.id.clone()).collect::<Vec<_>>();
-        let embeddings = chunks
-            .iter()
-            .map(|c| c.embedding.clone())
-            .collect::<Vec<_>>();
-        let documents = chunks
-            .iter()
-            .map(|c| c.document.clone())
-            .collect::<Vec<_>>();
-        let metadatas = chunks
+        let ids: Vec<&str> = chunks.iter().map(|c| c.id.as_str()).collect();
+        let embeddings: Vec<Vec<f32>> = chunks.iter().map(|c| c.embedding.clone()).collect();
+        let documents: Vec<&str> = chunks.iter().map(|c| c.document.as_str()).collect();
+        let metadatas: Vec<Map<String, serde_json::Value>> = chunks
             .iter()
             .map(|c| {
-                json!({
-                    "path": c.path,
-                    "chunk_index": c.chunk_index,
-                })
+                let mut map = Map::new();
+                map.insert("path".to_owned(), serde_json::Value::String(c.path.clone()));
+                map.insert(
+                    "chunk_index".to_owned(),
+                    serde_json::Value::Number(serde_json::Number::from(c.chunk_index)),
+                );
+                map
             })
-            .collect::<Vec<_>>();
+            .collect();
 
-        let payload = json!({
-            "ids": ids,
-            "embeddings": embeddings,
-            "documents": documents,
-            "metadatas": metadatas,
-        });
+        let entries = CollectionEntries {
+            ids,
+            embeddings: Some(embeddings),
+            documents: Some(documents),
+            metadatas: Some(metadatas),
+        };
 
-        let upsert_url = format!("{}/upsert", self.collection_url);
-        let add_url = format!("{}/add", self.collection_url);
-
-        let upsert_resp = self
-            .authed(self.http.post(&upsert_url))
-            .json(&payload)
-            .send()
+        collection
+            .upsert(entries, None)
             .await
-            .map_err(|e| format!("upsert request failed: {e}"))?;
+            .map_err(|e| MemoryError::Other {
+                message: format!("chroma upsert failed: {e}"),
+            })?;
 
-        if upsert_resp.status().is_success() {
-            return Ok(());
-        }
-
-        let add_resp = self
-            .authed(self.http.post(&add_url))
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|e| format!("add request failed: {e}"))?;
-
-        if add_resp.status().is_success() {
-            Ok(())
-        } else {
-            Err(format!(
-                "upsert failed: status={} body={}",
-                add_resp.status(),
-                add_resp.text().await.unwrap_or_default()
-            ))
-        }
+        Ok(())
     }
 
     /// Execute a nearest-neighbor query in Chroma.
     ///
     /// Distances are converted to a normalized score (`1 - distance`) for
     /// fusion with keyword retrieval.
-    pub async fn query(&self, embedding: &[f32], n_results: usize) -> Result<Vec<ChromaHit>, String> {
-        self.ensure_collection().await?;
+    pub async fn query(&self, embedding: &[f32], n_results: usize) -> MemoryResult<Vec<ChromaHit>> {
+        let (_client, collection) = self.get_collection().await?;
 
-        let payload = json!({
-            "query_embeddings": [embedding],
-            "n_results": n_results,
-            "include": ["metadatas", "documents", "distances"],
-        });
+        let query_options = QueryOptions {
+            query_embeddings: Some(vec![embedding.to_vec()]),
+            n_results: Some(n_results),
+            include: Some(vec!["metadatas", "documents", "distances"]),
+            ..Default::default()
+        };
 
-        let query_url = format!("{}/query", self.collection_url);
-        let resp = self
-            .authed(self.http.post(&query_url))
-            .json(&payload)
-            .send()
+        let result = collection
+            .query(query_options, None)
             .await
-            .map_err(|e| format!("query request failed: {e}"))?;
+            .map_err(|e| MemoryError::Other {
+                message: format!("chroma query failed: {e}"),
+            })?;
 
-        if !resp.status().is_success() {
-            return Err(format!(
-                "query failed: status={} body={}",
-                resp.status(),
-                resp.text().await.unwrap_or_default()
-            ));
-        }
-
-        let body = resp
-            .json::<serde_json::Value>()
-            .await
-            .map_err(|e| format!("query decode failed: {e}"))?;
-
-        let ids = body
-            .get("ids")
-            .and_then(|v| v.get(0))
-            .and_then(serde_json::Value::as_array)
+        let ids = result
+            .ids
+            .first()
             .cloned()
             .unwrap_or_default();
-        let docs = body
-            .get("documents")
-            .and_then(|v| v.get(0))
-            .and_then(serde_json::Value::as_array)
+        let docs: Vec<String> = result
+            .documents
+            .as_ref()
+            .and_then(|d| d.first())
             .cloned()
             .unwrap_or_default();
-        let metadatas = body
-            .get("metadatas")
-            .and_then(|v| v.get(0))
-            .and_then(serde_json::Value::as_array)
+        let metadatas: Vec<Option<Map<String, serde_json::Value>>> = result
+            .metadatas
+            .as_ref()
+            .and_then(|m| m.first())
             .cloned()
             .unwrap_or_default();
-        let distances = body
-            .get("distances")
-            .and_then(|v| v.get(0))
-            .and_then(serde_json::Value::as_array)
+        let distances: Vec<f32> = result
+            .distances
+            .as_ref()
+            .and_then(|d| d.first())
             .cloned()
             .unwrap_or_default();
 
         let mut hits = Vec::new();
         for i in 0..ids.len() {
-            let id = ids
-                .get(i)
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .to_owned();
+            let id = &ids[i];
             if id.is_empty() {
                 continue;
             }
 
-            let metadata = metadatas
-                .get(i)
-                .and_then(serde_json::Value::as_object)
-                .cloned()
-                .unwrap_or_default();
+            let metadata = metadatas.get(i).and_then(|m| m.as_ref());
             let path = metadata
-                .get("path")
+                .and_then(|m| m.get("path"))
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default()
                 .to_owned();
             let chunk_index = metadata
-                .get("chunk_index")
+                .and_then(|m| m.get("chunk_index"))
                 .and_then(serde_json::Value::as_i64)
                 .unwrap_or_default();
 
-            let document = docs
-                .get(i)
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .to_owned();
+            let document = docs.get(i).cloned().unwrap_or_default();
 
-            let distance = distances
-                .get(i)
-                .and_then(serde_json::Value::as_f64)
-                .unwrap_or(1.0);
+            let distance = f64::from(*distances.get(i).unwrap_or(&1.0));
             let score = 1.0 - distance.max(0.0);
 
             hits.push(ChromaHit {
-                id,
+                id: id.clone(),
                 path,
                 chunk_index,
                 document,
