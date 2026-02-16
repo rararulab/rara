@@ -25,7 +25,10 @@ reqwest = { workspace = true, features = ["json"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_yaml = "0.9"
+rara-model.workspace = true
+sha2.workspace = true
 snafu.workspace = true
+sqlx.workspace = true
 strum = { workspace = true, features = ["derive"] }
 strum_macros.workspace = true
 tar = "0.4"

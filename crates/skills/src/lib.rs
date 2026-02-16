@@ -5,8 +5,10 @@
 //! plugins, registry), parsing their metadata, checking binary requirements, installing
 //! from GitHub repos, and generating XML prompt blocks for LLM system prompt injection.
 
+pub mod cache;
 pub mod discover;
 pub mod error;
+pub mod hash;
 pub mod formats;
 pub mod install;
 pub mod manifest;

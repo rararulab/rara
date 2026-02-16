@@ -61,4 +61,7 @@ pub enum SkillError {
 
     #[snafu(display("install error: {message}"))]
     Install { message: String },
+
+    #[snafu(display("database error: {source}"))]
+    Sqlx { source: sqlx::Error },
 }
