@@ -17,18 +17,9 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router';
 import {
-  LayoutDashboard,
   Bot,
   Briefcase,
-  FileText,
-  FileType,
-  MessageSquare,
-  Search,
-  Bookmark,
-  Bell,
-  Clock,
   Settings as SettingsIcon,
-  Wrench,
   Globe,
   Database,
   ExternalLink,
@@ -52,17 +43,8 @@ const THEME_META = {
 } as const;
 
 const navItems = [
-  { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/chat', icon: Bot, label: 'Chat' },
-  { to: '/skills', icon: Wrench, label: 'Skills' },
-  { to: '/applications', icon: Briefcase, label: 'Applications' },
-  { to: '/resumes', icon: FileText, label: 'Resumes' },
-  { to: '/typst', icon: FileType, label: 'Typst' },
-  { to: '/interviews', icon: MessageSquare, label: 'Interviews' },
-  { to: '/discovery', icon: Search, label: 'Job Discovery' },
-  { to: '/saved-jobs', icon: Bookmark, label: 'Saved Jobs' },
-  { to: '/notifications', icon: Bell, label: 'Notifications' },
-  { to: '/scheduler', icon: Clock, label: 'Scheduler' },
+  { to: '/agent', icon: Bot, label: 'Agent' },
+  { to: '/jobs', icon: Briefcase, label: 'Jobs' },
   { to: '/settings', icon: SettingsIcon, label: 'Settings' },
 ];
 
@@ -129,10 +111,10 @@ function useIsWide(): boolean {
 }
 
 /** Routes that need zero padding in the main content area. */
-const FULL_BLEED_ROUTES = new Set(['/chat']);
+const FULL_BLEED_ROUTES = new Set(['/agent', '/jobs']);
 
 /** Routes that need full bleed when they match as a prefix (e.g. /typst/:id). */
-const FULL_BLEED_PREFIXES = ['/typst/'];
+const FULL_BLEED_PREFIXES = ['/jobs/typst/'];
 
 export default function DashboardLayout() {
   const [collapsed, setCollapsed] = useLocalStorage('sidebar-collapsed', false);
@@ -149,7 +131,7 @@ export default function DashboardLayout() {
       {/* Sidebar */}
       <aside className={cn('border-r bg-card flex flex-col transition-all duration-200', collapsed ? 'w-16' : 'w-64')}>
         <div className={cn('flex items-center', collapsed ? 'justify-center p-4' : 'justify-between p-6')}>
-          {!collapsed && <h1 className="text-xl font-bold">Job Platform</h1>}
+          {!collapsed && <h1 className="text-xl font-bold">Rara</h1>}
           <Button
             variant="ghost"
             size="icon"
@@ -165,17 +147,17 @@ export default function DashboardLayout() {
             <NavLink
               key={item.to}
               to={item.to}
-              end={item.to === '/'}
               title={collapsed ? item.label : undefined}
-              className={({ isActive }) =>
-                cn(
+              className={({ isActive }) => {
+                const active = isActive || location.pathname.startsWith(item.to + '/');
+                return cn(
                   'flex items-center rounded-md text-sm font-medium transition-colors',
                   collapsed ? 'justify-center px-2 py-2' : 'gap-3 px-3 py-2',
-                  isActive
+                  active
                     ? 'bg-accent text-accent-foreground'
                     : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
-                )
-              }
+                );
+              }}
             >
               <item.icon className="h-4 w-4 shrink-0" />
               {!collapsed && item.label}

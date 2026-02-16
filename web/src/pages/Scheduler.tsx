@@ -214,21 +214,14 @@ function TaskCard({ task }: { task: ScheduledTask }) {
   );
 }
 
-export default function Scheduler() {
+export function DomainSchedulerPanel() {
   const tasksQuery = useQuery({
     queryKey: ["scheduler", "tasks"],
     queryFn: () => api.get<ScheduledTask[]>("/api/v1/scheduler/tasks"),
   });
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Scheduler</h1>
-        <p className="text-muted-foreground mt-2">
-          Configure automated tasks and schedules.
-        </p>
-      </div>
-
+    <div className="space-y-4">
       {tasksQuery.isLoading ? (
         <div className="space-y-4">
           {Array.from({ length: 3 }).map((_, i) => (
@@ -265,6 +258,22 @@ export default function Scheduler() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+export { DomainSchedulerPanel as AgentJobsPanel };
+
+export default function Scheduler() {
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold">Scheduler</h1>
+        <p className="text-muted-foreground mt-2">
+          Configure automated tasks and schedules.
+        </p>
+      </div>
+      <DomainSchedulerPanel />
     </div>
   );
 }

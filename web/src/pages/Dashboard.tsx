@@ -275,7 +275,7 @@ export default function Dashboard() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">Recent Applications</h2>
           <Link
-            to="/applications"
+            to="/jobs?tab=applications"
             className="text-sm text-muted-foreground hover:text-foreground inline-flex items-center gap-1 transition-colors"
           >
             View all

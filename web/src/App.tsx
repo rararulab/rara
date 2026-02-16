@@ -14,22 +14,14 @@
  * limitations under the License.
  */
 
-import { BrowserRouter, Routes, Route } from 'react-router';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ServerStatusProvider } from '@/components/ServerStatusProvider';
 import DashboardLayout from '@/layouts/DashboardLayout';
-import Dashboard from '@/pages/Dashboard';
-import Applications from '@/pages/Applications';
-import Resumes from '@/pages/Resumes';
-import Interviews from '@/pages/Interviews';
-import JobDiscovery from '@/pages/JobDiscovery';
-import Notifications from '@/pages/Notifications';
-import Scheduler from '@/pages/Scheduler';
-import SavedJobs from '@/pages/SavedJobs';
+import AgentConsole from '@/pages/AgentConsole';
+import JobsWorkspace from '@/pages/JobsWorkspace';
 import SavedJobMarkdownPreview from '@/pages/SavedJobMarkdownPreview';
 import Settings from '@/pages/Settings';
-import Chat from '@/pages/Chat';
-import Skills from '@/pages/Skills';
 import TypstProjects from '@/pages/TypstProjects';
 import TypstEditor from '@/pages/TypstEditor';
 
@@ -41,21 +33,32 @@ export default function App() {
       <ServerStatusProvider>
         <BrowserRouter>
           <Routes>
+            {/* Standalone full-page routes */}
             <Route path="saved-jobs/:id/markdown" element={<SavedJobMarkdownPreview />} />
+
+            {/* Main layout */}
             <Route element={<DashboardLayout />}>
-              <Route index element={<Dashboard />} />
-              <Route path="applications" element={<Applications />} />
-              <Route path="resumes" element={<Resumes />} />
-              <Route path="interviews" element={<Interviews />} />
-              <Route path="discovery" element={<JobDiscovery />} />
-              <Route path="saved-jobs" element={<SavedJobs />} />
-              <Route path="notifications" element={<Notifications />} />
-              <Route path="scheduler" element={<Scheduler />} />
-              <Route path="chat" element={<Chat />} />
-              <Route path="skills" element={<Skills />} />
-              <Route path="typst" element={<TypstProjects />} />
-              <Route path="typst/:projectId" element={<TypstEditor />} />
+              <Route index element={<Navigate to="/agent" replace />} />
+              <Route path="agent" element={<AgentConsole />} />
+              <Route path="jobs" element={<JobsWorkspace />} />
+              <Route path="jobs/typst" element={<TypstProjects />} />
+              <Route path="jobs/typst/:projectId" element={<TypstEditor />} />
               <Route path="settings" element={<Settings />} />
+
+              {/* Redirects for old routes */}
+              <Route path="chat" element={<Navigate to="/agent?tab=chat" replace />} />
+              <Route path="skills" element={<Navigate to="/agent?tab=skills" replace />} />
+              <Route path="scheduler" element={<Navigate to="/agent?tab=scheduler" replace />} />
+              <Route path="notifications" element={<Navigate to="/agent?tab=notifications" replace />} />
+              <Route path="discovery" element={<Navigate to="/jobs?tab=discovery" replace />} />
+              <Route path="saved-jobs" element={<Navigate to="/jobs?tab=saved" replace />} />
+              <Route path="applications" element={<Navigate to="/jobs?tab=applications" replace />} />
+              <Route path="resumes" element={<Navigate to="/jobs?tab=resumes" replace />} />
+              <Route path="interviews" element={<Navigate to="/jobs?tab=interviews" replace />} />
+              <Route path="dashboard" element={<Navigate to="/jobs?tab=dashboard" replace />} />
+
+              {/* Redirect old typst route */}
+              <Route path="typst" element={<Navigate to="/jobs/typst" replace />} />
             </Route>
           </Routes>
         </BrowserRouter>
