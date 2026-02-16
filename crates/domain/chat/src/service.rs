@@ -427,17 +427,30 @@ impl ChatService {
         };
         self.session_repo.append_message(key, &user_msg).await?;
 
-        // 4. Convert history to openrouter format
+        // 4. Resolve model (needed for context window check).
+        let model = session
+            .model
+            .clone()
+            .unwrap_or_else(|| self.current_default_model());
+
+        // 4a. Check if context compaction is needed
+        let history_tokens = estimate_history_tokens(&history);
+        let model_context = self.model_catalog.get_context_length(&model).unwrap_or(128_000);
+        let threshold = (model_context as f64 * 0.80) as usize;
+
+        let history = if history_tokens > threshold {
+            self.compact_history(key, &history, &model).await?
+        } else {
+            history
+        };
+
+        // 4b. Convert history to openrouter format
         let openrouter_history = history
             .iter()
             .map(to_openrouter_message)
             .collect::<Vec<_>>();
 
         // 5. Build and run agent — multimodal content for user message
-        let model = session
-            .model
-            .clone()
-            .unwrap_or_else(|| self.current_default_model());
         let base_system_prompt = session
             .system_prompt
             .clone()
@@ -760,6 +773,93 @@ impl ChatService {
 
         Ok(())
     }
+
+    // -- context compaction --------------------------------------------------
+
+    /// Summarize the conversation history via LLM and replace it with a
+    /// single `[Conversation Summary]` message.
+    ///
+    /// This is invoked automatically when the estimated token count of the
+    /// history exceeds 80 % of the model's context window.
+    async fn compact_history(
+        &self,
+        session_key: &SessionKey,
+        history: &[ChatMessage],
+        model: &str,
+    ) -> Result<Vec<ChatMessage>, ChatError> {
+        info!(
+            session = %session_key,
+            original_messages = history.len(),
+            "compacting conversation context"
+        );
+
+        // Build summarization prompt from history
+        let history_text: String = history
+            .iter()
+            .map(|m| format!("{}: {}", m.role, m.content.as_text()))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let summary_prompt = format!(
+            "Summarize the following conversation history into a concise summary. \
+             Preserve key facts, decisions, user preferences, and action items. \
+             Keep it under 500 words. Respond in the same language as the conversation.\n\n\
+             {history_text}"
+        );
+
+        // Single-turn LLM call for summarization (no tools)
+        let runner = AgentRunner::builder()
+            .llm_provider(self.llm_provider.clone())
+            .model_name(model.to_owned())
+            .system_prompt(
+                "You are a conversation summarizer. Be concise and preserve important details.",
+            )
+            .user_content(Content::Text(summary_prompt))
+            .max_iterations(1_usize)
+            .build();
+
+        let empty_tools = ToolRegistry::default();
+        let result = runner
+            .run(&empty_tools, None)
+            .await
+            .map_err(|e| ChatError::AgentError {
+                message: format!("compact failed: {e}"),
+            })?;
+
+        let summary = result
+            .provider_response
+            .choices
+            .first()
+            .and_then(|c| c.content())
+            .unwrap_or("[Summary unavailable]")
+            .to_owned();
+
+        // Create summary message
+        let summary_msg =
+            ChatMessage::assistant(format!("[Conversation Summary]\n{summary}"));
+
+        // Replace old messages: clear, then insert the summary
+        self.session_repo
+            .clear_messages(session_key)
+            .await
+            .map_err(|e| ChatError::SessionError {
+                message: format!("failed to clear messages during compaction: {e}"),
+            })?;
+        self.session_repo
+            .append_message(session_key, &summary_msg)
+            .await
+            .map_err(|e| ChatError::SessionError {
+                message: format!("failed to append summary during compaction: {e}"),
+            })?;
+
+        info!(
+            session = %session_key,
+            summary_len = summary.len(),
+            "context compacted successfully"
+        );
+
+        Ok(vec![summary_msg])
+    }
 }
 
 impl std::fmt::Debug for ChatService {
@@ -891,6 +991,25 @@ fn truncate_preview(s: &str, max_len: usize) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Token estimation
+// ---------------------------------------------------------------------------
+
+/// Rough token estimate: ~3 chars per token (balanced for mixed EN/CN content).
+fn estimate_tokens(text: &str) -> usize {
+    (text.chars().count() + 2) / 3
+}
+
+/// Estimate total tokens for a message history.
+///
+/// Adds 4 tokens overhead per message (role, separators).
+fn estimate_history_tokens(messages: &[ChatMessage]) -> usize {
+    messages
+        .iter()
+        .map(|m| estimate_tokens(&m.content.as_text()) + 4)
+        .sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -928,5 +1047,26 @@ mod tests {
         let msg = ChatMessage::system("you are helpful");
         let converted = to_openrouter_message(&msg);
         assert!(matches!(converted.role, Role::System));
+    }
+
+    #[test]
+    fn estimate_tokens_basic() {
+        // "hello" = 5 chars → (5 + 2) / 3 = 2 tokens
+        assert_eq!(estimate_tokens("hello"), 2);
+        // empty string → (0 + 2) / 3 = 0 tokens
+        assert_eq!(estimate_tokens(""), 0);
+        // 300 chars → (300 + 2) / 3 = 100 tokens
+        let long = "a".repeat(300);
+        assert_eq!(estimate_tokens(&long), 100);
+    }
+
+    #[test]
+    fn estimate_history_tokens_sums_correctly() {
+        let messages = vec![
+            ChatMessage::user("hello"),       // 2 + 4 = 6
+            ChatMessage::assistant("world!"), // 2 + 4 = 6
+        ];
+        let total = estimate_history_tokens(&messages);
+        assert_eq!(total, 12);
     }
 }

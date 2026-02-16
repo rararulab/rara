@@ -185,6 +185,17 @@ impl ModelCatalog {
         }
     }
 
+    /// Look up a model's context length from the curated list.
+    ///
+    /// Returns `None` if the model is not in the curated list. Callers
+    /// should fall back to a sensible default (e.g. 128 000) when `None`.
+    pub fn get_context_length(&self, model_id: &str) -> Option<u32> {
+        CURATED_MODELS
+            .iter()
+            .find(|m| m.id == model_id)
+            .map(|m| m.context_length)
+    }
+
     /// Return available models, optionally fetching from OpenRouter.
     ///
     /// - `api_key` — OpenRouter API key; if `None`, the curated fallback is
@@ -287,4 +298,25 @@ fn apply_favorite_sort(models: &mut [ChatModel]) {
             .cmp(&a.is_favorite)
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_context_length_known_model() {
+        let catalog = ModelCatalog::new();
+        assert_eq!(catalog.get_context_length("openai/gpt-4o"), Some(128_000));
+        assert_eq!(
+            catalog.get_context_length("anthropic/claude-sonnet-4"),
+            Some(200_000)
+        );
+    }
+
+    #[test]
+    fn get_context_length_unknown_model() {
+        let catalog = ModelCatalog::new();
+        assert_eq!(catalog.get_context_length("unknown/model"), None);
+    }
 }
