@@ -51,6 +51,15 @@ impl InMemoryRegistry {
 
     /// Add a skill directly (useful for testing).
     pub fn insert(&mut self, meta: SkillMetadata) { self.skills.insert(meta.name.clone(), meta); }
+
+    /// Synchronous access to all skill metadata (for use in sync contexts like RwLock).
+    pub fn list_all(&self) -> Vec<SkillMetadata> { self.skills.values().cloned().collect() }
+
+    /// Get a skill's metadata by name (synchronous).
+    pub fn get(&self, name: &str) -> Option<&SkillMetadata> { self.skills.get(name) }
+
+    /// Remove a skill by name. Returns the removed metadata, if any.
+    pub fn remove(&mut self, name: &str) -> Option<SkillMetadata> { self.skills.remove(name) }
 }
 
 impl Default for InMemoryRegistry {
