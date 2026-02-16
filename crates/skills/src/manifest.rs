@@ -1,3 +1,8 @@
+//! Persistent manifest storage for installed skill repos.
+//!
+//! [`ManifestStore`] reads and writes a JSON [`SkillsManifest`]
+//! to disk using atomic writes (write to `.tmp` file, then rename) to avoid corruption.
+
 use std::path::{Path, PathBuf};
 
 use snafu::ResultExt;

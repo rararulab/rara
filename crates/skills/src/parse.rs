@@ -1,3 +1,9 @@
+//! SKILL.md parser -- frontmatter extraction and metadata deserialization.
+//!
+//! Splits a `SKILL.md` file at `---` delimiters into YAML frontmatter and Markdown body,
+//! deserializes the frontmatter into [`SkillMetadata`],
+//! validates skill names, and merges OpenClaw-style requirements when present.
+
 use std::path::Path;
 
 use serde::Deserialize;

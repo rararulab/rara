@@ -1,3 +1,8 @@
+//! Legacy single-file skill parser.
+//!
+//! This module is internal only and will be removed in a future version.
+//! New code should use [`parse`](crate::parse) + [`InMemoryRegistry`](crate::registry::InMemoryRegistry) instead.
+
 use std::path::Path;
 
 use snafu::ResultExt;

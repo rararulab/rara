@@ -1,3 +1,9 @@
+//! Error types for skill operations.
+//!
+//! All errors use [`snafu`] for ergonomic context-based error construction.
+//! [`SkillError`] covers I/O, frontmatter parsing, validation, network requests,
+//! archive extraction, filesystem watching, and installation failures.
+
 use snafu::Snafu;
 
 pub type Result<T> = std::result::Result<T, SkillError>;

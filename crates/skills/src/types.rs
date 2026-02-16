@@ -1,3 +1,10 @@
+//! Core types for the skills system.
+//!
+//! Defines the primary data structures: [`SkillMetadata`] (frontmatter), [`SkillContent`]
+//! (metadata + body), [`SkillsManifest`] and [`RepoEntry`] (installed repo tracking),
+//! [`SkillRequirements`] and [`InstallSpec`] (binary dependencies), and
+//! [`SkillEligibility`] (requirement check results).
+
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
