@@ -17,12 +17,11 @@
 use axum::{
     Json,
     extract::{Path, Query, State},
-    routing::{get, post},
 };
-use utoipa_axum::router::OpenApiRouter;
 use rara_domain_shared::id::SchedulerTaskId;
 use serde::Deserialize;
 use tracing::instrument;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::{
@@ -31,12 +30,12 @@ use crate::{
     types::{ScheduledTask, TaskFilter, TaskRunRecord},
 };
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct TaskListQuery {
     pub enabled: Option<bool>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct HistoryQuery {
     pub limit: Option<i64>,
 }
@@ -44,14 +43,26 @@ pub struct HistoryQuery {
 /// Register all scheduler routes on a new router with shared state.
 pub fn routes(service: SchedulerService) -> OpenApiRouter {
     OpenApiRouter::new()
-        .route("/api/v1/scheduler/tasks", get(list_tasks))
-        .route("/api/v1/scheduler/tasks/{id}", get(get_task))
-        .route("/api/v1/scheduler/tasks/{id}/enable", post(enable_task))
-        .route("/api/v1/scheduler/tasks/{id}/disable", post(disable_task))
-        .route("/api/v1/scheduler/tasks/{id}/history", get(get_history))
+        .routes(routes!(list_tasks))
+        .routes(routes!(get_task))
+        .routes(routes!(enable_task))
+        .routes(routes!(disable_task))
+        .routes(routes!(get_history))
         .with_state(service)
 }
 
+/// List scheduler tasks with optional filters.
+#[utoipa::path(
+    get,
+    path = "/api/v1/scheduler/tasks",
+    tag = "scheduler",
+    params(
+        ("enabled" = Option<bool>, Query, description = "Filter by enabled status"),
+    ),
+    responses(
+        (status = 200, description = "List of scheduled tasks", body = Vec<ScheduledTask>),
+    )
+)]
 #[instrument(skip(service))]
 async fn list_tasks(
     State(service): State<SchedulerService>,
@@ -65,6 +76,17 @@ async fn list_tasks(
     Ok(Json(tasks))
 }
 
+/// Get a single scheduler task by ID.
+#[utoipa::path(
+    get,
+    path = "/api/v1/scheduler/tasks/{id}",
+    tag = "scheduler",
+    params(("id" = Uuid, Path, description = "Scheduler task ID")),
+    responses(
+        (status = 200, description = "Scheduler task found", body = ScheduledTask),
+        (status = 404, description = "Scheduler task not found"),
+    )
+)]
 #[instrument(skip(service))]
 async fn get_task(
     State(service): State<SchedulerService>,
@@ -74,6 +96,16 @@ async fn get_task(
     Ok(Json(task))
 }
 
+/// Enable a scheduler task.
+#[utoipa::path(
+    post,
+    path = "/api/v1/scheduler/tasks/{id}/enable",
+    tag = "scheduler",
+    params(("id" = Uuid, Path, description = "Scheduler task ID")),
+    responses(
+        (status = 200, description = "Task enabled", body = ScheduledTask),
+    )
+)]
 #[instrument(skip(service))]
 async fn enable_task(
     State(service): State<SchedulerService>,
@@ -83,6 +115,16 @@ async fn enable_task(
     Ok(Json(task))
 }
 
+/// Disable a scheduler task.
+#[utoipa::path(
+    post,
+    path = "/api/v1/scheduler/tasks/{id}/disable",
+    tag = "scheduler",
+    params(("id" = Uuid, Path, description = "Scheduler task ID")),
+    responses(
+        (status = 200, description = "Task disabled", body = ScheduledTask),
+    )
+)]
 #[instrument(skip(service))]
 async fn disable_task(
     State(service): State<SchedulerService>,
@@ -92,6 +134,19 @@ async fn disable_task(
     Ok(Json(task))
 }
 
+/// Get run history for a scheduler task.
+#[utoipa::path(
+    get,
+    path = "/api/v1/scheduler/tasks/{id}/history",
+    tag = "scheduler",
+    params(
+        ("id" = Uuid, Path, description = "Scheduler task ID"),
+        ("limit" = Option<i64>, Query, description = "Maximum number of history records to return"),
+    ),
+    responses(
+        (status = 200, description = "Task run history", body = Vec<TaskRunRecord>),
+    )
+)]
 #[instrument(skip(service))]
 async fn get_history(
     State(service): State<SchedulerService>,

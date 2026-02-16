@@ -17,11 +17,10 @@
 use axum::{
     Json,
     extract::{Path, Query, State},
-    routing::{delete, get, post},
 };
-use utoipa_axum::router::OpenApiRouter;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::{
@@ -30,20 +29,22 @@ use crate::{
     types::{CreateSnapshotRequest, MetricsPeriod, MetricsSnapshot, SnapshotFilter},
 };
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct SnapshotListQuery {
     pub period:    Option<MetricsPeriod>,
+    #[schema(value_type = Option<String>)]
     pub date_from: Option<jiff::civil::Date>,
+    #[schema(value_type = Option<String>)]
     pub date_to:   Option<jiff::civil::Date>,
     pub limit:     Option<i64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct LatestQuery {
     pub period: Option<MetricsPeriod>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct DerivedRates {
     pub offer_rate:          Option<f64>,
     pub interview_rate:      Option<f64>,
@@ -54,18 +55,23 @@ pub struct DerivedRates {
 /// Register all analytics routes on a new router with shared state.
 pub fn routes(service: AnalyticsService) -> OpenApiRouter {
     OpenApiRouter::new()
-        .route("/api/v1/analytics/snapshots", post(create_snapshot))
-        .route("/api/v1/analytics/snapshots", get(list_snapshots))
-        .route("/api/v1/analytics/snapshots/latest", get(get_latest))
-        .route("/api/v1/analytics/snapshots/{id}", get(get_snapshot))
-        .route(
-            "/api/v1/analytics/snapshots/{id}/rates",
-            get(get_derived_rates),
-        )
-        .route("/api/v1/analytics/snapshots/{id}", delete(delete_snapshot))
+        .routes(routes!(create_snapshot, list_snapshots))
+        .routes(routes!(get_latest))
+        .routes(routes!(get_snapshot, delete_snapshot))
+        .routes(routes!(get_derived_rates))
         .with_state(service)
 }
 
+/// Create a new metrics snapshot.
+#[utoipa::path(
+    post,
+    path = "/api/v1/analytics/snapshots",
+    tag = "analytics",
+    request_body = CreateSnapshotRequest,
+    responses(
+        (status = 200, description = "Snapshot created", body = MetricsSnapshot),
+    )
+)]
 #[instrument(skip(service, req))]
 async fn create_snapshot(
     State(service): State<AnalyticsService>,
@@ -75,6 +81,21 @@ async fn create_snapshot(
     Ok(Json(snapshot))
 }
 
+/// List metrics snapshots with optional filters.
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/snapshots",
+    tag = "analytics",
+    params(
+        ("period" = Option<MetricsPeriod>, Query, description = "Filter by aggregation period"),
+        ("date_from" = Option<String>, Query, description = "Filter snapshots from this date"),
+        ("date_to" = Option<String>, Query, description = "Filter snapshots up to this date"),
+        ("limit" = Option<i64>, Query, description = "Maximum number of snapshots to return"),
+    ),
+    responses(
+        (status = 200, description = "List of metrics snapshots", body = Vec<MetricsSnapshot>),
+    )
+)]
 #[instrument(skip(service))]
 async fn list_snapshots(
     State(service): State<AnalyticsService>,
@@ -90,6 +111,18 @@ async fn list_snapshots(
     Ok(Json(snapshots))
 }
 
+/// Get the latest metrics snapshot.
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/snapshots/latest",
+    tag = "analytics",
+    params(
+        ("period" = Option<MetricsPeriod>, Query, description = "Aggregation period (defaults to daily)"),
+    ),
+    responses(
+        (status = 200, description = "Latest snapshot", body = Option<MetricsSnapshot>),
+    )
+)]
 #[instrument(skip(service))]
 async fn get_latest(
     State(service): State<AnalyticsService>,
@@ -100,6 +133,17 @@ async fn get_latest(
     Ok(Json(snapshot))
 }
 
+/// Get a single metrics snapshot by ID.
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/snapshots/{id}",
+    tag = "analytics",
+    params(("id" = Uuid, Path, description = "Snapshot ID")),
+    responses(
+        (status = 200, description = "Snapshot found", body = MetricsSnapshot),
+        (status = 404, description = "Snapshot not found"),
+    )
+)]
 #[instrument(skip(service))]
 async fn get_snapshot(
     State(service): State<AnalyticsService>,
@@ -109,6 +153,16 @@ async fn get_snapshot(
     Ok(Json(snapshot))
 }
 
+/// Get derived rates for a metrics snapshot.
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/snapshots/{id}/rates",
+    tag = "analytics",
+    params(("id" = Uuid, Path, description = "Snapshot ID")),
+    responses(
+        (status = 200, description = "Derived rates", body = DerivedRates),
+    )
+)]
 #[instrument(skip(service))]
 async fn get_derived_rates(
     State(service): State<AnalyticsService>,
@@ -124,6 +178,16 @@ async fn get_derived_rates(
     Ok(Json(rates))
 }
 
+/// Delete a metrics snapshot.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/analytics/snapshots/{id}",
+    tag = "analytics",
+    params(("id" = Uuid, Path, description = "Snapshot ID")),
+    responses(
+        (status = 200, description = "Snapshot deleted"),
+    )
+)]
 #[instrument(skip(service))]
 async fn delete_snapshot(
     State(service): State<AnalyticsService>,

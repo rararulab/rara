@@ -21,7 +21,7 @@ use strum_macros::FromRepr;
 use uuid::Uuid;
 
 /// Status of a task run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[repr(u8)]
 #[derive(FromRepr)]
 pub enum TaskRunStatus {
@@ -34,7 +34,7 @@ pub enum TaskRunStatus {
 }
 
 /// A scheduled task registered in the system.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ScheduledTask {
     /// Unique identifier.
     pub id:            SchedulerTaskId,
@@ -45,6 +45,7 @@ pub struct ScheduledTask {
     /// Whether the task is currently enabled.
     pub enabled:       bool,
     /// When the task was last run.
+    #[schema(value_type = Option<String>)]
     pub last_run_at:   Option<Timestamp>,
     /// Status of the last run.
     pub last_status:   Option<TaskRunStatus>,
@@ -55,13 +56,15 @@ pub struct ScheduledTask {
     /// Total number of failed runs.
     pub failure_count: i64,
     /// When the record was created.
+    #[schema(value_type = String)]
     pub created_at:    Timestamp,
     /// When the record was last updated.
+    #[schema(value_type = String)]
     pub updated_at:    Timestamp,
 }
 
 /// A record of a single task execution.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct TaskRunRecord {
     /// Unique identifier for this run.
     pub id:          Uuid,
@@ -70,21 +73,25 @@ pub struct TaskRunRecord {
     /// Outcome of the run.
     pub status:      TaskRunStatus,
     /// When the run started.
+    #[schema(value_type = String)]
     pub started_at:  Timestamp,
     /// When the run finished.
+    #[schema(value_type = Option<String>)]
     pub finished_at: Option<Timestamp>,
     /// Duration in milliseconds.
     pub duration_ms: Option<i64>,
     /// Error message (if failed).
     pub error:       Option<String>,
     /// Structured output from the run.
+    #[schema(value_type = Option<Object>)]
     pub output:      Option<serde_json::Value>,
     /// When this record was created.
+    #[schema(value_type = String)]
     pub created_at:  Timestamp,
 }
 
 /// Parameters for creating (registering) a new scheduler task.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateTaskRequest {
     /// Human-readable name for the task.
     pub name:      String,
@@ -93,7 +100,7 @@ pub struct CreateTaskRequest {
 }
 
 /// Criteria for listing/filtering scheduler tasks.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct TaskFilter {
     /// Filter by enabled/disabled status.
     pub enabled:       Option<bool>,

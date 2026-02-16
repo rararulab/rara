@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use strum_macros::FromRepr;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum QueueMessageState {
     Ready,
@@ -27,7 +27,7 @@ pub enum QueueMessageState {
     Archived,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct NotificationQueueOverview {
     pub queue_name:     String,
     pub ready_count:    i64,
@@ -35,14 +35,18 @@ pub struct NotificationQueueOverview {
     pub archived_count: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct NotificationQueueMessage {
     pub state:       QueueMessageState,
     pub msg_id:      i64,
     pub read_ct:     i32,
+    #[schema(value_type = String)]
     pub enqueued_at: chrono::DateTime<chrono::Utc>,
+    #[schema(value_type = String)]
     pub vt:          chrono::DateTime<chrono::Utc>,
+    #[schema(value_type = Option<String>)]
     pub archived_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[schema(value_type = Object)]
     pub payload:     serde_json::Value,
 }
 

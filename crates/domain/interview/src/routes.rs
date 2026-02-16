@@ -18,12 +18,11 @@ use axum::{
     Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{delete, get, post, put},
 };
-use utoipa_axum::router::OpenApiRouter;
 use rara_domain_shared::id::InterviewId;
 use serde::Deserialize;
 use tracing::instrument;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::{
@@ -35,7 +34,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct UpdateStatusRequest {
     status: InterviewTaskStatus,
 }
@@ -43,16 +42,23 @@ struct UpdateStatusRequest {
 /// Register all interview routes on a new router with shared state.
 pub fn routes(service: InterviewService) -> OpenApiRouter {
     OpenApiRouter::new()
-        .route("/api/v1/interviews", post(create_interview))
-        .route("/api/v1/interviews", get(list_interviews))
-        .route("/api/v1/interviews/{id}", get(get_interview))
-        .route("/api/v1/interviews/{id}", put(update_interview))
-        .route("/api/v1/interviews/{id}/status", post(update_status))
-        .route("/api/v1/interviews/{id}/prep", post(regenerate_prep))
-        .route("/api/v1/interviews/{id}", delete(delete_interview))
+        .routes(routes!(create_interview, list_interviews))
+        .routes(routes!(get_interview, update_interview, delete_interview))
+        .routes(routes!(update_status))
+        .routes(routes!(regenerate_prep))
         .with_state(service)
 }
 
+/// Create a new interview plan.
+#[utoipa::path(
+    post,
+    path = "/api/v1/interviews",
+    tag = "interviews",
+    request_body = CreateInterviewPlanRequest,
+    responses(
+        (status = 201, description = "Interview plan created", body = InterviewPlan),
+    )
+)]
 #[instrument(skip(service, req))]
 async fn create_interview(
     State(service): State<InterviewService>,
@@ -62,6 +68,23 @@ async fn create_interview(
     Ok((StatusCode::CREATED, Json(plan)))
 }
 
+/// List interview plans with optional filters.
+#[utoipa::path(
+    get,
+    path = "/api/v1/interviews",
+    tag = "interviews",
+    params(
+        ("application_id" = Option<String>, Query, description = "Filter by application ID"),
+        ("company" = Option<String>, Query, description = "Filter by company name"),
+        ("task_status" = Option<InterviewTaskStatus>, Query, description = "Filter by task status"),
+        ("round" = Option<String>, Query, description = "Filter by interview round"),
+        ("scheduled_after" = Option<String>, Query, description = "Scheduled at or after this timestamp"),
+        ("scheduled_before" = Option<String>, Query, description = "Scheduled at or before this timestamp"),
+    ),
+    responses(
+        (status = 200, description = "List of interview plans", body = Vec<InterviewPlan>),
+    )
+)]
 #[instrument(skip(service))]
 async fn list_interviews(
     State(service): State<InterviewService>,
@@ -71,6 +94,17 @@ async fn list_interviews(
     Ok(Json(plans))
 }
 
+/// Get a single interview plan by ID.
+#[utoipa::path(
+    get,
+    path = "/api/v1/interviews/{id}",
+    tag = "interviews",
+    params(("id" = Uuid, Path, description = "Interview plan ID")),
+    responses(
+        (status = 200, description = "Interview plan found", body = InterviewPlan),
+        (status = 404, description = "Interview plan not found"),
+    )
+)]
 #[instrument(skip(service))]
 async fn get_interview(
     State(service): State<InterviewService>,
@@ -80,6 +114,17 @@ async fn get_interview(
     Ok(Json(plan))
 }
 
+/// Update an existing interview plan.
+#[utoipa::path(
+    put,
+    path = "/api/v1/interviews/{id}",
+    tag = "interviews",
+    params(("id" = Uuid, Path, description = "Interview plan ID")),
+    request_body = UpdateInterviewPlanRequest,
+    responses(
+        (status = 200, description = "Interview plan updated", body = InterviewPlan),
+    )
+)]
 #[instrument(skip(service, req))]
 async fn update_interview(
     State(service): State<InterviewService>,
@@ -90,6 +135,17 @@ async fn update_interview(
     Ok(Json(plan))
 }
 
+/// Update the status of an interview plan.
+#[utoipa::path(
+    post,
+    path = "/api/v1/interviews/{id}/status",
+    tag = "interviews",
+    params(("id" = Uuid, Path, description = "Interview plan ID")),
+    request_body = UpdateStatusRequest,
+    responses(
+        (status = 200, description = "Status updated", body = InterviewPlan),
+    )
+)]
 #[instrument(skip(service, body))]
 async fn update_status(
     State(service): State<InterviewService>,
@@ -102,6 +158,17 @@ async fn update_status(
     Ok(Json(plan))
 }
 
+/// Regenerate AI prep materials for an interview plan.
+#[utoipa::path(
+    post,
+    path = "/api/v1/interviews/{id}/prep",
+    tag = "interviews",
+    params(("id" = Uuid, Path, description = "Interview plan ID")),
+    request_body = PrepGenerationRequest,
+    responses(
+        (status = 200, description = "Prep materials regenerated", body = InterviewPlan),
+    )
+)]
 #[instrument(skip(service, prep_req))]
 async fn regenerate_prep(
     State(service): State<InterviewService>,
@@ -114,6 +181,16 @@ async fn regenerate_prep(
     Ok(Json(plan))
 }
 
+/// Delete an interview plan.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/interviews/{id}",
+    tag = "interviews",
+    params(("id" = Uuid, Path, description = "Interview plan ID")),
+    responses(
+        (status = 204, description = "Interview plan deleted"),
+    )
+)]
 #[instrument(skip(service))]
 async fn delete_interview(
     State(service): State<InterviewService>,

@@ -67,7 +67,7 @@ impl std::fmt::Display for InterviewRound {
 /// Task-level status of an interview plan (maps to the DB enum
 /// `interview_task_status`).
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, FromRepr)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, FromRepr, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum InterviewTaskStatus {
@@ -89,7 +89,7 @@ pub enum InterviewTaskStatus {
 /// interview.
 ///
 /// Serialised as JSONB in the `materials` column of `interview_plan`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct PrepMaterials {
     /// Key knowledge points to review.
     pub knowledge_points:     Vec<String>,
@@ -104,7 +104,7 @@ pub struct PrepMaterials {
 }
 
 /// A single project-review entry inside [`PrepMaterials`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ProjectReview {
     /// Name of the project.
     pub project_name:        String,
@@ -115,7 +115,7 @@ pub struct ProjectReview {
 }
 
 /// A single behavioural question inside [`PrepMaterials`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct BehavioralQuestion {
     /// The question itself.
     pub question:           String,
@@ -132,7 +132,7 @@ pub struct BehavioralQuestion {
 /// An interview preparation plan linked to a specific application.
 ///
 /// This is the primary aggregate root for the interview domain.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct InterviewPlan {
     /// Unique identifier.
     pub id:              InterviewId,
@@ -147,8 +147,10 @@ pub struct InterviewPlan {
     /// Full job description text.
     pub job_description: Option<String>,
     /// Which interview round this plan covers.
+    #[schema(value_type = String)]
     pub round:           InterviewRound,
     /// Scheduled date/time of the interview.
+    #[schema(value_type = Option<String>)]
     pub scheduled_at:    Option<Timestamp>,
     /// Current task status.
     pub task_status:     InterviewTaskStatus,
@@ -161,10 +163,13 @@ pub struct InterviewPlan {
     /// Soft-delete flag.
     pub is_deleted:      bool,
     /// When the record was soft-deleted.
+    #[schema(value_type = Option<String>)]
     pub deleted_at:      Option<Timestamp>,
     /// When the record was created.
+    #[schema(value_type = String)]
     pub created_at:      Timestamp,
     /// When the record was last updated.
+    #[schema(value_type = String)]
     pub updated_at:      Timestamp,
 }
 
@@ -173,7 +178,7 @@ pub struct InterviewPlan {
 // ---------------------------------------------------------------------------
 
 /// Parameters for creating a new interview plan.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateInterviewPlanRequest {
     /// The application this interview belongs to.
     pub application_id:  ApplicationId,
@@ -186,8 +191,10 @@ pub struct CreateInterviewPlanRequest {
     /// Full job description.
     pub job_description: Option<String>,
     /// Interview round.
+    #[schema(value_type = String)]
     pub round:           InterviewRound,
     /// Scheduled date/time.
+    #[schema(value_type = Option<String>)]
     pub scheduled_at:    Option<Timestamp>,
     /// Optional free-form notes.
     pub notes:           Option<String>,
@@ -196,7 +203,7 @@ pub struct CreateInterviewPlanRequest {
 /// Parameters for a partial update to an existing interview plan.
 ///
 /// Only fields set to `Some` will be applied.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct UpdateInterviewPlanRequest {
     /// New title.
     pub title:           Option<String>,
@@ -207,8 +214,10 @@ pub struct UpdateInterviewPlanRequest {
     /// New job description.
     pub job_description: Option<Option<String>>,
     /// New round.
+    #[schema(value_type = Option<String>)]
     pub round:           Option<InterviewRound>,
     /// New scheduled time.
+    #[schema(value_type = Option<Option<String>>)]
     pub scheduled_at:    Option<Option<Timestamp>>,
     /// Replace prep materials entirely.
     pub prep_materials:  Option<PrepMaterials>,
@@ -217,7 +226,7 @@ pub struct UpdateInterviewPlanRequest {
 }
 
 /// Criteria for listing/searching interview plans.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct InterviewFilter {
     /// Filter by application.
     pub application_id:   Option<ApplicationId>,
@@ -226,15 +235,18 @@ pub struct InterviewFilter {
     /// Filter by task status.
     pub task_status:      Option<InterviewTaskStatus>,
     /// Filter by interview round.
+    #[schema(value_type = Option<String>)]
     pub round:            Option<InterviewRound>,
     /// Scheduled at or after this timestamp.
+    #[schema(value_type = Option<String>)]
     pub scheduled_after:  Option<Timestamp>,
     /// Scheduled at or before this timestamp.
+    #[schema(value_type = Option<String>)]
     pub scheduled_before: Option<Timestamp>,
 }
 
 /// Input for AI prep-material generation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct PrepGenerationRequest {
     /// Target company.
     pub company:         String,
@@ -243,6 +255,7 @@ pub struct PrepGenerationRequest {
     /// Full job description text.
     pub job_description: String,
     /// Which interview round to prepare for.
+    #[schema(value_type = String)]
     pub round:           InterviewRound,
     /// Candidate's resume content (if available).
     pub resume_content:  Option<String>,

@@ -19,8 +19,8 @@ use axum::{
     extract::{Query, State},
     http::StatusCode,
 };
-use utoipa_axum::router::OpenApiRouter;
 use serde::Deserialize;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::notify::{
     client::NotifyClient,
@@ -36,7 +36,7 @@ struct RouteState {
     client: NotifyClient,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct QueueMessagesResponse {
     pub state:  QueueMessageState,
     pub limit:  i64,
@@ -44,7 +44,7 @@ pub struct QueueMessagesResponse {
     pub items:  Vec<NotificationQueueMessage>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct QueueMessagesQuery {
     state:  Option<String>,
     limit:  Option<i64>,
@@ -54,17 +54,20 @@ struct QueueMessagesQuery {
 /// Build notification observability routes.
 pub fn routes(client: NotifyClient) -> OpenApiRouter {
     OpenApiRouter::new()
-        .route(
-            "/api/v1/notifications/queues/telegram/overview",
-            axum::routing::get(get_telegram_queue_overview),
-        )
-        .route(
-            "/api/v1/notifications/queues/telegram/messages",
-            axum::routing::get(list_telegram_queue_messages),
-        )
+        .routes(routes!(get_telegram_queue_overview))
+        .routes(routes!(list_telegram_queue_messages))
         .with_state(RouteState { client })
 }
 
+/// Get Telegram notification queue overview.
+#[utoipa::path(
+    get,
+    path = "/api/v1/notifications/queues/telegram/overview",
+    tag = "notifications",
+    responses(
+        (status = 200, description = "Queue overview", body = NotificationQueueOverview),
+    )
+)]
 async fn get_telegram_queue_overview(
     State(state): State<RouteState>,
 ) -> Result<Json<NotificationQueueOverview>, (StatusCode, String)> {
@@ -76,6 +79,20 @@ async fn get_telegram_queue_overview(
     Ok(Json(overview))
 }
 
+/// List Telegram notification queue messages.
+#[utoipa::path(
+    get,
+    path = "/api/v1/notifications/queues/telegram/messages",
+    tag = "notifications",
+    params(
+        ("state" = Option<String>, Query, description = "Message state filter: ready|inflight|archived"),
+        ("limit" = Option<i64>, Query, description = "Maximum number of messages to return"),
+        ("offset" = Option<i64>, Query, description = "Offset for pagination"),
+    ),
+    responses(
+        (status = 200, description = "Queue messages", body = QueueMessagesResponse),
+    )
+)]
 async fn list_telegram_queue_messages(
     State(state): State<RouteState>,
     Query(query): Query<QueueMessagesQuery>,

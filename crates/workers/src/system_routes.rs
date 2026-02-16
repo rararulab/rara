@@ -16,42 +16,50 @@
 
 use std::path::PathBuf;
 
-use axum::{Json, extract::Query, http::StatusCode, routing::get};
-use utoipa_axum::router::OpenApiRouter;
+use axum::{Json, extract::Query, http::StatusCode};
 use serde::{Deserialize, Serialize};
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 /// Build `/api/v1/system/...` routes.
 pub fn routes() -> OpenApiRouter {
     OpenApiRouter::new().nest(
         "/api/v1/system",
-        OpenApiRouter::new().route("/browse", get(browse_directory)),
+        OpenApiRouter::new().routes(routes!(browse_directory)),
     )
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct BrowseParams {
     /// Directory path to browse.  Falls back to `$HOME` when absent.
     path: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct BrowseResult {
     current_path: String,
     parent_path:  Option<String>,
     entries:      Vec<DirEntry>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct DirEntry {
     name:          String,
     path:          String,
     has_typ_files: bool,
 }
 
-/// `GET /api/v1/system/browse?path=...`
-///
-/// Returns the list of sub-directories at the given path so the frontend
-/// folder-picker can navigate the local filesystem.
+/// Browse local filesystem directories.
+#[utoipa::path(
+    get,
+    path = "/api/v1/system/browse",
+    tag = "system",
+    params(
+        ("path" = Option<String>, Query, description = "Directory path to browse (defaults to $HOME)"),
+    ),
+    responses(
+        (status = 200, description = "Directory listing", body = BrowseResult),
+    )
+)]
 async fn browse_directory(
     Query(params): Query<BrowseParams>,
 ) -> Result<Json<BrowseResult>, (StatusCode, String)> {

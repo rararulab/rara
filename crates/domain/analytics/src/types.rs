@@ -25,7 +25,7 @@ use uuid::Uuid;
 
 /// Aggregation period for a metrics snapshot.
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, FromRepr)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, FromRepr, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum MetricsPeriod {
@@ -40,10 +40,11 @@ pub enum MetricsPeriod {
 
 /// A point-in-time statistics snapshot for a given period (domain
 /// representation).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct MetricsSnapshot {
     pub id:                   Uuid,
     pub period:               MetricsPeriod,
+    #[schema(value_type = String)]
     pub snapshot_date:        Date,
     pub jobs_discovered:      i32,
     pub applications_sent:    i32,
@@ -52,8 +53,10 @@ pub struct MetricsSnapshot {
     pub rejections:           i32,
     pub ai_runs_count:        i32,
     pub ai_total_cost_cents:  i32,
+    #[schema(value_type = Option<Object>)]
     pub extra:                Option<serde_json::Value>,
     pub trace_id:             Option<String>,
+    #[schema(value_type = String)]
     pub created_at:           Timestamp,
 }
 
@@ -62,9 +65,10 @@ pub struct MetricsSnapshot {
 // ---------------------------------------------------------------------------
 
 /// Parameters for creating a new metrics snapshot.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateSnapshotRequest {
     pub period:               MetricsPeriod,
+    #[schema(value_type = String)]
     pub snapshot_date:        Date,
     pub jobs_discovered:      i32,
     pub applications_sent:    i32,
@@ -73,6 +77,7 @@ pub struct CreateSnapshotRequest {
     pub rejections:           i32,
     pub ai_runs_count:        i32,
     pub ai_total_cost_cents:  i32,
+    #[schema(value_type = Option<Object>)]
     pub extra:                Option<serde_json::Value>,
 }
 
@@ -81,10 +86,12 @@ pub struct CreateSnapshotRequest {
 // ---------------------------------------------------------------------------
 
 /// Criteria for listing/searching metrics snapshots.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SnapshotFilter {
     pub period:    Option<MetricsPeriod>,
+    #[schema(value_type = Option<String>)]
     pub date_from: Option<Date>,
+    #[schema(value_type = Option<String>)]
     pub date_to:   Option<Date>,
     pub limit:     Option<i64>,
 }
