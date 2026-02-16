@@ -41,10 +41,10 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
-use utoipa_axum::{router::OpenApiRouter, routes};
 use rara_sessions::types::{ChannelBinding, ChatMessage, SessionEntry, SessionKey};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{error::ChatError, model_catalog::ChatModel, service::ChatService};
 
@@ -56,11 +56,11 @@ use crate::{error::ChatError, model_catalog::ChatModel, service::ChatService};
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CreateSessionRequest {
     /// Session key (e.g. `"user:alice"` or `"dm:alice:bob"`).
-    pub key:           String,
+    pub key: String,
     /// Optional human-readable title.
-    pub title:         Option<String>,
+    pub title: Option<String>,
     /// Optional LLM model override (e.g. `"gpt-4o"`).
-    pub model:         Option<String>,
+    pub model: Option<String>,
     /// Optional system prompt override.
     pub system_prompt: Option<String>,
 }
@@ -69,7 +69,7 @@ pub struct CreateSessionRequest {
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct ListSessionsQuery {
     /// Maximum number of sessions to return (default: 50).
-    pub limit:  Option<i64>,
+    pub limit: Option<i64>,
     /// Number of sessions to skip (default: 0).
     pub offset: Option<i64>,
 }
@@ -78,7 +78,7 @@ pub struct ListSessionsQuery {
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct SendMessageRequest {
     /// The user's message text.
-    pub text:       String,
+    pub text: String,
     /// Optional list of image URLs to include as multimodal content.
     #[serde(default)]
     pub image_urls: Option<Vec<String>>,
@@ -98,14 +98,14 @@ pub struct GetMessagesQuery {
     /// Only return messages with `seq > after_seq` (cursor-based pagination).
     pub after_seq: Option<i64>,
     /// Maximum number of messages to return.
-    pub limit:     Option<i64>,
+    pub limit: Option<i64>,
 }
 
 /// Request body for `POST /sessions/{key}/fork`.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct ForkSessionRequest {
     /// Key for the newly created forked session.
-    pub target_key:  String,
+    pub target_key: String,
     /// Fork point — messages with `seq <= fork_at_seq` are copied.
     pub fork_at_seq: i64,
 }
@@ -114,9 +114,9 @@ pub struct ForkSessionRequest {
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct UpdateSessionRequest {
     /// New human-readable title.
-    pub title:         Option<String>,
+    pub title: Option<String>,
     /// New LLM model identifier (e.g. `"openai/gpt-4o"`).
-    pub model:         Option<String>,
+    pub model: Option<String>,
     /// New system prompt override.
     pub system_prompt: Option<String>,
 }
@@ -134,11 +134,11 @@ pub struct BindChannelRequest {
     /// Channel type identifier (e.g. `"telegram"`, `"slack"`).
     pub channel_type: String,
     /// Account or bot identifier within the channel.
-    pub account:      String,
+    pub account: String,
     /// Chat or conversation identifier within the channel.
-    pub chat_id:      String,
+    pub chat_id: String,
     /// Internal session key to bind to.
-    pub session_key:  String,
+    pub session_key: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -148,21 +148,32 @@ pub struct BindChannelRequest {
 /// Build an axum [`Router`] with all chat endpoints and the given
 /// [`ChatService`] as shared state.
 pub fn routes(service: ChatService) -> OpenApiRouter {
+    model_routes(service.clone())
+        .merge(session_routes(service.clone()))
+        .merge(message_routes(service))
+}
+
+fn model_routes(service: ChatService) -> OpenApiRouter {
     OpenApiRouter::new()
-        // Models
         .routes(routes!(list_models))
         .routes(routes!(set_favorites))
-        // Sessions
+        .with_state(service)
+}
+
+fn session_routes(service: ChatService) -> OpenApiRouter {
+    OpenApiRouter::new()
         .routes(routes!(create_session, list_sessions))
         .routes(routes!(get_session, update_session, delete_session))
-        // Messages
-        .routes(routes!(send_message))
-        .routes(routes!(get_messages, clear_messages))
-        // Fork
         .routes(routes!(fork_session))
-        // Channel bindings
         .routes(routes!(bind_channel))
         .routes(routes!(get_channel_binding))
+        .with_state(service)
+}
+
+fn message_routes(service: ChatService) -> OpenApiRouter {
+    OpenApiRouter::new()
+        .routes(routes!(send_message))
+        .routes(routes!(get_messages, clear_messages))
         .with_state(service)
 }
 

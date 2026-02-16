@@ -35,17 +35,17 @@ pub struct AppState {
     pub ai_service: rara_ai::service::AiService,
 
     // -- domain services --
-    pub resume_service:      rara_domain_resume::ResumeAppService,
+    pub resume_service: rara_domain_resume::ResumeAppService,
     pub application_service: rara_domain_application::service::ApplicationService,
-    pub interview_service:   rara_domain_interview::service::InterviewService,
-    pub scheduler_service:   rara_domain_scheduler::service::SchedulerService,
-    pub analytics_service:   rara_domain_analytics::service::AnalyticsService,
-    pub job_service:         rara_domain_job::service::JobService,
-    pub chat_service:        rara_domain_chat::service::ChatService,
-    pub typst_service:       rara_domain_typst::service::TypstService,
+    pub interview_service: rara_domain_interview::service::InterviewService,
+    pub scheduler_service: rara_domain_scheduler::service::SchedulerService,
+    pub analytics_service: rara_domain_analytics::service::AnalyticsService,
+    pub job_service: rara_domain_job::service::JobService,
+    pub chat_service: rara_domain_chat::service::ChatService,
+    pub typst_service: rara_domain_typst::service::TypstService,
 
     // -- shared --
-    pub settings_svc:  rara_domain_shared::settings::SettingsSvc,
+    pub settings_svc: rara_domain_shared::settings::SettingsSvc,
     pub notify_client: rara_domain_shared::notify::client::NotifyClient,
 
     // -- LLM provider --
@@ -65,7 +65,7 @@ pub struct AppState {
     pub skill_registry: Arc<RwLock<rara_skills::registry::InMemoryRegistry>>,
 
     // -- worker coordination --
-    pub analyze_notify:   Arc<RwLock<Option<NotifyHandle>>>,
+    pub analyze_notify: Arc<RwLock<Option<NotifyHandle>>>,
     pub proactive_notify: Arc<RwLock<Option<IntervalOrNotifyHandle>>>,
 }
 
@@ -146,10 +146,9 @@ impl AppState {
                 .whatever_context("Failed to initialize memory manager")?,
         );
         info!("memory manager initialized");
-        let _ = memory_manager
-            .sync()
-            .await
-            .whatever_context("Failed to sync memory index")?;
+        if let Err(err) = memory_manager.sync().await {
+            warn!(error = %err, "Failed to sync memory index; continuing startup");
+        }
 
         // Layer 1: Primitives
         tool_registry.register_primitive(Arc::new(crate::tools::primitives::DbQueryTool::new(
@@ -322,48 +321,79 @@ impl AppState {
     /// that the chained `.merge()` calls on `OpenApiRouter` would produce,
     /// which previously caused a runtime stack overflow.
     pub fn routes(&self) -> (axum::Router, utoipa::openapi::OpenApi) {
-        use utoipa_axum::router::OpenApiRouter;
-
         let mut api = Self::api_doc();
 
-        // All domain routers that carry OpenAPI metadata.
-        let domain_routers: Vec<OpenApiRouter> = vec![
+        let mut router = axum::Router::new();
+        merge_openapi_router(
+            &mut router,
+            &mut api,
             rara_domain_resume::routes::routes(
                 self.resume_service.clone(),
                 self.object_store.clone(),
             ),
+        );
+        merge_openapi_router(
+            &mut router,
+            &mut api,
             rara_domain_application::routes::routes(self.application_service.clone()),
+        );
+        merge_openapi_router(
+            &mut router,
+            &mut api,
             rara_domain_interview::routes::routes(self.interview_service.clone()),
+        );
+        merge_openapi_router(
+            &mut router,
+            &mut api,
             rara_domain_scheduler::routes::routes(self.scheduler_service.clone()),
+        );
+        merge_openapi_router(
+            &mut router,
+            &mut api,
             rara_domain_analytics::routes::routes(self.analytics_service.clone()),
+        );
+        merge_openapi_router(
+            &mut router,
+            &mut api,
             rara_domain_job::routes::management_routes(
                 self.job_service.clone(),
                 self.object_store.clone(),
             ),
+        );
+        merge_openapi_router(
+            &mut router,
+            &mut api,
             rara_domain_job::routes::discovery_routes(self.job_service.clone()),
+        );
+        merge_openapi_router(
+            &mut router,
+            &mut api,
             rara_domain_shared::settings::router::routes(self.settings_svc.clone()),
+        );
+        merge_openapi_router(
+            &mut router,
+            &mut api,
             rara_domain_shared::notify::routes::routes(self.notify_client.clone()),
+        );
+        merge_openapi_router(
+            &mut router,
+            &mut api,
             rara_domain_chat::router::routes(self.chat_service.clone()),
-            rara_domain_typst::router::routes(self.typst_service.clone()),
-            crate::system_routes::routes(),
+        );
+        router = router.merge(rara_domain_typst::router::plain_routes(
+            self.typst_service.clone(),
+        ));
+        merge_openapi_router(&mut router, &mut api, crate::system_routes::routes());
+        merge_openapi_router(
+            &mut router,
+            &mut api,
             crate::agent_scheduler_routes::routes(self.agent_scheduler.clone()),
-        ];
-
-        // Split each OpenApiRouter immediately and merge the plain Router +
-        // OpenApi spec separately — plain axum::Router merges are type-erased
-        // and do not create nested generics.
-        let mut router = axum::Router::new();
-        for domain_router in domain_routers {
-            let (r, a) = domain_router.split_for_parts();
-            router = router.merge(r);
-            api.merge(a);
-        }
+        );
 
         // skill_routes returns a plain axum::Router (no OpenAPI metadata).
         router = router.merge(rara_domain_skill::router::skill_routes(
             self.skill_registry.clone(),
         ));
-
         (router, api)
     }
 
@@ -395,6 +425,16 @@ impl AppState {
     }
 }
 
+fn merge_openapi_router(
+    router: &mut axum::Router,
+    api: &mut utoipa::openapi::OpenApi,
+    domain_router: utoipa_axum::router::OpenApiRouter,
+) {
+    let (r, a) = domain_router.split_for_parts();
+    *router = std::mem::take(router).merge(r);
+    api.merge(a);
+}
+
 // ---------------------------------------------------------------------------
 // SettingsOpenRouterLoader
 // ---------------------------------------------------------------------------
@@ -408,7 +448,7 @@ impl AppState {
 /// cached for subsequent calls via [`OnceCell`].
 struct SettingsOpenRouterLoader {
     settings: rara_domain_shared::settings::SettingsSvc,
-    client:   OnceCell<OpenRouterClient>,
+    client: OnceCell<OpenRouterClient>,
 }
 
 impl SettingsOpenRouterLoader {

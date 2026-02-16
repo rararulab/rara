@@ -34,16 +34,17 @@
 //! | `POST`   | `/api/v1/typst/projects/{id}/run`             | Run recipe or command    |
 
 use axum::{
-    Json,
+    Json, Router,
     body::Body,
     extract::{Path, State},
     http::{StatusCode, header},
     response::IntoResponse,
     routing::get,
 };
-use utoipa_axum::{router::OpenApiRouter, routes};
 use serde::Deserialize;
 use tracing::instrument;
+use utoipa::OpenApi;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::{
@@ -59,25 +60,105 @@ use crate::{
 
 /// Build an axum [`Router`] with all Typst endpoints.
 pub fn routes(service: TypstService) -> OpenApiRouter {
+    project_routes(service.clone())
+        .merge(file_routes(service.clone()))
+        .merge(compile_routes(service.clone()))
+        .merge(runner_routes(service))
+}
+
+/// Build Typst OpenAPI documentation without constructing OpenApiRouter.
+pub fn openapi_doc() -> utoipa::openapi::OpenApi {
+    #[derive(OpenApi)]
+    #[openapi(
+        paths(
+            register_project,
+            list_projects,
+            get_project,
+            delete_project,
+            import_from_git,
+            sync_git,
+            list_files,
+            read_file,
+            write_file,
+            compile_project,
+            list_renders,
+            get_render_pdf,
+            list_recipes,
+            run_project_command
+        )
+    )]
+    struct TypstApiDoc;
+
+    TypstApiDoc::openapi()
+}
+
+/// Build an axum [`Router`] for Typst endpoints without OpenAPI metadata.
+pub fn plain_routes(service: TypstService) -> Router {
+    Router::new()
+        .route(
+            "/api/v1/typst/projects",
+            get(list_projects).post(register_project),
+        )
+        .route(
+            "/api/v1/typst/projects/{id}",
+            get(get_project).delete(delete_project),
+        )
+        .route(
+            "/api/v1/typst/projects/import-git",
+            axum::routing::post(import_from_git),
+        )
+        .route(
+            "/api/v1/typst/projects/{id}/git-sync",
+            axum::routing::post(sync_git),
+        )
+        .route("/api/v1/typst/projects/{id}/files", get(list_files))
+        .route(
+            "/api/v1/typst/projects/{id}/files/{*path}",
+            get(read_file).put(write_file),
+        )
+        .route(
+            "/api/v1/typst/projects/{id}/compile",
+            axum::routing::post(compile_project),
+        )
+        .route("/api/v1/typst/projects/{id}/renders", get(list_renders))
+        .route("/api/v1/typst/renders/{id}/pdf", get(get_render_pdf))
+        .route("/api/v1/typst/projects/{id}/recipes", get(list_recipes))
+        .route(
+            "/api/v1/typst/projects/{id}/run",
+            axum::routing::post(run_project_command),
+        )
+        .with_state(service)
+}
+
+fn project_routes(service: TypstService) -> OpenApiRouter {
     OpenApiRouter::new()
-        // Projects
         .routes(routes!(register_project, list_projects))
         .routes(routes!(get_project, delete_project))
-        // Git import & sync
         .routes(routes!(import_from_git))
         .routes(routes!(sync_git))
-        // Files (local filesystem)
+        .with_state(service)
+}
+
+fn file_routes(service: TypstService) -> OpenApiRouter {
+    OpenApiRouter::new()
         .routes(routes!(list_files))
         .route(
             "/api/v1/typst/projects/{id}/files/{*path}",
             get(read_file).put(write_file),
         )
-        // Compile
+        .with_state(service)
+}
+
+fn compile_routes(service: TypstService) -> OpenApiRouter {
+    OpenApiRouter::new()
         .routes(routes!(compile_project))
-        // Renders
         .routes(routes!(list_renders))
         .routes(routes!(get_render_pdf))
-        // Runner (just recipes / shell commands)
+        .with_state(service)
+}
+
+fn runner_routes(service: TypstService) -> OpenApiRouter {
+    OpenApiRouter::new()
         .routes(routes!(list_recipes))
         .routes(routes!(run_project_command))
         .with_state(service)
@@ -272,7 +353,7 @@ async fn write_file(
 /// JSON response body for file content endpoints.
 #[derive(serde::Serialize, utoipa::ToSchema)]
 struct FileContent {
-    path:    String,
+    path: String,
     content: String,
 }
 
@@ -372,7 +453,7 @@ async fn list_recipes(
 /// Exactly one of `recipe` or `command` must be provided.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct RunRequest {
-    recipe:  Option<String>,
+    recipe: Option<String>,
     command: Option<String>,
 }
 
