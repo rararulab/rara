@@ -36,6 +36,7 @@ use teloxide::{
     net::Download,
     payloads::{EditMessageTextSetters, SendMessageSetters},
     requests::Requester,
+    sugar::request::RequestReplyExt,
     types::{CallbackQuery, ChatAction, ChatId, Message, ParseMode, PhotoSize, Update, UpdateKind},
     utils::command::BotCommands,
 };
@@ -420,12 +421,13 @@ async fn handle_chat_message(
 
                 let html = markdown_to_telegram_html(&reply_text);
                 let chunks = chunk_message(&html, TELEGRAM_MAX_MESSAGE_LEN);
-                for chunk in chunks {
-                    state
-                        .bot
-                        .send_message(msg.chat.id, chunk)
-                        .parse_mode(ParseMode::Html)
-                        .await?;
+                for (i, chunk) in chunks.into_iter().enumerate() {
+                    let mut req = state.bot.send_message(msg.chat.id, chunk)
+                        .parse_mode(ParseMode::Html);
+                    if i == 0 {
+                        req = req.reply_to(msg.id);
+                    }
+                    req.await?;
                 }
             }
         }
@@ -433,6 +435,7 @@ async fn handle_chat_message(
             state
                 .bot
                 .send_message(msg.chat.id, format!("Chat error: {e}"))
+                .reply_to(msg.id)
                 .await?;
         }
     }
@@ -558,12 +561,13 @@ async fn handle_photo_message(
             if !reply_text.is_empty() {
                 let html = markdown_to_telegram_html(&reply_text);
                 let chunks = chunk_message(&html, TELEGRAM_MAX_MESSAGE_LEN);
-                for chunk in chunks {
-                    state
-                        .bot
-                        .send_message(msg.chat.id, chunk)
-                        .parse_mode(ParseMode::Html)
-                        .await?;
+                for (i, chunk) in chunks.into_iter().enumerate() {
+                    let mut req = state.bot.send_message(msg.chat.id, chunk)
+                        .parse_mode(ParseMode::Html);
+                    if i == 0 {
+                        req = req.reply_to(msg.id);
+                    }
+                    req.await?;
                 }
             }
         }
