@@ -377,3 +377,13 @@ export type ChatContentBlock =
 export interface SendMessageResponse {
   message: ChatMessageData;
 }
+
+// Skills
+export interface Skill {
+  name: string;
+  description: string;
+  tools: string[];
+  trigger: string | null;
+  enabled: boolean;
+  prompt?: string; // only in detail response
+}
