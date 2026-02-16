@@ -34,16 +34,39 @@ impl FsSkillDiscoverer {
 
     /// Build the default search paths for skill discovery.
     ///
-    /// Workspace root is always the configured data directory.
+    /// Scans the following locations in order:
+    /// 1. Project-local: `<data_dir>/.rara/skills/`
+    /// 2. Personal (rara): `<data_dir>/skills/`
+    /// 3. Personal (Claude Code): `~/.claude/skills/`
+    /// 4. Registry-installed: `<data_dir>/installed-skills/`
+    /// 5. Plugins: `<data_dir>/installed-plugins/`
+    /// 6. Bundled: `<cwd>/skills/`
     pub fn default_paths() -> Vec<(PathBuf, SkillSource)> {
-        let workspace_root = rara_paths::data_dir();
-        let data = workspace_root.clone();
-        vec![
-            (workspace_root.join(".rara/skills"), SkillSource::Project),
+        let data = rara_paths::data_dir().clone();
+        let mut paths = vec![
+            (data.join(".rara/skills"), SkillSource::Project),
             (data.join("skills"), SkillSource::Personal),
+        ];
+
+        // ~/.claude/skills/ — Claude Code personal skills
+        if let Some(home) = dirs::home_dir() {
+            paths.push((home.join(".claude/skills"), SkillSource::Personal));
+        }
+
+        paths.extend([
             (data.join("installed-skills"), SkillSource::Registry),
             (data.join("installed-plugins"), SkillSource::Plugin),
-        ]
+        ]);
+
+        // Bundled skills in the working directory
+        if let Ok(cwd) = std::env::current_dir() {
+            let bundled = cwd.join("skills");
+            if bundled.is_dir() {
+                paths.push((bundled, SkillSource::Project));
+            }
+        }
+
+        paths
     }
 }
 

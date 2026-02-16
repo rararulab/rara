@@ -16,6 +16,7 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
+dirs.workspace = true
 flate2 = "1"
 notify-debouncer-full = "0.5"
 rara-paths.workspace = true
