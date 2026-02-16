@@ -315,49 +315,54 @@ impl AppState {
     }
 
     /// Build all domain API routes and the OpenAPI spec.
+    ///
+    /// Each domain `OpenApiRouter` is split immediately into a plain
+    /// `axum::Router` + `utoipa::openapi::OpenApi` and merged separately.
+    /// This avoids the deeply-nested `Merge<Merge<Merge<…>>>` generic type
+    /// that the chained `.merge()` calls on `OpenApiRouter` would produce,
+    /// which previously caused a runtime stack overflow.
     pub fn routes(&self) -> (axum::Router, utoipa::openapi::OpenApi) {
         use utoipa_axum::router::OpenApiRouter;
 
-        let (router, api) = OpenApiRouter::with_openapi(Self::api_doc())
-            .merge(rara_domain_resume::routes::routes(
+        let mut api = Self::api_doc();
+
+        // All domain routers that carry OpenAPI metadata.
+        let domain_routers: Vec<OpenApiRouter> = vec![
+            rara_domain_resume::routes::routes(
                 self.resume_service.clone(),
                 self.object_store.clone(),
-            ))
-            .merge(rara_domain_application::routes::routes(
-                self.application_service.clone(),
-            ))
-            .merge(rara_domain_interview::routes::routes(
-                self.interview_service.clone(),
-            ))
-            .merge(rara_domain_scheduler::routes::routes(
-                self.scheduler_service.clone(),
-            ))
-            .merge(rara_domain_analytics::routes::routes(
-                self.analytics_service.clone(),
-            ))
-            .merge(rara_domain_job::routes::management_routes(
+            ),
+            rara_domain_application::routes::routes(self.application_service.clone()),
+            rara_domain_interview::routes::routes(self.interview_service.clone()),
+            rara_domain_scheduler::routes::routes(self.scheduler_service.clone()),
+            rara_domain_analytics::routes::routes(self.analytics_service.clone()),
+            rara_domain_job::routes::management_routes(
                 self.job_service.clone(),
                 self.object_store.clone(),
-            ))
-            .merge(rara_domain_job::routes::discovery_routes(
-                self.job_service.clone(),
-            ))
-            .merge(rara_domain_shared::settings::router::routes(
-                self.settings_svc.clone(),
-            ))
-            .merge(rara_domain_shared::notify::routes::routes(
-                self.notify_client.clone(),
-            ))
-            .merge(rara_domain_chat::router::routes(self.chat_service.clone()))
-            .merge(rara_domain_skill::router::skill_routes(self.skill_registry.clone()).into())
-            .merge(rara_domain_typst::router::routes(
-                self.typst_service.clone(),
-            ))
-            .merge(crate::system_routes::routes())
-            .merge(crate::agent_scheduler_routes::routes(
-                self.agent_scheduler.clone(),
-            ))
-            .split_for_parts();
+            ),
+            rara_domain_job::routes::discovery_routes(self.job_service.clone()),
+            rara_domain_shared::settings::router::routes(self.settings_svc.clone()),
+            rara_domain_shared::notify::routes::routes(self.notify_client.clone()),
+            rara_domain_chat::router::routes(self.chat_service.clone()),
+            rara_domain_typst::router::routes(self.typst_service.clone()),
+            crate::system_routes::routes(),
+            crate::agent_scheduler_routes::routes(self.agent_scheduler.clone()),
+        ];
+
+        // Split each OpenApiRouter immediately and merge the plain Router +
+        // OpenApi spec separately — plain axum::Router merges are type-erased
+        // and do not create nested generics.
+        let mut router = axum::Router::new();
+        for domain_router in domain_routers {
+            let (r, a) = domain_router.split_for_parts();
+            router = router.merge(r);
+            api.merge(a);
+        }
+
+        // skill_routes returns a plain axum::Router (no OpenAPI metadata).
+        router = router.merge(rara_domain_skill::router::skill_routes(
+            self.skill_registry.clone(),
+        ));
 
         (router, api)
     }
