@@ -29,6 +29,7 @@ import SavedJobs from '@/pages/SavedJobs';
 import SavedJobMarkdownPreview from '@/pages/SavedJobMarkdownPreview';
 import Settings from '@/pages/Settings';
 import Chat from '@/pages/Chat';
+import Skills from '@/pages/Skills';
 import TypstProjects from '@/pages/TypstProjects';
 import TypstEditor from '@/pages/TypstEditor';
 
@@ -51,6 +52,7 @@ export default function App() {
               <Route path="notifications" element={<Notifications />} />
               <Route path="scheduler" element={<Scheduler />} />
               <Route path="chat" element={<Chat />} />
+              <Route path="skills" element={<Skills />} />
               <Route path="typst" element={<TypstProjects />} />
               <Route path="typst/:projectId" element={<TypstEditor />} />
               <Route path="settings" element={<Settings />} />

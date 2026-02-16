@@ -28,6 +28,7 @@ import {
   Bell,
   Clock,
   Settings as SettingsIcon,
+  Wrench,
   Globe,
   Database,
   ExternalLink,
@@ -53,6 +54,7 @@ const THEME_META = {
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/chat', icon: Bot, label: 'Chat' },
+  { to: '/skills', icon: Wrench, label: 'Skills' },
   { to: '/applications', icon: Briefcase, label: 'Applications' },
   { to: '/resumes', icon: FileText, label: 'Resumes' },
   { to: '/typst', icon: FileType, label: 'Typst' },
