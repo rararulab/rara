@@ -15,22 +15,18 @@
  */
 
 import { api } from './client';
-import type { Skill } from './types';
+import type { SkillSummary, SkillDetail, CreateSkillRequest } from './types';
 
-export async function listSkills(): Promise<Skill[]> {
-  return api.get<Skill[]>('/api/v1/skills');
+export async function listSkills(): Promise<SkillSummary[]> {
+  return api.get<SkillSummary[]>('/api/v1/skills');
 }
 
-export async function getSkill(name: string): Promise<Skill> {
-  return api.get<Skill>(`/api/v1/skills/${encodeURIComponent(name)}`);
+export async function getSkill(name: string): Promise<SkillDetail> {
+  return api.get<SkillDetail>(`/api/v1/skills/${encodeURIComponent(name)}`);
 }
 
-export async function createSkill(skill: Omit<Skill, 'enabled'>): Promise<Skill> {
-  return api.post<Skill>('/api/v1/skills', skill);
-}
-
-export async function updateSkill(name: string, updates: Partial<Skill>): Promise<Skill> {
-  return api.put<Skill>(`/api/v1/skills/${encodeURIComponent(name)}`, updates);
+export async function createSkill(skill: CreateSkillRequest): Promise<SkillDetail> {
+  return api.post<SkillDetail>('/api/v1/skills', skill);
 }
 
 export async function deleteSkill(name: string): Promise<void> {
