@@ -379,11 +379,23 @@ export interface SendMessageResponse {
 }
 
 // Skills
-export interface Skill {
+export interface SkillSummary {
   name: string;
   description: string;
-  tools: string[];
-  trigger: string | null;
-  enabled: boolean;
-  prompt?: string; // only in detail response
+  allowed_tools: string[];
+  source: string | null;
+  homepage: string | null;
+  license: string | null;
+  eligible: boolean;
+}
+
+export interface SkillDetail extends SkillSummary {
+  body: string;
+}
+
+export interface CreateSkillRequest {
+  name: string;
+  description: string;
+  allowed_tools: string[];
+  prompt: string;
 }

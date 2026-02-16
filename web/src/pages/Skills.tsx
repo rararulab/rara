@@ -16,13 +16,12 @@
 
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { listSkills, createSkill, updateSkill, deleteSkill } from "@/api/skills";
-import type { Skill } from "@/api/types";
+import { listSkills, createSkill, deleteSkill } from "@/api/skills";
+import type { SkillSummary, CreateSkillRequest } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
-import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -34,82 +33,61 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Plus, Pencil, Trash2, Code } from "lucide-react";
+import {
+  Plus,
+  Trash2,
+  Code,
+  ExternalLink,
+  CheckCircle,
+  XCircle,
+} from "lucide-react";
 
 // ---------------------------------------------------------------------------
-// Skill Form Dialog
+// Skill Form Dialog (create only)
 // ---------------------------------------------------------------------------
 
 interface SkillFormData {
   name: string;
   description: string;
-  tools: string;
-  trigger: string;
+  allowed_tools: string;
   prompt: string;
 }
 
 const EMPTY_FORM: SkillFormData = {
   name: "",
   description: "",
-  tools: "",
-  trigger: "",
+  allowed_tools: "",
   prompt: "",
 };
 
 function SkillFormDialog({
   open,
   onOpenChange,
-  initialData,
-  mode,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  initialData?: Skill;
-  mode: "create" | "edit";
 }) {
   const queryClient = useQueryClient();
-  const [form, setForm] = useState<SkillFormData>(() =>
-    initialData
-      ? {
-          name: initialData.name,
-          description: initialData.description,
-          tools: initialData.tools.join(", "),
-          trigger: initialData.trigger ?? "",
-          prompt: initialData.prompt ?? "",
-        }
-      : { ...EMPTY_FORM }
-  );
+  const [form, setForm] = useState<SkillFormData>({ ...EMPTY_FORM });
 
-  const createMutation = useMutation({
-    mutationFn: (data: SkillFormData) =>
-      createSkill({
+  const mutation = useMutation({
+    mutationFn: (data: SkillFormData): Promise<unknown> => {
+      const req: CreateSkillRequest = {
         name: data.name,
         description: data.description,
-        tools: data.tools.split(",").map((t) => t.trim()).filter(Boolean),
-        trigger: data.trigger || null,
-        prompt: data.prompt || undefined,
-      }),
+        allowed_tools: data.allowed_tools
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean),
+        prompt: data.prompt,
+      };
+      return createSkill(req);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["skills"] });
       onOpenChange(false);
     },
   });
-
-  const updateMutation = useMutation({
-    mutationFn: (data: SkillFormData) =>
-      updateSkill(initialData!.name, {
-        description: data.description,
-        tools: data.tools.split(",").map((t) => t.trim()).filter(Boolean),
-        trigger: data.trigger || null,
-        prompt: data.prompt || undefined,
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["skills"] });
-      onOpenChange(false);
-    },
-  });
-
-  const mutation = mode === "create" ? createMutation : updateMutation;
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -127,13 +105,9 @@ function SkillFormDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[600px]">
         <DialogHeader>
-          <DialogTitle>
-            {mode === "create" ? "Create Skill" : "Edit Skill"}
-          </DialogTitle>
+          <DialogTitle>Create Skill</DialogTitle>
           <DialogDescription>
-            {mode === "create"
-              ? "Define a new skill with tools and triggers."
-              : "Update the skill configuration."}
+            Define a new skill with allowed tools and a prompt body.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="grid gap-4 py-4">
@@ -145,13 +119,7 @@ function SkillFormDialog({
               onChange={(e) => updateField("name", e.target.value)}
               placeholder="e.g. commit"
               required
-              disabled={mode === "edit"}
             />
-            {mode === "edit" && (
-              <p className="text-xs text-muted-foreground">
-                Skill name cannot be changed.
-              </p>
-            )}
           </div>
           <div className="grid gap-2">
             <Label htmlFor="description">Description *</Label>
@@ -164,11 +132,11 @@ function SkillFormDialog({
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="tools">Tools *</Label>
+            <Label htmlFor="allowed_tools">Allowed Tools *</Label>
             <Input
-              id="tools"
-              value={form.tools}
-              onChange={(e) => updateField("tools", e.target.value)}
+              id="allowed_tools"
+              value={form.allowed_tools}
+              onChange={(e) => updateField("allowed_tools", e.target.value)}
               placeholder="e.g. Read, Write, Bash (comma-separated)"
               required
             />
@@ -177,25 +145,14 @@ function SkillFormDialog({
             </p>
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="trigger">Trigger Pattern</Label>
-            <Input
-              id="trigger"
-              value={form.trigger}
-              onChange={(e) => updateField("trigger", e.target.value)}
-              placeholder="e.g. /commit"
-            />
-            <p className="text-xs text-muted-foreground">
-              Optional regex pattern to auto-trigger this skill.
-            </p>
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="prompt">Prompt</Label>
+            <Label htmlFor="prompt">Body *</Label>
             <Textarea
               id="prompt"
               value={form.prompt}
               onChange={(e) => updateField("prompt", e.target.value)}
-              placeholder="System prompt for this skill..."
+              placeholder="Markdown content for this skill..."
               rows={6}
+              required
             />
           </div>
           <DialogFooter>
@@ -207,11 +164,7 @@ function SkillFormDialog({
               Cancel
             </Button>
             <Button type="submit" disabled={mutation.isPending}>
-              {mutation.isPending
-                ? "Saving..."
-                : mode === "create"
-                  ? "Create"
-                  : "Save"}
+              {mutation.isPending ? "Creating..." : "Create"}
             </Button>
           </DialogFooter>
           {mutation.isError && (
@@ -236,7 +189,7 @@ function DeleteDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  skill: Skill;
+  skill: SkillSummary;
 }) {
   const queryClient = useQueryClient();
 
@@ -304,10 +257,9 @@ function SkillsSkeleton() {
 
 export default function Skills() {
   const [createOpen, setCreateOpen] = useState(false);
-  const [editSkill, setEditSkill] = useState<Skill | null>(null);
-  const [deleteSkillItem, setDeleteSkillItem] = useState<Skill | null>(null);
-
-  const queryClient = useQueryClient();
+  const [deleteSkillItem, setDeleteSkillItem] = useState<SkillSummary | null>(
+    null
+  );
 
   const {
     data: skills,
@@ -319,18 +271,6 @@ export default function Skills() {
     queryFn: listSkills,
   });
 
-  const toggleEnabledMutation = useMutation({
-    mutationFn: ({ name, enabled }: { name: string; enabled: boolean }) =>
-      updateSkill(name, { enabled }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["skills"] });
-    },
-  });
-
-  function handleToggleEnabled(skill: Skill) {
-    toggleEnabledMutation.mutate({ name: skill.name, enabled: !skill.enabled });
-  }
-
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -338,7 +278,7 @@ export default function Skills() {
         <div>
           <h1 className="text-2xl font-bold">Skills</h1>
           <p className="text-muted-foreground mt-1">
-            Manage agent skills, tools, and triggers.
+            Manage agent skills and allowed tools.
           </p>
         </div>
         <Button onClick={() => setCreateOpen(true)}>
@@ -377,9 +317,7 @@ export default function Skills() {
             <SkillCard
               key={skill.name}
               skill={skill}
-              onEdit={() => setEditSkill(skill)}
               onDelete={() => setDeleteSkillItem(skill)}
-              onToggleEnabled={() => handleToggleEnabled(skill)}
             />
           ))}
         </div>
@@ -392,19 +330,6 @@ export default function Skills() {
           onOpenChange={(open) => {
             setCreateOpen(open);
           }}
-          mode="create"
-        />
-      )}
-
-      {editSkill && (
-        <SkillFormDialog
-          key={editSkill.name}
-          open={true}
-          onOpenChange={(open) => {
-            if (!open) setEditSkill(null);
-          }}
-          initialData={editSkill}
-          mode="edit"
         />
       )}
 
@@ -423,87 +348,109 @@ export default function Skills() {
 }
 
 // ---------------------------------------------------------------------------
+// Source badge variant helper
+// ---------------------------------------------------------------------------
+
+function sourceVariant(
+  source: string | null
+): "default" | "secondary" | "outline" | "destructive" {
+  switch (source) {
+    case "project":
+      return "default";
+    case "personal":
+      return "secondary";
+    case "plugin":
+      return "outline";
+    case "registry":
+      return "outline";
+    default:
+      return "secondary";
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Skill Card Component
 // ---------------------------------------------------------------------------
 
 function SkillCard({
   skill,
-  onEdit,
   onDelete,
-  onToggleEnabled,
 }: {
-  skill: Skill;
-  onEdit: () => void;
+  skill: SkillSummary;
   onDelete: () => void;
-  onToggleEnabled: () => void;
 }) {
   return (
     <div className="rounded-lg border bg-card p-4 space-y-3 hover:bg-accent/5 transition-colors">
       {/* Header */}
       <div className="flex items-start justify-between gap-2">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 min-w-0">
           <Code className="h-5 w-5 text-muted-foreground shrink-0" />
-          <h3 className="font-semibold text-lg">{skill.name}</h3>
+          <h3 className="font-semibold text-lg truncate">{skill.name}</h3>
         </div>
-        <Badge variant={skill.enabled ? "default" : "secondary"}>
-          {skill.enabled ? "Enabled" : "Disabled"}
-        </Badge>
+        {skill.source && (
+          <Badge variant={sourceVariant(skill.source)} className="shrink-0">
+            {skill.source}
+          </Badge>
+        )}
       </div>
 
       {/* Description */}
       <p className="text-sm text-muted-foreground">{skill.description}</p>
 
-      {/* Tools */}
-      <div className="flex flex-wrap gap-1.5">
-        {skill.tools.map((tool) => (
-          <Badge key={tool} variant="outline" className="text-xs">
-            {tool}
-          </Badge>
-        ))}
-      </div>
+      {/* Allowed Tools */}
+      {skill.allowed_tools.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {skill.allowed_tools.map((tool) => (
+            <Badge key={tool} variant="outline" className="text-xs">
+              {tool}
+            </Badge>
+          ))}
+        </div>
+      )}
 
-      {/* Trigger */}
-      {skill.trigger && (
-        <div className="pt-1">
-          <p className="text-xs text-muted-foreground mb-1">Trigger:</p>
-          <code className="text-xs bg-muted px-2 py-0.5 rounded">
-            {skill.trigger}
-          </code>
+      {/* Metadata: license & homepage */}
+      {(skill.license || skill.homepage) && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          {skill.license && <span>License: {skill.license}</span>}
+          {skill.homepage && (
+            <a
+              href={skill.homepage}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
+            >
+              Homepage
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          )}
         </div>
       )}
 
       <Separator />
 
-      {/* Actions */}
+      {/* Footer: eligible status + delete action */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Switch
-            checked={skill.enabled}
-            onCheckedChange={onToggleEnabled}
-            aria-label="Toggle enabled"
-          />
-          <span className="text-xs text-muted-foreground">
-            {skill.enabled ? "Active" : "Inactive"}
-          </span>
+        <div className="flex items-center gap-1.5">
+          {skill.eligible ? (
+            <>
+              <CheckCircle className="h-4 w-4 text-green-600" />
+              <span className="text-xs text-green-600">Eligible</span>
+            </>
+          ) : (
+            <>
+              <XCircle className="h-4 w-4 text-destructive" />
+              <span className="text-xs text-destructive">Missing deps</span>
+            </>
+          )}
         </div>
-        <div className="flex gap-1">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onEdit}
-            title="Edit skill"
-          >
-            <Pencil className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onDelete}
-            title="Delete skill"
-          >
-            <Trash2 className="h-4 w-4" />
-          </Button>
-        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onDelete}
+          title="Delete skill"
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
       </div>
     </div>
   );
