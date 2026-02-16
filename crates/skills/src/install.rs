@@ -1,3 +1,9 @@
+//! Skill installation from GitHub repositories.
+//!
+//! Downloads a repo as an HTTP tarball, extracts it, auto-detects the repo format
+//! (`SKILL.md`, Claude Code `.claude-plugin/`, etc.), scans for skills, and records
+//! the installation in a persistent [`ManifestStore`].
+
 use std::path::{Component, Path, PathBuf};
 
 use snafu::ResultExt;

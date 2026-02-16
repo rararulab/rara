@@ -1,5 +1,6 @@
 [package]
 name = "rara-skills"
+description = "Skill discovery, management, and prompt-injection library"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

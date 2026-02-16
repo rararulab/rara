@@ -1,3 +1,10 @@
+//! Skill registry for managing discovered and installed skills.
+//!
+//! Provides the [`SkillRegistry`] async trait and [`InMemoryRegistry`], a hash-map-backed
+//! implementation that can be populated from a [`SkillDiscoverer`].
+//! The in-memory registry also exposes synchronous convenience methods (`list_all`, `get`,
+//! `remove`) for use inside `std::sync::RwLock` contexts.
+
 use std::{collections::HashMap, path::Path};
 
 use async_trait::async_trait;

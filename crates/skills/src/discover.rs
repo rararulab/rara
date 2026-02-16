@@ -1,3 +1,9 @@
+//! Skill discovery from filesystem paths.
+//!
+//! Provides the [`SkillDiscoverer`] trait and its default implementation
+//! [`FsSkillDiscoverer`], which scans project-local, personal, registry, and plugin
+//! directories for `SKILL.md` files and returns parsed [`SkillMetadata`].
+
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;

@@ -1,3 +1,8 @@
+//! System prompt generation for LLM skill injection.
+//!
+//! Generates an `<available_skills>` XML block listing all discovered skills with their
+//! names, sources, paths, and descriptions, suitable for injection into the LLM system prompt.
+
 use crate::types::SkillMetadata;
 
 /// Generate the `<available_skills>` XML block for injection into the system prompt.
