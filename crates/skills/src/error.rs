@@ -1,5 +1,7 @@
 use snafu::Snafu;
 
+pub type Result<T> = std::result::Result<T, SkillError>;
+
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum SkillError {
@@ -8,7 +10,7 @@ pub enum SkillError {
 
     #[snafu(display("invalid frontmatter in {path}: {source}"))]
     Frontmatter {
-        path: String,
+        path:   String,
         source: serde_yaml::Error,
     },
 
@@ -18,6 +20,39 @@ pub enum SkillError {
     #[snafu(display("invalid trigger regex '{pattern}': {source}"))]
     InvalidTrigger {
         pattern: String,
-        source: regex::Error,
+        source:  regex::Error,
     },
+
+    #[snafu(display("{source}"))]
+    SerdeJson {
+        source:   serde_json::Error,
+        #[snafu(implicit)]
+        location: snafu::Location,
+    },
+
+    #[snafu(display("request error: {source}"))]
+    Request { source: reqwest::Error },
+
+    #[snafu(display("{message}"))]
+    InvalidInput { message: String },
+
+    #[snafu(display("skill '{name}' not found"))]
+    NotFound { name: String },
+
+    #[snafu(display("not allowed: {message}"))]
+    NotAllowed { message: String },
+
+    #[snafu(display("watcher error: {source}"))]
+    Watcher {
+        source: notify_debouncer_full::notify::Error,
+    },
+
+    #[snafu(display("archive error: {message}"))]
+    Archive { message: String },
+
+    #[snafu(display("task join error: {source}"))]
+    TaskJoin { source: tokio::task::JoinError },
+
+    #[snafu(display("install error: {message}"))]
+    Install { message: String },
 }

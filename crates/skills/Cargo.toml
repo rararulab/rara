@@ -14,11 +14,22 @@ categories.workspace = true
 workspace = true
 
 [dependencies]
-serde = { workspace = true, features = ["derive"] }
-serde_yaml = "0.9"
+async-trait.workspace = true
+flate2 = "1"
+notify-debouncer-full = "0.5"
+rara-paths.workspace = true
 regex = "1"
-snafu = { workspace = true }
-tracing = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+serde_yaml = "0.9"
+snafu.workspace = true
+strum = { workspace = true, features = ["derive"] }
+strum_macros.workspace = true
+tar = "0.4"
+tokio.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
+rstest = "0.25"
 tempfile = { workspace = true }

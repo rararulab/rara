@@ -3,13 +3,13 @@ use std::path::Path;
 use snafu::ResultExt;
 
 use crate::error::{FrontmatterSnafu, IoSnafu, MissingFrontmatterSnafu, SkillError};
-use crate::types::{Skill, SkillMetadata};
+use crate::types::{Skill, SkillMetadataLegacy};
 
 /// Split raw file content into YAML frontmatter and markdown body.
 ///
 /// Expects the content to start with `---\n`, followed by YAML, then a closing
 /// `---\n`, and finally the prompt body.
-fn split_frontmatter(content: &str, path: &str) -> Result<(SkillMetadata, String), SkillError> {
+fn split_frontmatter(content: &str, path: &str) -> Result<(SkillMetadataLegacy, String), SkillError> {
     // Normalise line endings so we can search for `\n---\n` uniformly.
     let normalised = content.replace("\r\n", "\n");
 
@@ -39,7 +39,7 @@ fn split_frontmatter(content: &str, path: &str) -> Result<(SkillMetadata, String
     let yaml_str = &rest[..closing];
     let body = rest[closing + 4..].trim().to_owned(); // skip `\n---\n`
 
-    let metadata: SkillMetadata =
+    let metadata: SkillMetadataLegacy =
         serde_yaml::from_str(yaml_str).context(FrontmatterSnafu { path })?;
 
     Ok((metadata, body))
