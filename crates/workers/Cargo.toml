@@ -28,6 +28,7 @@ rara-domain-analytics = { workspace = true }
 rara-domain-application = { workspace = true }
 rara-domain-chat = { workspace = true }
 rara-domain-interview = { workspace = true }
+rara-domain-skill = { workspace = true }
 rara-domain-job = { workspace = true }
 rara-domain-resume = { workspace = true }
 rara-domain-scheduler = { workspace = true }

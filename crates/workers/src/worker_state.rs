@@ -346,7 +346,7 @@ impl AppState {
                 self.notify_client.clone(),
             ))
             .merge(rara_domain_chat::router::routes(self.chat_service.clone()))
-            .merge(rara_domain_chat::skill_router::skill_routes(
+            .merge(rara_domain_skill::router::skill_routes(
                 self.skill_registry.clone(),
             ).into())
             .merge(rara_domain_typst::router::routes(
