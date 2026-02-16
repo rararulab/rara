@@ -108,8 +108,8 @@ pub struct ChatService {
     model_catalog:   ModelCatalog,
     /// Settings service for persisting favorite models.
     settings_svc:    rara_domain_shared::settings::SettingsSvc,
-    /// Skills registry for trigger matching and tool filtering.
-    skill_registry:  Arc<std::sync::RwLock<rara_skills::registry::SkillRegistry>>,
+    /// Skills registry for available skills listing in system prompt.
+    skill_registry:  Arc<std::sync::RwLock<rara_skills::registry::InMemoryRegistry>>,
 }
 
 impl ChatService {
@@ -127,7 +127,7 @@ impl ChatService {
         settings_rx: watch::Receiver<Settings>,
         memory_manager: Option<Arc<MemoryManager>>,
         settings_svc: rara_domain_shared::settings::SettingsSvc,
-        skill_registry: Arc<std::sync::RwLock<rara_skills::registry::SkillRegistry>>,
+        skill_registry: Arc<std::sync::RwLock<rara_skills::registry::InMemoryRegistry>>,
     ) -> Self {
         Self {
             session_repo,
@@ -479,36 +479,19 @@ impl ChatService {
             }
         }
 
-        // -- skill matching + injection --
+        // -- skill listing injection --
         let tool_whitelist = {
             let registry = self.skill_registry.read().unwrap();
+            let all_skills = registry.list_all();
 
-            // Match user message against skill triggers
-            let matched = registry.match_triggers(&user_text);
-
-            let mut prompt_parts = String::new();
-            let mut tools: Vec<String> = Vec::new();
-
-            for skill in &matched {
-                prompt_parts.push_str(&format!(
-                    "\n\n## Active Skill: {}\n\n{}",
-                    skill.name(),
-                    skill.prompt
-                ));
-                tools.extend(skill.tools().iter().cloned());
-            }
-
-            // Add available skills listing to system prompt
-            let skills_xml = registry.to_prompt_xml();
+            // Generate available skills listing for the system prompt
+            let skills_xml = rara_skills::prompt_gen::generate_skills_prompt(&all_skills);
             if !skills_xml.is_empty() {
-                prompt_parts.push_str(&format!("\n\n{skills_xml}"));
+                system_prompt.push_str(&format!("\n\n{skills_xml}"));
             }
 
-            if !prompt_parts.is_empty() {
-                system_prompt.push_str(&prompt_parts);
-            }
-
-            tools
+            // No trigger-based tool filtering in the new API
+            Vec::<String>::new()
         };
 
         // Build effective tool registry: filtered when skills specify tools,

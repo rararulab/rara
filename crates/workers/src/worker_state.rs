@@ -62,7 +62,7 @@ pub struct AppState {
     pub agent_scheduler: Arc<crate::agent_scheduler::AgentScheduler>,
 
     // -- skills --
-    pub skill_registry: Arc<RwLock<rara_skills::registry::SkillRegistry>>,
+    pub skill_registry: Arc<RwLock<rara_skills::registry::InMemoryRegistry>>,
 
     // -- worker coordination --
     pub analyze_notify:   Arc<RwLock<Option<NotifyHandle>>>,
@@ -249,29 +249,26 @@ impl AppState {
 
         // -- skills registry ------------------------------------------------
         let skill_registry = {
-            let user_dir = rara_paths::skills_dir();
-            let bundled_dir = std::env::current_dir()
-                .unwrap_or_default()
-                .join("skills");
-            rara_skills::registry::SkillRegistry::load_from_dirs(&[
-                bundled_dir.as_path(),
-                user_dir.as_path(),
-            ])
-            .unwrap_or_else(|e| {
-                warn!(error = %e, "Failed to load skills, using empty registry");
-                rara_skills::registry::SkillRegistry::new()
-            })
+            let discoverer =
+                rara_skills::discover::FsSkillDiscoverer::new(
+                    rara_skills::discover::FsSkillDiscoverer::default_paths(),
+                );
+            match rara_skills::registry::InMemoryRegistry::from_discoverer(&discoverer).await {
+                Ok(reg) => reg,
+                Err(e) => {
+                    warn!(error = %e, "Failed to load skills, using empty registry");
+                    rara_skills::registry::InMemoryRegistry::new()
+                }
+            }
         };
+        let skill_count = skill_registry.list_all().len();
         let skill_registry = Arc::new(RwLock::new(skill_registry));
-        info!(count = skill_registry.read().unwrap().list_all().len(), "Skills registry initialized");
+        info!(count = skill_count, "Skills registry initialized");
 
         tool_registry.register_service(Arc::new(crate::tools::services::ListSkillsTool::new(
             skill_registry.clone(),
         )));
         tool_registry.register_service(Arc::new(crate::tools::services::CreateSkillTool::new(
-            skill_registry.clone(),
-        )));
-        tool_registry.register_service(Arc::new(crate::tools::services::UpdateSkillTool::new(
             skill_registry.clone(),
         )));
         tool_registry.register_service(Arc::new(crate::tools::services::DeleteSkillTool::new(

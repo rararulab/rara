@@ -29,7 +29,7 @@ pub use memory_tools::{MemoryGetTool, MemorySearchTool, MemoryUpdateProfileTool,
 pub use resume_tools::{AnalyzeResumeTool, GetResumeContentTool, ListResumesTool};
 pub use schedule_tools::{ScheduleAddTool, ScheduleListTool, ScheduleRemoveTool};
 pub use screenshot::ScreenshotTool;
-pub use skill_tools::{CreateSkillTool, DeleteSkillTool, ListSkillsTool, UpdateSkillTool};
+pub use skill_tools::{CreateSkillTool, DeleteSkillTool, ListSkillsTool};
 pub use typst_tools::{
     CompileTypstProjectTool, ListTypstFilesTool, ListTypstProjectsTool, ReadTypstFileTool,
     UpdateTypstFileTool,

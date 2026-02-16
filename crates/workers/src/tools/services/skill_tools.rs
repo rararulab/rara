@@ -18,16 +18,14 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use rara_agents::tool_registry::AgentTool;
-use rara_skills::registry::SkillRegistry;
+use rara_skills::registry::InMemoryRegistry;
 use serde_json::{json, Value};
 
-/// Format a skill as a `.md` file with YAML frontmatter.
+/// Format a SKILL.md file with YAML frontmatter (new format).
 fn format_skill_md(
     name: &str,
     description: &str,
-    tools: &[String],
-    trigger: Option<&str>,
-    enabled: bool,
+    allowed_tools: &[String],
     prompt: &str,
 ) -> String {
     let mut md = String::from("---\n");
@@ -36,20 +34,11 @@ fn format_skill_md(
         "description: \"{}\"\n",
         description.replace('"', "\\\"")
     ));
-    if !tools.is_empty() {
-        md.push_str("tools:\n");
-        for tool in tools {
+    if !allowed_tools.is_empty() {
+        md.push_str("allowed-tools:\n");
+        for tool in allowed_tools {
             md.push_str(&format!("  - {tool}\n"));
         }
-    }
-    if let Some(trigger) = trigger {
-        md.push_str(&format!(
-            "trigger: \"{}\"\n",
-            trigger.replace('"', "\\\"")
-        ));
-    }
-    if !enabled {
-        md.push_str("enabled: false\n");
     }
     md.push_str("---\n\n");
     md.push_str(prompt);
@@ -63,11 +52,11 @@ fn format_skill_md(
 
 /// Tool that lists all available skills with their metadata.
 pub struct ListSkillsTool {
-    registry: Arc<RwLock<SkillRegistry>>,
+    registry: Arc<RwLock<InMemoryRegistry>>,
 }
 
 impl ListSkillsTool {
-    pub fn new(registry: Arc<RwLock<SkillRegistry>>) -> Self { Self { registry } }
+    pub fn new(registry: Arc<RwLock<InMemoryRegistry>>) -> Self { Self { registry } }
 }
 
 #[async_trait]
@@ -75,8 +64,8 @@ impl AgentTool for ListSkillsTool {
     fn name(&self) -> &str { "list_skills" }
 
     fn description(&self) -> &str {
-        "List all available skills with their metadata (name, description, tools, trigger, enabled \
-         status)."
+        "List all available skills with their metadata (name, description, allowed_tools, source, \
+         eligibility)."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -96,13 +85,16 @@ impl AgentTool for ListSkillsTool {
         let skills: Vec<Value> = registry
             .list_all()
             .iter()
-            .map(|s| {
+            .map(|meta| {
+                let elig = rara_skills::requirements::check_requirements(meta);
                 json!({
-                    "name": s.name(),
-                    "description": s.description(),
-                    "tools": s.tools(),
-                    "trigger": s.trigger_pattern(),
-                    "enabled": s.is_enabled(),
+                    "name": meta.name,
+                    "description": meta.description,
+                    "allowed_tools": meta.allowed_tools,
+                    "source": meta.source.as_ref().map(|s| format!("{s:?}").to_lowercase()),
+                    "homepage": meta.homepage,
+                    "license": meta.license,
+                    "eligible": elig.eligible,
                 })
             })
             .collect();
@@ -115,14 +107,14 @@ impl AgentTool for ListSkillsTool {
 // CreateSkillTool
 // ---------------------------------------------------------------------------
 
-/// Tool that creates a new skill by writing a `.md` file and inserting it
-/// into the registry.
+/// Tool that creates a new skill by writing a `SKILL.md` file inside a skill
+/// directory and inserting the parsed metadata into the registry.
 pub struct CreateSkillTool {
-    registry: Arc<RwLock<SkillRegistry>>,
+    registry: Arc<RwLock<InMemoryRegistry>>,
 }
 
 impl CreateSkillTool {
-    pub fn new(registry: Arc<RwLock<SkillRegistry>>) -> Self { Self { registry } }
+    pub fn new(registry: Arc<RwLock<InMemoryRegistry>>) -> Self { Self { registry } }
 }
 
 #[async_trait]
@@ -139,20 +131,16 @@ impl AgentTool for CreateSkillTool {
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "Unique skill name (used as filename)"
+                    "description": "Unique skill name (lowercase, hyphens allowed)"
                 },
                 "description": {
                     "type": "string",
                     "description": "Short description of what the skill does"
                 },
-                "tools": {
+                "allowed_tools": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "List of tool names this skill uses"
-                },
-                "trigger": {
-                    "type": "string",
-                    "description": "Regex pattern that activates this skill"
+                    "description": "List of tools this skill is allowed to use"
                 },
                 "prompt": {
                     "type": "string",
@@ -185,8 +173,8 @@ impl AgentTool for CreateSkillTool {
                 message: "missing required parameter: prompt".into(),
             })?;
 
-        let tools: Vec<String> = params
-            .get("tools")
+        let allowed_tools: Vec<String> = params
+            .get("allowed_tools")
             .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
@@ -195,20 +183,19 @@ impl AgentTool for CreateSkillTool {
             })
             .unwrap_or_default();
 
-        let trigger = params.get("trigger").and_then(|v| v.as_str());
+        // Build the SKILL.md content.
+        let content = format_skill_md(name, description, &allowed_tools, prompt);
 
-        // Build the skill markdown content.
-        let content = format_skill_md(name, description, &tools, trigger, true, prompt);
-
-        // Write to skills_dir()/{name}.md.
+        // Write to skills_dir()/{name}/SKILL.md.
         let skills_dir = rara_paths::skills_dir();
-        std::fs::create_dir_all(skills_dir.as_path()).map_err(|e| {
+        let skill_dir = skills_dir.join(name);
+        std::fs::create_dir_all(&skill_dir).map_err(|e| {
             rara_agents::err::Error::Other {
-                message: format!("failed to create skills directory: {e}").into(),
+                message: format!("failed to create skill directory: {e}").into(),
             }
         })?;
 
-        let file_path = skills_dir.join(format!("{name}.md"));
+        let file_path = skill_dir.join("SKILL.md");
         std::fs::write(&file_path, &content).map_err(|e| {
             rara_agents::err::Error::Other {
                 message: format!("failed to write skill file: {e}").into(),
@@ -216,19 +203,25 @@ impl AgentTool for CreateSkillTool {
         })?;
 
         // Parse the file back and insert into registry.
-        let skill =
-            rara_skills::loader::parse_skill_file(&file_path).map_err(|e| {
+        let raw = std::fs::read_to_string(&file_path).map_err(|e| {
+            rara_agents::err::Error::Other {
+                message: format!("failed to read skill file: {e}").into(),
+            }
+        })?;
+        let mut meta =
+            rara_skills::parse::parse_metadata(&raw, &skill_dir).map_err(|e| {
                 rara_agents::err::Error::Other {
                     message: format!("failed to parse skill file: {e}").into(),
                 }
             })?;
+        meta.source = Some(rara_skills::types::SkillSource::Personal);
 
         let mut registry = self.registry.write().map_err(|e| {
             rara_agents::err::Error::Other {
                 message: format!("failed to acquire skill registry lock: {e}").into(),
             }
         })?;
-        registry.insert(skill);
+        registry.insert(meta);
 
         Ok(json!({
             "created": name,
@@ -238,176 +231,25 @@ impl AgentTool for CreateSkillTool {
 }
 
 // ---------------------------------------------------------------------------
-// UpdateSkillTool
-// ---------------------------------------------------------------------------
-
-/// Tool that updates an existing skill by merging new fields with the current
-/// metadata, re-writing the file, and refreshing the registry.
-pub struct UpdateSkillTool {
-    registry: Arc<RwLock<SkillRegistry>>,
-}
-
-impl UpdateSkillTool {
-    pub fn new(registry: Arc<RwLock<SkillRegistry>>) -> Self { Self { registry } }
-}
-
-#[async_trait]
-impl AgentTool for UpdateSkillTool {
-    fn name(&self) -> &str { "update_skill" }
-
-    fn description(&self) -> &str {
-        "Update an existing skill. Merges provided fields with current values and re-writes the \
-         skill file."
-    }
-
-    fn parameters_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "description": "Name of the skill to update"
-                },
-                "description": {
-                    "type": "string",
-                    "description": "New description (optional)"
-                },
-                "tools": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "New list of tool names (optional)"
-                },
-                "trigger": {
-                    "type": "string",
-                    "description": "New trigger regex pattern (optional)"
-                },
-                "prompt": {
-                    "type": "string",
-                    "description": "New prompt body (optional)"
-                },
-                "enabled": {
-                    "type": "boolean",
-                    "description": "Enable or disable the skill (optional)"
-                }
-            },
-            "required": ["name"]
-        })
-    }
-
-    async fn execute(&self, params: Value) -> rara_agents::err::Result<Value> {
-        let name = params
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
-                message: "missing required parameter: name".into(),
-            })?;
-
-        // Read existing skill from registry.
-        let (existing_description, existing_tools, existing_trigger, existing_enabled, existing_prompt, source_path) = {
-            let registry = self.registry.read().map_err(|e| {
-                rara_agents::err::Error::Other {
-                    message: format!("failed to acquire skill registry lock: {e}").into(),
-                }
-            })?;
-            let skill = registry.get(name).ok_or_else(|| {
-                rara_agents::err::Error::Other {
-                    message: format!("skill not found: {name}").into(),
-                }
-            })?;
-            (
-                skill.description().to_owned(),
-                skill.tools().to_vec(),
-                skill.trigger_pattern().map(ToOwned::to_owned),
-                skill.is_enabled(),
-                skill.prompt.clone(),
-                skill.source_path.clone(),
-            )
-        };
-
-        // Merge with provided fields.
-        let description = params
-            .get("description")
-            .and_then(|v| v.as_str())
-            .map_or(existing_description, |s| s.to_owned());
-
-        let tools: Vec<String> = params
-            .get("tools")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(ToOwned::to_owned))
-                    .collect()
-            })
-            .unwrap_or(existing_tools);
-
-        let trigger = match params.get("trigger") {
-            Some(v) => v.as_str().map(ToOwned::to_owned),
-            None => existing_trigger,
-        };
-
-        let enabled = params
-            .get("enabled")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(existing_enabled);
-
-        let prompt = params
-            .get("prompt")
-            .and_then(|v| v.as_str())
-            .map_or(existing_prompt, |s| s.to_owned());
-
-        // Write updated file.
-        let content = format_skill_md(
-            name,
-            &description,
-            &tools,
-            trigger.as_deref(),
-            enabled,
-            &prompt,
-        );
-
-        std::fs::write(&source_path, &content).map_err(|e| {
-            rara_agents::err::Error::Other {
-                message: format!("failed to write skill file: {e}").into(),
-            }
-        })?;
-
-        // Re-parse and update registry.
-        let skill =
-            rara_skills::loader::parse_skill_file(&source_path).map_err(|e| {
-                rara_agents::err::Error::Other {
-                    message: format!("failed to parse updated skill file: {e}").into(),
-                }
-            })?;
-
-        let mut registry = self.registry.write().map_err(|e| {
-            rara_agents::err::Error::Other {
-                message: format!("failed to acquire skill registry lock: {e}").into(),
-            }
-        })?;
-        registry.insert(skill);
-
-        Ok(json!({ "updated": name }))
-    }
-}
-
-// ---------------------------------------------------------------------------
 // DeleteSkillTool
 // ---------------------------------------------------------------------------
 
-/// Tool that deletes a skill by removing its file and unregistering it.
+/// Tool that deletes a skill by removing its directory and unregistering it.
 pub struct DeleteSkillTool {
-    registry: Arc<RwLock<SkillRegistry>>,
+    registry: Arc<RwLock<InMemoryRegistry>>,
 }
 
 impl DeleteSkillTool {
-    pub fn new(registry: Arc<RwLock<SkillRegistry>>) -> Self { Self { registry } }
+    pub fn new(registry: Arc<RwLock<InMemoryRegistry>>) -> Self { Self { registry } }
 }
 
 #[async_trait]
 impl AgentTool for DeleteSkillTool {
     fn name(&self) -> &str { "delete_skill" }
 
-    fn description(&self) -> &str { "Delete a skill by removing its file and unregistering it." }
+    fn description(&self) -> &str {
+        "Delete a skill by removing its directory and unregistering it."
+    }
 
     fn parameters_schema(&self) -> Value {
         json!({
@@ -430,28 +272,24 @@ impl AgentTool for DeleteSkillTool {
                 message: "missing required parameter: name".into(),
             })?;
 
-        // Get the source path before removing from registry.
-        let source_path = {
+        // Get the skill path before removing from registry.
+        let skill_path = {
             let registry = self.registry.read().map_err(|e| {
                 rara_agents::err::Error::Other {
                     message: format!("failed to acquire skill registry lock: {e}").into(),
                 }
             })?;
-            let skill = registry.get(name).ok_or_else(|| {
+            let meta = registry.get(name).ok_or_else(|| {
                 rara_agents::err::Error::Other {
                     message: format!("skill not found: {name}").into(),
                 }
             })?;
-            skill.source_path.clone()
+            meta.path.clone()
         };
 
-        // Remove the file.
-        if source_path.exists() {
-            std::fs::remove_file(&source_path).map_err(|e| {
-                rara_agents::err::Error::Other {
-                    message: format!("failed to remove skill file: {e}").into(),
-                }
-            })?;
+        // Remove the directory (best-effort).
+        if skill_path.exists() {
+            let _ = std::fs::remove_dir_all(&skill_path);
         }
 
         // Remove from registry.
