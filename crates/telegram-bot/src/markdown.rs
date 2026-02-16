@@ -55,8 +55,12 @@ pub const TELEGRAM_MAX_MESSAGE_LEN: usize = 4096;
 ///
 /// HTML special characters (`&`, `<`, `>`) are escaped first.
 pub fn markdown_to_telegram_html(md: &str) -> String {
-    // First pass: escape HTML entities in the raw text.
-    let escaped = html_escape(md);
+    // First pass: convert block-level markdown (headings, HRs, blockquotes)
+    // into inline equivalents that the character-level parser can handle.
+    let preprocessed = preprocess_blocks(md);
+
+    // Second pass: escape HTML entities in the raw text.
+    let escaped = html_escape(&preprocessed);
 
     let mut result = String::with_capacity(escaped.len());
     let chars: Vec<char> = escaped.chars().collect();
@@ -166,6 +170,68 @@ pub fn markdown_to_telegram_html(md: &str) -> String {
     }
 
     result
+}
+
+/// Pre-process block-level Markdown into inline equivalents.
+///
+/// Converts headings to bold (`**text**`), strips horizontal rules, and
+/// removes blockquote markers so the character-level parser can handle them.
+fn preprocess_blocks(md: &str) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for line in md.lines() {
+        let trimmed = line.trim();
+
+        // Headings: #{1,6} text -> **text**
+        if let Some(rest) = strip_heading_prefix(trimmed) {
+            lines.push(format!("**{rest}**"));
+        }
+        // Horizontal rules: 3+ of -, *, or _ (optionally with spaces)
+        else if is_horizontal_rule(trimmed) {
+            lines.push(String::new());
+        }
+        // Blockquotes: > text -> text
+        else if let Some(rest) = trimmed.strip_prefix("> ") {
+            lines.push(rest.to_string());
+        } else if trimmed == ">" {
+            lines.push(String::new());
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+    lines.join("\n")
+}
+
+/// Strip a Markdown heading prefix (`# ` through `###### `), returning the
+/// heading text. Returns `None` if the line is not a heading.
+fn strip_heading_prefix(line: &str) -> Option<&str> {
+    let bytes = line.as_bytes();
+    let mut level = 0;
+    while level < bytes.len() && level < 6 && bytes[level] == b'#' {
+        level += 1;
+    }
+    if level == 0 {
+        return None;
+    }
+    // Must be followed by a space (or be just `###...` with nothing after).
+    let rest = &line[level..];
+    if rest.is_empty() {
+        return Some("");
+    }
+    if rest.starts_with(' ') {
+        return Some(rest[1..].trim());
+    }
+    None
+}
+
+/// Check whether a line is a Markdown horizontal rule (`---`, `***`, `___`,
+/// possibly with spaces between).
+fn is_horizontal_rule(line: &str) -> bool {
+    let stripped: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+    if stripped.len() < 3 {
+        return false;
+    }
+    let ch = stripped.as_bytes()[0];
+    matches!(ch, b'-' | b'*' | b'_') && stripped.bytes().all(|b| b == ch)
 }
 
 /// Escape HTML special characters.
@@ -444,5 +510,94 @@ mod tests {
     fn test_unclosed_bold_passthrough() {
         // Unclosed ** should pass through as literal
         assert_eq!(markdown_to_telegram_html("**unclosed"), "**unclosed");
+    }
+
+    // --- Block-level markdown tests ---
+
+    #[test]
+    fn test_heading_h1() {
+        assert_eq!(markdown_to_telegram_html("# Title"), "<b>Title</b>");
+    }
+
+    #[test]
+    fn test_heading_h2() {
+        assert_eq!(markdown_to_telegram_html("## Section"), "<b>Section</b>");
+    }
+
+    #[test]
+    fn test_heading_h3() {
+        assert_eq!(
+            markdown_to_telegram_html("### Sub-section"),
+            "<b>Sub-section</b>"
+        );
+    }
+
+    #[test]
+    fn test_heading_with_inline() {
+        // Heading wraps content in **..** which becomes <b>; inline code
+        // inside bold is not recursively processed (pre-existing limitation).
+        assert_eq!(
+            markdown_to_telegram_html("## `code` heading"),
+            "<b>`code` heading</b>"
+        );
+    }
+
+    #[test]
+    fn test_horizontal_rule_dashes() {
+        assert_eq!(markdown_to_telegram_html("---"), "");
+    }
+
+    #[test]
+    fn test_horizontal_rule_asterisks() {
+        assert_eq!(markdown_to_telegram_html("***"), "");
+    }
+
+    #[test]
+    fn test_horizontal_rule_underscores() {
+        assert_eq!(markdown_to_telegram_html("___"), "");
+    }
+
+    #[test]
+    fn test_blockquote() {
+        assert_eq!(markdown_to_telegram_html("> quoted text"), "quoted text");
+    }
+
+    #[test]
+    fn test_blockquote_empty() {
+        assert_eq!(markdown_to_telegram_html(">"), "");
+    }
+
+    #[test]
+    fn test_mixed_block_and_inline() {
+        let input = "## Summary\n\nThis is **bold** text.\n\n---\n\n> A quote";
+        let expected = "<b>Summary</b>\n\nThis is <b>bold</b> text.\n\n\n\nA quote";
+        assert_eq!(markdown_to_telegram_html(input), expected);
+    }
+
+    #[test]
+    fn test_hash_not_heading() {
+        // A '#' not followed by space should pass through.
+        assert_eq!(markdown_to_telegram_html("#hashtag"), "#hashtag");
+    }
+
+    #[test]
+    fn test_strip_heading_prefix_fn() {
+        assert_eq!(strip_heading_prefix("# Hello"), Some("Hello"));
+        assert_eq!(strip_heading_prefix("## World"), Some("World"));
+        assert_eq!(strip_heading_prefix("###### Deep"), Some("Deep"));
+        assert_eq!(strip_heading_prefix("#no-space"), None);
+        assert_eq!(strip_heading_prefix("not a heading"), None);
+        assert_eq!(strip_heading_prefix("###"), Some(""));
+    }
+
+    #[test]
+    fn test_is_horizontal_rule_fn() {
+        assert!(is_horizontal_rule("---"));
+        assert!(is_horizontal_rule("***"));
+        assert!(is_horizontal_rule("___"));
+        assert!(is_horizontal_rule("- - -"));
+        assert!(is_horizontal_rule("----"));
+        assert!(!is_horizontal_rule("--"));
+        assert!(!is_horizontal_rule("abc"));
     }
 }

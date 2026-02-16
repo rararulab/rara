@@ -4,13 +4,16 @@
 //! deserializes the frontmatter into [`SkillMetadata`],
 //! validates skill names, and merges OpenClaw-style requirements when present.
 
-use std::path::Path;
+use std::{
+    io::{BufRead, BufReader},
+    path::Path,
+};
 
 use serde::Deserialize;
 use snafu::ResultExt;
 
 use crate::{
-    error::{FrontmatterSnafu, InvalidInputSnafu, MissingFrontmatterSnafu, Result},
+    error::{FrontmatterSnafu, InvalidInputSnafu, IoSnafu, MissingFrontmatterSnafu, Result},
     types::{InstallKind, InstallSpec, SkillContent, SkillMetadata},
 };
 
@@ -74,6 +77,74 @@ pub fn parse_skill(content: &str, skill_dir: &Path) -> Result<SkillContent> {
         metadata: meta,
         body:     body.to_string(),
     })
+}
+
+/// Read only the YAML frontmatter from a SKILL.md file, stopping at the
+/// closing `---` delimiter.  Avoids reading the (potentially large) Markdown
+/// body into memory.
+pub fn read_frontmatter(path: &Path) -> Result<String> {
+    let file = std::fs::File::open(path).context(IoSnafu)?;
+    let reader = BufReader::new(file);
+
+    let mut lines = reader.lines();
+    // Expect the first non-empty line to be "---".
+    let first = loop {
+        match lines.next() {
+            Some(Ok(line)) if line.trim().is_empty() => continue,
+            Some(Ok(line)) => break line,
+            Some(Err(e)) => return Err(e).context(IoSnafu),
+            None => {
+                return MissingFrontmatterSnafu {
+                    path: path.display().to_string(),
+                }
+                .fail()
+            }
+        }
+    };
+    if first.trim() != "---" {
+        return MissingFrontmatterSnafu {
+            path: path.display().to_string(),
+        }
+        .fail();
+    }
+
+    // Collect lines until the closing "---".
+    let mut frontmatter = String::new();
+    for line in lines {
+        let line = line.context(IoSnafu)?;
+        if line.trim() == "---" {
+            return Ok(frontmatter);
+        }
+        frontmatter.push_str(&line);
+        frontmatter.push('\n');
+    }
+
+    MissingFrontmatterSnafu {
+        path: path.display().to_string(),
+    }
+    .fail()
+}
+
+/// Parse metadata directly from a SKILL.md file, reading only the frontmatter.
+pub fn parse_metadata_from_file(skill_md: &Path, skill_dir: &Path) -> Result<SkillMetadata> {
+    let frontmatter = read_frontmatter(skill_md)?;
+    let path_str = skill_dir.display().to_string();
+    let mut meta: SkillMetadata =
+        serde_yaml::from_str(&frontmatter).context(FrontmatterSnafu { path: &path_str })?;
+
+    if !validate_name(&meta.name) {
+        return InvalidInputSnafu {
+            message: format!(
+                "invalid skill name '{}': must be 1-64 lowercase alphanumeric/hyphen chars",
+                meta.name
+            ),
+        }
+        .fail();
+    }
+
+    merge_openclaw_requires(&frontmatter, &mut meta);
+    meta.path = skill_dir.to_path_buf();
+    Ok(meta)
 }
 
 // ── OpenClaw metadata extraction ────────────────────────────────────────────

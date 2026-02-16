@@ -18,6 +18,7 @@
 //! domain services for background processing tasks.
 
 pub mod agent_scheduler;
+pub mod agent_scheduler_routes;
 pub mod jd_parser;
 pub mod memory_sync;
 pub mod proactive;

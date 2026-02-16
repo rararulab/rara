@@ -247,23 +247,26 @@ impl AppState {
             task_store.clone(),
         )));
 
-        // -- skills registry ------------------------------------------------
-        let skill_registry = {
-            let discoverer =
-                rara_skills::discover::FsSkillDiscoverer::new(
+        // -- skills registry (empty now, populated by background task) --------
+        let skill_registry = Arc::new(RwLock::new(rara_skills::registry::InMemoryRegistry::new()));
+        {
+            let reg = Arc::clone(&skill_registry);
+            tokio::spawn(async move {
+                let discoverer = rara_skills::discover::FsSkillDiscoverer::new(
                     rara_skills::discover::FsSkillDiscoverer::default_paths(),
                 );
-            match rara_skills::registry::InMemoryRegistry::from_discoverer(&discoverer).await {
-                Ok(reg) => reg,
-                Err(e) => {
-                    warn!(error = %e, "Failed to load skills, using empty registry");
-                    rara_skills::registry::InMemoryRegistry::new()
+                match rara_skills::registry::InMemoryRegistry::from_discoverer(&discoverer).await {
+                    Ok(discovered) => {
+                        let count = discovered.list_all().len();
+                        *reg.write().unwrap() = discovered;
+                        info!(count, "Skills discovered (background)");
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Background skill discovery failed");
+                    }
                 }
-            }
-        };
-        let skill_count = skill_registry.list_all().len();
-        let skill_registry = Arc::new(RwLock::new(skill_registry));
-        info!(count = skill_count, "Skills registry initialized");
+            });
+        }
 
         tool_registry.register_service(Arc::new(crate::tools::services::ListSkillsTool::new(
             skill_registry.clone(),
@@ -346,13 +349,14 @@ impl AppState {
                 self.notify_client.clone(),
             ))
             .merge(rara_domain_chat::router::routes(self.chat_service.clone()))
-            .merge(rara_domain_skill::router::skill_routes(
-                self.skill_registry.clone(),
-            ).into())
+            .merge(rara_domain_skill::router::skill_routes(self.skill_registry.clone()).into())
             .merge(rara_domain_typst::router::routes(
                 self.typst_service.clone(),
             ))
             .merge(crate::system_routes::routes())
+            .merge(crate::agent_scheduler_routes::routes(
+                self.agent_scheduler.clone(),
+            ))
             .split_for_parts();
 
         (router, api)

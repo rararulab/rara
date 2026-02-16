@@ -21,6 +21,7 @@ import {
   Briefcase,
   Settings as SettingsIcon,
   Globe,
+  Code,
   Database,
   ExternalLink,
   PanelLeftClose,
@@ -163,6 +164,24 @@ export default function DashboardLayout() {
               {!collapsed && item.label}
             </NavLink>
           ))}
+          <a
+            href="/swagger-ui"
+            target="_blank"
+            rel="noopener noreferrer"
+            title={collapsed ? 'API Docs' : undefined}
+            className={cn(
+              'flex items-center rounded-md text-sm font-medium transition-colors text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+              collapsed ? 'justify-center px-2 py-2' : 'gap-3 px-3 py-2'
+            )}
+          >
+            <Code className="h-4 w-4 shrink-0" />
+            {!collapsed && (
+              <>
+                <span>API Docs</span>
+                <ExternalLink className="h-3.5 w-3.5 ml-auto shrink-0 opacity-70" />
+              </>
+            )}
+          </a>
           <a
             href="http://localhost:9001"
             target="_blank"

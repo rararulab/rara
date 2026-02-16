@@ -49,6 +49,10 @@ export default defineConfig({
           });
         },
       },
+      '/swagger-ui': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+      },
     },
   },
   preview: {

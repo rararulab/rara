@@ -8,11 +8,12 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 
+use snafu::ResultExt;
+
 use crate::{
-    error::Result,
+    error::{Result, TaskJoinSnafu},
     formats::PluginFormat,
     manifest::ManifestStore,
-    parse::parse_metadata,
     types::{SkillMetadata, SkillSource},
 };
 
@@ -73,30 +74,35 @@ impl FsSkillDiscoverer {
 #[async_trait]
 impl SkillDiscoverer for FsSkillDiscoverer {
     async fn discover(&self) -> Result<Vec<SkillMetadata>> {
-        let mut skills = Vec::new();
+        let search_paths = self.search_paths.clone();
 
-        for (base_path, source) in &self.search_paths {
-            if !base_path.is_dir() {
-                continue;
+        // All helpers use std::fs (blocking IO). Run on the blocking thread
+        // pool to avoid stalling tokio worker threads.
+        tokio::task::spawn_blocking(move || {
+            let mut skills = Vec::new();
+
+            for (base_path, source) in &search_paths {
+                if !base_path.is_dir() {
+                    continue;
+                }
+
+                match source {
+                    SkillSource::Project | SkillSource::Personal => {
+                        discover_flat(base_path, source, &mut skills);
+                    }
+                    SkillSource::Registry => {
+                        discover_registry(base_path, &mut skills);
+                    }
+                    SkillSource::Plugin => {
+                        discover_plugins(base_path, &mut skills);
+                    }
+                }
             }
 
-            match source {
-                // Project/Personal: scan one level deep (always enabled).
-                SkillSource::Project | SkillSource::Personal => {
-                    discover_flat(base_path, source, &mut skills);
-                }
-                // Registry: use manifest to filter by enabled state.
-                SkillSource::Registry => {
-                    discover_registry(base_path, &mut skills);
-                }
-                // Plugin: use plugins manifest to filter by enabled state.
-                SkillSource::Plugin => {
-                    discover_plugins(base_path, &mut skills);
-                }
-            }
-        }
-
-        Ok(skills)
+            skills
+        })
+        .await
+        .context(TaskJoinSnafu)
     }
 }
 
@@ -120,14 +126,7 @@ fn discover_flat<P: AsRef<Path>>(
         if !skill_md.is_file() {
             continue;
         }
-        let content = match std::fs::read_to_string(&skill_md) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(?skill_md, %e, "failed to read SKILL.md");
-                continue;
-            }
-        };
-        match parse_metadata(&content, &skill_dir) {
+        match crate::parse::parse_metadata_from_file(&skill_md, &skill_dir) {
             Ok(mut meta) => {
                 meta.source = Some(source.clone());
                 tracing::info!(
@@ -215,14 +214,7 @@ fn discover_registry(install_dir: &Path, skills: &mut Vec<SkillMetadata>) {
                         tracing::warn!(?skill_md, "manifest references missing SKILL.md");
                         continue;
                     }
-                    let content = match std::fs::read_to_string(&skill_md) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            tracing::warn!(?skill_md, %e, "failed to read SKILL.md");
-                            continue;
-                        }
-                    };
-                    match parse_metadata(&content, &skill_dir) {
+                    match crate::parse::parse_metadata_from_file(&skill_md, &skill_dir) {
                         Ok(mut meta) => {
                             meta.source = Some(SkillSource::Registry);
                             tracing::info!(
