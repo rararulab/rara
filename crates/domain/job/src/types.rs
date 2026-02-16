@@ -40,7 +40,7 @@ use crate::{error::SourceError, jobspy::JOBSPY_SOURCE_NAME};
 ///
 /// Drivers translate these high-level criteria into whatever query
 /// format their backing platform requires.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, bon::Builder)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, bon::Builder, utoipa::ToSchema)]
 pub struct DiscoveryCriteria {
     /// Keyword terms to search for (e.g. "rust engineer").
     #[builder(with = |it: impl IntoIterator<Item = impl Into<String>>| {
@@ -54,6 +54,7 @@ pub struct DiscoveryCriteria {
     /// Maximum number of results to return per source.
     pub max_results:  Option<u32>,
     /// Only return jobs posted after this timestamp.
+    #[schema(value_type = Option<String>)]
     pub posted_after: Option<Timestamp>,
     /// Which job sites to search (e.g. "linkedin", "indeed").
     /// If empty, the driver uses its default set.
@@ -123,7 +124,7 @@ pub struct ParsedJob {
 ///
 /// All required fields are guaranteed to be present after
 /// normalization.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct NormalizedJob {
     /// Internal UUID for this job record.
     pub id:              Uuid,
@@ -150,8 +151,10 @@ pub struct NormalizedJob {
     /// Normalized tags.
     pub tags:            Vec<String>,
     /// The original raw payload, kept for debugging.
+    #[schema(value_type = Option<Object>)]
     pub raw_data:        Option<serde_json::Value>,
     /// When the listing was originally posted.
+    #[schema(value_type = Option<String>)]
     pub posted_at:       Option<Timestamp>,
 }
 
@@ -182,7 +185,7 @@ impl NormalizedJob {
 ///
 /// This keeps the existing fields and exposes a stable subset of
 /// detail fields extracted from the source payload.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DiscoveryJobResponse {
     pub id:               Uuid,
     pub source_job_id:    String,
@@ -196,6 +199,7 @@ pub struct DiscoveryJobResponse {
     pub salary_max:       Option<i32>,
     pub salary_currency:  Option<String>,
     pub tags:             Vec<String>,
+    #[schema(value_type = Option<String>)]
     pub posted_at:        Option<Timestamp>,
     pub job_type:         Option<String>,
     pub is_remote:        Option<bool>,
@@ -470,6 +474,7 @@ fn json_opt_bool(raw: &serde_json::Value, key: &str) -> Option<bool> { raw.get(k
 #[repr(u8)]
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, EnumString, FromRepr,
+    utoipa::ToSchema,
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -496,7 +501,7 @@ pub enum SavedJobStatus {
 
 /// Pipeline stage for a saved job event.
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, FromRepr)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, FromRepr, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum PipelineStage {
@@ -507,7 +512,7 @@ pub enum PipelineStage {
 
 /// Kind of pipeline event.
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, FromRepr)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, FromRepr, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum PipelineEventKind {
@@ -522,14 +527,16 @@ pub enum PipelineEventKind {
 // ---------------------------------------------------------------------------
 
 /// A pipeline event for a saved job (domain representation).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct PipelineEvent {
     pub id:           Uuid,
     pub saved_job_id: Uuid,
     pub stage:        PipelineStage,
     pub event_kind:   PipelineEventKind,
     pub message:      String,
+    #[schema(value_type = Option<Object>)]
     pub metadata:     Option<serde_json::Value>,
+    #[schema(value_type = String)]
     pub created_at:   Timestamp,
 }
 
@@ -565,7 +572,7 @@ impl From<StoreSavedJobEvent> for PipelineEvent {
 // ---------------------------------------------------------------------------
 
 /// A saved job posting (domain representation).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SavedJob {
     pub id:               Uuid,
     pub url:              String,
@@ -575,13 +582,19 @@ pub struct SavedJob {
     pub markdown_s3_key:  Option<String>,
     #[serde(skip_serializing)]
     pub markdown_preview: Option<String>,
+    #[schema(value_type = Option<Object>)]
     pub analysis_result:  Option<serde_json::Value>,
     pub match_score:      Option<f32>,
     pub error_message:    Option<String>,
+    #[schema(value_type = Option<String>)]
     pub crawled_at:       Option<Timestamp>,
+    #[schema(value_type = Option<String>)]
     pub analyzed_at:      Option<Timestamp>,
+    #[schema(value_type = Option<String>)]
     pub expires_at:       Option<Timestamp>,
+    #[schema(value_type = String)]
     pub created_at:       Timestamp,
+    #[schema(value_type = String)]
     pub updated_at:       Timestamp,
 }
 
@@ -590,13 +603,13 @@ pub struct SavedJob {
 // ---------------------------------------------------------------------------
 
 /// Parameters for saving a new job by URL.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateSavedJobRequest {
     pub url: String,
 }
 
 /// Optional query filter for listing saved jobs.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SavedJobFilter {
     /// Filter by pipeline status name (e.g. `"analyzed"`).
     pub status: Option<String>,

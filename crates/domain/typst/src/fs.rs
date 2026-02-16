@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::TypstError;
 
 /// A file tree entry representing a file or directory on disk.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct FileEntry {
     /// Relative path within the project root.
     pub path:     String,

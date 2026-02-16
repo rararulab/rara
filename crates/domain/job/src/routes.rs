@@ -22,9 +22,9 @@ use axum::{
     extract::{Path, Query, State},
     http::{StatusCode, header},
     response::IntoResponse,
-    routing::{delete, get, post},
+    routing::get,
 };
-use utoipa_axum::router::OpenApiRouter;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use opendal::Operator;
 use tracing::instrument;
 use uuid::Uuid;
@@ -45,10 +45,19 @@ use crate::{
 /// Discovery routes (caller may apply DedupLayer).
 pub fn discovery_routes(service: JobService) -> OpenApiRouter {
     OpenApiRouter::new()
-        .route("/api/v1/jobs/discover", post(discover_jobs))
+        .routes(routes!(discover_jobs))
         .with_state(service)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/jobs/discover",
+    tag = "jobs",
+    request_body = DiscoveryCriteria,
+    responses(
+        (status = 200, description = "Discovered jobs", body = Vec<DiscoveryJobResponse>),
+    )
+)]
 #[tracing::instrument(skip(service, criteria), fields(keywords = ?criteria.keywords))]
 async fn discover_jobs(
     State(service): State<JobService>,
@@ -103,18 +112,13 @@ pub fn management_routes(service: JobService, object_store: Operator) -> OpenApi
     };
     OpenApiRouter::new()
         // Tracker
-        .route("/api/v1/saved-jobs", post(create_saved_job))
-        .route("/api/v1/saved-jobs", get(list_saved_jobs))
-        .route("/api/v1/saved-jobs/{id}", get(get_saved_job))
-        .route("/api/v1/saved-jobs/{id}", delete(delete_saved_job))
-        .route("/api/v1/saved-jobs/{id}/retry", post(retry_saved_job))
+        .routes(routes!(create_saved_job, list_saved_jobs))
+        .routes(routes!(get_saved_job, delete_saved_job))
+        .routes(routes!(retry_saved_job))
         .route("/api/v1/saved-jobs/{id}/markdown", get(get_saved_job_markdown))
-        .route(
-            "/api/v1/saved-jobs/{id}/events",
-            get(list_saved_job_events),
-        )
+        .routes(routes!(list_saved_job_events))
         // Bot internal
-        .route("/api/v1/internal/bot/jd-parse", post(parse_jd_from_bot))
+        .routes(routes!(parse_jd_from_bot))
         .with_state(state)
 }
 
@@ -126,6 +130,15 @@ struct ManagementState {
 
 // -- Tracker handlers -------------------------------------------------------
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/saved-jobs",
+    tag = "saved-jobs",
+    request_body = CreateSavedJobRequest,
+    responses(
+        (status = 201, description = "Saved job created", body = SavedJob),
+    )
+)]
 #[instrument(skip(state, req))]
 async fn create_saved_job(
     State(state): State<ManagementState>,
@@ -135,6 +148,17 @@ async fn create_saved_job(
     Ok((StatusCode::CREATED, Json(saved_job)))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/saved-jobs",
+    tag = "saved-jobs",
+    params(
+        ("status" = Option<String>, Query, description = "Filter by pipeline status name"),
+    ),
+    responses(
+        (status = 200, description = "List of saved jobs", body = Vec<SavedJob>),
+    )
+)]
 #[instrument(skip(state))]
 async fn list_saved_jobs(
     State(state): State<ManagementState>,
@@ -145,6 +169,16 @@ async fn list_saved_jobs(
     Ok(Json(jobs))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/saved-jobs/{id}",
+    tag = "saved-jobs",
+    params(("id" = Uuid, Path, description = "Saved job ID")),
+    responses(
+        (status = 200, description = "Saved job found", body = SavedJob),
+        (status = 404, description = "Saved job not found"),
+    )
+)]
 #[instrument(skip(state))]
 async fn get_saved_job(
     State(state): State<ManagementState>,
@@ -158,6 +192,15 @@ async fn get_saved_job(
     Ok(Json(job))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/v1/saved-jobs/{id}",
+    tag = "saved-jobs",
+    params(("id" = Uuid, Path, description = "Saved job ID")),
+    responses(
+        (status = 204, description = "Saved job deleted"),
+    )
+)]
 #[instrument(skip(state))]
 async fn delete_saved_job(
     State(state): State<ManagementState>,
@@ -167,6 +210,15 @@ async fn delete_saved_job(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/saved-jobs/{id}/retry",
+    tag = "saved-jobs",
+    params(("id" = Uuid, Path, description = "Saved job ID")),
+    responses(
+        (status = 204, description = "Retry queued"),
+    )
+)]
 #[instrument(skip(state))]
 async fn retry_saved_job(
     State(state): State<ManagementState>,
@@ -176,6 +228,15 @@ async fn retry_saved_job(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/saved-jobs/{id}/events",
+    tag = "saved-jobs",
+    params(("id" = Uuid, Path, description = "Saved job ID")),
+    responses(
+        (status = 200, description = "Pipeline events", body = Vec<PipelineEvent>),
+    )
+)]
 #[instrument(skip(state))]
 async fn list_saved_job_events(
     State(state): State<ManagementState>,
@@ -185,6 +246,15 @@ async fn list_saved_job_events(
     Ok(Json(events))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/saved-jobs/{id}/markdown",
+    tag = "saved-jobs",
+    params(("id" = Uuid, Path, description = "Saved job ID")),
+    responses(
+        (status = 200, description = "Markdown content", content_type = "text/markdown"),
+    )
+)]
 #[instrument(skip(state))]
 async fn get_saved_job_markdown(
     State(state): State<ManagementState>,
@@ -219,18 +289,27 @@ async fn get_saved_job_markdown(
 
 // -- Bot internal handler ---------------------------------------------------
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 struct BotJdParseRequest {
     text: String,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
 struct BotJdParseResponse {
     id:      Uuid,
     title:   String,
     company: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/internal/bot/jd-parse",
+    tag = "internal",
+    request_body = BotJdParseRequest,
+    responses(
+        (status = 200, description = "Parsed job description", body = BotJdParseResponse),
+    )
+)]
 async fn parse_jd_from_bot(
     State(state): State<ManagementState>,
     Json(req): Json<BotJdParseRequest>,

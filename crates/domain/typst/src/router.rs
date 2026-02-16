@@ -39,9 +39,9 @@ use axum::{
     extract::{Path, State},
     http::{StatusCode, header},
     response::IntoResponse,
-    routing::{delete, get, post, put},
+    routing::get,
 };
-use utoipa_axum::router::OpenApiRouter;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use serde::Deserialize;
 use tracing::instrument;
 use uuid::Uuid;
@@ -61,49 +61,25 @@ use crate::{
 pub fn routes(service: TypstService) -> OpenApiRouter {
     OpenApiRouter::new()
         // Projects
-        .route("/api/v1/typst/projects", post(register_project))
-        .route("/api/v1/typst/projects", get(list_projects))
-        .route("/api/v1/typst/projects/{id}", get(get_project))
-        .route("/api/v1/typst/projects/{id}", delete(delete_project))
+        .routes(routes!(register_project, list_projects))
+        .routes(routes!(get_project, delete_project))
         // Git import & sync
-        .route(
-            "/api/v1/typst/projects/import-git",
-            post(import_from_git),
-        )
-        .route(
-            "/api/v1/typst/projects/{id}/git-sync",
-            post(sync_git),
-        )
+        .routes(routes!(import_from_git))
+        .routes(routes!(sync_git))
         // Files (local filesystem)
-        .route("/api/v1/typst/projects/{id}/files", get(list_files))
+        .routes(routes!(list_files))
         .route(
             "/api/v1/typst/projects/{id}/files/{*path}",
-            get(read_file),
-        )
-        .route(
-            "/api/v1/typst/projects/{id}/files/{*path}",
-            put(write_file),
+            get(read_file).put(write_file),
         )
         // Compile
-        .route(
-            "/api/v1/typst/projects/{id}/compile",
-            post(compile_project),
-        )
+        .routes(routes!(compile_project))
         // Renders
-        .route(
-            "/api/v1/typst/projects/{id}/renders",
-            get(list_renders),
-        )
-        .route("/api/v1/typst/renders/{id}/pdf", get(get_render_pdf))
+        .routes(routes!(list_renders))
+        .routes(routes!(get_render_pdf))
         // Runner (just recipes / shell commands)
-        .route(
-            "/api/v1/typst/projects/{id}/recipes",
-            get(list_recipes),
-        )
-        .route(
-            "/api/v1/typst/projects/{id}/run",
-            post(run_project_command),
-        )
+        .routes(routes!(list_recipes))
+        .routes(routes!(run_project_command))
         .with_state(service)
 }
 
@@ -111,6 +87,15 @@ pub fn routes(service: TypstService) -> OpenApiRouter {
 // Project handlers
 // ---------------------------------------------------------------------------
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/typst/projects",
+    tag = "typst",
+    request_body = RegisterProjectRequest,
+    responses(
+        (status = 201, description = "Project registered", body = TypstProject),
+    )
+)]
 #[instrument(skip(service, req))]
 async fn register_project(
     State(service): State<TypstService>,
@@ -120,6 +105,14 @@ async fn register_project(
     Ok((StatusCode::CREATED, Json(project)))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/typst/projects",
+    tag = "typst",
+    responses(
+        (status = 200, description = "List of projects", body = Vec<TypstProject>),
+    )
+)]
 #[instrument(skip(service))]
 async fn list_projects(
     State(service): State<TypstService>,
@@ -128,6 +121,15 @@ async fn list_projects(
     Ok(Json(projects))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/typst/projects/{id}",
+    tag = "typst",
+    params(("id" = Uuid, Path, description = "Project ID")),
+    responses(
+        (status = 200, description = "Project found", body = TypstProject),
+    )
+)]
 #[instrument(skip(service))]
 async fn get_project(
     State(service): State<TypstService>,
@@ -137,6 +139,15 @@ async fn get_project(
     Ok(Json(project))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/v1/typst/projects/{id}",
+    tag = "typst",
+    params(("id" = Uuid, Path, description = "Project ID")),
+    responses(
+        (status = 204, description = "Project deleted"),
+    )
+)]
 #[instrument(skip(service))]
 async fn delete_project(
     State(service): State<TypstService>,
@@ -150,6 +161,15 @@ async fn delete_project(
 // Git import handlers
 // ---------------------------------------------------------------------------
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/typst/projects/import-git",
+    tag = "typst",
+    request_body = ImportGitRequest,
+    responses(
+        (status = 201, description = "Project imported from Git", body = TypstProject),
+    )
+)]
 #[instrument(skip(service, req))]
 async fn import_from_git(
     State(service): State<TypstService>,
@@ -159,6 +179,15 @@ async fn import_from_git(
     Ok((StatusCode::CREATED, Json(project)))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/typst/projects/{id}/git-sync",
+    tag = "typst",
+    params(("id" = Uuid, Path, description = "Project ID")),
+    responses(
+        (status = 200, description = "Git sync completed", body = TypstProject),
+    )
+)]
 #[instrument(skip(service))]
 async fn sync_git(
     State(service): State<TypstService>,
@@ -172,6 +201,15 @@ async fn sync_git(
 // File handlers (local filesystem)
 // ---------------------------------------------------------------------------
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/typst/projects/{id}/files",
+    tag = "typst",
+    params(("id" = Uuid, Path, description = "Project ID")),
+    responses(
+        (status = 200, description = "File tree", body = Vec<FileEntry>),
+    )
+)]
 #[instrument(skip(service))]
 async fn list_files(
     State(service): State<TypstService>,
@@ -182,6 +220,18 @@ async fn list_files(
     Ok(Json(entries))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/typst/projects/{id}/files/{path}",
+    tag = "typst",
+    params(
+        ("id" = Uuid, Path, description = "Project ID"),
+        ("path" = String, Path, description = "File path relative to project root"),
+    ),
+    responses(
+        (status = 200, description = "File content", body = FileContent),
+    )
+)]
 #[instrument(skip(service))]
 async fn read_file(
     State(service): State<TypstService>,
@@ -192,6 +242,19 @@ async fn read_file(
     Ok(Json(FileContent { path, content }))
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/v1/typst/projects/{id}/files/{path}",
+    tag = "typst",
+    params(
+        ("id" = Uuid, Path, description = "Project ID"),
+        ("path" = String, Path, description = "File path relative to project root"),
+    ),
+    request_body = UpdateFileRequest,
+    responses(
+        (status = 200, description = "File written", body = FileContent),
+    )
+)]
 #[instrument(skip(service, req))]
 async fn write_file(
     State(service): State<TypstService>,
@@ -207,7 +270,7 @@ async fn write_file(
 }
 
 /// JSON response body for file content endpoints.
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, utoipa::ToSchema)]
 struct FileContent {
     path:    String,
     content: String,
@@ -217,6 +280,16 @@ struct FileContent {
 // Compile handlers
 // ---------------------------------------------------------------------------
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/typst/projects/{id}/compile",
+    tag = "typst",
+    params(("id" = Uuid, Path, description = "Project ID")),
+    request_body = CompileRequest,
+    responses(
+        (status = 200, description = "Compilation result", body = RenderResult),
+    )
+)]
 #[instrument(skip(service))]
 async fn compile_project(
     State(service): State<TypstService>,
@@ -227,6 +300,15 @@ async fn compile_project(
     Ok((StatusCode::OK, Json(render)))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/typst/projects/{id}/renders",
+    tag = "typst",
+    params(("id" = Uuid, Path, description = "Project ID")),
+    responses(
+        (status = 200, description = "Render history", body = Vec<RenderResult>),
+    )
+)]
 #[instrument(skip(service))]
 async fn list_renders(
     State(service): State<TypstService>,
@@ -236,6 +318,15 @@ async fn list_renders(
     Ok(Json(renders))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/typst/renders/{id}/pdf",
+    tag = "typst",
+    params(("id" = Uuid, Path, description = "Render ID")),
+    responses(
+        (status = 200, description = "Rendered PDF", content_type = "application/pdf"),
+    )
+)]
 #[instrument(skip(service))]
 async fn get_render_pdf(
     State(service): State<TypstService>,
@@ -258,6 +349,15 @@ async fn get_render_pdf(
 // Runner handlers (just recipes / shell commands)
 // ---------------------------------------------------------------------------
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/typst/projects/{id}/recipes",
+    tag = "typst",
+    params(("id" = Uuid, Path, description = "Project ID")),
+    responses(
+        (status = 200, description = "Available just recipes", body = Vec<JustRecipe>),
+    )
+)]
 #[instrument(skip(service))]
 async fn list_recipes(
     State(service): State<TypstService>,
@@ -270,12 +370,22 @@ async fn list_recipes(
 /// Request body for `POST /api/v1/typst/projects/{id}/run`.
 ///
 /// Exactly one of `recipe` or `command` must be provided.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct RunRequest {
     recipe:  Option<String>,
     command: Option<String>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/typst/projects/{id}/run",
+    tag = "typst",
+    params(("id" = Uuid, Path, description = "Project ID")),
+    request_body = RunRequest,
+    responses(
+        (status = 200, description = "Command output", body = RunOutput),
+    )
+)]
 #[instrument(skip(service, req))]
 async fn run_project_command(
     State(service): State<TypstService>,

@@ -67,6 +67,15 @@ pub fn routes<R: ResumeRepository + 'static>(
         .with_state(state)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/resumes",
+    tag = "resumes",
+    request_body = CreateResumeRequest,
+    responses(
+        (status = 201, description = "Resume created", body = Resume),
+    )
+)]
 #[instrument(skip(state, req))]
 async fn create_resume<R: ResumeRepository + 'static>(
     State(state): State<ResumeRouteState<R>>,
@@ -76,6 +85,14 @@ async fn create_resume<R: ResumeRepository + 'static>(
     Ok((StatusCode::CREATED, Json(resume)))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/resumes",
+    tag = "resumes",
+    responses(
+        (status = 200, description = "List of resumes", body = Vec<Resume>),
+    )
+)]
 #[instrument(skip(state))]
 async fn list_resumes<R: ResumeRepository + 'static>(
     State(state): State<ResumeRouteState<R>>,
@@ -85,6 +102,16 @@ async fn list_resumes<R: ResumeRepository + 'static>(
     Ok(Json(resumes))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/resumes/{id}",
+    tag = "resumes",
+    params(("id" = Uuid, Path, description = "Resume ID")),
+    responses(
+        (status = 200, description = "Resume found", body = Resume),
+        (status = 404, description = "Resume not found"),
+    )
+)]
 #[instrument(skip(state))]
 async fn get_resume<R: ResumeRepository + 'static>(
     State(state): State<ResumeRouteState<R>>,
@@ -98,6 +125,16 @@ async fn get_resume<R: ResumeRepository + 'static>(
     Ok(Json(resume))
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/v1/resumes/{id}",
+    tag = "resumes",
+    params(("id" = Uuid, Path, description = "Resume ID")),
+    request_body = UpdateResumeRequest,
+    responses(
+        (status = 200, description = "Resume updated", body = Resume),
+    )
+)]
 #[instrument(skip(state, req))]
 async fn update_resume<R: ResumeRepository + 'static>(
     State(state): State<ResumeRouteState<R>>,
@@ -108,6 +145,15 @@ async fn update_resume<R: ResumeRepository + 'static>(
     Ok(Json(resume))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/v1/resumes/{id}",
+    tag = "resumes",
+    params(("id" = Uuid, Path, description = "Resume ID")),
+    responses(
+        (status = 204, description = "Resume deleted"),
+    )
+)]
 #[instrument(skip(state))]
 async fn delete_resume<R: ResumeRepository + 'static>(
     State(state): State<ResumeRouteState<R>>,
@@ -123,6 +169,15 @@ async fn delete_resume<R: ResumeRepository + 'static>(
 /// - `title` (text): resume title
 /// - `tags` (text, optional): comma-separated tags
 /// - `file` (file): the PDF file
+#[utoipa::path(
+    post,
+    path = "/api/v1/resumes/upload",
+    tag = "resumes",
+    description = "Upload a PDF resume via multipart form. Fields: title (text), tags (text, comma-separated), file (PDF)",
+    responses(
+        (status = 201, description = "Resume created from uploaded PDF", body = Resume),
+    )
+)]
 #[instrument(skip(state, multipart))]
 async fn upload_pdf<R: ResumeRepository + 'static>(
     State(state): State<ResumeRouteState<R>>,
@@ -206,6 +261,15 @@ async fn upload_pdf<R: ResumeRepository + 'static>(
 }
 
 /// Download the PDF associated with a resume.
+#[utoipa::path(
+    get,
+    path = "/api/v1/resumes/{id}/pdf",
+    tag = "resumes",
+    params(("id" = Uuid, Path, description = "Resume ID")),
+    responses(
+        (status = 200, description = "Resume PDF", content_type = "application/pdf"),
+    )
+)]
 #[instrument(skip(state))]
 async fn download_pdf<R: ResumeRepository + 'static>(
     State(state): State<ResumeRouteState<R>>,

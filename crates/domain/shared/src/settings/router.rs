@@ -20,7 +20,7 @@ use axum::{
     http::StatusCode,
     routing::get,
 };
-use utoipa_axum::router::OpenApiRouter;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use serde::Deserialize;
 use tokio::fs;
 
@@ -111,8 +111,8 @@ pub fn routes(svc: SettingsSvc) -> OpenApiRouter {
         .nest(
             "/api/v1",
             OpenApiRouter::new()
-                .route("/settings", get(get_settings).post(update_settings))
-                .route("/settings/prompts", get(list_prompts))
+                .routes(routes!(get_settings, update_settings))
+                .routes(routes!(list_prompts))
                 .route(
                     "/settings/prompts/{*name}",
                     get(get_prompt_content).put(update_prompt_content),
@@ -121,6 +121,14 @@ pub fn routes(svc: SettingsSvc) -> OpenApiRouter {
         .with_state(svc)
 }
 
+#[utoipa::path(
+    get,
+    path = "/settings",
+    tag = "settings",
+    responses(
+        (status = 200, description = "Current runtime settings", body = RuntimeSettingsView),
+    )
+)]
 async fn get_settings(
     State(state): State<SettingsSvc>,
 ) -> Result<Json<RuntimeSettingsView>, (StatusCode, String)> {
@@ -128,6 +136,15 @@ async fn get_settings(
     Ok(Json(current.into()))
 }
 
+#[utoipa::path(
+    post,
+    path = "/settings",
+    tag = "settings",
+    request_body = UpdateRequest,
+    responses(
+        (status = 200, description = "Settings updated", body = RuntimeSettingsView),
+    )
+)]
 async fn update_settings(
     State(state): State<SettingsSvc>,
     Json(req): Json<UpdateRequest>,
@@ -142,23 +159,31 @@ async fn update_settings(
     Ok(Json(updated.into()))
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct PromptFileView {
     pub name:        String,
     pub description: String,
     pub content:     String,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct PromptListView {
     pub prompts: Vec<PromptFileView>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub struct PromptUpdateRequest {
     pub content: String,
 }
 
+#[utoipa::path(
+    get,
+    path = "/settings/prompts",
+    tag = "settings",
+    responses(
+        (status = 200, description = "List of prompt files", body = PromptListView),
+    )
+)]
 async fn list_prompts() -> Result<Json<PromptListView>, (StatusCode, String)> {
     let prompts = PROMPT_SPECS
         .iter()
@@ -172,6 +197,15 @@ async fn list_prompts() -> Result<Json<PromptListView>, (StatusCode, String)> {
     Ok(Json(PromptListView { prompts }))
 }
 
+#[utoipa::path(
+    get,
+    path = "/settings/prompts/{name}",
+    tag = "settings",
+    params(("name" = String, Path, description = "Prompt file name")),
+    responses(
+        (status = 200, description = "Prompt content", body = PromptFileView),
+    )
+)]
 async fn get_prompt_content(
     Path(name): Path<String>,
 ) -> Result<Json<PromptFileView>, (StatusCode, String)> {
@@ -186,6 +220,16 @@ async fn get_prompt_content(
     }))
 }
 
+#[utoipa::path(
+    put,
+    path = "/settings/prompts/{name}",
+    tag = "settings",
+    params(("name" = String, Path, description = "Prompt file name")),
+    request_body = PromptUpdateRequest,
+    responses(
+        (status = 200, description = "Prompt updated", body = PromptFileView),
+    )
+)]
 async fn update_prompt_content(
     Path(name): Path<String>,
     Json(req): Json<PromptUpdateRequest>,
@@ -224,30 +268,31 @@ async fn update_prompt_content(
     }))
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct RuntimeSettingsView {
     pub ai:         AiSettingsView,
     pub telegram:   TgSettingsResp,
     pub agent:      AgentSettingsView,
     // TODO: use jiff
+    #[schema(value_type = Option<String>)]
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct AgentSettingsView {
     pub soul:               Option<String>,
     pub chat_system_prompt: Option<String>,
     pub memory:             MemorySettingsView,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct MemorySettingsView {
     pub chroma_url:          Option<String>,
     pub chroma_collection:   Option<String>,
     pub chroma_api_key_hint: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct AiSettingsView {
     pub configured:         bool,
     pub default_model:      Option<String>,
@@ -257,7 +302,7 @@ pub struct AiSettingsView {
     pub favorite_models:    Vec<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct TgSettingsResp {
     pub configured:            bool,
     pub chat_id:               Option<i64>,
