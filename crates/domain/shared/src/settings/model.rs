@@ -112,14 +112,14 @@ impl Default for MemorySettings {
 }
 
 /// Partial update payload for runtime settings writes.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct UpdateRequest {
     pub ai:       Option<AiRuntimeSettingsPatch>,
     pub telegram: Option<TelegramRuntimeSettingsPatch>,
     pub agent:    Option<AgentRuntimeSettingsPatch>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct AiRuntimeSettingsPatch {
     pub openrouter_api_key: Option<String>,
     pub default_model:      Option<String>,
@@ -133,14 +133,14 @@ pub struct AiRuntimeSettingsPatch {
     pub favorite_models:    Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct TelegramRuntimeSettingsPatch {
     pub bot_token:             Option<String>,
     pub chat_id:               Option<i64>,
     pub allowed_group_chat_id: Option<i64>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct AgentRuntimeSettingsPatch {
     pub soul:               Option<String>,
     pub chat_system_prompt: Option<String>,
@@ -149,7 +149,7 @@ pub struct AgentRuntimeSettingsPatch {
     pub memory:             Option<MemoryRuntimeSettingsPatch>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct MemoryRuntimeSettingsPatch {
     pub chroma_url:        Option<String>,
     pub chroma_collection: Option<String>,

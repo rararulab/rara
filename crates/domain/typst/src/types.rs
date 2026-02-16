@@ -23,7 +23,7 @@ use uuid::Uuid;
 // ---------------------------------------------------------------------------
 
 /// A Typst project that points to a local directory on disk.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct TypstProject {
     pub id:                 Uuid,
     pub name:               String,
@@ -35,13 +35,16 @@ pub struct TypstProject {
     /// If this project was imported from a Git repository, the clone URL.
     pub git_url:            Option<String>,
     /// Timestamp of the last successful Git sync.
+    #[schema(value_type = Option<String>)]
     pub git_last_synced_at: Option<Timestamp>,
+    #[schema(value_type = String)]
     pub created_at:         Timestamp,
+    #[schema(value_type = String)]
     pub updated_at:         Timestamp,
 }
 
 /// A completed PDF render, stored in object storage.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RenderResult {
     pub id:             Uuid,
     pub project_id:     Uuid,
@@ -52,6 +55,7 @@ pub struct RenderResult {
     pub page_count:     i32,
     /// PDF file size in bytes.
     pub file_size:      i64,
+    #[schema(value_type = String)]
     pub created_at:     Timestamp,
 }
 
@@ -60,7 +64,7 @@ pub struct RenderResult {
 // ---------------------------------------------------------------------------
 
 /// Body for `POST /api/v1/typst/projects` — register a local project.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RegisterProjectRequest {
     pub name:       String,
     /// Absolute path to the local project directory.
@@ -70,13 +74,13 @@ pub struct RegisterProjectRequest {
 }
 
 /// Body for `PUT /api/v1/typst/projects/{id}/files/{path}`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct UpdateFileRequest {
     pub content: String,
 }
 
 /// Body for `POST /api/v1/typst/projects/import-git`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ImportGitRequest {
     pub url:        String,
     pub name:       Option<String>,
@@ -85,7 +89,7 @@ pub struct ImportGitRequest {
 }
 
 /// Body for `POST /api/v1/typst/projects/{id}/compile`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CompileRequest {
     /// Optionally override the main file for this compilation.
     pub main_file: Option<String>,

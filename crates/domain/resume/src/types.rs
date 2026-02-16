@@ -37,7 +37,7 @@ pub type ResumeId = rara_domain_shared::id::ResumeId;
 
 /// How a resume version was produced.
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, FromRepr)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, FromRepr, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum ResumeSource {
@@ -58,7 +58,7 @@ pub enum ResumeSource {
 /// This mirrors the database `resume` table but lives in the domain layer
 /// so that the service and repository trait can work without depending on
 /// any infrastructure crate.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Resume {
     pub id:                  Uuid,
     pub title:               String,
@@ -70,13 +70,17 @@ pub struct Resume {
     pub target_job_id:       Option<Uuid>,
     pub customization_notes: Option<String>,
     pub tags:                Vec<String>,
+    #[schema(value_type = Option<Object>)]
     pub metadata:            Option<serde_json::Value>,
     pub pdf_object_key:      Option<String>,
     pub pdf_file_size:       Option<i64>,
     pub trace_id:            Option<String>,
     pub is_deleted:          bool,
+    #[schema(value_type = Option<String>)]
     pub deleted_at:          Option<Timestamp>,
+    #[schema(value_type = String)]
     pub created_at:          Timestamp,
+    #[schema(value_type = String)]
     pub updated_at:          Timestamp,
 }
 
@@ -85,7 +89,7 @@ pub struct Resume {
 // ---------------------------------------------------------------------------
 
 /// Parameters for creating a new resume version.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateResumeRequest {
     pub title:               String,
     pub content:             String,
@@ -106,7 +110,7 @@ pub struct UploadPdfRequest {
 /// Parameters for a partial update of an existing resume.
 ///
 /// Only the fields set to `Some` will be applied.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct UpdateResumeRequest {
     pub title:               Option<String>,
     pub content:             Option<String>,
@@ -121,7 +125,7 @@ pub struct UpdateResumeRequest {
 // ---------------------------------------------------------------------------
 
 /// Criteria for listing/searching resume versions.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ResumeFilter {
     /// Only return resumes produced by this source.
     pub source:         Option<ResumeSource>,
@@ -133,8 +137,10 @@ pub struct ResumeFilter {
     /// Resumes must contain *all* of these tags.
     pub tags:           Option<Vec<String>>,
     /// Created at or after this timestamp.
+    #[schema(value_type = Option<String>)]
     pub created_after:  Option<Timestamp>,
     /// Created at or before this timestamp.
+    #[schema(value_type = Option<String>)]
     pub created_before: Option<Timestamp>,
 }
 

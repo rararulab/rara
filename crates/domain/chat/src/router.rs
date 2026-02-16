@@ -40,9 +40,8 @@ use axum::{
     Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{delete, get, patch, post, put},
 };
-use utoipa_axum::router::OpenApiRouter;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use rara_sessions::types::{ChannelBinding, ChatMessage, SessionEntry, SessionKey};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -54,7 +53,7 @@ use crate::{error::ChatError, model_catalog::ChatModel, service::ChatService};
 // ---------------------------------------------------------------------------
 
 /// Request body for `POST /sessions`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CreateSessionRequest {
     /// Session key (e.g. `"user:alice"` or `"dm:alice:bob"`).
     pub key:           String,
@@ -67,7 +66,7 @@ pub struct CreateSessionRequest {
 }
 
 /// Query parameters for `GET /sessions`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct ListSessionsQuery {
     /// Maximum number of sessions to return (default: 50).
     pub limit:  Option<i64>,
@@ -76,7 +75,7 @@ pub struct ListSessionsQuery {
 }
 
 /// Request body for `POST /sessions/{key}/send`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct SendMessageRequest {
     /// The user's message text.
     pub text:       String,
@@ -86,14 +85,15 @@ pub struct SendMessageRequest {
 }
 
 /// Response body for `POST /sessions/{key}/send`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct SendMessageResponse {
     /// The persisted assistant response message.
+    #[schema(value_type = Object)]
     pub message: ChatMessage,
 }
 
 /// Query parameters for `GET /sessions/{key}/messages`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct GetMessagesQuery {
     /// Only return messages with `seq > after_seq` (cursor-based pagination).
     pub after_seq: Option<i64>,
@@ -102,7 +102,7 @@ pub struct GetMessagesQuery {
 }
 
 /// Request body for `POST /sessions/{key}/fork`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct ForkSessionRequest {
     /// Key for the newly created forked session.
     pub target_key:  String,
@@ -111,7 +111,7 @@ pub struct ForkSessionRequest {
 }
 
 /// Request body for `PATCH /sessions/{key}`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct UpdateSessionRequest {
     /// New human-readable title.
     pub title:         Option<String>,
@@ -122,14 +122,14 @@ pub struct UpdateSessionRequest {
 }
 
 /// Request body for `PUT /models/favorites`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct SetFavoritesRequest {
     /// Model IDs to mark as favorites.
     pub model_ids: Vec<String>,
 }
 
 /// Request body for `PUT /channel-bindings`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct BindChannelRequest {
     /// Channel type identifier (e.g. `"telegram"`, `"slack"`).
     pub channel_type: String,
@@ -150,35 +150,19 @@ pub struct BindChannelRequest {
 pub fn routes(service: ChatService) -> OpenApiRouter {
     OpenApiRouter::new()
         // Models
-        .route("/api/v1/chat/models", get(list_models))
-        .route("/api/v1/chat/models/favorites", put(set_favorites))
+        .routes(routes!(list_models))
+        .routes(routes!(set_favorites))
         // Sessions
-        .route("/api/v1/chat/sessions", post(create_session))
-        .route("/api/v1/chat/sessions", get(list_sessions))
-        .route("/api/v1/chat/sessions/{key}", get(get_session))
-        .route("/api/v1/chat/sessions/{key}", patch(update_session))
-        .route("/api/v1/chat/sessions/{key}", delete(delete_session))
+        .routes(routes!(create_session, list_sessions))
+        .routes(routes!(get_session, update_session, delete_session))
         // Messages
-        .route("/api/v1/chat/sessions/{key}/send", post(send_message))
-        .route(
-            "/api/v1/chat/sessions/{key}/messages",
-            get(get_messages),
-        )
-        .route(
-            "/api/v1/chat/sessions/{key}/messages",
-            delete(clear_messages),
-        )
+        .routes(routes!(send_message))
+        .routes(routes!(get_messages, clear_messages))
         // Fork
-        .route(
-            "/api/v1/chat/sessions/{key}/fork",
-            post(fork_session),
-        )
+        .routes(routes!(fork_session))
         // Channel bindings
-        .route("/api/v1/chat/channel-bindings", put(bind_channel))
-        .route(
-            "/api/v1/chat/channel-bindings/{channel_type}/{account}/{chat_id}",
-            get(get_channel_binding),
-        )
+        .routes(routes!(bind_channel))
+        .routes(routes!(get_channel_binding))
         .with_state(service)
 }
 
@@ -191,6 +175,14 @@ pub fn routes(service: ChatService) -> OpenApiRouter {
 /// When an OpenRouter API key is configured, this endpoint dynamically fetches
 /// the full model list from OpenRouter (cached for 5 minutes). Without a key,
 /// a curated fallback list is returned.
+#[utoipa::path(
+    get,
+    path = "/api/v1/chat/models",
+    tag = "chat",
+    responses(
+        (status = 200, description = "List of available models", body = Vec<ChatModel>),
+    )
+)]
 async fn list_models(State(service): State<ChatService>) -> Json<Vec<ChatModel>> {
     let models = service.list_models().await;
     Json(models)
@@ -198,6 +190,15 @@ async fn list_models(State(service): State<ChatService>) -> Json<Vec<ChatModel>>
 
 /// `PUT /api/v1/chat/models/favorites` — replace the user's favorite model
 /// list.
+#[utoipa::path(
+    put,
+    path = "/api/v1/chat/models/favorites",
+    tag = "chat",
+    request_body = SetFavoritesRequest,
+    responses(
+        (status = 200, description = "Updated favorite model IDs", body = Vec<String>),
+    )
+)]
 #[instrument(skip(service, req))]
 async fn set_favorites(
     State(service): State<ChatService>,
@@ -209,6 +210,15 @@ async fn set_favorites(
 }
 
 /// `POST /api/v1/chat/sessions` — create a new session.
+#[utoipa::path(
+    post,
+    path = "/api/v1/chat/sessions",
+    tag = "chat",
+    request_body = CreateSessionRequest,
+    responses(
+        (status = 201, description = "Session created", body = Object),
+    )
+)]
 #[instrument(skip(service, req))]
 async fn create_session(
     State(service): State<ChatService>,
@@ -222,6 +232,18 @@ async fn create_session(
 }
 
 /// `GET /api/v1/chat/sessions` — list sessions with pagination.
+#[utoipa::path(
+    get,
+    path = "/api/v1/chat/sessions",
+    tag = "chat",
+    params(
+        ("limit" = Option<i64>, Query, description = "Maximum number of sessions to return"),
+        ("offset" = Option<i64>, Query, description = "Number of sessions to skip"),
+    ),
+    responses(
+        (status = 200, description = "List of sessions", body = Vec<Object>),
+    )
+)]
 #[instrument(skip(service))]
 async fn list_sessions(
     State(service): State<ChatService>,
@@ -232,6 +254,15 @@ async fn list_sessions(
 }
 
 /// `GET /api/v1/chat/sessions/{key}` — get a single session.
+#[utoipa::path(
+    get,
+    path = "/api/v1/chat/sessions/{key}",
+    tag = "chat",
+    params(("key" = String, Path, description = "Session key")),
+    responses(
+        (status = 200, description = "Session found", body = Object),
+    )
+)]
 #[instrument(skip(service))]
 async fn get_session(
     State(service): State<ChatService>,
@@ -243,6 +274,16 @@ async fn get_session(
 
 /// `PATCH /api/v1/chat/sessions/{key}` — partially update a session's
 /// mutable fields (title, model, system_prompt).
+#[utoipa::path(
+    patch,
+    path = "/api/v1/chat/sessions/{key}",
+    tag = "chat",
+    params(("key" = String, Path, description = "Session key")),
+    request_body = UpdateSessionRequest,
+    responses(
+        (status = 200, description = "Session updated", body = Object),
+    )
+)]
 #[instrument(skip(service, req))]
 async fn update_session(
     State(service): State<ChatService>,
@@ -261,6 +302,15 @@ async fn update_session(
 }
 
 /// `DELETE /api/v1/chat/sessions/{key}` — delete a session and all its data.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/chat/sessions/{key}",
+    tag = "chat",
+    params(("key" = String, Path, description = "Session key")),
+    responses(
+        (status = 204, description = "Session deleted"),
+    )
+)]
 #[instrument(skip(service))]
 async fn delete_session(
     State(service): State<ChatService>,
@@ -273,6 +323,16 @@ async fn delete_session(
 /// `POST /api/v1/chat/sessions/{key}/send` — send a user message and receive
 /// the assistant's response (synchronous, blocks until the agent loop
 /// completes).
+#[utoipa::path(
+    post,
+    path = "/api/v1/chat/sessions/{key}/send",
+    tag = "chat",
+    params(("key" = String, Path, description = "Session key")),
+    request_body = SendMessageRequest,
+    responses(
+        (status = 200, description = "Assistant response", body = SendMessageResponse),
+    )
+)]
 #[instrument(skip(service, req))]
 async fn send_message(
     State(service): State<ChatService>,
@@ -287,6 +347,19 @@ async fn send_message(
 
 /// `GET /api/v1/chat/sessions/{key}/messages` — retrieve conversation
 /// history with optional cursor-based pagination.
+#[utoipa::path(
+    get,
+    path = "/api/v1/chat/sessions/{key}/messages",
+    tag = "chat",
+    params(
+        ("key" = String, Path, description = "Session key"),
+        ("after_seq" = Option<i64>, Query, description = "Only return messages with seq > after_seq"),
+        ("limit" = Option<i64>, Query, description = "Maximum number of messages to return"),
+    ),
+    responses(
+        (status = 200, description = "Message history", body = Vec<Object>),
+    )
+)]
 #[instrument(skip(service))]
 async fn get_messages(
     State(service): State<ChatService>,
@@ -301,6 +374,15 @@ async fn get_messages(
 
 /// `DELETE /api/v1/chat/sessions/{key}/messages` — clear all messages for a
 /// session (keeps the session itself).
+#[utoipa::path(
+    delete,
+    path = "/api/v1/chat/sessions/{key}/messages",
+    tag = "chat",
+    params(("key" = String, Path, description = "Session key")),
+    responses(
+        (status = 204, description = "Messages cleared"),
+    )
+)]
 #[instrument(skip(service))]
 async fn clear_messages(
     State(service): State<ChatService>,
@@ -312,6 +394,16 @@ async fn clear_messages(
 
 /// `POST /api/v1/chat/sessions/{key}/fork` — fork a session at a specific
 /// message sequence number.
+#[utoipa::path(
+    post,
+    path = "/api/v1/chat/sessions/{key}/fork",
+    tag = "chat",
+    params(("key" = String, Path, description = "Session key to fork from")),
+    request_body = ForkSessionRequest,
+    responses(
+        (status = 201, description = "Forked session created", body = Object),
+    )
+)]
 #[instrument(skip(service, req))]
 async fn fork_session(
     State(service): State<ChatService>,
@@ -330,6 +422,15 @@ async fn fork_session(
 
 /// `PUT /api/v1/chat/channel-bindings` — bind an external channel to a
 /// session (upsert).
+#[utoipa::path(
+    put,
+    path = "/api/v1/chat/channel-bindings",
+    tag = "chat",
+    request_body = BindChannelRequest,
+    responses(
+        (status = 200, description = "Channel binding created/updated", body = Object),
+    )
+)]
 #[instrument(skip(service, req))]
 async fn bind_channel(
     State(service): State<ChatService>,
@@ -348,6 +449,19 @@ async fn bind_channel(
 
 /// `GET /api/v1/chat/channel-bindings/{type}/{account}/{chat_id}` — resolve
 /// a channel binding to its session.
+#[utoipa::path(
+    get,
+    path = "/api/v1/chat/channel-bindings/{channel_type}/{account}/{chat_id}",
+    tag = "chat",
+    params(
+        ("channel_type" = String, Path, description = "Channel type (e.g. telegram, slack)"),
+        ("account" = String, Path, description = "Account or bot identifier"),
+        ("chat_id" = String, Path, description = "Chat or conversation identifier"),
+    ),
+    responses(
+        (status = 200, description = "Channel binding found", body = Object),
+    )
+)]
 #[instrument(skip(service))]
 async fn get_channel_binding(
     State(service): State<ChatService>,

@@ -38,7 +38,7 @@ const OPENROUTER_MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
 // ---------------------------------------------------------------------------
 
 /// A single model entry returned by the `GET /api/v1/chat/models` endpoint.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ChatModel {
     /// OpenRouter model identifier (e.g. `"openai/gpt-4o"`).
     pub id:             String,

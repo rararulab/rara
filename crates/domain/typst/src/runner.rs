@@ -25,14 +25,14 @@ use tokio::process::Command;
 use crate::error::TypstError;
 
 /// A justfile recipe description.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct JustRecipe {
     pub name:        String,
     pub description: Option<String>,
 }
 
 /// Command execution result.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RunOutput {
     pub exit_code: i32,
     pub stdout:    String,
