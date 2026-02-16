@@ -16,6 +16,8 @@
 
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { listSkills, getSkill, createSkill, deleteSkill } from "@/api/skills";
 import type { SkillSummary, CreateSkillRequest } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
@@ -339,9 +341,11 @@ function SkillDetailDialog({
               <Separator />
 
               {/* Body content */}
-              <pre className="text-sm whitespace-pre-wrap font-mono bg-muted/50 rounded-md p-4 overflow-x-auto">
-                {data.body}
-              </pre>
+              <div className="prose prose-sm dark:prose-invert max-w-none">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {data.body}
+                </ReactMarkdown>
+              </div>
             </div>
           )}
         </div>
