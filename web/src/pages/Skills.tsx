@@ -16,7 +16,7 @@
 
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { listSkills, createSkill, deleteSkill } from "@/api/skills";
+import { listSkills, getSkill, createSkill, deleteSkill } from "@/api/skills";
 import type { SkillSummary, CreateSkillRequest } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -238,6 +238,119 @@ function DeleteDialog({
 }
 
 // ---------------------------------------------------------------------------
+// Skill Detail Dialog
+// ---------------------------------------------------------------------------
+
+function SkillDetailDialog({
+  open,
+  onOpenChange,
+  skillName,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  skillName: string;
+}) {
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["skills", skillName],
+    queryFn: () => getSkill(skillName),
+    enabled: open,
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[700px] max-h-[80vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Code className="h-5 w-5" />
+            {skillName}
+          </DialogTitle>
+          {data && (
+            <DialogDescription>{data.description}</DialogDescription>
+          )}
+        </DialogHeader>
+        <div className="flex-1 overflow-y-auto">
+          {isLoading && (
+            <div className="space-y-2 py-4">
+              <Skeleton className="h-4 w-3/4" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-5/6" />
+              <Skeleton className="h-4 w-2/3" />
+            </div>
+          )}
+          {isError && (
+            <p className="text-sm text-destructive py-4">
+              Failed to load skill details.
+            </p>
+          )}
+          {data && (
+            <div className="space-y-4 py-2">
+              {/* Metadata row */}
+              <div className="flex flex-wrap gap-2">
+                {data.source && (
+                  <Badge variant={sourceVariant(data.source)}>
+                    {data.source}
+                  </Badge>
+                )}
+                {data.eligible ? (
+                  <Badge variant="outline" className="text-green-600 border-green-600/30">
+                    <CheckCircle className="h-3 w-3 mr-1" />
+                    Eligible
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-destructive border-destructive/30">
+                    <XCircle className="h-3 w-3 mr-1" />
+                    Missing deps
+                  </Badge>
+                )}
+                {data.license && (
+                  <Badge variant="outline">{data.license}</Badge>
+                )}
+              </div>
+
+              {/* Allowed tools */}
+              {data.allowed_tools.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground mb-1.5">
+                    Allowed Tools
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {data.allowed_tools.map((tool) => (
+                      <Badge key={tool} variant="secondary" className="text-xs">
+                        {tool}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Homepage */}
+              {data.homepage && (
+                <a
+                  href={data.homepage}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <ExternalLink className="h-3 w-3" />
+                  {data.homepage}
+                </a>
+              )}
+
+              <Separator />
+
+              {/* Body content */}
+              <pre className="text-sm whitespace-pre-wrap font-mono bg-muted/50 rounded-md p-4 overflow-x-auto">
+                {data.body}
+              </pre>
+            </div>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Loading Skeleton
 // ---------------------------------------------------------------------------
 
@@ -257,6 +370,7 @@ function SkillsSkeleton() {
 
 export default function Skills() {
   const [createOpen, setCreateOpen] = useState(false);
+  const [detailSkillName, setDetailSkillName] = useState<string | null>(null);
   const [deleteSkillItem, setDeleteSkillItem] = useState<SkillSummary | null>(
     null
   );
@@ -317,6 +431,7 @@ export default function Skills() {
             <SkillCard
               key={skill.name}
               skill={skill}
+              onClick={() => setDetailSkillName(skill.name)}
               onDelete={() => setDeleteSkillItem(skill)}
             />
           ))}
@@ -324,6 +439,16 @@ export default function Skills() {
       )}
 
       {/* Dialogs */}
+      {detailSkillName && (
+        <SkillDetailDialog
+          open={true}
+          onOpenChange={(open) => {
+            if (!open) setDetailSkillName(null);
+          }}
+          skillName={detailSkillName}
+        />
+      )}
+
       {createOpen && (
         <SkillFormDialog
           open={createOpen}
@@ -374,13 +499,18 @@ function sourceVariant(
 
 function SkillCard({
   skill,
+  onClick,
   onDelete,
 }: {
   skill: SkillSummary;
+  onClick: () => void;
   onDelete: () => void;
 }) {
   return (
-    <div className="rounded-lg border bg-card p-4 space-y-3 hover:bg-accent/5 transition-colors">
+    <div
+      className="rounded-lg border bg-card p-4 space-y-3 hover:bg-accent/5 transition-colors cursor-pointer"
+      onClick={onClick}
+    >
       {/* Header */}
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
@@ -418,6 +548,7 @@ function SkillCard({
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
+              onClick={(e) => e.stopPropagation()}
             >
               Homepage
               <ExternalLink className="h-3 w-3" />
@@ -446,7 +577,10 @@ function SkillCard({
         <Button
           variant="ghost"
           size="sm"
-          onClick={onDelete}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
           title="Delete skill"
         >
           <Trash2 className="h-4 w-4" />
