@@ -111,17 +111,18 @@ mod manifest_tests {
 // ── Skill metadata ───────────────────────────────────────────────────────────
 
 /// Where a skill was discovered from.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum_macros::FromRepr)]
 #[serde(rename_all = "lowercase")]
 pub enum SkillSource {
     /// Project-local: `<data_dir>/.rara/skills/`
-    Project,
+    Project = 0,
     /// Personal: `<data_dir>/skills/`
-    Personal,
+    Personal = 1,
     /// Bundled inside a plugin directory.
-    Plugin,
+    Plugin = 2,
     /// Installed from a registry (e.g. skills.sh).
-    Registry,
+    Registry = 3,
 }
 
 /// Lightweight metadata parsed from SKILL.md frontmatter.

@@ -26,7 +26,6 @@ use openrouter_rs::client::OpenRouterClient;
 use snafu::{ResultExt, Whatever};
 use tokio::sync::OnceCell;
 use tracing::{info, warn};
-use rara_skills::discover::SkillDiscoverer;
 use yunara_store::db::DBStore;
 
 /// Shared application state used by workers and HTTP routes.
@@ -63,7 +62,7 @@ pub struct AppState {
     pub agent_scheduler: Arc<crate::agent_scheduler::AgentScheduler>,
 
     // -- skills --
-    pub skill_registry: Arc<RwLock<rara_skills::registry::InMemoryRegistry>>,
+    pub skill_registry: rara_skills::registry::InMemoryRegistry,
 
     // -- worker coordination --
     pub analyze_notify: Arc<RwLock<Option<NotifyHandle>>>,
@@ -248,96 +247,8 @@ impl AppState {
         )));
 
         // -- skills registry (PG cache + incremental FS sync) --------------------
-        let skill_registry = Arc::new(RwLock::new(rara_skills::registry::InMemoryRegistry::new()));
-        {
-            let reg = Arc::clone(&skill_registry);
-            let pool_clone = pool.clone();
-            tokio::spawn(async move {
-                let cache = rara_skills::cache::PgSkillCache::new(pool_clone);
-                let discoverer = rara_skills::discover::FsSkillDiscoverer::new(
-                    rara_skills::discover::FsSkillDiscoverer::default_paths(),
-                );
-
-                // Phase 1: load from PG cache (fast startup)
-                let cached = match cache.load_all().await {
-                    Ok(c) => {
-                        let count = c.len();
-                        if count > 0 {
-                            let mut guard = reg.write().unwrap();
-                            for cached_skill in c.values() {
-                                guard.insert(cached_skill.metadata.clone());
-                            }
-                            info!(count, "Skills loaded from cache");
-                        }
-                        c
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Failed to load skill cache, falling back to FS");
-                        std::collections::HashMap::new()
-                    }
-                };
-
-                // Phase 2: incremental FS sync with hash comparison
-                match discoverer.discover().await {
-                    Ok(discovered) => {
-                        let mut added = 0u32;
-                        let mut changed = 0u32;
-                        let mut unchanged = 0u32;
-
-                        let mut seen_names = std::collections::HashSet::new();
-
-                        for meta in &discovered {
-                            seen_names.insert(meta.name.clone());
-                            let skill_md = meta.path.join("SKILL.md");
-                            let current_hash = match rara_skills::hash::file_hash(&skill_md) {
-                                Ok(h) => h,
-                                Err(e) => {
-                                    warn!(skill = %meta.name, error = %e, "Failed to hash SKILL.md, skipping");
-                                    continue;
-                                }
-                            };
-
-                            let needs_update = cached
-                                .get(&meta.name)
-                                .map(|c| c.content_hash != current_hash)
-                                .unwrap_or(true);
-
-                            if needs_update {
-                                if cached.contains_key(&meta.name) {
-                                    changed += 1;
-                                } else {
-                                    added += 1;
-                                }
-                                reg.write().unwrap().insert(meta.clone());
-                                if let Err(e) = cache.upsert(meta, &current_hash).await {
-                                    warn!(skill = %meta.name, error = %e, "Failed to update cache");
-                                }
-                            } else {
-                                unchanged += 1;
-                            }
-                        }
-
-                        // Phase 3: garbage-collect stale cache entries
-                        let mut removed = 0u32;
-                        for name in cached.keys() {
-                            if !seen_names.contains(name) {
-                                removed += 1;
-                                reg.write().unwrap().remove(name);
-                                if let Err(e) = cache.remove(name).await {
-                                    warn!(skill = %name, error = %e, "Failed to remove stale cache entry");
-                                }
-                            }
-                        }
-
-                        let total = reg.read().unwrap().list_all().len();
-                        info!(total, added, changed, unchanged, removed, "Skill registry synced");
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Background skill discovery failed");
-                    }
-                }
-            });
-        }
+        let skill_registry = rara_skills::registry::InMemoryRegistry::new();
+        rara_skills::cache::spawn_background_sync(pool.clone(), skill_registry.clone());
 
         tool_registry.register_service(Arc::new(crate::tools::services::ListSkillsTool::new(
             skill_registry.clone(),

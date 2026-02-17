@@ -1,11 +1,13 @@
 //! Skill registry for managing discovered and installed skills.
 //!
-//! Provides the [`SkillRegistry`] async trait and [`InMemoryRegistry`], a hash-map-backed
-//! implementation that can be populated from a [`SkillDiscoverer`].
-//! The in-memory registry also exposes synchronous convenience methods (`list_all`, `get`,
-//! `remove`) for use inside `std::sync::RwLock` contexts.
+//! Provides the [`SkillRegistry`] async trait and [`InMemoryRegistry`], a
+//! cheaply-cloneable, thread-safe registry backed by `Arc<RwLock<HashMap>>`.
 
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::HashMap,
+    path::Path,
+    sync::{Arc, RwLock},
+};
 
 use async_trait::async_trait;
 use snafu::ResultExt;
@@ -33,16 +35,20 @@ pub trait SkillRegistry: Send + Sync {
     async fn remove_skill(&self, name: &str) -> Result<()>;
 }
 
-/// In-memory registry backed by a discoverer.
+/// Cheaply-cloneable in-memory skill registry.
+///
+/// All clones share the same underlying `HashMap` via `Arc<RwLock<…>>`,
+/// so there is no need for an outer `Arc<RwLock<InMemoryRegistry>>`.
+#[derive(Clone)]
 pub struct InMemoryRegistry {
-    skills: HashMap<String, SkillMetadata>,
+    skills: Arc<RwLock<HashMap<String, SkillMetadata>>>,
 }
 
 impl InMemoryRegistry {
     /// Create a new empty registry.
     pub fn new() -> Self {
         Self {
-            skills: HashMap::new(),
+            skills: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -53,20 +59,30 @@ impl InMemoryRegistry {
         for meta in discovered {
             skills.insert(meta.name.clone(), meta);
         }
-        Ok(Self { skills })
+        Ok(Self {
+            skills: Arc::new(RwLock::new(skills)),
+        })
     }
 
-    /// Add a skill directly (useful for testing).
-    pub fn insert(&mut self, meta: SkillMetadata) { self.skills.insert(meta.name.clone(), meta); }
+    /// Add a skill directly.
+    pub fn insert(&self, meta: SkillMetadata) {
+        self.skills.write().unwrap().insert(meta.name.clone(), meta);
+    }
 
-    /// Synchronous access to all skill metadata (for use in sync contexts like RwLock).
-    pub fn list_all(&self) -> Vec<SkillMetadata> { self.skills.values().cloned().collect() }
+    /// List all skill metadata.
+    pub fn list_all(&self) -> Vec<SkillMetadata> {
+        self.skills.read().unwrap().values().cloned().collect()
+    }
 
-    /// Get a skill's metadata by name (synchronous).
-    pub fn get(&self, name: &str) -> Option<&SkillMetadata> { self.skills.get(name) }
+    /// Get a clone of a skill's metadata by name.
+    pub fn get(&self, name: &str) -> Option<SkillMetadata> {
+        self.skills.read().unwrap().get(name).cloned()
+    }
 
     /// Remove a skill by name. Returns the removed metadata, if any.
-    pub fn remove(&mut self, name: &str) -> Option<SkillMetadata> { self.skills.remove(name) }
+    pub fn remove(&self, name: &str) -> Option<SkillMetadata> {
+        self.skills.write().unwrap().remove(name)
+    }
 }
 
 impl Default for InMemoryRegistry {
@@ -76,12 +92,11 @@ impl Default for InMemoryRegistry {
 #[async_trait]
 impl SkillRegistry for InMemoryRegistry {
     async fn list_skills(&self) -> Result<Vec<SkillMetadata>> {
-        Ok(self.skills.values().cloned().collect())
+        Ok(self.list_all())
     }
 
     async fn load_skill(&self, name: &str) -> Result<SkillContent> {
         let meta = self
-            .skills
             .get(name)
             .ok_or_else(|| NotFoundSnafu { name }.build())?;
 
@@ -99,7 +114,6 @@ impl SkillRegistry for InMemoryRegistry {
 
     async fn remove_skill(&self, name: &str) -> Result<()> {
         let meta = self
-            .skills
             .get(name)
             .ok_or_else(|| NotFoundSnafu { name }.build())?;
 
@@ -153,7 +167,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut reg = InMemoryRegistry::new();
+        let reg = InMemoryRegistry::new();
         reg.insert(SkillMetadata {
             name:          "my-skill".into(),
             description:   "test".into(),
@@ -182,7 +196,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_non_registry_skill_fails() {
-        let mut reg = InMemoryRegistry::new();
+        let reg = InMemoryRegistry::new();
         reg.insert(SkillMetadata {
             name:          "local".into(),
             description:   "".into(),

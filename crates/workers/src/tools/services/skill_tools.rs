@@ -14,8 +14,6 @@
 
 //! Layer 2 service tools for managing agent skills.
 
-use std::sync::{Arc, RwLock};
-
 use async_trait::async_trait;
 use rara_agents::tool_registry::AgentTool;
 use rara_skills::registry::InMemoryRegistry;
@@ -52,11 +50,11 @@ fn format_skill_md(
 
 /// Tool that lists all available skills with their metadata.
 pub struct ListSkillsTool {
-    registry: Arc<RwLock<InMemoryRegistry>>,
+    registry: InMemoryRegistry,
 }
 
 impl ListSkillsTool {
-    pub fn new(registry: Arc<RwLock<InMemoryRegistry>>) -> Self { Self { registry } }
+    pub fn new(registry: InMemoryRegistry) -> Self { Self { registry } }
 }
 
 #[async_trait]
@@ -77,12 +75,8 @@ impl AgentTool for ListSkillsTool {
     }
 
     async fn execute(&self, _params: Value) -> rara_agents::err::Result<Value> {
-        let registry = self.registry.read().map_err(|e| {
-            rara_agents::err::Error::Other {
-                message: format!("failed to acquire skill registry lock: {e}").into(),
-            }
-        })?;
-        let skills: Vec<Value> = registry
+        let skills: Vec<Value> = self
+            .registry
             .list_all()
             .iter()
             .map(|meta| {
@@ -110,11 +104,11 @@ impl AgentTool for ListSkillsTool {
 /// Tool that creates a new skill by writing a `SKILL.md` file inside a skill
 /// directory and inserting the parsed metadata into the registry.
 pub struct CreateSkillTool {
-    registry: Arc<RwLock<InMemoryRegistry>>,
+    registry: InMemoryRegistry,
 }
 
 impl CreateSkillTool {
-    pub fn new(registry: Arc<RwLock<InMemoryRegistry>>) -> Self { Self { registry } }
+    pub fn new(registry: InMemoryRegistry) -> Self { Self { registry } }
 }
 
 #[async_trait]
@@ -216,12 +210,7 @@ impl AgentTool for CreateSkillTool {
             })?;
         meta.source = Some(rara_skills::types::SkillSource::Personal);
 
-        let mut registry = self.registry.write().map_err(|e| {
-            rara_agents::err::Error::Other {
-                message: format!("failed to acquire skill registry lock: {e}").into(),
-            }
-        })?;
-        registry.insert(meta);
+        self.registry.insert(meta);
 
         Ok(json!({
             "created": name,
@@ -236,11 +225,11 @@ impl AgentTool for CreateSkillTool {
 
 /// Tool that deletes a skill by removing its directory and unregistering it.
 pub struct DeleteSkillTool {
-    registry: Arc<RwLock<InMemoryRegistry>>,
+    registry: InMemoryRegistry,
 }
 
 impl DeleteSkillTool {
-    pub fn new(registry: Arc<RwLock<InMemoryRegistry>>) -> Self { Self { registry } }
+    pub fn new(registry: InMemoryRegistry) -> Self { Self { registry } }
 }
 
 #[async_trait]
@@ -273,19 +262,12 @@ impl AgentTool for DeleteSkillTool {
             })?;
 
         // Get the skill path before removing from registry.
-        let skill_path = {
-            let registry = self.registry.read().map_err(|e| {
-                rara_agents::err::Error::Other {
-                    message: format!("failed to acquire skill registry lock: {e}").into(),
-                }
-            })?;
-            let meta = registry.get(name).ok_or_else(|| {
-                rara_agents::err::Error::Other {
-                    message: format!("skill not found: {name}").into(),
-                }
-            })?;
-            meta.path.clone()
-        };
+        let meta = self.registry.get(name).ok_or_else(|| {
+            rara_agents::err::Error::Other {
+                message: format!("skill not found: {name}").into(),
+            }
+        })?;
+        let skill_path = meta.path.clone();
 
         // Remove the directory (best-effort).
         if skill_path.exists() {
@@ -293,12 +275,7 @@ impl AgentTool for DeleteSkillTool {
         }
 
         // Remove from registry.
-        let mut registry = self.registry.write().map_err(|e| {
-            rara_agents::err::Error::Other {
-                message: format!("failed to acquire skill registry lock: {e}").into(),
-            }
-        })?;
-        registry.remove(name);
+        self.registry.remove(name);
 
         Ok(json!({ "deleted": name }))
     }

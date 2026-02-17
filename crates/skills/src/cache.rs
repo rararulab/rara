@@ -56,7 +56,7 @@ impl PgSkillCache {
             .build()
         })?;
 
-        let source_i16 = source_to_i16(meta.source.as_ref());
+        let source_i16: i16 = meta.source.map(|s| s as u8 as i16).unwrap_or(-1);
 
         sqlx::query(
             r#"INSERT INTO skill_cache
@@ -115,26 +115,104 @@ impl PgSkillCache {
     }
 }
 
-// ── Source <-> i16 mapping ──────────────────────────────────────────────────
 
-fn source_to_i16(source: Option<&SkillSource>) -> i16 {
-    match source {
-        Some(SkillSource::Project) => 0,
-        Some(SkillSource::Personal) => 1,
-        Some(SkillSource::Plugin) => 2,
-        Some(SkillSource::Registry) => 3,
-        None => -1,
-    }
-}
+// ── Background sync ─────────────────────────────────────────────────────────
 
-fn source_from_i16(value: i16) -> Option<SkillSource> {
-    match value {
-        0 => Some(SkillSource::Project),
-        1 => Some(SkillSource::Personal),
-        2 => Some(SkillSource::Plugin),
-        3 => Some(SkillSource::Registry),
-        _ => None,
-    }
+/// Spawn a background task that populates `registry` from the PG cache,
+/// then incrementally syncs with the filesystem using content hashing.
+///
+/// 1. **Phase 1** — load cached metadata from DB → fill registry (fast).
+/// 2. **Phase 2** — FS scan + SHA-256 hash comparison → upsert changed skills.
+/// 3. **Phase 3** — garbage-collect stale cache entries no longer on disk.
+pub fn spawn_background_sync(
+    pool: PgPool,
+    registry: crate::registry::InMemoryRegistry,
+) {
+    use crate::discover::{FsSkillDiscoverer, SkillDiscoverer};
+    use std::collections::HashSet;
+    use tracing::{info, warn};
+
+    tokio::spawn(async move {
+        let cache = PgSkillCache::new(pool);
+        let discoverer = FsSkillDiscoverer::new(FsSkillDiscoverer::default_paths());
+
+        // Phase 1: load from PG cache (fast startup)
+        let cached = match cache.load_all().await {
+            Ok(c) => {
+                let count = c.len();
+                if count > 0 {
+                    for cached_skill in c.values() {
+                        registry.insert(cached_skill.metadata.clone());
+                    }
+                    info!(count, "Skills loaded from cache");
+                }
+                c
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to load skill cache, falling back to FS");
+                HashMap::new()
+            }
+        };
+
+        // Phase 2: incremental FS sync with hash comparison
+        match discoverer.discover().await {
+            Ok(discovered) => {
+                let mut added = 0u32;
+                let mut changed = 0u32;
+                let mut unchanged = 0u32;
+                let mut seen_names = HashSet::new();
+
+                for meta in &discovered {
+                    seen_names.insert(meta.name.clone());
+                    let skill_md = meta.path.join("SKILL.md");
+                    let current_hash = match crate::hash::file_hash(&skill_md) {
+                        Ok(h) => h,
+                        Err(e) => {
+                            warn!(skill = %meta.name, error = %e, "Failed to hash SKILL.md, skipping");
+                            continue;
+                        }
+                    };
+
+                    let needs_update = cached
+                        .get(&meta.name)
+                        .map(|c| c.content_hash != current_hash)
+                        .unwrap_or(true);
+
+                    if needs_update {
+                        if cached.contains_key(&meta.name) {
+                            changed += 1;
+                        } else {
+                            added += 1;
+                        }
+                        registry.insert(meta.clone());
+                        if let Err(e) = cache.upsert(meta, &current_hash).await {
+                            warn!(skill = %meta.name, error = %e, "Failed to update cache");
+                        }
+                    } else {
+                        unchanged += 1;
+                    }
+                }
+
+                // Phase 3: garbage-collect stale cache entries
+                let mut removed = 0u32;
+                for name in cached.keys() {
+                    if !seen_names.contains(name) {
+                        removed += 1;
+                        registry.remove(name);
+                        if let Err(e) = cache.remove(name).await {
+                            warn!(skill = %name, error = %e, "Failed to remove stale cache entry");
+                        }
+                    }
+                }
+
+                let total = registry.list_all().len();
+                info!(total, added, changed, unchanged, removed, "Skill registry synced");
+            }
+            Err(e) => {
+                warn!(error = %e, "Background skill discovery failed");
+            }
+        }
+    });
 }
 
 impl CachedSkill {
@@ -157,7 +235,7 @@ impl CachedSkill {
                 dockerfile: row.dockerfile,
                 requires,
                 path: PathBuf::from(row.path),
-                source: source_from_i16(row.source),
+                source: SkillSource::from_repr(row.source as u8),
             },
             content_hash: row.content_hash,
         })

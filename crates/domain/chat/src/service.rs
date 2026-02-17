@@ -109,7 +109,7 @@ pub struct ChatService {
     /// Settings service for persisting favorite models.
     settings_svc:    rara_domain_shared::settings::SettingsSvc,
     /// Skills registry for available skills listing in system prompt.
-    skill_registry:  Arc<std::sync::RwLock<rara_skills::registry::InMemoryRegistry>>,
+    skill_registry:  rara_skills::registry::InMemoryRegistry,
 }
 
 impl ChatService {
@@ -127,7 +127,7 @@ impl ChatService {
         settings_rx: watch::Receiver<Settings>,
         memory_manager: Option<Arc<MemoryManager>>,
         settings_svc: rara_domain_shared::settings::SettingsSvc,
-        skill_registry: Arc<std::sync::RwLock<rara_skills::registry::InMemoryRegistry>>,
+        skill_registry: rara_skills::registry::InMemoryRegistry,
     ) -> Self {
         Self {
             session_repo,
@@ -494,8 +494,7 @@ impl ChatService {
 
         // -- skill listing injection --
         let tool_whitelist = {
-            let registry = self.skill_registry.read().unwrap();
-            let all_skills = registry.list_all();
+            let all_skills = self.skill_registry.list_all();
 
             // Generate available skills listing for the system prompt
             let skills_xml = rara_skills::prompt_gen::generate_skills_prompt(&all_skills);

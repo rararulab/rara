@@ -27,8 +27,6 @@
 //! | `POST`   | `/api/v1/skills`         | Create a new skill  |
 //! | `DELETE` | `/api/v1/skills/{name}`  | Delete a skill      |
 
-use std::sync::{Arc, RwLock};
-
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -37,9 +35,6 @@ use axum::{
 };
 use rara_skills::registry::InMemoryRegistry;
 use serde::{Deserialize, Serialize};
-
-/// Shared state type for skill endpoints.
-type SkillState = Arc<RwLock<InMemoryRegistry>>;
 
 // ---------------------------------------------------------------------------
 // Request / Response types
@@ -86,7 +81,7 @@ pub struct CreateSkillRequest {
 
 /// Build an axum [`Router`] with all skill CRUD endpoints and the given
 /// [`InMemoryRegistry`] as shared state.
-pub fn skill_routes(registry: SkillState) -> Router {
+pub fn skill_routes(registry: InMemoryRegistry) -> Router {
     Router::new()
         .route("/api/v1/skills", get(list_skills).post(create_skill))
         .route(
@@ -101,9 +96,8 @@ pub fn skill_routes(registry: SkillState) -> Router {
 // ---------------------------------------------------------------------------
 
 /// `GET /api/v1/skills` -- list all registered skills.
-async fn list_skills(State(registry): State<SkillState>) -> Json<Vec<SkillSummary>> {
-    let reg = registry.read().unwrap();
-    let skills = reg
+async fn list_skills(State(registry): State<InMemoryRegistry>) -> Json<Vec<SkillSummary>> {
+    let skills = registry
         .list_all()
         .iter()
         .map(|meta| {
@@ -126,13 +120,10 @@ async fn list_skills(State(registry): State<SkillState>) -> Json<Vec<SkillSummar
 /// `GET /api/v1/skills/{name}` -- get a single skill by name, including its
 /// prompt body.
 async fn get_skill(
-    State(registry): State<SkillState>,
+    State(registry): State<InMemoryRegistry>,
     Path(name): Path<String>,
 ) -> Result<Json<SkillResponse>, StatusCode> {
-    let meta = {
-        let reg = registry.read().unwrap();
-        reg.get(&name).cloned().ok_or(StatusCode::NOT_FOUND)?
-    };
+    let meta = registry.get(&name).ok_or(StatusCode::NOT_FOUND)?;
 
     // Load full content (async file read).
     let content = rara_skills::registry::load_skill_from_path(&meta.path)
@@ -159,15 +150,12 @@ async fn get_skill(
 /// The skill is written as a `SKILL.md` file inside a new directory under the
 /// user skills directory, then parsed and inserted into the in-memory registry.
 async fn create_skill(
-    State(registry): State<SkillState>,
+    State(registry): State<InMemoryRegistry>,
     Json(req): Json<CreateSkillRequest>,
 ) -> Result<(StatusCode, Json<SkillSummary>), StatusCode> {
     // Check if a skill with this name already exists.
-    {
-        let reg = registry.read().unwrap();
-        if reg.get(&req.name).is_some() {
-            return Err(StatusCode::CONFLICT);
-        }
+    if registry.get(&req.name).is_some() {
+        return Err(StatusCode::CONFLICT);
     }
 
     // Write skill directory + SKILL.md to disk.
@@ -198,7 +186,7 @@ async fn create_skill(
         eligible:      elig.eligible,
     };
 
-    registry.write().unwrap().insert(meta);
+    registry.insert(meta);
 
     Ok((StatusCode::CREATED, Json(summary)))
 }
@@ -206,20 +194,17 @@ async fn create_skill(
 /// `DELETE /api/v1/skills/{name}` -- delete a skill from the registry and
 /// optionally remove its directory from disk.
 async fn delete_skill(
-    State(registry): State<SkillState>,
+    State(registry): State<InMemoryRegistry>,
     Path(name): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
-    let skill_path = {
-        let reg = registry.read().unwrap();
-        let meta = reg.get(&name).ok_or(StatusCode::NOT_FOUND)?;
-        meta.path.clone()
-    };
+    let meta = registry.get(&name).ok_or(StatusCode::NOT_FOUND)?;
+    let skill_path = meta.path.clone();
 
     // Remove directory from disk (best-effort).
     let _ = std::fs::remove_dir_all(&skill_path);
 
     // Remove from in-memory registry.
-    registry.write().unwrap().remove(&name);
+    registry.remove(&name);
 
     Ok(StatusCode::NO_CONTENT)
 }
