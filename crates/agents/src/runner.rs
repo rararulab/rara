@@ -20,7 +20,7 @@ use openrouter_rs::{
     types::{Choice, Role, completion::CompletionsResponse},
 };
 use snafu::ResultExt;
-use tracing::{error, info, trace};
+use tracing::{error, info, trace, warn};
 
 use crate::{err::prelude::*, model::OpenRouterLoaderRef, tool_registry::ToolRegistry};
 
@@ -73,6 +73,10 @@ pub struct AgentRunner {
     history:        Option<Vec<Message>>,
     #[builder(default = MAX_ITERATIONS)]
     max_iterations: usize,
+    /// Fallback models to try (in order) when the primary model fails with a
+    /// fallback-eligible error. Empty means no fallback.
+    #[builder(default)]
+    fallback_models: Vec<SharedString>,
 }
 
 impl AgentRunner {
@@ -82,14 +86,54 @@ impl AgentRunner {
     /// If `history` is provided, those messages are inserted between the system
     /// prompt and the current user message, giving the LLM conversational
     /// context.
+    ///
+    /// When the primary model fails with a fallback-eligible error and
+    /// `fallback_models` is non-empty, the runner will try each fallback
+    /// model in order before giving up.
     pub async fn run(
         self,
         tools: &ToolRegistry,
         on_event: Option<&OnEvent>,
     ) -> Result<AgentRunResponse> {
+        // Try the primary model first.
+        match self.run_with_model(self.model_name.as_ref(), tools, on_event).await {
+            Ok(response) => Ok(response),
+            Err(err) if !self.fallback_models.is_empty() && is_fallback_eligible(&err) => {
+                let mut last_err = err;
+                for fallback in &self.fallback_models {
+                    warn!(
+                        from = %self.model_name,
+                        to = %fallback,
+                        error = %last_err,
+                        "switching to fallback model"
+                    );
+                    match self.run_with_model(fallback.as_ref(), tools, on_event).await {
+                        Ok(response) => return Ok(response),
+                        Err(err) if is_fallback_eligible(&err) => {
+                            last_err = err;
+                            continue;
+                        }
+                        Err(err) => return Err(err),
+                    }
+                }
+                // All fallback models exhausted — return the last error.
+                Err(last_err)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Core agent loop for a single model. Extracted so that [`run`] can
+    /// wrap it with fallback logic.
+    async fn run_with_model(
+        &self,
+        model: &str,
+        tools: &ToolRegistry,
+        on_event: Option<&OnEvent>,
+    ) -> Result<AgentRunResponse> {
         let is_multimodal = matches!(self.user_content, Content::Parts(_));
         info!(
-            model_name = self.model_name.as_ref(),
+            model_name = model,
             is_multimodal, "starting agent loop"
         );
 
@@ -101,12 +145,12 @@ impl AgentRunner {
                 self.system_prompt.as_ref(),
             )];
             // Insert conversation history before the current user message.
-            if let Some(hist) = self.history {
-                messages.extend(hist);
+            if let Some(hist) = &self.history {
+                messages.extend(hist.clone());
             }
             messages.push(Message::new(
                 openrouter_rs::types::Role::User,
-                self.user_content,
+                self.user_content.clone(),
             ));
             messages
         };
@@ -143,7 +187,7 @@ impl AgentRunner {
                 let mut request_builder =
                     openrouter_rs::api::chat::ChatCompletionRequest::builder();
                 request_builder
-                    .model(self.model_name.as_ref())
+                    .model(model)
                     .messages(messages.clone())
                     .temperature(0.7);
 

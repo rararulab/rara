@@ -294,12 +294,14 @@ pub struct MemorySettingsView {
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct AiSettingsView {
-    pub configured:         bool,
-    pub default_model:      Option<String>,
-    pub job_model:          Option<String>,
-    pub chat_model:         Option<String>,
-    pub openrouter_api_key: Option<String>,
-    pub favorite_models:    Vec<String>,
+    pub configured:           bool,
+    pub default_model:        Option<String>,
+    pub job_model:            Option<String>,
+    pub chat_model:           Option<String>,
+    pub openrouter_api_key:   Option<String>,
+    pub favorite_models:      Vec<String>,
+    pub chat_model_fallbacks: Vec<String>,
+    pub job_model_fallbacks:  Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
@@ -327,12 +329,14 @@ impl Into<RuntimeSettingsView> for Settings {
 
         RuntimeSettingsView {
             ai:         AiSettingsView {
-                configured:         self.ai.openrouter_api_key.is_some(),
-                default_model:      self.ai.default_model.clone(),
-                job_model:          self.ai.job_model.clone(),
-                chat_model:         self.ai.chat_model.clone(),
-                openrouter_api_key: self.ai.openrouter_api_key.clone(),
-                favorite_models:    self.ai.favorite_models.clone(),
+                configured:           self.ai.openrouter_api_key.is_some(),
+                default_model:        self.ai.default_model.clone(),
+                job_model:            self.ai.job_model.clone(),
+                chat_model:           self.ai.chat_model.clone(),
+                openrouter_api_key:   self.ai.openrouter_api_key.clone(),
+                favorite_models:      self.ai.favorite_models.clone(),
+                chat_model_fallbacks: self.ai.chat_model_fallbacks.clone(),
+                job_model_fallbacks:  self.ai.job_model_fallbacks.clone(),
             },
             telegram:   TgSettingsResp {
                 configured:            self.telegram.bot_token.is_some()

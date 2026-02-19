@@ -45,6 +45,12 @@ pub struct AISettings {
     /// User-pinned model IDs shown at the top of the model picker.
     #[serde(default)]
     pub favorite_models:    Vec<String>,
+    /// Fallback models for chat scenario, tried in order when primary fails.
+    #[serde(default)]
+    pub chat_model_fallbacks: Vec<String>,
+    /// Fallback models for job scenario, tried in order when primary fails.
+    #[serde(default)]
+    pub job_model_fallbacks:  Vec<String>,
 }
 
 impl AISettings {
@@ -59,6 +65,27 @@ impl AISettings {
         specific
             .or(self.default_model.as_deref())
             .unwrap_or("openai/gpt-4o")
+    }
+
+    /// Return the ordered fallback chain for a given scenario.
+    ///
+    /// The chain starts with the primary model (`model_for(scenario)`) and
+    /// appends any configured fallback models, skipping empty strings and
+    /// duplicates of the primary.
+    pub fn fallback_chain(&self, scenario: ModelScenario) -> Vec<&str> {
+        let primary = self.model_for(scenario);
+        let fallbacks = match scenario {
+            ModelScenario::Job => &self.job_model_fallbacks,
+            ModelScenario::Chat => &self.chat_model_fallbacks,
+        };
+        let mut chain = vec![primary];
+        for fb in fallbacks {
+            let fb = fb.trim();
+            if !fb.is_empty() && fb != primary {
+                chain.push(fb);
+            }
+        }
+        chain
     }
 }
 
@@ -121,16 +148,20 @@ pub struct UpdateRequest {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct AiRuntimeSettingsPatch {
-    pub openrouter_api_key: Option<String>,
-    pub default_model:      Option<String>,
+    pub openrouter_api_key:    Option<String>,
+    pub default_model:         Option<String>,
     /// `Some(model)` to set, `None` to leave unchanged.
     /// Use `Some("")` or send an empty string to clear (revert to default).
-    pub job_model:          Option<String>,
+    pub job_model:             Option<String>,
     /// `Some(model)` to set, `None` to leave unchanged.
     /// Use `Some("")` or send an empty string to clear (revert to default).
-    pub chat_model:         Option<String>,
+    pub chat_model:            Option<String>,
     /// Replace the entire favorite models list. `None` to leave unchanged.
-    pub favorite_models:    Option<Vec<String>>,
+    pub favorite_models:       Option<Vec<String>>,
+    /// Replace the chat fallback models list. `None` to leave unchanged.
+    pub chat_model_fallbacks:  Option<Vec<String>>,
+    /// Replace the job fallback models list. `None` to leave unchanged.
+    pub job_model_fallbacks:   Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
@@ -174,6 +205,12 @@ impl Settings {
             }
             if let Some(favorites) = ai.favorite_models {
                 self.ai.favorite_models = favorites;
+            }
+            if let Some(fallbacks) = ai.chat_model_fallbacks {
+                self.ai.chat_model_fallbacks = fallbacks;
+            }
+            if let Some(fallbacks) = ai.job_model_fallbacks {
+                self.ai.job_model_fallbacks = fallbacks;
             }
         }
 
@@ -224,6 +261,8 @@ impl Settings {
         self.ai.chat_model = normalize_text(self.ai.chat_model.take());
         self.ai.favorite_models.retain(|s| !s.trim().is_empty());
         self.ai.favorite_models.dedup();
+        normalize_string_list(&mut self.ai.chat_model_fallbacks);
+        normalize_string_list(&mut self.ai.job_model_fallbacks);
         self.telegram.bot_token = normalize_secret(self.telegram.bot_token.take());
         self.agent.soul = normalize_text(self.agent.soul.take());
         self.agent.chat_system_prompt = normalize_text(self.agent.chat_system_prompt.take());
@@ -248,6 +287,15 @@ fn normalize_text(value: Option<String>) -> Option<String> {
 }
 
 fn normalize_secret(value: Option<String>) -> Option<String> { normalize_text(value) }
+
+/// Trim each entry, drop empty strings, and deduplicate.
+fn normalize_string_list(list: &mut Vec<String>) {
+    for item in list.iter_mut() {
+        *item = item.trim().to_owned();
+    }
+    list.retain(|s| !s.is_empty());
+    list.dedup();
+}
 
 #[cfg(test)]
 mod tests {
@@ -455,6 +503,146 @@ mod tests {
         assert_eq!(
             settings.agent.memory.chroma_api_key,
             Some("secret-token".to_owned())
+        );
+    }
+
+    // -- fallback_chain tests -----------------------------------------------
+
+    #[test]
+    fn fallback_chain_no_fallbacks_returns_primary_only() {
+        let ai = AISettings {
+            chat_model: Some("openai/gpt-4o".to_owned()),
+            ..Default::default()
+        };
+        assert_eq!(ai.fallback_chain(ModelScenario::Chat), vec!["openai/gpt-4o"]);
+    }
+
+    #[test]
+    fn fallback_chain_returns_correct_order() {
+        let ai = AISettings {
+            chat_model: Some("openai/gpt-4o".to_owned()),
+            chat_model_fallbacks: vec![
+                "anthropic/claude-sonnet-4".to_owned(),
+                "google/gemini-2.0-flash".to_owned(),
+            ],
+            ..Default::default()
+        };
+        let chain = ai.fallback_chain(ModelScenario::Chat);
+        assert_eq!(
+            chain,
+            vec![
+                "openai/gpt-4o",
+                "anthropic/claude-sonnet-4",
+                "google/gemini-2.0-flash",
+            ]
+        );
+    }
+
+    #[test]
+    fn fallback_chain_deduplicates_primary() {
+        let ai = AISettings {
+            job_model: Some("openai/gpt-4o".to_owned()),
+            job_model_fallbacks: vec![
+                "openai/gpt-4o".to_owned(), // same as primary — should be skipped
+                "anthropic/claude-sonnet-4".to_owned(),
+            ],
+            ..Default::default()
+        };
+        let chain = ai.fallback_chain(ModelScenario::Job);
+        assert_eq!(
+            chain,
+            vec!["openai/gpt-4o", "anthropic/claude-sonnet-4"]
+        );
+    }
+
+    #[test]
+    fn fallback_chain_skips_empty_entries() {
+        let ai = AISettings {
+            chat_model: Some("openai/gpt-4o".to_owned()),
+            chat_model_fallbacks: vec![
+                "".to_owned(),
+                "  ".to_owned(),
+                "anthropic/claude-sonnet-4".to_owned(),
+            ],
+            ..Default::default()
+        };
+        let chain = ai.fallback_chain(ModelScenario::Chat);
+        assert_eq!(
+            chain,
+            vec!["openai/gpt-4o", "anthropic/claude-sonnet-4"]
+        );
+    }
+
+    #[test]
+    fn fallback_chain_uses_default_model_as_primary() {
+        let ai = AISettings {
+            default_model: Some("anthropic/claude-sonnet-4".to_owned()),
+            job_model_fallbacks: vec!["openai/gpt-4o".to_owned()],
+            ..Default::default()
+        };
+        let chain = ai.fallback_chain(ModelScenario::Job);
+        assert_eq!(
+            chain,
+            vec!["anthropic/claude-sonnet-4", "openai/gpt-4o"]
+        );
+    }
+
+    #[test]
+    fn fallback_chain_uses_hardcoded_default_when_nothing_set() {
+        let ai = AISettings {
+            chat_model_fallbacks: vec!["anthropic/claude-sonnet-4".to_owned()],
+            ..Default::default()
+        };
+        let chain = ai.fallback_chain(ModelScenario::Chat);
+        assert_eq!(
+            chain,
+            vec!["openai/gpt-4o", "anthropic/claude-sonnet-4"]
+        );
+    }
+
+    #[test]
+    fn apply_patch_fallback_models() {
+        let mut settings = Settings::default();
+        settings.apply_patch(UpdateRequest {
+            ai:       Some(AiRuntimeSettingsPatch {
+                chat_model_fallbacks: Some(vec![
+                    "anthropic/claude-sonnet-4".to_owned(),
+                    "google/gemini-2.0-flash".to_owned(),
+                ]),
+                job_model_fallbacks: Some(vec!["openai/gpt-4o-mini".to_owned()]),
+                ..Default::default()
+            }),
+            telegram: None,
+            agent:    None,
+        });
+        assert_eq!(
+            settings.ai.chat_model_fallbacks,
+            vec!["anthropic/claude-sonnet-4", "google/gemini-2.0-flash"]
+        );
+        assert_eq!(
+            settings.ai.job_model_fallbacks,
+            vec!["openai/gpt-4o-mini"]
+        );
+    }
+
+    #[test]
+    fn normalize_trims_and_deduplicates_fallbacks() {
+        let mut settings = Settings {
+            ai: AISettings {
+                chat_model_fallbacks: vec![
+                    "  openai/gpt-4o  ".to_owned(),
+                    "".to_owned(),
+                    "openai/gpt-4o".to_owned(), // dup after trim
+                    "anthropic/claude-sonnet-4".to_owned(),
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        settings.normalize();
+        assert_eq!(
+            settings.ai.chat_model_fallbacks,
+            vec!["openai/gpt-4o", "anthropic/claude-sonnet-4"]
         );
     }
 }

@@ -109,6 +109,17 @@ impl From<(&str, Option<u16>)> for Error {
     }
 }
 
+/// Whether the error is eligible for model fallback.
+///
+/// Context window errors and missing API key errors are NOT eligible because
+/// switching models would not resolve them.
+pub fn is_fallback_eligible(err: &Error) -> bool {
+    !matches!(
+        err,
+        Error::ContextWindow | Error::OpenRouterNotConfigured { .. }
+    )
+}
+
 pub fn is_retryable_provider_error(err: &Error) -> bool {
     fn classify_openrouter_error(err: &OpenRouterError) -> bool {
         match err {
@@ -133,4 +144,38 @@ pub fn is_retryable_provider_error(err: &Error) -> bool {
 
 pub mod prelude {
     pub use super::*;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fallback_eligible_for_retryable_server() {
+        assert!(is_fallback_eligible(&Error::RetryableServer));
+    }
+
+    #[test]
+    fn fallback_eligible_for_non_retryable() {
+        assert!(is_fallback_eligible(&Error::NonRetryable));
+    }
+
+    #[test]
+    fn fallback_eligible_for_other() {
+        assert!(is_fallback_eligible(&Error::Other {
+            message: "something went wrong".into(),
+        }));
+    }
+
+    #[test]
+    fn fallback_not_eligible_for_context_window() {
+        assert!(!is_fallback_eligible(&Error::ContextWindow));
+    }
+
+    #[test]
+    fn fallback_not_eligible_for_not_configured() {
+        assert!(!is_fallback_eligible(&Error::OpenRouterNotConfigured {
+            location: snafu::Location::new("test", 0, 0),
+        }));
+    }
 }

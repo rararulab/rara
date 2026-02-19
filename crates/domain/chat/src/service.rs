@@ -530,12 +530,25 @@ impl ChatService {
             Content::Text(user_text.clone())
         };
 
+        // Resolve fallback models from settings.
+        let fallback_models = {
+            let settings = self.settings_rx.borrow();
+            let chain = settings.ai.fallback_chain(ModelScenario::Chat);
+            // Skip the primary (first element); the rest are fallbacks.
+            chain
+                .into_iter()
+                .skip(1)
+                .map(|s| s.to_owned().into())
+                .collect()
+        };
+
         let runner = AgentRunner::builder()
             .llm_provider(self.llm_provider.clone())
             .model_name(model)
             .system_prompt(system_prompt)
             .user_content(user_content)
             .history(openrouter_history)
+            .fallback_models(fallback_models)
             .build();
 
         let result =
