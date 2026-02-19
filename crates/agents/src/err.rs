@@ -21,19 +21,24 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub))]
 pub enum Error {
+    #[snafu(display("OpenRouter: {source}"))]
     OpenRouter {
         source:   openrouter_rs::error::OpenRouterError,
         #[snafu(implicit)]
         location: snafu::Location,
     },
 
+    #[snafu(display("OpenRouter not configured"))]
     OpenRouterNotConfigured {
         #[snafu(implicit)]
         location: snafu::Location,
     },
 
+    #[snafu(display("context window exceeded"))]
     ContextWindow,
+    #[snafu(display("retryable server error"))]
     RetryableServer,
+    #[snafu(display("non-retryable error"))]
     NonRetryable,
 
     IO {
