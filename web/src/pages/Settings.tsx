@@ -38,6 +38,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  ArrowDown,
+  ArrowUp,
   Bot,
   ChevronRight,
   Download,
@@ -48,6 +50,7 @@ import {
   Search,
   SlidersHorizontal,
   Sparkles,
+  X,
 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -90,6 +93,8 @@ export default function Settings() {
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramChatId, setTelegramChatId] = useState("");
   const [telegramAllowedGroupChatId, setTelegramAllowedGroupChatId] = useState("");
+  const [chatFallbacks, setChatFallbacks] = useState<string[]>([]);
+  const [jobFallbacks, setJobFallbacks] = useState<string[]>([]);
   const [selectedPromptName, setSelectedPromptName] = useState("");
   const [selectedPromptContent, setSelectedPromptContent] = useState("");
   const [promptDirty, setPromptDirty] = useState(false);
@@ -111,6 +116,8 @@ export default function Settings() {
     setDefaultModel(settingsQuery.data.ai.default_model ?? "");
     setJobModel(settingsQuery.data.ai.job_model ?? USE_DEFAULT);
     setChatModel(settingsQuery.data.ai.chat_model ?? USE_DEFAULT);
+    setChatFallbacks(settingsQuery.data.ai.chat_model_fallbacks ?? []);
+    setJobFallbacks(settingsQuery.data.ai.job_model_fallbacks ?? []);
     setAiApiKey(settingsQuery.data.ai.openrouter_api_key ?? "");
     setTelegramChatId(
       settingsQuery.data.telegram.chat_id == null
@@ -195,6 +202,22 @@ export default function Settings() {
       }
     }
 
+    // Chat model fallbacks
+    if (
+      JSON.stringify(chatFallbacks) !==
+      JSON.stringify(current.ai.chat_model_fallbacks ?? [])
+    ) {
+      aiPatch.chat_model_fallbacks = chatFallbacks;
+    }
+
+    // Job model fallbacks
+    if (
+      JSON.stringify(jobFallbacks) !==
+      JSON.stringify(current.ai.job_model_fallbacks ?? [])
+    ) {
+      aiPatch.job_model_fallbacks = jobFallbacks;
+    }
+
     if (aiApiKey.trim() !== "") {
       aiPatch.openrouter_api_key = aiApiKey.trim();
     }
@@ -234,6 +257,8 @@ export default function Settings() {
     defaultModel,
     jobModel,
     chatModel,
+    chatFallbacks,
+    jobFallbacks,
     settingsQuery.data,
     telegramAllowedGroupChatId,
     telegramChatId,
@@ -489,6 +514,125 @@ export default function Settings() {
     );
   };
 
+  /** Render an ordered fallback model list with reorder and remove controls */
+  const renderFallbackList = (
+    label: string,
+    fallbacks: string[],
+    setFallbacks: React.Dispatch<React.SetStateAction<string[]>>,
+    primaryModelId: string,
+  ) => {
+    // Models available to add as fallback: exclude primary and already-selected
+    const excluded = new Set([primaryModelId, ...fallbacks]);
+    const availableToAdd = models.filter((m) => !excluded.has(m.id));
+
+    const moveUp = (index: number) => {
+      if (index === 0) return;
+      setFallbacks((prev) => {
+        const next = [...prev];
+        [next[index - 1], next[index]] = [next[index], next[index - 1]];
+        return next;
+      });
+    };
+
+    const moveDown = (index: number) => {
+      setFallbacks((prev) => {
+        if (index >= prev.length - 1) return prev;
+        const next = [...prev];
+        [next[index], next[index + 1]] = [next[index + 1], next[index]];
+        return next;
+      });
+    };
+
+    const remove = (index: number) => {
+      setFallbacks((prev) => prev.filter((_, i) => i !== index));
+    };
+
+    const addFallback = (modelId: string) => {
+      if (!modelId) return;
+      setFallbacks((prev) => [...prev, modelId]);
+    };
+
+    // Resolve model name from id
+    const modelName = (id: string): string => {
+      const found = models.find((m) => m.id === id);
+      return found ? found.name : id;
+    };
+
+    return (
+      <div className="mt-2 space-y-2 rounded-lg border bg-muted/20 p-3">
+        <p className="text-xs font-semibold text-muted-foreground">{label}</p>
+
+        {fallbacks.length === 0 && (
+          <p className="text-xs text-muted-foreground/60">
+            No fallback models configured. The primary model will be used exclusively.
+          </p>
+        )}
+
+        {fallbacks.map((id, index) => (
+          <div
+            key={id}
+            className="flex items-center gap-2 rounded border bg-background px-2 py-1.5"
+          >
+            <span className="w-5 shrink-0 text-center text-xs font-medium text-muted-foreground">
+              {index + 1}
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium">{modelName(id)}</p>
+              <p className="truncate text-xs text-muted-foreground">{id}</p>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 shrink-0"
+              disabled={index === 0}
+              onClick={() => moveUp(index)}
+              title="Move up"
+            >
+              <ArrowUp className="h-3 w-3" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 shrink-0"
+              disabled={index === fallbacks.length - 1}
+              onClick={() => moveDown(index)}
+              title="Move down"
+            >
+              <ArrowDown className="h-3 w-3" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 shrink-0 text-muted-foreground hover:text-destructive"
+              onClick={() => remove(index)}
+              title="Remove"
+            >
+              <X className="h-3 w-3" />
+            </Button>
+          </div>
+        ))}
+
+        {availableToAdd.length > 0 && (
+          <Select onValueChange={addFallback} value="">
+            <SelectTrigger className="h-8 text-xs">
+              <SelectValue placeholder="Add a fallback model..." />
+            </SelectTrigger>
+            <SelectContent>
+              {availableToAdd.map((m) => (
+                <SelectItem key={m.id} value={m.id}>
+                  {m.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -668,12 +812,24 @@ export default function Settings() {
                   (id) => setJobModel(id),
                   true,
                 )}
+                {renderFallbackList(
+                  "Job Analysis Fallback Models",
+                  jobFallbacks,
+                  setJobFallbacks,
+                  effectiveModel(jobModel),
+                )}
 
                 {renderModelSelector(
                   "Chat Model",
                   chatModel,
                   (id) => setChatModel(id),
                   true,
+                )}
+                {renderFallbackList(
+                  "Chat Fallback Models",
+                  chatFallbacks,
+                  setChatFallbacks,
+                  effectiveModel(chatModel),
                 )}
               </div>
             </div>

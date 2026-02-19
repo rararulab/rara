@@ -256,6 +256,8 @@ export interface RuntimeSettingsView {
     default_model: string | null;
     job_model: string | null;
     chat_model: string | null;
+    chat_model_fallbacks: string[];
+    job_model_fallbacks: string[];
     openrouter_api_key: string | null;
   };
   telegram: {
@@ -277,6 +279,8 @@ export interface RuntimeSettingsPatch {
     default_model?: string;
     job_model?: string | null;
     chat_model?: string | null;
+    chat_model_fallbacks?: string[];
+    job_model_fallbacks?: string[];
   };
   telegram?: {
     bot_token?: string;
