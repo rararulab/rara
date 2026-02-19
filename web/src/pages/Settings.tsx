@@ -48,7 +48,6 @@ import {
   EyeOff,
   MessageSquare,
   Search,
-  SlidersHorizontal,
   Sparkles,
   X,
 } from "lucide-react";
@@ -69,9 +68,6 @@ type OpenRouterModel = {
   contextLength: number | null;
 };
 
-/** Sentinel value meaning "use default model" for scenario-specific selectors */
-const USE_DEFAULT = "__use_default__";
-
 function formatUpdatedAt(value: string | null): string {
   if (!value) return "Never";
   const d = new Date(value);
@@ -82,8 +78,8 @@ function formatUpdatedAt(value: string | null): string {
 export default function Settings() {
   const queryClient = useQueryClient();
   const [defaultModel, setDefaultModel] = useState("");
-  const [jobModel, setJobModel] = useState(USE_DEFAULT);
-  const [chatModel, setChatModel] = useState(USE_DEFAULT);
+  const [jobModels, setJobModels] = useState<string[]>([]);   // ordered: [primary, fallback1, fallback2, ...]
+  const [chatModels, setChatModels] = useState<string[]>([]); // ordered: [primary, fallback1, fallback2, ...]
   const [aiApiKey, setAiApiKey] = useState("");
   const [showAiApiKey, setShowAiApiKey] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -93,8 +89,6 @@ export default function Settings() {
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramChatId, setTelegramChatId] = useState("");
   const [telegramAllowedGroupChatId, setTelegramAllowedGroupChatId] = useState("");
-  const [chatFallbacks, setChatFallbacks] = useState<string[]>([]);
-  const [jobFallbacks, setJobFallbacks] = useState<string[]>([]);
   const [selectedPromptName, setSelectedPromptName] = useState("");
   const [selectedPromptContent, setSelectedPromptContent] = useState("");
   const [promptDirty, setPromptDirty] = useState(false);
@@ -114,10 +108,16 @@ export default function Settings() {
   useEffect(() => {
     if (!settingsQuery.data) return;
     setDefaultModel(settingsQuery.data.ai.default_model ?? "");
-    setJobModel(settingsQuery.data.ai.job_model ?? USE_DEFAULT);
-    setChatModel(settingsQuery.data.ai.chat_model ?? USE_DEFAULT);
-    setChatFallbacks(settingsQuery.data.ai.chat_model_fallbacks ?? []);
-    setJobFallbacks(settingsQuery.data.ai.job_model_fallbacks ?? []);
+
+    // Build ordered model lists: [primary, ...fallbacks]
+    const jobPrimary = settingsQuery.data.ai.job_model;
+    const jobFallbacks = settingsQuery.data.ai.job_model_fallbacks ?? [];
+    setJobModels(jobPrimary ? [jobPrimary, ...jobFallbacks] : []);
+
+    const chatPrimary = settingsQuery.data.ai.chat_model;
+    const chatFallbacks = settingsQuery.data.ai.chat_model_fallbacks ?? [];
+    setChatModels(chatPrimary ? [chatPrimary, ...chatFallbacks] : []);
+
     setAiApiKey(settingsQuery.data.ai.openrouter_api_key ?? "");
     setTelegramChatId(
       settingsQuery.data.telegram.chat_id == null
@@ -152,17 +152,6 @@ export default function Settings() {
     }
   }, [promptsQuery.data, promptDirty, selectedPromptName]);
 
-  /** The effective model for a scenario — resolves "use default" to the actual default model. */
-  const effectiveModel = useCallback(
-    (scenarioValue: string): string => {
-      if (scenarioValue === USE_DEFAULT || scenarioValue === "") {
-        return defaultModel || "openai/gpt-4o";
-      }
-      return scenarioValue;
-    },
-    [defaultModel],
-  );
-
   const filteredModels = useMemo(() => {
     const q = modelSearch.trim().toLowerCase();
     const filtered = !q
@@ -182,40 +171,36 @@ export default function Settings() {
       aiPatch.default_model = trimmedDefault;
     }
 
-    // Job model: USE_DEFAULT means send empty string (clear), otherwise send the model id
-    const currentJobModel = current.ai.job_model ?? USE_DEFAULT;
-    if (jobModel !== currentJobModel) {
-      if (jobModel === USE_DEFAULT) {
-        aiPatch.job_model = ""; // empty string clears it on the backend
+    // Job models: derive current ordered list from settings for comparison
+    const currentJobModels = (() => {
+      const primary = current.ai.job_model;
+      const fallbacks = current.ai.job_model_fallbacks ?? [];
+      return primary ? [primary, ...fallbacks] : [];
+    })();
+    if (JSON.stringify(jobModels) !== JSON.stringify(currentJobModels)) {
+      if (jobModels.length === 0) {
+        aiPatch.job_model = "";  // clear to use default
+        aiPatch.job_model_fallbacks = [];
       } else {
-        aiPatch.job_model = jobModel;
+        aiPatch.job_model = jobModels[0];
+        aiPatch.job_model_fallbacks = jobModels.slice(1);
       }
     }
 
-    // Chat model: same logic
-    const currentChatModel = current.ai.chat_model ?? USE_DEFAULT;
-    if (chatModel !== currentChatModel) {
-      if (chatModel === USE_DEFAULT) {
-        aiPatch.chat_model = "";
+    // Chat models: same logic
+    const currentChatModels = (() => {
+      const primary = current.ai.chat_model;
+      const fallbacks = current.ai.chat_model_fallbacks ?? [];
+      return primary ? [primary, ...fallbacks] : [];
+    })();
+    if (JSON.stringify(chatModels) !== JSON.stringify(currentChatModels)) {
+      if (chatModels.length === 0) {
+        aiPatch.chat_model = "";  // clear to use default
+        aiPatch.chat_model_fallbacks = [];
       } else {
-        aiPatch.chat_model = chatModel;
+        aiPatch.chat_model = chatModels[0];
+        aiPatch.chat_model_fallbacks = chatModels.slice(1);
       }
-    }
-
-    // Chat model fallbacks
-    if (
-      JSON.stringify(chatFallbacks) !==
-      JSON.stringify(current.ai.chat_model_fallbacks ?? [])
-    ) {
-      aiPatch.chat_model_fallbacks = chatFallbacks;
-    }
-
-    // Job model fallbacks
-    if (
-      JSON.stringify(jobFallbacks) !==
-      JSON.stringify(current.ai.job_model_fallbacks ?? [])
-    ) {
-      aiPatch.job_model_fallbacks = jobFallbacks;
     }
 
     if (aiApiKey.trim() !== "") {
@@ -255,10 +240,8 @@ export default function Settings() {
   }, [
     aiApiKey,
     defaultModel,
-    jobModel,
-    chatModel,
-    chatFallbacks,
-    jobFallbacks,
+    jobModels,
+    chatModels,
     settingsQuery.data,
     telegramAllowedGroupChatId,
     telegramChatId,
@@ -407,6 +390,24 @@ export default function Settings() {
     settingsQuery.data?.ai.openrouter_api_key,
   ]);
 
+  /** Resolve model name from id */
+  const modelName = useCallback(
+    (id: string): string => {
+      const found = models.find((m) => m.id === id);
+      return found ? found.name : id;
+    },
+    [models],
+  );
+
+  /** Resolve model context length from id */
+  const modelContext = useCallback(
+    (id: string): number | null => {
+      const found = models.find((m) => m.id === id);
+      return found?.contextLength ?? null;
+    },
+    [models],
+  );
+
   if (settingsQuery.isLoading) {
     return (
       <div className="space-y-6">
@@ -439,47 +440,21 @@ export default function Settings() {
         ? "Agent Personality"
         : "Telegram Bot";
 
-  /** Render a model selector section (shared UI for default, job, chat) */
-  const renderModelSelector = (
-    label: string,
-    value: string,
-    onChange: (id: string) => void,
-    showUseDefault: boolean,
-  ) => {
-    const isDefault = value === USE_DEFAULT;
-    const activeModelId = isDefault ? effectiveModel(value) : value;
-
+  /** Render the global default model selector (single-select) */
+  const renderDefaultModelSelector = () => {
     // Sort so the currently selected model appears first
     const sorted = [...filteredModels].sort(
-      (a, b) => Number(b.id === activeModelId) - Number(a.id === activeModelId),
+      (a, b) => Number(b.id === defaultModel) - Number(a.id === defaultModel),
     );
 
     return (
       <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
         <div className="flex items-center justify-between">
-          <p className="text-sm font-semibold">{label}</p>
+          <p className="text-sm font-semibold">Default Model</p>
           <span className="text-xs text-muted-foreground">
-            Active: {activeModelId || "openai/gpt-4o"}
+            Active: {defaultModel || "openai/gpt-4o"}
           </span>
         </div>
-
-        {showUseDefault && (
-          <div className="flex items-center justify-between gap-3 rounded border bg-background px-3 py-2">
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium">Use default model</p>
-              <p className="text-xs text-muted-foreground">
-                Falls back to: {defaultModel || "openai/gpt-4o"}
-              </p>
-            </div>
-            <Switch
-              checked={isDefault}
-              onCheckedChange={(checked) => {
-                if (checked) onChange(USE_DEFAULT);
-              }}
-            />
-          </div>
-        )}
-
         <div className="max-h-48 overflow-y-auto rounded border bg-background">
           {sorted.length === 0 && (
             <div className="p-3 text-sm text-muted-foreground">
@@ -498,15 +473,12 @@ export default function Settings() {
                   {model.contextLength ? ` -- ${Math.round(model.contextLength / 1000)}K` : ""}
                 </p>
               </div>
-              <div className="flex items-center gap-2">
-                <SlidersHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
-                <Switch
-                  checked={!isDefault && model.id === value}
-                  onCheckedChange={(checked) => {
-                    if (checked) onChange(model.id);
-                  }}
-                />
-              </div>
+              <Switch
+                checked={model.id === defaultModel}
+                onCheckedChange={(checked) => {
+                  if (checked) setDefaultModel(model.id);
+                }}
+              />
             </div>
           ))}
         </div>
@@ -514,20 +486,28 @@ export default function Settings() {
     );
   };
 
-  /** Render an ordered fallback model list with reorder and remove controls */
-  const renderFallbackList = (
+  /** Unified multi-select ordered model picker for scenario-specific models */
+  const renderModelPicker = (
     label: string,
-    fallbacks: string[],
-    setFallbacks: React.Dispatch<React.SetStateAction<string[]>>,
-    primaryModelId: string,
+    selectedModels: string[],
+    setSelectedModels: React.Dispatch<React.SetStateAction<string[]>>,
   ) => {
-    // Models available to add as fallback: exclude primary and already-selected
-    const excluded = new Set([primaryModelId, ...fallbacks]);
-    const availableToAdd = models.filter((m) => !excluded.has(m.id));
+    const isUsingDefault = selectedModels.length === 0;
+    const activeDisplay = isUsingDefault
+      ? (defaultModel || "openai/gpt-4o")
+      : selectedModels[0];
+    const selectedSet = new Set(selectedModels);
+
+    // Available models: sort selected first, then the rest
+    const sorted = [...filteredModels].sort((a, b) => {
+      const aSelected = selectedSet.has(a.id) ? 0 : 1;
+      const bSelected = selectedSet.has(b.id) ? 0 : 1;
+      return aSelected - bSelected;
+    });
 
     const moveUp = (index: number) => {
       if (index === 0) return;
-      setFallbacks((prev) => {
+      setSelectedModels((prev) => {
         const next = [...prev];
         [next[index - 1], next[index]] = [next[index], next[index - 1]];
         return next;
@@ -535,7 +515,7 @@ export default function Settings() {
     };
 
     const moveDown = (index: number) => {
-      setFallbacks((prev) => {
+      setSelectedModels((prev) => {
         if (index >= prev.length - 1) return prev;
         const next = [...prev];
         [next[index], next[index + 1]] = [next[index + 1], next[index]];
@@ -544,91 +524,134 @@ export default function Settings() {
     };
 
     const remove = (index: number) => {
-      setFallbacks((prev) => prev.filter((_, i) => i !== index));
+      setSelectedModels((prev) => prev.filter((_, i) => i !== index));
     };
 
-    const addFallback = (modelId: string) => {
-      if (!modelId) return;
-      setFallbacks((prev) => [...prev, modelId]);
-    };
-
-    // Resolve model name from id
-    const modelName = (id: string): string => {
-      const found = models.find((m) => m.id === id);
-      return found ? found.name : id;
+    const toggleModel = (modelId: string, checked: boolean) => {
+      if (checked) {
+        setSelectedModels((prev) => [...prev, modelId]);
+      } else {
+        setSelectedModels((prev) => prev.filter((id) => id !== modelId));
+      }
     };
 
     return (
-      <div className="mt-2 space-y-2 rounded-lg border bg-muted/20 p-3">
-        <p className="text-xs font-semibold text-muted-foreground">{label}</p>
+      <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-semibold">{label}</p>
+          <span className="text-xs text-muted-foreground">
+            Active: {activeDisplay}
+          </span>
+        </div>
 
-        {fallbacks.length === 0 && (
-          <p className="text-xs text-muted-foreground/60">
-            No fallback models configured. The primary model will be used exclusively.
-          </p>
-        )}
-
-        {fallbacks.map((id, index) => (
-          <div
-            key={id}
-            className="flex items-center gap-2 rounded border bg-background px-2 py-1.5"
-          >
-            <span className="w-5 shrink-0 text-center text-xs font-medium text-muted-foreground">
-              {index + 1}
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium">{modelName(id)}</p>
-              <p className="truncate text-xs text-muted-foreground">{id}</p>
-            </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6 shrink-0"
-              disabled={index === 0}
-              onClick={() => moveUp(index)}
-              title="Move up"
-            >
-              <ArrowUp className="h-3 w-3" />
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6 shrink-0"
-              disabled={index === fallbacks.length - 1}
-              onClick={() => moveDown(index)}
-              title="Move down"
-            >
-              <ArrowDown className="h-3 w-3" />
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6 shrink-0 text-muted-foreground hover:text-destructive"
-              onClick={() => remove(index)}
-              title="Remove"
-            >
-              <X className="h-3 w-3" />
-            </Button>
+        {/* Use default model toggle */}
+        <div className="flex items-center justify-between gap-3 rounded border bg-background px-3 py-2">
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium">Use default model</p>
+            <p className="text-xs text-muted-foreground">
+              Falls back to: {defaultModel || "openai/gpt-4o"}
+            </p>
           </div>
-        ))}
+          <Switch
+            checked={isUsingDefault}
+            onCheckedChange={(checked) => {
+              if (checked) setSelectedModels([]);
+            }}
+          />
+        </div>
 
-        {availableToAdd.length > 0 && (
-          <Select onValueChange={addFallback} value="">
-            <SelectTrigger className="h-8 text-xs">
-              <SelectValue placeholder="Add a fallback model..." />
-            </SelectTrigger>
-            <SelectContent>
-              {availableToAdd.map((m) => (
-                <SelectItem key={m.id} value={m.id}>
-                  {m.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        {/* Selected models (ordered list) */}
+        {selectedModels.length > 0 && (
+          <div className="space-y-1 rounded border bg-muted/20 p-2">
+            <p className="text-xs font-semibold text-muted-foreground">
+              Selected Models (ordered)
+            </p>
+            {selectedModels.map((id, index) => {
+              const ctx = modelContext(id);
+              return (
+                <div
+                  key={id}
+                  className="flex items-center gap-2 rounded border bg-background px-2 py-1.5"
+                >
+                  <span className="w-5 shrink-0 text-center text-xs font-medium text-muted-foreground">
+                    {index + 1}.
+                  </span>
+                  <Badge
+                    variant={index === 0 ? "default" : "secondary"}
+                    className="shrink-0 text-[10px] px-1.5 py-0"
+                  >
+                    {index === 0 ? "Primary" : "Fallback"}
+                  </Badge>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{modelName(id)}</p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {id}{ctx ? ` -- ${Math.round(ctx / 1000)}K` : ""}
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 shrink-0"
+                    disabled={index === 0}
+                    onClick={() => moveUp(index)}
+                    title="Move up"
+                  >
+                    <ArrowUp className="h-3 w-3" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 shrink-0"
+                    disabled={index === selectedModels.length - 1}
+                    onClick={() => moveDown(index)}
+                    title="Move down"
+                  >
+                    <ArrowDown className="h-3 w-3" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 shrink-0 text-muted-foreground hover:text-destructive"
+                    onClick={() => remove(index)}
+                    title="Remove"
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
         )}
+
+        {/* Available models list */}
+        <div className="max-h-48 overflow-y-auto rounded border bg-background">
+          {sorted.length === 0 && (
+            <div className="p-3 text-sm text-muted-foreground">
+              No models loaded. Fetch models above.
+            </div>
+          )}
+          {sorted.map((model) => (
+            <div
+              key={model.id}
+              className="flex items-center justify-between gap-3 border-b px-3 py-2 last:border-b-0"
+            >
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium">{model.name}</p>
+                <p className="truncate text-xs text-muted-foreground">
+                  {model.id}
+                  {model.contextLength ? ` -- ${Math.round(model.contextLength / 1000)}K` : ""}
+                </p>
+              </div>
+              <Switch
+                checked={selectedSet.has(model.id)}
+                onCheckedChange={(checked) => toggleModel(model.id, checked)}
+              />
+            </div>
+          ))}
+        </div>
       </div>
     );
   };
@@ -799,37 +822,18 @@ export default function Settings() {
                   <p className="text-sm text-destructive">{modelsError}</p>
                 )}
 
-                {renderModelSelector(
-                  "Default Model",
-                  defaultModel,
-                  (id) => setDefaultModel(id),
-                  false,
+                {renderDefaultModelSelector()}
+
+                {renderModelPicker(
+                  "Job Analysis Models",
+                  jobModels,
+                  setJobModels,
                 )}
 
-                {renderModelSelector(
-                  "Job Analysis Model",
-                  jobModel,
-                  (id) => setJobModel(id),
-                  true,
-                )}
-                {renderFallbackList(
-                  "Job Analysis Fallback Models",
-                  jobFallbacks,
-                  setJobFallbacks,
-                  effectiveModel(jobModel),
-                )}
-
-                {renderModelSelector(
-                  "Chat Model",
-                  chatModel,
-                  (id) => setChatModel(id),
-                  true,
-                )}
-                {renderFallbackList(
-                  "Chat Fallback Models",
-                  chatFallbacks,
-                  setChatFallbacks,
-                  effectiveModel(chatModel),
+                {renderModelPicker(
+                  "Chat Models",
+                  chatModels,
+                  setChatModels,
                 )}
               </div>
             </div>
