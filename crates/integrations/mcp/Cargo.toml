@@ -1,0 +1,47 @@
+[package]
+name = "rara-mcp"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+base.workspace = true
+futures.workspace = true
+keyring = { version = "^3.6", features = ["crypto-rust"] }
+oauth2.workspace = true
+rara-keyring-store.workspace = true
+rara-paths.workspace = true
+reqwest.workspace = true
+rmcp = { version = "^0.16", default-features = false, features = [
+    "auth",
+    "base64",
+    "client",
+    "macros",
+    "schemars",
+    "server",
+    "transport-child-process",
+    "transport-streamable-http-client-reqwest",
+    "transport-streamable-http-server",
+] }
+schemars.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2.workspace = true
+snafu.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+
+[lints]
+workspace = true
