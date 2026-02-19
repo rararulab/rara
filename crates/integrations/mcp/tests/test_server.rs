@@ -46,14 +46,10 @@ impl TestServer {
 #[tool_router]
 impl TestServer {
     #[tool(name = "echo", description = "Echo a message back")]
-    fn echo(&self, Parameters(req): Parameters<EchoRequest>) -> String {
-        req.message
-    }
+    fn echo(&self, Parameters(req): Parameters<EchoRequest>) -> String { req.message }
 
     #[tool(name = "add", description = "Add two numbers")]
-    fn add(&self, Parameters(req): Parameters<AddRequest>) -> String {
-        (req.a + req.b).to_string()
-    }
+    fn add(&self, Parameters(req): Parameters<AddRequest>) -> String { (req.a + req.b).to_string() }
 }
 
 #[tool_handler]
@@ -75,12 +71,12 @@ impl ServerHandler for TestServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, rmcp::ErrorData> {
         Ok(ListResourcesResult {
-            resources: vec![Annotated {
-                raw: RawResource::new("test://greeting", "greeting"),
+            resources:   vec![Annotated {
+                raw:         RawResource::new("test://greeting", "greeting"),
                 annotations: None,
             }],
             next_cursor: None,
-            meta: None,
+            meta:        None,
         })
     }
 
@@ -91,7 +87,10 @@ impl ServerHandler for TestServer {
     ) -> Result<ReadResourceResult, rmcp::ErrorData> {
         if request.uri == "test://greeting" {
             Ok(ReadResourceResult {
-                contents: vec![ResourceContents::text("Hello from test server!", request.uri)],
+                contents: vec![ResourceContents::text(
+                    "Hello from test server!",
+                    request.uri,
+                )],
             })
         } else {
             Err(rmcp::ErrorData::resource_not_found(

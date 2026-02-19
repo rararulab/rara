@@ -155,7 +155,7 @@ pub(crate) async fn handle_callback_query(
     state: &Arc<BotState>,
 ) -> Result<(), teloxide::RequestError> {
     // Always ack callback query so Telegram client stops spinner quickly.
-    state.bot.answer_callback_query(&q.id).await?;
+    state.bot.answer_callback_query(q.id.clone()).await?;
 
     let Some(data) = q.data.as_deref() else {
         return Ok(());
@@ -422,7 +422,9 @@ async fn handle_chat_message(
                 let html = markdown_to_telegram_html(&reply_text);
                 let chunks = chunk_message(&html, TELEGRAM_MAX_MESSAGE_LEN);
                 for (i, chunk) in chunks.into_iter().enumerate() {
-                    let mut req = state.bot.send_message(msg.chat.id, chunk)
+                    let mut req = state
+                        .bot
+                        .send_message(msg.chat.id, chunk)
                         .parse_mode(ParseMode::Html);
                     if i == 0 {
                         req = req.reply_to(msg.id);
@@ -503,7 +505,7 @@ async fn handle_photo_message(
     };
 
     // Download the photo via the Bot API.
-    let file = match state.bot.get_file(&photo.file.id).await {
+    let file = match state.bot.get_file(photo.file.id.clone()).await {
         Ok(f) => f,
         Err(e) => {
             typing_cancel.cancel();
@@ -562,7 +564,9 @@ async fn handle_photo_message(
                 let html = markdown_to_telegram_html(&reply_text);
                 let chunks = chunk_message(&html, TELEGRAM_MAX_MESSAGE_LEN);
                 for (i, chunk) in chunks.into_iter().enumerate() {
-                    let mut req = state.bot.send_message(msg.chat.id, chunk)
+                    let mut req = state
+                        .bot
+                        .send_message(msg.chat.id, chunk)
                         .parse_mode(ParseMode::Html);
                     if i == 0 {
                         req = req.reply_to(msg.id);

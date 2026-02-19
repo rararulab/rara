@@ -1,3 +1,17 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! Binary requirement checking and dependency installation.
 
 use std::path::Path;
@@ -13,46 +27,56 @@ use crate::{
 pub fn install_program_and_args(spec: &InstallSpec) -> Result<(&'static str, Vec<&str>)> {
     let (program, args) = match &spec.kind {
         InstallKind::Brew => {
-            let formula = spec
-                .formula
-                .as_deref()
-                .ok_or_else(|| InvalidInputSnafu { message: "brew install requires 'formula'" }.build())?;
+            let formula = spec.formula.as_deref().ok_or_else(|| {
+                InvalidInputSnafu {
+                    message: "brew install requires 'formula'",
+                }
+                .build()
+            })?;
             ("brew", vec!["install", formula])
-        },
+        }
         InstallKind::Npm => {
-            let package = spec
-                .package
-                .as_deref()
-                .ok_or_else(|| InvalidInputSnafu { message: "npm install requires 'package'" }.build())?;
+            let package = spec.package.as_deref().ok_or_else(|| {
+                InvalidInputSnafu {
+                    message: "npm install requires 'package'",
+                }
+                .build()
+            })?;
             ("npm", vec!["install", "-g", "--ignore-scripts", package])
-        },
+        }
         InstallKind::Go => {
-            let module = spec
-                .module
-                .as_deref()
-                .ok_or_else(|| InvalidInputSnafu { message: "go install requires 'module'" }.build())?;
+            let module = spec.module.as_deref().ok_or_else(|| {
+                InvalidInputSnafu {
+                    message: "go install requires 'module'",
+                }
+                .build()
+            })?;
             ("go", vec!["install", module])
-        },
+        }
         InstallKind::Cargo => {
-            let package = spec
-                .package
-                .as_deref()
-                .ok_or_else(|| InvalidInputSnafu { message: "cargo install requires 'package'" }.build())?;
+            let package = spec.package.as_deref().ok_or_else(|| {
+                InvalidInputSnafu {
+                    message: "cargo install requires 'package'",
+                }
+                .build()
+            })?;
             ("cargo", vec!["install", package])
-        },
+        }
         InstallKind::Uv => {
-            let package = spec
-                .package
-                .as_deref()
-                .ok_or_else(|| InvalidInputSnafu { message: "uv install requires 'package'" }.build())?;
+            let package = spec.package.as_deref().ok_or_else(|| {
+                InvalidInputSnafu {
+                    message: "uv install requires 'package'",
+                }
+                .build()
+            })?;
             ("uv", vec!["tool", "install", package])
-        },
+        }
         InstallKind::Download => {
             return InstallSnafu {
                 message: "download install kind is not yet supported for automatic installation",
             }
             .fail();
-        },
+        }
     };
 
     Ok((program, args))
@@ -102,9 +126,7 @@ fn is_executable(path: &Path) -> bool {
 }
 
 #[cfg(not(unix))]
-fn is_executable(_path: &Path) -> bool {
-    true
-}
+fn is_executable(_path: &Path) -> bool { true }
 
 /// Check all requirements for a skill and return eligibility info.
 pub fn check_requirements(meta: &SkillMetadata) -> SkillEligibility {
@@ -113,8 +135,8 @@ pub fn check_requirements(meta: &SkillMetadata) -> SkillEligibility {
     // If no requirements declared, skill is eligible
     if req.bins.is_empty() && req.any_bins.is_empty() {
         return SkillEligibility {
-            eligible: true,
-            missing_bins: Vec::new(),
+            eligible:        true,
+            missing_bins:    Vec::new(),
             install_options: Vec::new(),
         };
     }
@@ -155,8 +177,8 @@ pub fn check_requirements(meta: &SkillMetadata) -> SkillEligibility {
 #[derive(Debug)]
 pub struct InstallResult {
     pub success: bool,
-    pub stdout: String,
-    pub stderr: String,
+    pub stdout:  String,
+    pub stderr:  String,
 }
 
 /// Run an install spec command (e.g. `brew install <formula>`).
@@ -172,15 +194,16 @@ pub async fn run_install(spec: &InstallSpec) -> Result<InstallResult> {
 
     Ok(InstallResult {
         success: output.status.success(),
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        stdout:  String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr:  String::from_utf8_lossy(&output.stderr).to_string(),
     })
 }
 
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::types::SkillRequirements};
+    use super::*;
+    use crate::types::SkillRequirements;
 
     #[test]
     fn test_current_os() {
@@ -203,16 +226,16 @@ mod tests {
     #[test]
     fn test_no_requirements_is_eligible() {
         let meta = SkillMetadata {
-            name: "test".into(),
-            description: String::new(),
-            homepage: None,
-            license: None,
+            name:          "test".into(),
+            description:   String::new(),
+            homepage:      None,
+            license:       None,
             compatibility: None,
             allowed_tools: Vec::new(),
-            dockerfile: None,
-            requires: SkillRequirements::default(),
-            path: Default::default(),
-            source: None,
+            dockerfile:    None,
+            requires:      SkillRequirements::default(),
+            path:          Default::default(),
+            source:        None,
         };
         let elig = check_requirements(&meta);
         assert!(elig.eligible);
@@ -222,20 +245,20 @@ mod tests {
     #[test]
     fn test_missing_bin_is_blocked() {
         let meta = SkillMetadata {
-            name: "test".into(),
-            description: String::new(),
-            homepage: None,
-            license: None,
+            name:          "test".into(),
+            description:   String::new(),
+            homepage:      None,
+            license:       None,
             compatibility: None,
             allowed_tools: Vec::new(),
-            dockerfile: None,
-            requires: SkillRequirements {
-                bins: vec!["__nonexistent_binary_xyz__".into()],
+            dockerfile:    None,
+            requires:      SkillRequirements {
+                bins:     vec!["__nonexistent_binary_xyz__".into()],
                 any_bins: Vec::new(),
-                install: Vec::new(),
+                install:  Vec::new(),
             },
-            path: Default::default(),
-            source: None,
+            path:          Default::default(),
+            source:        None,
         };
         let elig = check_requirements(&meta);
         assert!(!elig.eligible);
@@ -245,20 +268,20 @@ mod tests {
     #[test]
     fn test_any_bins_one_present() {
         let meta = SkillMetadata {
-            name: "test".into(),
-            description: String::new(),
-            homepage: None,
-            license: None,
+            name:          "test".into(),
+            description:   String::new(),
+            homepage:      None,
+            license:       None,
             compatibility: None,
             allowed_tools: Vec::new(),
-            dockerfile: None,
-            requires: SkillRequirements {
-                bins: Vec::new(),
+            dockerfile:    None,
+            requires:      SkillRequirements {
+                bins:     Vec::new(),
                 any_bins: vec!["ls".into(), "__nonexistent__".into()],
-                install: Vec::new(),
+                install:  Vec::new(),
             },
-            path: Default::default(),
-            source: None,
+            path:          Default::default(),
+            source:        None,
         };
         #[cfg(unix)]
         {
@@ -270,20 +293,20 @@ mod tests {
     #[test]
     fn test_any_bins_none_present() {
         let meta = SkillMetadata {
-            name: "test".into(),
-            description: String::new(),
-            homepage: None,
-            license: None,
+            name:          "test".into(),
+            description:   String::new(),
+            homepage:      None,
+            license:       None,
             compatibility: None,
             allowed_tools: Vec::new(),
-            dockerfile: None,
-            requires: SkillRequirements {
-                bins: Vec::new(),
+            dockerfile:    None,
+            requires:      SkillRequirements {
+                bins:     Vec::new(),
                 any_bins: vec!["__nope1__".into(), "__nope2__".into()],
-                install: Vec::new(),
+                install:  Vec::new(),
             },
-            path: Default::default(),
-            source: None,
+            path:          Default::default(),
+            source:        None,
         };
         let elig = check_requirements(&meta);
         assert!(!elig.eligible);
@@ -293,51 +316,51 @@ mod tests {
     #[test]
     fn test_install_options_filtered_by_os() {
         let meta = SkillMetadata {
-            name: "test".into(),
-            description: String::new(),
-            homepage: None,
-            license: None,
+            name:          "test".into(),
+            description:   String::new(),
+            homepage:      None,
+            license:       None,
             compatibility: None,
             allowed_tools: Vec::new(),
-            dockerfile: None,
-            requires: SkillRequirements {
-                bins: vec!["__missing__".into()],
+            dockerfile:    None,
+            requires:      SkillRequirements {
+                bins:     vec!["__missing__".into()],
                 any_bins: Vec::new(),
-                install: vec![
+                install:  vec![
                     InstallSpec {
-                        kind: InstallKind::Brew,
+                        kind:    InstallKind::Brew,
                         formula: Some("test".into()),
                         package: None,
-                        module: None,
-                        url: None,
-                        bins: vec!["__missing__".into()],
-                        os: vec!["darwin".into()],
-                        label: None,
+                        module:  None,
+                        url:     None,
+                        bins:    vec!["__missing__".into()],
+                        os:      vec!["darwin".into()],
+                        label:   None,
                     },
                     InstallSpec {
-                        kind: InstallKind::Npm,
+                        kind:    InstallKind::Npm,
                         formula: None,
                         package: Some("test".into()),
-                        module: None,
-                        url: None,
-                        bins: vec!["__missing__".into()],
-                        os: vec!["linux".into()],
-                        label: None,
+                        module:  None,
+                        url:     None,
+                        bins:    vec!["__missing__".into()],
+                        os:      vec!["linux".into()],
+                        label:   None,
                     },
                     InstallSpec {
-                        kind: InstallKind::Cargo,
+                        kind:    InstallKind::Cargo,
                         formula: None,
                         package: Some("test".into()),
-                        module: None,
-                        url: None,
-                        bins: vec!["__missing__".into()],
-                        os: Vec::new(), // all platforms
-                        label: None,
+                        module:  None,
+                        url:     None,
+                        bins:    vec!["__missing__".into()],
+                        os:      Vec::new(), // all platforms
+                        label:   None,
                     },
                 ],
             },
-            path: Default::default(),
-            source: None,
+            path:          Default::default(),
+            source:        None,
         };
         let elig = check_requirements(&meta);
         assert!(!elig.eligible);
@@ -357,14 +380,14 @@ mod tests {
     #[test]
     fn test_install_command_preview() {
         let spec = InstallSpec {
-            kind: InstallKind::Cargo,
+            kind:    InstallKind::Cargo,
             formula: None,
             package: Some("ripgrep".into()),
-            module: None,
-            url: None,
-            bins: vec!["rg".into()],
-            os: Vec::new(),
-            label: None,
+            module:  None,
+            url:     None,
+            bins:    vec!["rg".into()],
+            os:      Vec::new(),
+            label:   None,
         };
 
         let preview = install_command_preview(&spec).unwrap();
@@ -374,14 +397,14 @@ mod tests {
     #[test]
     fn test_npm_install_includes_ignore_scripts() {
         let spec = InstallSpec {
-            kind: InstallKind::Npm,
+            kind:    InstallKind::Npm,
             formula: None,
             package: Some("@anthropic/qmd".into()),
-            module: None,
-            url: None,
-            bins: vec!["qmd".into()],
-            os: Vec::new(),
-            label: None,
+            module:  None,
+            url:     None,
+            bins:    vec!["qmd".into()],
+            os:      Vec::new(),
+            label:   None,
         };
 
         let (program, args) = install_program_and_args(&spec).unwrap();

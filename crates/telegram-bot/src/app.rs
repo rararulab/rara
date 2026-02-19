@@ -105,7 +105,8 @@ impl BotApp {
         };
 
         // Build reqwest client with extended timeout for long polling.
-        let http_client = reqwest::Client::builder()
+        // Use teloxide's re-exported reqwest to match the version teloxide expects.
+        let http_client = teloxide::net::default_reqwest_settings()
             .timeout(std::time::Duration::from_secs(45))
             .build()
             .whatever_context("failed to build HTTP client")?;

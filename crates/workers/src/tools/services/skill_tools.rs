@@ -17,7 +17,7 @@
 use async_trait::async_trait;
 use rara_agents::tool_registry::AgentTool;
 use rara_skills::registry::InMemoryRegistry;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Format a SKILL.md file with YAML frontmatter (new format).
 fn format_skill_md(
@@ -146,12 +146,11 @@ impl AgentTool for CreateSkillTool {
     }
 
     async fn execute(&self, params: Value) -> rara_agents::err::Result<Value> {
-        let name = params
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
+        let name = params.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
+            rara_agents::err::Error::Other {
                 message: "missing required parameter: name".into(),
-            })?;
+            }
+        })?;
 
         let description = params
             .get("description")
@@ -183,31 +182,25 @@ impl AgentTool for CreateSkillTool {
         // Write to skills_dir()/{name}/SKILL.md.
         let skills_dir = rara_paths::skills_dir();
         let skill_dir = skills_dir.join(name);
-        std::fs::create_dir_all(&skill_dir).map_err(|e| {
-            rara_agents::err::Error::Other {
-                message: format!("failed to create skill directory: {e}").into(),
-            }
+        std::fs::create_dir_all(&skill_dir).map_err(|e| rara_agents::err::Error::Other {
+            message: format!("failed to create skill directory: {e}").into(),
         })?;
 
         let file_path = skill_dir.join("SKILL.md");
-        std::fs::write(&file_path, &content).map_err(|e| {
-            rara_agents::err::Error::Other {
-                message: format!("failed to write skill file: {e}").into(),
-            }
+        std::fs::write(&file_path, &content).map_err(|e| rara_agents::err::Error::Other {
+            message: format!("failed to write skill file: {e}").into(),
         })?;
 
         // Parse the file back and insert into registry.
-        let raw = std::fs::read_to_string(&file_path).map_err(|e| {
-            rara_agents::err::Error::Other {
+        let raw =
+            std::fs::read_to_string(&file_path).map_err(|e| rara_agents::err::Error::Other {
                 message: format!("failed to read skill file: {e}").into(),
+            })?;
+        let mut meta = rara_skills::parse::parse_metadata(&raw, &skill_dir).map_err(|e| {
+            rara_agents::err::Error::Other {
+                message: format!("failed to parse skill file: {e}").into(),
             }
         })?;
-        let mut meta =
-            rara_skills::parse::parse_metadata(&raw, &skill_dir).map_err(|e| {
-                rara_agents::err::Error::Other {
-                    message: format!("failed to parse skill file: {e}").into(),
-                }
-            })?;
         meta.source = Some(rara_skills::types::SkillSource::Personal);
 
         self.registry.insert(meta);
@@ -254,19 +247,19 @@ impl AgentTool for DeleteSkillTool {
     }
 
     async fn execute(&self, params: Value) -> rara_agents::err::Result<Value> {
-        let name = params
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
-                message: "missing required parameter: name".into(),
-            })?;
-
-        // Get the skill path before removing from registry.
-        let meta = self.registry.get(name).ok_or_else(|| {
+        let name = params.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
             rara_agents::err::Error::Other {
-                message: format!("skill not found: {name}").into(),
+                message: "missing required parameter: name".into(),
             }
         })?;
+
+        // Get the skill path before removing from registry.
+        let meta = self
+            .registry
+            .get(name)
+            .ok_or_else(|| rara_agents::err::Error::Other {
+                message: format!("skill not found: {name}").into(),
+            })?;
         let skill_path = meta.path.clone();
 
         // Remove the directory (best-effort).

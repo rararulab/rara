@@ -28,17 +28,17 @@ rara-domain-analytics = { workspace = true }
 rara-domain-application = { workspace = true }
 rara-domain-chat = { workspace = true }
 rara-domain-interview = { workspace = true }
-rara-domain-skill = { workspace = true }
 rara-domain-job = { workspace = true }
 rara-domain-resume = { workspace = true }
 rara-domain-scheduler = { workspace = true }
 rara-domain-shared = { workspace = true }
+rara-domain-skill = { workspace = true }
 rara-domain-typst = { workspace = true }
 rara-memory = { workspace = true }
 rara-paths = { workspace = true }
-rara-skills = { workspace = true }
 rara-server = { workspace = true }
 rara-sessions = { workspace = true }
+rara-skills = { workspace = true }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

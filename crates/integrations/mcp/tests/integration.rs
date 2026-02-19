@@ -19,13 +19,7 @@ use test_server::TestServer;
 /// Built once per test process via `LazyLock`.
 static TEST_SERVER_BIN: LazyLock<PathBuf> = LazyLock::new(|| {
     let status = std::process::Command::new("cargo")
-        .args([
-            "build",
-            "--example",
-            "test_mcp_server",
-            "-p",
-            "rara-mcp",
-        ])
+        .args(["build", "--example", "test_mcp_server", "-p", "rara-mcp"])
         .status()
         .expect("failed to run `cargo build --example test_mcp_server`");
     assert!(status.success(), "test server example failed to compile");
@@ -102,8 +96,14 @@ async fn test_list_tools() -> Result<()> {
     let result = client.list_tools(None, TIMEOUT).await?;
 
     let names: Vec<String> = result.tools.iter().map(|t| t.name.to_string()).collect();
-    assert!(names.iter().any(|n| n == "echo"), "expected `echo` tool, got {names:?}");
-    assert!(names.iter().any(|n| n == "add"), "expected `add` tool, got {names:?}");
+    assert!(
+        names.iter().any(|n| n == "echo"),
+        "expected `echo` tool, got {names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n == "add"),
+        "expected `add` tool, got {names:?}"
+    );
     Ok(())
 }
 
@@ -187,7 +187,7 @@ async fn test_read_resource() -> Result<()> {
         .read_resource(
             ReadResourceRequestParams {
                 meta: None,
-                uri: "test://greeting".to_string(),
+                uri:  "test://greeting".to_string(),
             },
             TIMEOUT,
         )
@@ -209,11 +209,11 @@ async fn test_read_resource() -> Result<()> {
 ///
 /// Returns `(url, CancellationToken)`. Drop the token to stop the server.
 async fn start_http_server() -> Result<(String, tokio_util::sync::CancellationToken)> {
-    use rmcp::transport::streamable_http_server::{
-        StreamableHttpServerConfig, StreamableHttpService,
-        session::local::LocalSessionManager,
-    };
     use std::sync::Arc;
+
+    use rmcp::transport::streamable_http_server::{
+        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+    };
 
     let ct = tokio_util::sync::CancellationToken::new();
 
@@ -344,7 +344,7 @@ async fn test_http_read_resource() -> Result<()> {
         .read_resource(
             ReadResourceRequestParams {
                 meta: None,
-                uri: "test://greeting".to_string(),
+                uri:  "test://greeting".to_string(),
             },
             TIMEOUT,
         )

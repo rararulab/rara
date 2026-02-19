@@ -46,7 +46,11 @@ struct TransitionRequest {
 pub fn routes(service: ApplicationService) -> OpenApiRouter {
     OpenApiRouter::new()
         .routes(routes!(create_application, list_applications))
-        .routes(routes!(get_application, update_application, delete_application))
+        .routes(routes!(
+            get_application,
+            update_application,
+            delete_application
+        ))
         .routes(routes!(transition_status))
         .routes(routes!(get_status_history))
         .with_state(service)

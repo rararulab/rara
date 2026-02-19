@@ -1,9 +1,23 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! Core types for the skills system.
 //!
-//! Defines the primary data structures: [`SkillMetadata`] (frontmatter), [`SkillContent`]
-//! (metadata + body), [`SkillsManifest`] and [`RepoEntry`] (installed repo tracking),
-//! [`SkillRequirements`] and [`InstallSpec`] (binary dependencies), and
-//! [`SkillEligibility`] (requirement check results).
+//! Defines the primary data structures: [`SkillMetadata`] (frontmatter),
+//! [`SkillContent`] (metadata + body), [`SkillsManifest`] and [`RepoEntry`]
+//! (installed repo tracking), [`SkillRequirements`] and [`InstallSpec`] (binary
+//! dependencies), and [`SkillEligibility`] (requirement check results).
 
 use std::path::PathBuf;
 
@@ -252,33 +266,21 @@ pub struct SkillMetadataLegacy {
     pub enabled:     bool,
 }
 
-fn default_enabled() -> bool {
-    true
-}
+fn default_enabled() -> bool { true }
 
 impl Skill {
     #[must_use]
-    pub fn name(&self) -> &str {
-        &self.metadata.name
-    }
+    pub fn name(&self) -> &str { &self.metadata.name }
 
     #[must_use]
-    pub fn description(&self) -> &str {
-        &self.metadata.description
-    }
+    pub fn description(&self) -> &str { &self.metadata.description }
 
     #[must_use]
-    pub fn tools(&self) -> &[String] {
-        &self.metadata.tools
-    }
+    pub fn tools(&self) -> &[String] { &self.metadata.tools }
 
     #[must_use]
-    pub fn trigger_pattern(&self) -> Option<&str> {
-        self.metadata.trigger.as_deref()
-    }
+    pub fn trigger_pattern(&self) -> Option<&str> { self.metadata.trigger.as_deref() }
 
     #[must_use]
-    pub fn is_enabled(&self) -> bool {
-        self.metadata.enabled
-    }
+    pub fn is_enabled(&self) -> bool { self.metadata.enabled }
 }

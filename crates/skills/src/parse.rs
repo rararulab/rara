@@ -1,7 +1,21 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! SKILL.md parser -- frontmatter extraction and metadata deserialization.
 //!
-//! Splits a `SKILL.md` file at `---` delimiters into YAML frontmatter and Markdown body,
-//! deserializes the frontmatter into [`SkillMetadata`],
+//! Splits a `SKILL.md` file at `---` delimiters into YAML frontmatter and
+//! Markdown body, deserializes the frontmatter into [`SkillMetadata`],
 //! validates skill names, and merges OpenClaw-style requirements when present.
 
 use std::{
@@ -97,7 +111,7 @@ pub fn read_frontmatter(path: &Path) -> Result<String> {
                 return MissingFrontmatterSnafu {
                     path: path.display().to_string(),
                 }
-                .fail()
+                .fail();
             }
         }
     };
@@ -149,7 +163,8 @@ pub fn parse_metadata_from_file(skill_md: &Path, skill_dir: &Path) -> Result<Ski
 
 // ── OpenClaw metadata extraction ────────────────────────────────────────────
 
-/// Helper struct to extract `metadata.openclaw.requires` and `metadata.openclaw.install`.
+/// Helper struct to extract `metadata.openclaw.requires` and
+/// `metadata.openclaw.install`.
 #[derive(Deserialize, Default)]
 struct OpenClawRoot {
     #[serde(default)]
@@ -166,7 +181,7 @@ struct OpenClawMetadataWrap {
     clawdbot: Option<OpenClawMeta>,
     /// Moltbot namespace (some openclaw skills use this).
     #[serde(default)]
-    moltbot: Option<OpenClawMeta>,
+    moltbot:  Option<OpenClawMeta>,
 }
 
 #[derive(Deserialize, Default)]
@@ -174,13 +189,13 @@ struct OpenClawMeta {
     #[serde(default)]
     requires: Option<OpenClawRequires>,
     #[serde(default)]
-    install: Vec<OpenClawInstallSpec>,
+    install:  Vec<OpenClawInstallSpec>,
 }
 
 #[derive(Deserialize, Default)]
 struct OpenClawRequires {
     #[serde(default)]
-    bins: Vec<String>,
+    bins:     Vec<String>,
     #[serde(default, rename = "anyBins")]
     any_bins: Vec<String>,
 }
@@ -188,28 +203,29 @@ struct OpenClawRequires {
 #[derive(Deserialize)]
 struct OpenClawInstallSpec {
     #[serde(default)]
-    kind: String,
+    kind:        String,
     #[serde(default)]
-    formula: Option<String>,
+    formula:     Option<String>,
     #[serde(default)]
-    package: Option<String>,
+    package:     Option<String>,
     /// openclaw uses `pkg` for go/cargo installs.
     #[serde(default)]
-    pkg: Option<String>,
+    pkg:         Option<String>,
     #[serde(default, rename = "module")]
     module_path: Option<String>,
     #[serde(default)]
-    url: Option<String>,
+    url:         Option<String>,
     #[serde(default)]
-    bins: Vec<String>,
+    bins:        Vec<String>,
     #[serde(default)]
-    os: Vec<String>,
+    os:          Vec<String>,
     #[serde(default)]
-    label: Option<String>,
+    label:       Option<String>,
 }
 
-/// If the top-level `requires` is empty but `metadata.openclaw.requires`/`install` exist,
-/// merge them into `SkillMetadata.requires`.
+/// If the top-level `requires` is empty but
+/// `metadata.openclaw.requires`/`install` exist, merge them into
+/// `SkillMetadata.requires`.
 fn merge_openclaw_requires(frontmatter: &str, meta: &mut SkillMetadata) {
     // Only merge if top-level requires is empty
     if !meta.requires.bins.is_empty()
@@ -252,7 +268,7 @@ fn merge_openclaw_requires(frontmatter: &str, meta: &mut SkillMetadata) {
     for spec in oc.install {
         if let Some(kind) = parse_kind(&spec.kind) {
             meta.requires.install.push(InstallSpec {
-                kind: kind.clone(),
+                kind:    kind.clone(),
                 formula: spec.formula,
                 package: spec.package.or_else(|| {
                     if kind == InstallKind::Npm || kind == InstallKind::Cargo {
@@ -261,17 +277,17 @@ fn merge_openclaw_requires(frontmatter: &str, meta: &mut SkillMetadata) {
                         None
                     }
                 }),
-                module: spec.module_path.or_else(|| {
+                module:  spec.module_path.or_else(|| {
                     if kind == InstallKind::Go {
                         spec.pkg.clone()
                     } else {
                         None
                     }
                 }),
-                url: spec.url,
-                bins: spec.bins,
-                os: spec.os,
-                label: spec.label,
+                url:     spec.url,
+                bins:    spec.bins,
+                os:      spec.os,
+                label:   spec.label,
             });
         }
     }
@@ -283,13 +299,13 @@ fn merge_openclaw_requires(frontmatter: &str, meta: &mut SkillMetadata) {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct SkillMetaJson {
     #[serde(default)]
-    pub owner: Option<String>,
+    pub owner:        Option<String>,
     #[serde(default)]
-    pub slug: Option<String>,
+    pub slug:         Option<String>,
     #[serde(default, rename = "displayName")]
     pub display_name: Option<String>,
     #[serde(default)]
-    pub latest: Option<SkillMetaVersion>,
+    pub latest:       Option<SkillMetaVersion>,
 }
 
 /// Version info from `_meta.json`.
@@ -334,9 +350,9 @@ fn split_frontmatter(content: &str, path: &str) -> Result<(String, String)> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use rstest::rstest;
+
+    use super::*;
 
     #[rstest]
     #[case("my-skill", true)]
@@ -533,7 +549,8 @@ Body.
 
     #[test]
     fn test_allowed_tools_hyphenated() {
-        let content = "---\nname: git-skill\ndescription: Git helper\nallowed-tools:\n  - Bash(git:*)\n  - Read\n---\nBody.\n";
+        let content = "---\nname: git-skill\ndescription: Git helper\nallowed-tools:\n  - \
+                       Bash(git:*)\n  - Read\n---\nBody.\n";
         let meta = parse_metadata(content, Path::new("/tmp/git-skill")).unwrap();
         assert_eq!(meta.allowed_tools, vec!["Bash(git:*)", "Read"]);
     }

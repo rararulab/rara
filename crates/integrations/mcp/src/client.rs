@@ -1,3 +1,17 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::{
     collections::HashMap, ffi::OsString, io, path::PathBuf, process::Stdio, sync::Arc,
     time::Duration,
@@ -298,8 +312,8 @@ impl RmcpClient {
     ///
     /// # Arguments
     ///
-    /// * `params`  — Optional pagination cursor. Pass `None` to fetch the
-    ///   first page.
+    /// * `params`  — Optional pagination cursor. Pass `None` to fetch the first
+    ///   page.
     /// * `timeout` — Maximum wait duration for the server response. When
     ///   `None`, waits indefinitely.
     #[tracing::instrument(skip_all)]
@@ -323,8 +337,8 @@ impl RmcpClient {
     ///
     /// # Arguments
     ///
-    /// * `params`  — Optional pagination cursor. Pass `None` to fetch the
-    ///   first page.
+    /// * `params`  — Optional pagination cursor. Pass `None` to fetch the first
+    ///   page.
     /// * `timeout` — Maximum wait duration for the server response. When
     ///   `None`, waits indefinitely.
     #[tracing::instrument(skip_all)]
@@ -335,8 +349,7 @@ impl RmcpClient {
     ) -> Result<ListToolsWithConnectorIdResult> {
         self.refresh_oauth_if_needed().await;
         let service = self.service().await?;
-        let result =
-            run_with_timeout(service.list_tools(params), timeout, "tools/list").await?;
+        let result = run_with_timeout(service.list_tools(params), timeout, "tools/list").await?;
 
         let tools = result
             .tools
@@ -431,8 +444,8 @@ impl RmcpClient {
     /// # Arguments
     ///
     /// * `name`      — The tool name as advertised in `tools/list`.
-    /// * `arguments` — Optional JSON object of tool arguments. Returns an
-    ///   error if the value is not a JSON object (e.g. an array or scalar).
+    /// * `arguments` — Optional JSON object of tool arguments. Returns an error
+    ///   if the value is not a JSON object (e.g. an array or scalar).
     /// * `timeout`   — Maximum wait duration for the server response.
     #[tracing::instrument(skip_all, fields(tool = %name))]
     pub async fn call_tool(

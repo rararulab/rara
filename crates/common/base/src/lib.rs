@@ -14,5 +14,6 @@
 
 pub mod arc_cow;
 pub mod env;
+pub mod process_group;
 pub mod readable_size;
 pub mod shared_string;

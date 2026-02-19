@@ -19,13 +19,13 @@ async-trait.workspace = true
 dirs.workspace = true
 flate2 = "1"
 notify-debouncer-full = "0.5"
+rara-model.workspace = true
 rara-paths.workspace = true
 regex = "1"
 reqwest = { workspace = true, features = ["json"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_yaml = "0.9"
-rara-model.workspace = true
 sha2.workspace = true
 snafu.workspace = true
 sqlx.workspace = true

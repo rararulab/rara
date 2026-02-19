@@ -1,15 +1,32 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! Skill installation from GitHub repositories.
 //!
-//! Downloads a repo as an HTTP tarball, extracts it, auto-detects the repo format
-//! (`SKILL.md`, Claude Code `.claude-plugin/`, etc.), scans for skills, and records
-//! the installation in a persistent [`ManifestStore`].
+//! Downloads a repo as an HTTP tarball, extracts it, auto-detects the repo
+//! format (`SKILL.md`, Claude Code `.claude-plugin/`, etc.), scans for skills,
+//! and records the installation in a persistent [`ManifestStore`].
 
 use std::path::{Component, Path, PathBuf};
 
 use snafu::ResultExt;
 
 use crate::{
-    error::{ArchiveSnafu, InstallSnafu, InvalidInputSnafu, IoSnafu, NotFoundSnafu, RequestSnafu, Result, TaskJoinSnafu},
+    error::{
+        ArchiveSnafu, InstallSnafu, InvalidInputSnafu, IoSnafu, NotFoundSnafu, RequestSnafu,
+        Result, TaskJoinSnafu,
+    },
     formats::{PluginFormat, detect_format, scan_with_adapter},
     manifest::ManifestStore,
     parse,
@@ -76,7 +93,9 @@ pub async fn install_skill(source: &str, install_dir: &Path) -> Result<Vec<Skill
             None => {
                 let _ = tokio::fs::remove_dir_all(&target).await;
                 return InstallSnafu {
-                    message: format!("no adapter available for format '{format}' in repo '{source}'"),
+                    message: format!(
+                        "no adapter available for format '{format}' in repo '{source}'"
+                    ),
                 }
                 .fail();
             }
@@ -124,9 +143,12 @@ pub async fn remove_repo(source: &str, install_dir: &Path) -> Result<()> {
     let store = ManifestStore::new(manifest_path);
     let mut manifest = store.load()?;
 
-    let repo = manifest
-        .find_repo(source)
-        .ok_or_else(|| NotFoundSnafu { name: format!("repo '{source}' not found in manifest") }.build())?;
+    let repo = manifest.find_repo(source).ok_or_else(|| {
+        NotFoundSnafu {
+            name: format!("repo '{source}' not found in manifest"),
+        }
+        .build()
+    })?;
     let dir = install_dir.join(&repo.repo_name);
 
     if dir.exists() {
@@ -276,7 +298,9 @@ async fn scan_repo_skills(
     // Check root SKILL.md (single-skill repo).
     let root_skill_md = repo_dir.join("SKILL.md");
     if root_skill_md.is_file() {
-        let content = tokio::fs::read_to_string(&root_skill_md).await.context(IoSnafu)?;
+        let content = tokio::fs::read_to_string(&root_skill_md)
+            .await
+            .context(IoSnafu)?;
         let mut meta = parse::parse_metadata(&content, repo_dir)?;
         meta.source = Some(crate::types::SkillSource::Registry);
 

@@ -35,17 +35,17 @@ pub struct AppState {
     pub ai_service: rara_ai::service::AiService,
 
     // -- domain services --
-    pub resume_service: rara_domain_resume::ResumeAppService,
+    pub resume_service:      rara_domain_resume::ResumeAppService,
     pub application_service: rara_domain_application::service::ApplicationService,
-    pub interview_service: rara_domain_interview::service::InterviewService,
-    pub scheduler_service: rara_domain_scheduler::service::SchedulerService,
-    pub analytics_service: rara_domain_analytics::service::AnalyticsService,
-    pub job_service: rara_domain_job::service::JobService,
-    pub chat_service: rara_domain_chat::service::ChatService,
-    pub typst_service: rara_domain_typst::service::TypstService,
+    pub interview_service:   rara_domain_interview::service::InterviewService,
+    pub scheduler_service:   rara_domain_scheduler::service::SchedulerService,
+    pub analytics_service:   rara_domain_analytics::service::AnalyticsService,
+    pub job_service:         rara_domain_job::service::JobService,
+    pub chat_service:        rara_domain_chat::service::ChatService,
+    pub typst_service:       rara_domain_typst::service::TypstService,
 
     // -- shared --
-    pub settings_svc: rara_domain_shared::settings::SettingsSvc,
+    pub settings_svc:  rara_domain_shared::settings::SettingsSvc,
     pub notify_client: rara_domain_shared::notify::client::NotifyClient,
 
     // -- LLM provider --
@@ -65,7 +65,7 @@ pub struct AppState {
     pub skill_registry: rara_skills::registry::InMemoryRegistry,
 
     // -- worker coordination --
-    pub analyze_notify: Arc<RwLock<Option<NotifyHandle>>>,
+    pub analyze_notify:   Arc<RwLock<Option<NotifyHandle>>>,
     pub proactive_notify: Arc<RwLock<Option<IntervalOrNotifyHandle>>>,
 }
 
@@ -431,7 +431,7 @@ fn merge_openapi_router(
 /// cached for subsequent calls via [`OnceCell`].
 struct SettingsOpenRouterLoader {
     settings: rara_domain_shared::settings::SettingsSvc,
-    client: OnceCell<OpenRouterClient>,
+    client:   OnceCell<OpenRouterClient>,
 }
 
 impl SettingsOpenRouterLoader {

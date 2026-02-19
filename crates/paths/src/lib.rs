@@ -18,6 +18,8 @@ use std::{
 };
 
 static HOME_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+// TODO: refactor me
 const DEFAULT_AGENT_SOUL_PROMPT: &str = include_str!("../../../prompts/agent/soul.md");
 
 /// A custom data directory override, set only by `set_custom_data_dir`.

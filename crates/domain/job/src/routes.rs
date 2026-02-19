@@ -24,9 +24,9 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
-use utoipa_axum::{router::OpenApiRouter, routes};
 use opendal::Operator;
 use tracing::instrument;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::{

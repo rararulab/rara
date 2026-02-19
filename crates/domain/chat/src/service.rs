@@ -93,23 +93,23 @@ fn resolve_soul_prompt(settings: &Settings) -> Option<String> {
 #[derive(Clone)]
 pub struct ChatService {
     /// Persistence layer for sessions, messages, and channel bindings.
-    session_repo:    Arc<dyn SessionRepository>,
+    session_repo:   Arc<dyn SessionRepository>,
     /// Factory for creating OpenRouter API clients.
-    llm_provider:    OpenRouterLoaderRef,
+    llm_provider:   OpenRouterLoaderRef,
     /// Registry of tools available to the agent during execution.
-    tools:           Arc<ToolRegistry>,
+    tools:          Arc<ToolRegistry>,
     /// Watch receiver for runtime settings — provides dynamic model and
     /// system prompt configuration.
-    settings_rx:     watch::Receiver<Settings>,
+    settings_rx:    watch::Receiver<Settings>,
     /// Optional memory manager for pre-fetching relevant context on first
     /// turn of a session.
-    memory_manager:  Option<Arc<MemoryManager>>,
+    memory_manager: Option<Arc<MemoryManager>>,
     /// Cached catalog of models fetched from OpenRouter.
-    model_catalog:   ModelCatalog,
+    model_catalog:  ModelCatalog,
     /// Settings service for persisting favorite models.
-    settings_svc:    rara_domain_shared::settings::SettingsSvc,
+    settings_svc:   rara_domain_shared::settings::SettingsSvc,
     /// Skills registry for available skills listing in system prompt.
-    skill_registry:  rara_skills::registry::InMemoryRegistry,
+    skill_registry: rara_skills::registry::InMemoryRegistry,
 }
 
 impl ChatService {
@@ -435,7 +435,10 @@ impl ChatService {
 
         // 4a. Check if context compaction is needed
         let history_tokens = estimate_history_tokens(&history);
-        let model_context = self.model_catalog.get_context_length(&model).unwrap_or(128_000);
+        let model_context = self
+            .model_catalog
+            .get_context_length(&model)
+            .unwrap_or(128_000);
         let threshold = (model_context as f64 * 0.80) as usize;
 
         let history = if history_tokens > threshold {
@@ -535,12 +538,13 @@ impl ChatService {
             .history(openrouter_history)
             .build();
 
-        let result = runner
-            .run(effective_tools, None)
-            .await
-            .map_err(|e| ChatError::AgentError {
-                message: e.to_string(),
-            })?;
+        let result =
+            runner
+                .run(effective_tools, None)
+                .await
+                .map_err(|e| ChatError::AgentError {
+                    message: e.to_string(),
+                })?;
 
         // 6. Extract assistant text from response
         let assistant_text = result
@@ -783,10 +787,9 @@ impl ChatService {
             .join("\n");
 
         let summary_prompt = format!(
-            "Summarize the following conversation history into a concise summary. \
-             Preserve key facts, decisions, user preferences, and action items. \
-             Keep it under 500 words. Respond in the same language as the conversation.\n\n\
-             {history_text}"
+            "Summarize the following conversation history into a concise summary. Preserve key \
+             facts, decisions, user preferences, and action items. Keep it under 500 words. \
+             Respond in the same language as the conversation.\n\n{history_text}"
         );
 
         // Single-turn LLM call for summarization (no tools)
@@ -817,8 +820,7 @@ impl ChatService {
             .to_owned();
 
         // Create summary message
-        let summary_msg =
-            ChatMessage::assistant(format!("[Conversation Summary]\n{summary}"));
+        let summary_msg = ChatMessage::assistant(format!("[Conversation Summary]\n{summary}"));
 
         // Replace old messages: clear, then insert the summary
         self.session_repo
@@ -978,9 +980,7 @@ fn truncate_preview(s: &str, max_len: usize) -> String {
 // ---------------------------------------------------------------------------
 
 /// Rough token estimate: ~3 chars per token (balanced for mixed EN/CN content).
-fn estimate_tokens(text: &str) -> usize {
-    (text.chars().count() + 2) / 3
-}
+fn estimate_tokens(text: &str) -> usize { (text.chars().count() + 2) / 3 }
 
 /// Estimate total tokens for a message history.
 ///

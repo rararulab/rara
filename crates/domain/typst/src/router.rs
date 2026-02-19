@@ -69,24 +69,22 @@ pub fn routes(service: TypstService) -> OpenApiRouter {
 /// Build Typst OpenAPI documentation without constructing OpenApiRouter.
 pub fn openapi_doc() -> utoipa::openapi::OpenApi {
     #[derive(OpenApi)]
-    #[openapi(
-        paths(
-            register_project,
-            list_projects,
-            get_project,
-            delete_project,
-            import_from_git,
-            sync_git,
-            list_files,
-            read_file,
-            write_file,
-            compile_project,
-            list_renders,
-            get_render_pdf,
-            list_recipes,
-            run_project_command
-        )
-    )]
+    #[openapi(paths(
+        register_project,
+        list_projects,
+        get_project,
+        delete_project,
+        import_from_git,
+        sync_git,
+        list_files,
+        read_file,
+        write_file,
+        compile_project,
+        list_renders,
+        get_render_pdf,
+        list_recipes,
+        run_project_command
+    ))]
     struct TypstApiDoc;
 
     TypstApiDoc::openapi()
@@ -353,7 +351,7 @@ async fn write_file(
 /// JSON response body for file content endpoints.
 #[derive(serde::Serialize, utoipa::ToSchema)]
 struct FileContent {
-    path: String,
+    path:    String,
     content: String,
 }
 
@@ -453,7 +451,7 @@ async fn list_recipes(
 /// Exactly one of `recipe` or `command` must be provided.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct RunRequest {
-    recipe: Option<String>,
+    recipe:  Option<String>,
     command: Option<String>,
 }
 

@@ -68,11 +68,11 @@ pub struct SkillSummary {
 /// Request body for `POST /api/v1/skills`.
 #[derive(Debug, Deserialize)]
 pub struct CreateSkillRequest {
-    pub name:        String,
-    pub description: String,
+    pub name:          String,
+    pub description:   String,
     #[serde(default)]
     pub allowed_tools: Vec<String>,
-    pub prompt:      String,
+    pub prompt:        String,
 }
 
 // ---------------------------------------------------------------------------
@@ -84,10 +84,7 @@ pub struct CreateSkillRequest {
 pub fn skill_routes(registry: InMemoryRegistry) -> Router {
     Router::new()
         .route("/api/v1/skills", get(list_skills).post(create_skill))
-        .route(
-            "/api/v1/skills/{name}",
-            get(get_skill).delete(delete_skill),
-        )
+        .route("/api/v1/skills/{name}", get(get_skill).delete(delete_skill))
         .with_state(registry)
 }
 
@@ -102,7 +99,10 @@ async fn list_skills(State(registry): State<InMemoryRegistry>) -> Json<Vec<Skill
         .iter()
         .map(|meta| {
             let elig = rara_skills::requirements::check_requirements(meta);
-            let source_str = meta.source.as_ref().map(|s| format!("{s:?}").to_lowercase());
+            let source_str = meta
+                .source
+                .as_ref()
+                .map(|s| format!("{s:?}").to_lowercase());
             SkillSummary {
                 name:          meta.name.clone(),
                 description:   meta.description.clone(),
@@ -131,7 +131,10 @@ async fn get_skill(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let elig = rara_skills::requirements::check_requirements(&meta);
-    let source_str = meta.source.as_ref().map(|s| format!("{s:?}").to_lowercase());
+    let source_str = meta
+        .source
+        .as_ref()
+        .map(|s| format!("{s:?}").to_lowercase());
 
     Ok(Json(SkillResponse {
         name:          meta.name.clone(),
@@ -168,14 +171,17 @@ async fn create_skill(
     std::fs::write(&skill_md_path, &content).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Parse the written file and insert into the registry.
-    let raw = std::fs::read_to_string(&skill_md_path)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let raw =
+        std::fs::read_to_string(&skill_md_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let mut meta = rara_skills::parse::parse_metadata(&raw, &skill_dir)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     meta.source = Some(rara_skills::types::SkillSource::Personal);
 
     let elig = rara_skills::requirements::check_requirements(&meta);
-    let source_str = meta.source.as_ref().map(|s| format!("{s:?}").to_lowercase());
+    let source_str = meta
+        .source
+        .as_ref()
+        .map(|s| format!("{s:?}").to_lowercase());
     let summary = SkillSummary {
         name:          meta.name.clone(),
         description:   meta.description.clone(),

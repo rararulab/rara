@@ -62,9 +62,12 @@ members = [
     "crates/domain/typst",
     "crates/memory",
     "crates/skills",
+    "crates/integrations/mcp",
+    "crates/integrations/keyring-store",
 ]
 
 [workspace.dependencies]
+anyhow = "^1.0"
 async-trait = "^0.1"
 axum = "^0.8"
 axum-tracing-opentelemetry = "0.33.0"
@@ -83,14 +86,16 @@ http = "^1"
 jiff = { version = "^0.2", features = ["serde"] }
 lazy_static = "^1.4"
 moka = { version = "0.12", features = ["future"] }
+oauth2 = "5"
 once_cell = "^1.20"
 opendal = { version = "0.52", features = ["services-s3"] }
 openrouter-rs = "^0.4"
 prometheus = "^0.14"
 prost = "^0.14"
 protobuf = "^3.7"
-reqwest = "0.12"
+reqwest = { version = "^0.13", features = ["json"] }
 rig-core = "0.30"
+rustix = "^1.1"
 schemars = "^1.2"
 serde = { version = "^1.0", features = ["derive"] }
 serde_json = "1.0.143"
@@ -98,9 +103,10 @@ sha2 = "0.10"
 shadow-rs = "1.2"
 smart-default = "0.7"
 snafu = "^0.8"
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "macros", "migrate", "chrono", "uuid"] }
 strum = "^0.27"
 strum_macros = "^0.27"
-teloxide = { version = "0.14", features = ["macros"] }
+teloxide = { version = "^0.17", features = ["macros"] }
 tokio = { version = "^1.45", features = ["full", "tracing"] }
 tokio-util = "^0.7"
 tonic = "^0.14"
@@ -120,10 +126,7 @@ utoipa = { version = "5", features = ["axum_extras", "uuid"] }
 utoipa-axum = "0.2"
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
 uuid = { version = "1", features = ["v4", "serde"] }
-validator = "0.20"
-
-# Database
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "macros", "migrate", "chrono", "uuid"] }
+validator = "^0.20"
 
 # Testing
 git2 = "0.20"
@@ -155,12 +158,14 @@ rara-domain-shared = { path = "crates/domain/shared" }
 rara-domain-skill = { path = "crates/domain/skill" }
 rara-domain-typst = { path = "crates/domain/typst" }
 rara-error = { path = "crates/common/error" }
+rara-keyring-store = { path = "crates/integrations/keyring-store" }
+rara-mcp = { path = "crates/mcp" }
 rara-memory = { path = "crates/memory" }
 rara-model = { path = "crates/rara-model" }
 rara-paths = { path = "crates/paths" }
 rara-server = { path = "crates/server" }
-rara-skills = { path = "crates/skills" }
 rara-sessions = { path = "crates/sessions" }
+rara-skills = { path = "crates/skills" }
 rara-telegram-bot = { path = "crates/telegram-bot" }
 rara-workers = { path = "crates/workers" }
 yunara-store = { path = "crates/common/yunara-store" }

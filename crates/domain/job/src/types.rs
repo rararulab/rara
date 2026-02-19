@@ -473,7 +473,16 @@ fn json_opt_bool(raw: &serde_json::Value, key: &str) -> Option<bool> { raw.get(k
 /// Pipeline status for a saved job.
 #[repr(u8)]
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, EnumString, FromRepr,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Display,
+    EnumString,
+    FromRepr,
     utoipa::ToSchema,
 )]
 #[serde(rename_all = "snake_case")]
@@ -501,7 +510,9 @@ pub enum SavedJobStatus {
 
 /// Pipeline stage for a saved job event.
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, FromRepr, utoipa::ToSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, FromRepr, utoipa::ToSchema,
+)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum PipelineStage {
@@ -512,7 +523,9 @@ pub enum PipelineStage {
 
 /// Kind of pipeline event.
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, FromRepr, utoipa::ToSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, FromRepr, utoipa::ToSchema,
+)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum PipelineEventKind {

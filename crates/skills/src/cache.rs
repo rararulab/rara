@@ -1,7 +1,22 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! PostgreSQL-backed skill metadata cache.
 //!
 //! Provides fast startup by caching parsed skill metadata in the database.
-//! Filesystem remains the source of truth; the cache is updated on hash mismatch.
+//! Filesystem remains the source of truth; the cache is updated on hash
+//! mismatch.
 
 use std::{collections::HashMap, path::PathBuf};
 
@@ -21,14 +36,12 @@ pub struct PgSkillCache {
 /// Cached skill with hash for change detection.
 #[derive(Debug, Clone)]
 pub struct CachedSkill {
-    pub metadata: SkillMetadata,
+    pub metadata:     SkillMetadata,
     pub content_hash: String,
 }
 
 impl PgSkillCache {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
+    pub fn new(pool: PgPool) -> Self { Self { pool } }
 
     /// Load all cached skill metadata from the database.
     pub async fn load_all(&self) -> Result<HashMap<String, CachedSkill>> {
@@ -115,7 +128,6 @@ impl PgSkillCache {
     }
 }
 
-
 // ── Background sync ─────────────────────────────────────────────────────────
 
 /// Spawn a background task that populates `registry` from the PG cache,
@@ -124,13 +136,12 @@ impl PgSkillCache {
 /// 1. **Phase 1** — load cached metadata from DB → fill registry (fast).
 /// 2. **Phase 2** — FS scan + SHA-256 hash comparison → upsert changed skills.
 /// 3. **Phase 3** — garbage-collect stale cache entries no longer on disk.
-pub fn spawn_background_sync(
-    pool: PgPool,
-    registry: crate::registry::InMemoryRegistry,
-) {
-    use crate::discover::{FsSkillDiscoverer, SkillDiscoverer};
+pub fn spawn_background_sync(pool: PgPool, registry: crate::registry::InMemoryRegistry) {
     use std::collections::HashSet;
+
     use tracing::{info, warn};
+
+    use crate::discover::{FsSkillDiscoverer, SkillDiscoverer};
 
     tokio::spawn(async move {
         let cache = PgSkillCache::new(pool);
@@ -206,7 +217,10 @@ pub fn spawn_background_sync(
                 }
 
                 let total = registry.list_all().len();
-                info!(total, added, changed, unchanged, removed, "Skill registry synced");
+                info!(
+                    total,
+                    added, changed, unchanged, removed, "Skill registry synced"
+                );
             }
             Err(e) => {
                 warn!(error = %e, "Background skill discovery failed");
@@ -225,7 +239,7 @@ impl CachedSkill {
         })?;
 
         Ok(Self {
-            metadata: SkillMetadata {
+            metadata:     SkillMetadata {
                 name: row.name,
                 description: row.description,
                 homepage: row.homepage,

@@ -20,9 +20,9 @@ use axum::{
     http::StatusCode,
     routing::get,
 };
-use utoipa_axum::{router::OpenApiRouter, routes};
 use serde::Deserialize;
 use tokio::fs;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::settings::{
     model::{Settings, UpdateRequest},

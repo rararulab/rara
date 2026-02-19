@@ -161,9 +161,7 @@ impl ToolRegistry {
 
     /// Return the names of all registered tools.
     #[must_use]
-    pub fn tool_names(&self) -> Vec<String> {
-        self.tools.keys().cloned().collect()
-    }
+    pub fn tool_names(&self) -> Vec<String> { self.tools.keys().cloned().collect() }
 
     /// Create a new registry containing only the named tools.
     /// If `tool_names` is empty, returns a clone of all tools.
@@ -172,22 +170,14 @@ impl ToolRegistry {
         if tool_names.is_empty() {
             let mut new = Self::new();
             for entry in self.tools.values() {
-                new.register(
-                    Arc::clone(&entry.tool),
-                    entry.source.clone(),
-                    entry.layer,
-                );
+                new.register(Arc::clone(&entry.tool), entry.source.clone(), entry.layer);
             }
             return new;
         }
         let mut new = Self::new();
         for (name, entry) in &self.tools {
             if tool_names.iter().any(|n| n == name) {
-                new.register(
-                    Arc::clone(&entry.tool),
-                    entry.source.clone(),
-                    entry.layer,
-                );
+                new.register(Arc::clone(&entry.tool), entry.source.clone(), entry.layer);
             }
         }
         new
