@@ -136,17 +136,14 @@ impl AgentTool for DbQueryTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> anyhow::Result<serde_json::Value> {
         let table = params
             .get("table")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
-                message: "missing required parameter: table".into(),
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: table"))?;
 
-        let columns = allowed_columns(table).ok_or_else(|| rara_agents::err::Error::Other {
-            message: format!("table not allowed: {table}").into(),
-        })?;
+        let columns =
+            allowed_columns(table).ok_or_else(|| anyhow::anyhow!("table not allowed: {table}"))?;
 
         let limit = params
             .get("limit")

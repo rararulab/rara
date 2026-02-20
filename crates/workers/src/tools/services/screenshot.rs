@@ -94,11 +94,9 @@ impl AgentTool for ScreenshotTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> anyhow::Result<serde_json::Value> {
         let url = params.get("url").and_then(|v| v.as_str()).ok_or_else(|| {
-            rara_agents::err::Error::Other {
-                message: "missing required parameter: url".into(),
-            }
+            anyhow::anyhow!("missing required parameter: url")
         })?;
 
         let selector = params
@@ -140,22 +138,16 @@ impl AgentTool for ScreenshotTool {
         let result = cmd
             .output()
             .await
-            .map_err(|e| rara_agents::err::Error::Other {
-                message: format!("failed to run screenshot script: {e}").into(),
-            })?;
+            .map_err(|e| anyhow::anyhow!("failed to run screenshot script: {e}"))?;
 
         if !result.status.success() {
             let stderr = String::from_utf8_lossy(&result.stderr);
-            return Err(rara_agents::err::Error::Other {
-                message: format!("screenshot script failed: {stderr}").into(),
-            });
+            return Err(anyhow::anyhow!("screenshot script failed: {stderr}"));
         }
 
         // Verify the file exists.
         if !output_path.exists() {
-            return Err(rara_agents::err::Error::Other {
-                message: "screenshot file was not created".into(),
-            });
+            return Err(anyhow::anyhow!("screenshot file was not created"));
         }
 
         let mut sent = false;

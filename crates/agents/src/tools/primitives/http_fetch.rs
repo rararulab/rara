@@ -68,14 +68,11 @@ impl AgentTool for HttpFetchTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value) -> crate::err::Result<serde_json::Value> {
-        let url =
-            params
-                .get("url")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| crate::err::Error::Other {
-                    message: "missing required parameter: url".into(),
-                })?;
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        let url = params
+            .get("url")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: url"))?;
 
         let method = params
             .get("method")

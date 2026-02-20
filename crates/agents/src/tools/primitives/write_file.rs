@@ -19,6 +19,7 @@
 
 use std::path::Path;
 
+use anyhow::Context;
 use async_trait::async_trait;
 use serde_json::json;
 
@@ -57,41 +58,32 @@ impl AgentTool for WriteFileTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value) -> crate::err::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let file_path = params
             .get("file_path")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| crate::err::Error::Other {
-                message: "missing required parameter: file_path".into(),
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: file_path"))?;
 
         let content = params
             .get("content")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| crate::err::Error::Other {
-                message: "missing required parameter: content".into(),
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: content"))?;
 
         // Create parent directories if necessary.
         if let Some(parent) = Path::new(file_path).parent() {
             if !parent.as_os_str().is_empty() {
                 tokio::fs::create_dir_all(parent)
                     .await
-                    .map_err(|e| crate::err::Error::Other {
-                        message: format!(
-                            "failed to create parent directories for {file_path}: {e}"
-                        )
-                        .into(),
-                    })?;
+                    .context(format!(
+                        "failed to create parent directories for {file_path}"
+                    ))?;
             }
         }
 
         let bytes = content.as_bytes();
         tokio::fs::write(file_path, bytes)
             .await
-            .map_err(|e| crate::err::Error::Other {
-                message: format!("failed to write file {file_path}: {e}").into(),
-            })?;
+            .context(format!("failed to write file {file_path}"))?;
 
         Ok(json!({
             "bytes_written": bytes.len(),

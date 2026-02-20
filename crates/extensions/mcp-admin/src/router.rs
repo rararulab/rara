@@ -1,4 +1,3 @@
-use std::sync::Arc;
 
 use axum::{
     Json, Router,
@@ -14,7 +13,7 @@ use crate::types::{
     McpToolView, UpdateServerRequest,
 };
 
-type McpState = Arc<McpManager>;
+type McpState = McpManager;
 
 pub fn mcp_router(manager: McpState) -> Router {
     Router::new()

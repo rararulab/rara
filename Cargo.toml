@@ -65,6 +65,7 @@ members = [
     "crates/integrations/mcp",
     "crates/integrations/keyring-store",
     "crates/extensions/mcp-admin",
+    "crates/core/tool-core",
 ]
 
 [workspace.dependencies]
@@ -170,6 +171,7 @@ rara-sessions = { path = "crates/sessions" }
 rara-skills = { path = "crates/skills" }
 rara-telegram-bot = { path = "crates/telegram-bot" }
 rara-workers = { path = "crates/workers" }
+tool-core = { path = "crates/core/tool-core" }
 yunara-store = { path = "crates/common/yunara-store" }
 
 # Config for 'cargo dist'

@@ -56,12 +56,11 @@ impl AgentTool for StorageReadTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
-        let key = params.get("key").and_then(|v| v.as_str()).ok_or_else(|| {
-            rara_agents::err::Error::Other {
-                message: "missing required parameter: key".into(),
-            }
-        })?;
+    ) -> anyhow::Result<serde_json::Value> {
+        let key = params
+            .get("key")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: key"))?;
 
         match self.operator.read(key).await {
             Ok(buf) => {

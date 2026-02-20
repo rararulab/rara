@@ -62,7 +62,7 @@ impl AgentTool for ListTypstProjectsTool {
     async fn execute(
         &self,
         _params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> anyhow::Result<serde_json::Value> {
         match self.typst_service.list_projects().await {
             Ok(projects) => {
                 let items: Vec<serde_json::Value> = projects
@@ -123,7 +123,7 @@ impl AgentTool for ListTypstFilesTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> anyhow::Result<serde_json::Value> {
         let project_id = parse_uuid(&params, "project_id")?;
 
         let project = match self.typst_service.get_project(project_id).await {
@@ -181,7 +181,7 @@ impl AgentTool for ReadTypstFileTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> anyhow::Result<serde_json::Value> {
         let project_id = parse_uuid(&params, "project_id")?;
         let file_path = parse_string(&params, "file_path")?;
 
@@ -248,7 +248,7 @@ impl AgentTool for UpdateTypstFileTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> anyhow::Result<serde_json::Value> {
         let project_id = parse_uuid(&params, "project_id")?;
         let file_path = parse_string(&params, "file_path")?;
         let content = parse_string(&params, "content")?;
@@ -312,7 +312,7 @@ impl AgentTool for CompileTypstProjectTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> anyhow::Result<serde_json::Value> {
         let project_id = parse_uuid(&params, "project_id")?;
 
         match self.typst_service.compile(project_id, None).await {
@@ -334,25 +334,19 @@ impl AgentTool for CompileTypstProjectTool {
 // ---------------------------------------------------------------------------
 
 /// Extract a required UUID parameter from JSON.
-fn parse_uuid(params: &serde_json::Value, field: &str) -> rara_agents::err::Result<Uuid> {
+fn parse_uuid(params: &serde_json::Value, field: &str) -> anyhow::Result<Uuid> {
     let s = params.get(field).and_then(|v| v.as_str()).ok_or_else(|| {
-        rara_agents::err::Error::Other {
-            message: format!("missing required parameter: {field}").into(),
-        }
+        anyhow::anyhow!("missing required parameter: {field}")
     })?;
 
-    Uuid::parse_str(s).map_err(|e| rara_agents::err::Error::Other {
-        message: format!("invalid UUID for {field}: {e}").into(),
-    })
+    Uuid::parse_str(s).map_err(|e| anyhow::anyhow!("invalid UUID for {field}: {e}"))
 }
 
 /// Extract a required string parameter from JSON.
-fn parse_string(params: &serde_json::Value, field: &str) -> rara_agents::err::Result<String> {
+fn parse_string(params: &serde_json::Value, field: &str) -> anyhow::Result<String> {
     params
         .get(field)
         .and_then(|v| v.as_str())
         .map(|s| s.to_owned())
-        .ok_or_else(|| rara_agents::err::Error::Other {
-            message: format!("missing required parameter: {field}").into(),
-        })
+        .ok_or_else(|| anyhow::anyhow!("missing required parameter: {field}"))
 }

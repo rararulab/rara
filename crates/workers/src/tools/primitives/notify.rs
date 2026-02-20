@@ -73,20 +73,16 @@ impl AgentTool for NotifyTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> anyhow::Result<serde_json::Value> {
         let channel = params
             .get("channel")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
-                message: "missing required parameter: channel".into(),
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: channel"))?;
 
         let message = params
             .get("message")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
-                message: "missing required parameter: message".into(),
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: message"))?;
 
         match channel {
             "telegram" => {

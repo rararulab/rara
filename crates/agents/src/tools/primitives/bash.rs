@@ -68,13 +68,11 @@ impl AgentTool for BashTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value) -> crate::err::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let command = params
             .get("command")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| crate::err::Error::Other {
-                message: "missing required parameter: command".into(),
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: command"))?;
 
         let timeout_secs = params
             .get("timeout")

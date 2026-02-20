@@ -17,6 +17,7 @@
 //! Uses `find` to locate files matching a glob pattern under a given directory,
 //! sorted by modification time (newest first).
 
+use anyhow::Context;
 use async_trait::async_trait;
 use serde_json::json;
 
@@ -62,13 +63,11 @@ impl AgentTool for FindFilesTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value) -> crate::err::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let pattern = params
             .get("pattern")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| crate::err::Error::Other {
-                message: "missing required parameter: pattern".into(),
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: pattern"))?;
 
         let path = params.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
@@ -95,9 +94,7 @@ impl AgentTool for FindFilesTool {
             .stderr(std::process::Stdio::piped())
             .output()
             .await
-            .map_err(|e| crate::err::Error::Other {
-                message: format!("failed to run find: {e}").into(),
-            })?;
+            .context("failed to run find")?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
 

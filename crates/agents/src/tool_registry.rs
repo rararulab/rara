@@ -14,21 +14,11 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use async_trait::async_trait;
 use snafu::ResultExt;
 
 use crate::err::prelude::*;
 
-pub type AgentToolRef = Arc<dyn AgentTool>;
-
-/// Agent-callable tool.
-#[async_trait]
-pub trait AgentTool: Send + Sync {
-    fn name(&self) -> &str;
-    fn description(&self) -> &str;
-    fn parameters_schema(&self) -> serde_json::Value;
-    async fn execute(&self, params: serde_json::Value) -> Result<serde_json::Value>;
-}
+pub use tool_core::{AgentTool, AgentToolRef};
 
 /// Where a tool originates from.
 #[derive(Debug, Clone, PartialEq, Eq)]

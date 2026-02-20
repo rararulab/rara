@@ -13,6 +13,7 @@ categories.workspace = true
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
+tool-core.workspace = true
 base.workspace = true
 bon.workspace = true
 futures.workspace = true

@@ -16,6 +16,7 @@
 //!
 //! Lists entries in a directory with name, type, and size metadata.
 
+use anyhow::Context;
 use async_trait::async_trait;
 use serde_json::json;
 
@@ -53,30 +54,23 @@ impl AgentTool for ListDirectoryTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value) -> crate::err::Result<serde_json::Value> {
-        let path = params.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
-            crate::err::Error::Other {
-                message: "missing required parameter: path".into(),
-            }
-        })?;
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        let path = params
+            .get("path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: path"))?;
 
-        let mut read_dir =
-            tokio::fs::read_dir(path)
-                .await
-                .map_err(|e| crate::err::Error::Other {
-                    message: format!("failed to read directory {path}: {e}").into(),
-                })?;
+        let mut read_dir = tokio::fs::read_dir(path)
+            .await
+            .context(format!("failed to read directory {path}"))?;
 
         let mut entries = Vec::new();
         let mut total = 0usize;
 
-        while let Some(entry) =
-            read_dir
-                .next_entry()
-                .await
-                .map_err(|e| crate::err::Error::Other {
-                    message: format!("failed to read directory entry: {e}").into(),
-                })?
+        while let Some(entry) = read_dir
+            .next_entry()
+            .await
+            .context("failed to read directory entry")?
         {
             total += 1;
 
@@ -89,9 +83,7 @@ impl AgentTool for ListDirectoryTool {
             let file_type = entry
                 .file_type()
                 .await
-                .map_err(|e| crate::err::Error::Other {
-                    message: format!("failed to get file type for {name}: {e}").into(),
-                })?;
+                .context(format!("failed to get file type for {name}"))?;
 
             let type_str = if file_type.is_dir() {
                 "dir"

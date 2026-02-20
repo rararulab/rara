@@ -415,7 +415,7 @@ mod tests {
             serde_json::json!({"type": "object", "properties": {"text": {"type": "string"}}})
         }
 
-        async fn execute(&self, params: serde_json::Value) -> Result<serde_json::Value> {
+        async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
             Ok(params)
         }
     }

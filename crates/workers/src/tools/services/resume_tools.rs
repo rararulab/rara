@@ -65,7 +65,7 @@ impl AgentTool for ListResumesTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> anyhow::Result<serde_json::Value> {
         let source_filter = params
             .get("source")
             .and_then(|v| v.as_str())
@@ -142,18 +142,14 @@ impl AgentTool for GetResumeContentTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> anyhow::Result<serde_json::Value> {
         let resume_id_str = params
             .get("resume_id")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
-                message: "missing required parameter: resume_id".into(),
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: resume_id"))?;
 
         let resume_id =
-            Uuid::parse_str(resume_id_str).map_err(|e| rara_agents::err::Error::Other {
-                message: format!("invalid UUID: {e}").into(),
-            })?;
+            Uuid::parse_str(resume_id_str).map_err(|e| anyhow::anyhow!("invalid UUID: {e}"))?;
 
         match self.resume_service.get(resume_id).await {
             Ok(Some(resume)) => Ok(json!({
@@ -262,19 +258,15 @@ impl AgentTool for AnalyzeResumeTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> anyhow::Result<serde_json::Value> {
         // -- parse resume_id ----------------------------------------------------
         let resume_id_str = params
             .get("resume_id")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
-                message: "missing required parameter: resume_id".into(),
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: resume_id"))?;
 
         let resume_id =
-            Uuid::parse_str(resume_id_str).map_err(|e| rara_agents::err::Error::Other {
-                message: format!("invalid UUID: {e}").into(),
-            })?;
+            Uuid::parse_str(resume_id_str).map_err(|e| anyhow::anyhow!("invalid UUID: {e}"))?;
 
         // -- fetch resume -------------------------------------------------------
         let resume = match self.resume_service.get(resume_id).await {

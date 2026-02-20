@@ -65,7 +65,7 @@ pub struct AppState {
     pub skill_registry: rara_skills::registry::InMemoryRegistry,
 
     // -- MCP --
-    pub mcp_manager: Arc<rara_mcp::manager::mgr::McpManager>,
+    pub mcp_manager: rara_mcp::manager::mgr::McpManager,
 
     // -- worker coordination --
     pub analyze_notify:   Arc<RwLock<Option<NotifyHandle>>>,
@@ -269,10 +269,10 @@ impl AppState {
         let mcp_registry = rara_mcp::manager::registry::FSMcpRegistry::load(&mcp_registry_path)
             .await
             .whatever_context("Failed to load MCP registry")?;
-        let mcp_manager = Arc::new(rara_mcp::manager::mgr::McpManager::new(
+        let mcp_manager = rara_mcp::manager::mgr::McpManager::new(
             Arc::new(mcp_registry),
             rara_mcp::oauth::OAuthCredentialsStoreMode::default(),
-        ));
+        );
         let started = mcp_manager.start_enabled().await;
         if started.is_empty() {
             info!("No MCP servers to start");
@@ -280,6 +280,21 @@ impl AppState {
             info!(servers = ?started, "MCP servers started");
         }
 
+
+        // -- MCP tool bridges ------------------------------------------------
+        match rara_mcp::tool_bridge::McpToolBridge::from_manager(mcp_manager.clone()).await {
+            Ok(bridges) => {
+                let count = bridges.len();
+                for bridge in bridges {
+                    let server = bridge.server_name().to_string();
+                    tool_registry.register_mcp(Arc::new(bridge), server);
+                }
+                info!(count, "MCP tool bridges registered");
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to create MCP tool bridges");
+            }
+        }
         let tools = Arc::new(tool_registry);
 
         let chat_service = rara_domain_chat::service::ChatService::new(

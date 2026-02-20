@@ -262,13 +262,11 @@ impl AgentTool for CodexRunTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> anyhow::Result<serde_json::Value> {
         let prompt = params
             .get("prompt")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
-                message: "missing required parameter: prompt".into(),
-            })?
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: prompt"))?
             .to_owned();
 
         let agent_kind = match params.get("agent").and_then(|v| v.as_str()) {
@@ -294,15 +292,11 @@ impl AgentTool for CodexRunTool {
             .current_dir(&self.project_root)
             .output()
             .await
-            .map_err(|e| rara_agents::err::Error::Other {
-                message: format!("failed to run git worktree add: {e}").into(),
-            })?;
+            .map_err(|e| anyhow::anyhow!("failed to run git worktree add: {e}"))?;
 
         if !worktree_output.status.success() {
             let stderr = String::from_utf8_lossy(&worktree_output.stderr);
-            return Err(rara_agents::err::Error::Other {
-                message: format!("git worktree add failed: {stderr}").into(),
-            });
+            return Err(anyhow::anyhow!("git worktree add failed: {stderr}"));
         }
 
         let task = AgentTask {
@@ -470,7 +464,7 @@ impl AgentTool for CodexStatusTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> anyhow::Result<serde_json::Value> {
         let task = if let Some(id) = params.get("task_id").and_then(|v| v.as_u64()) {
             self.store.get(id as u32).await
         } else {
@@ -531,7 +525,7 @@ impl AgentTool for CodexListTool {
     async fn execute(
         &self,
         _params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> anyhow::Result<serde_json::Value> {
         let items = self.store.list().await;
         Ok(json!({
             "count": items.len(),

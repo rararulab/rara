@@ -77,44 +77,34 @@ impl AgentTool for ScheduleAddTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> anyhow::Result<serde_json::Value> {
         let message = params
             .get("message")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
-                message: "missing required parameter: message".into(),
-            })?
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: message"))?
             .to_owned();
 
         let trigger_type = params
             .get("trigger_type")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
-                message: "missing required parameter: trigger_type".into(),
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: trigger_type"))?;
 
         let trigger = match trigger_type {
             "cron" => {
                 let expr = params
                     .get("cron_expr")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| rara_agents::err::Error::Other {
-                        message: "cron_expr is required when trigger_type=cron".into(),
-                    })?
+                    .ok_or_else(|| anyhow::anyhow!("cron_expr is required when trigger_type=cron"))?
                     .to_owned();
                 // Validate the expression.
-                croner::Cron::from_str(&expr).map_err(|e| rara_agents::err::Error::Other {
-                    message: format!("invalid cron expression: {e}").into(),
-                })?;
+                croner::Cron::from_str(&expr).map_err(|e| anyhow::anyhow!("invalid cron expression: {e}"))?;
                 AgentTrigger::Cron { expr }
             }
             "delay" => {
                 let seconds = params
                     .get("delay_seconds")
                     .and_then(|v| v.as_u64())
-                    .ok_or_else(|| rara_agents::err::Error::Other {
-                        message: "delay_seconds is required when trigger_type=delay".into(),
-                    })?;
+                    .ok_or_else(|| anyhow::anyhow!("delay_seconds is required when trigger_type=delay"))?;
                 let run_at = jiff::Timestamp::now() + std::time::Duration::from_secs(seconds);
                 AgentTrigger::Delay { run_at }
             }
@@ -122,15 +112,11 @@ impl AgentTool for ScheduleAddTool {
                 let seconds = params
                     .get("interval_seconds")
                     .and_then(|v| v.as_u64())
-                    .ok_or_else(|| rara_agents::err::Error::Other {
-                        message: "interval_seconds is required when trigger_type=interval".into(),
-                    })?;
+                    .ok_or_else(|| anyhow::anyhow!("interval_seconds is required when trigger_type=interval"))?;
                 AgentTrigger::Interval { seconds }
             }
             other => {
-                return Err(rara_agents::err::Error::Other {
-                    message: format!("unknown trigger_type: {other}").into(),
-                });
+                return Err(anyhow::anyhow!("unknown trigger_type: {other}"));
             }
         };
 
@@ -148,9 +134,7 @@ impl AgentTool for ScheduleAddTool {
         self.scheduler
             .add(job)
             .await
-            .map_err(|e| rara_agents::err::Error::Other {
-                message: format!("failed to add job: {e}").into(),
-            })?;
+            .map_err(|e| anyhow::anyhow!("failed to add job: {e}"))?;
 
         Ok(json!({ "status": "ok", "id": id }))
     }
@@ -187,7 +171,7 @@ impl AgentTool for ScheduleListTool {
     async fn execute(
         &self,
         _params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> anyhow::Result<serde_json::Value> {
         let jobs = self.scheduler.list().await;
         let items: Vec<serde_json::Value> = jobs
             .iter()
@@ -242,20 +226,16 @@ impl AgentTool for ScheduleRemoveTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> anyhow::Result<serde_json::Value> {
         let id = params.get("id").and_then(|v| v.as_str()).ok_or_else(|| {
-            rara_agents::err::Error::Other {
-                message: "missing required parameter: id".into(),
-            }
+            anyhow::anyhow!("missing required parameter: id")
         })?;
 
         let removed =
             self.scheduler
                 .remove(id)
                 .await
-                .map_err(|e| rara_agents::err::Error::Other {
-                    message: format!("failed to remove job: {e}").into(),
-                })?;
+                .map_err(|e| anyhow::anyhow!("failed to remove job: {e}"))?;
 
         if removed {
             Ok(json!({ "status": "ok", "removed": true }))

@@ -12,6 +12,7 @@ categories.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+anyhow.workspace = true
 backon.workspace = true
 base.workspace = true
 bon.workspace = true
@@ -26,6 +27,7 @@ snafu.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
+tool-core.workspace = true
 
 [lints]
 workspace = true

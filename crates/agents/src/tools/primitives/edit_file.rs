@@ -17,6 +17,7 @@
 //! Reads a file, replaces an exact substring, and writes the result back.
 //! Supports single (unique) replacement and replace-all modes.
 
+use anyhow::{bail, Context};
 use async_trait::async_trait;
 use serde_json::json;
 
@@ -63,59 +64,44 @@ impl AgentTool for EditFileTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value) -> crate::err::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let file_path = params
             .get("file_path")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| crate::err::Error::Other {
-                message: "missing required parameter: file_path".into(),
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: file_path"))?;
 
         let old_string = params
             .get("old_string")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| crate::err::Error::Other {
-                message: "missing required parameter: old_string".into(),
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: old_string"))?;
 
         let new_string = params
             .get("new_string")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| crate::err::Error::Other {
-                message: "missing required parameter: new_string".into(),
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: new_string"))?;
 
         let replace_all = params
             .get("replace_all")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let content =
-            tokio::fs::read_to_string(file_path)
-                .await
-                .map_err(|e| crate::err::Error::Other {
-                    message: format!("failed to read file {file_path}: {e}").into(),
-                })?;
+        let content = tokio::fs::read_to_string(file_path)
+            .await
+            .context(format!("failed to read file {file_path}"))?;
 
         let count = content.matches(old_string).count();
 
         if count == 0 {
-            return Err(crate::err::Error::Other {
-                message: format!(
-                    "old_string not found in {file_path}. Make sure the string matches exactly."
-                )
-                .into(),
-            });
+            bail!(
+                "old_string not found in {file_path}. Make sure the string matches exactly."
+            );
         }
 
         if !replace_all && count > 1 {
-            return Err(crate::err::Error::Other {
-                message: format!(
-                    "old_string found {count} times in {file_path}. Use replace_all=true to \
-                     replace all occurrences, or provide a more specific old_string."
-                )
-                .into(),
-            });
+            bail!(
+                "old_string found {count} times in {file_path}. Use replace_all=true to \
+                 replace all occurrences, or provide a more specific old_string."
+            );
         }
 
         let new_content = if replace_all {
@@ -126,9 +112,7 @@ impl AgentTool for EditFileTool {
 
         tokio::fs::write(file_path, &new_content)
             .await
-            .map_err(|e| crate::err::Error::Other {
-                message: format!("failed to write file {file_path}: {e}").into(),
-            })?;
+            .context(format!("failed to write file {file_path}"))?;
 
         Ok(json!({
             "replacements": if replace_all { count } else { 1 },

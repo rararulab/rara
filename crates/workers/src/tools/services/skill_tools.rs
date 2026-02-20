@@ -74,7 +74,7 @@ impl AgentTool for ListSkillsTool {
         })
     }
 
-    async fn execute(&self, _params: Value) -> rara_agents::err::Result<Value> {
+    async fn execute(&self, _params: Value) -> anyhow::Result<Value> {
         let skills: Vec<Value> = self
             .registry
             .list_all()
@@ -145,26 +145,20 @@ impl AgentTool for CreateSkillTool {
         })
     }
 
-    async fn execute(&self, params: Value) -> rara_agents::err::Result<Value> {
+    async fn execute(&self, params: Value) -> anyhow::Result<Value> {
         let name = params.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
-            rara_agents::err::Error::Other {
-                message: "missing required parameter: name".into(),
-            }
+            anyhow::anyhow!("missing required parameter: name")
         })?;
 
         let description = params
             .get("description")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
-                message: "missing required parameter: description".into(),
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: description"))?;
 
         let prompt = params
             .get("prompt")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
-                message: "missing required parameter: prompt".into(),
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: prompt"))?;
 
         let allowed_tools: Vec<String> = params
             .get("allowed_tools")
@@ -182,24 +176,16 @@ impl AgentTool for CreateSkillTool {
         // Write to skills_dir()/{name}/SKILL.md.
         let skills_dir = rara_paths::skills_dir();
         let skill_dir = skills_dir.join(name);
-        std::fs::create_dir_all(&skill_dir).map_err(|e| rara_agents::err::Error::Other {
-            message: format!("failed to create skill directory: {e}").into(),
-        })?;
+        std::fs::create_dir_all(&skill_dir).map_err(|e| anyhow::anyhow!("failed to create skill directory: {e}"))?;
 
         let file_path = skill_dir.join("SKILL.md");
-        std::fs::write(&file_path, &content).map_err(|e| rara_agents::err::Error::Other {
-            message: format!("failed to write skill file: {e}").into(),
-        })?;
+        std::fs::write(&file_path, &content).map_err(|e| anyhow::anyhow!("failed to write skill file: {e}"))?;
 
         // Parse the file back and insert into registry.
         let raw =
-            std::fs::read_to_string(&file_path).map_err(|e| rara_agents::err::Error::Other {
-                message: format!("failed to read skill file: {e}").into(),
-            })?;
+            std::fs::read_to_string(&file_path).map_err(|e| anyhow::anyhow!("failed to read skill file: {e}"))?;
         let mut meta = rara_skills::parse::parse_metadata(&raw, &skill_dir).map_err(|e| {
-            rara_agents::err::Error::Other {
-                message: format!("failed to parse skill file: {e}").into(),
-            }
+            anyhow::anyhow!("failed to parse skill file: {e}")
         })?;
         meta.source = Some(rara_skills::types::SkillSource::Personal);
 
@@ -246,20 +232,16 @@ impl AgentTool for DeleteSkillTool {
         })
     }
 
-    async fn execute(&self, params: Value) -> rara_agents::err::Result<Value> {
+    async fn execute(&self, params: Value) -> anyhow::Result<Value> {
         let name = params.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
-            rara_agents::err::Error::Other {
-                message: "missing required parameter: name".into(),
-            }
+            anyhow::anyhow!("missing required parameter: name")
         })?;
 
         // Get the skill path before removing from registry.
         let meta = self
             .registry
             .get(name)
-            .ok_or_else(|| rara_agents::err::Error::Other {
-                message: format!("skill not found: {name}").into(),
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("skill not found: {name}"))?;
         let skill_path = meta.path.clone();
 
         // Remove the directory (best-effort).

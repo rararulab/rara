@@ -18,6 +18,7 @@ use crate::{
 };
 
 /// Manages the lifecycle of multiple MCP server connections.
+#[derive(Clone)]
 pub struct McpManager {
     inner: Arc<RwLock<McpManagerInner>>,
 }

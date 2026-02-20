@@ -18,6 +18,7 @@
 //! file type filtering and context lines.  Falls back to `grep -rn` if `rg` is
 //! not installed.
 
+use anyhow::{bail, Context};
 use async_trait::async_trait;
 use serde_json::json;
 
@@ -75,13 +76,11 @@ impl AgentTool for GrepTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value) -> crate::err::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let pattern = params
             .get("pattern")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| crate::err::Error::Other {
-                message: "missing required parameter: pattern".into(),
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: pattern"))?;
 
         let path = params.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
@@ -113,7 +112,7 @@ async fn try_ripgrep(
     glob_filter: Option<&str>,
     context: u64,
     ignore_case: bool,
-) -> crate::err::Result<serde_json::Value> {
+) -> anyhow::Result<serde_json::Value> {
     let mut cmd = tokio::process::Command::new("rg");
     cmd.arg("-n"); // line numbers
     cmd.arg("--max-count").arg(MAX_MATCHES.to_string());
@@ -134,18 +133,14 @@ async fn try_ripgrep(
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 
-    let output = cmd.output().await.map_err(|e| crate::err::Error::Other {
-        message: format!("failed to run rg: {e}").into(),
-    })?;
+    let output = cmd.output().await.context("failed to run rg")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     // rg returns exit code 1 when no matches found, which is fine.
     if output.status.code() == Some(2) {
-        return Err(crate::err::Error::Other {
-            message: format!("rg error: {stderr}").into(),
-        });
+        bail!("rg error: {stderr}");
     }
 
     format_grep_output(&stdout)
@@ -155,7 +150,7 @@ async fn try_grep_fallback(
     pattern: &str,
     path: &str,
     ignore_case: bool,
-) -> crate::err::Result<serde_json::Value> {
+) -> anyhow::Result<serde_json::Value> {
     let mut cmd = tokio::process::Command::new("grep");
     cmd.arg("-rn");
 
@@ -167,15 +162,13 @@ async fn try_grep_fallback(
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 
-    let output = cmd.output().await.map_err(|e| crate::err::Error::Other {
-        message: format!("failed to run grep: {e}").into(),
-    })?;
+    let output = cmd.output().await.context("failed to run grep")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     format_grep_output(&stdout)
 }
 
-fn format_grep_output(stdout: &str) -> crate::err::Result<serde_json::Value> {
+fn format_grep_output(stdout: &str) -> anyhow::Result<serde_json::Value> {
     let lines: Vec<&str> = stdout.lines().collect();
     let match_count = lines.len();
     let mut truncated = false;

@@ -17,6 +17,7 @@
 //! Reads a file with optional line offset and limit, adds `cat -n` style line
 //! number prefixes, and truncates long lines at 2000 characters.
 
+use anyhow::Context;
 use async_trait::async_trait;
 use serde_json::json;
 
@@ -72,13 +73,11 @@ impl AgentTool for ReadFileTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value) -> crate::err::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let file_path = params
             .get("file_path")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| crate::err::Error::Other {
-                message: "missing required parameter: file_path".into(),
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: file_path"))?;
 
         let offset = params
             .get("offset")
@@ -94,9 +93,7 @@ impl AgentTool for ReadFileTool {
 
         let raw_bytes = tokio::fs::read(file_path)
             .await
-            .map_err(|e| crate::err::Error::Other {
-                message: format!("failed to read file {file_path}: {e}").into(),
-            })?;
+            .context(format!("failed to read file {file_path}"))?;
 
         // Binary detection: check for null bytes in the first BINARY_CHECK_BYTES.
         let check_len = raw_bytes.len().min(BINARY_CHECK_BYTES);

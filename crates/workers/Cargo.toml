@@ -13,6 +13,7 @@ description = "Background worker implementations for job automation"
 
 [dependencies]
 async-trait.workspace = true
+anyhow.workspace = true
 axum = { workspace = true }
 chrono = { workspace = true }
 common-runtime = { workspace = true }
@@ -49,6 +50,7 @@ sqlx.workspace = true
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing.workspace = true
+tool-core.workspace = true
 ulid.workspace = true
 utoipa.workspace = true
 utoipa-axum.workspace = true

@@ -63,13 +63,11 @@ impl AgentTool for MemorySearchTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> anyhow::Result<serde_json::Value> {
         let query = params
             .get("query")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
-                message: "missing required parameter: query".into(),
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: query"))?;
 
         let limit = params
             .get("limit")
@@ -78,9 +76,7 @@ impl AgentTool for MemorySearchTool {
             .clamp(1, 50);
 
         let results = self.manager.search(query, limit).await.map_err(|e| {
-            rara_agents::err::Error::Other {
-                message: format!("memory search failed: {e}").into(),
-            }
+            anyhow::anyhow!("memory search failed: {e}")
         })?;
 
         Ok(json!({
@@ -134,18 +130,14 @@ impl AgentTool for MemoryGetTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> anyhow::Result<serde_json::Value> {
         let chunk_id = params
             .get("chunk_id")
             .and_then(|v| v.as_i64())
-            .ok_or_else(|| rara_agents::err::Error::Other {
-                message: "missing required parameter: chunk_id".into(),
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: chunk_id"))?;
 
         match self.manager.get_chunk(chunk_id).await.map_err(|e| {
-            rara_agents::err::Error::Other {
-                message: format!("memory get failed: {e}").into(),
-            }
+            anyhow::anyhow!("memory get failed: {e}")
         })? {
             Some(chunk) => Ok(json!({
                 "chunk_id": chunk.chunk_id,
@@ -267,29 +259,23 @@ impl AgentTool for MemoryUpdateProfileTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> anyhow::Result<serde_json::Value> {
         let section = params
             .get("section")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
-                message: "missing required parameter: section".into(),
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: section"))?;
 
         let content = params
             .get("content")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
-                message: "missing required parameter: content".into(),
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: content"))?;
 
         // Read current profile (empty string if not yet created).
         let mut profile =
             self.manager
                 .read_core_profile()
                 .await
-                .map_err(|e| rara_agents::err::Error::Other {
-                    message: format!("failed to read profile: {e}").into(),
-                })?;
+                .map_err(|e| anyhow::anyhow!("failed to read profile: {e}"))?;
 
         // Initialize with template if empty.
         if profile.trim().is_empty() {
@@ -303,17 +289,13 @@ impl AgentTool for MemoryUpdateProfileTool {
         self.manager
             .write_core_profile(&updated)
             .await
-            .map_err(|e| rara_agents::err::Error::Other {
-                message: format!("failed to write profile: {e}").into(),
-            })?;
+            .map_err(|e| anyhow::anyhow!("failed to write profile: {e}"))?;
 
         // Trigger sync so the profile is indexed for search.
         self.manager
             .sync()
             .await
-            .map_err(|e| rara_agents::err::Error::Other {
-                message: format!("memory sync failed: {e}").into(),
-            })?;
+            .map_err(|e| anyhow::anyhow!("memory sync failed: {e}"))?;
 
         Ok(json!({
             "status": "ok",
@@ -365,13 +347,11 @@ impl AgentTool for MemoryWriteTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-    ) -> rara_agents::err::Result<serde_json::Value> {
+    ) -> anyhow::Result<serde_json::Value> {
         let content = params
             .get("content")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| rara_agents::err::Error::Other {
-                message: "missing required parameter: content".into(),
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: content"))?;
 
         let filename = match params.get("filename").and_then(|v| v.as_str()) {
             Some(name) => {
@@ -394,25 +374,19 @@ impl AgentTool for MemoryWriteTool {
         // Ensure parent directory exists (in case filename contains subdirectories).
         if let Some(parent) = file_path.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                rara_agents::err::Error::Other {
-                    message: format!("failed to create directory: {e}").into(),
-                }
+                anyhow::anyhow!("failed to create directory: {e}")
             })?;
         }
 
         tokio::fs::write(&file_path, content).await.map_err(|e| {
-            rara_agents::err::Error::Other {
-                message: format!("failed to write memory file: {e}").into(),
-            }
+            anyhow::anyhow!("failed to write memory file: {e}")
         })?;
 
         // Trigger sync so the new file is immediately indexed.
         self.manager
             .sync()
             .await
-            .map_err(|e| rara_agents::err::Error::Other {
-                message: format!("memory sync failed: {e}").into(),
-            })?;
+            .map_err(|e| anyhow::anyhow!("memory sync failed: {e}"))?;
 
         Ok(json!({
             "status": "ok",
