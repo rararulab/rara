@@ -25,6 +25,7 @@ use async_trait::async_trait;
 pub type AgentToolRef = Arc<dyn AgentTool>;
 
 pub mod core_primitives;
+pub mod domain_primitives;
 
 /// Agent-callable tool.
 #[async_trait]
