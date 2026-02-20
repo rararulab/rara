@@ -166,6 +166,7 @@ export default function McpServers() {
   const serversQuery = useQuery({
     queryKey: ["mcp-servers"],
     queryFn: () => api.get<McpServerInfo[]>("/api/v1/mcp/servers"),
+    refetchInterval: 5000, // Poll every 5s for status changes
   });
 
   // ── Mutations ────────────────────────────────────────────

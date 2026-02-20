@@ -38,6 +38,35 @@ pub fn mcp_router(manager: McpState) -> Router {
         .with_state(manager)
 }
 
+/// Build an [`McpServerInfo`] from the registry + connection state.
+async fn build_server_info(
+    manager: &McpManager,
+    name: &str,
+) -> Result<McpServerInfo, McpAdminError> {
+    let registry = manager.registry().await;
+    let config = registry
+        .get(name)
+        .await
+        .map_err(|e| {
+            RegistrySnafu {
+                message: e.to_string(),
+            }
+            .build()
+        })?
+        .ok_or_else(|| ServerNotFoundSnafu { name: name.to_string() }.build())?;
+    let connected = manager.connected_servers().await;
+    let status = if connected.contains(&name.to_string()) {
+        McpServerStatus::Connected
+    } else {
+        McpServerStatus::Disconnected
+    };
+    Ok(McpServerInfo {
+        name:   name.to_string(),
+        config: McpServerConfigView::from(config),
+        status,
+    })
+}
+
 async fn list_servers(
     State(manager): State<McpState>,
 ) -> Result<Json<Vec<McpServerInfo>>, McpAdminError> {
@@ -80,58 +109,40 @@ async fn get_server(
     State(manager): State<McpState>,
     Path(name): Path<String>,
 ) -> Result<Json<McpServerInfo>, McpAdminError> {
-    let registry = manager.registry().await;
-    let config = registry
-        .get(&name)
-        .await
-        .map_err(|e| {
-            RegistrySnafu {
-                message: e.to_string(),
-            }
-            .build()
-        })?
-        .ok_or_else(|| ServerNotFoundSnafu { name: name.clone() }.build())?;
-
-    let connected = manager.connected_servers().await;
-    let status = if connected.contains(&name) {
-        McpServerStatus::Connected
-    } else {
-        McpServerStatus::Disconnected
-    };
-
-    Ok(Json(McpServerInfo {
-        name,
-        config: McpServerConfigView::from(config),
-        status,
-    }))
+    Ok(Json(build_server_info(&manager, &name).await?))
 }
 
 async fn add_server(
     State(manager): State<McpState>,
     Json(req): Json<CreateServerRequest>,
 ) -> Result<Json<McpServerInfo>, McpAdminError> {
-    manager
-        .add_server(req.name.clone(), req.config.clone(), true)
+    // 1. Save to registry (fast, no handshake)
+    let registry = manager.registry().await;
+    registry
+        .add(req.name.clone(), req.config.clone())
         .await
         .map_err(|e| {
-            McpSnafu {
+            RegistrySnafu {
                 message: e.to_string(),
             }
             .build()
         })?;
+    drop(registry);
 
-    let connected = manager.connected_servers().await;
-    let status = if connected.contains(&req.name) {
-        McpServerStatus::Connected
-    } else {
-        McpServerStatus::Disconnected
-    };
+    // 2. Fire-and-forget start if enabled
+    if req.config.enabled {
+        let mgr = manager.clone();
+        let name = req.name.clone();
+        let config = req.config.clone();
+        tokio::spawn(async move {
+            if let Err(e) = mgr.start_server(&name, &config).await {
+                tracing::warn!(server = %name, error = %e, "background MCP server start failed");
+            }
+        });
+    }
 
-    Ok(Json(McpServerInfo {
-        name:   req.name,
-        config: McpServerConfigView::from(req.config),
-        status,
-    }))
+    // 3. Return immediately with current status
+    Ok(Json(build_server_info(&manager, &req.name).await?))
 }
 
 async fn update_server(
@@ -140,55 +151,47 @@ async fn update_server(
     Json(req): Json<UpdateServerRequest>,
 ) -> Result<Json<McpServerInfo>, McpAdminError> {
     let registry = manager.registry().await;
-    if registry
+    let existing = registry
         .get(&name)
         .await
         .map_err(|e| {
             RegistrySnafu {
-                message: e.to_string(),
-            }
-            .build()
-        })?
-        .is_none()
-    {
-        return Err(ServerNotFoundSnafu { name }.build());
-    }
-    drop(registry);
-
-    manager
-        .update_server(&name, req.config.clone())
-        .await
-        .map_err(|e| {
-            McpSnafu {
                 message: e.to_string(),
             }
             .build()
         })?;
+    if existing.is_none() {
+        return Err(ServerNotFoundSnafu { name }.build());
+    }
 
-    let registry = manager.registry().await;
-    let config = registry
-        .get(&name)
+    // Preserve the enabled flag from existing config
+    let enabled = existing.as_ref().is_none_or(|c| c.enabled);
+    let mut new_config = req.config.clone();
+    new_config.enabled = enabled;
+    registry
+        .add(name.clone(), new_config)
         .await
         .map_err(|e| {
             RegistrySnafu {
                 message: e.to_string(),
             }
             .build()
-        })?
-        .ok_or_else(|| ServerNotFoundSnafu { name: name.clone() }.build())?;
+        })?;
+    drop(registry);
 
+    // If server was running, spawn background restart
     let connected = manager.connected_servers().await;
-    let status = if connected.contains(&name) {
-        McpServerStatus::Connected
-    } else {
-        McpServerStatus::Disconnected
-    };
+    if connected.contains(&name) {
+        let mgr = manager.clone();
+        let restart_name = name.clone();
+        tokio::spawn(async move {
+            if let Err(e) = mgr.restart_server(&restart_name).await {
+                tracing::warn!(server = %restart_name, error = %e, "background MCP server restart failed");
+            }
+        });
+    }
 
-    Ok(Json(McpServerInfo {
-        name,
-        config: McpServerConfigView::from(config),
-        status,
-    }))
+    Ok(Json(build_server_info(&manager, &name).await?))
 }
 
 async fn remove_server(
@@ -226,45 +229,29 @@ async fn start_server(
         .ok_or_else(|| ServerNotFoundSnafu { name: name.clone() }.build())?;
     drop(registry);
 
-    manager.start_server(&name, &config).await.map_err(|e| {
-        McpSnafu {
-            message: e.to_string(),
+    // Fire-and-forget start
+    let mgr = manager.clone();
+    let start_name = name.clone();
+    tokio::spawn(async move {
+        if let Err(e) = mgr.start_server(&start_name, &config).await {
+            tracing::warn!(server = %start_name, error = %e, "background MCP server start failed");
         }
-        .build()
-    })?;
+    });
 
-    let status = McpServerStatus::Connected;
-
-    Ok(Json(McpServerInfo {
-        name,
-        config: McpServerConfigView::from(config),
-        status,
-    }))
+    Ok(Json(build_server_info(&manager, &name).await?))
 }
 
 async fn stop_server(
     State(manager): State<McpState>,
     Path(name): Path<String>,
 ) -> Result<Json<McpServerInfo>, McpAdminError> {
-    let registry = manager.registry().await;
-    let config = registry
-        .get(&name)
-        .await
-        .map_err(|e| {
-            RegistrySnafu {
-                message: e.to_string(),
-            }
-            .build()
-        })?
-        .ok_or_else(|| ServerNotFoundSnafu { name: name.clone() }.build())?;
-    drop(registry);
-
+    // Verify server exists before stopping
+    let info = build_server_info(&manager, &name).await?;
     manager.stop_server(&name).await;
 
     Ok(Json(McpServerInfo {
-        name,
-        config: McpServerConfigView::from(config),
         status: McpServerStatus::Disconnected,
+        ..info
     }))
 }
 
@@ -272,71 +259,53 @@ async fn restart_server(
     State(manager): State<McpState>,
     Path(name): Path<String>,
 ) -> Result<Json<McpServerInfo>, McpAdminError> {
-    manager.restart_server(&name).await.map_err(|e| {
-        McpSnafu {
-            message: e.to_string(),
+    // Verify server exists
+    let _ = build_server_info(&manager, &name).await?;
+
+    // Fire-and-forget restart
+    let mgr = manager.clone();
+    let restart_name = name.clone();
+    tokio::spawn(async move {
+        if let Err(e) = mgr.restart_server(&restart_name).await {
+            tracing::warn!(server = %restart_name, error = %e, "background MCP server restart failed");
         }
-        .build()
-    })?;
+    });
 
-    let registry = manager.registry().await;
-    let config = registry
-        .get(&name)
-        .await
-        .map_err(|e| {
-            RegistrySnafu {
-                message: e.to_string(),
-            }
-            .build()
-        })?
-        .ok_or_else(|| ServerNotFoundSnafu { name: name.clone() }.build())?;
-
-    Ok(Json(McpServerInfo {
-        name,
-        config: McpServerConfigView::from(config),
-        status: McpServerStatus::Connected,
-    }))
+    Ok(Json(build_server_info(&manager, &name).await?))
 }
 
 async fn enable_server(
     State(manager): State<McpState>,
     Path(name): Path<String>,
 ) -> Result<Json<McpServerInfo>, McpAdminError> {
-    let enabled = manager.enable_server(&name).await.map_err(|e| {
-        McpSnafu {
+    // Enable in registry (fast)
+    let registry = manager.registry().await;
+    let enabled = registry.enable(&name).await.map_err(|e| {
+        RegistrySnafu {
             message: e.to_string(),
         }
         .build()
     })?;
+    drop(registry);
 
     if !enabled {
         return Err(ServerNotFoundSnafu { name }.build());
     }
 
-    let registry = manager.registry().await;
-    let config = registry
-        .get(&name)
-        .await
-        .map_err(|e| {
-            RegistrySnafu {
-                message: e.to_string(),
+    // Fire-and-forget start
+    let mgr = manager.clone();
+    let start_name = name.clone();
+    tokio::spawn(async move {
+        let registry = mgr.registry().await;
+        if let Ok(Some(config)) = registry.get(&start_name).await {
+            drop(registry);
+            if let Err(e) = mgr.start_server(&start_name, &config).await {
+                tracing::warn!(server = %start_name, error = %e, "background MCP server start failed");
             }
-            .build()
-        })?
-        .ok_or_else(|| ServerNotFoundSnafu { name: name.clone() }.build())?;
+        }
+    });
 
-    let connected = manager.connected_servers().await;
-    let status = if connected.contains(&name) {
-        McpServerStatus::Connected
-    } else {
-        McpServerStatus::Disconnected
-    };
-
-    Ok(Json(McpServerInfo {
-        name,
-        config: McpServerConfigView::from(config),
-        status,
-    }))
+    Ok(Json(build_server_info(&manager, &name).await?))
 }
 
 async fn disable_server(
@@ -354,23 +323,7 @@ async fn disable_server(
         return Err(ServerNotFoundSnafu { name }.build());
     }
 
-    let registry = manager.registry().await;
-    let config = registry
-        .get(&name)
-        .await
-        .map_err(|e| {
-            RegistrySnafu {
-                message: e.to_string(),
-            }
-            .build()
-        })?
-        .ok_or_else(|| ServerNotFoundSnafu { name: name.clone() }.build())?;
-
-    Ok(Json(McpServerInfo {
-        name,
-        config: McpServerConfigView::from(config),
-        status: McpServerStatus::Disconnected,
-    }))
+    Ok(Json(build_server_info(&manager, &name).await?))
 }
 
 async fn list_server_tools(
