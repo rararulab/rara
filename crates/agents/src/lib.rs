@@ -16,4 +16,3 @@ pub mod err;
 pub mod model;
 pub mod runner;
 pub mod tool_registry;
-pub mod tools;
