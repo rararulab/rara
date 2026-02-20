@@ -419,3 +419,54 @@ export interface CreateSkillRequest {
   allowed_tools: string[];
   prompt: string;
 }
+
+// ── MCP Management ──────────────────────────────────────────
+
+export interface McpServerInfo {
+  name: string;
+  config: McpServerConfig;
+  status: McpServerStatus;
+}
+
+export interface McpServerConfig {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  enabled: boolean;
+  transport: string;
+  url: string | null;
+  startup_timeout_secs: number | null;
+  tool_timeout_secs: number | null;
+  tools_enabled: string[] | null;
+  tools_disabled: string[];
+}
+
+export type McpServerStatus =
+  | { type: 'connected' }
+  | { type: 'disconnected' }
+  | { type: 'error'; message: string };
+
+export interface McpToolView {
+  name: string;
+  description: string | null;
+  input_schema: Record<string, unknown>;
+}
+
+export interface McpResourceView {
+  uri: string;
+  name: string | null;
+  description: string | null;
+  mime_type: string | null;
+}
+
+export interface CreateMcpServerRequest {
+  name: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  enabled: boolean;
+  transport: string;
+  url?: string;
+  startup_timeout_secs?: number;
+  tool_timeout_secs?: number;
+}
