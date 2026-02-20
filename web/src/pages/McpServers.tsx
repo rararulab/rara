@@ -45,7 +45,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  ArrowLeft,
+
   ChevronDown,
   ChevronRight,
   FileText,
@@ -153,7 +153,7 @@ function serverToForm(server: McpServerInfo): FormState {
   };
 }
 
-export default function McpServers({ onBack }: { onBack: () => void }) {
+export default function McpServers() {
   const queryClient = useQueryClient();
   const [toast, setToast] = useState<ToastState>(null);
   const [expandedServer, setExpandedServer] = useState<string | null>(null);
@@ -372,16 +372,11 @@ export default function McpServers({ onBack }: { onBack: () => void }) {
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={onBack}>
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <div>
-            <h2 className="text-xl font-bold">MCP Servers</h2>
-            <p className="text-sm text-muted-foreground">
-              {connectedCount} connected / {servers.length} configured
-            </p>
-          </div>
+        <div>
+          <h2 className="text-xl font-bold">MCP Servers</h2>
+          <p className="text-sm text-muted-foreground">
+            {connectedCount} connected / {servers.length} configured
+          </p>
         </div>
         <Button onClick={openAdd}>
           <Plus className="mr-2 h-4 w-4" />

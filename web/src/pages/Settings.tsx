@@ -18,7 +18,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import type {
-  McpServerInfo,
   PromptFileView,
   PromptListView,
   RuntimeSettingsPatch,
@@ -49,11 +48,11 @@ import {
   EyeOff,
   MessageSquare,
   Search,
-  Server,
+
   Sparkles,
   X,
 } from "lucide-react";
-import McpServers from "@/pages/McpServers";
+
 import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
@@ -63,7 +62,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-type SettingKey = "ai" | "agent" | "telegram" | "mcp";
+type SettingKey = "ai" | "agent" | "telegram";
 type ToastState = { kind: "success" | "error"; message: string } | null;
 type OpenRouterModel = {
   id: string;
@@ -103,10 +102,6 @@ export default function Settings() {
     queryFn: () => api.get<RuntimeSettingsView>("/api/v1/settings"),
   });
 
-  const mcpServersQuery = useQuery({
-    queryKey: ["mcp-servers"],
-    queryFn: () => api.get<McpServerInfo[]>("/api/v1/mcp/servers"),
-  });
 
   const promptsQuery = useQuery({
     queryKey: ["settings-prompts"],
@@ -439,7 +434,7 @@ export default function Settings() {
   const current = settingsQuery.data;
   const availablePrompts = promptsQuery.data?.prompts ?? [];
   const selectedPromptMeta = availablePrompts.find((p) => p.name === selectedPromptName);
-  const isDialogOpen = selectedSetting !== null && selectedSetting !== "mcp";
+  const isDialogOpen = selectedSetting !== null;
 
   const dialogTitle =
     selectedSetting === "ai"
@@ -664,10 +659,6 @@ export default function Settings() {
     );
   };
 
-  if (selectedSetting === "mcp") {
-    return <McpServers onBack={() => setSelectedSetting(null)} />;
-  }
-
   return (
     <div className="space-y-6">
       <div>
@@ -748,42 +739,6 @@ export default function Settings() {
           </div>
         </button>
 
-        <button
-          type="button"
-          className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
-          onClick={() => openSetting("mcp")}
-        >
-          <div className="flex items-center gap-3">
-            <Server className="h-4 w-4 text-muted-foreground" />
-            <div className="space-y-1">
-              <p className="font-medium">MCP Servers</p>
-              <p className="text-xs text-muted-foreground">
-                {(() => {
-                  const mcpServers = mcpServersQuery.data ?? [];
-                  const connected = mcpServers.filter((s) => s.status.type === "connected").length;
-                  return `${connected} connected \u00b7 ${mcpServers.length} configured`;
-                })()}
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <Badge
-              variant={
-                (mcpServersQuery.data ?? []).some((s) => s.status.type === "connected")
-                  ? "default"
-                  : "secondary"
-              }
-            >
-              {(() => {
-                const connected = (mcpServersQuery.data ?? []).filter(
-                  (s) => s.status.type === "connected",
-                ).length;
-                return connected > 0 ? `${connected} Active` : "None active";
-              })()}
-            </Badge>
-            <ChevronRight className="h-4 w-4 text-muted-foreground" />
-          </div>
-        </button>
       </div>
 
       <Dialog open={isDialogOpen} onOpenChange={(open) => !open && setSelectedSetting(null)}>
