@@ -345,6 +345,9 @@ async fn handle_command(
         Command::Model(args) => {
             handle_model(&msg, &args, state).await?;
         }
+        Command::Mcp => {
+            handle_mcp(&msg, state).await?;
+        }
     }
     Ok(())
 }
@@ -1080,6 +1083,60 @@ async fn handle_model(
                     .send_message(msg.chat.id, format!("Failed to update model: {e}"))
                     .await?;
             }
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle `/mcp` — show MCP server connection status.
+async fn handle_mcp(msg: &Message, state: &Arc<BotState>) -> Result<(), teloxide::RequestError> {
+    use crate::http_client::McpServerStatus;
+
+    match state.http_client.list_mcp_servers().await {
+        Ok(servers) => {
+            if servers.is_empty() {
+                state
+                    .bot
+                    .send_message(msg.chat.id, "No MCP servers configured.")
+                    .await?;
+                return Ok(());
+            }
+
+            use std::fmt::Write;
+            let mut text = format!("<b>MCP Servers</b> ({})\n\n", servers.len());
+            for s in &servers {
+                let (icon, status_text) = match &s.status {
+                    McpServerStatus::Connected => ("●", "connected".to_owned()),
+                    McpServerStatus::Disconnected => ("○", "disconnected".to_owned()),
+                    McpServerStatus::Error { message } => {
+                        ("✘", format!("error: {}", html_escape(message)))
+                    }
+                };
+                let _ = writeln!(text, "{icon} <b>{}</b> — {status_text}", html_escape(&s.name));
+            }
+
+            let connected = servers
+                .iter()
+                .filter(|s| matches!(s.status, McpServerStatus::Connected))
+                .count();
+            let _ = write!(
+                text,
+                "\n{connected}/{} connected",
+                servers.len()
+            );
+
+            state
+                .bot
+                .send_message(msg.chat.id, text)
+                .parse_mode(ParseMode::Html)
+                .await?;
+        }
+        Err(e) => {
+            state
+                .bot
+                .send_message(msg.chat.id, format!("Failed to fetch MCP status: {e}"))
+                .await?;
         }
     }
 

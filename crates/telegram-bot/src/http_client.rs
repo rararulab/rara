@@ -307,6 +307,24 @@ impl MainServiceHttpClient {
             .context(RequestSnafu)
     }
 
+    /// List MCP server status.
+    ///
+    /// Maps to `GET /api/v1/mcp/servers`.
+    pub async fn list_mcp_servers(&self) -> Result<Vec<McpServerInfo>, MainServiceHttpError> {
+        let url = format!("{}/api/v1/mcp/servers", self.base_url);
+        let resp = self.client.get(url).send().await.context(RequestSnafu)?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(MainServiceHttpError::HttpStatus { status, body });
+        }
+
+        resp.json::<Vec<McpServerInfo>>()
+            .await
+            .context(RequestSnafu)
+    }
+
     /// Update session fields (e.g. model, title).
     ///
     /// Maps to `PATCH /api/v1/chat/sessions/{key}`.
@@ -411,6 +429,22 @@ pub(crate) struct SessionDetailResponse {
     pub preview:       Option<String>,
     pub created_at:    String,
     pub updated_at:    String,
+}
+
+/// MCP server info returned by `GET /api/v1/mcp/servers`.
+#[derive(Debug, Deserialize)]
+pub(crate) struct McpServerInfo {
+    pub name:   String,
+    pub status: McpServerStatus,
+}
+
+/// MCP server connection status.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub(crate) enum McpServerStatus {
+    Connected,
+    Disconnected,
+    Error { message: String },
 }
 
 impl ChatMessageData {
