@@ -1,0 +1,74 @@
+# rara-mcp crate tasks
+
+PKG := "rara-mcp"
+
+[group("help")]
+[private]
+default:
+    @just --list
+
+# ── Code Quality ─────────────────────────────────────────────────────────
+
+[doc("cargo check")]
+[group("quality")]
+check:
+    cargo check -p {{PKG}}
+
+alias c := check
+
+[doc("cargo clippy")]
+[group("quality")]
+clippy:
+    cargo clippy -p {{PKG}} --all-targets --no-deps -- -D warnings
+
+[doc("cargo fmt check")]
+[group("quality")]
+fmt-check:
+    cargo +nightly fmt -p {{PKG}} --check
+
+# ── Tests ────────────────────────────────────────────────────────────────
+
+[doc("run all tests (unit + integration)")]
+[group("test")]
+test:
+    cargo test -p {{PKG}}
+
+alias t := test
+
+[doc("run integration tests only (requires test_mcp_server example)")]
+[group("test")]
+test-integration:
+    cargo test -p {{PKG}} --test manager
+
+alias ti := test-integration
+
+[doc("run unit tests only")]
+[group("test")]
+test-unit:
+    cargo test -p {{PKG}} --lib
+
+alias tu := test-unit
+
+[doc("run tests with output visible")]
+[group("test")]
+test-verbose:
+    cargo test -p {{PKG}} -- --nocapture
+
+# ── Build ────────────────────────────────────────────────────────────────
+
+[doc("build the test_mcp_server example binary")]
+[group("build")]
+build-test-server:
+    cargo build --example test_mcp_server -p {{PKG}}
+
+[doc("build the crate")]
+[group("build")]
+build:
+    cargo build -p {{PKG}}
+
+# ── Documentation ────────────────────────────────────────────────────────
+
+[doc("open crate docs in browser")]
+[group("docs")]
+docs:
+    cargo doc -p {{PKG}} --no-deps --document-private-items --open

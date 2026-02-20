@@ -14,6 +14,7 @@ categories.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 base.workspace = true
+bon.workspace = true
 futures.workspace = true
 keyring = { version = "^3.6", features = ["crypto-rust"] }
 oauth2.workspace = true
@@ -35,6 +36,7 @@ schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2.workspace = true
+smart-default.workspace = true
 snafu.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
@@ -42,6 +44,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

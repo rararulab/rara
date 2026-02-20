@@ -1,0 +1,140 @@
+use std::{collections::HashMap, sync::Arc};
+
+use futures::future::BoxFuture;
+use rmcp::model::{CreateElicitationResult, RequestId};
+use tokio::sync::{Mutex, oneshot};
+
+use crate::logging_client_handler::SendElicitation;
+
+/// Manages pending MCP elicitation requests.
+///
+/// When an MCP server asks the user for input (e.g. OAuth consent or a form),
+/// the request is parked here via a oneshot channel. The UI layer later
+/// calls [`complete`](Self::complete) to deliver the user's response back
+/// to the waiting server handler.
+#[derive(Clone, Default)]
+pub(crate) struct ElicitationRequestManager {
+    inner: Arc<Mutex<ElicitationRequestManagerInner>>,
+}
+
+/// Interior state: maps `(server_name, request_id)` to the oneshot sender
+/// that will unblock the waiting elicitation callback.
+#[derive(Default)]
+struct ElicitationRequestManagerInner {
+    requests: HashMap<(String, RequestId), oneshot::Sender<CreateElicitationResult>>,
+}
+
+impl ElicitationRequestManager {
+    /// Build a [`SendElicitation`] callback for a specific server.
+    ///
+    /// When the MCP server sends an elicitation request, the callback
+    /// registers a oneshot channel and waits for a response (provided
+    /// later via [`complete`](Self::complete)).
+    pub(crate) fn make_sender(&self, server_name: String) -> SendElicitation {
+        let inner = self.inner.clone();
+        Box::new(move |request_id, _params| {
+            let inner = inner.clone();
+            let server_name = server_name.clone();
+            Box::pin(async move {
+                let (tx, rx) = oneshot::channel();
+                {
+                    let mut guard = inner.lock().await;
+                    guard.requests.insert((server_name, request_id), tx);
+                }
+                rx.await
+                    .map_err(|_| anyhow::anyhow!("elicitation response channel closed"))
+            }) as BoxFuture<'static, anyhow::Result<CreateElicitationResult>>
+        })
+    }
+
+    /// Deliver an elicitation response from the UI back to the waiting
+    /// MCP server handler.
+    pub(crate) async fn complete(
+        &self,
+        server_name: &str,
+        request_id: RequestId,
+        result: CreateElicitationResult,
+    ) -> bool {
+        let mut guard = self.inner.lock().await;
+        if let Some(tx) = guard
+            .requests
+            .remove(&(server_name.to_string(), request_id))
+        {
+            tx.send(result).is_ok()
+        } else {
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use rmcp::model::{
+        CreateElicitationRequestParams, CreateElicitationResult, ElicitationAction,
+        ElicitationSchema,
+    };
+
+    use super::*;
+
+    fn make_request_id(n: i64) -> RequestId { RequestId::Number(n) }
+
+    fn dummy_result(action: ElicitationAction) -> CreateElicitationResult {
+        CreateElicitationResult {
+            action,
+            content: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn sender_and_complete_round_trip() {
+        let erm = ElicitationRequestManager::default();
+        let sender = erm.make_sender("test-server".to_string());
+        let request_id = make_request_id(1);
+
+        // Spawn a task that waits for the elicitation response.
+        let handle = tokio::spawn({
+            let request_id = request_id.clone();
+            async move {
+                let params =
+                    CreateElicitationRequestParams::FormElicitationParams {
+                        meta:             None,
+                        message:          "pick one".into(),
+                        requested_schema: ElicitationSchema::new(BTreeMap::new()),
+                    };
+                sender(request_id, params).await
+            }
+        });
+
+        // Give the sender task time to register.
+        tokio::task::yield_now().await;
+
+        // Complete the elicitation from the "UI" side.
+        let delivered = erm
+            .complete(
+                "test-server",
+                request_id,
+                dummy_result(ElicitationAction::Accept),
+            )
+            .await;
+        assert!(delivered, "complete should find the pending request");
+
+        // The sender task should resolve successfully.
+        let result = handle.await.unwrap().unwrap();
+        assert_eq!(result.action, ElicitationAction::Accept);
+    }
+
+    #[tokio::test]
+    async fn complete_unknown_request_returns_false() {
+        let erm = ElicitationRequestManager::default();
+        let delivered = erm
+            .complete(
+                "nonexistent",
+                make_request_id(999),
+                dummy_result(ElicitationAction::Decline),
+            )
+            .await;
+        assert!(!delivered);
+    }
+}
