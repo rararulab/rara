@@ -64,6 +64,7 @@ members = [
     "crates/skills",
     "crates/integrations/mcp",
     "crates/integrations/keyring-store",
+    "crates/extensions/mcp-admin",
 ]
 
 [workspace.dependencies]
@@ -159,7 +160,8 @@ rara-domain-skill = { path = "crates/domain/skill" }
 rara-domain-typst = { path = "crates/domain/typst" }
 rara-error = { path = "crates/common/error" }
 rara-keyring-store = { path = "crates/integrations/keyring-store" }
-rara-mcp = { path = "crates/mcp" }
+rara-mcp = { path = "crates/integrations/mcp" }
+rara-mcp-admin = { path = "crates/extensions/mcp-admin" }
 rara-memory = { path = "crates/memory" }
 rara-model = { path = "crates/rara-model" }
 rara-paths = { path = "crates/paths" }

@@ -64,6 +64,9 @@ pub struct AppState {
     // -- skills --
     pub skill_registry: rara_skills::registry::InMemoryRegistry,
 
+    // -- MCP --
+    pub mcp_manager: Arc<rara_mcp::manager::mgr::McpManager>,
+
     // -- worker coordination --
     pub analyze_notify:   Arc<RwLock<Option<NotifyHandle>>>,
     pub proactive_notify: Arc<RwLock<Option<IntervalOrNotifyHandle>>>,
@@ -260,6 +263,23 @@ impl AppState {
             skill_registry.clone(),
         )));
 
+        // -- MCP manager -------------------------------------------------------
+
+        let mcp_registry_path = rara_paths::config_dir().join("mcp-servers.json");
+        let mcp_registry = rara_mcp::manager::registry::FSMcpRegistry::load(&mcp_registry_path)
+            .await
+            .whatever_context("Failed to load MCP registry")?;
+        let mcp_manager = Arc::new(rara_mcp::manager::mgr::McpManager::new(
+            Arc::new(mcp_registry),
+            rara_mcp::oauth::OAuthCredentialsStoreMode::default(),
+        ));
+        let started = mcp_manager.start_enabled().await;
+        if started.is_empty() {
+            info!("No MCP servers to start");
+        } else {
+            info!(servers = ?started, "MCP servers started");
+        }
+
         let tools = Arc::new(tool_registry);
 
         let chat_service = rara_domain_chat::service::ChatService::new(
@@ -291,6 +311,7 @@ impl AppState {
             memory_manager,
             agent_scheduler,
             skill_registry,
+            mcp_manager,
             analyze_notify: Arc::new(RwLock::new(None)),
             proactive_notify: Arc::new(RwLock::new(None)),
         })
@@ -377,6 +398,10 @@ impl AppState {
         router = router.merge(rara_domain_skill::router::skill_routes(
             self.skill_registry.clone(),
         ));
+
+        // MCP admin routes (plain axum::Router, no OpenAPI metadata).
+        router = router.merge(rara_mcp_admin::router(self.mcp_manager.clone()));
+
         (router, api)
     }
 
