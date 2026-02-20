@@ -25,11 +25,13 @@
 //! | POST   | `/api/v1/jobs/discover`          | Search jobs with keyword filters |
 //! | POST   | `/api/v1/internal/bot/jd-parse`  | Submit raw JD text for parsing   |
 
+use futures::StreamExt;
 use rara_domain_job::types::DiscoveryCriteria;
 pub use rara_domain_job::types::DiscoveryJobResponse;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
+use tokio::sync::mpsc;
 
 /// Error model for bot -> main-service HTTP calls.
 #[derive(Debug, Snafu)]
@@ -233,6 +235,104 @@ impl MainServiceHttpClient {
         resp.json::<ChatMessageResponse>()
             .await
             .context(RequestSnafu)
+    }
+
+    /// Send a chat message via SSE streaming endpoint.
+    ///
+    /// Maps to `POST /api/v1/chat/sessions/{key}/stream`.
+    /// Returns a channel receiver that yields parsed SSE events.
+    /// Falls back to `Err` if the initial HTTP request fails.
+    pub async fn send_chat_message_streaming(
+        &self,
+        session_key: &str,
+        text: &str,
+        image_urls: Vec<String>,
+    ) -> Result<mpsc::Receiver<ChatStreamEvent>, MainServiceHttpError> {
+        let url = format!(
+            "{}/api/v1/chat/sessions/{}/stream",
+            self.base_url, session_key
+        );
+
+        let mut body = serde_json::json!({ "text": text });
+        if !image_urls.is_empty() {
+            body["image_urls"] = serde_json::json!(image_urls);
+        }
+
+        let resp = self
+            .client
+            .post(url)
+            .json(&body)
+            .send()
+            .await
+            .context(RequestSnafu)?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(MainServiceHttpError::HttpStatus { status, body });
+        }
+
+        let (tx, rx) = mpsc::channel(64);
+
+        // Spawn a task to read the SSE stream and parse events.
+        tokio::spawn(async move {
+            let mut stream = resp.bytes_stream();
+            let mut buffer = String::new();
+            let mut current_event_type = String::new();
+
+            while let Some(chunk_result) = stream.next().await {
+                let Ok(bytes) = chunk_result else { break };
+                buffer.push_str(&String::from_utf8_lossy(&bytes));
+
+                // Process complete SSE messages (terminated by double newline).
+                while let Some(pos) = buffer.find("\n\n") {
+                    let message = buffer[..pos].to_owned();
+                    buffer = buffer[pos + 2..].to_owned();
+
+                    let mut data_str = String::new();
+                    for line in message.lines() {
+                        if let Some(evt) = line.strip_prefix("event: ") {
+                            current_event_type = evt.trim().to_owned();
+                        } else if let Some(d) = line.strip_prefix("data: ") {
+                            data_str = d.to_owned();
+                        } else if line.starts_with(':') {
+                            // SSE comment (keep-alive), ignore.
+                            continue;
+                        }
+                    }
+
+                    if data_str.is_empty() {
+                        continue;
+                    }
+
+                    match serde_json::from_str::<ChatStreamEvent>(&data_str) {
+                        Ok(event) => {
+                            let is_terminal = matches!(
+                                &event,
+                                ChatStreamEvent::Done { .. }
+                                    | ChatStreamEvent::Error { .. }
+                            );
+                            if tx.send(event).await.is_err() {
+                                return; // receiver dropped
+                            }
+                            if is_terminal {
+                                return;
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                event_type = %current_event_type,
+                                data = %data_str,
+                                error = %e,
+                                "failed to parse SSE event"
+                            );
+                        }
+                    }
+                }
+            }
+        });
+
+        Ok(rx)
     }
 
     /// Create a new chat session.
@@ -445,6 +545,46 @@ pub(crate) enum McpServerStatus {
     Connected,
     Disconnected,
     Error { message: String },
+}
+
+/// SSE event from the streaming chat endpoint.
+///
+/// Mirrors `rara_domain_chat::stream::ChatStreamEvent` -- duplicated here
+/// so the bot crate doesn't depend on the domain crate.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum ChatStreamEvent {
+    TextDelta {
+        text: String,
+    },
+    ReasoningDelta {
+        #[allow(dead_code)]
+        text: String,
+    },
+    Thinking,
+    ThinkingDone,
+    Iteration {
+        #[allow(dead_code)]
+        index: usize,
+    },
+    ToolCallStart {
+        #[allow(dead_code)]
+        id: String,
+        name: String,
+    },
+    ToolCallEnd {
+        #[allow(dead_code)]
+        id: String,
+        name: String,
+        success: bool,
+        error: Option<String>,
+    },
+    Done {
+        text: String,
+    },
+    Error {
+        message: String,
+    },
 }
 
 impl ChatMessageData {

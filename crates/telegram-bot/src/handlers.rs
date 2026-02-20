@@ -30,6 +30,7 @@
 //! interactive.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use teloxide::{
@@ -45,7 +46,7 @@ use tracing::{info, warn};
 
 use crate::{
     command::Command,
-    http_client::DiscoveryJobResponse,
+    http_client::{ChatStreamEvent, DiscoveryJobResponse},
     markdown::{TELEGRAM_MAX_MESSAGE_LEN, chunk_message, markdown_to_telegram_html},
     state::BotState,
 };
@@ -294,6 +295,259 @@ fn start_typing_loop(
     (handle, cancel)
 }
 
+/// Minimum interval between Telegram `edit_message_text` calls (1.5 seconds)
+/// to avoid hitting Telegram API rate limits.
+const EDIT_THROTTLE: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Stream AI response via SSE and progressively update a Telegram message.
+///
+/// 1. Sends a placeholder "..." message and records its `message_id`.
+/// 2. Consumes SSE events from the streaming endpoint.
+/// 3. On `TextDelta`: accumulates text and edits the Telegram message every
+///    ~1.5 seconds (throttled).
+/// 4. On `ToolCallStart`: appends a status line like "Using tool: search_web".
+/// 5. On `Done`: final edit with the complete response (Markdown -> HTML).
+/// 6. On `Error`: edits the message to show the error.
+///
+/// Falls back to the synchronous `send_chat_message()` if SSE connection fails.
+async fn stream_and_relay(
+    msg: &Message,
+    session_key: &str,
+    text: &str,
+    image_urls: Vec<String>,
+    state: &Arc<BotState>,
+) -> Result<(), teloxide::RequestError> {
+    // Try SSE streaming first.
+    let mut rx = match state
+        .http_client
+        .send_chat_message_streaming(session_key, text, image_urls.clone())
+        .await
+    {
+        Ok(rx) => rx,
+        Err(e) => {
+            // Fallback to synchronous endpoint.
+            warn!(error = %e, "SSE streaming failed, falling back to sync");
+            return fallback_sync_reply(msg, session_key, text, image_urls, state).await;
+        }
+    };
+
+    // Send placeholder message.
+    let placeholder = state
+        .bot
+        .send_message(msg.chat.id, "...")
+        .reply_to(msg.id)
+        .await?;
+    let placeholder_id = placeholder.id;
+
+    let mut accumulated_text = String::new();
+    let mut last_edit = Instant::now();
+    let mut tool_status: Vec<String> = Vec::new();
+    let mut final_text: Option<String> = None;
+    let mut errored = false;
+
+    while let Some(event) = rx.recv().await {
+        match event {
+            ChatStreamEvent::TextDelta { text: delta } => {
+                accumulated_text.push_str(&delta);
+                // Throttled edit: only send if enough time has passed and there's
+                // content.
+                if last_edit.elapsed() >= EDIT_THROTTLE && !accumulated_text.trim().is_empty() {
+                    let display = build_progress_text(&accumulated_text, &tool_status);
+                    let _ = state
+                        .bot
+                        .edit_message_text(msg.chat.id, placeholder_id, &display)
+                        .await;
+                    last_edit = Instant::now();
+                }
+            }
+            ChatStreamEvent::ToolCallStart { name, .. } => {
+                tool_status.push(format!("\u{1f527} {name}"));
+                let display = build_progress_text(&accumulated_text, &tool_status);
+                // Always edit on tool start (important UX feedback).
+                let _ = state
+                    .bot
+                    .edit_message_text(msg.chat.id, placeholder_id, &display)
+                    .await;
+                last_edit = Instant::now();
+            }
+            ChatStreamEvent::ToolCallEnd {
+                name,
+                success,
+                error,
+                ..
+            } => {
+                // Update the tool status line.
+                if let Some(entry) = tool_status.iter_mut().find(|s| s.contains(&name)) {
+                    if success {
+                        *entry = format!("\u{2705} {name}");
+                    } else {
+                        let err_msg = error.as_deref().unwrap_or("failed");
+                        *entry = format!("\u{274c} {name}: {err_msg}");
+                    }
+                }
+            }
+            ChatStreamEvent::Done { text: done_text } => {
+                final_text = Some(done_text);
+                break;
+            }
+            ChatStreamEvent::Error { message: err_msg } => {
+                let _ = state
+                    .bot
+                    .edit_message_text(
+                        msg.chat.id,
+                        placeholder_id,
+                        format!("Error: {err_msg}"),
+                    )
+                    .await;
+                errored = true;
+                break;
+            }
+            // Ignore thinking/iteration/reasoning events.
+            _ => {}
+        }
+    }
+
+    if errored {
+        return Ok(());
+    }
+
+    // Final edit with the complete text.
+    let response_text = final_text.unwrap_or(accumulated_text);
+    if response_text.trim().is_empty() {
+        let _ = state
+            .bot
+            .edit_message_text(msg.chat.id, placeholder_id, "(empty response)")
+            .await;
+        return Ok(());
+    }
+
+    // Add @mention for group chats.
+    let response_text = if matches!(msg.chat.kind, teloxide::types::ChatKind::Public(..)) {
+        let mention = mention_sender(msg);
+        if mention.is_empty() {
+            response_text
+        } else {
+            format!("{mention}\n{response_text}")
+        }
+    } else {
+        response_text
+    };
+
+    let html = markdown_to_telegram_html(&response_text);
+    let chunks = chunk_message(&html, TELEGRAM_MAX_MESSAGE_LEN);
+
+    if chunks.len() == 1 {
+        // Single chunk: edit the placeholder.
+        let _ = state
+            .bot
+            .edit_message_text(msg.chat.id, placeholder_id, &chunks[0])
+            .parse_mode(ParseMode::Html)
+            .await;
+    } else {
+        // Multiple chunks: edit placeholder with first chunk, send rest as new
+        // messages.
+        let _ = state
+            .bot
+            .edit_message_text(msg.chat.id, placeholder_id, &chunks[0])
+            .parse_mode(ParseMode::Html)
+            .await;
+        for chunk in &chunks[1..] {
+            state
+                .bot
+                .send_message(msg.chat.id, chunk)
+                .parse_mode(ParseMode::Html)
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Build a progress display string showing accumulated text and tool status.
+fn build_progress_text(text: &str, tool_status: &[String]) -> String {
+    let mut display = String::new();
+    if !tool_status.is_empty() {
+        for status in tool_status {
+            display.push_str(status);
+            display.push('\n');
+        }
+        display.push('\n');
+    }
+    if !text.trim().is_empty() {
+        display.push_str(text);
+    }
+    if display.is_empty() {
+        display.push_str("...");
+    }
+    // Telegram edit_message_text won't accept identical content,
+    // and we don't want to exceed message size limits for intermediate edits.
+    if display.len() > 4000 {
+        display.truncate(4000);
+        display.push_str("...");
+    }
+    display
+}
+
+/// Fallback: use the synchronous `send_chat_message` endpoint.
+async fn fallback_sync_reply(
+    msg: &Message,
+    session_key: &str,
+    text: &str,
+    image_urls: Vec<String>,
+    state: &Arc<BotState>,
+) -> Result<(), teloxide::RequestError> {
+    let (typing_handle, typing_cancel) = start_typing_loop(state.bot.clone(), msg.chat.id);
+
+    let result = state
+        .http_client
+        .send_chat_message(session_key, text, image_urls)
+        .await;
+
+    typing_cancel.cancel();
+    let _ = typing_handle.await;
+
+    match result {
+        Ok(response) => {
+            let reply_text = response.message.text_content();
+            if !reply_text.is_empty() {
+                let reply_text =
+                    if matches!(msg.chat.kind, teloxide::types::ChatKind::Public(..)) {
+                        let mention = mention_sender(msg);
+                        if mention.is_empty() {
+                            reply_text
+                        } else {
+                            format!("{mention}\n{reply_text}")
+                        }
+                    } else {
+                        reply_text
+                    };
+
+                let html = markdown_to_telegram_html(&reply_text);
+                let chunks = chunk_message(&html, TELEGRAM_MAX_MESSAGE_LEN);
+                for (i, chunk) in chunks.into_iter().enumerate() {
+                    let mut req = state
+                        .bot
+                        .send_message(msg.chat.id, chunk)
+                        .parse_mode(ParseMode::Html);
+                    if i == 0 {
+                        req = req.reply_to(msg.id);
+                    }
+                    req.await?;
+                }
+            }
+        }
+        Err(e) => {
+            state
+                .bot
+                .send_message(msg.chat.id, format!("Chat error: {e}"))
+                .reply_to(msg.id)
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Command handlers
 // ---------------------------------------------------------------------------
@@ -355,8 +609,8 @@ async fn handle_command(
 /// Route plain text messages to the chat session system.
 ///
 /// Resolves (or auto-creates) a channel binding for this Telegram chat,
-/// sends the user message to the chat service, and relays the AI response
-/// back to the user with Markdown formatting.
+/// then streams the AI response via SSE with progressive Telegram message
+/// updates.
 async fn handle_chat_message(
     msg: &Message,
     text: &str,
@@ -394,58 +648,7 @@ async fn handle_chat_message(
         }
     };
 
-    // Start continuous typing indicator while waiting for LLM response.
-    let (typing_handle, typing_cancel) = start_typing_loop(state.bot.clone(), msg.chat.id);
-
-    // Send to chat service and relay response.
-    let result = state
-        .http_client
-        .send_chat_message(&session_key, text, vec![])
-        .await;
-
-    // Stop the typing indicator loop.
-    typing_cancel.cancel();
-    let _ = typing_handle.await;
-
-    match result {
-        Ok(response) => {
-            let reply_text = response.message.text_content();
-            if !reply_text.is_empty() {
-                let reply_text = if matches!(msg.chat.kind, teloxide::types::ChatKind::Public(..)) {
-                    let mention = mention_sender(msg);
-                    if mention.is_empty() {
-                        reply_text
-                    } else {
-                        format!("{mention}\n{reply_text}")
-                    }
-                } else {
-                    reply_text
-                };
-
-                let html = markdown_to_telegram_html(&reply_text);
-                let chunks = chunk_message(&html, TELEGRAM_MAX_MESSAGE_LEN);
-                for (i, chunk) in chunks.into_iter().enumerate() {
-                    let mut req = state
-                        .bot
-                        .send_message(msg.chat.id, chunk)
-                        .parse_mode(ParseMode::Html);
-                    if i == 0 {
-                        req = req.reply_to(msg.id);
-                    }
-                    req.await?;
-                }
-            }
-        }
-        Err(e) => {
-            state
-                .bot
-                .send_message(msg.chat.id, format!("Chat error: {e}"))
-                .reply_to(msg.id)
-                .await?;
-        }
-    }
-
-    Ok(())
+    stream_and_relay(msg, &session_key, text, vec![], state).await
 }
 
 /// Handle a photo message by downloading the image and forwarding it to the
@@ -550,43 +753,12 @@ async fn handle_photo_message(
         caption
     };
 
-    // Send to chat service with multimodal content.
-    let result = state
-        .http_client
-        .send_chat_message(&session_key, text, vec![data_url])
-        .await;
-
-    // Stop the typing indicator loop.
+    // Stop typing since streaming will show progress inline.
     typing_cancel.cancel();
     let _ = typing_handle.await;
 
-    match result {
-        Ok(response) => {
-            let reply_text = response.message.text_content();
-            if !reply_text.is_empty() {
-                let html = markdown_to_telegram_html(&reply_text);
-                let chunks = chunk_message(&html, TELEGRAM_MAX_MESSAGE_LEN);
-                for (i, chunk) in chunks.into_iter().enumerate() {
-                    let mut req = state
-                        .bot
-                        .send_message(msg.chat.id, chunk)
-                        .parse_mode(ParseMode::Html);
-                    if i == 0 {
-                        req = req.reply_to(msg.id);
-                    }
-                    req.await?;
-                }
-            }
-        }
-        Err(e) => {
-            state
-                .bot
-                .send_message(msg.chat.id, format!("Chat error: {e}"))
-                .await?;
-        }
-    }
-
-    Ok(())
+    // Stream AI response and progressively update Telegram message.
+    stream_and_relay(msg, &session_key, text, vec![data_url], state).await
 }
 
 /// Handle `/new` — start a new chat session and re-bind the channel.
