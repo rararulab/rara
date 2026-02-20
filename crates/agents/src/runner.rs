@@ -12,14 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use backon::{ExponentialBuilder, Retryable};
 use base::shared_string::SharedString;
 use bon::Builder;
+use futures::StreamExt;
 use openrouter_rs::{
     api::chat::{Content, Message},
     types::{Choice, Role, completion::CompletionsResponse},
 };
 use snafu::ResultExt;
+use tokio::sync::mpsc;
 use tracing::{error, info, trace, warn};
 
 use crate::{err::prelude::*, model::OpenRouterLoaderRef, tool_registry::ToolRegistry};
@@ -39,7 +44,8 @@ pub struct AgentRunResponse {
 }
 
 /// Events emitted during the agent run.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum RunnerEvent {
     /// LLM is processing (show a "thinking" indicator).
     Thinking,
@@ -58,6 +64,18 @@ pub enum RunnerEvent {
         error:   Option<String>,
         result:  Option<serde_json::Value>,
     },
+    /// Incremental text content from a streaming LLM response.
+    TextDelta(String),
+    /// Incremental reasoning content from a streaming LLM response.
+    ReasoningDelta(String),
+    /// The agent loop completed successfully.
+    Done {
+        text:             String,
+        iterations:       usize,
+        tool_calls_made:  usize,
+    },
+    /// The agent loop failed with an error.
+    Error(String),
 }
 
 /// Callback for streaming events out of the runner.
@@ -377,6 +395,270 @@ impl AgentRunner {
             message: "agent loop exceeded max iterations".into(),
         })?
     }
+
+    /// Streaming variant of [`run`]. Spawns the agent loop in a background
+    /// task and returns a channel receiver yielding [`RunnerEvent`]s in
+    /// real-time, including incremental text/reasoning deltas.
+    ///
+    /// The primary model is tried first; on fallback-eligible errors the
+    /// runner transparently retries with each model in `fallback_models`.
+    pub fn run_streaming(self, tools: Arc<ToolRegistry>) -> mpsc::Receiver<RunnerEvent> {
+        let (tx, rx) = mpsc::channel(128);
+        tokio::spawn(async move {
+            let model = self.model_name.as_ref().to_owned();
+            if let Err(e) = self.run_streaming_inner(&model, &tools, &tx).await {
+                let _ = tx.send(RunnerEvent::Error(e.to_string())).await;
+            }
+        });
+        rx
+    }
+
+    /// Core streaming agent loop for a single model.
+    async fn run_streaming_inner(
+        &self,
+        model: &str,
+        tools: &ToolRegistry,
+        tx: &mpsc::Sender<RunnerEvent>,
+    ) -> Result<()> {
+        info!(model_name = model, "starting streaming agent loop");
+
+        // Prepare messages — identical to run_with_model.
+        let mut messages = {
+            let mut msgs = vec![Message::new(Role::System, self.system_prompt.as_ref())];
+            if let Some(hist) = &self.history {
+                msgs.extend(hist.clone());
+            }
+            msgs.push(Message::new(Role::User, self.user_content.clone()));
+            msgs
+        };
+
+        let request_tools = if tools.is_empty() {
+            None
+        } else {
+            Some(tools.to_openrouter_tools()?)
+        };
+        let mut tool_calls_made = 0_usize;
+
+        for iteration in 0..self.max_iterations {
+            let _ = tx.send(RunnerEvent::Iteration(iteration)).await;
+            let _ = tx.send(RunnerEvent::Thinking).await;
+            info!(iteration, messages_count = messages.len(), "calling LLM (streaming)");
+
+            let openrouter_client = self.llm_provider.acquire_client().await?;
+
+            // Build request
+            let mut request_builder =
+                openrouter_rs::api::chat::ChatCompletionRequest::builder();
+            request_builder
+                .model(model)
+                .messages(messages.clone())
+                .temperature(0.7);
+
+            if let Some(tool_defs) = &request_tools {
+                request_builder.tools(tool_defs.clone());
+                request_builder.tool_choice(openrouter_rs::types::ToolChoice::auto());
+                request_builder.parallel_tool_calls(true);
+            }
+
+            let request = request_builder.build().context(OpenRouterSnafu)?;
+
+            // Use streaming API
+            let mut stream = openrouter_client
+                .stream_chat_completion(&request)
+                .await
+                .context(OpenRouterSnafu)?;
+
+            let mut accumulated_text = String::new();
+            let mut pending_tool_calls: HashMap<u32, PendingToolCall> = HashMap::new();
+            let mut has_tool_calls = false;
+
+            while let Some(chunk_result) = stream.next().await {
+                let response = chunk_result.context(OpenRouterSnafu)?;
+                let Some(choice) = response.choices.first() else {
+                    continue;
+                };
+
+                if let Choice::Streaming(sc) = choice {
+                    // Text content delta
+                    if let Some(ref text) = sc.delta.content {
+                        if !text.is_empty() {
+                            accumulated_text.push_str(text);
+                            let _ = tx.send(RunnerEvent::TextDelta(text.clone())).await;
+                        }
+                    }
+
+                    // Reasoning delta
+                    if let Some(ref reasoning) = sc.delta.reasoning {
+                        if !reasoning.is_empty() {
+                            let _ =
+                                tx.send(RunnerEvent::ReasoningDelta(reasoning.clone())).await;
+                        }
+                    }
+
+                    // Tool call delta accumulation
+                    if let Some(ref tool_calls_delta) = sc.delta.tool_calls {
+                        for tc in tool_calls_delta {
+                            let idx = tc.index.unwrap_or(0);
+                            let entry =
+                                pending_tool_calls.entry(idx).or_insert_with(|| {
+                                    PendingToolCall {
+                                        id:              String::new(),
+                                        name:            String::new(),
+                                        arguments_buf:   String::new(),
+                                    }
+                                });
+                            if !tc.id.is_empty() {
+                                entry.id = tc.id.clone();
+                            }
+                            if !tc.function.name.is_empty() {
+                                entry.name = tc.function.name.clone();
+                            }
+                            entry.arguments_buf.push_str(&tc.function.arguments);
+                        }
+                    }
+
+                    // Check finish_reason
+                    if let Some(ref reason) = sc.finish_reason {
+                        match reason {
+                            openrouter_rs::types::completion::FinishReason::ToolCalls => {
+                                has_tool_calls = true;
+                                break;
+                            }
+                            openrouter_rs::types::completion::FinishReason::Stop
+                            | openrouter_rs::types::completion::FinishReason::Length => {
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
+            let _ = tx.send(RunnerEvent::ThinkingDone).await;
+
+            if !has_tool_calls {
+                // Terminal: no tool calls, return text.
+                let _ = tx
+                    .send(RunnerEvent::Done {
+                        text:            accumulated_text,
+                        iterations:      iteration + 1,
+                        tool_calls_made,
+                    })
+                    .await;
+                return Ok(());
+            }
+
+            // Build tool calls from pending, sorted by index.
+            let mut sorted_indices: Vec<u32> = pending_tool_calls.keys().copied().collect();
+            sorted_indices.sort_unstable();
+
+            let tool_call_list: Vec<(String, String, serde_json::Value)> = sorted_indices
+                .into_iter()
+                .filter_map(|idx| pending_tool_calls.remove(&idx))
+                .map(|ptc| {
+                    let args = serde_json::from_str::<serde_json::Value>(&ptc.arguments_buf)
+                        .unwrap_or(serde_json::json!({}));
+                    (ptc.id, ptc.name, args)
+                })
+                .collect();
+
+            // Build assistant message with tool_calls for message history.
+            let openrouter_tool_calls: Vec<openrouter_rs::types::completion::ToolCall> =
+                tool_call_list
+                    .iter()
+                    .map(|(id, name, args)| openrouter_rs::types::completion::ToolCall {
+                        id:        id.clone(),
+                        type_:     "function".to_string(),
+                        function:  openrouter_rs::types::completion::FunctionCall {
+                            name:      name.clone(),
+                            arguments: serde_json::to_string(args).unwrap_or_default(),
+                        },
+                        index: None,
+                    })
+                    .collect();
+
+            let assistant_msg = Message {
+                role:         Role::Assistant,
+                content:      if accumulated_text.is_empty() {
+                    Content::Text(String::new())
+                } else {
+                    Content::Text(accumulated_text.clone())
+                },
+                name:         None,
+                tool_call_id: None,
+                tool_calls:   Some(openrouter_tool_calls),
+            };
+            messages.push(assistant_msg);
+
+            // Emit ToolCallStart events and execute tools.
+            for (id, name, args) in &tool_call_list {
+                tool_calls_made += 1;
+                let _ = tx
+                    .send(RunnerEvent::ToolCallStart {
+                        id:        id.clone(),
+                        name:      name.clone(),
+                        arguments: args.clone(),
+                    })
+                    .await;
+            }
+
+            // Execute tools concurrently.
+            let tool_futures: Vec<_> = tool_call_list
+                .iter()
+                .map(|(_id, name, args)| {
+                    let tool = tools.get(name);
+                    let args = args.clone();
+                    let name = name.clone();
+                    async move {
+                        if let Some(tool) = tool {
+                            match tool.execute(args).await {
+                                Ok(result) => (true, result, None::<String>),
+                                Err(e) => (
+                                    false,
+                                    serde_json::json!({ "error": e.to_string() }),
+                                    Some(e.to_string()),
+                                ),
+                            }
+                        } else {
+                            let err = format!("tool not found: {name}");
+                            (false, serde_json::json!({ "error": &err }), Some(err))
+                        }
+                    }
+                })
+                .collect();
+
+            let results = futures::future::join_all(tool_futures).await;
+
+            // Process results: emit ToolCallEnd and append tool response messages.
+            for ((id, name, _args), (success, result, err)) in
+                tool_call_list.iter().zip(results)
+            {
+                let _ = tx
+                    .send(RunnerEvent::ToolCallEnd {
+                        id:      id.clone(),
+                        name:    name.clone(),
+                        success,
+                        error:   err,
+                        result:  if success { Some(result.clone()) } else { None },
+                    })
+                    .await;
+
+                messages.push(Message::tool_response_named(id, name, result.to_string()));
+            }
+            // Continue to next iteration.
+        }
+
+        Err(Error::Other {
+            message: "agent loop exceeded max iterations".into(),
+        })
+    }
+}
+
+/// Tool call being accumulated from streaming chunks.
+struct PendingToolCall {
+    id:            String,
+    name:          String,
+    arguments_buf: String,
 }
 
 fn build_assistant_tool_call_message(choice: &Choice, assistant_text: &str) -> Message {

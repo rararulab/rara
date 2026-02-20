@@ -30,6 +30,7 @@
 //! | `PATCH`  | `/api/v1/chat/sessions/{key}`                        | Update session fields  |
 //! | `DELETE` | `/api/v1/chat/sessions/{key}`                        | Delete a session       |
 //! | `POST`   | `/api/v1/chat/sessions/{key}/send`                   | Send a message         |
+//! | `POST`   | `/api/v1/chat/sessions/{key}/stream`                 | Stream a message (SSE) |
 //! | `GET`    | `/api/v1/chat/sessions/{key}/messages`               | Get message history    |
 //! | `DELETE` | `/api/v1/chat/sessions/{key}/messages`               | Clear messages         |
 //! | `POST`   | `/api/v1/chat/sessions/{key}/fork`                   | Fork a session         |
@@ -40,9 +41,12 @@ use axum::{
     Json,
     extract::{Path, Query, State},
     http::StatusCode,
+    response::sse::{Event, KeepAlive, Sse},
 };
+use futures::stream::StreamExt;
 use rara_sessions::types::{ChannelBinding, ChatMessage, SessionEntry, SessionKey};
 use serde::{Deserialize, Serialize};
+use tokio_stream::wrappers::ReceiverStream;
 use tracing::instrument;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -173,6 +177,7 @@ fn session_routes(service: ChatService) -> OpenApiRouter {
 fn message_routes(service: ChatService) -> OpenApiRouter {
     OpenApiRouter::new()
         .routes(routes!(send_message))
+        .routes(routes!(stream_message))
         .routes(routes!(get_messages, clear_messages))
         .with_state(service)
 }
@@ -354,6 +359,45 @@ async fn send_message(
         .send_message(&SessionKey::from_raw(key), req.text, req.image_urls)
         .await?;
     Ok(Json(SendMessageResponse { message }))
+}
+
+/// `POST /api/v1/chat/sessions/{key}/stream` — send a user message and
+/// stream the assistant's response as Server-Sent Events (SSE).
+///
+/// Each SSE event has an `event` field set to the event type name (e.g.
+/// `text_delta`, `done`) and a `data` field containing the JSON-serialized
+/// [`ChatStreamEvent`](crate::stream::ChatStreamEvent).
+#[utoipa::path(
+    post,
+    path = "/api/v1/chat/sessions/{key}/stream",
+    tag = "chat",
+    params(("key" = String, Path, description = "Session key")),
+    request_body = SendMessageRequest,
+    responses(
+        (status = 200, description = "SSE event stream"),
+    )
+)]
+#[instrument(skip(service, req))]
+async fn stream_message(
+    State(service): State<ChatService>,
+    Path(key): Path<String>,
+    Json(req): Json<SendMessageRequest>,
+) -> Result<Sse<impl futures::Stream<Item = Result<Event, axum::Error>>>, ChatError> {
+    let rx = service
+        .send_message_streaming(&SessionKey::from_raw(key), req.text, req.image_urls)
+        .await?;
+
+    let stream = ReceiverStream::new(rx).map(|event| {
+        let event_name = event.event_type_name();
+        let data = serde_json::to_string(&event).unwrap_or_default();
+        Ok(Event::default().event(event_name).data(data))
+    });
+
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(std::time::Duration::from_secs(15))
+            .text("keep-alive"),
+    ))
 }
 
 /// `GET /api/v1/chat/sessions/{key}/messages` — retrieve conversation

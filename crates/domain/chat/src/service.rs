@@ -36,8 +36,10 @@ use rara_sessions::{
         SessionKey,
     },
 };
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tracing::{info, instrument};
+
+use crate::stream::ChatStreamEvent;
 
 use crate::{
     error::ChatError,
@@ -369,23 +371,19 @@ impl ChatService {
 
     // -- send message (LLM) -------------------------------------------------
 
-    /// Send a user message and get an assistant response.
+    /// Common setup for `send_message` and `send_message_streaming`.
     ///
-    /// This method:
-    /// 1. Ensures the session exists (creates it if `auto_create` is true).
-    /// 2. Reads the existing message history.
-    /// 3. Persists the user message (multimodal if `image_urls` are provided).
-    /// 4. Converts history to `openrouter_rs::api::chat::Message` format.
-    /// 5. Runs the agent loop.
-    /// 6. Persists the assistant response.
-    /// 7. Updates session metadata.
-    #[instrument(skip(self, user_text, image_urls))]
-    pub async fn send_message(
+    /// Validates input, ensures the session exists, persists the user message,
+    /// compacts history if needed, builds the system prompt and agent runner.
+    ///
+    /// Returns the prepared runner, effective tools, session, and user text
+    /// needed by both the synchronous and streaming paths.
+    async fn prepare_agent_run(
         &self,
         key: &SessionKey,
-        user_text: String,
-        image_urls: Option<Vec<String>>,
-    ) -> Result<ChatMessage, ChatError> {
+        user_text: &str,
+        image_urls: &Option<Vec<String>>,
+    ) -> Result<AgentRunSetup, ChatError> {
         if user_text.trim().is_empty() {
             return Err(ChatError::InvalidRequest {
                 message: "message text cannot be empty".to_owned(),
@@ -393,12 +391,9 @@ impl ChatService {
         }
 
         // 1. Ensure session exists
-        let mut session = match self.session_repo.get_session(key).await? {
+        let session = match self.session_repo.get_session(key).await? {
             Some(s) => s,
-            None => {
-                // Auto-create session
-                self.create_session(key.clone(), None, None, None).await?
-            }
+            None => self.create_session(key.clone(), None, None, None).await?,
         };
 
         // 2. Read existing history
@@ -409,7 +404,7 @@ impl ChatService {
         let user_msg = if has_images {
             let urls = image_urls.as_ref().unwrap();
             let mut blocks = vec![ContentBlock::Text {
-                text: user_text.clone(),
+                text: user_text.to_owned(),
             }];
             for url in urls {
                 blocks.push(ContentBlock::ImageUrl { url: url.clone() });
@@ -423,11 +418,11 @@ impl ChatService {
                 created_at:   Utc::now(),
             }
         } else {
-            ChatMessage::user(&user_text)
+            ChatMessage::user(user_text)
         };
         self.session_repo.append_message(key, &user_msg).await?;
 
-        // 4. Resolve model (needed for context window check).
+        // 4. Resolve model
         let model = session
             .model
             .clone()
@@ -453,7 +448,7 @@ impl ChatService {
             .map(to_openrouter_message)
             .collect::<Vec<_>>();
 
-        // 5. Build and run agent — multimodal content for user message
+        // 5. Build system prompt
         let base_system_prompt = session
             .system_prompt
             .clone()
@@ -476,7 +471,7 @@ impl ChatService {
         // Pre-fetch relevant memory context for new / short sessions.
         if history.len() < 3 {
             if let Some(ref mm) = self.memory_manager {
-                match mm.search(&user_text, 5).await {
+                match mm.search(user_text, 5).await {
                     Ok(results) if !results.is_empty() => {
                         system_prompt.push_str("\n\n## Relevant Memory Context\n");
                         for hit in &results {
@@ -487,7 +482,7 @@ impl ChatService {
                             "memory pre-fetch injected into system prompt"
                         );
                     }
-                    Ok(_) => {} // no results — nothing to inject
+                    Ok(_) => {}
                     Err(e) => {
                         tracing::warn!(error = %e, "memory pre-fetch failed, continuing without context");
                     }
@@ -498,43 +493,35 @@ impl ChatService {
         // -- skill listing injection --
         let tool_whitelist = {
             let all_skills = self.skill_registry.list_all();
-
-            // Generate available skills listing for the system prompt
             let skills_xml = rara_skills::prompt_gen::generate_skills_prompt(&all_skills);
             if !skills_xml.is_empty() {
                 system_prompt.push_str(&format!("\n\n{skills_xml}"));
             }
-
-            // No trigger-based tool filtering in the new API
             Vec::<String>::new()
         };
 
-        // Build effective tool registry: filtered when skills specify tools,
-        // otherwise use the full registry.
-        let filtered_tools;
-        let effective_tools: &ToolRegistry = if tool_whitelist.is_empty() {
-            &self.tools
+        // Build effective tool registry
+        let effective_tools = if tool_whitelist.is_empty() {
+            Arc::clone(&self.tools)
         } else {
-            filtered_tools = self.tools.filtered(&tool_whitelist);
-            &filtered_tools
+            Arc::new(self.tools.filtered(&tool_whitelist))
         };
 
         let user_content = if has_images {
             let urls = image_urls.as_ref().unwrap();
-            let mut parts = vec![ContentPart::text(&user_text)];
+            let mut parts = vec![ContentPart::text(user_text)];
             for url in urls {
                 parts.push(ContentPart::image_url(url));
             }
             Content::Parts(parts)
         } else {
-            Content::Text(user_text.clone())
+            Content::Text(user_text.to_owned())
         };
 
         // Resolve fallback models from settings.
         let fallback_models = {
             let settings = self.settings_rx.borrow();
             let chain = settings.ai.fallback_chain(ModelScenario::Chat);
-            // Skip the primary (first element); the rest are fallbacks.
             chain
                 .into_iter()
                 .skip(1)
@@ -551,9 +538,39 @@ impl ChatService {
             .fallback_models(fallback_models)
             .build();
 
+        Ok(AgentRunSetup {
+            runner,
+            effective_tools,
+            session,
+        })
+    }
+
+    /// Send a user message and get an assistant response.
+    ///
+    /// This method:
+    /// 1. Ensures the session exists (creates it if `auto_create` is true).
+    /// 2. Reads the existing message history.
+    /// 3. Persists the user message (multimodal if `image_urls` are provided).
+    /// 4. Converts history to `openrouter_rs::api::chat::Message` format.
+    /// 5. Runs the agent loop.
+    /// 6. Persists the assistant response.
+    /// 7. Updates session metadata.
+    #[instrument(skip(self, user_text, image_urls))]
+    pub async fn send_message(
+        &self,
+        key: &SessionKey,
+        user_text: String,
+        image_urls: Option<Vec<String>>,
+    ) -> Result<ChatMessage, ChatError> {
+        let AgentRunSetup {
+            runner,
+            effective_tools,
+            mut session,
+        } = self.prepare_agent_run(key, &user_text, &image_urls).await?;
+
         let result =
             runner
-                .run(effective_tools, None)
+                .run(&effective_tools, None)
                 .await
                 .map_err(|e| ChatError::AgentError {
                     message: e.to_string(),
@@ -578,7 +595,6 @@ impl ChatService {
         // 8. Update session metadata
         session.message_count += 2; // user + assistant
         if session.preview.is_none() {
-            // Use first user message as preview
             session.preview = Some(truncate_preview(&user_text, 100));
         }
         let _ = self.session_repo.update_session(&session).await;
@@ -616,6 +632,109 @@ impl ChatService {
         }
 
         Ok(persisted)
+    }
+
+    /// Streaming variant of [`send_message`](Self::send_message).
+    ///
+    /// Performs the same setup (session lookup, history, persist user message,
+    /// build prompt) but uses the streaming agent runner. Returns a channel
+    /// receiver of [`ChatStreamEvent`]s that the caller can convert into SSE
+    /// events.
+    ///
+    /// On the terminal `Done` event the assistant message is persisted and
+    /// session metadata is updated, all inside the background task.
+    #[instrument(skip(self, user_text, image_urls))]
+    pub async fn send_message_streaming(
+        &self,
+        key: &SessionKey,
+        user_text: String,
+        image_urls: Option<Vec<String>>,
+    ) -> Result<mpsc::Receiver<ChatStreamEvent>, ChatError> {
+        let AgentRunSetup {
+            runner,
+            effective_tools,
+            mut session,
+        } = self.prepare_agent_run(key, &user_text, &image_urls).await?;
+
+        // Start the streaming agent loop.
+        let mut runner_rx = runner.run_streaming(effective_tools);
+
+        // Channel for ChatStreamEvents sent to the SSE handler.
+        let (tx, rx) = mpsc::channel::<ChatStreamEvent>(128);
+
+        // Spawn a task that bridges RunnerEvent -> ChatStreamEvent and
+        // handles persistence on completion.
+        let session_repo = Arc::clone(&self.session_repo);
+        let session_key = key.clone();
+        let memory_manager = self.memory_manager.clone();
+        let llm_provider = self.llm_provider.clone();
+        let tools = Arc::clone(&self.tools);
+        let default_model = self.current_default_model();
+
+        tokio::spawn(async move {
+            while let Some(runner_event) = runner_rx.recv().await {
+                let chat_event = ChatStreamEvent::from(runner_event.clone());
+                let is_done = matches!(chat_event, ChatStreamEvent::Done { .. });
+                let is_error = matches!(chat_event, ChatStreamEvent::Error { .. });
+
+                // On Done: persist assistant message and update session.
+                if let ChatStreamEvent::Done { ref text } = chat_event {
+                    let assistant_msg = ChatMessage::assistant(text);
+                    if let Err(e) = session_repo
+                        .append_message(&session_key, &assistant_msg)
+                        .await
+                    {
+                        tracing::error!(error = %e, "failed to persist streaming assistant message");
+                    }
+
+                    session.message_count += 2; // user + assistant
+                    if session.preview.is_none() {
+                        session.preview = Some(truncate_preview(&user_text, 100));
+                    }
+                    let _ = session_repo.update_session(&session).await;
+
+                    info!(key = %session_key, "streaming message exchange complete");
+
+                    // Fire-and-forget memory reflection.
+                    if let Some(ref mm) = memory_manager {
+                        let mm = Arc::clone(mm);
+                        let user_text_clone = user_text.clone();
+                        let assistant_text_clone = text.clone();
+                        let llm = llm_provider.clone();
+                        let tools = Arc::clone(&tools);
+                        let model = default_model.clone();
+
+                        tokio::spawn(async move {
+                            if let Err(e) = memory_reflection(
+                                &mm,
+                                &llm,
+                                &tools,
+                                &model,
+                                &user_text_clone,
+                                &assistant_text_clone,
+                            )
+                            .await
+                            {
+                                tracing::warn!(error = %e, "memory reflection failed");
+                            }
+                        });
+                    }
+                }
+
+                // Forward the event to the SSE stream; if the receiver is
+                // dropped (client disconnected), stop the loop.
+                if tx.send(chat_event).await.is_err() {
+                    tracing::debug!("SSE client disconnected, stopping stream bridge");
+                    break;
+                }
+
+                if is_done || is_error {
+                    break;
+                }
+            }
+        });
+
+        Ok(rx)
     }
 
     // -- export to memory ---------------------------------------------------
@@ -865,6 +984,18 @@ impl std::fmt::Debug for ChatService {
             .field("default_model", &self.current_default_model())
             .finish_non_exhaustive()
     }
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/// Bundle returned by [`ChatService::prepare_agent_run`] containing
+/// everything needed to execute the agent loop (sync or streaming).
+struct AgentRunSetup {
+    runner:          AgentRunner,
+    effective_tools: Arc<ToolRegistry>,
+    session:         SessionEntry,
 }
 
 // ---------------------------------------------------------------------------

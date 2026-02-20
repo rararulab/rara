@@ -37,3 +37,4 @@ pub mod error;
 pub mod model_catalog;
 pub mod router;
 pub mod service;
+pub mod stream;
