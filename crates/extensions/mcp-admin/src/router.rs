@@ -330,13 +330,20 @@ async fn list_server_tools(
     State(manager): State<McpState>,
     Path(name): Path<String>,
 ) -> Result<Json<Vec<McpToolView>>, McpAdminError> {
-    let tools = manager.list_tools(&name).await.map_err(|e| {
-        let msg = e.to_string();
-        if msg.contains("not connected") {
-            return ServerNotFoundSnafu { name: name.clone() }.build();
+    let tools = match manager.list_tools(&name).await {
+        Ok(tools) => tools,
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("not connected") {
+                return Err(ServerNotFoundSnafu { name }.build());
+            }
+            // Method not supported — return empty list
+            if msg.contains("Method not found") || msg.contains("-32601") {
+                return Ok(Json(vec![]));
+            }
+            return Err(McpSnafu { message: msg }.build());
         }
-        McpSnafu { message: msg }.build()
-    })?;
+    };
 
     let views = tools
         .into_iter()
@@ -354,13 +361,20 @@ async fn list_server_resources(
     State(manager): State<McpState>,
     Path(name): Path<String>,
 ) -> Result<Json<Vec<McpResourceView>>, McpAdminError> {
-    let result = manager.list_resources(&name).await.map_err(|e| {
-        let msg = e.to_string();
-        if msg.contains("not connected") {
-            return ServerNotFoundSnafu { name: name.clone() }.build();
+    let result = match manager.list_resources(&name).await {
+        Ok(result) => result,
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("not connected") {
+                return Err(ServerNotFoundSnafu { name }.build());
+            }
+            // Method not supported — return empty list
+            if msg.contains("Method not found") || msg.contains("-32601") {
+                return Ok(Json(vec![]));
+            }
+            return Err(McpSnafu { message: msg }.build());
         }
-        McpSnafu { message: msg }.build()
-    })?;
+    };
 
     let views = result
         .resources
