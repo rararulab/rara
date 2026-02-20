@@ -31,6 +31,7 @@ import {
   Star,
   Trash2,
   User,
+  Wrench,
   X,
 } from "lucide-react";
 import { api } from "@/api/client";
@@ -39,7 +40,7 @@ import type {
   ChatMessageData,
   ChatModel,
   ChatSession,
-  SendMessageResponse,
+  ChatStreamEvent,
 } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -80,15 +81,48 @@ function createSession(body: {
   return api.post<ChatSession>("/api/v1/chat/sessions", body);
 }
 
-function sendMessage(key: string, text: string, imageUrls?: string[]) {
-  const body: { text: string; image_urls?: string[] } = { text };
-  if (imageUrls && imageUrls.length > 0) {
-    body.image_urls = imageUrls;
+/** Parse an SSE chunk buffer into events. Returns [parsedEvents, remainingBuffer]. */
+function parseSSEChunk(
+  buffer: string,
+): [ChatStreamEvent[], string] {
+  const events: ChatStreamEvent[] = [];
+  // SSE events are separated by double newlines
+  const parts = buffer.split("\n\n");
+  // Last part may be incomplete — keep it in the buffer
+  const remaining = parts.pop() ?? "";
+
+  for (const part of parts) {
+    if (!part.trim()) continue;
+    let data = "";
+    for (const line of part.split("\n")) {
+      if (line.startsWith("data:")) {
+        data += line.slice(5).trim();
+      }
+      // We don't need the event: field since type is in the JSON payload
+    }
+    if (data) {
+      try {
+        events.push(JSON.parse(data) as ChatStreamEvent);
+      } catch {
+        // Ignore malformed events
+      }
+    }
   }
-  return api.post<SendMessageResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(key)}/send`,
-    body,
-  );
+  return [events, remaining];
+}
+
+interface ActiveToolCall {
+  id: string;
+  name: string;
+}
+
+interface StreamState {
+  isStreaming: boolean;
+  text: string;
+  reasoning: string;
+  isThinking: boolean;
+  activeTools: ActiveToolCall[];
+  error: string | null;
 }
 
 function deleteSession(key: string) {
@@ -802,6 +836,71 @@ function ChangeModelDialog({
 // ChatThread (right panel)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// StreamingBubble — live assistant response during SSE streaming
+// ---------------------------------------------------------------------------
+
+function StreamingBubble({ stream }: { stream: StreamState }) {
+  return (
+    <div className="flex gap-3">
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+        <Bot className="h-4 w-4" />
+      </div>
+      <div className="max-w-[75%] rounded-xl bg-muted px-4 py-2.5 text-foreground">
+        {/* Tool call indicators */}
+        {stream.activeTools.length > 0 && (
+          <div className="mb-2 space-y-1">
+            {stream.activeTools.map((tool) => (
+              <div
+                key={tool.id}
+                className="flex items-center gap-1.5 text-xs text-muted-foreground"
+              >
+                <Wrench className="h-3 w-3 animate-pulse" />
+                <span className="font-mono">{tool.name}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Thinking indicator */}
+        {stream.isThinking && !stream.text && (
+          <div className="flex items-center gap-2">
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            <span className="text-sm text-muted-foreground">Thinking...</span>
+          </div>
+        )}
+
+        {/* Streaming text content */}
+        {stream.text && (
+          <div className="prose prose-sm dark:prose-invert max-w-none [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-background/50 [&_pre]:p-3 [&_code]:rounded [&_code]:bg-background/50 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {stream.text}
+            </ReactMarkdown>
+          </div>
+        )}
+
+        {/* Error */}
+        {stream.error && (
+          <p className="text-sm text-destructive">{stream.error}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ChatThread (right panel) — SSE streaming version
+// ---------------------------------------------------------------------------
+
+const INITIAL_STREAM_STATE: StreamState = {
+  isStreaming: false,
+  text: "",
+  reasoning: "",
+  isThinking: false,
+  activeTools: [],
+  error: null,
+};
+
 function ChatThread({
   session,
   onClearMessages,
@@ -817,6 +916,8 @@ function ChatThread({
   const [imageInputVisible, setImageInputVisible] = useState(false);
   const [imageInputValue, setImageInputValue] = useState("");
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
+  const [stream, setStream] = useState<StreamState>(INITIAL_STREAM_STATE);
+  const abortRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -827,63 +928,6 @@ function ChatThread({
   });
 
   const messages = messagesQuery.data ?? [];
-
-  const sendMutation = useMutation({
-    mutationFn: (vars: { text: string; imageUrls?: string[] }) =>
-      sendMessage(sessionKey, vars.text, vars.imageUrls),
-    onMutate: async (vars) => {
-      // Cancel in-flight fetches so they don't overwrite optimistic update
-      await queryClient.cancelQueries({
-        queryKey: ["chat-messages", sessionKey],
-      });
-
-      const previous = queryClient.getQueryData<ChatMessageData[]>([
-        "chat-messages",
-        sessionKey,
-      ]);
-
-      // Build optimistic user message
-      const content: ChatContentBlock[] | string = vars.imageUrls?.length
-        ? [
-            { type: "text" as const, text: vars.text },
-            ...vars.imageUrls.map((url) => ({
-              type: "image_url" as const,
-              url,
-            })),
-          ]
-        : vars.text;
-
-      const optimisticMsg: ChatMessageData = {
-        seq: (previous?.length ?? 0) + 1,
-        role: "user",
-        content,
-        created_at: new Date().toISOString(),
-      };
-
-      queryClient.setQueryData<ChatMessageData[]>(
-        ["chat-messages", sessionKey],
-        (old) => [...(old ?? []), optimisticMsg],
-      );
-
-      return { previous };
-    },
-    onError: (_err, _vars, context) => {
-      // Roll back to previous messages on error
-      if (context?.previous) {
-        queryClient.setQueryData(
-          ["chat-messages", sessionKey],
-          context.previous,
-        );
-      }
-    },
-    onSettled: () => {
-      // Always refetch to get the real server data (including assistant reply)
-      queryClient.invalidateQueries({
-        queryKey: ["chat-messages", sessionKey],
-      });
-      queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
-    },
-  });
 
   const handleAddImageUrl = useCallback(() => {
     const url = imageInputValue.trim();
@@ -904,16 +948,152 @@ function ChatThread({
     },
   });
 
-  const handleSend = useCallback(() => {
+  // SSE streaming send
+  const handleSend = useCallback(async () => {
     const text = input.trim();
-    if (!text || sendMutation.isPending || !isOnline) return;
+    if (!text || stream.isStreaming || !isOnline) return;
+
     const urls = imageUrls.length > 0 ? [...imageUrls] : undefined;
     setInput("");
     setImageUrls([]);
     setImageInputVisible(false);
     setImageInputValue("");
-    sendMutation.mutate({ text, imageUrls: urls });
-  }, [input, imageUrls, sendMutation, isOnline]);
+
+    // Optimistically add user message to the cache
+    const previous = queryClient.getQueryData<ChatMessageData[]>([
+      "chat-messages",
+      sessionKey,
+    ]);
+    const content: ChatContentBlock[] | string = urls?.length
+      ? [
+          { type: "text" as const, text },
+          ...urls.map((url) => ({ type: "image_url" as const, url })),
+        ]
+      : text;
+    const optimisticMsg: ChatMessageData = {
+      seq: (previous?.length ?? 0) + 1,
+      role: "user",
+      content,
+      created_at: new Date().toISOString(),
+    };
+    queryClient.setQueryData<ChatMessageData[]>(
+      ["chat-messages", sessionKey],
+      (old) => [...(old ?? []), optimisticMsg],
+    );
+
+    // Reset streaming state
+    setStream({ ...INITIAL_STREAM_STATE, isStreaming: true });
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    try {
+      const body: { text: string; image_urls?: string[] } = { text };
+      if (urls) body.image_urls = urls;
+
+      const BASE_URL = import.meta.env.VITE_API_URL || "";
+      const res = await fetch(
+        `${BASE_URL}/api/v1/chat/sessions/${encodeURIComponent(sessionKey)}/stream`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        },
+      );
+
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(errText || `HTTP ${res.status}`);
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No response body");
+
+      const decoder = new TextDecoder();
+      let sseBuffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        sseBuffer += decoder.decode(value, { stream: true });
+        const [events, remaining] = parseSSEChunk(sseBuffer);
+        sseBuffer = remaining;
+
+        for (const event of events) {
+          switch (event.type) {
+            case "text_delta":
+              setStream((s) => ({ ...s, text: s.text + event.text }));
+              break;
+            case "reasoning_delta":
+              setStream((s) => ({ ...s, reasoning: s.reasoning + event.text }));
+              break;
+            case "thinking":
+              setStream((s) => ({ ...s, isThinking: true }));
+              break;
+            case "thinking_done":
+              setStream((s) => ({ ...s, isThinking: false }));
+              break;
+            case "tool_call_start":
+              setStream((s) => ({
+                ...s,
+                activeTools: [
+                  ...s.activeTools,
+                  { id: event.id, name: event.name },
+                ],
+              }));
+              break;
+            case "tool_call_end":
+              setStream((s) => ({
+                ...s,
+                activeTools: s.activeTools.filter((t) => t.id !== event.id),
+              }));
+              break;
+            case "done":
+              // Reset stream state — the final assistant message will
+              // appear from the server-refetched message list.
+              setStream(INITIAL_STREAM_STATE);
+              queryClient.invalidateQueries({
+                queryKey: ["chat-messages", sessionKey],
+              });
+              queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
+              break;
+            case "error":
+              setStream((s) => ({
+                ...s,
+                isStreaming: false,
+                error: event.message,
+              }));
+              queryClient.invalidateQueries({
+                queryKey: ["chat-messages", sessionKey],
+              });
+              break;
+          }
+        }
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      setStream((s) => ({
+        ...s,
+        isStreaming: false,
+        error: err instanceof Error ? err.message : "Stream failed",
+      }));
+      // Rollback optimistic update on connection error
+      if (previous) {
+        queryClient.setQueryData(["chat-messages", sessionKey], previous);
+      }
+    } finally {
+      abortRef.current = null;
+    }
+  }, [input, imageUrls, stream.isStreaming, isOnline, sessionKey, queryClient]);
+
+  // Cleanup abort on unmount
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -932,10 +1112,10 @@ function ChatThread({
     [changeModelMutation],
   );
 
-  // Auto-scroll to bottom
+  // Auto-scroll to bottom (triggers on new messages or streaming text)
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length, sendMutation.isPending]);
+  }, [messages.length, stream.isStreaming, stream.text]);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -952,6 +1132,8 @@ function ChatThread({
   const modelDisplay = session.model
     ? session.model.split("/").pop() ?? session.model
     : "default";
+
+  const isBusy = stream.isStreaming;
 
   return (
     <div className="flex flex-1 flex-col">
@@ -1013,7 +1195,7 @@ function ChatThread({
           </div>
         )}
 
-        {!messagesQuery.isLoading && visibleMessages.length === 0 && (
+        {!messagesQuery.isLoading && visibleMessages.length === 0 && !isBusy && (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
             <Bot className="h-12 w-12 opacity-30" />
             <p className="text-sm">
@@ -1028,27 +1210,15 @@ function ChatThread({
               <MessageBubble key={msg.seq} msg={msg} />
             ))}
 
-            {/* Pending assistant response indicator */}
-            {sendMutation.isPending && (
-              <div className="flex gap-3">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-                  <Bot className="h-4 w-4" />
-                </div>
-                <div className="flex items-center gap-2 rounded-xl bg-muted px-4 py-2.5">
-                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                  <span className="text-sm text-muted-foreground">
-                    Thinking...
-                  </span>
-                </div>
-              </div>
+            {/* Live streaming assistant bubble */}
+            {(stream.isStreaming || stream.text || stream.error) && (
+              <StreamingBubble stream={stream} />
             )}
 
-            {/* Error display */}
-            {sendMutation.isError && (
+            {/* Non-streaming error (e.g. connection failure before stream starts) */}
+            {stream.error && !stream.isStreaming && !stream.text && (
               <div className="mx-auto max-w-md rounded-md border border-destructive/30 bg-destructive/10 px-4 py-2 text-center text-sm text-destructive">
-                {sendMutation.error instanceof Error
-                  ? sendMutation.error.message
-                  : "Failed to send message. Please try again."}
+                {stream.error}
               </div>
             )}
 
@@ -1134,7 +1304,7 @@ function ChatThread({
             size="icon"
             className="h-10 w-10 shrink-0 text-muted-foreground hover:text-foreground"
             onClick={() => setImageInputVisible((v) => !v)}
-            disabled={sendMutation.isPending || !isOnline}
+            disabled={isBusy || !isOnline}
             title="Attach image URL"
           >
             <ImagePlus className="h-4 w-4" />
@@ -1146,17 +1316,17 @@ function ChatThread({
             onKeyDown={handleKeyDown}
             placeholder={isOnline ? "Type a message... (Enter to send, Shift+Enter for newline)" : "Server offline -- sending disabled"}
             rows={1}
-            disabled={sendMutation.isPending || !isOnline}
+            disabled={isBusy || !isOnline}
             className="flex-1 resize-none rounded-lg border border-input bg-background px-3 py-2.5 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
           />
           <Button
             size="icon"
             className="h-10 w-10 shrink-0"
             onClick={handleSend}
-            disabled={!input.trim() || sendMutation.isPending || !isOnline}
+            disabled={!input.trim() || isBusy || !isOnline}
             title={isOnline ? "Send message" : "Server offline"}
           >
-            {sendMutation.isPending ? (
+            {isBusy ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
               <Send className="h-4 w-4" />
