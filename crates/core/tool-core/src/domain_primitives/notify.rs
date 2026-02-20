@@ -18,7 +18,6 @@
 //! telegram notification via the `NotifyClient`.
 
 use async_trait::async_trait;
-use rara_agents::tool_registry::AgentTool;
 use rara_domain_shared::{
     notify::{
         client::NotifyClient,
@@ -27,6 +26,8 @@ use rara_domain_shared::{
     settings::SettingsSvc,
 };
 use serde_json::json;
+
+use crate::AgentTool;
 
 /// Layer 1 primitive: enqueue a notification message.
 pub struct NotifyTool {

@@ -15,7 +15,7 @@
 //! Layer 2 service tools for managing agent skills.
 
 use async_trait::async_trait;
-use rara_agents::tool_registry::AgentTool;
+use tool_core::AgentTool;
 use rara_skills::registry::InMemoryRegistry;
 use serde_json::{Value, json};
 

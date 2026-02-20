@@ -16,6 +16,9 @@
 //!
 //! This crate defines the [`AgentTool`] trait and [`AgentToolRef`] type alias
 //! used by the agent runtime and tool implementations across the workspace.
+//!
+//! It also houses all **primitive tool** implementations (core + domain) and
+//! provides [`default_primitives`] to obtain them in one call.
 
 use std::sync::Arc;
 
@@ -23,6 +26,9 @@ use async_trait::async_trait;
 
 /// Reference-counted handle to an agent tool.
 pub type AgentToolRef = Arc<dyn AgentTool>;
+
+pub mod core_primitives;
+pub mod domain_primitives;
 
 /// Agent-callable tool.
 #[async_trait]
@@ -38,4 +44,43 @@ pub trait AgentTool: Send + Sync {
 
     /// Execute the tool with the given parameters.
     async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value>;
+}
+
+/// Dependencies required to construct domain-level primitive tools.
+pub struct PrimitiveDeps {
+    pub pool:          sqlx::PgPool,
+    pub notify_client: rara_domain_shared::notify::client::NotifyClient,
+    pub settings_svc:  rara_domain_shared::settings::SettingsSvc,
+    pub object_store:  opendal::Operator,
+}
+
+/// Returns all primitive tools (core + domain), ready for registration.
+pub fn default_primitives(deps: PrimitiveDeps) -> Vec<AgentToolRef> {
+    let mut tools = core_primitives_vec();
+    tools.extend(domain_primitives_vec(deps));
+    tools
+}
+
+/// Returns only the 8 core primitives (no application deps).
+pub fn core_primitives_vec() -> Vec<AgentToolRef> {
+    vec![
+        Arc::new(core_primitives::BashTool::new()),
+        Arc::new(core_primitives::ReadFileTool::new()),
+        Arc::new(core_primitives::WriteFileTool::new()),
+        Arc::new(core_primitives::EditFileTool::new()),
+        Arc::new(core_primitives::FindFilesTool::new()),
+        Arc::new(core_primitives::GrepTool::new()),
+        Arc::new(core_primitives::ListDirectoryTool::new()),
+        Arc::new(core_primitives::HttpFetchTool::new()),
+    ]
+}
+
+/// Returns only the 4 domain primitives.
+pub fn domain_primitives_vec(deps: PrimitiveDeps) -> Vec<AgentToolRef> {
+    vec![
+        Arc::new(domain_primitives::DbQueryTool::new(deps.pool.clone())),
+        Arc::new(domain_primitives::DbMutateTool::new(deps.pool)),
+        Arc::new(domain_primitives::NotifyTool::new(deps.notify_client, deps.settings_svc)),
+        Arc::new(domain_primitives::StorageReadTool::new(deps.object_store)),
+    ]
 }

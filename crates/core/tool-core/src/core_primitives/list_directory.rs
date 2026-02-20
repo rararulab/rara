@@ -20,7 +20,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use serde_json::json;
 
-use crate::tool_registry::AgentTool;
+use crate::AgentTool;
 
 /// Maximum number of directory entries to return.
 const MAX_ENTRIES: usize = 1000;

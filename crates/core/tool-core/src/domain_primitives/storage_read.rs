@@ -19,8 +19,9 @@
 
 use async_trait::async_trait;
 use opendal::Operator;
-use rara_agents::tool_registry::AgentTool;
 use serde_json::json;
+
+use crate::AgentTool;
 
 /// Layer 1 primitive: read text content from object storage.
 pub struct StorageReadTool {

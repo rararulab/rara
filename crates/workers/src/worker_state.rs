@@ -132,7 +132,15 @@ impl AppState {
         );
         let llm_provider: rara_agents::model::OpenRouterLoaderRef =
             Arc::new(SettingsOpenRouterLoader::new(settings_svc.clone()));
-        let mut tool_registry = rara_agents::tool_registry::ToolRegistry::with_defaults();
+        let mut tool_registry = rara_agents::tool_registry::ToolRegistry::new();
+        for tool in tool_core::default_primitives(tool_core::PrimitiveDeps {
+            pool:          pool.clone(),
+            notify_client: notify_client.clone(),
+            settings_svc:  settings_svc.clone(),
+            object_store:  object_store.clone(),
+        }) {
+            tool_registry.register_primitive(tool);
+        }
         let memory_settings = settings_svc.current().agent.memory;
         let chroma_url = memory_settings
             .chroma_url
@@ -152,21 +160,6 @@ impl AppState {
         if let Err(err) = memory_manager.sync().await {
             warn!(error = %err, "Failed to sync memory index; continuing startup");
         }
-
-        // Layer 1: Primitives
-        tool_registry.register_primitive(Arc::new(crate::tools::primitives::DbQueryTool::new(
-            pool.clone(),
-        )));
-        tool_registry.register_primitive(Arc::new(crate::tools::primitives::DbMutateTool::new(
-            pool.clone(),
-        )));
-        tool_registry.register_primitive(Arc::new(crate::tools::primitives::NotifyTool::new(
-            notify_client.clone(),
-            settings_svc.clone(),
-        )));
-        tool_registry.register_primitive(Arc::new(crate::tools::primitives::StorageReadTool::new(
-            object_store.clone(),
-        )));
 
         // Layer 2: Services
         tool_registry.register_service(Arc::new(crate::tools::services::JobPipelineTool::new(

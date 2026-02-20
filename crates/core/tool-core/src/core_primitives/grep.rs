@@ -22,7 +22,7 @@ use anyhow::{bail, Context};
 use async_trait::async_trait;
 use serde_json::json;
 
-use crate::tool_registry::AgentTool;
+use crate::AgentTool;
 
 /// Maximum output size in bytes (50 KB).
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;

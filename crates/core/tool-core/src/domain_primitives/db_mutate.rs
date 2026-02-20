@@ -18,9 +18,10 @@
 //! Values are always bound as query parameters.
 
 use async_trait::async_trait;
-use rara_agents::tool_registry::AgentTool;
 use serde_json::json;
 use sqlx::{PgPool, Row};
+
+use crate::AgentTool;
 
 /// Allowed tables and their mutable columns.
 ///

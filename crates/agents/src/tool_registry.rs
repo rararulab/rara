@@ -193,23 +193,6 @@ impl ToolRegistry {
     }
 }
 
-impl ToolRegistry {
-    /// Create a registry pre-loaded with all built-in generic primitive tools.
-    pub fn with_defaults() -> Self {
-        use crate::tools::primitives::*;
-        let mut registry = Self::new();
-        registry.register_primitive(Arc::new(BashTool::new()));
-        registry.register_primitive(Arc::new(ReadFileTool::new()));
-        registry.register_primitive(Arc::new(WriteFileTool::new()));
-        registry.register_primitive(Arc::new(EditFileTool::new()));
-        registry.register_primitive(Arc::new(FindFilesTool::new()));
-        registry.register_primitive(Arc::new(GrepTool::new()));
-        registry.register_primitive(Arc::new(ListDirectoryTool::new()));
-        registry.register_primitive(Arc::new(HttpFetchTool::new()));
-        registry
-    }
-}
-
 impl Default for ToolRegistry {
     fn default() -> Self { Self::new() }
 }

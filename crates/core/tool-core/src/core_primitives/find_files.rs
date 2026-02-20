@@ -21,7 +21,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use serde_json::json;
 
-use crate::tool_registry::AgentTool;
+use crate::AgentTool;
 
 /// Default maximum number of file entries to return.
 const DEFAULT_LIMIT: usize = 500;

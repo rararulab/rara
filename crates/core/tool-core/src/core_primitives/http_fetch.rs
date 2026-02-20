@@ -20,7 +20,7 @@
 use async_trait::async_trait;
 use serde_json::json;
 
-use crate::tool_registry::AgentTool;
+use crate::AgentTool;
 
 /// Maximum response body size in bytes (100 KB).
 const MAX_BODY_BYTES: usize = 100 * 1024;
