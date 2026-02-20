@@ -17,7 +17,7 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use rara_agents::tool_registry::AgentTool;
+use tool_core::AgentTool;
 use rara_domain_shared::{
     notify::{
         client::NotifyClient,

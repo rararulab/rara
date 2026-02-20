@@ -23,7 +23,7 @@
 //! - [`CompileTypstProjectTool`]: compile a project to PDF (reading from disk).
 
 use async_trait::async_trait;
-use rara_agents::tool_registry::AgentTool;
+use tool_core::AgentTool;
 use serde_json::json;
 use uuid::Uuid;
 

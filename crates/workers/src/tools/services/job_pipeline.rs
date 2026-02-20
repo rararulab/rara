@@ -18,7 +18,7 @@
 //! and AI analysis. Migrated from the former `save_job_url` flat tool.
 
 use async_trait::async_trait;
-use rara_agents::tool_registry::AgentTool;
+use tool_core::AgentTool;
 use serde_json::json;
 
 /// Layer 2 service tool: save a job URL into the automated pipeline.
