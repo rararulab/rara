@@ -1,9 +1,25 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! McpManager: lifecycle management for multiple MCP server connections.
 
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
-use rmcp::model::{CallToolResult, ListResourcesResult, ReadResourceRequestParams, ReadResourceResult, Tool};
+use rmcp::model::{
+    CallToolResult, ListResourcesResult, ReadResourceRequestParams, ReadResourceResult, Tool,
+};
 use serde_json::Value;
 use tokio::sync::RwLock;
 use tracing::{info, instrument, warn};
@@ -21,7 +37,7 @@ use crate::{
 /// Manages the lifecycle of multiple MCP server connections.
 #[derive(Clone)]
 pub struct McpManager {
-    inner: Arc<RwLock<McpManagerInner>>,
+    inner:      Arc<RwLock<McpManagerInner>>,
     /// Per-server log ring buffer.  Lives outside the `RwLock` because
     /// `McpLogBuffer` carries its own `Arc<RwLock<…>>` internally.
     log_buffer: McpLogBuffer,
@@ -38,7 +54,7 @@ impl McpManager {
     #[instrument(skip_all)]
     pub fn new(registry: McpRegistryRef, store_mode: OAuthCredentialsStoreMode) -> Self {
         Self {
-            inner: Arc::new(RwLock::new(McpManagerInner {
+            inner:      Arc::new(RwLock::new(McpManagerInner {
                 clients: HashMap::new(),
                 elicitation_requests: ElicitationRequestManager::default(),
                 registry,
@@ -272,10 +288,7 @@ impl McpManager {
     #[instrument(skip(self), fields(server = %name))]
     pub async fn list_tools(&self, name: &str) -> Result<Vec<Tool>> {
         let managed = self.get_managed_client(name).await?;
-        let mc = managed
-            .client()
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mc = managed.client().await.map_err(|e| anyhow::anyhow!("{e}"))?;
         let tools = mc.list_tools().await?;
         Ok(tools
             .into_iter()
@@ -293,10 +306,7 @@ impl McpManager {
         arguments: Option<Value>,
     ) -> Result<CallToolResult> {
         let managed = self.get_managed_client(server_name).await?;
-        let mc = managed
-            .client()
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mc = managed.client().await.map_err(|e| anyhow::anyhow!("{e}"))?;
         let timeout = mc.tool_timeout;
         let result = mc
             .client
@@ -310,10 +320,7 @@ impl McpManager {
     #[instrument(skip(self), fields(server = %name))]
     pub async fn list_resources(&self, name: &str) -> Result<ListResourcesResult> {
         let managed = self.get_managed_client(name).await?;
-        let mc = managed
-            .client()
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mc = managed.client().await.map_err(|e| anyhow::anyhow!("{e}"))?;
         let result = mc.client.list_resources(None, mc.tool_timeout).await;
         drop(mc);
         result
@@ -327,10 +334,7 @@ impl McpManager {
         params: ReadResourceRequestParams,
     ) -> Result<ReadResourceResult> {
         let managed = self.get_managed_client(name).await?;
-        let mc = managed
-            .client()
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mc = managed.client().await.map_err(|e| anyhow::anyhow!("{e}"))?;
         let result = mc.client.read_resource(params, mc.tool_timeout).await;
         drop(mc);
         result

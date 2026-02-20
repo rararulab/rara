@@ -62,7 +62,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-type SettingKey = "ai" | "agent" | "telegram";
+type SettingKey = "ai" | "agent" | "telegram" | "composio";
 type ToastState = { kind: "success" | "error"; message: string } | null;
 type OpenRouterModel = {
   id: string;
@@ -91,6 +91,9 @@ export default function Settings() {
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramChatId, setTelegramChatId] = useState("");
   const [telegramAllowedGroupChatId, setTelegramAllowedGroupChatId] = useState("");
+  const [composioApiKey, setComposioApiKey] = useState("");
+  const [showComposioApiKey, setShowComposioApiKey] = useState(false);
+  const [composioEntityId, setComposioEntityId] = useState("");
   const [selectedPromptName, setSelectedPromptName] = useState("");
   const [selectedPromptContent, setSelectedPromptContent] = useState("");
   const [promptDirty, setPromptDirty] = useState(false);
@@ -132,6 +135,8 @@ export default function Settings() {
         ? ""
         : String(settingsQuery.data.telegram.allowed_group_chat_id),
     );
+    setComposioApiKey(settingsQuery.data.agent.composio.api_key ?? "");
+    setComposioEntityId(settingsQuery.data.agent.composio.entity_id ?? "");
   }, [settingsQuery.data]);
 
   useEffect(() => {
@@ -239,9 +244,34 @@ export default function Settings() {
       next.telegram = telegramPatch;
     }
 
+    const agentPatch: NonNullable<RuntimeSettingsPatch["agent"]> = {};
+    const currentComposioApiKey = current.agent.composio.api_key ?? "";
+    const currentComposioEntityId = current.agent.composio.entity_id ?? "";
+    const nextComposioApiKey = composioApiKey.trim();
+    const nextComposioEntityId = composioEntityId.trim();
+
+    if (nextComposioApiKey !== currentComposioApiKey) {
+      // empty string means clear
+      agentPatch.composio = {
+        ...(agentPatch.composio ?? {}),
+        api_key: nextComposioApiKey,
+      };
+    }
+    if (nextComposioEntityId !== currentComposioEntityId) {
+      agentPatch.composio = {
+        ...(agentPatch.composio ?? {}),
+        entity_id: nextComposioEntityId,
+      };
+    }
+    if (Object.keys(agentPatch).length > 0) {
+      next.agent = agentPatch;
+    }
+
     return Object.keys(next).length > 0 ? next : null;
   }, [
     aiApiKey,
+    composioApiKey,
+    composioEntityId,
     defaultModel,
     jobModels,
     chatModels,
@@ -258,6 +288,9 @@ export default function Settings() {
       queryClient.setQueryData(["settings"], updated);
       setAiApiKey(updated.ai.openrouter_api_key ?? "");
       setShowAiApiKey(false);
+      setComposioApiKey(updated.agent.composio.api_key ?? "");
+      setComposioEntityId(updated.agent.composio.entity_id ?? "");
+      setShowComposioApiKey(false);
       setTelegramToken("");
       setSelectedSetting(null);
       setToast({ kind: "success", message: "Settings updated successfully." });
@@ -321,6 +354,8 @@ export default function Settings() {
       setModelSearch("");
       setModelsError(null);
       setShowAiApiKey(false);
+    } else if (setting === "composio") {
+      setShowComposioApiKey(false);
     }
   };
 
@@ -439,6 +474,8 @@ export default function Settings() {
   const dialogTitle =
     selectedSetting === "ai"
       ? "AI (OpenRouter)"
+      : selectedSetting === "composio"
+        ? "Composio"
       : selectedSetting === "agent"
         ? "Agent Personality"
         : "Telegram Bot";
@@ -698,6 +735,29 @@ export default function Settings() {
         <button
           type="button"
           className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
+          onClick={() => openSetting("composio")}
+        >
+          <div className="flex items-center gap-3">
+            <Sparkles className="h-4 w-4 text-muted-foreground" />
+            <div className="space-y-1">
+              <p className="font-medium">Composio</p>
+              <p className="text-xs text-muted-foreground">
+                Entity: {current.agent.composio.entity_id ?? "default"} · Key:{" "}
+                {current.agent.composio.api_key ? "Set" : "Not set"}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <Badge variant={current.agent.composio.api_key ? "default" : "secondary"}>
+              {current.agent.composio.api_key ? "Configured" : "Not configured"}
+            </Badge>
+            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+          </div>
+        </button>
+
+        <button
+          type="button"
+          className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
           onClick={() => openSetting("agent")}
         >
           <div className="flex items-center gap-3">
@@ -839,6 +899,56 @@ export default function Settings() {
                   chatModels,
                   setChatModels,
                 )}
+              </div>
+            </div>
+          )}
+
+          {selectedSetting === "composio" && (
+            <div className="space-y-6 px-6 py-5">
+              <div className="space-y-4 rounded-xl border bg-card p-4">
+                <div className="space-y-2">
+                  <Label htmlFor="composio-api-key" className="text-base font-semibold">
+                    Composio API Key
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id="composio-api-key"
+                      type={showComposioApiKey ? "text" : "password"}
+                      value={composioApiKey}
+                      onChange={(e) => setComposioApiKey(e.target.value)}
+                      placeholder={current.agent.composio.api_key ?? "cmp_..."}
+                      className="h-11"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="h-11 w-11 shrink-0"
+                      onClick={() => setShowComposioApiKey((v) => !v)}
+                    >
+                      {showComposioApiKey ? <EyeOff /> : <Eye />}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Leave empty and save to clear the key from runtime settings.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="composio-entity-id" className="text-base font-semibold">
+                    Default Entity ID
+                  </Label>
+                  <Input
+                    id="composio-entity-id"
+                    value={composioEntityId}
+                    onChange={(e) => setComposioEntityId(e.target.value)}
+                    placeholder="default"
+                    className="h-11"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Used when tool calls omit entity_id.
+                  </p>
+                </div>
               </div>
             </div>
           )}

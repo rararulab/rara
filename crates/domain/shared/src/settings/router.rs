@@ -283,6 +283,7 @@ pub struct AgentSettingsView {
     pub soul:               Option<String>,
     pub chat_system_prompt: Option<String>,
     pub memory:             MemorySettingsView,
+    pub composio:           ComposioSettingsView,
 }
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
@@ -290,6 +291,12 @@ pub struct MemorySettingsView {
     pub chroma_url:          Option<String>,
     pub chroma_collection:   Option<String>,
     pub chroma_api_key_hint: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+pub struct ComposioSettingsView {
+    pub api_key:   Option<String>,
+    pub entity_id: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
@@ -352,6 +359,10 @@ impl Into<RuntimeSettingsView> for Settings {
                     chroma_url:          self.agent.memory.chroma_url.clone(),
                     chroma_collection:   self.agent.memory.chroma_collection.clone(),
                     chroma_api_key_hint: secret_hint(self.agent.memory.chroma_api_key.as_deref()),
+                },
+                composio:           ComposioSettingsView {
+                    api_key:   self.agent.composio.api_key.clone(),
+                    entity_id: self.agent.composio.entity_id.clone(),
                 },
             },
             updated_at: self.updated_at,

@@ -12,8 +12,8 @@ categories.workspace = true
 description = "Background worker implementations for job automation"
 
 [dependencies]
-async-trait.workspace = true
 anyhow.workspace = true
+async-trait.workspace = true
 axum = { workspace = true }
 chrono = { workspace = true }
 common-runtime = { workspace = true }
@@ -25,6 +25,7 @@ opendal.workspace = true
 openrouter-rs = { workspace = true }
 rara-agents = { workspace = true }
 rara-ai = { workspace = true }
+rara-composio = { workspace = true }
 rara-domain-analytics = { workspace = true }
 rara-domain-application = { workspace = true }
 rara-domain-chat = { workspace = true }
@@ -33,7 +34,6 @@ rara-domain-job = { workspace = true }
 rara-domain-resume = { workspace = true }
 rara-domain-scheduler = { workspace = true }
 rara-domain-shared = { workspace = true }
-rara-skill-admin = { workspace = true }
 rara-domain-typst = { workspace = true }
 rara-mcp = { workspace = true }
 rara-mcp-admin = { workspace = true }
@@ -41,6 +41,7 @@ rara-memory = { workspace = true }
 rara-paths = { workspace = true }
 rara-server = { workspace = true }
 rara-sessions = { workspace = true }
+rara-skill-admin = { workspace = true }
 rara-skills = { workspace = true }
 reqwest.workspace = true
 serde.workspace = true
@@ -49,8 +50,8 @@ snafu.workspace = true
 sqlx.workspace = true
 tokio = { workspace = true }
 tokio-util = { workspace = true }
-tracing.workspace = true
 tool-core.workspace = true
+tracing.workspace = true
 ulid.workspace = true
 utoipa.workspace = true
 utoipa-axum.workspace = true

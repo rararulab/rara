@@ -72,11 +72,9 @@ impl AgentTool for WriteFileTool {
         // Create parent directories if necessary.
         if let Some(parent) = Path::new(file_path).parent() {
             if !parent.as_os_str().is_empty() {
-                tokio::fs::create_dir_all(parent)
-                    .await
-                    .context(format!(
-                        "failed to create parent directories for {file_path}"
-                    ))?;
+                tokio::fs::create_dir_all(parent).await.context(format!(
+                    "failed to create parent directories for {file_path}"
+                ))?;
             }
         }
 

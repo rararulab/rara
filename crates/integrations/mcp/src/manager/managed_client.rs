@@ -1,3 +1,17 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! Async-managed MCP client with lazy startup via [`Shared`] futures.
 //!
 //! # Architecture
@@ -37,7 +51,12 @@
 //! callers (e.g. tool calls arriving during startup) can simply await
 //! the same future rather than racing to create duplicate connections.
 
-use std::{collections::HashSet, ffi::OsString, sync::Arc, time::{Duration, Instant}};
+use std::{
+    collections::HashSet,
+    ffi::OsString,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::Result;
 use futures::{
@@ -332,10 +351,10 @@ async fn make_rmcp_client(
             };
 
             RmcpClient::new_stdio_client(command, args, env, &config.env_vars, config.cwd.clone())
-            .await
-            .map_err(|err| StartupOutcomeError::Failed {
-                error: err.to_string(),
-            })
+                .await
+                .map_err(|err| StartupOutcomeError::Failed {
+                    error: err.to_string(),
+                })
         }
         TransportType::Sse => {
             let url = config
@@ -469,7 +488,8 @@ impl ManagedClient {
         })
     }
 
-    /// Return cached tools, re-fetching from the server if the cache has expired.
+    /// Return cached tools, re-fetching from the server if the cache has
+    /// expired.
     pub(crate) async fn list_tools(&self) -> Result<Vec<ToolInfo>> {
         let mut cache = self.tools_cache.lock().await;
         if Instant::now() < cache.expires_at {

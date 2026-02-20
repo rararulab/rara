@@ -38,13 +38,13 @@ pub enum ModelScenario {
 /// AI-specific runtime settings.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AISettings {
-    pub openrouter_api_key: Option<String>,
-    pub default_model:      Option<String>,
-    pub job_model:          Option<String>,
-    pub chat_model:         Option<String>,
+    pub openrouter_api_key:   Option<String>,
+    pub default_model:        Option<String>,
+    pub job_model:            Option<String>,
+    pub chat_model:           Option<String>,
     /// User-pinned model IDs shown at the top of the model picker.
     #[serde(default)]
-    pub favorite_models:    Vec<String>,
+    pub favorite_models:      Vec<String>,
     /// Fallback models for chat scenario, tried in order when primary fails.
     #[serde(default)]
     pub chat_model_fallbacks: Vec<String>,
@@ -114,6 +114,9 @@ pub struct AgentSettings {
     /// Memory retrieval runtime configuration.
     #[serde(default)]
     pub memory:             MemorySettings,
+    /// Composio tool runtime authentication settings.
+    #[serde(default)]
+    pub composio:           ComposioSettings,
 }
 
 /// Memory runtime settings.
@@ -138,6 +141,16 @@ impl Default for MemorySettings {
     }
 }
 
+/// Composio runtime settings.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ComposioSettings {
+    /// Composio API key used by the composio primitive.
+    pub api_key:   Option<String>,
+    /// Optional default user/entity id for composio calls.
+    pub entity_id: Option<String>,
+}
+
 /// Partial update payload for runtime settings writes.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct UpdateRequest {
@@ -148,20 +161,20 @@ pub struct UpdateRequest {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct AiRuntimeSettingsPatch {
-    pub openrouter_api_key:    Option<String>,
-    pub default_model:         Option<String>,
+    pub openrouter_api_key:   Option<String>,
+    pub default_model:        Option<String>,
     /// `Some(model)` to set, `None` to leave unchanged.
     /// Use `Some("")` or send an empty string to clear (revert to default).
-    pub job_model:             Option<String>,
+    pub job_model:            Option<String>,
     /// `Some(model)` to set, `None` to leave unchanged.
     /// Use `Some("")` or send an empty string to clear (revert to default).
-    pub chat_model:            Option<String>,
+    pub chat_model:           Option<String>,
     /// Replace the entire favorite models list. `None` to leave unchanged.
-    pub favorite_models:       Option<Vec<String>>,
+    pub favorite_models:      Option<Vec<String>>,
     /// Replace the chat fallback models list. `None` to leave unchanged.
-    pub chat_model_fallbacks:  Option<Vec<String>>,
+    pub chat_model_fallbacks: Option<Vec<String>>,
     /// Replace the job fallback models list. `None` to leave unchanged.
-    pub job_model_fallbacks:   Option<Vec<String>>,
+    pub job_model_fallbacks:  Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
@@ -178,6 +191,7 @@ pub struct AgentRuntimeSettingsPatch {
     pub proactive_enabled:  Option<bool>,
     pub proactive_cron:     Option<String>,
     pub memory:             Option<MemoryRuntimeSettingsPatch>,
+    pub composio:           Option<ComposioRuntimeSettingsPatch>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
@@ -185,6 +199,12 @@ pub struct MemoryRuntimeSettingsPatch {
     pub chroma_url:        Option<String>,
     pub chroma_collection: Option<String>,
     pub chroma_api_key:    Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
+pub struct ComposioRuntimeSettingsPatch {
+    pub api_key:   Option<String>,
+    pub entity_id: Option<String>,
 }
 
 impl Settings {
@@ -250,6 +270,14 @@ impl Settings {
                     self.agent.memory.chroma_api_key = normalize_secret(Some(chroma_api_key));
                 }
             }
+            if let Some(composio) = agent.composio {
+                if let Some(api_key) = composio.api_key {
+                    self.agent.composio.api_key = normalize_secret(Some(api_key));
+                }
+                if let Some(entity_id) = composio.entity_id {
+                    self.agent.composio.entity_id = normalize_text(Some(entity_id));
+                }
+            }
         }
     }
 
@@ -272,6 +300,8 @@ impl Settings {
             normalize_text(self.agent.memory.chroma_collection.take());
         self.agent.memory.chroma_api_key =
             normalize_secret(self.agent.memory.chroma_api_key.take());
+        self.agent.composio.api_key = normalize_secret(self.agent.composio.api_key.take());
+        self.agent.composio.entity_id = normalize_text(self.agent.composio.entity_id.take());
     }
 }
 
@@ -409,6 +439,7 @@ mod tests {
                 proactive_enabled:  Some(true),
                 proactive_cron:     Some("0 9 * * *".to_owned()),
                 memory:             None,
+                composio:           None,
             }),
         });
         assert_eq!(
@@ -428,6 +459,7 @@ mod tests {
                 proactive_enabled:  true,
                 proactive_cron:     Some("0 9 * * *".to_owned()),
                 memory:             MemorySettings::default(),
+                composio:           ComposioSettings::default(),
             },
             ..Default::default()
         };
@@ -441,6 +473,7 @@ mod tests {
                 proactive_enabled:  Some(false),
                 proactive_cron:     None,
                 memory:             None,
+                composio:           None,
             }),
         });
         assert_eq!(settings.agent.soul, Some("existing soul".to_owned()));
@@ -457,6 +490,7 @@ mod tests {
                 proactive_enabled:  true,
                 proactive_cron:     Some("  0 9 * * *  ".to_owned()),
                 memory:             MemorySettings::default(),
+                composio:           ComposioSettings::default(),
             },
             ..Default::default()
         };
@@ -489,6 +523,7 @@ mod tests {
                     chroma_collection: Some("team-memory".to_owned()),
                     chroma_api_key:    Some("secret-token".to_owned()),
                 }),
+                composio:           None,
             }),
         });
 
@@ -514,7 +549,10 @@ mod tests {
             chat_model: Some("openai/gpt-4o".to_owned()),
             ..Default::default()
         };
-        assert_eq!(ai.fallback_chain(ModelScenario::Chat), vec!["openai/gpt-4o"]);
+        assert_eq!(
+            ai.fallback_chain(ModelScenario::Chat),
+            vec!["openai/gpt-4o"]
+        );
     }
 
     #[test]
@@ -549,10 +587,7 @@ mod tests {
             ..Default::default()
         };
         let chain = ai.fallback_chain(ModelScenario::Job);
-        assert_eq!(
-            chain,
-            vec!["openai/gpt-4o", "anthropic/claude-sonnet-4"]
-        );
+        assert_eq!(chain, vec!["openai/gpt-4o", "anthropic/claude-sonnet-4"]);
     }
 
     #[test]
@@ -567,10 +602,7 @@ mod tests {
             ..Default::default()
         };
         let chain = ai.fallback_chain(ModelScenario::Chat);
-        assert_eq!(
-            chain,
-            vec!["openai/gpt-4o", "anthropic/claude-sonnet-4"]
-        );
+        assert_eq!(chain, vec!["openai/gpt-4o", "anthropic/claude-sonnet-4"]);
     }
 
     #[test]
@@ -581,10 +613,7 @@ mod tests {
             ..Default::default()
         };
         let chain = ai.fallback_chain(ModelScenario::Job);
-        assert_eq!(
-            chain,
-            vec!["anthropic/claude-sonnet-4", "openai/gpt-4o"]
-        );
+        assert_eq!(chain, vec!["anthropic/claude-sonnet-4", "openai/gpt-4o"]);
     }
 
     #[test]
@@ -594,10 +623,7 @@ mod tests {
             ..Default::default()
         };
         let chain = ai.fallback_chain(ModelScenario::Chat);
-        assert_eq!(
-            chain,
-            vec!["openai/gpt-4o", "anthropic/claude-sonnet-4"]
-        );
+        assert_eq!(chain, vec!["openai/gpt-4o", "anthropic/claude-sonnet-4"]);
     }
 
     #[test]
@@ -619,10 +645,7 @@ mod tests {
             settings.ai.chat_model_fallbacks,
             vec!["anthropic/claude-sonnet-4", "google/gemini-2.0-flash"]
         );
-        assert_eq!(
-            settings.ai.job_model_fallbacks,
-            vec!["openai/gpt-4o-mini"]
-        );
+        assert_eq!(settings.ai.job_model_fallbacks, vec!["openai/gpt-4o-mini"]);
     }
 
     #[test]

@@ -17,7 +17,6 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use tool_core::AgentTool;
 use rara_domain_shared::{
     notify::{
         client::NotifyClient,
@@ -26,6 +25,7 @@ use rara_domain_shared::{
     settings::SettingsSvc,
 };
 use serde_json::json;
+use tool_core::AgentTool;
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -91,13 +91,11 @@ impl AgentTool for ScreenshotTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
-        let url = params.get("url").and_then(|v| v.as_str()).ok_or_else(|| {
-            anyhow::anyhow!("missing required parameter: url")
-        })?;
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        let url = params
+            .get("url")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: url"))?;
 
         let selector = params
             .get("selector")

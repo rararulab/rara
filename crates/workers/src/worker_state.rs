@@ -134,13 +134,18 @@ impl AppState {
             Arc::new(SettingsOpenRouterLoader::new(settings_svc.clone()));
         let mut tool_registry = rara_agents::tool_registry::ToolRegistry::new();
         for tool in tool_core::default_primitives(tool_core::PrimitiveDeps {
-            pool:          pool.clone(),
-            notify_client: notify_client.clone(),
-            settings_svc:  settings_svc.clone(),
-            object_store:  object_store.clone(),
+            pool:                   pool.clone(),
+            notify_client:          notify_client.clone(),
+            settings_svc:           settings_svc.clone(),
+            object_store:           object_store.clone(),
+            composio_auth_provider: Arc::new(SettingsComposioAuthProvider::new(
+                settings_svc.clone(),
+            )),
         }) {
             tool_registry.register_primitive(tool);
         }
+        // TODO: its not correct, chroma's settings should not be changed at the
+        // runtime. so it should be called as memory configure, rather than settings
         let memory_settings = settings_svc.current().agent.memory;
         let chroma_url = memory_settings
             .chroma_url
@@ -272,7 +277,6 @@ impl AppState {
         } else {
             info!(servers = ?started, "MCP servers started");
         }
-
 
         // -- MCP tool bridges ------------------------------------------------
         match rara_mcp::tool_bridge::McpToolBridge::from_manager(mcp_manager.clone()).await {
@@ -465,6 +469,31 @@ fn merge_openapi_router(
 struct SettingsOpenRouterLoader {
     settings: rara_domain_shared::settings::SettingsSvc,
     client:   OnceCell<OpenRouterClient>,
+}
+
+/// Composio auth provider that reads credentials from runtime settings.
+#[derive(Clone)]
+struct SettingsComposioAuthProvider {
+    settings: rara_domain_shared::settings::SettingsSvc,
+}
+
+impl SettingsComposioAuthProvider {
+    fn new(settings: rara_domain_shared::settings::SettingsSvc) -> Self { Self { settings } }
+}
+
+#[async_trait]
+impl rara_composio::ComposioAuthProvider for SettingsComposioAuthProvider {
+    async fn acquire_auth(&self) -> anyhow::Result<rara_composio::ComposioAuth> {
+        let current = self.settings.current();
+        let composio = current.agent.composio;
+        let api_key = composio
+            .api_key
+            .ok_or_else(|| anyhow::anyhow!("composio.api_key is not configured in settings"))?;
+        Ok(rara_composio::ComposioAuth::new(
+            api_key,
+            composio.entity_id.as_deref(),
+        ))
+    }
 }
 
 impl SettingsOpenRouterLoader {

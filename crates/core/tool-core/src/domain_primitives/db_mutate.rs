@@ -139,10 +139,7 @@ impl AgentTool for DbMutateTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let table = params
             .get("table")
             .and_then(|v| v.as_str())
@@ -158,8 +155,8 @@ impl AgentTool for DbMutateTool {
             .and_then(|v| v.as_object())
             .ok_or_else(|| anyhow::anyhow!("missing required parameter: data"))?;
 
-        let columns = mutable_columns(table)
-            .ok_or_else(|| anyhow::anyhow!("table not allowed: {table}"))?;
+        let columns =
+            mutable_columns(table).ok_or_else(|| anyhow::anyhow!("table not allowed: {table}"))?;
 
         // Validate all data keys.
         for col in data.keys() {
@@ -177,12 +174,9 @@ impl AgentTool for DbMutateTool {
         match action {
             "create" => execute_insert(&self.pool, table, data).await,
             "update" => {
-                let id = params
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("missing required parameter: id (for update)")
-                    })?;
+                let id = params.get("id").and_then(|v| v.as_str()).ok_or_else(|| {
+                    anyhow::anyhow!("missing required parameter: id (for update)")
+                })?;
                 execute_update(&self.pool, table, id, data).await
             }
             other => Ok(json!({ "error": format!("unknown action: {other}") })),
@@ -225,8 +219,7 @@ async fn execute_update(
     id: &str,
     data: &serde_json::Map<String, serde_json::Value>,
 ) -> anyhow::Result<serde_json::Value> {
-    let id_uuid =
-        uuid::Uuid::parse_str(id).map_err(|e| anyhow::anyhow!("invalid UUID: {e}"))?;
+    let id_uuid = uuid::Uuid::parse_str(id).map_err(|e| anyhow::anyhow!("invalid UUID: {e}"))?;
 
     let set_clauses: Vec<String> = data
         .keys()

@@ -26,7 +26,6 @@ use std::{
 };
 
 use async_trait::async_trait;
-use tool_core::AgentTool;
 use rara_domain_shared::{
     notify::{
         client::NotifyClient,
@@ -36,6 +35,7 @@ use rara_domain_shared::{
 };
 use serde_json::json;
 use tokio::sync::RwLock;
+use tool_core::AgentTool;
 use tracing::{info, warn};
 
 // ---------------------------------------------------------------------------
@@ -259,10 +259,7 @@ impl AgentTool for CodexRunTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let prompt = params
             .get("prompt")
             .and_then(|v| v.as_str())
@@ -461,10 +458,7 @@ impl AgentTool for CodexStatusTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let task = if let Some(id) = params.get("task_id").and_then(|v| v.as_u64()) {
             self.store.get(id as u32).await
         } else {
@@ -522,10 +516,7 @@ impl AgentTool for CodexListTool {
         })
     }
 
-    async fn execute(
-        &self,
-        _params: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
+    async fn execute(&self, _params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let items = self.store.list().await;
         Ok(json!({
             "count": items.len(),

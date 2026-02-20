@@ -17,8 +17,8 @@
 use std::{str::FromStr, sync::Arc};
 
 use async_trait::async_trait;
-use tool_core::AgentTool;
 use serde_json::json;
+use tool_core::AgentTool;
 
 use crate::agent_scheduler::{AgentJob, AgentScheduler, AgentTrigger};
 
@@ -74,10 +74,7 @@ impl AgentTool for ScheduleAddTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let message = params
             .get("message")
             .and_then(|v| v.as_str())
@@ -97,14 +94,17 @@ impl AgentTool for ScheduleAddTool {
                     .ok_or_else(|| anyhow::anyhow!("cron_expr is required when trigger_type=cron"))?
                     .to_owned();
                 // Validate the expression.
-                croner::Cron::from_str(&expr).map_err(|e| anyhow::anyhow!("invalid cron expression: {e}"))?;
+                croner::Cron::from_str(&expr)
+                    .map_err(|e| anyhow::anyhow!("invalid cron expression: {e}"))?;
                 AgentTrigger::Cron { expr }
             }
             "delay" => {
                 let seconds = params
                     .get("delay_seconds")
                     .and_then(|v| v.as_u64())
-                    .ok_or_else(|| anyhow::anyhow!("delay_seconds is required when trigger_type=delay"))?;
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("delay_seconds is required when trigger_type=delay")
+                    })?;
                 let run_at = jiff::Timestamp::now() + std::time::Duration::from_secs(seconds);
                 AgentTrigger::Delay { run_at }
             }
@@ -112,7 +112,9 @@ impl AgentTool for ScheduleAddTool {
                 let seconds = params
                     .get("interval_seconds")
                     .and_then(|v| v.as_u64())
-                    .ok_or_else(|| anyhow::anyhow!("interval_seconds is required when trigger_type=interval"))?;
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("interval_seconds is required when trigger_type=interval")
+                    })?;
                 AgentTrigger::Interval { seconds }
             }
             other => {
@@ -168,10 +170,7 @@ impl AgentTool for ScheduleListTool {
         })
     }
 
-    async fn execute(
-        &self,
-        _params: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
+    async fn execute(&self, _params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let jobs = self.scheduler.list().await;
         let items: Vec<serde_json::Value> = jobs
             .iter()
@@ -223,19 +222,17 @@ impl AgentTool for ScheduleRemoveTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
-        let id = params.get("id").and_then(|v| v.as_str()).ok_or_else(|| {
-            anyhow::anyhow!("missing required parameter: id")
-        })?;
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        let id = params
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: id"))?;
 
-        let removed =
-            self.scheduler
-                .remove(id)
-                .await
-                .map_err(|e| anyhow::anyhow!("failed to remove job: {e}"))?;
+        let removed = self
+            .scheduler
+            .remove(id)
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to remove job: {e}"))?;
 
         if removed {
             Ok(json!({ "status": "ok", "removed": true }))

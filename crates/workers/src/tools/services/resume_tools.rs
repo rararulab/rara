@@ -20,8 +20,8 @@
 //!   suggestions.
 
 use async_trait::async_trait;
-use tool_core::AgentTool;
 use serde_json::json;
+use tool_core::AgentTool;
 use uuid::Uuid;
 
 const ANALYZE_PROMPT_FILE: &str = "workers/resume_analysis_instructions.md";
@@ -62,10 +62,7 @@ impl AgentTool for ListResumesTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let source_filter = params
             .get("source")
             .and_then(|v| v.as_str())
@@ -139,10 +136,7 @@ impl AgentTool for GetResumeContentTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let resume_id_str = params
             .get("resume_id")
             .and_then(|v| v.as_str())
@@ -255,10 +249,7 @@ impl AgentTool for AnalyzeResumeTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         // -- parse resume_id ----------------------------------------------------
         let resume_id_str = params
             .get("resume_id")

@@ -1,5 +1,5 @@
 [package]
-name = "rara-agents"
+name = "rara-composio"
 version = "0.0.1"
 edition.workspace = true
 license.workspace = true
@@ -10,23 +10,13 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-[dependencies]
-anyhow.workspace = true
-async-trait.workspace = true
-backon.workspace = true
-base.workspace = true
-bon.workspace = true
-openrouter-rs = "^0.4"
-serde.workspace = true
-serde_json.workspace = true
-snafu.workspace = true
-tokio.workspace = true
-tool-core.workspace = true
-tracing.workspace = true
-
 [lints]
 workspace = true
 
-[dev-dependencies]
-common-telemetry.workspace = true
-test-case = "^3"
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+parking_lot = "0.12"
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true

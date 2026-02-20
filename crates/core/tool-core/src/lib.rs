@@ -48,10 +48,11 @@ pub trait AgentTool: Send + Sync {
 
 /// Dependencies required to construct domain-level primitive tools.
 pub struct PrimitiveDeps {
-    pub pool:          sqlx::PgPool,
-    pub notify_client: rara_domain_shared::notify::client::NotifyClient,
-    pub settings_svc:  rara_domain_shared::settings::SettingsSvc,
-    pub object_store:  opendal::Operator,
+    pub pool:                   sqlx::PgPool,
+    pub notify_client:          rara_domain_shared::notify::client::NotifyClient,
+    pub settings_svc:           rara_domain_shared::settings::SettingsSvc,
+    pub object_store:           opendal::Operator,
+    pub composio_auth_provider: Arc<dyn rara_composio::ComposioAuthProvider>,
 }
 
 /// Returns all primitive tools (core + domain), ready for registration.
@@ -75,12 +76,19 @@ pub fn core_primitives_vec() -> Vec<AgentToolRef> {
     ]
 }
 
-/// Returns only the 4 domain primitives.
+/// Returns domain primitives. Composio is included when configured.
 pub fn domain_primitives_vec(deps: PrimitiveDeps) -> Vec<AgentToolRef> {
-    vec![
+    let mut tools: Vec<AgentToolRef> = vec![
         Arc::new(domain_primitives::DbQueryTool::new(deps.pool.clone())),
         Arc::new(domain_primitives::DbMutateTool::new(deps.pool)),
-        Arc::new(domain_primitives::NotifyTool::new(deps.notify_client, deps.settings_svc)),
+        Arc::new(domain_primitives::NotifyTool::new(
+            deps.notify_client,
+            deps.settings_svc,
+        )),
         Arc::new(domain_primitives::StorageReadTool::new(deps.object_store)),
-    ]
+    ];
+    tools.push(Arc::new(
+        domain_primitives::ComposioTool::from_auth_provider(deps.composio_auth_provider),
+    ));
+    tools
 }

@@ -15,9 +15,9 @@
 //! Layer 2 service tools for managing agent skills.
 
 use async_trait::async_trait;
-use tool_core::AgentTool;
 use rara_skills::registry::InMemoryRegistry;
 use serde_json::{Value, json};
+use tool_core::AgentTool;
 
 /// Format a SKILL.md file with YAML frontmatter (new format).
 fn format_skill_md(
@@ -146,9 +146,10 @@ impl AgentTool for CreateSkillTool {
     }
 
     async fn execute(&self, params: Value) -> anyhow::Result<Value> {
-        let name = params.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
-            anyhow::anyhow!("missing required parameter: name")
-        })?;
+        let name = params
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: name"))?;
 
         let description = params
             .get("description")
@@ -176,17 +177,18 @@ impl AgentTool for CreateSkillTool {
         // Write to skills_dir()/{name}/SKILL.md.
         let skills_dir = rara_paths::skills_dir();
         let skill_dir = skills_dir.join(name);
-        std::fs::create_dir_all(&skill_dir).map_err(|e| anyhow::anyhow!("failed to create skill directory: {e}"))?;
+        std::fs::create_dir_all(&skill_dir)
+            .map_err(|e| anyhow::anyhow!("failed to create skill directory: {e}"))?;
 
         let file_path = skill_dir.join("SKILL.md");
-        std::fs::write(&file_path, &content).map_err(|e| anyhow::anyhow!("failed to write skill file: {e}"))?;
+        std::fs::write(&file_path, &content)
+            .map_err(|e| anyhow::anyhow!("failed to write skill file: {e}"))?;
 
         // Parse the file back and insert into registry.
-        let raw =
-            std::fs::read_to_string(&file_path).map_err(|e| anyhow::anyhow!("failed to read skill file: {e}"))?;
-        let mut meta = rara_skills::parse::parse_metadata(&raw, &skill_dir).map_err(|e| {
-            anyhow::anyhow!("failed to parse skill file: {e}")
-        })?;
+        let raw = std::fs::read_to_string(&file_path)
+            .map_err(|e| anyhow::anyhow!("failed to read skill file: {e}"))?;
+        let mut meta = rara_skills::parse::parse_metadata(&raw, &skill_dir)
+            .map_err(|e| anyhow::anyhow!("failed to parse skill file: {e}"))?;
         meta.source = Some(rara_skills::types::SkillSource::Personal);
 
         self.registry.insert(meta);
@@ -233,9 +235,10 @@ impl AgentTool for DeleteSkillTool {
     }
 
     async fn execute(&self, params: Value) -> anyhow::Result<Value> {
-        let name = params.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
-            anyhow::anyhow!("missing required parameter: name")
-        })?;
+        let name = params
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: name"))?;
 
         // Get the skill path before removing from registry.
         let meta = self

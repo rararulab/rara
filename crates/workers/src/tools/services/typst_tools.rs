@@ -23,8 +23,8 @@
 //! - [`CompileTypstProjectTool`]: compile a project to PDF (reading from disk).
 
 use async_trait::async_trait;
-use tool_core::AgentTool;
 use serde_json::json;
+use tool_core::AgentTool;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -59,10 +59,7 @@ impl AgentTool for ListTypstProjectsTool {
         })
     }
 
-    async fn execute(
-        &self,
-        _params: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
+    async fn execute(&self, _params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         match self.typst_service.list_projects().await {
             Ok(projects) => {
                 let items: Vec<serde_json::Value> = projects
@@ -120,10 +117,7 @@ impl AgentTool for ListTypstFilesTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let project_id = parse_uuid(&params, "project_id")?;
 
         let project = match self.typst_service.get_project(project_id).await {
@@ -178,10 +172,7 @@ impl AgentTool for ReadTypstFileTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let project_id = parse_uuid(&params, "project_id")?;
         let file_path = parse_string(&params, "file_path")?;
 
@@ -245,10 +236,7 @@ impl AgentTool for UpdateTypstFileTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let project_id = parse_uuid(&params, "project_id")?;
         let file_path = parse_string(&params, "file_path")?;
         let content = parse_string(&params, "content")?;
@@ -309,10 +297,7 @@ impl AgentTool for CompileTypstProjectTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let project_id = parse_uuid(&params, "project_id")?;
 
         match self.typst_service.compile(project_id, None).await {
@@ -335,9 +320,10 @@ impl AgentTool for CompileTypstProjectTool {
 
 /// Extract a required UUID parameter from JSON.
 fn parse_uuid(params: &serde_json::Value, field: &str) -> anyhow::Result<Uuid> {
-    let s = params.get(field).and_then(|v| v.as_str()).ok_or_else(|| {
-        anyhow::anyhow!("missing required parameter: {field}")
-    })?;
+    let s = params
+        .get(field)
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing required parameter: {field}"))?;
 
     Uuid::parse_str(s).map_err(|e| anyhow::anyhow!("invalid UUID for {field}: {e}"))
 }

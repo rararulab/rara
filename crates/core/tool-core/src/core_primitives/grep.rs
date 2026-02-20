@@ -18,7 +18,7 @@
 //! file type filtering and context lines.  Falls back to `grep -rn` if `rg` is
 //! not installed.
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use async_trait::async_trait;
 use serde_json::json;
 

@@ -134,10 +134,7 @@ impl AgentTool for DbQueryTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let table = params
             .get("table")
             .and_then(|v| v.as_str())

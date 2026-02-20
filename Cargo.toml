@@ -66,6 +66,7 @@ members = [
     "crates/integrations/keyring-store",
     "crates/extensions/mcp-admin",
     "crates/core/tool-core",
+    "crates/integrations/composio",
 ]
 
 [workspace.dependencies]
@@ -149,6 +150,7 @@ rara-ai = { path = "crates/ai" }
 rara-api = { path = "api" }
 rara-app = { path = "crates/app" }
 rara-cli = { path = "crates/cmd" }
+rara-composio = { path = "crates/integrations/composio" }
 rara-domain-analytics = { path = "crates/domain/analytics" }
 rara-domain-application = { path = "crates/domain/application" }
 rara-domain-chat = { path = "crates/domain/chat" }
@@ -157,7 +159,6 @@ rara-domain-job = { path = "crates/domain/job" }
 rara-domain-resume = { path = "crates/domain/resume" }
 rara-domain-scheduler = { path = "crates/domain/scheduler" }
 rara-domain-shared = { path = "crates/domain/shared" }
-rara-skill-admin = { path = "crates/extensions/skill-admin" }
 rara-domain-typst = { path = "crates/domain/typst" }
 rara-error = { path = "crates/common/error" }
 rara-keyring-store = { path = "crates/integrations/keyring-store" }
@@ -168,6 +169,7 @@ rara-model = { path = "crates/rara-model" }
 rara-paths = { path = "crates/paths" }
 rara-server = { path = "crates/server" }
 rara-sessions = { path = "crates/sessions" }
+rara-skill-admin = { path = "crates/extensions/skill-admin" }
 rara-skills = { path = "crates/skills" }
 rara-telegram-bot = { path = "crates/telegram-bot" }
 rara-workers = { path = "crates/workers" }

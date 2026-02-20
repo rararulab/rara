@@ -15,10 +15,9 @@
 use std::{collections::HashMap, sync::Arc};
 
 use snafu::ResultExt;
+pub use tool_core::{AgentTool, AgentToolRef};
 
 use crate::err::prelude::*;
-
-pub use tool_core::{AgentTool, AgentToolRef};
 
 /// Where a tool originates from.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -18,8 +18,8 @@
 //! and AI analysis. Migrated from the former `save_job_url` flat tool.
 
 use async_trait::async_trait;
-use tool_core::AgentTool;
 use serde_json::json;
+use tool_core::AgentTool;
 
 /// Layer 2 service tool: save a job URL into the automated pipeline.
 pub struct JobPipelineTool {
@@ -54,13 +54,11 @@ impl AgentTool for JobPipelineTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
-        let url = params.get("url").and_then(|v| v.as_str()).ok_or_else(|| {
-            anyhow::anyhow!("missing required parameter: url")
-        })?;
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        let url = params
+            .get("url")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: url"))?;
 
         match self.job_service.create(url).await {
             Ok(job) => Ok(json!({

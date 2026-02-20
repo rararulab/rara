@@ -17,7 +17,7 @@
 //! Reads a file, replaces an exact substring, and writes the result back.
 //! Supports single (unique) replacement and replace-all modes.
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use async_trait::async_trait;
 use serde_json::json;
 
@@ -92,15 +92,13 @@ impl AgentTool for EditFileTool {
         let count = content.matches(old_string).count();
 
         if count == 0 {
-            bail!(
-                "old_string not found in {file_path}. Make sure the string matches exactly."
-            );
+            bail!("old_string not found in {file_path}. Make sure the string matches exactly.");
         }
 
         if !replace_all && count > 1 {
             bail!(
-                "old_string found {count} times in {file_path}. Use replace_all=true to \
-                 replace all occurrences, or provide a more specific old_string."
+                "old_string found {count} times in {file_path}. Use replace_all=true to replace \
+                 all occurrences, or provide a more specific old_string."
             );
         }
 

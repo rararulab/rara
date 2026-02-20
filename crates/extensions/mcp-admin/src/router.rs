@@ -1,16 +1,30 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use axum::{
     Json, Router,
     extract::{Path, State},
     routing::{get, post},
 };
-
 use rara_mcp::manager::{log_buffer::McpLogEntry, mgr::McpManager};
 
-use crate::error::{McpAdminError, McpSnafu, RegistrySnafu, ServerNotFoundSnafu};
-use crate::types::{
-    CreateServerRequest, McpResourceView, McpServerConfigView, McpServerInfo, McpServerStatus,
-    McpToolView, UpdateServerRequest,
+use crate::{
+    error::{McpAdminError, McpSnafu, RegistrySnafu, ServerNotFoundSnafu},
+    types::{
+        CreateServerRequest, McpResourceView, McpServerConfigView, McpServerInfo, McpServerStatus,
+        McpToolView, UpdateServerRequest,
+    },
 };
 
 type McpState = McpManager;
@@ -27,18 +41,12 @@ pub fn mcp_router(manager: McpState) -> Router {
         .route("/api/v1/mcp/servers/{name}/restart", post(restart_server))
         .route("/api/v1/mcp/servers/{name}/enable", post(enable_server))
         .route("/api/v1/mcp/servers/{name}/disable", post(disable_server))
-        .route(
-            "/api/v1/mcp/servers/{name}/tools",
-            get(list_server_tools),
-        )
+        .route("/api/v1/mcp/servers/{name}/tools", get(list_server_tools))
         .route(
             "/api/v1/mcp/servers/{name}/resources",
             get(list_server_resources),
         )
-        .route(
-            "/api/v1/mcp/servers/{name}/logs",
-            get(list_server_logs),
-        )
+        .route("/api/v1/mcp/servers/{name}/logs", get(list_server_logs))
         .with_state(manager)
 }
 
@@ -57,7 +65,12 @@ async fn build_server_info(
             }
             .build()
         })?
-        .ok_or_else(|| ServerNotFoundSnafu { name: name.to_string() }.build())?;
+        .ok_or_else(|| {
+            ServerNotFoundSnafu {
+                name: name.to_string(),
+            }
+            .build()
+        })?;
     let connected = manager.connected_servers().await;
     let status = if connected.contains(&name.to_string()) {
         McpServerStatus::Connected
@@ -65,7 +78,7 @@ async fn build_server_info(
         McpServerStatus::Disconnected
     };
     Ok(McpServerInfo {
-        name:   name.to_string(),
+        name: name.to_string(),
         config: McpServerConfigView::from(config),
         status,
     })
@@ -155,15 +168,12 @@ async fn update_server(
     Json(req): Json<UpdateServerRequest>,
 ) -> Result<Json<McpServerInfo>, McpAdminError> {
     let registry = manager.registry().await;
-    let existing = registry
-        .get(&name)
-        .await
-        .map_err(|e| {
-            RegistrySnafu {
-                message: e.to_string(),
-            }
-            .build()
-        })?;
+    let existing = registry.get(&name).await.map_err(|e| {
+        RegistrySnafu {
+            message: e.to_string(),
+        }
+        .build()
+    })?;
     if existing.is_none() {
         return Err(ServerNotFoundSnafu { name }.build());
     }
@@ -172,15 +182,12 @@ async fn update_server(
     let enabled = existing.as_ref().is_none_or(|c| c.enabled);
     let mut new_config = req.config.clone();
     new_config.enabled = enabled;
-    registry
-        .add(name.clone(), new_config)
-        .await
-        .map_err(|e| {
-            RegistrySnafu {
-                message: e.to_string(),
-            }
-            .build()
-        })?;
+    registry.add(name.clone(), new_config).await.map_err(|e| {
+        RegistrySnafu {
+            message: e.to_string(),
+        }
+        .build()
+    })?;
     drop(registry);
 
     // If server was running, spawn background restart

@@ -66,13 +66,13 @@ pub type OnEvent = Box<dyn Fn(RunnerEvent) + Send + Sync>;
 #[derive(Builder)]
 #[builder(on(SharedString, into))]
 pub struct AgentRunner {
-    llm_provider:   OpenRouterLoaderRef,
-    model_name:     SharedString,
-    system_prompt:  SharedString,
-    user_content:   Content,
-    history:        Option<Vec<Message>>,
+    llm_provider:    OpenRouterLoaderRef,
+    model_name:      SharedString,
+    system_prompt:   SharedString,
+    user_content:    Content,
+    history:         Option<Vec<Message>>,
     #[builder(default = MAX_ITERATIONS)]
-    max_iterations: usize,
+    max_iterations:  usize,
     /// Fallback models to try (in order) when the primary model fails with a
     /// fallback-eligible error. Empty means no fallback.
     #[builder(default)]
@@ -96,7 +96,10 @@ impl AgentRunner {
         on_event: Option<&OnEvent>,
     ) -> Result<AgentRunResponse> {
         // Try the primary model first.
-        match self.run_with_model(self.model_name.as_ref(), tools, on_event).await {
+        match self
+            .run_with_model(self.model_name.as_ref(), tools, on_event)
+            .await
+        {
             Ok(response) => Ok(response),
             Err(err) if !self.fallback_models.is_empty() && is_fallback_eligible(&err) => {
                 let mut last_err = err;
@@ -107,7 +110,10 @@ impl AgentRunner {
                         error = %last_err,
                         "switching to fallback model"
                     );
-                    match self.run_with_model(fallback.as_ref(), tools, on_event).await {
+                    match self
+                        .run_with_model(fallback.as_ref(), tools, on_event)
+                        .await
+                    {
                         Ok(response) => return Ok(response),
                         Err(err) if is_fallback_eligible(&err) => {
                             last_err = err;
@@ -132,10 +138,7 @@ impl AgentRunner {
         on_event: Option<&OnEvent>,
     ) -> Result<AgentRunResponse> {
         let is_multimodal = matches!(self.user_content, Content::Parts(_));
-        info!(
-            model_name = model,
-            is_multimodal, "starting agent loop"
-        );
+        info!(model_name = model, is_multimodal, "starting agent loop");
 
         // prepare messages with system prompt, optional history, and current user
         // message

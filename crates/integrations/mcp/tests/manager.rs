@@ -4,7 +4,11 @@
 //! example binary (stdio transport) to verify MCP protocol operations
 //! end-to-end: tool listing, tool calling, resource reading.
 
-use std::{collections::HashSet, path::PathBuf, sync::Arc, sync::LazyLock};
+use std::{
+    collections::HashSet,
+    path::PathBuf,
+    sync::{Arc, LazyLock},
+};
 
 use anyhow::Result;
 use rara_mcp::{
@@ -41,7 +45,7 @@ static TEST_SERVER_BIN: LazyLock<PathBuf> = LazyLock::new(|| {
 /// Create a stdio-based McpServerConfig pointing at the test server binary.
 fn test_server_config() -> McpServerConfig {
     McpServerConfig {
-        command:   TEST_SERVER_BIN.to_string_lossy().into_owned(),
+        command: TEST_SERVER_BIN.to_string_lossy().into_owned(),
         transport: TransportType::Stdio,
         ..Default::default()
     }
@@ -52,10 +56,7 @@ async fn new_test_manager() -> Result<(McpManager, tempfile::TempDir)> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("mcp-registry.json");
     let registry = FSMcpRegistry::load(&path).await?;
-    let manager = McpManager::new(
-        Arc::new(registry),
-        OAuthCredentialsStoreMode::default(),
-    );
+    let manager = McpManager::new(Arc::new(registry), OAuthCredentialsStoreMode::default());
     Ok((manager, dir))
 }
 
@@ -74,7 +75,10 @@ async fn list_tools_returns_echo_and_add() -> Result<()> {
 
     let tools = manager.list_tools("test").await?;
     let names: HashSet<_> = tools.iter().map(|t| &*t.name).collect();
-    assert!(names.contains("echo"), "expected 'echo' tool, got {names:?}");
+    assert!(
+        names.contains("echo"),
+        "expected 'echo' tool, got {names:?}"
+    );
     assert!(names.contains("add"), "expected 'add' tool, got {names:?}");
 
     manager.shutdown_all().await;
@@ -152,11 +156,7 @@ async fn list_resources_returns_greeting() -> Result<()> {
     let (manager, _dir) = manager_with_server().await?;
 
     let result = manager.list_resources("test").await?;
-    let uris: Vec<_> = result
-        .resources
-        .iter()
-        .map(|r| &*r.raw.uri)
-        .collect();
+    let uris: Vec<_> = result.resources.iter().map(|r| &*r.raw.uri).collect();
     assert!(
         uris.contains(&"test://greeting"),
         "expected 'test://greeting' resource, got {uris:?}",
@@ -344,7 +344,10 @@ async fn start_server_invalid_name_fails() -> Result<()> {
     let result = manager.start_server("bad name!", &config).await;
     assert!(result.is_err());
     assert!(
-        result.unwrap_err().to_string().contains("invalid MCP server name"),
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("invalid MCP server name"),
         "expected invalid name error",
     );
     Ok(())

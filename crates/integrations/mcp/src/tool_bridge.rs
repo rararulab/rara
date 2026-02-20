@@ -40,16 +40,10 @@ impl McpToolBridge {
 
     /// Create bridges for all tools exposed by a specific server.
     #[instrument(skip(manager), fields(server = %server_name))]
-    pub async fn from_server(
-        manager: McpManager,
-        server_name: &str,
-    ) -> Result<Vec<Self>> {
-        let tools = manager
-            .list_tools(server_name)
-            .await
-            .context(format!(
-                "failed to list tools from MCP server '{server_name}'"
-            ))?;
+    pub async fn from_server(manager: McpManager, server_name: &str) -> Result<Vec<Self>> {
+        let tools = manager.list_tools(server_name).await.context(format!(
+            "failed to list tools from MCP server '{server_name}'"
+        ))?;
 
         Ok(tools
             .into_iter()

@@ -54,10 +54,7 @@ impl AgentTool for StorageReadTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let key = params
             .get("key")
             .and_then(|v| v.as_str())

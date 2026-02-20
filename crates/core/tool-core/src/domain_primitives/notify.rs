@@ -71,10 +71,7 @@ impl AgentTool for NotifyTool {
         })
     }
 
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let channel = params
             .get("channel")
             .and_then(|v| v.as_str())

@@ -6,7 +6,9 @@
 use std::{ffi::OsString, path::PathBuf, sync::LazyLock, time::Duration};
 
 use anyhow::Result;
-use rara_mcp::{client::RmcpClient, manager::log_buffer::McpLogBuffer, oauth::OAuthCredentialsStoreMode};
+use rara_mcp::{
+    client::RmcpClient, manager::log_buffer::McpLogBuffer, oauth::OAuthCredentialsStoreMode,
+};
 use rmcp::model::{ClientInfo, ReadResourceRequestParams};
 
 mod test_server;

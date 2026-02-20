@@ -16,5 +16,5 @@ pub mod client;
 pub mod logging_client_handler;
 pub mod manager;
 pub mod oauth;
-pub mod utils;
 pub mod tool_bridge;
+pub mod utils;

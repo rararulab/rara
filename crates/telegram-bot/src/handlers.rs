@@ -1113,18 +1113,18 @@ async fn handle_mcp(msg: &Message, state: &Arc<BotState>) -> Result<(), teloxide
                         ("✘", format!("error: {}", html_escape(message)))
                     }
                 };
-                let _ = writeln!(text, "{icon} <b>{}</b> — {status_text}", html_escape(&s.name));
+                let _ = writeln!(
+                    text,
+                    "{icon} <b>{}</b> — {status_text}",
+                    html_escape(&s.name)
+                );
             }
 
             let connected = servers
                 .iter()
                 .filter(|s| matches!(s.status, McpServerStatus::Connected))
                 .count();
-            let _ = write!(
-                text,
-                "\n{connected}/{} connected",
-                servers.len()
-            );
+            let _ = write!(text, "\n{connected}/{} connected", servers.len());
 
             state
                 .bot
