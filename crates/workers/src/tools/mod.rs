@@ -14,11 +14,9 @@
 
 //! Agent tools organized in a layered architecture.
 //!
-//! - **Layer 1 (Primitives)**: atomic, composable operations (db, http, notify,
-//!   storage).
+//! - **Layer 1 (Primitives)**: provided by `tool-core` crate.
 //! - **Layer 2 (Services)**: complex business workflows built on top of domain
 //!   services.
 //! - **Layer 3 (Planner)**: the `AgentRunner` itself (no code changes needed).
 
-pub mod primitives;
 pub mod services;
