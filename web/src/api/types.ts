@@ -459,6 +459,12 @@ export interface McpResourceView {
   mime_type: string | null;
 }
 
+export interface McpLogEntry {
+  timestamp: string;
+  level: string;
+  message: string;
+}
+
 export interface CreateMcpServerRequest {
   name: string;
   command: string;

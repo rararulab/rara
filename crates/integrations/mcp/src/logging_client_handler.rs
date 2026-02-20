@@ -26,6 +26,8 @@ use rmcp::{
 };
 use tracing::{debug, error, info, warn};
 
+use crate::manager::log_buffer::McpLogBuffer;
+
 /// Interface for sending elicitation requests to the UI and awaiting a
 /// response.
 pub type SendElicitation = Box<
@@ -41,13 +43,22 @@ pub type SendElicitation = Box<
 pub(crate) struct LoggingClientHandler {
     client_info:      ClientInfo,
     send_elicitation: Arc<SendElicitation>,
+    log_buffer:       McpLogBuffer,
+    server_name:      String,
 }
 
 impl LoggingClientHandler {
-    pub(crate) fn new(client_info: ClientInfo, send_elicitation: SendElicitation) -> Self {
+    pub(crate) fn new(
+        client_info: ClientInfo,
+        send_elicitation: SendElicitation,
+        server_name: String,
+        log_buffer: McpLogBuffer,
+    ) -> Self {
         Self {
             client_info,
             send_elicitation: Arc::new(send_elicitation),
+            log_buffer,
+            server_name,
         }
     }
 }
@@ -68,10 +79,12 @@ impl ClientHandler for LoggingClientHandler {
         params: CancelledNotificationParam,
         _context: NotificationContext<RoleClient>,
     ) {
-        info!(
-            "MCP server cancelled request (request_id: {}, reason: {:?})",
+        let msg = format!(
+            "cancelled request (request_id: {}, reason: {:?})",
             params.request_id, params.reason
         );
+        info!("MCP server {msg}");
+        self.log_buffer.push(&self.server_name, "warn", msg).await;
     }
 
     async fn on_progress(
@@ -79,11 +92,12 @@ impl ClientHandler for LoggingClientHandler {
         params: ProgressNotificationParam,
         _context: NotificationContext<RoleClient>,
     ) {
-        info!(
-            "MCP server progress notification (token: {:?}, progress: {}, total: {:?}, message: \
-             {:?})",
+        let msg = format!(
+            "progress (token: {:?}, progress: {}, total: {:?}, message: {:?})",
             params.progress_token, params.progress, params.total, params.message
         );
+        info!("MCP server {msg}");
+        self.log_buffer.push(&self.server_name, "debug", msg).await;
     }
 
     async fn on_resource_updated(
@@ -91,19 +105,30 @@ impl ClientHandler for LoggingClientHandler {
         params: ResourceUpdatedNotificationParam,
         _context: NotificationContext<RoleClient>,
     ) {
-        info!("MCP server resource updated (uri: {})", params.uri);
+        let msg = format!("resource updated (uri: {})", params.uri);
+        info!("MCP server {msg}");
+        self.log_buffer.push(&self.server_name, "info", msg).await;
     }
 
     async fn on_resource_list_changed(&self, _context: NotificationContext<RoleClient>) {
         info!("MCP server resource list changed");
+        self.log_buffer
+            .push(&self.server_name, "info", "resource list changed".into())
+            .await;
     }
 
     async fn on_tool_list_changed(&self, _context: NotificationContext<RoleClient>) {
         info!("MCP server tool list changed");
+        self.log_buffer
+            .push(&self.server_name, "info", "tool list changed".into())
+            .await;
     }
 
     async fn on_prompt_list_changed(&self, _context: NotificationContext<RoleClient>) {
         info!("MCP server prompt list changed");
+        self.log_buffer
+            .push(&self.server_name, "info", "prompt list changed".into())
+            .await;
     }
 
     fn get_info(&self) -> ClientInfo { self.client_info.clone() }
@@ -119,7 +144,7 @@ impl ClientHandler for LoggingClientHandler {
             data,
         } = params;
         let logger = logger.as_deref();
-        match level {
+        let buf_level = match level {
             LoggingLevel::Emergency
             | LoggingLevel::Alert
             | LoggingLevel::Critical
@@ -128,25 +153,32 @@ impl ClientHandler for LoggingClientHandler {
                     "MCP server log message (level: {:?}, logger: {:?}, data: {})",
                     level, logger, data
                 );
+                "error"
             }
             LoggingLevel::Warning => {
                 warn!(
                     "MCP server log message (level: {:?}, logger: {:?}, data: {})",
                     level, logger, data
                 );
+                "warn"
             }
             LoggingLevel::Notice | LoggingLevel::Info => {
                 info!(
                     "MCP server log message (level: {:?}, logger: {:?}, data: {})",
                     level, logger, data
                 );
+                "info"
             }
             LoggingLevel::Debug => {
                 debug!(
                     "MCP server log message (level: {:?}, logger: {:?}, data: {})",
                     level, logger, data
                 );
+                "debug"
             }
-        }
+        };
+        self.log_buffer
+            .push(&self.server_name, buf_level, format!("{data}"))
+            .await;
     }
 }

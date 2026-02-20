@@ -17,6 +17,7 @@ tool-core.workspace = true
 base.workspace = true
 bon.workspace = true
 futures.workspace = true
+jiff.workspace = true
 keyring = { version = "^3.6", features = ["crypto-rust"] }
 oauth2.workspace = true
 rara-keyring-store.workspace = true

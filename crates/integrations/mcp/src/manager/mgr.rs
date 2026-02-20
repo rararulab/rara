@@ -11,6 +11,7 @@ use tracing::{info, instrument, warn};
 use crate::{
     manager::{
         erm::ElicitationRequestManager,
+        log_buffer::McpLogBuffer,
         managed_client::AsyncManagedClient,
         registry::{McpRegistryRef, McpServerConfig},
     },
@@ -21,6 +22,9 @@ use crate::{
 #[derive(Clone)]
 pub struct McpManager {
     inner: Arc<RwLock<McpManagerInner>>,
+    /// Per-server log ring buffer.  Lives outside the `RwLock` because
+    /// `McpLogBuffer` carries its own `Arc<RwLock<…>>` internally.
+    log_buffer: McpLogBuffer,
 }
 
 struct McpManagerInner {
@@ -40,8 +44,12 @@ impl McpManager {
                 registry,
                 store_mode,
             })),
+            log_buffer: McpLogBuffer::default(),
         }
     }
+
+    /// Return a reference to the per-server log buffer.
+    pub fn log_buffer(&self) -> &McpLogBuffer { &self.log_buffer }
 
     /// Start all enabled servers from the registry concurrently.
     ///
@@ -95,7 +103,17 @@ impl McpManager {
             (inner.store_mode, inner.elicitation_requests.clone())
         };
 
-        let managed = AsyncManagedClient::new(name, config.clone(), store_mode, erm);
+        let managed = AsyncManagedClient::new(
+            name,
+            config.clone(),
+            store_mode,
+            erm,
+            self.log_buffer.clone(),
+        );
+
+        self.log_buffer
+            .push(name, "info", "connecting...".into())
+            .await;
 
         // Store immediately so concurrent callers can await the same startup.
         {
@@ -105,6 +123,9 @@ impl McpManager {
 
         // Wait for startup to finish.
         if let Err(e) = managed.client().await {
+            self.log_buffer
+                .push(name, "error", format!("connection failed: {e}"))
+                .await;
             let mut inner = self.inner.write().await;
             inner.clients.remove(name);
             return Err(anyhow::anyhow!("{e}"));
@@ -123,6 +144,9 @@ impl McpManager {
         };
         if let Some(client) = client {
             client.cancel();
+            self.log_buffer
+                .push(name, "info", "disconnected".into())
+                .await;
         }
     }
 
