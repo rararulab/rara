@@ -5,7 +5,7 @@ use axum::{
     routing::{get, post},
 };
 
-use rara_mcp::manager::mgr::McpManager;
+use rara_mcp::manager::{log_buffer::McpLogEntry, mgr::McpManager};
 
 use crate::error::{McpAdminError, McpSnafu, RegistrySnafu, ServerNotFoundSnafu};
 use crate::types::{
@@ -34,6 +34,10 @@ pub fn mcp_router(manager: McpState) -> Router {
         .route(
             "/api/v1/mcp/servers/{name}/resources",
             get(list_server_resources),
+        )
+        .route(
+            "/api/v1/mcp/servers/{name}/logs",
+            get(list_server_logs),
         )
         .with_state(manager)
 }
@@ -374,4 +378,12 @@ async fn list_server_resources(
         .collect();
 
     Ok(Json(views))
+}
+
+async fn list_server_logs(
+    State(manager): State<McpState>,
+    Path(name): Path<String>,
+) -> Result<Json<Vec<McpLogEntry>>, McpAdminError> {
+    let entries = manager.log_buffer().entries(&name).await;
+    Ok(Json(entries))
 }

@@ -55,6 +55,7 @@ use crate::{
     client::RmcpClient,
     manager::{
         erm::ElicitationRequestManager,
+        log_buffer::McpLogBuffer,
         registry::{McpServerConfig, TransportType},
     },
     oauth::OAuthCredentialsStoreMode,
@@ -108,6 +109,7 @@ impl AsyncManagedClient {
         config: McpServerConfig,
         store_mode: OAuthCredentialsStoreMode,
         elicitation_requests: ElicitationRequestManager,
+        log_buffer: McpLogBuffer,
     ) -> Self {
         let server_name = server_name.into();
         let cancel_token = CancellationToken::new();
@@ -129,17 +131,31 @@ impl AsyncManagedClient {
             // Race the actual handshake against the cancellation signal.
             // If McpManager::stop_server is called before startup completes,
             // the cancel branch fires and we return Cancelled immediately.
-            tokio::select! {
+            let result = tokio::select! {
                 result = ManagedClient::start(
-                    server_name,
+                    server_name.clone(),
                     client,
                     Some(Duration::from_secs(startup_timeout)),
                     Duration::from_secs(tool_timeout),
                     tool_filter,
                     elicitation_requests,
+                    log_buffer.clone(),
                 ) => result,
                 _ = ct.cancelled() => Err(StartupOutcomeError::Cancelled),
+            };
+
+            if let Ok(ref mc) = result {
+                let tool_count = mc.tools_cache.lock().await.tools.len();
+                log_buffer
+                    .push(
+                        &server_name,
+                        "info",
+                        format!("connected, {tool_count} tools available"),
+                    )
+                    .await;
             }
+
+            result
         };
 
         Self {
@@ -316,10 +332,10 @@ async fn make_rmcp_client(
             };
 
             RmcpClient::new_stdio_client(command, args, env, &config.env_vars, config.cwd.clone())
-                .await
-                .map_err(|err| StartupOutcomeError::Failed {
-                    error: err.to_string(),
-                })
+            .await
+            .map_err(|err| StartupOutcomeError::Failed {
+                error: err.to_string(),
+            })
         }
         TransportType::Sse => {
             let url = config
@@ -381,6 +397,7 @@ impl ManagedClient {
         tool_timeout: Duration,
         tool_filter: ToolFilter,
         elicitation_requests: ElicitationRequestManager,
+        log_buffer: McpLogBuffer,
     ) -> Result<Self, StartupOutcomeError> {
         // Declare our client capabilities per the MCP specification.
         // https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle
@@ -418,7 +435,13 @@ impl ManagedClient {
 
         // Phase 1: MCP initialize handshake.
         let _init_result = client
-            .initialize(params, startup_timeout, send_elicitation)
+            .initialize(
+                params,
+                startup_timeout,
+                send_elicitation,
+                server_name.clone(),
+                log_buffer,
+            )
             .await
             .map_err(StartupOutcomeError::from)?;
 

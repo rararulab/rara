@@ -48,9 +48,11 @@ use tracing::{info, warn};
 
 use crate::{
     logging_client_handler::{LoggingClientHandler, SendElicitation},
+    manager::log_buffer::McpLogBuffer,
     oauth::{OAuthCredentialsStoreMode, OAuthPersistor, StoredOAuthTokens},
     utils::{
-        apply_default_headers, build_default_headers, create_env_for_mcp_server, run_with_timeout,
+        apply_default_headers, build_default_headers, create_env_for_mcp_server,
+        run_with_timeout,
     },
 };
 
@@ -253,8 +255,15 @@ impl RmcpClient {
         params: InitializeRequestParams,
         timeout: Option<Duration>,
         send_elicitation: SendElicitation,
+        server_name: String,
+        log_buffer: McpLogBuffer,
     ) -> Result<InitializeResult> {
-        let handler = LoggingClientHandler::new(params.clone(), send_elicitation);
+        let handler = LoggingClientHandler::new(
+            params.clone(),
+            send_elicitation,
+            server_name,
+            log_buffer,
+        );
 
         // Phase 1: Take the pending transport out of the `Connecting` state.
         // The lock is released immediately so that the (potentially long-running)

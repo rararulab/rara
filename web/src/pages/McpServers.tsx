@@ -21,6 +21,7 @@ import type {
   McpServerInfo,
   McpToolView,
   McpResourceView,
+  McpLogEntry,
   CreateMcpServerRequest,
 } from "@/api/types";
 import { Button } from "@/components/ui/button";
@@ -53,6 +54,7 @@ import {
   Play,
   Plus,
   RotateCcw,
+  ScrollText,
   Server,
   Square,
   Trash2,
@@ -843,6 +845,9 @@ function ServerCard({
 
           {/* Resources (only fetch when connected) */}
           {isConnected && <ResourcesList serverName={server.name} />}
+
+          {/* Logs (always available) */}
+          <LogsList serverName={server.name} />
         </div>
       )}
     </div>
@@ -1092,6 +1097,95 @@ function ResourcesList({ serverName }: { serverName: string }) {
               )}
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Logs list ────────────────────────────────────────────────
+
+function LogsList({ serverName }: { serverName: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  const logsQuery = useQuery({
+    queryKey: ["mcp-server-logs", serverName],
+    queryFn: () =>
+      api.get<McpLogEntry[]>(`/api/v1/mcp/servers/${serverName}/logs`),
+    enabled: expanded,
+    refetchInterval: expanded ? 3000 : false,
+  });
+
+  const logs = logsQuery.data ?? [];
+
+  return (
+    <div className="rounded-lg border bg-muted/30">
+      <button
+        type="button"
+        className="flex w-full items-center justify-between p-3 text-left transition-colors hover:bg-accent/50"
+        onClick={() => setExpanded((v) => !v)}
+      >
+        <div className="flex items-center gap-2">
+          <ScrollText className="h-3.5 w-3.5 text-muted-foreground" />
+          <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+            Logs
+          </span>
+          {expanded && !logsQuery.isLoading && logs.length > 0 && (
+            <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+              {logs.length}
+            </Badge>
+          )}
+        </div>
+        {expanded ? (
+          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+        )}
+      </button>
+      {expanded && (
+        <div className="border-t px-3 pb-3 pt-2">
+          {logsQuery.isLoading && (
+            <div className="space-y-2">
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-full" />
+            </div>
+          )}
+          {logsQuery.isError && (
+            <p className="text-xs text-destructive">Failed to load logs.</p>
+          )}
+          {logs.length === 0 && !logsQuery.isLoading && !logsQuery.isError && (
+            <p className="text-xs text-muted-foreground">No logs yet.</p>
+          )}
+          {logs.length > 0 && (
+            <div className="max-h-64 overflow-y-auto rounded border bg-muted/30 p-2 font-mono text-xs space-y-0.5">
+              {logs.map((entry, i) => (
+                <div key={i} className="flex gap-2 py-0.5">
+                  <span className="shrink-0 text-muted-foreground">
+                    {new Date(entry.timestamp).toLocaleTimeString()}
+                  </span>
+                  <Badge
+                    variant={
+                      entry.level === "error"
+                        ? "destructive"
+                        : entry.level === "warn"
+                          ? "secondary"
+                          : "outline"
+                    }
+                    className="shrink-0 text-[10px] px-1 py-0"
+                  >
+                    {entry.level}
+                  </Badge>
+                  <span
+                    className={
+                      entry.level === "error" ? "text-destructive" : ""
+                    }
+                  >
+                    {entry.message}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

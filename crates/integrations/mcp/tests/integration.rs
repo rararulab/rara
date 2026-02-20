@@ -6,7 +6,7 @@
 use std::{ffi::OsString, path::PathBuf, sync::LazyLock, time::Duration};
 
 use anyhow::Result;
-use rara_mcp::{client::RmcpClient, oauth::OAuthCredentialsStoreMode};
+use rara_mcp::{client::RmcpClient, manager::log_buffer::McpLogBuffer, oauth::OAuthCredentialsStoreMode};
 use rmcp::model::{ClientInfo, ReadResourceRequestParams};
 
 mod test_server;
@@ -47,6 +47,7 @@ fn noop_elicitation() -> rara_mcp::logging_client_handler::SendElicitation {
 
 /// Spin up a new stdio-based MCP client connected to the test server.
 async fn new_test_client() -> Result<RmcpClient> {
+    let log_buffer = McpLogBuffer::default();
     let client = RmcpClient::new_stdio_client(
         OsString::from(TEST_SERVER_BIN.as_os_str()),
         vec![],
@@ -57,7 +58,13 @@ async fn new_test_client() -> Result<RmcpClient> {
     .await?;
 
     let _init = client
-        .initialize(ClientInfo::default(), TIMEOUT, noop_elicitation())
+        .initialize(
+            ClientInfo::default(),
+            TIMEOUT,
+            noop_elicitation(),
+            "test-stdio".to_string(),
+            log_buffer,
+        )
         .await?;
 
     Ok(client)
@@ -67,6 +74,7 @@ async fn new_test_client() -> Result<RmcpClient> {
 
 #[tokio::test]
 async fn test_initialize() -> Result<()> {
+    let log_buffer = McpLogBuffer::default();
     let client = RmcpClient::new_stdio_client(
         OsString::from(TEST_SERVER_BIN.as_os_str()),
         vec![],
@@ -77,7 +85,13 @@ async fn test_initialize() -> Result<()> {
     .await?;
 
     let init = client
-        .initialize(ClientInfo::default(), TIMEOUT, noop_elicitation())
+        .initialize(
+            ClientInfo::default(),
+            TIMEOUT,
+            noop_elicitation(),
+            "test-init".to_string(),
+            log_buffer,
+        )
         .await?;
 
     assert!(
@@ -248,6 +262,7 @@ async fn start_http_server() -> Result<(String, tokio_util::sync::CancellationTo
 /// Create an HTTP-based MCP client connected to the in-process test server.
 async fn new_http_test_client() -> Result<(RmcpClient, tokio_util::sync::CancellationToken)> {
     let (url, ct) = start_http_server().await?;
+    let log_buffer = McpLogBuffer::default();
 
     let client = RmcpClient::new_streamable_http_client(
         "test-server",
@@ -260,7 +275,13 @@ async fn new_http_test_client() -> Result<(RmcpClient, tokio_util::sync::Cancell
     .await?;
 
     let _init = client
-        .initialize(ClientInfo::default(), TIMEOUT, noop_elicitation())
+        .initialize(
+            ClientInfo::default(),
+            TIMEOUT,
+            noop_elicitation(),
+            "test-server".to_string(),
+            log_buffer,
+        )
         .await?;
 
     Ok((client, ct))
@@ -269,6 +290,7 @@ async fn new_http_test_client() -> Result<(RmcpClient, tokio_util::sync::Cancell
 #[tokio::test]
 async fn test_http_initialize() -> Result<()> {
     let (url, ct) = start_http_server().await?;
+    let log_buffer = McpLogBuffer::default();
 
     let client = RmcpClient::new_streamable_http_client(
         "test-server",
@@ -281,7 +303,13 @@ async fn test_http_initialize() -> Result<()> {
     .await?;
 
     let init = client
-        .initialize(ClientInfo::default(), TIMEOUT, noop_elicitation())
+        .initialize(
+            ClientInfo::default(),
+            TIMEOUT,
+            noop_elicitation(),
+            "test-server".to_string(),
+            log_buffer,
+        )
         .await?;
 
     assert!(
