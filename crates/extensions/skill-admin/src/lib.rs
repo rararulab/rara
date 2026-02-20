@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # rara-domain-skill
+//! # rara-skill-admin
 //!
-//! Skill management domain crate — HTTP API for listing, creating, viewing,
+//! Skill management extension — HTTP API for listing, creating, viewing,
 //! and deleting agent skills.
 //!
 //! ## HTTP API

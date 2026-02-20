@@ -403,7 +403,7 @@ impl AppState {
         );
 
         // skill_routes returns a plain axum::Router (no OpenAPI metadata).
-        router = router.merge(rara_domain_skill::router::skill_routes(
+        router = router.merge(rara_skill_admin::router::skill_routes(
             self.skill_registry.clone(),
         ));
 

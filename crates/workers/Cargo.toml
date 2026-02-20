@@ -33,7 +33,7 @@ rara-domain-job = { workspace = true }
 rara-domain-resume = { workspace = true }
 rara-domain-scheduler = { workspace = true }
 rara-domain-shared = { workspace = true }
-rara-domain-skill = { workspace = true }
+rara-skill-admin = { workspace = true }
 rara-domain-typst = { workspace = true }
 rara-mcp = { workspace = true }
 rara-mcp-admin = { workspace = true }
