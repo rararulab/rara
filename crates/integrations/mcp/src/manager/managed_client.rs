@@ -17,14 +17,14 @@
 //!   │  1. validate_mcp_server_name   — reject bad names early     │
 //!   │  2. make_rmcp_client           — create transport (stdio    │
 //!   │                                  or streamable HTTP)        │
-//!   │  3. start_server_task          — MCP initialize handshake   │
+//!   │  3. ManagedClient::start       — MCP initialize handshake   │
 //!   │                                  + tools/list               │
 //!   │                                                             │
 //!   │  All racing against CancellationToken (stop_server)         │
 //!   └─────────────────────────────────────────────────────────────┘
 //!       │
 //!       ▼
-//!   ManagedClient { client, tools, tool_filter, tool_timeout }
+//!   ManagedClient { client, server_name, tool_filter, tool_timeout, tools_cache }
 //! ```
 //!
 //! The [`Shared`] wrapper on the startup future means:
@@ -37,7 +37,7 @@
 //! callers (e.g. tool calls arriving during startup) can simply await
 //! the same future rather than racing to create duplicate connections.
 
-use std::{collections::HashSet, ffi::OsString, sync::Arc, time::Duration};
+use std::{collections::HashSet, ffi::OsString, sync::Arc, time::{Duration, Instant}};
 
 use anyhow::Result;
 use futures::{
@@ -64,6 +64,8 @@ use crate::{
 const DEFAULT_STARTUP_TIMEOUT_SECS: u64 = 30;
 /// Default timeout for individual tool calls (seconds).
 const DEFAULT_TOOL_TIMEOUT_SECS: u64 = 60;
+/// TTL for the per-server tool cache.
+const TOOLS_CACHE_TTL: Duration = Duration::from_secs(300);
 
 // ── AsyncManagedClient ──────────────────────────────────────────────
 
@@ -98,7 +100,7 @@ impl AsyncManagedClient {
     /// The startup pipeline captured in the future is:
     /// 1. [`validate_mcp_server_name`] — reject names with special chars.
     /// 2. [`make_rmcp_client`] — create the transport (stdio / HTTP).
-    /// 3. [`start_server_task`] — MCP `initialize` handshake + `tools/list`.
+    /// 3. [`ManagedClient::start`] — MCP `initialize` handshake + `tools/list`.
     ///
     /// The whole pipeline races against `cancel_token.cancelled()`.
     pub(crate) fn new<S: Into<String>>(
@@ -128,7 +130,7 @@ impl AsyncManagedClient {
             // If McpManager::stop_server is called before startup completes,
             // the cancel branch fires and we return Cancelled immediately.
             tokio::select! {
-                result = start_server_task(
+                result = ManagedClient::start(
                     server_name,
                     client,
                     Some(Duration::from_secs(startup_timeout)),
@@ -173,12 +175,20 @@ impl AsyncManagedClient {
 pub(crate) struct ManagedClient {
     /// The low-level rmcp SDK client (wrapped in Arc for cheap cloning).
     pub(crate) client:       Arc<RmcpClient>,
-    /// All tools advertised by this server (post-`tools/list`).
-    pub(crate) tools:        Vec<ToolInfo>,
+    /// Which MCP server this client is connected to.
+    pub(crate) server_name:  String,
     /// Allowlist / denylist filter applied before exposing tools.
     pub(crate) tool_filter:  ToolFilter,
     /// Per-tool-call timeout for this server.
     pub(crate) tool_timeout: Option<Duration>,
+    /// Cached tool catalogue with TTL-based expiration.
+    tools_cache:             Arc<tokio::sync::Mutex<CachedTools>>,
+}
+
+/// Cached tool catalogue with expiration time.
+struct CachedTools {
+    tools:      Vec<ToolInfo>,
+    expires_at: Instant,
 }
 
 // ── ToolInfo ────────────────────────────────────────────────────────
@@ -356,106 +366,119 @@ fn resolve_bearer_token(env_var: Option<&str>) -> Result<Option<String>, Startup
     }
 }
 
-/// Perform the MCP `initialize` handshake and fetch the tool catalogue.
-///
-/// This is the core of the startup pipeline:
-///
-/// 1. Build [`InitializeRequestParams`] with our client capabilities
-///    (elicitation support, protocol version, etc.).
-/// 2. Call [`RmcpClient::initialize`] which sends `initialize` to the server
-///    and waits for `initialized`.
-/// 3. Call [`list_tools`] to fetch the server's tool catalogue with connector
-///    metadata.
-/// 4. Return a [`ManagedClient`] ready for tool calls.
-async fn start_server_task(
-    server_name: String,
-    client: Arc<RmcpClient>,
-    startup_timeout: Option<Duration>,
-    tool_timeout: Duration,
-    tool_filter: ToolFilter,
-    elicitation_requests: ElicitationRequestManager,
-) -> Result<ManagedClient, StartupOutcomeError> {
-    // Declare our client capabilities per the MCP specification.
-    // https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle
-    let params = InitializeRequestParams {
-        meta:             None,
-        capabilities:     ClientCapabilities {
-            experimental: None,
-            extensions:   None,
-            roots:        None,
-            sampling:     None,
-            // Elicitation: server can ask the user for input via forms.
-            // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation
-            elicitation:  Some(ElicitationCapability {
-                form: Some(FormElicitationCapability {
-                    schema_validation: None,
+impl ManagedClient {
+    /// Perform the MCP `initialize` handshake and fetch the tool catalogue.
+    ///
+    /// This is the core of the startup pipeline:
+    /// 1. Build [`InitializeRequestParams`] with our client capabilities.
+    /// 2. Call [`RmcpClient::initialize`] for the MCP handshake.
+    /// 3. Fetch the tool catalogue via `tools/list`.
+    /// 4. Return a fully initialized [`ManagedClient`].
+    async fn start(
+        server_name: String,
+        client: Arc<RmcpClient>,
+        startup_timeout: Option<Duration>,
+        tool_timeout: Duration,
+        tool_filter: ToolFilter,
+        elicitation_requests: ElicitationRequestManager,
+    ) -> Result<Self, StartupOutcomeError> {
+        // Declare our client capabilities per the MCP specification.
+        // https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle
+        let params = InitializeRequestParams {
+            meta:             None,
+            capabilities:     ClientCapabilities {
+                experimental: None,
+                extensions:   None,
+                roots:        None,
+                sampling:     None,
+                // Elicitation: server can ask the user for input via forms.
+                // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation
+                elicitation:  Some(ElicitationCapability {
+                    form: Some(FormElicitationCapability {
+                        schema_validation: None,
+                    }),
+                    url:  None,
                 }),
-                url:  None,
-            }),
-            tasks:        None,
-        },
-        client_info:      Implementation {
-            name:        "rara-mcp-client".to_owned(),
-            version:     env!("CARGO_PKG_VERSION").to_owned(),
-            title:       Some("rara".into()),
-            description: None,
-            icons:       None,
-            website_url: None,
-        },
-        protocol_version: ProtocolVersion::LATEST,
-    };
+                tasks:        None,
+            },
+            client_info:      Implementation {
+                name:        "rara-mcp-client".to_owned(),
+                version:     env!("CARGO_PKG_VERSION").to_owned(),
+                title:       Some("rara".into()),
+                description: None,
+                icons:       None,
+                website_url: None,
+            },
+            protocol_version: ProtocolVersion::LATEST,
+        };
 
-    // Build the elicitation callback that bridges server-initiated
-    // elicitation requests back to the UI via ElicitationRequestManager.
-    let send_elicitation = elicitation_requests.make_sender(server_name.clone());
+        // Build the elicitation callback that bridges server-initiated
+        // elicitation requests back to the UI via ElicitationRequestManager.
+        let send_elicitation = elicitation_requests.make_sender(server_name.clone());
 
-    // Phase 1: MCP initialize handshake.
-    let _init_result = client
-        .initialize(params, startup_timeout, send_elicitation)
-        .await
-        .map_err(StartupOutcomeError::from)?;
+        // Phase 1: MCP initialize handshake.
+        let _init_result = client
+            .initialize(params, startup_timeout, send_elicitation)
+            .await
+            .map_err(StartupOutcomeError::from)?;
 
-    // Phase 2: Fetch tool catalogue (reuses the startup timeout for the
-    // tools/list request as well).
-    let tools = list_tools(&server_name, &client, startup_timeout)
-        .await
-        .map_err(StartupOutcomeError::from)?;
+        // Phase 2: Fetch tool catalogue (reuses the startup timeout for the
+        // tools/list request as well).
+        let tools = Self::fetch_tools(&server_name, &client, startup_timeout)
+            .await
+            .map_err(StartupOutcomeError::from)?;
 
-    info!(
-        server = %server_name,
-        tools = tools.len(),
-        "MCP server initialized"
-    );
+        info!(
+            server = %server_name,
+            tools = tools.len(),
+            "MCP server initialized"
+        );
 
-    Ok(ManagedClient {
-        client: Arc::clone(&client),
-        tools,
-        tool_timeout: Some(tool_timeout),
-        tool_filter,
-    })
-}
-
-/// Fetch all tools from a connected MCP server, enriched with connector
-/// metadata (`connector_id`, `connector_name`).
-///
-/// Currently fetches the first page only. Most MCP servers return all
-/// tools in a single response; pagination can be added later if needed.
-async fn list_tools(
-    server_name: &str,
-    client: &Arc<RmcpClient>,
-    timeout: Option<Duration>,
-) -> Result<Vec<ToolInfo>> {
-    let result = client.list_tools_with_connector_ids(None, timeout).await?;
-
-    Ok(result
-        .tools
-        .into_iter()
-        .map(|t| ToolInfo {
-            server_name:    server_name.to_string(),
-            tool_name:      t.tool.name.to_string(),
-            tool:           t.tool,
-            connector_id:   t.connector_id,
-            connector_name: t.connector_name,
+        Ok(Self {
+            client: Arc::clone(&client),
+            server_name,
+            tool_filter,
+            tool_timeout: Some(tool_timeout),
+            tools_cache: Arc::new(tokio::sync::Mutex::new(CachedTools {
+                tools,
+                expires_at: Instant::now() + TOOLS_CACHE_TTL,
+            })),
         })
-        .collect())
+    }
+
+    /// Return cached tools, re-fetching from the server if the cache has expired.
+    pub(crate) async fn list_tools(&self) -> Result<Vec<ToolInfo>> {
+        let mut cache = self.tools_cache.lock().await;
+        if Instant::now() < cache.expires_at {
+            return Ok(cache.tools.clone());
+        }
+        let tools = Self::fetch_tools(&self.server_name, &self.client, self.tool_timeout).await?;
+        cache.tools = tools.clone();
+        cache.expires_at = Instant::now() + TOOLS_CACHE_TTL;
+        Ok(tools)
+    }
+
+    /// Fetch all tools from the MCP server, enriched with connector metadata.
+    ///
+    /// Currently fetches the first page only. Most MCP servers return all
+    /// tools in a single response; pagination can be added later if needed.
+    async fn fetch_tools(
+        server_name: &str,
+        client: &Arc<RmcpClient>,
+        timeout: Option<Duration>,
+    ) -> Result<Vec<ToolInfo>> {
+        let result = client.list_tools_with_connector_ids(None, timeout).await?;
+
+        Ok(result
+            .tools
+            .into_iter()
+            .map(|t| ToolInfo {
+                server_name:    server_name.to_string(),
+                tool_name:      t.tool.name.to_string(),
+                tool:           t.tool,
+                connector_id:   t.connector_id,
+                connector_name: t.connector_name,
+            })
+            .collect())
+    }
 }

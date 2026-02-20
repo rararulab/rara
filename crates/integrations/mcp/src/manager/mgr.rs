@@ -139,12 +139,19 @@ impl McpManager {
         self.start_server(name, &config).await
     }
 
-    /// Shut down all servers.
+    /// Shut down all servers concurrently.
+    ///
+    /// Drains all clients in a single write-lock acquisition, then cancels
+    /// them all. Much cheaper than calling [`stop_server`](Self::stop_server)
+    /// in a loop (which would acquire/release the lock N times).
     #[instrument(skip(self))]
     pub async fn shutdown_all(&self) {
-        let names: Vec<String> = self.inner.read().await.clients.keys().cloned().collect();
-        for name in names {
-            self.stop_server(&name).await;
+        let clients: Vec<AsyncManagedClient> = {
+            let mut inner = self.inner.write().await;
+            inner.clients.drain().map(|(_, c)| c).collect()
+        };
+        for client in clients {
+            client.cancel();
         }
     }
 
@@ -244,9 +251,9 @@ impl McpManager {
             .client()
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
-        Ok(mc
-            .tools
-            .iter()
+        let tools = mc.list_tools().await?;
+        Ok(tools
+            .into_iter()
             .filter(|t| mc.tool_filter.allowed(&t.tool_name))
             .map(|t| t.tool.clone())
             .collect())
