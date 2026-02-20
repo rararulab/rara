@@ -377,22 +377,48 @@ async fn send_message(
         (status = 200, description = "SSE event stream"),
     )
 )]
+/// `POST /api/v1/chat/sessions/{key}/stream` — send a message and receive
+/// the assistant's response as a Server-Sent Events (SSE) stream.
+///
+/// Accepts the same `SendMessageRequest` body as the synchronous `/send`
+/// endpoint. Instead of blocking until the full response is ready, this
+/// endpoint immediately returns an SSE stream that emits typed events:
+///
+/// - `text_delta` — incremental text fragments from the LLM.
+/// - `reasoning_delta` — chain-of-thought reasoning fragments.
+/// - `thinking` / `thinking_done` — LLM processing lifecycle markers.
+/// - `iteration` — a new agent loop iteration has started.
+/// - `tool_call_start` / `tool_call_end` — tool execution progress.
+/// - `done` — terminal event containing the complete response text.
+/// - `error` — terminal event indicating the agent loop failed.
+///
+/// Each SSE event has a typed `event:` field and a JSON `data:` payload.
+///
+/// A 15-second keep-alive heartbeat prevents proxies and CDNs from
+/// closing the connection during long-running tool calls. The keep-alive
+/// also resets axum's `TimeoutLayer` timer, so the global 60-second
+/// request timeout does not apply to streaming responses.
 #[instrument(skip(service, req))]
 async fn stream_message(
     State(service): State<ChatService>,
     Path(key): Path<String>,
     Json(req): Json<SendMessageRequest>,
 ) -> Result<Sse<impl futures::Stream<Item = Result<Event, axum::Error>>>, ChatError> {
+    // Kick off the streaming agent loop. This returns immediately with a
+    // channel receiver — the agent runs in a background tokio task.
     let rx = service
         .send_message_streaming(&SessionKey::from_raw(key), req.text, req.image_urls)
         .await?;
 
+    // Wrap the mpsc::Receiver in a Stream and map each ChatStreamEvent to
+    // an axum SSE Event with typed event name and JSON data payload.
     let stream = ReceiverStream::new(rx).map(|event| {
         let event_name = event.event_type_name();
         let data = serde_json::to_string(&event).unwrap_or_default();
         Ok(Event::default().event(event_name).data(data))
     });
 
+    // 15-second keep-alive prevents connection drops during tool execution.
     Ok(Sse::new(stream).keep_alive(
         KeepAlive::new()
             .interval(std::time::Duration::from_secs(15))

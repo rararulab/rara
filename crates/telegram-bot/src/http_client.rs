@@ -237,11 +237,39 @@ impl MainServiceHttpClient {
             .context(RequestSnafu)
     }
 
-    /// Send a chat message via SSE streaming endpoint.
+    /// Send a chat message via the SSE streaming endpoint.
     ///
     /// Maps to `POST /api/v1/chat/sessions/{key}/stream`.
-    /// Returns a channel receiver that yields parsed SSE events.
-    /// Falls back to `Err` if the initial HTTP request fails.
+    ///
+    /// Unlike [`send_chat_message`] which blocks until the full response is
+    /// ready, this method returns immediately after the HTTP connection is
+    /// established. A background tokio task consumes the SSE byte stream,
+    /// parses each event, and forwards it through the returned
+    /// `mpsc::Receiver<ChatStreamEvent>`.
+    ///
+    /// # SSE wire format
+    ///
+    /// The server sends events in standard SSE format:
+    /// ```text
+    /// event: text_delta
+    /// data: {"type":"text_delta","text":"Hello"}
+    ///
+    /// event: done
+    /// data: {"type":"done","text":"Hello, world!"}
+    /// ```
+    ///
+    /// Keep-alive comments (`:keep-alive\n\n`) are silently discarded.
+    ///
+    /// # Terminal events
+    ///
+    /// The stream ends after either a `Done` or `Error` event. The background
+    /// task exits and the channel closes, causing `rx.recv()` to return `None`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` only if the initial HTTP request fails (network error or
+    /// non-2xx status). Stream-level errors (malformed SSE, etc.) are logged
+    /// but do not propagate — the channel simply closes.
     pub async fn send_chat_message_streaming(
         &self,
         session_key: &str,
@@ -274,21 +302,32 @@ impl MainServiceHttpClient {
 
         let (tx, rx) = mpsc::channel(64);
 
-        // Spawn a task to read the SSE stream and parse events.
+        // Spawn a background task to consume the SSE byte stream.
+        // The task reads raw bytes from the HTTP response, buffers them,
+        // and splits on "\n\n" boundaries (the SSE message delimiter).
         tokio::spawn(async move {
+            // `bytes_stream()` yields raw HTTP response body chunks.
+            // reqwest's `stream` feature must be enabled for this.
             let mut stream = resp.bytes_stream();
+            // Rolling buffer for incomplete SSE messages that span chunk boundaries.
             let mut buffer = String::new();
+            // Tracks the most recent `event:` field (used for debug logging only).
             let mut current_event_type = String::new();
 
             while let Some(chunk_result) = stream.next().await {
                 let Ok(bytes) = chunk_result else { break };
                 buffer.push_str(&String::from_utf8_lossy(&bytes));
 
-                // Process complete SSE messages (terminated by double newline).
+                // SSE messages are delimited by double newlines. There may be
+                // multiple complete messages in a single TCP chunk, or a message
+                // may span multiple chunks. We loop to drain all complete messages.
                 while let Some(pos) = buffer.find("\n\n") {
                     let message = buffer[..pos].to_owned();
                     buffer = buffer[pos + 2..].to_owned();
 
+                    // Parse SSE fields from the message block.
+                    // Each line is either `event: <type>`, `data: <json>`, or
+                    // a comment starting with `:` (used for keep-alive).
                     let mut data_str = String::new();
                     for line in message.lines() {
                         if let Some(evt) = line.strip_prefix("event: ") {
@@ -296,15 +335,18 @@ impl MainServiceHttpClient {
                         } else if let Some(d) = line.strip_prefix("data: ") {
                             data_str = d.to_owned();
                         } else if line.starts_with(':') {
-                            // SSE comment (keep-alive), ignore.
+                            // SSE comment (keep-alive heartbeat), skip.
                             continue;
                         }
                     }
 
+                    // Skip events without data (e.g. pure keep-alive).
                     if data_str.is_empty() {
                         continue;
                     }
 
+                    // Deserialize the JSON payload using the tagged enum format.
+                    // The `type` field in the JSON determines the variant.
                     match serde_json::from_str::<ChatStreamEvent>(&data_str) {
                         Ok(event) => {
                             let is_terminal = matches!(
@@ -313,10 +355,10 @@ impl MainServiceHttpClient {
                                     | ChatStreamEvent::Error { .. }
                             );
                             if tx.send(event).await.is_err() {
-                                return; // receiver dropped
+                                return; // receiver dropped (caller disconnected)
                             }
                             if is_terminal {
-                                return;
+                                return; // stream is complete
                             }
                         }
                         Err(e) => {

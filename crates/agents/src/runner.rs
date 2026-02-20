@@ -400,8 +400,24 @@ impl AgentRunner {
     /// task and returns a channel receiver yielding [`RunnerEvent`]s in
     /// real-time, including incremental text/reasoning deltas.
     ///
-    /// The primary model is tried first; on fallback-eligible errors the
-    /// runner transparently retries with each model in `fallback_models`.
+    /// Unlike [`run`], which blocks until the full response is available,
+    /// this method returns immediately with an `mpsc::Receiver`. The caller
+    /// can consume events as they arrive (e.g. to build an SSE stream or
+    /// progressively update a Telegram message).
+    ///
+    /// The channel buffer size is 128 — large enough to absorb bursts of
+    /// small `TextDelta` events without back-pressuring the LLM stream.
+    ///
+    /// # Error handling
+    ///
+    /// If the agent loop encounters a fatal error, a terminal
+    /// [`RunnerEvent::Error`] is sent before the background task exits.
+    /// The caller should treat both `Done` and `Error` as terminal events.
+    ///
+    /// # Fallback models
+    ///
+    /// Not yet implemented for streaming — only the primary model is used.
+    /// (The non-streaming [`run`] supports fallback models.)
     pub fn run_streaming(self, tools: Arc<ToolRegistry>) -> mpsc::Receiver<RunnerEvent> {
         let (tx, rx) = mpsc::channel(128);
         tokio::spawn(async move {
@@ -414,6 +430,19 @@ impl AgentRunner {
     }
 
     /// Core streaming agent loop for a single model.
+    ///
+    /// This is the streaming counterpart to [`run_with_model`]. The loop
+    /// structure is identical — prepare messages, call LLM, handle tool
+    /// calls, repeat — but differs in two key ways:
+    ///
+    /// 1. Uses `stream_chat_completion()` instead of `send_chat_completion()`
+    ///    so that partial text/reasoning/tool-call fragments arrive as SSE
+    ///    chunks. Each chunk is forwarded to the caller via the `tx` channel
+    ///    as a [`RunnerEvent`].
+    ///
+    /// 2. Tool calls are executed **concurrently** via `join_all`, not
+    ///    sequentially. This reduces total latency when the model requests
+    ///    multiple independent tool calls in a single turn.
     async fn run_streaming_inner(
         &self,
         model: &str,
@@ -422,7 +451,8 @@ impl AgentRunner {
     ) -> Result<()> {
         info!(model_name = model, "starting streaming agent loop");
 
-        // Prepare messages — identical to run_with_model.
+        // ---- Prepare messages ----
+        // Identical to run_with_model: system prompt + optional history + user message.
         let mut messages = {
             let mut msgs = vec![Message::new(Role::System, self.system_prompt.as_ref())];
             if let Some(hist) = &self.history {
@@ -432,6 +462,8 @@ impl AgentRunner {
             msgs
         };
 
+        // Convert registered tools to the OpenRouter tool definition format.
+        // `None` means "no tools" — the model won't attempt function calls.
         let request_tools = if tools.is_empty() {
             None
         } else {
@@ -439,14 +471,18 @@ impl AgentRunner {
         };
         let mut tool_calls_made = 0_usize;
 
+        // ---- Main agent loop ----
+        // Each iteration: call LLM → consume streaming chunks → either finish
+        // (Done) or execute tool calls and loop again.
         for iteration in 0..self.max_iterations {
+            // Notify caller that a new iteration is starting.
             let _ = tx.send(RunnerEvent::Iteration(iteration)).await;
             let _ = tx.send(RunnerEvent::Thinking).await;
             info!(iteration, messages_count = messages.len(), "calling LLM (streaming)");
 
             let openrouter_client = self.llm_provider.acquire_client().await?;
 
-            // Build request
+            // ---- Phase 1: Build and send streaming request ----
             let mut request_builder =
                 openrouter_rs::api::chat::ChatCompletionRequest::builder();
             request_builder
@@ -457,17 +493,27 @@ impl AgentRunner {
             if let Some(tool_defs) = &request_tools {
                 request_builder.tools(tool_defs.clone());
                 request_builder.tool_choice(openrouter_rs::types::ToolChoice::auto());
+                // Allow the model to request multiple tool calls in a single turn.
                 request_builder.parallel_tool_calls(true);
             }
 
             let request = request_builder.build().context(OpenRouterSnafu)?;
 
-            // Use streaming API
+            // `stream_chat_completion` returns a `BoxStream` of
+            // `CompletionsResponse` chunks. Each chunk contains a
+            // `StreamingChoice` with incremental deltas.
             let mut stream = openrouter_client
                 .stream_chat_completion(&request)
                 .await
                 .context(OpenRouterSnafu)?;
 
+            // ---- Phase 2: Consume streaming chunks ----
+            // We accumulate three things from the stream:
+            //   - `accumulated_text`: full assistant text built from TextDelta fragments.
+            //   - `pending_tool_calls`: tool calls being assembled from incremental deltas.
+            //     Each tool call arrives across multiple chunks — first the id/name, then
+            //     argument fragments. We key them by `index` (position in the tool_calls array).
+            //   - `has_tool_calls`: set to true when finish_reason == ToolCalls.
             let mut accumulated_text = String::new();
             let mut pending_tool_calls: HashMap<u32, PendingToolCall> = HashMap::new();
             let mut has_tool_calls = false;
@@ -479,7 +525,8 @@ impl AgentRunner {
                 };
 
                 if let Choice::Streaming(sc) = choice {
-                    // Text content delta
+                    // --- Text content delta ---
+                    // Each chunk may contain a fragment of the assistant's text response.
                     if let Some(ref text) = sc.delta.content {
                         if !text.is_empty() {
                             accumulated_text.push_str(text);
@@ -487,7 +534,9 @@ impl AgentRunner {
                         }
                     }
 
-                    // Reasoning delta
+                    // --- Reasoning delta ---
+                    // Some models (e.g. o1) emit chain-of-thought reasoning in a
+                    // separate field. We forward it as a distinct event type.
                     if let Some(ref reasoning) = sc.delta.reasoning {
                         if !reasoning.is_empty() {
                             let _ =
@@ -495,7 +544,12 @@ impl AgentRunner {
                         }
                     }
 
-                    // Tool call delta accumulation
+                    // --- Tool call delta accumulation ---
+                    // Tool call fragments arrive incrementally:
+                    //   Chunk 1: { index: 0, id: "call_abc", function: { name: "search", arguments: "" } }
+                    //   Chunk 2: { index: 0, id: "",          function: { name: "",       arguments: '{"q' } }
+                    //   Chunk 3: { index: 0, id: "",          function: { name: "",       arguments: '":"hello"}' } }
+                    // We accumulate by `index` until `finish_reason == ToolCalls`.
                     if let Some(ref tool_calls_delta) = sc.delta.tool_calls {
                         for tc in tool_calls_delta {
                             let idx = tc.index.unwrap_or(0);
@@ -507,17 +561,22 @@ impl AgentRunner {
                                         arguments_buf:   String::new(),
                                     }
                                 });
+                            // id and name are sent once (in the first chunk for this index);
+                            // subsequent chunks have empty strings.
                             if !tc.id.is_empty() {
                                 entry.id = tc.id.clone();
                             }
                             if !tc.function.name.is_empty() {
                                 entry.name = tc.function.name.clone();
                             }
+                            // Arguments are always appended — they arrive as JSON fragments.
                             entry.arguments_buf.push_str(&tc.function.arguments);
                         }
                     }
 
-                    // Check finish_reason
+                    // --- Check finish_reason ---
+                    // `ToolCalls` means the model wants us to execute tools before continuing.
+                    // `Stop` or `Length` means the model has finished its response.
                     if let Some(ref reason) = sc.finish_reason {
                         match reason {
                             openrouter_rs::types::completion::FinishReason::ToolCalls => {
@@ -536,8 +595,8 @@ impl AgentRunner {
 
             let _ = tx.send(RunnerEvent::ThinkingDone).await;
 
+            // ---- Phase 3: Handle terminal response (no tool calls) ----
             if !has_tool_calls {
-                // Terminal: no tool calls, return text.
                 let _ = tx
                     .send(RunnerEvent::Done {
                         text:            accumulated_text,
@@ -548,10 +607,12 @@ impl AgentRunner {
                 return Ok(());
             }
 
-            // Build tool calls from pending, sorted by index.
+            // ---- Phase 4: Assemble and execute tool calls ----
+            // Sort by index to preserve the model's intended ordering.
             let mut sorted_indices: Vec<u32> = pending_tool_calls.keys().copied().collect();
             sorted_indices.sort_unstable();
 
+            // Parse accumulated JSON argument strings into serde_json::Value.
             let tool_call_list: Vec<(String, String, serde_json::Value)> = sorted_indices
                 .into_iter()
                 .filter_map(|idx| pending_tool_calls.remove(&idx))
@@ -562,7 +623,10 @@ impl AgentRunner {
                 })
                 .collect();
 
-            // Build assistant message with tool_calls for message history.
+            // Reconstruct the assistant message with tool_calls for message history.
+            // This is required by the OpenRouter/OpenAI protocol — the assistant turn
+            // that requests tool calls must be in the message array, followed by the
+            // tool response messages.
             let openrouter_tool_calls: Vec<openrouter_rs::types::completion::ToolCall> =
                 tool_call_list
                     .iter()
@@ -590,7 +654,7 @@ impl AgentRunner {
             };
             messages.push(assistant_msg);
 
-            // Emit ToolCallStart events and execute tools.
+            // Emit ToolCallStart events so the caller can show tool execution progress.
             for (id, name, args) in &tool_call_list {
                 tool_calls_made += 1;
                 let _ = tx
@@ -602,7 +666,10 @@ impl AgentRunner {
                     .await;
             }
 
-            // Execute tools concurrently.
+            // Execute all tool calls concurrently via `join_all`.
+            // Unlike `run_with_model` which runs tools sequentially, this
+            // significantly reduces latency when multiple tools are independent
+            // (e.g. parallel web searches).
             let tool_futures: Vec<_> = tool_call_list
                 .iter()
                 .map(|(_id, name, args)| {
@@ -629,7 +696,9 @@ impl AgentRunner {
 
             let results = futures::future::join_all(tool_futures).await;
 
-            // Process results: emit ToolCallEnd and append tool response messages.
+            // Emit ToolCallEnd events and append tool response messages to history.
+            // The response messages use the OpenRouter `tool_response_named` format
+            // so the model can see each tool's output keyed by call id.
             for ((id, name, _args), (success, result, err)) in
                 tool_call_list.iter().zip(results)
             {
@@ -645,7 +714,8 @@ impl AgentRunner {
 
                 messages.push(Message::tool_response_named(id, name, result.to_string()));
             }
-            // Continue to next iteration.
+            // Loop continues — the model will see tool outputs and can call more
+            // tools or produce a final text response.
         }
 
         Err(Error::Other {
@@ -654,10 +724,19 @@ impl AgentRunner {
     }
 }
 
-/// Tool call being accumulated from streaming chunks.
+/// A tool call being incrementally assembled from streaming SSE chunks.
+///
+/// During streaming, tool call information arrives in fragments across
+/// multiple `StreamingChoice` chunks. The first chunk for a given `index`
+/// typically carries the `id` and `name`, while subsequent chunks append
+/// to `arguments_buf` with JSON fragments. Once `finish_reason == ToolCalls`,
+/// we parse `arguments_buf` as complete JSON and execute the tool.
 struct PendingToolCall {
+    /// Unique tool call identifier assigned by the model (e.g. "call_abc123").
     id:            String,
+    /// Tool function name (e.g. "web_search").
     name:          String,
+    /// Accumulated JSON argument string, built by concatenating fragments.
     arguments_buf: String,
 }
 
