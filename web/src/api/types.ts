@@ -473,6 +473,7 @@ export interface McpServerConfig {
 
 export type McpServerStatus =
   | { type: 'connected' }
+  | { type: 'connecting' }
   | { type: 'disconnected' }
   | { type: 'error'; message: string };
 
