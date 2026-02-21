@@ -943,8 +943,10 @@ function ChatThread({
 
   const changeModelMutation = useMutation({
     mutationFn: (model: string) => updateSession(sessionKey, { model }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
+    onSuccess: (_data, model) => {
+      queryClient.setQueryData<ChatSession[]>(["chat-sessions"], (old) =>
+        old?.map((s) => (s.key === sessionKey ? { ...s, model } : s)),
+      );
     },
   });
 
@@ -1057,7 +1059,21 @@ function ChatThread({
               queryClient.invalidateQueries({
                 queryKey: ["chat-messages", sessionKey],
               });
-              queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
+              // Update session metadata locally instead of refetching
+              // the entire sessions list.
+              queryClient.setQueryData<ChatSession[]>(
+                ["chat-sessions"],
+                (old) =>
+                  old?.map((s) =>
+                    s.key === sessionKey
+                      ? {
+                          ...s,
+                          message_count: s.message_count + 2,
+                          updated_at: new Date().toISOString(),
+                        }
+                      : s,
+                  ),
+              );
               break;
             case "error":
               setStream((s) => ({
@@ -1375,7 +1391,6 @@ export default function Chat() {
   const sessionsQuery = useQuery({
     queryKey: ["chat-sessions"],
     queryFn: fetchSessions,
-    refetchInterval: 10_000,
   });
 
   // Hide internal agent sessions (e.g. "agent:proactive") from the UI
@@ -1414,7 +1429,13 @@ export default function Chat() {
       queryClient.invalidateQueries({
         queryKey: ["chat-messages", clearedKey],
       });
-      queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
+      queryClient.setQueryData<ChatSession[]>(["chat-sessions"], (old) =>
+        old?.map((s) =>
+          s.key === clearedKey
+            ? { ...s, message_count: 0, preview: null }
+            : s,
+        ),
+      );
     },
   });
 
