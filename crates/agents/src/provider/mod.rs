@@ -15,33 +15,24 @@
 //! LLM provider abstraction.
 //!
 //! [`LlmProvider`] defines the interface for chat completions (streaming and
-//! non-streaming).  [`OpenAiProvider`] is the default implementation backed by
-//! `async_openai::Client`, targeting the OpenRouter API.
+//! non-streaming).  Concrete implementations live in sub-modules:
 //!
-//! [`LlmProviderLoader`] is a factory trait that creates providers on demand,
-//! reading credentials from environment variables, runtime settings, etc.
+//! - [`openai`] — OpenAI-compatible provider (also works with OpenRouter)
+
+mod openai;
 
 use std::sync::Arc;
 
-use async_openai::{
-    Client,
-    config::OpenAIConfig,
-    types::chat::{
-        ChatCompletionResponseStream, CreateChatCompletionRequest,
-        CreateChatCompletionResponse,
-    },
+use async_openai::types::chat::{
+    ChatCompletionResponseStream, CreateChatCompletionRequest, CreateChatCompletionResponse,
 };
 use async_trait::async_trait;
-use snafu::OptionExt;
 
-use crate::err::prelude::*;
+use crate::err::Result;
+
+pub use self::openai::{OpenAiProvider, OPENROUTER_API_BASE, OPENROUTER_API_KEY_ENV};
 
 pub type LlmProviderRef = Arc<dyn LlmProvider>;
-
-pub const OPENROUTER_API_KEY_ENV: &str = "OPENROUTER_KEY";
-
-/// Default OpenRouter API base URL used by [`OpenAiProvider`].
-const OPENROUTER_API_BASE: &str = "https://openrouter.ai/api/v1";
 
 /// Trait abstracting an LLM provider capable of chat completions.
 ///
@@ -60,62 +51,6 @@ pub trait LlmProvider: Send + Sync {
         &self,
         request: CreateChatCompletionRequest,
     ) -> Result<ChatCompletionResponseStream>;
-}
-
-/// [`LlmProvider`] backed by `async_openai::Client` with [`OpenAIConfig`].
-///
-/// This provider points at the OpenRouter API base by default but can be
-/// configured to use any OpenAI-compatible endpoint.
-pub struct OpenAiProvider {
-    client: Client<OpenAIConfig>,
-}
-
-impl OpenAiProvider {
-    /// Create a new provider from an API key, targeting OpenRouter.
-    pub fn new(api_key: impl Into<String>) -> Self {
-        let config = OpenAIConfig::new()
-            .with_api_key(api_key)
-            .with_api_base(OPENROUTER_API_BASE);
-        Self {
-            client: Client::with_config(config),
-        }
-    }
-
-    /// Create a new provider with a fully custom [`OpenAIConfig`].
-    pub fn with_config(config: OpenAIConfig) -> Self {
-        Self {
-            client: Client::with_config(config),
-        }
-    }
-}
-
-#[async_trait]
-impl LlmProvider for OpenAiProvider {
-    async fn chat_completion(
-        &self,
-        request: CreateChatCompletionRequest,
-    ) -> Result<CreateChatCompletionResponse> {
-        self.client
-            .chat()
-            .create(request)
-            .await
-            .map_err(|e| Error::Provider {
-                message: e.to_string().into(),
-            })
-    }
-
-    async fn chat_completion_stream(
-        &self,
-        request: CreateChatCompletionRequest,
-    ) -> Result<ChatCompletionResponseStream> {
-        self.client
-            .chat()
-            .create_stream(request)
-            .await
-            .map_err(|e| Error::Provider {
-                message: e.to_string().into(),
-            })
-    }
 }
 
 // -- Provider loader ---------------------------------------------------------
@@ -153,15 +88,17 @@ impl std::fmt::Debug for EnvLlmProviderLoader {
 #[async_trait]
 impl LlmProviderLoader for EnvLlmProviderLoader {
     async fn acquire_provider(&self) -> Result<Arc<dyn LlmProvider>> {
+        use snafu::OptionExt;
+
         let provider_ref = self
             .provider
             .get_or_try_init(|| async {
                 let api_key = base::env::required_var(OPENROUTER_API_KEY_ENV)
                     .ok()
-                    .context(ProviderNotConfiguredSnafu)?;
+                    .context(crate::err::ProviderNotConfiguredSnafu)?;
 
                 let provider: Arc<dyn LlmProvider> = Arc::new(OpenAiProvider::new(api_key));
-                Ok::<_, Error>(provider)
+                Ok::<_, crate::err::Error>(provider)
             })
             .await?;
 
