@@ -47,7 +47,7 @@ pub struct AppState {
     pub notify_client: rara_domain_shared::notify::client::NotifyClient,
 
     // -- LLM provider --
-    pub llm_provider: rara_agents::model::LlmProviderLoaderRef,
+    pub llm_provider: rara_agents::provider::LlmProviderLoaderRef,
 
     // -- infra --
     pub object_store: Operator,
@@ -128,7 +128,7 @@ impl AppState {
             .await
             .whatever_context("Failed to initialize session repository")?,
         );
-        let llm_provider: rara_agents::model::LlmProviderLoaderRef =
+        let llm_provider: rara_agents::provider::LlmProviderLoaderRef =
             Arc::new(SettingsLlmProviderLoader::new(settings_svc.clone()));
         let mut tool_registry = rara_agents::tool_registry::ToolRegistry::new();
         for tool in tool_core::default_primitives(tool_core::PrimitiveDeps {
@@ -451,16 +451,15 @@ fn merge_openapi_router(
 // SettingsLlmProviderLoader
 // ---------------------------------------------------------------------------
 
-/// [`LlmProviderLoader`](rara_agents::model::LlmProviderLoader) implementation
+/// [`LlmProviderLoader`](rara_agents::provider::LlmProviderLoader) implementation
 /// that reads the API key from
 /// [`SettingsSvc`](rara_domain_shared::settings::SettingsSvc) runtime settings
 /// rather than from environment variables.
 ///
-/// The provider is lazily initialized on the first `acquire_provider` call and
-/// cached for subsequent calls via [`OnceCell`].
+/// A fresh [`OpenAiProvider`](rara_agents::provider::OpenAiProvider) is created
+/// on every call so that runtime API-key changes take effect immediately.
 struct SettingsLlmProviderLoader {
     settings: rara_domain_shared::settings::SettingsSvc,
-    provider: tokio::sync::OnceCell<Arc<dyn rara_agents::model::LlmProvider>>,
 }
 
 /// Composio auth provider that reads credentials from runtime settings.
@@ -490,36 +489,23 @@ impl rara_composio::ComposioAuthProvider for SettingsComposioAuthProvider {
 
 impl SettingsLlmProviderLoader {
     fn new(settings: rara_domain_shared::settings::SettingsSvc) -> Self {
-        Self {
-            settings,
-            provider: tokio::sync::OnceCell::new(),
-        }
+        Self { settings }
     }
 }
 
 #[async_trait]
-impl rara_agents::model::LlmProviderLoader for SettingsLlmProviderLoader {
+impl rara_agents::provider::LlmProviderLoader for SettingsLlmProviderLoader {
     async fn acquire_provider(
         &self,
-    ) -> rara_agents::err::Result<Arc<dyn rara_agents::model::LlmProvider>> {
-        let provider_ref = self
-            .provider
-            .get_or_try_init(|| async {
-                let api_key = self
-                    .settings
-                    .current()
-                    .ai
-                    .openrouter_api_key
-                    .clone()
-                    .ok_or(rara_agents::err::ProviderNotConfiguredSnafu.build())?;
+    ) -> rara_agents::err::Result<Arc<dyn rara_agents::provider::LlmProvider>> {
+        let api_key = self
+            .settings
+            .current()
+            .ai
+            .openrouter_api_key
+            .clone()
+            .ok_or(rara_agents::err::ProviderNotConfiguredSnafu.build())?;
 
-                Ok::<_, rara_agents::err::Error>(
-                    Arc::new(rara_agents::model::OpenAiProvider::new(api_key))
-                        as Arc<dyn rara_agents::model::LlmProvider>,
-                )
-            })
-            .await?;
-
-        Ok(Arc::clone(provider_ref))
+        Ok(Arc::new(rara_agents::provider::OpenAiProvider::new(api_key)))
     }
 }
