@@ -64,6 +64,7 @@ members = [
     "crates/skills",
     "crates/integrations/mcp",
     "crates/integrations/keyring-store",
+    "crates/extensions/job-pipeline",
     "crates/extensions/mcp-admin",
     "crates/core/tool-core",
     "crates/integrations/composio",
@@ -164,6 +165,7 @@ rara-domain-scheduler = { path = "crates/domain/scheduler" }
 rara-domain-shared = { path = "crates/domain/shared" }
 rara-domain-typst = { path = "crates/domain/typst" }
 rara-error = { path = "crates/common/error" }
+rara-ext-job-pipeline = { path = "crates/extensions/job-pipeline" }
 rara-keyring-store = { path = "crates/integrations/keyring-store" }
 rara-mcp = { path = "crates/integrations/mcp" }
 rara-mcp-admin = { path = "crates/extensions/mcp-admin" }

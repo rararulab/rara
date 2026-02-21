@@ -36,11 +36,11 @@ use snafu::Snafu;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
-use crate::tools::services::pipeline_tools;
+use crate::tools::pipeline_tools;
 
 /// Default pipeline system prompt embedded into the binary.
 const DEFAULT_PIPELINE_PROMPT: &str =
-    include_str!("../../../prompts/workers/pipeline_agent.md");
+    include_str!("../../../../prompts/workers/pipeline_agent.md");
 
 /// Maximum agent loop iterations per pipeline run.
 const PIPELINE_MAX_ITERATIONS: usize = 25;
@@ -270,7 +270,7 @@ impl PipelineService {
 
         // Re-use the existing job_pipeline tool (save job URL).
         registry.register_service(Arc::new(
-            crate::tools::services::JobPipelineTool::new(self.job_service.clone()),
+            crate::tools::job_pipeline_tool::JobPipelineTool::new(self.job_service.clone()),
         ));
 
         registry

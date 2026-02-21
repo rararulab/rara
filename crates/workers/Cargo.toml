@@ -20,7 +20,6 @@ common-runtime = { workspace = true }
 common-worker = { workspace = true }
 crawl4ai = { workspace = true }
 croner.workspace = true
-git2.workspace = true
 jiff.workspace = true
 opendal.workspace = true
 async-openai = { workspace = true }
@@ -30,6 +29,7 @@ rara-coding-task = { workspace = true }
 rara-workspace = { workspace = true }
 rara-composio = { workspace = true }
 rara-domain-analytics = { workspace = true }
+rara-ext-job-pipeline = { workspace = true }
 rara-domain-application = { workspace = true }
 rara-domain-chat = { workspace = true }
 rara-domain-interview = { workspace = true }
