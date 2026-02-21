@@ -783,6 +783,7 @@ mod tests {
                 score_threshold_auto:   Some(90),
                 score_threshold_notify: Some(70),
                 resume_project_path:    Some("/home/user/resume".to_owned()),
+                pipeline_cron:          None,
             }),
         });
         assert_eq!(
@@ -809,6 +810,7 @@ mod tests {
                 score_threshold_auto:   Some(95),
                 score_threshold_notify: None,
                 resume_project_path:    None,
+                pipeline_cron:          None,
             }),
         });
         assert_eq!(settings.job_pipeline.score_threshold_auto, 95);
@@ -823,6 +825,7 @@ mod tests {
                 score_threshold_auto:   85,
                 score_threshold_notify: 60,
                 resume_project_path:    Some("  /home/user/resume  ".to_owned()),
+                pipeline_cron:          None,
             },
             ..Default::default()
         };
