@@ -612,13 +612,16 @@ pub(crate) enum ChatStreamEvent {
     ToolCallStart {
         #[allow(dead_code)]
         id: String,
+        #[allow(dead_code)]
         name: String,
     },
     ToolCallEnd {
         #[allow(dead_code)]
         id: String,
+        #[allow(dead_code)]
         name: String,
         success: bool,
+        #[allow(dead_code)]
         error: Option<String>,
     },
     Done {

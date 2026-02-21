@@ -332,19 +332,18 @@ async fn stream_and_relay(
         }
     };
 
-    // Send typing indicator instead of a "..." placeholder message.
-    state
-        .bot
-        .send_chat_action(msg.chat.id, ChatAction::Typing)
-        .await
-        .ok();
+    // Start a continuous typing loop so the indicator stays visible between
+    // message edits (Telegram's typing indicator expires after ~5 seconds).
+    let (typing_handle, typing_cancel) = start_typing_loop(state.bot.clone(), msg.chat.id);
 
     // Message ID is None until we have real content to show.
     let mut message_id: Option<teloxide::types::MessageId> = None;
 
     let mut accumulated_text = String::new();
     let mut last_edit = Instant::now();
-    let mut tool_status: Vec<String> = Vec::new();
+    let mut tool_calls_total: usize = 0;
+    let mut tool_calls_done: usize = 0;
+    let mut tool_calls_failed: usize = 0;
     let mut final_text: Option<String> = None;
     let mut errored = false;
 
@@ -355,34 +354,37 @@ async fn stream_and_relay(
                 // Throttled edit: only send if enough time has passed and there's
                 // content.
                 if last_edit.elapsed() >= EDIT_THROTTLE && !accumulated_text.trim().is_empty() {
-                    let display = build_progress_text(&accumulated_text, &tool_status);
+                    let display = build_progress_text(
+                        &accumulated_text,
+                        tool_calls_total,
+                        tool_calls_done,
+                        tool_calls_failed,
+                    );
                     message_id =
                         send_or_edit(state, msg, message_id, &display, None).await;
                     last_edit = Instant::now();
                 }
             }
-            ChatStreamEvent::ToolCallStart { name, .. } => {
-                tool_status.push(format!("\u{1f527} {name}"));
-                let display = build_progress_text(&accumulated_text, &tool_status);
+            ChatStreamEvent::ToolCallStart { .. } => {
+                tool_calls_total += 1;
+                let display = build_progress_text(
+                    &accumulated_text,
+                    tool_calls_total,
+                    tool_calls_done,
+                    tool_calls_failed,
+                );
                 // Always send/edit on tool start (important UX feedback).
                 message_id =
                     send_or_edit(state, msg, message_id, &display, None).await;
                 last_edit = Instant::now();
             }
             ChatStreamEvent::ToolCallEnd {
-                name,
                 success,
-                error,
                 ..
             } => {
-                // Update the tool status line.
-                if let Some(entry) = tool_status.iter_mut().find(|s| s.contains(&name)) {
-                    if success {
-                        *entry = format!("\u{2705} {name}");
-                    } else {
-                        let err_msg = error.as_deref().unwrap_or("failed");
-                        *entry = format!("\u{274c} {name}: {err_msg}");
-                    }
+                tool_calls_done += 1;
+                if !success {
+                    tool_calls_failed += 1;
                 }
             }
             ChatStreamEvent::Done { text: done_text } => {
@@ -399,6 +401,10 @@ async fn stream_and_relay(
             _ => {}
         }
     }
+
+    // Stop the typing loop now that streaming is done.
+    typing_cancel.cancel();
+    let _ = typing_handle.await;
 
     if errored {
         return Ok(());
@@ -481,7 +487,12 @@ async fn send_or_edit(
             Some(id)
         }
         None => {
-            let mut req = state.bot.send_message(msg.chat.id, text).reply_to(msg.id);
+            let mut req = state.bot.send_message(msg.chat.id, text);
+            // Only reply-to in group chats; in private chats it creates
+            // unnecessary quote bubbles.
+            if matches!(msg.chat.kind, teloxide::types::ChatKind::Public(..)) {
+                req = req.reply_to(msg.id);
+            }
             if let Some(mode) = parse_mode {
                 req = req.parse_mode(mode);
             }
@@ -493,14 +504,30 @@ async fn send_or_edit(
     }
 }
 
-/// Build a progress display string showing accumulated text and tool status.
-fn build_progress_text(text: &str, tool_status: &[String]) -> String {
+/// Build a progress display string showing accumulated text and a single-line
+/// tool status summary (e.g. "⏳ Working... (3 tool calls)").
+fn build_progress_text(
+    text: &str,
+    total: usize,
+    done: usize,
+    failed: usize,
+) -> String {
     let mut display = String::new();
-    if !tool_status.is_empty() {
-        for status in tool_status {
-            display.push_str(status);
-            display.push('\n');
+    if total > 0 {
+        let pending = total.saturating_sub(done);
+        if pending > 0 {
+            // Still working.
+            display.push_str(&format!("\u{23f3} Working... ({total} tool calls)"));
+        } else if failed > 0 {
+            // All done but some failed.
+            display.push_str(&format!(
+                "\u{26a0}\u{fe0f} Done ({done} tool calls, {failed} failed)"
+            ));
+        } else {
+            // All succeeded.
+            display.push_str(&format!("\u{2705} Done ({done} tool calls)"));
         }
+        display.push('\n');
         display.push('\n');
     }
     if !text.trim().is_empty() {
@@ -554,12 +581,13 @@ async fn fallback_sync_reply(
 
                 let html = markdown_to_telegram_html(&reply_text);
                 let chunks = chunk_message(&html, TELEGRAM_MAX_MESSAGE_LEN);
+                let is_group = matches!(msg.chat.kind, teloxide::types::ChatKind::Public(..));
                 for (i, chunk) in chunks.into_iter().enumerate() {
                     let mut req = state
                         .bot
                         .send_message(msg.chat.id, chunk)
                         .parse_mode(ParseMode::Html);
-                    if i == 0 {
+                    if i == 0 && is_group {
                         req = req.reply_to(msg.id);
                     }
                     req.await?;
@@ -567,11 +595,13 @@ async fn fallback_sync_reply(
             }
         }
         Err(e) => {
-            state
+            let mut req = state
                 .bot
-                .send_message(msg.chat.id, format!("Chat error: {e}"))
-                .reply_to(msg.id)
-                .await?;
+                .send_message(msg.chat.id, format!("Chat error: {e}"));
+            if matches!(msg.chat.kind, teloxide::types::ChatKind::Public(..)) {
+                req = req.reply_to(msg.id);
+            }
+            req.await?;
         }
     }
 
