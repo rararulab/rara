@@ -65,6 +65,9 @@ pub struct AppState {
     // -- MCP --
     pub mcp_manager: rara_mcp::manager::mgr::McpManager,
 
+    // -- pipeline --
+    pub pipeline_service: crate::pipeline::PipelineService,
+
     // -- worker coordination --
     pub analyze_notify:   Arc<RwLock<Option<NotifyHandle>>>,
     pub proactive_notify: Arc<RwLock<Option<IntervalOrNotifyHandle>>>,
@@ -130,15 +133,15 @@ impl AppState {
         );
         let llm_provider: rara_agents::provider::LlmProviderLoaderRef =
             Arc::new(SettingsLlmProviderLoader::new(settings_svc.clone()));
+        let composio_auth_provider: Arc<dyn rara_composio::ComposioAuthProvider> =
+            Arc::new(SettingsComposioAuthProvider::new(settings_svc.clone()));
         let mut tool_registry = rara_agents::tool_registry::ToolRegistry::new();
         for tool in tool_core::default_primitives(tool_core::PrimitiveDeps {
             pool:                   pool.clone(),
             notify_client:          notify_client.clone(),
             settings_svc:           settings_svc.clone(),
             object_store:           object_store.clone(),
-            composio_auth_provider: Arc::new(SettingsComposioAuthProvider::new(
-                settings_svc.clone(),
-            )),
+            composio_auth_provider: composio_auth_provider.clone(),
         }) {
             tool_registry.register_primitive(tool);
         }
@@ -287,6 +290,30 @@ impl AppState {
             crate::tools::services::RemoveMcpServerTool::new(mcp_manager.clone()),
         ));
 
+        // -- pipeline service ---------------------------------------------------
+
+        let pipeline_service = crate::pipeline::PipelineService::new(
+            settings_svc.clone(),
+            llm_provider.clone(),
+            ai_service.clone(),
+            job_service.clone(),
+            pool.clone(),
+            notify_client.clone(),
+            composio_auth_provider,
+        );
+        info!("Pipeline service initialized");
+
+        // Register pipeline control tools on the main rara agent.
+        tool_registry.register_service(Arc::new(
+            crate::tools::services::RunJobPipelineTool::new(pipeline_service.clone()),
+        ));
+        tool_registry.register_service(Arc::new(
+            crate::tools::services::CancelJobPipelineTool::new(pipeline_service.clone()),
+        ));
+        tool_registry.register_service(Arc::new(
+            crate::tools::services::PipelineStatusTool::new(pipeline_service.clone()),
+        ));
+
         let tools = Arc::new(tool_registry);
 
         let chat_service = rara_domain_chat::service::ChatService::new(
@@ -320,6 +347,7 @@ impl AppState {
             agent_scheduler,
             skill_registry,
             mcp_manager,
+            pipeline_service,
             analyze_notify: Arc::new(RwLock::new(None)),
             proactive_notify: Arc::new(RwLock::new(None)),
         })
@@ -403,6 +431,12 @@ impl AppState {
 
         // MCP admin routes (plain axum::Router, no OpenAPI metadata).
         router = router.merge(rara_mcp_admin::router(self.mcp_manager.clone()));
+
+        // Pipeline routes (plain axum::Router, no OpenAPI metadata).
+        let (pipeline_router, pipeline_api) =
+            crate::pipeline_routes::routes(self.pipeline_service.clone()).split_for_parts();
+        router = router.merge(pipeline_router);
+        api.merge(pipeline_api);
 
         (router, api)
     }
