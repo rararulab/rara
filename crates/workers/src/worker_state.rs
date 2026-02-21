@@ -451,8 +451,8 @@ fn merge_openapi_router(
 // SettingsLlmProviderLoader
 // ---------------------------------------------------------------------------
 
-/// [`LlmProviderLoader`](rara_agents::provider::LlmProviderLoader) implementation
-/// that reads the API key from
+/// [`LlmProviderLoader`](rara_agents::provider::LlmProviderLoader)
+/// implementation that reads the API key from
 /// [`SettingsSvc`](rara_domain_shared::settings::SettingsSvc) runtime settings
 /// rather than from environment variables.
 ///
@@ -488,9 +488,7 @@ impl rara_composio::ComposioAuthProvider for SettingsComposioAuthProvider {
 }
 
 impl SettingsLlmProviderLoader {
-    fn new(settings: rara_domain_shared::settings::SettingsSvc) -> Self {
-        Self { settings }
-    }
+    fn new(settings: rara_domain_shared::settings::SettingsSvc) -> Self { Self { settings } }
 }
 
 #[async_trait]
@@ -506,6 +504,8 @@ impl rara_agents::provider::LlmProviderLoader for SettingsLlmProviderLoader {
             .clone()
             .ok_or(rara_agents::err::ProviderNotConfiguredSnafu.build())?;
 
-        Ok(Arc::new(rara_agents::provider::OpenAiProvider::new(api_key)))
+        Ok(Arc::new(rara_agents::provider::OpenAiProvider::new(
+            api_key,
+        )))
     }
 }
