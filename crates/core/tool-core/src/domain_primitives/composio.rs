@@ -45,25 +45,29 @@ impl AgentTool for ComposioTool {
     fn name(&self) -> &str { "composio" }
 
     fn description(&self) -> &str {
-        "Execute actions on apps via Composio. Supports list, list_accounts, execute, and connect."
+        "Execute actions on 1000+ apps via Composio (Gmail, Notion, GitHub, Slack, etc.). Use \
+         action='list' to see available actions, action='list_accounts' or \
+         action='connected_accounts' to list OAuth-connected accounts after login, \
+         action='execute' with action_name/tool_slug and params (connected_account_id \
+         auto-resolved when omitted), or action='connect' with app/auth_config_id to get OAuth URL."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
         json!({
-            "type": "object",
+                       "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "Operation to perform",
+                    "description": "The operation: 'list' (list available actions), 'list_accounts'/'connected_accounts' (list connected accounts), 'execute' (run an action), or 'connect' (get OAuth URL)",
                     "enum": ["list", "list_accounts", "connected_accounts", "execute", "connect"]
                 },
                 "app": {
                     "type": "string",
-                    "description": "Toolkit/app slug (e.g. gmail, notion, github)"
+                    "description": "Toolkit slug filter for 'list' or 'list_accounts', optional app hint for 'execute', or toolkit/app for 'connect' (e.g. 'gmail', 'notion', 'github')"
                 },
                 "action_name": {
                     "type": "string",
-                    "description": "Action/tool identifier to execute"
+                    "description": "Action/tool identifier to execute (legacy aliases supported)"
                 },
                 "tool_slug": {
                     "type": "string",
@@ -71,19 +75,19 @@ impl AgentTool for ComposioTool {
                 },
                 "params": {
                     "type": "object",
-                    "description": "Parameters passed to the Composio action"
+                    "description": "Parameters to pass to the action"
                 },
                 "entity_id": {
                     "type": "string",
-                    "description": "Entity/user ID (defaults to COMPOSIO_ENTITY_ID or 'default')"
+                    "description": "Entity/user ID for multi-user setups (defaults to composio.entity_id from config)"
                 },
                 "auth_config_id": {
                     "type": "string",
-                    "description": "Optional Composio auth config id for connect flow"
+                    "description": "Optional Composio v3 auth config id for connect flow"
                 },
                 "connected_account_id": {
                     "type": "string",
-                    "description": "Optional connected account ID for execute flow"
+                    "description": "Optional connected account ID for execute flow when a specific account is required"
                 }
             },
             "required": ["action"]

@@ -150,7 +150,6 @@ impl ComposioClient {
         connected_account_ref: Option<&str>,
     ) -> anyhow::Result<serde_json::Value> {
         let auth = self.inner.auth_provider.acquire_auth().await?;
-        let tool_slug = normalize_tool_slug(action_name);
         let app_hint = app_name_hint
             .map(normalize_app_slug)
             .filter(|app| !app.is_empty())
@@ -174,57 +173,71 @@ impl ComposioClient {
             .await?
         };
 
-        match self
-            .inner
-            .v3
-            .execute_action(
-                &self.inner,
-                &auth,
-                &tool_slug,
-                params.clone(),
+        // Build V3 candidates: try the normalized slug first, then the original
+        // name as-is. Some Composio tools only respond to one format.
+        let tool_slug = normalize_tool_slug(action_name);
+        let original_trimmed = action_name.trim().to_string();
+        let mut v3_candidates = vec![tool_slug];
+        if !v3_candidates.contains(&original_trimmed) {
+            v3_candidates.push(original_trimmed);
+        }
+
+        let mut v3_errors = Vec::new();
+        for candidate in &v3_candidates {
+            match self
+                .inner
+                .v3
+                .execute_action(
+                    &self.inner,
+                    &auth,
+                    candidate,
+                    params.clone(),
+                    normalized_entity_id.as_deref(),
+                    resolved_account_ref.as_deref(),
+                )
+                .await
+            {
+                Ok(result) => return Ok(result),
+                Err(e) => v3_errors.push(format!("{candidate}: {e}")),
+            }
+        }
+
+        // V3 exhausted — fall back to V2 with legacy name formats.
+        let mut v2_candidates = vec![action_name.trim().to_string()];
+        let legacy_action_name = normalize_legacy_action_name(action_name);
+        if !legacy_action_name.is_empty() && !v2_candidates.contains(&legacy_action_name) {
+            v2_candidates.push(legacy_action_name);
+        }
+
+        let mut v2_errors = Vec::new();
+        for candidate in v2_candidates {
+            match self
+                .inner
+                .v2
+                .execute_action(
+                    &self.inner,
+                    &auth,
+                    &candidate,
+                    params.clone(),
+                    normalized_entity_id.as_deref(),
+                )
+                .await
+            {
+                Ok(result) => return Ok(result),
+                Err(v2_err) => v2_errors.push(format!("{candidate}: {v2_err}")),
+            }
+        }
+
+        anyhow::bail!(
+            "Composio execute failed on v3 ({}) and v2 fallback ({}){}",
+            v3_errors.join(" | "),
+            v2_errors.join(" | "),
+            build_connected_account_hint(
+                app_hint.as_deref(),
                 normalized_entity_id.as_deref(),
                 resolved_account_ref.as_deref(),
             )
-            .await
-        {
-            Ok(result) => Ok(result),
-            Err(v3_err) => {
-                let mut v2_candidates = vec![action_name.trim().to_string()];
-                let legacy_action_name = normalize_legacy_action_name(action_name);
-                if !legacy_action_name.is_empty() && !v2_candidates.contains(&legacy_action_name) {
-                    v2_candidates.push(legacy_action_name);
-                }
-
-                let mut v2_errors = Vec::new();
-                for candidate in v2_candidates {
-                    match self
-                        .inner
-                        .v2
-                        .execute_action(
-                            &self.inner,
-                            &auth,
-                            &candidate,
-                            params.clone(),
-                            normalized_entity_id.as_deref(),
-                        )
-                        .await
-                    {
-                        Ok(result) => return Ok(result),
-                        Err(v2_err) => v2_errors.push(format!("{candidate}: {v2_err}")),
-                    }
-                }
-
-                anyhow::bail!(
-                    "Composio execute failed on v3 ({v3_err}) and v2 fallback attempts ({}){}",
-                    v2_errors.join(" | "),
-                    build_connected_account_hint(
-                        app_hint.as_deref(),
-                        normalized_entity_id.as_deref(),
-                        resolved_account_ref.as_deref(),
-                    )
-                );
-            }
-        }
+        );
     }
 
     /// Build the OAuth connection link for an app/auth config.
