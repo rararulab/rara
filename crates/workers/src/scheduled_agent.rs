@@ -19,10 +19,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use common_worker::{FallibleWorker, WorkResult, WorkerContext};
-use openrouter_rs::api::chat::Content;
-use rara_agents::runner::AgentRunner;
+use rara_agents::runner::{AgentRunner, UserContent};
+use rara_domain_chat::service::to_chat_message;
 use rara_domain_shared::settings::model::Settings;
-use rara_sessions::types::{MessageRole, SessionKey};
+use rara_sessions::types::SessionKey;
 use tracing::{info, warn};
 
 use crate::{agent_scheduler::AgentScheduler, worker_state::AppState};
@@ -106,20 +106,7 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
                 .await
             {
                 Ok(msgs) => {
-                    let hist: Vec<openrouter_rs::api::chat::Message> = msgs
-                        .iter()
-                        .map(|m| {
-                            let role = match m.role {
-                                MessageRole::User => openrouter_rs::types::Role::User,
-                                MessageRole::Assistant => openrouter_rs::types::Role::Assistant,
-                                MessageRole::System => openrouter_rs::types::Role::System,
-                                MessageRole::Tool | MessageRole::ToolResult => {
-                                    openrouter_rs::types::Role::Tool
-                                }
-                            };
-                            openrouter_rs::api::chat::Message::new(role, m.content.as_text())
-                        })
-                        .collect();
+                    let hist: Vec<_> = msgs.iter().map(to_chat_message).collect();
                     Some(hist)
                 }
                 Err(e) => {
@@ -137,7 +124,7 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
                 .llm_provider(state.llm_provider.clone())
                 .model_name(model.clone())
                 .system_prompt(policy.clone())
-                .user_content(Content::Text(job.message.clone()))
+                .user_content(UserContent::Text(job.message.clone()))
                 .maybe_history(history)
                 .max_iterations(15_usize)
                 .build();
@@ -149,7 +136,7 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
                         .provider_response
                         .choices
                         .first()
-                        .and_then(|c| c.content())
+                        .and_then(|c| c.message.content.as_deref())
                         .unwrap_or_default()
                         .to_owned();
 

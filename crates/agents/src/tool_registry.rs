@@ -14,7 +14,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use snafu::ResultExt;
+use async_openai::types::chat::{ChatCompletionTool, ChatCompletionTools, FunctionObjectArgs};
 pub use tool_core::{AgentTool, AgentToolRef};
 
 use crate::err::prelude::*;
@@ -111,40 +111,26 @@ impl ToolRegistry {
             .map(|(name, entry)| (name.as_str(), &entry.tool, &entry.source, entry.layer))
     }
 
-    pub fn to_openrouter_tools(&self) -> Result<Vec<openrouter_rs::types::Tool>> {
+    pub fn to_chat_completion_tools(&self) -> Result<Vec<ChatCompletionTools>> {
         self.tools
             .values()
-            .map(|entry| {
-                openrouter_rs::types::Tool::builder()
-                    .name(entry.tool.name())
-                    .description(entry.tool.description())
-                    .parameters(entry.tool.parameters_schema())
-                    .build()
-                    .context(OpenRouterSnafu)
-            })
+            .map(|entry| build_tool_def(&entry.tool))
             .collect()
     }
 
-    /// Convert only the named tools to OpenRouter format.
+    /// Convert only the named tools to chat completion format.
     /// If `tool_names` is empty, include ALL tools (no filtering).
-    pub fn to_openrouter_tools_filtered(
+    pub fn to_chat_completion_tools_filtered(
         &self,
         tool_names: &[String],
-    ) -> Result<Vec<openrouter_rs::types::Tool>> {
+    ) -> Result<Vec<ChatCompletionTools>> {
         if tool_names.is_empty() {
-            return self.to_openrouter_tools();
+            return self.to_chat_completion_tools();
         }
         self.tools
             .values()
             .filter(|entry| tool_names.iter().any(|n| n == entry.tool.name()))
-            .map(|entry| {
-                openrouter_rs::types::Tool::builder()
-                    .name(entry.tool.name())
-                    .description(entry.tool.description())
-                    .parameters(entry.tool.parameters_schema())
-                    .build()
-                    .context(OpenRouterSnafu)
-            })
+            .map(|entry| build_tool_def(&entry.tool))
             .collect()
     }
 
@@ -194,4 +180,20 @@ impl ToolRegistry {
 
 impl Default for ToolRegistry {
     fn default() -> Self { Self::new() }
+}
+
+/// Build a [`ChatCompletionTools`] from an [`AgentToolRef`].
+fn build_tool_def(tool: &AgentToolRef) -> Result<ChatCompletionTools> {
+    let function = FunctionObjectArgs::default()
+        .name(tool.name())
+        .description(tool.description())
+        .parameters(tool.parameters_schema())
+        .build()
+        .map_err(|e| Error::Other {
+            message: format!("failed to build tool function object: {e}").into(),
+        })?;
+
+    Ok(ChatCompletionTools::Function(ChatCompletionTool {
+        function,
+    }))
 }

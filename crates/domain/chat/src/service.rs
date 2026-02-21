@@ -21,12 +21,20 @@
 
 use std::sync::Arc;
 
-use chrono::Utc;
-use openrouter_rs::{
-    api::chat::{Content, ContentPart, Message},
-    types::Role,
+use async_openai::types::chat::{
+    ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
+    ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestToolMessageArgs,
+    ChatCompletionRequestUserMessageArgs,
+    ChatCompletionRequestUserMessageContentPart,
+    ChatCompletionRequestMessageContentPartImage,
+    ChatCompletionRequestMessageContentPartText, ImageUrlArgs,
 };
-use rara_agents::{model::OpenRouterLoaderRef, runner::AgentRunner, tool_registry::ToolRegistry};
+use chrono::Utc;
+use rara_agents::{
+    model::LlmProviderLoaderRef,
+    runner::{AgentRunner, UserContent},
+    tool_registry::ToolRegistry,
+};
 use rara_domain_shared::settings::model::{ModelScenario, Settings};
 use rara_memory::MemoryManager;
 use rara_sessions::{
@@ -96,8 +104,8 @@ fn resolve_soul_prompt(settings: &Settings) -> Option<String> {
 pub struct ChatService {
     /// Persistence layer for sessions, messages, and channel bindings.
     session_repo:   Arc<dyn SessionRepository>,
-    /// Factory for creating OpenRouter API clients.
-    llm_provider:   OpenRouterLoaderRef,
+    /// Factory for creating LLM provider clients.
+    llm_provider:   LlmProviderLoaderRef,
     /// Registry of tools available to the agent during execution.
     tools:          Arc<ToolRegistry>,
     /// Watch receiver for runtime settings — provides dynamic model and
@@ -124,7 +132,7 @@ impl ChatService {
     #[must_use]
     pub fn new(
         session_repo: Arc<dyn SessionRepository>,
-        llm_provider: OpenRouterLoaderRef,
+        llm_provider: LlmProviderLoaderRef,
         tools: Arc<ToolRegistry>,
         settings_rx: watch::Receiver<Settings>,
         memory_manager: Option<Arc<MemoryManager>>,
@@ -372,12 +380,6 @@ impl ChatService {
     // -- send message (LLM) -------------------------------------------------
 
     /// Common setup for `send_message` and `send_message_streaming`.
-    ///
-    /// Validates input, ensures the session exists, persists the user message,
-    /// compacts history if needed, builds the system prompt and agent runner.
-    ///
-    /// Returns the prepared runner, effective tools, session, and user text
-    /// needed by both the synchronous and streaming paths.
     async fn prepare_agent_run(
         &self,
         key: &SessionKey,
@@ -442,10 +444,10 @@ impl ChatService {
             history
         };
 
-        // 4b. Convert history to openrouter format
-        let openrouter_history = history
+        // 4b. Convert history to async-openai message format
+        let chat_history = history
             .iter()
-            .map(to_openrouter_message)
+            .map(to_chat_message)
             .collect::<Vec<_>>();
 
         // 5. Build system prompt
@@ -509,13 +511,12 @@ impl ChatService {
 
         let user_content = if has_images {
             let urls = image_urls.as_ref().unwrap();
-            let mut parts = vec![ContentPart::text(user_text)];
-            for url in urls {
-                parts.push(ContentPart::image_url(url));
+            UserContent::Multimodal {
+                text:       user_text.to_owned(),
+                image_urls: urls.clone(),
             }
-            Content::Parts(parts)
         } else {
-            Content::Text(user_text.to_owned())
+            UserContent::Text(user_text.to_owned())
         };
 
         // Resolve fallback models from settings.
@@ -534,7 +535,7 @@ impl ChatService {
             .model_name(model)
             .system_prompt(system_prompt)
             .user_content(user_content)
-            .history(openrouter_history)
+            .history(chat_history)
             .fallback_models(fallback_models)
             .build();
 
@@ -546,15 +547,6 @@ impl ChatService {
     }
 
     /// Send a user message and get an assistant response.
-    ///
-    /// This method:
-    /// 1. Ensures the session exists (creates it if `auto_create` is true).
-    /// 2. Reads the existing message history.
-    /// 3. Persists the user message (multimodal if `image_urls` are provided).
-    /// 4. Converts history to `openrouter_rs::api::chat::Message` format.
-    /// 5. Runs the agent loop.
-    /// 6. Persists the assistant response.
-    /// 7. Updates session metadata.
     #[instrument(skip(self, user_text, image_urls))]
     pub async fn send_message(
         &self,
@@ -581,7 +573,7 @@ impl ChatService {
             .provider_response
             .choices
             .first()
-            .and_then(|choice| choice.content())
+            .and_then(|choice| choice.message.content.as_deref())
             .unwrap_or_default()
             .to_owned();
 
@@ -635,14 +627,6 @@ impl ChatService {
     }
 
     /// Streaming variant of [`send_message`](Self::send_message).
-    ///
-    /// Performs the same setup (session lookup, history, persist user message,
-    /// build prompt) but uses the streaming agent runner. Returns a channel
-    /// receiver of [`ChatStreamEvent`]s that the caller can convert into SSE
-    /// events.
-    ///
-    /// On the terminal `Done` event the assistant message is persisted and
-    /// session metadata is updated, all inside the background task.
     #[instrument(skip(self, user_text, image_urls))]
     pub async fn send_message_streaming(
         &self,
@@ -740,11 +724,6 @@ impl ChatService {
     // -- export to memory ---------------------------------------------------
 
     /// Export a session's message history to the memory directory as markdown.
-    ///
-    /// Reads all messages for the given session key, formats them as a
-    /// markdown document, and writes it to
-    /// `rara_paths::memory_sessions_dir()/{key}.md`. Returns the path of
-    /// the written file.
     #[instrument(skip(self))]
     pub async fn export_session_to_memory(
         &self,
@@ -796,8 +775,7 @@ impl ChatService {
 
     // -- fork ---------------------------------------------------------------
 
-    /// Fork a session at a specific message sequence number, creating a new
-    /// session that shares the conversation history up to that point.
+    /// Fork a session at a specific message sequence number.
     #[instrument(skip(self))]
     pub async fn fork_session(
         &self,
@@ -821,9 +799,6 @@ impl ChatService {
     // -- channel bindings ---------------------------------------------------
 
     /// Bind an external channel (e.g. Telegram chat) to a session key.
-    ///
-    /// If a binding for the same channel already exists, the session key is
-    /// updated (upsert semantics).
     #[instrument(skip(self))]
     pub async fn bind_channel(
         &self,
@@ -846,8 +821,6 @@ impl ChatService {
     }
 
     /// Look up which session an external channel is currently bound to.
-    ///
-    /// Returns `None` if no binding exists for the given channel coordinates.
     #[instrument(skip(self))]
     pub async fn get_channel_session(
         &self,
@@ -866,9 +839,6 @@ impl ChatService {
 
     /// Append a user message and an assistant response to a session,
     /// auto-creating the session if it does not exist.
-    ///
-    /// This is intended for background workers (e.g. the scheduled agent)
-    /// that produce messages outside the normal `send_message` flow.
     #[instrument(skip(self, user_text, assistant_text))]
     pub async fn append_messages(
         &self,
@@ -896,9 +866,6 @@ impl ChatService {
 
     /// Summarize the conversation history via LLM and replace it with a
     /// single `[Conversation Summary]` message.
-    ///
-    /// This is invoked automatically when the estimated token count of the
-    /// history exceeds 80 % of the model's context window.
     async fn compact_history(
         &self,
         session_key: &SessionKey,
@@ -931,7 +898,7 @@ impl ChatService {
             .system_prompt(
                 "You are a conversation summarizer. Be concise and preserve important details.",
             )
-            .user_content(Content::Text(summary_prompt))
+            .user_content(UserContent::Text(summary_prompt))
             .max_iterations(1_usize)
             .build();
 
@@ -947,7 +914,7 @@ impl ChatService {
             .provider_response
             .choices
             .first()
-            .and_then(|c| c.content())
+            .and_then(|c| c.message.content.as_deref())
             .unwrap_or("[Summary unavailable]")
             .to_owned();
 
@@ -1003,57 +970,87 @@ struct AgentRunSetup {
 // ---------------------------------------------------------------------------
 
 /// Convert a session [`ChatMessage`] to an
-/// [`openrouter_rs::api::chat::Message`].
+/// [`async_openai::types::ChatCompletionRequestMessage`].
 ///
-/// Maps domain roles to OpenRouter roles and converts text / multimodal
-/// content to the appropriate [`Content`] variant. Tool-related fields
-/// (`tool_call_id`, `tool_name`) are carried over when present.
-pub fn to_openrouter_message(msg: &ChatMessage) -> Message {
-    let role = match msg.role {
-        MessageRole::System => Role::System,
-        MessageRole::User => Role::User,
-        MessageRole::Assistant => Role::Assistant,
-        MessageRole::Tool | MessageRole::ToolResult => Role::Tool,
-    };
-
-    let content = match &msg.content {
-        MessageContent::Text(text) => Content::Text(text.clone()),
-        MessageContent::Multimodal(blocks) => {
-            let parts = blocks
-                .iter()
-                .map(|b| match b {
-                    ContentBlock::Text { text } => ContentPart::text(text),
-                    ContentBlock::ImageUrl { url } => ContentPart::image_url(url),
-                })
-                .collect();
-            Content::Parts(parts)
+/// Maps domain roles to async-openai message types and converts text /
+/// multimodal content to the appropriate message variant. Tool-related
+/// fields (`tool_call_id`, `tool_name`) are carried over when present.
+pub fn to_chat_message(msg: &ChatMessage) -> ChatCompletionRequestMessage {
+    match msg.role {
+        MessageRole::System => {
+            ChatCompletionRequestSystemMessageArgs::default()
+                .content(msg.content.as_text())
+                .build()
+                .expect("system message build should not fail")
+                .into()
         }
-    };
-
-    let mut message = Message::new(role, content);
-
-    if let Some(ref tool_call_id) = msg.tool_call_id {
-        message.tool_call_id = Some(tool_call_id.clone());
+        MessageRole::User => {
+            match &msg.content {
+                MessageContent::Text(text) => {
+                    ChatCompletionRequestUserMessageArgs::default()
+                        .content(text.as_str())
+                        .build()
+                        .expect("user message build should not fail")
+                        .into()
+                }
+                MessageContent::Multimodal(blocks) => {
+                    let parts: Vec<ChatCompletionRequestUserMessageContentPart> = blocks
+                        .iter()
+                        .map(|b| match b {
+                            ContentBlock::Text { text } => {
+                                ChatCompletionRequestUserMessageContentPart::Text(
+                                    ChatCompletionRequestMessageContentPartText {
+                                        text: text.clone(),
+                                    },
+                                )
+                            }
+                            ContentBlock::ImageUrl { url } => {
+                                let image_url = ImageUrlArgs::default()
+                                    .url(url.as_str())
+                                    .build()
+                                    .expect("image URL build should not fail");
+                                ChatCompletionRequestUserMessageContentPart::ImageUrl(
+                                    ChatCompletionRequestMessageContentPartImage {
+                                        image_url,
+                                    },
+                                )
+                            }
+                        })
+                        .collect();
+                    ChatCompletionRequestUserMessageArgs::default()
+                        .content(parts)
+                        .build()
+                        .expect("multimodal user message build should not fail")
+                        .into()
+                }
+            }
+        }
+        MessageRole::Assistant => {
+            ChatCompletionRequestAssistantMessageArgs::default()
+                .content(msg.content.as_text())
+                .build()
+                .expect("assistant message build should not fail")
+                .into()
+        }
+        MessageRole::Tool | MessageRole::ToolResult => {
+            let tool_call_id = msg
+                .tool_call_id
+                .as_deref()
+                .unwrap_or("unknown");
+            ChatCompletionRequestToolMessageArgs::default()
+                .tool_call_id(tool_call_id)
+                .content(msg.content.as_text())
+                .build()
+                .expect("tool message build should not fail")
+                .into()
+        }
     }
-    if let Some(ref tool_name) = msg.tool_name {
-        message.name = Some(tool_name.clone());
-    }
-
-    message
 }
 
 /// Run a lightweight memory reflection after a conversation turn.
-///
-/// This function examines the user message and assistant response to extract
-/// any new facts about the user. If something new was learned, it uses the
-/// `memory_update_profile` or `memory_write` tools to persist it.
-///
-/// The reflection uses a single-turn agent with `max_iterations = 1` to keep
-/// cost and latency low. It is designed to be called via `tokio::spawn` so
-/// it does not block the response.
 async fn memory_reflection(
     _mm: &Arc<MemoryManager>,
-    llm: &OpenRouterLoaderRef,
+    llm: &LlmProviderLoaderRef,
     tools: &Arc<ToolRegistry>,
     model: &str,
     user_text: &str,
@@ -1091,7 +1088,7 @@ async fn memory_reflection(
              profile if new facts were learned. Never produce conversational output."
                 .to_owned(),
         )
-        .user_content(openrouter_rs::api::chat::Content::Text(reflection_prompt))
+        .user_content(UserContent::Text(reflection_prompt))
         .max_iterations(1_usize)
         .build();
 
@@ -1107,9 +1104,6 @@ async fn memory_reflection(
 }
 
 /// Truncate a string to at most `max_len` characters.
-///
-/// If the string exceeds the limit, it is cut and `"..."` is appended (the
-/// total length will be exactly `max_len`).
 fn truncate_preview(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_owned()
@@ -1127,8 +1121,6 @@ fn truncate_preview(s: &str, max_len: usize) -> String {
 fn estimate_tokens(text: &str) -> usize { (text.chars().count() + 2) / 3 }
 
 /// Estimate total tokens for a message history.
-///
-/// Adds 4 tokens overhead per message (role, separators).
 fn estimate_history_tokens(messages: &[ChatMessage]) -> usize {
     messages
         .iter()
@@ -1154,34 +1146,42 @@ mod tests {
     }
 
     #[test]
-    fn to_openrouter_message_text() {
+    fn to_chat_message_text() {
         let msg = ChatMessage::user("hello");
-        let converted = to_openrouter_message(&msg);
-        assert!(matches!(converted.role, Role::User));
-        assert!(matches!(converted.content, Content::Text(ref t) if t == "hello"));
+        let converted = to_chat_message(&msg);
+        assert!(matches!(
+            converted,
+            ChatCompletionRequestMessage::User(_)
+        ));
     }
 
     #[test]
-    fn to_openrouter_message_assistant() {
+    fn to_chat_message_assistant() {
         let msg = ChatMessage::assistant("response");
-        let converted = to_openrouter_message(&msg);
-        assert!(matches!(converted.role, Role::Assistant));
+        let converted = to_chat_message(&msg);
+        assert!(matches!(
+            converted,
+            ChatCompletionRequestMessage::Assistant(_)
+        ));
     }
 
     #[test]
-    fn to_openrouter_message_system() {
+    fn to_chat_message_system() {
         let msg = ChatMessage::system("you are helpful");
-        let converted = to_openrouter_message(&msg);
-        assert!(matches!(converted.role, Role::System));
+        let converted = to_chat_message(&msg);
+        assert!(matches!(
+            converted,
+            ChatCompletionRequestMessage::System(_)
+        ));
     }
 
     #[test]
     fn estimate_tokens_basic() {
-        // "hello" = 5 chars → (5 + 2) / 3 = 2 tokens
+        // "hello" = 5 chars -> (5 + 2) / 3 = 2 tokens
         assert_eq!(estimate_tokens("hello"), 2);
-        // empty string → (0 + 2) / 3 = 0 tokens
+        // empty string -> (0 + 2) / 3 = 0 tokens
         assert_eq!(estimate_tokens(""), 0);
-        // 300 chars → (300 + 2) / 3 = 100 tokens
+        // 300 chars -> (300 + 2) / 3 = 100 tokens
         let long = "a".repeat(300);
         assert_eq!(estimate_tokens(&long), 100);
     }

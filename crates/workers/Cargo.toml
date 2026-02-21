@@ -22,7 +22,7 @@ crawl4ai = { workspace = true }
 croner.workspace = true
 jiff.workspace = true
 opendal.workspace = true
-openrouter-rs = { workspace = true }
+async-openai = { workspace = true }
 rara-agents = { workspace = true }
 rara-ai = { workspace = true }
 rara-composio = { workspace = true }

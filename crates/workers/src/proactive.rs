@@ -18,9 +18,8 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use common_worker::{FallibleWorker, WorkError, WorkResult, WorkerContext};
-use openrouter_rs::api::chat::Content;
-use rara_agents::runner::AgentRunner;
-use rara_domain_chat::service::to_openrouter_message;
+use rara_agents::runner::{AgentRunner, UserContent};
+use rara_domain_chat::service::to_chat_message;
 use rara_domain_shared::settings::model::Settings;
 use rara_sessions::types::SessionKey;
 use tracing::{info, warn};
@@ -63,13 +62,6 @@ fn resolve_soul_prompt(settings: &Settings) -> Option<String> {
 }
 
 /// Load the agent behavior policy from settings, file, or built-in default.
-///
-/// Priority order:
-/// 1. `{config_dir}/agent-policy.md` — markdown policy file on disk
-/// 2. `config/prompts/workers/agent_policy.md` — managed prompt markdown
-/// 3. [`DEFAULT_AGENT_POLICY`] — built-in fallback
-///
-/// If `settings.agent.soul` is set, it is prepended to the chosen policy.
 pub async fn load_agent_policy(settings: &Settings) -> String {
     let soul_prompt = resolve_soul_prompt(settings);
     // 1. On-disk policy file
@@ -147,8 +139,8 @@ impl FallibleWorker<AppState> for ProactiveAgentWorker {
             .model_for(rara_domain_shared::settings::model::ModelScenario::Chat)
             .to_owned();
 
-        // 6. Convert history to openrouter format
-        let openrouter_history: Vec<_> = history.iter().map(to_openrouter_message).collect();
+        // 6. Convert history to async-openai message format
+        let chat_history: Vec<_> = history.iter().map(to_chat_message).collect();
 
         // 7. Build and run multi-turn AgentRunner with full tools
         let tools = state.chat_service.tools().clone();
@@ -157,8 +149,8 @@ impl FallibleWorker<AppState> for ProactiveAgentWorker {
             .llm_provider(state.llm_provider.clone())
             .model_name(model)
             .system_prompt(policy)
-            .user_content(Content::Text(user_prompt.clone()))
-            .history(openrouter_history)
+            .user_content(UserContent::Text(user_prompt.clone()))
+            .history(chat_history)
             .max_iterations(PROACTIVE_MAX_ITERATIONS)
             .build();
 
@@ -172,7 +164,7 @@ impl FallibleWorker<AppState> for ProactiveAgentWorker {
             .provider_response
             .choices
             .first()
-            .and_then(|c| c.content())
+            .and_then(|c| c.message.content.as_deref())
             .unwrap_or("")
             .trim()
             .to_owned();
@@ -199,8 +191,6 @@ impl FallibleWorker<AppState> for ProactiveAgentWorker {
         if response_text == "DONE" || response_text == "SKIP" || response_text.is_empty() {
             info!("proactive agent: nothing to report");
         } else {
-            // Agent may have already sent notifications via tools (NotifyTool).
-            // Log the response for observability.
             info!(
                 iterations = result.iterations,
                 tool_calls = result.tool_calls_made,

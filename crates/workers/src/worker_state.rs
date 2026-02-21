@@ -22,9 +22,7 @@ use std::{
 use async_trait::async_trait;
 use common_worker::{IntervalOrNotifyHandle, NotifyHandle};
 use opendal::Operator;
-use openrouter_rs::client::OpenRouterClient;
 use snafu::{ResultExt, Whatever};
-use tokio::sync::OnceCell;
 use tracing::{info, warn};
 use yunara_store::db::DBStore;
 
@@ -49,7 +47,7 @@ pub struct AppState {
     pub notify_client: rara_domain_shared::notify::client::NotifyClient,
 
     // -- LLM provider --
-    pub llm_provider: rara_agents::model::OpenRouterLoaderRef,
+    pub llm_provider: rara_agents::model::LlmProviderLoaderRef,
 
     // -- infra --
     pub object_store: Operator,
@@ -130,8 +128,8 @@ impl AppState {
             .await
             .whatever_context("Failed to initialize session repository")?,
         );
-        let llm_provider: rara_agents::model::OpenRouterLoaderRef =
-            Arc::new(SettingsOpenRouterLoader::new(settings_svc.clone()));
+        let llm_provider: rara_agents::model::LlmProviderLoaderRef =
+            Arc::new(SettingsLlmProviderLoader::new(settings_svc.clone()));
         let mut tool_registry = rara_agents::tool_registry::ToolRegistry::new();
         for tool in tool_core::default_primitives(tool_core::PrimitiveDeps {
             pool:                   pool.clone(),
@@ -330,12 +328,6 @@ impl AppState {
     }
 
     /// Build all domain API routes and the OpenAPI spec.
-    ///
-    /// Each domain `OpenApiRouter` is split immediately into a plain
-    /// `axum::Router` + `utoipa::openapi::OpenApi` and merged separately.
-    /// This avoids the deeply-nested `Merge<Merge<Merge<…>>>` generic type
-    /// that the chained `.merge()` calls on `OpenApiRouter` would produce,
-    /// which previously caused a runtime stack overflow.
     pub fn routes(&self) -> (axum::Router, utoipa::openapi::OpenApi) {
         let mut api = Self::api_doc();
 
@@ -456,19 +448,19 @@ fn merge_openapi_router(
 }
 
 // ---------------------------------------------------------------------------
-// SettingsOpenRouterLoader
+// SettingsLlmProviderLoader
 // ---------------------------------------------------------------------------
 
-/// [`OpenRouterLoader`](rara_agents::model::OpenRouterLoader) implementation
+/// [`LlmProviderLoader`](rara_agents::model::LlmProviderLoader) implementation
 /// that reads the API key from
 /// [`SettingsSvc`](rara_domain_shared::settings::SettingsSvc) runtime settings
 /// rather than from environment variables.
 ///
-/// The client is lazily initialized on the first `acquire_client` call and
+/// The provider is lazily initialized on the first `acquire_provider` call and
 /// cached for subsequent calls via [`OnceCell`].
-struct SettingsOpenRouterLoader {
+struct SettingsLlmProviderLoader {
     settings: rara_domain_shared::settings::SettingsSvc,
-    client:   OnceCell<OpenRouterClient>,
+    provider: tokio::sync::OnceCell<Arc<dyn rara_agents::model::LlmProvider>>,
 }
 
 /// Composio auth provider that reads credentials from runtime settings.
@@ -496,20 +488,22 @@ impl rara_composio::ComposioAuthProvider for SettingsComposioAuthProvider {
     }
 }
 
-impl SettingsOpenRouterLoader {
+impl SettingsLlmProviderLoader {
     fn new(settings: rara_domain_shared::settings::SettingsSvc) -> Self {
         Self {
             settings,
-            client: OnceCell::new(),
+            provider: tokio::sync::OnceCell::new(),
         }
     }
 }
 
 #[async_trait]
-impl rara_agents::model::OpenRouterLoader for SettingsOpenRouterLoader {
-    async fn acquire_client(&self) -> rara_agents::err::Result<OpenRouterClient> {
-        let client_ref = self
-            .client
+impl rara_agents::model::LlmProviderLoader for SettingsLlmProviderLoader {
+    async fn acquire_provider(
+        &self,
+    ) -> rara_agents::err::Result<Arc<dyn rara_agents::model::LlmProvider>> {
+        let provider_ref = self
+            .provider
             .get_or_try_init(|| async {
                 let api_key = self
                     .settings
@@ -517,12 +511,15 @@ impl rara_agents::model::OpenRouterLoader for SettingsOpenRouterLoader {
                     .ai
                     .openrouter_api_key
                     .clone()
-                    .ok_or(rara_agents::err::OpenRouterNotConfiguredSnafu.build())?;
+                    .ok_or(rara_agents::err::ProviderNotConfiguredSnafu.build())?;
 
-                Self::build_client(api_key)
+                Ok::<_, rara_agents::err::Error>(
+                    Arc::new(rara_agents::model::OpenAiProvider::new(api_key))
+                        as Arc<dyn rara_agents::model::LlmProvider>,
+                )
             })
             .await?;
 
-        Ok(client_ref.clone())
+        Ok(Arc::clone(provider_ref))
     }
 }
