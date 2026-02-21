@@ -301,13 +301,14 @@ const EDIT_THROTTLE: std::time::Duration = std::time::Duration::from_millis(1500
 
 /// Stream AI response via SSE and progressively update a Telegram message.
 ///
-/// 1. Sends a placeholder "..." message and records its `message_id`.
+/// 1. Sends a `ChatAction::Typing` indicator (no placeholder message).
 /// 2. Consumes SSE events from the streaming endpoint.
-/// 3. On `TextDelta`: accumulates text and edits the Telegram message every
-///    ~1.5 seconds (throttled).
+/// 3. On `TextDelta`: accumulates text; on the first non-empty content, sends
+///    a real message and records its `message_id`. Subsequent deltas edit the
+///    message every ~1.5 seconds (throttled).
 /// 4. On `ToolCallStart`: appends a status line like "Using tool: search_web".
 /// 5. On `Done`: final edit with the complete response (Markdown -> HTML).
-/// 6. On `Error`: edits the message to show the error.
+/// 6. On `Error`: edits (or sends) the message to show the error.
 ///
 /// Falls back to the synchronous `send_chat_message()` if SSE connection fails.
 async fn stream_and_relay(
@@ -331,13 +332,15 @@ async fn stream_and_relay(
         }
     };
 
-    // Send placeholder message.
-    let placeholder = state
+    // Send typing indicator instead of a "..." placeholder message.
+    state
         .bot
-        .send_message(msg.chat.id, "...")
-        .reply_to(msg.id)
-        .await?;
-    let placeholder_id = placeholder.id;
+        .send_chat_action(msg.chat.id, ChatAction::Typing)
+        .await
+        .ok();
+
+    // Message ID is None until we have real content to show.
+    let mut message_id: Option<teloxide::types::MessageId> = None;
 
     let mut accumulated_text = String::new();
     let mut last_edit = Instant::now();
@@ -353,21 +356,17 @@ async fn stream_and_relay(
                 // content.
                 if last_edit.elapsed() >= EDIT_THROTTLE && !accumulated_text.trim().is_empty() {
                     let display = build_progress_text(&accumulated_text, &tool_status);
-                    let _ = state
-                        .bot
-                        .edit_message_text(msg.chat.id, placeholder_id, &display)
-                        .await;
+                    message_id =
+                        send_or_edit(state, msg, message_id, &display, None).await;
                     last_edit = Instant::now();
                 }
             }
             ChatStreamEvent::ToolCallStart { name, .. } => {
                 tool_status.push(format!("\u{1f527} {name}"));
                 let display = build_progress_text(&accumulated_text, &tool_status);
-                // Always edit on tool start (important UX feedback).
-                let _ = state
-                    .bot
-                    .edit_message_text(msg.chat.id, placeholder_id, &display)
-                    .await;
+                // Always send/edit on tool start (important UX feedback).
+                message_id =
+                    send_or_edit(state, msg, message_id, &display, None).await;
                 last_edit = Instant::now();
             }
             ChatStreamEvent::ToolCallEnd {
@@ -391,14 +390,8 @@ async fn stream_and_relay(
                 break;
             }
             ChatStreamEvent::Error { message: err_msg } => {
-                let _ = state
-                    .bot
-                    .edit_message_text(
-                        msg.chat.id,
-                        placeholder_id,
-                        format!("Error: {err_msg}"),
-                    )
-                    .await;
+                let error_text = format!("Error: {err_msg}");
+                send_or_edit(state, msg, message_id, &error_text, None).await;
                 errored = true;
                 break;
             }
@@ -414,10 +407,7 @@ async fn stream_and_relay(
     // Final edit with the complete text.
     let response_text = final_text.unwrap_or(accumulated_text);
     if response_text.trim().is_empty() {
-        let _ = state
-            .bot
-            .edit_message_text(msg.chat.id, placeholder_id, "(empty response)")
-            .await;
+        send_or_edit(state, msg, message_id, "(empty response)", None).await;
         return Ok(());
     }
 
@@ -437,20 +427,25 @@ async fn stream_and_relay(
     let chunks = chunk_message(&html, TELEGRAM_MAX_MESSAGE_LEN);
 
     if chunks.len() == 1 {
-        // Single chunk: edit the placeholder.
-        let _ = state
-            .bot
-            .edit_message_text(msg.chat.id, placeholder_id, &chunks[0])
-            .parse_mode(ParseMode::Html)
-            .await;
+        // Single chunk: edit or send the message.
+        send_or_edit(
+            state,
+            msg,
+            message_id,
+            &chunks[0],
+            Some(ParseMode::Html),
+        )
+        .await;
     } else {
-        // Multiple chunks: edit placeholder with first chunk, send rest as new
-        // messages.
-        let _ = state
-            .bot
-            .edit_message_text(msg.chat.id, placeholder_id, &chunks[0])
-            .parse_mode(ParseMode::Html)
-            .await;
+        // Multiple chunks: edit/send first chunk, send rest as new messages.
+        send_or_edit(
+            state,
+            msg,
+            message_id,
+            &chunks[0],
+            Some(ParseMode::Html),
+        )
+        .await;
         for chunk in &chunks[1..] {
             state
                 .bot
@@ -461,6 +456,41 @@ async fn stream_and_relay(
     }
 
     Ok(())
+}
+
+/// Send a new message or edit an existing one.
+///
+/// If `message_id` is `None`, sends a new reply message and returns `Some(id)`.
+/// If `message_id` is `Some`, edits the existing message and returns the same
+/// `Some(id)`. Errors are silently ignored (matching the existing behaviour for
+/// intermediate progress edits).
+async fn send_or_edit(
+    state: &Arc<BotState>,
+    msg: &Message,
+    message_id: Option<teloxide::types::MessageId>,
+    text: &str,
+    parse_mode: Option<ParseMode>,
+) -> Option<teloxide::types::MessageId> {
+    match message_id {
+        Some(id) => {
+            let mut req = state.bot.edit_message_text(msg.chat.id, id, text);
+            if let Some(mode) = parse_mode {
+                req = req.parse_mode(mode);
+            }
+            let _ = req.await;
+            Some(id)
+        }
+        None => {
+            let mut req = state.bot.send_message(msg.chat.id, text).reply_to(msg.id);
+            if let Some(mode) = parse_mode {
+                req = req.parse_mode(mode);
+            }
+            match req.await {
+                Ok(sent) => Some(sent.id),
+                Err(_) => None,
+            }
+        }
+    }
 }
 
 /// Build a progress display string showing accumulated text and tool status.
