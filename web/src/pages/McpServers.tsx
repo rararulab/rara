@@ -100,6 +100,12 @@ function statusBadge(status: McpServerInfo["status"]) {
           Connected
         </Badge>
       );
+    case "connecting":
+      return (
+        <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
+          Connecting...
+        </Badge>
+      );
     case "disconnected":
       return <Badge variant="secondary">Disconnected</Badge>;
     case "error":
@@ -370,6 +376,9 @@ export default function McpServers() {
   const connectedCount = servers.filter(
     (s) => s.status.type === "connected",
   ).length;
+  const connectingCount = servers.filter(
+    (s) => s.status.type === "connecting",
+  ).length;
 
   return (
     <div className="space-y-6">
@@ -378,7 +387,7 @@ export default function McpServers() {
         <div>
           <h2 className="text-xl font-bold">MCP Servers</h2>
           <p className="text-sm text-muted-foreground">
-            {connectedCount} connected / {servers.length} configured
+            {connectedCount} connected{connectingCount > 0 ? ` / ${connectingCount} connecting` : ""} / {servers.length} configured
           </p>
         </div>
         <Button onClick={openAdd}>
@@ -728,6 +737,8 @@ function ServerCard({
   disabled: boolean;
 }) {
   const isConnected = server.status.type === "connected";
+  const isConnecting = server.status.type === "connecting";
+  const isActive = isConnected || isConnecting;
   const summary =
     server.config.transport === "sse"
       ? server.config.url ?? "SSE"
@@ -777,7 +788,7 @@ function ServerCard({
 
           {/* Action buttons */}
           <div className="flex flex-wrap items-center gap-2">
-            {isConnected ? (
+            {isActive ? (
               <Button
                 variant="outline"
                 size="sm"

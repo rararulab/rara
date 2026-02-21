@@ -191,6 +191,16 @@ impl AsyncManagedClient {
         self.client.clone().await
     }
 
+    /// Returns `true` if the startup pipeline has completed successfully.
+    ///
+    /// Uses [`Shared::peek`] to inspect the future without polling it:
+    /// - `None` → the future hasn't resolved yet (still connecting).
+    /// - `Some(Ok(_))` → startup succeeded (connected).
+    /// - `Some(Err(_))` → startup failed.
+    pub(crate) fn is_ready(&self) -> bool {
+        self.client.peek().is_some_and(|result| result.is_ok())
+    }
+
     /// Signal the startup pipeline to abort.
     ///
     /// If the handshake is still in progress the `tokio::select!` will

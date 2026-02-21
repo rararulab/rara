@@ -28,6 +28,7 @@ pub struct McpServerInfo {
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum McpServerStatus {
     Connected,
+    Connecting,
     Disconnected,
     Error { message: String },
 }

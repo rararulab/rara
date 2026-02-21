@@ -17,7 +17,10 @@ use axum::{
     extract::{Path, State},
     routing::{get, post},
 };
-use rara_mcp::manager::{log_buffer::McpLogEntry, mgr::McpManager};
+use rara_mcp::manager::{
+    log_buffer::McpLogEntry,
+    mgr::{ConnectionStatus, McpManager},
+};
 
 use crate::{
     error::{McpAdminError, McpSnafu, RegistrySnafu, ServerNotFoundSnafu},
@@ -71,11 +74,10 @@ async fn build_server_info(
             }
             .build()
         })?;
-    let connected = manager.connected_servers().await;
-    let status = if connected.contains(&name.to_string()) {
-        McpServerStatus::Connected
-    } else {
-        McpServerStatus::Disconnected
+    let status = match manager.server_connection_status(name).await {
+        ConnectionStatus::Connected => McpServerStatus::Connected,
+        ConnectionStatus::Connecting => McpServerStatus::Connecting,
+        ConnectionStatus::Disconnected => McpServerStatus::Disconnected,
     };
     Ok(McpServerInfo {
         name: name.to_string(),
@@ -95,8 +97,6 @@ async fn list_servers(
         .build()
     })?;
 
-    let connected = manager.connected_servers().await;
-
     let mut servers = Vec::with_capacity(names.len());
     for name in names {
         let config = registry.get(&name).await.map_err(|e| {
@@ -106,10 +106,10 @@ async fn list_servers(
             .build()
         })?;
         if let Some(config) = config {
-            let status = if connected.contains(&name) {
-                McpServerStatus::Connected
-            } else {
-                McpServerStatus::Disconnected
+            let status = match manager.server_connection_status(&name).await {
+                ConnectionStatus::Connected => McpServerStatus::Connected,
+                ConnectionStatus::Connecting => McpServerStatus::Connecting,
+                ConnectionStatus::Disconnected => McpServerStatus::Disconnected,
             };
             servers.push(McpServerInfo {
                 name,
@@ -190,9 +190,9 @@ async fn update_server(
     })?;
     drop(registry);
 
-    // If server was running, spawn background restart
-    let connected = manager.connected_servers().await;
-    if connected.contains(&name) {
+    // If server was running (connected or connecting), spawn background restart
+    let was_running = manager.server_connection_status(&name).await != ConnectionStatus::Disconnected;
+    if was_running {
         let mgr = manager.clone();
         let restart_name = name.clone();
         tokio::spawn(async move {

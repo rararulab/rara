@@ -34,6 +34,17 @@ use crate::{
     oauth::OAuthCredentialsStoreMode,
 };
 
+/// Possible connection states for a managed server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionStatus {
+    /// Not in the clients map at all.
+    Disconnected,
+    /// In the clients map but startup future hasn't resolved yet.
+    Connecting,
+    /// Startup future resolved successfully.
+    Connected,
+}
+
 /// Manages the lifecycle of multiple MCP server connections.
 #[derive(Clone)]
 pub struct McpManager {
@@ -344,6 +355,25 @@ impl McpManager {
     #[instrument(skip(self))]
     pub async fn connected_servers(&self) -> Vec<String> {
         self.inner.read().await.clients.keys().cloned().collect()
+    }
+
+    /// Return the connection status for a single server.
+    ///
+    /// Uses [`AsyncManagedClient::is_ready`] to distinguish between
+    /// "connecting" (future still in flight) and "connected" (handshake
+    /// completed successfully).
+    pub async fn server_connection_status(&self, name: &str) -> ConnectionStatus {
+        let inner = self.inner.read().await;
+        match inner.clients.get(name) {
+            None => ConnectionStatus::Disconnected,
+            Some(managed) => {
+                if managed.is_ready() {
+                    ConnectionStatus::Connected
+                } else {
+                    ConnectionStatus::Connecting
+                }
+            }
+        }
     }
 
     // ── Private helpers ─────────────────────────────────────────────
