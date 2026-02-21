@@ -659,8 +659,8 @@ async fn handle_command(
         Command::Model(args) => {
             handle_model(&msg, &args, state).await?;
         }
-        Command::Mcp => {
-            handle_mcp(&msg, state).await?;
+        Command::Mcp(args) => {
+            handle_mcp(&msg, &args, state).await?;
         }
     }
     Ok(())
@@ -1321,8 +1321,177 @@ async fn handle_model(
     Ok(())
 }
 
-/// Handle `/mcp` — show MCP server connection status.
-async fn handle_mcp(msg: &Message, state: &Arc<BotState>) -> Result<(), teloxide::RequestError> {
+/// Handle `/mcp [url|name]` — show MCP status or install a server.
+///
+/// Without arguments, lists all configured MCP servers and their status.
+/// With a GitHub URL or package name, installs and starts the MCP server
+/// using `npx -y <package>`.
+async fn handle_mcp(
+    msg: &Message,
+    args: &str,
+    state: &Arc<BotState>,
+) -> Result<(), teloxide::RequestError> {
+    let args = args.trim();
+
+    if args.is_empty() {
+        return show_mcp_status(msg, state).await;
+    }
+
+    // Extract package name from GitHub URL or use as-is.
+    let package_name = extract_mcp_package_name(args);
+
+    // Check if already installed.
+    if let Ok(servers) = state.http_client.list_mcp_servers().await {
+        if let Some(existing) = servers.iter().find(|s| s.name == package_name) {
+            use crate::http_client::McpServerStatus;
+            let status = match &existing.status {
+                McpServerStatus::Connected => "connected",
+                McpServerStatus::Connecting => "connecting",
+                McpServerStatus::Disconnected => "disconnected",
+                McpServerStatus::Error { .. } => "error",
+            };
+
+            // If disconnected, try to start it.
+            if matches!(
+                existing.status,
+                McpServerStatus::Disconnected | McpServerStatus::Error { .. }
+            ) {
+                let _ = state.http_client.start_mcp_server(&package_name).await;
+                state
+                    .bot
+                    .send_message(
+                        msg.chat.id,
+                        format!(
+                            "<b>{}</b> already configured (was {status}), restarting...",
+                            html_escape(&package_name),
+                        ),
+                    )
+                    .parse_mode(ParseMode::Html)
+                    .await?;
+            } else {
+                state
+                    .bot
+                    .send_message(
+                        msg.chat.id,
+                        format!(
+                            "<b>{}</b> already configured ({status}).",
+                            html_escape(&package_name),
+                        ),
+                    )
+                    .parse_mode(ParseMode::Html)
+                    .await?;
+            }
+            return Ok(());
+        }
+    }
+
+    // Not found — install it.
+    state
+        .bot
+        .send_message(
+            msg.chat.id,
+            format!(
+                "Installing <b>{}</b> via npx...",
+                html_escape(&package_name)
+            ),
+        )
+        .parse_mode(ParseMode::Html)
+        .await?;
+
+    if let Err(e) = state
+        .http_client
+        .add_mcp_server(&package_name, "npx", &["-y", &package_name])
+        .await
+    {
+        state
+            .bot
+            .send_message(
+                msg.chat.id,
+                format!("Failed to install {}: {e}", html_escape(&package_name)),
+            )
+            .await?;
+        return Ok(());
+    }
+
+    // Poll status — the background start is async, give it time to connect
+    // or fail. Check every 2s up to 5 times (10s total).
+    use crate::http_client::McpServerStatus;
+    let mut final_status = None;
+    for _ in 0..5 {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        match state.http_client.get_mcp_server(&package_name).await {
+            Ok(info) => match &info.status {
+                McpServerStatus::Connected => {
+                    final_status = Some(info.status);
+                    break;
+                }
+                McpServerStatus::Error { .. } => {
+                    final_status = Some(info.status);
+                    break;
+                }
+                // Still connecting/starting — keep polling.
+                _ => {
+                    final_status = Some(info.status);
+                }
+            },
+            Err(_) => break,
+        }
+    }
+
+    match final_status {
+        Some(McpServerStatus::Connected) => {
+            state
+                .bot
+                .send_message(
+                    msg.chat.id,
+                    format!(
+                        "<b>{}</b> installed and connected.",
+                        html_escape(&package_name),
+                    ),
+                )
+                .parse_mode(ParseMode::Html)
+                .await?;
+        }
+        Some(McpServerStatus::Error { message }) => {
+            // Clean up the dead config.
+            let _ = state.http_client.remove_mcp_server(&package_name).await;
+            state
+                .bot
+                .send_message(
+                    msg.chat.id,
+                    format!(
+                        "Failed to start <b>{}</b>: {}\nConfig removed.",
+                        html_escape(&package_name),
+                        html_escape(&message),
+                    ),
+                )
+                .parse_mode(ParseMode::Html)
+                .await?;
+        }
+        _ => {
+            // Timed out waiting — might still be connecting.
+            state
+                .bot
+                .send_message(
+                    msg.chat.id,
+                    format!(
+                        "<b>{}</b> added, still connecting. Use /mcp to check status later.",
+                        html_escape(&package_name),
+                    ),
+                )
+                .parse_mode(ParseMode::Html)
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Display MCP server connection status.
+async fn show_mcp_status(
+    msg: &Message,
+    state: &Arc<BotState>,
+) -> Result<(), teloxide::RequestError> {
     use crate::http_client::McpServerStatus;
 
     match state.http_client.list_mcp_servers().await {
@@ -1340,6 +1509,7 @@ async fn handle_mcp(msg: &Message, state: &Arc<BotState>) -> Result<(), teloxide
             for s in &servers {
                 let (icon, status_text) = match &s.status {
                     McpServerStatus::Connected => ("●", "connected".to_owned()),
+                    McpServerStatus::Connecting => ("◐", "connecting".to_owned()),
                     McpServerStatus::Disconnected => ("○", "disconnected".to_owned()),
                     McpServerStatus::Error { message } => {
                         ("✘", format!("error: {}", html_escape(message)))
@@ -1373,6 +1543,32 @@ async fn handle_mcp(msg: &Message, state: &Arc<BotState>) -> Result<(), teloxide
     }
 
     Ok(())
+}
+
+/// Extract an MCP package name from a GitHub URL or plain string.
+///
+/// Supports:
+/// - `https://github.com/org/mcp-server-foo` → `mcp-server-foo`
+/// - `https://github.com/org/mcp-server-foo.git` → `mcp-server-foo`
+/// - `mcp-server-foo` → `mcp-server-foo` (pass-through)
+fn extract_mcp_package_name(input: &str) -> String {
+    // Try parsing as a URL with a github.com host.
+    if let Ok(url) = url::Url::parse(input) {
+        if url.host_str() == Some("github.com") {
+            // Path segments: ["", "org", "repo"]
+            if let Some(repo) = url.path_segments().and_then(|mut s| {
+                s.next(); // skip org
+                s.next() // repo name
+            }) {
+                let name = repo.trim_end_matches(".git");
+                if !name.is_empty() {
+                    return name.to_owned();
+                }
+            }
+        }
+    }
+    // Fallback: use as-is.
+    input.to_owned()
 }
 
 // ---------------------------------------------------------------------------

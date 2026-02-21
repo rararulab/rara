@@ -54,7 +54,7 @@ pub(crate) enum Command {
     /// With an argument, switches to the specified model.
     #[command(description = "Show/switch model: /model [name]")]
     Model(String),
-    /// Show MCP server connection status.
-    #[command(description = "Show MCP server status")]
-    Mcp,
+    /// Show MCP status or install a server from a GitHub URL.
+    #[command(description = "MCP status or install: /mcp [url]")]
+    Mcp(String),
 }

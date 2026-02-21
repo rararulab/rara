@@ -467,6 +467,95 @@ impl MainServiceHttpClient {
             .context(RequestSnafu)
     }
 
+    /// Add an MCP server and auto-start it.
+    ///
+    /// Maps to `POST /api/v1/mcp/servers`.
+    pub async fn add_mcp_server(
+        &self,
+        name: &str,
+        command: &str,
+        args: &[&str],
+    ) -> Result<McpServerInfo, MainServiceHttpError> {
+        let url = format!("{}/api/v1/mcp/servers", self.base_url);
+        let resp = self
+            .client
+            .post(url)
+            .json(&serde_json::json!({
+                "name": name,
+                "command": command,
+                "args": args,
+                "enabled": true,
+            }))
+            .send()
+            .await
+            .context(RequestSnafu)?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(MainServiceHttpError::HttpStatus { status, body });
+        }
+
+        resp.json::<McpServerInfo>().await.context(RequestSnafu)
+    }
+
+    /// Start an existing MCP server.
+    ///
+    /// Maps to `POST /api/v1/mcp/servers/{name}/start`.
+    pub async fn start_mcp_server(
+        &self,
+        name: &str,
+    ) -> Result<(), MainServiceHttpError> {
+        let url = format!("{}/api/v1/mcp/servers/{}/start", self.base_url, name);
+        let resp = self.client.post(url).send().await.context(RequestSnafu)?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(MainServiceHttpError::HttpStatus { status, body });
+        }
+
+        Ok(())
+    }
+
+    /// Remove an MCP server.
+    ///
+    /// Maps to `DELETE /api/v1/mcp/servers/{name}`.
+    pub async fn remove_mcp_server(
+        &self,
+        name: &str,
+    ) -> Result<(), MainServiceHttpError> {
+        let url = format!("{}/api/v1/mcp/servers/{}", self.base_url, name);
+        let resp = self.client.delete(url).send().await.context(RequestSnafu)?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(MainServiceHttpError::HttpStatus { status, body });
+        }
+
+        Ok(())
+    }
+
+    /// Get a single MCP server's info.
+    ///
+    /// Maps to `GET /api/v1/mcp/servers/{name}`.
+    pub async fn get_mcp_server(
+        &self,
+        name: &str,
+    ) -> Result<McpServerInfo, MainServiceHttpError> {
+        let url = format!("{}/api/v1/mcp/servers/{}", self.base_url, name);
+        let resp = self.client.get(url).send().await.context(RequestSnafu)?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(MainServiceHttpError::HttpStatus { status, body });
+        }
+
+        resp.json::<McpServerInfo>().await.context(RequestSnafu)
+    }
+
     /// Update session fields (e.g. model, title).
     ///
     /// Maps to `PATCH /api/v1/chat/sessions/{key}`.
@@ -585,6 +674,7 @@ pub(crate) struct McpServerInfo {
 #[serde(rename_all = "snake_case", tag = "type")]
 pub(crate) enum McpServerStatus {
     Connected,
+    Connecting,
     Disconnected,
     Error { message: String },
 }

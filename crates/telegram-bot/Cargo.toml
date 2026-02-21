@@ -25,6 +25,7 @@ teloxide = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
+url = "2.5.8"
 yunara-store = { workspace = true }
 
 [lints]
