@@ -68,6 +68,9 @@ pub struct AppState {
     // -- pipeline --
     pub pipeline_service: crate::pipeline::PipelineService,
 
+    // -- coding tasks --
+    pub coding_task_service: rara_coding_task::service::CodingTaskService,
+
     // -- worker coordination --
     pub analyze_notify:   Arc<RwLock<Option<NotifyHandle>>>,
     pub proactive_notify: Arc<RwLock<Option<IntervalOrNotifyHandle>>>,
@@ -227,14 +230,22 @@ impl AppState {
             agent_scheduler.clone(),
         )));
 
-        // -- codex agent dispatch ----------------------------------------
-        let task_store = crate::tools::services::AgentTaskStore::new();
-        let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        tool_registry.register_service(Arc::new(crate::tools::services::CodexRunTool::new(
-            task_store.clone(),
+        // -- codex agent dispatch (PG-backed via rara-coding-task) --------
+        let workspace_manager = rara_workspace::WorkspaceManager::new(
+            rara_paths::workspaces_dir().clone(),
+        );
+        let default_repo_url = std::env::var("RARA_DEFAULT_REPO_URL")
+            .unwrap_or_else(|_| "https://github.com/crrow/job".to_owned());
+        let coding_task_service = rara_coding_task::service::wire(
+            pool.clone(),
+            workspace_manager,
             notify_client.clone(),
             settings_svc.clone(),
-            project_root.clone(),
+            default_repo_url,
+        );
+        let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        tool_registry.register_service(Arc::new(crate::tools::services::CodexRunTool::new(
+            coding_task_service.clone(),
         )));
         tool_registry.register_service(Arc::new(crate::tools::services::ScreenshotTool::new(
             notify_client.clone(),
@@ -242,10 +253,10 @@ impl AppState {
             project_root,
         )));
         tool_registry.register_service(Arc::new(crate::tools::services::CodexStatusTool::new(
-            task_store.clone(),
+            coding_task_service.clone(),
         )));
         tool_registry.register_service(Arc::new(crate::tools::services::CodexListTool::new(
-            task_store.clone(),
+            coding_task_service.clone(),
         )));
 
         // -- skills registry (PG cache + incremental FS sync) --------------------
@@ -348,6 +359,7 @@ impl AppState {
             skill_registry,
             mcp_manager,
             pipeline_service,
+            coding_task_service,
             analyze_notify: Arc::new(RwLock::new(None)),
             proactive_notify: Arc::new(RwLock::new(None)),
         })
@@ -431,6 +443,11 @@ impl AppState {
 
         // MCP admin routes (plain axum::Router, no OpenAPI metadata).
         router = router.merge(rara_mcp_admin::router(self.mcp_manager.clone()));
+
+        // Coding task routes (plain axum::Router, no OpenAPI metadata).
+        router = router.merge(rara_coding_task::router::routes(
+            self.coding_task_service.clone(),
+        ));
 
         // Pipeline routes (plain axum::Router, no OpenAPI metadata).
         let (pipeline_router, pipeline_api) =

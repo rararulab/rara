@@ -662,6 +662,12 @@ async fn handle_command(
         Command::Mcp(args) => {
             handle_mcp(&msg, &args, state).await?;
         }
+        Command::Code(prompt) => {
+            handle_code(&msg, &prompt, state).await?;
+        }
+        Command::Tasks => {
+            handle_tasks(&msg, state).await?;
+        }
     }
     Ok(())
 }
@@ -1768,6 +1774,116 @@ fn format_timestamp(raw: &str) -> String {
         }
     }
     raw.to_owned()
+}
+
+// ---------------------------------------------------------------------------
+// /code and /tasks handlers
+// ---------------------------------------------------------------------------
+
+/// Handle `/code <prompt>` — dispatch a coding task via the main service API.
+async fn handle_code(
+    msg: &Message,
+    prompt: &str,
+    state: &Arc<BotState>,
+) -> Result<(), teloxide::RequestError> {
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        state
+            .bot
+            .send_message(msg.chat.id, "Usage: /code <prompt>\n\nExample: /code fix the login bug")
+            .await?;
+        return Ok(());
+    }
+
+    state
+        .bot
+        .send_chat_action(msg.chat.id, ChatAction::Typing)
+        .await?;
+
+    match state.http_client.dispatch_coding_task(prompt, "Claude").await {
+        Ok(task) => {
+            let text = format!(
+                "\u{1F680} Coding task dispatched!\n\n\
+                 ID: <code>{}</code>\n\
+                 Branch: <code>{}</code>\n\
+                 Tmux: <code>{}</code>\n\
+                 Status: {}\n\n\
+                 You'll be notified when it completes.",
+                task.id, task.branch, task.tmux_session, task.status
+            );
+            state
+                .bot
+                .send_message(msg.chat.id, text)
+                .parse_mode(ParseMode::Html)
+                .await?;
+        }
+        Err(e) => {
+            state
+                .bot
+                .send_message(msg.chat.id, format!("\u{274c} Failed to dispatch task: {e}"))
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+/// Handle `/tasks` — list coding tasks.
+async fn handle_tasks(
+    msg: &Message,
+    state: &Arc<BotState>,
+) -> Result<(), teloxide::RequestError> {
+    match state.http_client.list_coding_tasks().await {
+        Ok(tasks) if tasks.is_empty() => {
+            state
+                .bot
+                .send_message(msg.chat.id, "No coding tasks found.\n\nUse /code <prompt> to dispatch one.")
+                .await?;
+        }
+        Ok(tasks) => {
+            let mut text = format!("\u{1F4CB} <b>Coding Tasks</b> ({})\n\n", tasks.len());
+            for t in tasks.iter().take(10) {
+                let status_emoji = match t.status.as_str() {
+                    "Pending" => "\u{23F3}",
+                    "Cloning" => "\u{1F4E6}",
+                    "Running" => "\u{1F3C3}",
+                    "Completed" => "\u{2705}",
+                    "Failed" => "\u{274c}",
+                    "Merged" => "\u{1F389}",
+                    "MergeFailed" => "\u{26A0}",
+                    _ => "\u{2753}",
+                };
+                let short_id = if t.id.len() > 8 { &t.id[..8] } else { &t.id };
+                let prompt_short = if t.prompt.len() > 60 {
+                    format!("{}...", &t.prompt[..60])
+                } else {
+                    t.prompt.clone()
+                };
+                let pr = t
+                    .pr_url
+                    .as_deref()
+                    .map_or(String::new(), |url| format!("\n   PR: {url}"));
+                text.push_str(&format!(
+                    "{status_emoji} <code>{short_id}</code> [{agent}] {prompt_short}{pr}\n\n",
+                    agent = t.agent_type,
+                ));
+            }
+            if tasks.len() > 10 {
+                text.push_str(&format!("... and {} more", tasks.len() - 10));
+            }
+            state
+                .bot
+                .send_message(msg.chat.id, text)
+                .parse_mode(ParseMode::Html)
+                .await?;
+        }
+        Err(e) => {
+            state
+                .bot
+                .send_message(msg.chat.id, format!("\u{274c} Failed to list tasks: {e}"))
+                .await?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

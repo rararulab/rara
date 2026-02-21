@@ -530,3 +530,44 @@ export interface GmailSettings {
 export interface PipelineStatus {
   running: boolean;
 }
+
+// Coding Tasks
+export type CodingTaskStatus = 'Pending' | 'Cloning' | 'Running' | 'Completed' | 'Failed' | 'Merged' | 'MergeFailed';
+export type AgentType = 'Codex' | 'Claude';
+
+export interface CodingTaskSummary {
+  id: string;
+  status: CodingTaskStatus;
+  agent_type: AgentType;
+  branch: string;
+  prompt: string;
+  pr_url: string | null;
+  created_at: string;
+}
+
+export interface CodingTaskDetail {
+  id: string;
+  status: CodingTaskStatus;
+  agent_type: AgentType;
+  repo_url: string;
+  branch: string;
+  prompt: string;
+  pr_url: string | null;
+  pr_number: number | null;
+  session_key: string | null;
+  tmux_session: string;
+  workspace_path: string;
+  output: string;
+  exit_code: number | null;
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface CreateCodingTaskRequest {
+  prompt: string;
+  agent_type?: AgentType;
+  repo_url?: string;
+  session_key?: string;
+}

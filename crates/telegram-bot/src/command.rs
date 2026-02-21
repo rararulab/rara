@@ -57,4 +57,10 @@ pub(crate) enum Command {
     /// Show MCP status or install a server from a GitHub URL.
     #[command(description = "MCP status or install: /mcp [url]")]
     Mcp(String),
+    /// Dispatch a coding task to a CLI agent.
+    #[command(description = "Dispatch coding task: /code <prompt>")]
+    Code(String),
+    /// List coding tasks.
+    #[command(description = "List coding tasks")]
+    Tasks,
 }

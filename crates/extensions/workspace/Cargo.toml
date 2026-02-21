@@ -1,0 +1,13 @@
+[package]
+name = "rara-workspace"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+tokio = { workspace = true, features = ["process"] }
+tracing.workspace = true

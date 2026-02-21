@@ -608,6 +608,57 @@ impl MainServiceHttpClient {
             .await
             .context(RequestSnafu)
     }
+
+    /// Dispatch a coding task.
+    ///
+    /// Maps to `POST /api/v1/coding-tasks`.
+    pub async fn dispatch_coding_task(
+        &self,
+        prompt: &str,
+        agent: &str,
+    ) -> Result<CodingTaskResponse, MainServiceHttpError> {
+        let url = format!("{}/api/v1/coding-tasks", self.base_url);
+        let resp = self
+            .client
+            .post(url)
+            .json(&serde_json::json!({
+                "prompt": prompt,
+                "agent_type": agent,
+            }))
+            .send()
+            .await
+            .context(RequestSnafu)?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(MainServiceHttpError::HttpStatus { status, body });
+        }
+
+        resp.json::<CodingTaskResponse>()
+            .await
+            .context(RequestSnafu)
+    }
+
+    /// List coding tasks.
+    ///
+    /// Maps to `GET /api/v1/coding-tasks`.
+    pub async fn list_coding_tasks(
+        &self,
+    ) -> Result<Vec<CodingTaskSummaryResponse>, MainServiceHttpError> {
+        let url = format!("{}/api/v1/coding-tasks", self.base_url);
+        let resp = self.client.get(url).send().await.context(RequestSnafu)?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(MainServiceHttpError::HttpStatus { status, body });
+        }
+
+        resp.json::<Vec<CodingTaskSummaryResponse>>()
+            .await
+            .context(RequestSnafu)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -720,6 +771,27 @@ pub(crate) enum ChatStreamEvent {
     Error {
         message: String,
     },
+}
+
+/// Response from dispatching a coding task.
+#[derive(Debug, Deserialize)]
+pub(crate) struct CodingTaskResponse {
+    pub id:           String,
+    pub branch:       String,
+    pub tmux_session: String,
+    pub status:       String,
+}
+
+/// Summary of a coding task from the list endpoint.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub(crate) struct CodingTaskSummaryResponse {
+    pub id:         String,
+    pub status:     String,
+    pub agent_type: String,
+    pub branch:     String,
+    pub prompt:     String,
+    pub pr_url:     Option<String>,
 }
 
 impl ChatMessageData {

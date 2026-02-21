@@ -12,21 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Database-layer models and SQL migrations.
+//! # rara-coding-task
 //!
-//! This crate owns the "store" models used by repositories (`sqlx::FromRow`)
-//! and the SQL migrations that define and evolve those tables.
+//! Persistent coding task management — dispatch CLI agents (Claude Code / Codex)
+//! with PG-backed storage, git workspace isolation, tmux observability,
+//! and PR lifecycle management.
 
-#![deny(unsafe_code)]
-
-pub mod application;
-pub mod coding_task;
-pub mod interview;
-pub mod job;
-pub mod metrics;
-pub mod notify;
-pub mod resume;
-pub mod saved_job;
-pub mod scheduler;
-pub mod session;
-pub mod skill;
+pub mod error;
+pub mod pg_repository;
+pub mod repository;
+pub mod router;
+pub mod service;
+pub mod types;

@@ -336,3 +336,9 @@ pub fn skills_dir() -> &'static PathBuf {
     static SKILLS_DIR: OnceLock<PathBuf> = OnceLock::new();
     SKILLS_DIR.get_or_init(|| config_dir().join("skills"))
 }
+
+/// Returns the path to the git workspaces directory for coding tasks.
+pub fn workspaces_dir() -> &'static PathBuf {
+    static WORKSPACES_DIR: OnceLock<PathBuf> = OnceLock::new();
+    WORKSPACES_DIR.get_or_init(|| data_dir().join("workspaces"))
+}

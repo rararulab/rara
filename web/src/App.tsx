@@ -24,6 +24,7 @@ import SavedJobMarkdownPreview from '@/pages/SavedJobMarkdownPreview';
 import Settings from '@/pages/Settings';
 import TypstProjects from '@/pages/TypstProjects';
 import TypstEditor from '@/pages/TypstEditor';
+import CodingTasks from '@/pages/CodingTasks';
 
 const queryClient = new QueryClient();
 
@@ -43,6 +44,7 @@ export default function App() {
               <Route path="jobs" element={<JobsWorkspace />} />
               <Route path="jobs/typst" element={<TypstProjects />} />
               <Route path="jobs/typst/:projectId" element={<TypstEditor />} />
+              <Route path="tasks" element={<CodingTasks />} />
               <Route path="settings" element={<Settings />} />
 
               {/* Redirects for old routes */}

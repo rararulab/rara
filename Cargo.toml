@@ -67,6 +67,8 @@ members = [
     "crates/extensions/mcp-admin",
     "crates/core/tool-core",
     "crates/integrations/composio",
+    "crates/extensions/workspace",
+    "crates/extensions/coding-task",
 ]
 
 [workspace.dependencies]
@@ -173,6 +175,8 @@ rara-sessions = { path = "crates/sessions" }
 rara-skill-admin = { path = "crates/extensions/skill-admin" }
 rara-skills = { path = "crates/skills" }
 rara-telegram-bot = { path = "crates/telegram-bot" }
+rara-workspace = { path = "crates/extensions/workspace" }
+rara-coding-task = { path = "crates/extensions/coding-task" }
 rara-workers = { path = "crates/workers" }
 tool-core = { path = "crates/core/tool-core" }
 yunara-store = { path = "crates/common/yunara-store" }
