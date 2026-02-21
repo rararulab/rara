@@ -326,15 +326,15 @@ pub struct JobPipelineSettingsView {
     pub job_preferences:        Option<String>,
     pub score_threshold_auto:   u8,
     pub score_threshold_notify: u8,
-    pub auto_send_enabled:      bool,
     pub resume_project_path:    Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct GmailSettingsView {
-    pub configured:             bool,
-    pub gmail_address:          Option<String>,
-    pub gmail_app_password_hint: Option<String>,
+    pub configured:          bool,
+    pub auto_send_enabled:   bool,
+    pub address:             Option<String>,
+    pub app_password_hint:   Option<String>,
 }
 
 impl Into<RuntimeSettingsView> for Settings {
@@ -387,14 +387,14 @@ impl Into<RuntimeSettingsView> for Settings {
                 job_preferences:        self.job_pipeline.job_preferences.clone(),
                 score_threshold_auto:   self.job_pipeline.score_threshold_auto,
                 score_threshold_notify: self.job_pipeline.score_threshold_notify,
-                auto_send_enabled:      self.job_pipeline.auto_send_enabled,
                 resume_project_path:    self.job_pipeline.resume_project_path.clone(),
             },
             gmail:        GmailSettingsView {
-                configured:              self.gmail.gmail_address.is_some()
-                    && self.gmail.gmail_app_password.is_some(),
-                gmail_address:           self.gmail.gmail_address.clone(),
-                gmail_app_password_hint: secret_hint(self.gmail.gmail_app_password.as_deref()),
+                configured:        self.agent.gmail.address.is_some()
+                    && self.agent.gmail.app_password.is_some(),
+                auto_send_enabled: self.agent.gmail.auto_send_enabled,
+                address:           self.agent.gmail.address.clone(),
+                app_password_hint: secret_hint(self.agent.gmail.app_password.as_deref()),
             },
             updated_at:   self.updated_at,
         }

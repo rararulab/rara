@@ -191,12 +191,13 @@ impl ChatService {
         use rara_domain_shared::settings::model::{AiRuntimeSettingsPatch, UpdateRequest};
 
         let patch = UpdateRequest {
-            ai:       Some(AiRuntimeSettingsPatch {
+            ai:           Some(AiRuntimeSettingsPatch {
                 favorite_models: Some(ids),
                 ..Default::default()
             }),
-            telegram: None,
-            agent:    None,
+            telegram:     None,
+            agent:        None,
+            job_pipeline: None,
         };
         self.settings_svc
             .update(patch)
