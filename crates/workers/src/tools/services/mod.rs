@@ -16,6 +16,7 @@
 
 mod codex;
 mod job_pipeline;
+mod mcp_tools;
 mod memory_tools;
 mod resume_tools;
 mod schedule_tools;
@@ -25,6 +26,7 @@ mod typst_tools;
 
 pub use codex::{AgentTaskStore, CodexListTool, CodexRunTool, CodexStatusTool};
 pub use job_pipeline::JobPipelineTool;
+pub use mcp_tools::{InstallMcpServerTool, ListMcpServersTool, RemoveMcpServerTool};
 pub use memory_tools::{MemoryGetTool, MemorySearchTool, MemoryUpdateProfileTool, MemoryWriteTool};
 pub use resume_tools::{AnalyzeResumeTool, GetResumeContentTool, ListResumesTool};
 pub use schedule_tools::{ScheduleAddTool, ScheduleListTool, ScheduleRemoveTool};

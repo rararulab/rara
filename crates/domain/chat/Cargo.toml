@@ -19,6 +19,7 @@ futures.workspace = true
 async-openai.workspace = true
 rara-agents.workspace = true
 rara-domain-shared.workspace = true
+rara-mcp.workspace = true
 rara-memory.workspace = true
 rara-paths.workspace = true
 rara-sessions.workspace = true

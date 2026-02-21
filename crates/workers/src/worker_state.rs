@@ -276,20 +276,17 @@ impl AppState {
             info!(servers = ?started, "MCP servers started");
         }
 
-        // -- MCP tool bridges ------------------------------------------------
-        match rara_mcp::tool_bridge::McpToolBridge::from_manager(mcp_manager.clone()).await {
-            Ok(bridges) => {
-                let count = bridges.len();
-                for bridge in bridges {
-                    let server = bridge.server_name().to_string();
-                    tool_registry.register_mcp(Arc::new(bridge), server);
-                }
-                info!(count, "MCP tool bridges registered");
-            }
-            Err(e) => {
-                warn!(error = %e, "failed to create MCP tool bridges");
-            }
-        }
+        // -- MCP management tools -----------------------------------------------
+        tool_registry.register_service(Arc::new(
+            crate::tools::services::InstallMcpServerTool::new(mcp_manager.clone()),
+        ));
+        tool_registry.register_service(Arc::new(
+            crate::tools::services::ListMcpServersTool::new(mcp_manager.clone()),
+        ));
+        tool_registry.register_service(Arc::new(
+            crate::tools::services::RemoveMcpServerTool::new(mcp_manager.clone()),
+        ));
+
         let tools = Arc::new(tool_registry);
 
         let chat_service = rara_domain_chat::service::ChatService::new(
@@ -300,6 +297,7 @@ impl AppState {
             Some(Arc::clone(&memory_manager)),
             settings_svc.clone(),
             skill_registry.clone(),
+            mcp_manager.clone(),
         );
         info!("Chat service initialized");
 

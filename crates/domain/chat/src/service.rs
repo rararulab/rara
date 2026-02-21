@@ -36,6 +36,7 @@ use rara_agents::{
     tool_registry::ToolRegistry,
 };
 use rara_domain_shared::settings::model::{ModelScenario, Settings};
+use rara_mcp::{manager::mgr::McpManager, tool_bridge::McpToolBridge};
 use rara_memory::MemoryManager;
 use rara_sessions::{
     repository::SessionRepository,
@@ -120,6 +121,8 @@ pub struct ChatService {
     settings_svc:   rara_domain_shared::settings::SettingsSvc,
     /// Skills registry for available skills listing in system prompt.
     skill_registry: rara_skills::registry::InMemoryRegistry,
+    /// MCP manager for dynamic per-request MCP tool discovery.
+    mcp_manager:    McpManager,
 }
 
 impl ChatService {
@@ -138,6 +141,7 @@ impl ChatService {
         memory_manager: Option<Arc<MemoryManager>>,
         settings_svc: rara_domain_shared::settings::SettingsSvc,
         skill_registry: rara_skills::registry::InMemoryRegistry,
+        mcp_manager: McpManager,
     ) -> Self {
         Self {
             session_repo,
@@ -148,6 +152,7 @@ impl ChatService {
             model_catalog: ModelCatalog::new(),
             settings_svc,
             skill_registry,
+            mcp_manager,
         }
     }
 
@@ -502,11 +507,26 @@ impl ChatService {
             Vec::<String>::new()
         };
 
-        // Build effective tool registry
-        let effective_tools = if tool_whitelist.is_empty() {
-            Arc::clone(&self.tools)
-        } else {
-            Arc::new(self.tools.filtered(&tool_whitelist))
+        // Build effective tool registry with dynamic MCP tools
+        let effective_tools = {
+            let mut registry = if tool_whitelist.is_empty() {
+                self.tools.filtered(&[])
+            } else {
+                self.tools.filtered(&tool_whitelist)
+            };
+            // Dynamically add MCP tools (per-request, cached by ManagedClient 5min TTL)
+            match McpToolBridge::from_manager(self.mcp_manager.clone()).await {
+                Ok(bridges) => {
+                    for bridge in bridges {
+                        let server = bridge.server_name().to_string();
+                        registry.register_mcp(Arc::new(bridge), server);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to fetch dynamic MCP tools");
+                }
+            }
+            Arc::new(registry)
         };
 
         let user_content = if has_images {
