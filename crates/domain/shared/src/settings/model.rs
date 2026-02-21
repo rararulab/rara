@@ -168,6 +168,8 @@ pub struct JobPipelineSettings {
     pub score_threshold_notify: u8,
     /// Local path to typst resume project.
     pub resume_project_path:    Option<String>,
+    /// Cron expression for automatic pipeline runs (5-field format). `None` = disabled.
+    pub pipeline_cron:          Option<String>,
 }
 
 impl Default for JobPipelineSettings {
@@ -177,6 +179,7 @@ impl Default for JobPipelineSettings {
             score_threshold_auto:   85,
             score_threshold_notify: 60,
             resume_project_path:    None,
+            pipeline_cron:          None,
         }
     }
 }
@@ -258,6 +261,7 @@ pub struct JobPipelineRuntimeSettingsPatch {
     pub score_threshold_auto:   Option<u8>,
     pub score_threshold_notify: Option<u8>,
     pub resume_project_path:    Option<String>,
+    pub pipeline_cron:          Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
@@ -364,6 +368,9 @@ impl Settings {
             if let Some(path) = jp.resume_project_path {
                 self.job_pipeline.resume_project_path = normalize_text(Some(path));
             }
+            if let Some(cron) = jp.pipeline_cron {
+                self.job_pipeline.pipeline_cron = normalize_text(Some(cron));
+            }
         }
     }
 
@@ -395,6 +402,8 @@ impl Settings {
             normalize_text(self.job_pipeline.job_preferences.take());
         self.job_pipeline.resume_project_path =
             normalize_text(self.job_pipeline.resume_project_path.take());
+        self.job_pipeline.pipeline_cron =
+            normalize_text(self.job_pipeline.pipeline_cron.take());
     }
 }
 

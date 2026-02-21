@@ -261,6 +261,14 @@ impl AppConfig {
             .interval(Duration::from_secs(60))
             .spawn();
 
+        // -- pipeline scheduler worker (every 60s, checks cron from settings) --
+
+        let _pipeline_scheduler_handle = worker_manager
+            .fallible_worker(rara_workers::pipeline_scheduler::PipelineSchedulerWorker)
+            .name("pipeline-scheduler")
+            .interval(Duration::from_secs(60))
+            .spawn();
+
         // -- telegram bot (optional) -----------------------------------------
 
         let bot_handle = match Self::try_start_bot(
