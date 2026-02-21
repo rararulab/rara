@@ -519,7 +519,26 @@ impl AgentRunner {
             let mut has_tool_calls = false;
 
             while let Some(chunk_result) = stream.next().await {
-                let response = chunk_result.context(OpenRouterSnafu)?;
+                let response = match chunk_result {
+                    Ok(r) => r,
+                    Err(openrouter_rs::error::OpenRouterError::Serialization(e)) => {
+                        // Some models/providers return chunks with unexpected
+                        // shapes that don't match the `Choice` untagged enum
+                        // (e.g. usage-only chunks, extra fields). Skip these
+                        // rather than aborting the entire stream.
+                        warn!(
+                            iteration,
+                            error = %e,
+                            "skipping unparseable streaming chunk"
+                        );
+                        continue;
+                    }
+                    Err(e) => {
+                        // Connection-level errors (Curl, IO) are fatal —
+                        // the stream is broken and cannot continue.
+                        return Err(e).context(OpenRouterSnafu);
+                    }
+                };
                 let Some(choice) = response.choices.first() else {
                     continue;
                 };
