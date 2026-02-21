@@ -259,10 +259,14 @@ impl PipelineService {
             self.ai_service.clone(),
             self.settings_svc.clone(),
         )));
-        registry.register_service(Arc::new(pipeline_tools::OptimizeResumeTool::new(
+        // Resume optimization sub-tools (worktree-based workflow)
+        registry.register_service(Arc::new(pipeline_tools::PrepareResumeWorktreeTool::new(
             self.settings_svc.clone(),
-            self.ai_service.clone(),
         )));
+        registry.register_service(Arc::new(pipeline_tools::ReadResumeFileTool::new()));
+        registry.register_service(Arc::new(pipeline_tools::WriteResumeFileTool::new()));
+        registry.register_service(Arc::new(pipeline_tools::RenderResumeTool::new()));
+        registry.register_service(Arc::new(pipeline_tools::FinalizeResumeTool::new()));
 
         // Re-use the existing job_pipeline tool (save job URL).
         registry.register_service(Arc::new(
