@@ -522,20 +522,24 @@ impl AgentRunner {
                 let response = match chunk_result {
                     Ok(r) => r,
                     Err(openrouter_rs::error::OpenRouterError::Serialization(e)) => {
-                        // Some models/providers return chunks with unexpected
-                        // shapes that don't match the `Choice` untagged enum
-                        // (e.g. usage-only chunks, extra fields). Skip these
-                        // rather than aborting the entire stream.
-                        warn!(
+                        // The model returned a streaming chunk with an
+                        // unexpected JSON shape. This typically means the
+                        // model/provider is incompatible with openrouter-rs's
+                        // streaming parser. Abort and tell the user.
+                        error!(
                             iteration,
+                            model,
                             error = %e,
-                            "skipping unparseable streaming chunk"
+                            "model returned unparseable streaming response"
                         );
-                        continue;
+                        return Err(Error::Other {
+                            message: format!(
+                                "Model \"{model}\" returned an incompatible streaming response. \
+                                 Please switch to a different model."
+                            ).into(),
+                        });
                     }
                     Err(e) => {
-                        // Connection-level errors (Curl, IO) are fatal —
-                        // the stream is broken and cannot continue.
                         return Err(e).context(OpenRouterSnafu);
                     }
                 };
