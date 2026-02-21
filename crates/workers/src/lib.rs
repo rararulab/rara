@@ -23,6 +23,7 @@ pub mod jd_parser;
 pub mod memory_sync;
 pub mod pipeline;
 pub mod pipeline_routes;
+pub mod pipeline_scheduler;
 pub mod proactive;
 pub mod saved_job_analyze;
 pub mod saved_job_crawl;
