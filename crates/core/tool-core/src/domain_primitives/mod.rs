@@ -19,10 +19,12 @@ mod composio;
 mod db_mutate;
 mod db_query;
 mod notify;
+mod send_email;
 mod storage_read;
 
 pub use composio::ComposioTool;
 pub use db_mutate::DbMutateTool;
 pub use db_query::DbQueryTool;
 pub use notify::NotifyTool;
+pub use send_email::SendEmailTool;
 pub use storage_read::StorageReadTool;

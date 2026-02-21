@@ -117,6 +117,9 @@ pub struct AgentSettings {
     /// Composio tool runtime authentication settings.
     #[serde(default)]
     pub composio:           ComposioSettings,
+    /// Gmail SMTP settings for email sending.
+    #[serde(default)]
+    pub gmail:              GmailSettings,
 }
 
 /// Memory runtime settings.
@@ -149,6 +152,18 @@ pub struct ComposioSettings {
     pub api_key:   Option<String>,
     /// Optional default user/entity id for composio calls.
     pub entity_id: Option<String>,
+}
+
+/// Gmail SMTP runtime settings.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct GmailSettings {
+    /// Gmail address used as the sender (e.g. `user@gmail.com`).
+    pub address:           Option<String>,
+    /// Gmail App Password for SMTP authentication.
+    pub app_password:      Option<String>,
+    /// Whether the agent is allowed to send emails automatically.
+    pub auto_send_enabled: bool,
 }
 
 /// Partial update payload for runtime settings writes.
@@ -192,6 +207,7 @@ pub struct AgentRuntimeSettingsPatch {
     pub proactive_cron:     Option<String>,
     pub memory:             Option<MemoryRuntimeSettingsPatch>,
     pub composio:           Option<ComposioRuntimeSettingsPatch>,
+    pub gmail:              Option<GmailRuntimeSettingsPatch>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
@@ -205,6 +221,13 @@ pub struct MemoryRuntimeSettingsPatch {
 pub struct ComposioRuntimeSettingsPatch {
     pub api_key:   Option<String>,
     pub entity_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
+pub struct GmailRuntimeSettingsPatch {
+    pub address:           Option<String>,
+    pub app_password:      Option<String>,
+    pub auto_send_enabled: Option<bool>,
 }
 
 impl Settings {
@@ -278,6 +301,17 @@ impl Settings {
                     self.agent.composio.entity_id = normalize_text(Some(entity_id));
                 }
             }
+            if let Some(gmail) = agent.gmail {
+                if let Some(address) = gmail.address {
+                    self.agent.gmail.address = normalize_text(Some(address));
+                }
+                if let Some(app_password) = gmail.app_password {
+                    self.agent.gmail.app_password = normalize_secret(Some(app_password));
+                }
+                if let Some(auto_send_enabled) = gmail.auto_send_enabled {
+                    self.agent.gmail.auto_send_enabled = auto_send_enabled;
+                }
+            }
         }
     }
 
@@ -302,6 +336,8 @@ impl Settings {
             normalize_secret(self.agent.memory.chroma_api_key.take());
         self.agent.composio.api_key = normalize_secret(self.agent.composio.api_key.take());
         self.agent.composio.entity_id = normalize_text(self.agent.composio.entity_id.take());
+        self.agent.gmail.address = normalize_text(self.agent.gmail.address.take());
+        self.agent.gmail.app_password = normalize_secret(self.agent.gmail.app_password.take());
     }
 }
 

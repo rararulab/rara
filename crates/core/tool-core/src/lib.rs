@@ -83,8 +83,9 @@ pub fn domain_primitives_vec(deps: PrimitiveDeps) -> Vec<AgentToolRef> {
         Arc::new(domain_primitives::DbMutateTool::new(deps.pool)),
         Arc::new(domain_primitives::NotifyTool::new(
             deps.notify_client,
-            deps.settings_svc,
+            deps.settings_svc.clone(),
         )),
+        Arc::new(domain_primitives::SendEmailTool::new(deps.settings_svc)),
         Arc::new(domain_primitives::StorageReadTool::new(deps.object_store)),
     ];
     tools.push(Arc::new(
