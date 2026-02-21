@@ -19,11 +19,15 @@ use serde::{Deserialize, Serialize};
 /// Full runtime settings document persisted in `kv_table`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Settings {
-    pub ai:         AISettings,
-    pub telegram:   TelegramSettings,
+    pub ai:           AISettings,
+    pub telegram:     TelegramSettings,
     #[serde(default)]
-    pub agent:      AgentSettings,
-    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub agent:        AgentSettings,
+    #[serde(default)]
+    pub job_pipeline: JobPipelineSettings,
+    #[serde(default)]
+    pub gmail:        GmailSettings,
+    pub updated_at:   Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Which scenario an AI model will be used for.
@@ -151,12 +155,52 @@ pub struct ComposioSettings {
     pub entity_id: Option<String>,
 }
 
+/// Job pipeline runtime settings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct JobPipelineSettings {
+    /// Markdown describing target roles, tech stack, preferences.
+    pub job_preferences:        Option<String>,
+    /// Auto-apply score threshold (default 85).
+    pub score_threshold_auto:   u8,
+    /// Notification score threshold (default 60).
+    pub score_threshold_notify: u8,
+    /// Whether auto email sending is allowed (default false).
+    pub auto_send_enabled:      bool,
+    /// Local path to typst resume project.
+    pub resume_project_path:    Option<String>,
+}
+
+impl Default for JobPipelineSettings {
+    fn default() -> Self {
+        Self {
+            job_preferences:        None,
+            score_threshold_auto:   85,
+            score_threshold_notify: 60,
+            auto_send_enabled:      false,
+            resume_project_path:    None,
+        }
+    }
+}
+
+/// Gmail SMTP runtime settings.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct GmailSettings {
+    /// Gmail address used as the sender.
+    pub gmail_address:      Option<String>,
+    /// Gmail app password (secret).
+    pub gmail_app_password: Option<String>,
+}
+
 /// Partial update payload for runtime settings writes.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct UpdateRequest {
-    pub ai:       Option<AiRuntimeSettingsPatch>,
-    pub telegram: Option<TelegramRuntimeSettingsPatch>,
-    pub agent:    Option<AgentRuntimeSettingsPatch>,
+    pub ai:           Option<AiRuntimeSettingsPatch>,
+    pub telegram:     Option<TelegramRuntimeSettingsPatch>,
+    pub agent:        Option<AgentRuntimeSettingsPatch>,
+    pub job_pipeline: Option<JobPipelineRuntimeSettingsPatch>,
+    pub gmail:        Option<GmailRuntimeSettingsPatch>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
@@ -205,6 +249,21 @@ pub struct MemoryRuntimeSettingsPatch {
 pub struct ComposioRuntimeSettingsPatch {
     pub api_key:   Option<String>,
     pub entity_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
+pub struct JobPipelineRuntimeSettingsPatch {
+    pub job_preferences:        Option<String>,
+    pub score_threshold_auto:   Option<u8>,
+    pub score_threshold_notify: Option<u8>,
+    pub auto_send_enabled:      Option<bool>,
+    pub resume_project_path:    Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
+pub struct GmailRuntimeSettingsPatch {
+    pub gmail_address:      Option<String>,
+    pub gmail_app_password: Option<String>,
 }
 
 impl Settings {
@@ -279,6 +338,33 @@ impl Settings {
                 }
             }
         }
+
+        if let Some(jp) = patch.job_pipeline {
+            if let Some(prefs) = jp.job_preferences {
+                self.job_pipeline.job_preferences = normalize_text(Some(prefs));
+            }
+            if let Some(threshold) = jp.score_threshold_auto {
+                self.job_pipeline.score_threshold_auto = threshold;
+            }
+            if let Some(threshold) = jp.score_threshold_notify {
+                self.job_pipeline.score_threshold_notify = threshold;
+            }
+            if let Some(enabled) = jp.auto_send_enabled {
+                self.job_pipeline.auto_send_enabled = enabled;
+            }
+            if let Some(path) = jp.resume_project_path {
+                self.job_pipeline.resume_project_path = normalize_text(Some(path));
+            }
+        }
+
+        if let Some(gmail) = patch.gmail {
+            if let Some(addr) = gmail.gmail_address {
+                self.gmail.gmail_address = normalize_text(Some(addr));
+            }
+            if let Some(pw) = gmail.gmail_app_password {
+                self.gmail.gmail_app_password = normalize_secret(Some(pw));
+            }
+        }
     }
 
     /// Sanitize values by trimming and dropping empty strings.
@@ -302,6 +388,14 @@ impl Settings {
             normalize_secret(self.agent.memory.chroma_api_key.take());
         self.agent.composio.api_key = normalize_secret(self.agent.composio.api_key.take());
         self.agent.composio.entity_id = normalize_text(self.agent.composio.entity_id.take());
+
+        self.job_pipeline.job_preferences =
+            normalize_text(self.job_pipeline.job_preferences.take());
+        self.job_pipeline.resume_project_path =
+            normalize_text(self.job_pipeline.resume_project_path.take());
+
+        self.gmail.gmail_address = normalize_text(self.gmail.gmail_address.take());
+        self.gmail.gmail_app_password = normalize_secret(self.gmail.gmail_app_password.take());
     }
 }
 
@@ -396,8 +490,10 @@ mod tests {
                 job_model: Some("".to_owned()), // empty string clears
                 ..Default::default()
             }),
-            telegram: None,
-            agent:    None,
+            telegram:     None,
+            agent:        None,
+            job_pipeline: None,
+            gmail:        None,
         });
         assert_eq!(settings.ai.job_model, None);
     }
@@ -431,9 +527,9 @@ mod tests {
     fn apply_patch_agent_settings() {
         let mut settings = Settings::default();
         settings.apply_patch(UpdateRequest {
-            ai:       None,
-            telegram: None,
-            agent:    Some(AgentRuntimeSettingsPatch {
+            ai:           None,
+            telegram:     None,
+            agent:        Some(AgentRuntimeSettingsPatch {
                 soul:               Some("You are a cheerful assistant.".to_owned()),
                 chat_system_prompt: None,
                 proactive_enabled:  Some(true),
@@ -441,6 +537,8 @@ mod tests {
                 memory:             None,
                 composio:           None,
             }),
+            job_pipeline: None,
+            gmail:        None,
         });
         assert_eq!(
             settings.agent.soul,
@@ -465,9 +563,9 @@ mod tests {
         };
         // Only update proactive_enabled, leave soul and cron unchanged
         settings.apply_patch(UpdateRequest {
-            ai:       None,
-            telegram: None,
-            agent:    Some(AgentRuntimeSettingsPatch {
+            ai:           None,
+            telegram:     None,
+            agent:        Some(AgentRuntimeSettingsPatch {
                 soul:               None,
                 chat_system_prompt: None,
                 proactive_enabled:  Some(false),
@@ -475,6 +573,8 @@ mod tests {
                 memory:             None,
                 composio:           None,
             }),
+            job_pipeline: None,
+            gmail:        None,
         });
         assert_eq!(settings.agent.soul, Some("existing soul".to_owned()));
         assert!(!settings.agent.proactive_enabled);
@@ -511,9 +611,9 @@ mod tests {
     fn apply_patch_memory_settings() {
         let mut settings = Settings::default();
         settings.apply_patch(UpdateRequest {
-            ai:       None,
-            telegram: None,
-            agent:    Some(AgentRuntimeSettingsPatch {
+            ai:           None,
+            telegram:     None,
+            agent:        Some(AgentRuntimeSettingsPatch {
                 soul:               None,
                 chat_system_prompt: None,
                 proactive_enabled:  None,
@@ -525,6 +625,8 @@ mod tests {
                 }),
                 composio:           None,
             }),
+            job_pipeline: None,
+            gmail:        None,
         });
 
         assert_eq!(
@@ -630,7 +732,7 @@ mod tests {
     fn apply_patch_fallback_models() {
         let mut settings = Settings::default();
         settings.apply_patch(UpdateRequest {
-            ai:       Some(AiRuntimeSettingsPatch {
+            ai:           Some(AiRuntimeSettingsPatch {
                 chat_model_fallbacks: Some(vec![
                     "anthropic/claude-sonnet-4".to_owned(),
                     "google/gemini-2.0-flash".to_owned(),
@@ -638,14 +740,157 @@ mod tests {
                 job_model_fallbacks: Some(vec!["openai/gpt-4o-mini".to_owned()]),
                 ..Default::default()
             }),
-            telegram: None,
-            agent:    None,
+            telegram:     None,
+            agent:        None,
+            job_pipeline: None,
+            gmail:        None,
         });
         assert_eq!(
             settings.ai.chat_model_fallbacks,
             vec!["anthropic/claude-sonnet-4", "google/gemini-2.0-flash"]
         );
         assert_eq!(settings.ai.job_model_fallbacks, vec!["openai/gpt-4o-mini"]);
+    }
+
+    // -- job_pipeline tests ---------------------------------------------------
+
+    #[test]
+    fn job_pipeline_default_values() {
+        let settings = Settings::default();
+        assert_eq!(settings.job_pipeline.job_preferences, None);
+        assert_eq!(settings.job_pipeline.score_threshold_auto, 85);
+        assert_eq!(settings.job_pipeline.score_threshold_notify, 60);
+        assert!(!settings.job_pipeline.auto_send_enabled);
+        assert_eq!(settings.job_pipeline.resume_project_path, None);
+    }
+
+    #[test]
+    fn apply_patch_job_pipeline_settings() {
+        let mut settings = Settings::default();
+        settings.apply_patch(UpdateRequest {
+            ai:           None,
+            telegram:     None,
+            agent:        None,
+            job_pipeline: Some(JobPipelineRuntimeSettingsPatch {
+                job_preferences:        Some("Rust backend, distributed systems".to_owned()),
+                score_threshold_auto:   Some(90),
+                score_threshold_notify: Some(70),
+                auto_send_enabled:      Some(true),
+                resume_project_path:    Some("/home/user/resume".to_owned()),
+            }),
+            gmail:        None,
+        });
+        assert_eq!(
+            settings.job_pipeline.job_preferences,
+            Some("Rust backend, distributed systems".to_owned())
+        );
+        assert_eq!(settings.job_pipeline.score_threshold_auto, 90);
+        assert_eq!(settings.job_pipeline.score_threshold_notify, 70);
+        assert!(settings.job_pipeline.auto_send_enabled);
+        assert_eq!(
+            settings.job_pipeline.resume_project_path,
+            Some("/home/user/resume".to_owned())
+        );
+    }
+
+    #[test]
+    fn apply_patch_job_pipeline_partial() {
+        let mut settings = Settings::default();
+        // Only update threshold, leave defaults for everything else
+        settings.apply_patch(UpdateRequest {
+            ai:           None,
+            telegram:     None,
+            agent:        None,
+            job_pipeline: Some(JobPipelineRuntimeSettingsPatch {
+                job_preferences:        None,
+                score_threshold_auto:   Some(95),
+                score_threshold_notify: None,
+                auto_send_enabled:      None,
+                resume_project_path:    None,
+            }),
+            gmail:        None,
+        });
+        assert_eq!(settings.job_pipeline.score_threshold_auto, 95);
+        assert_eq!(settings.job_pipeline.score_threshold_notify, 60); // unchanged
+        assert!(!settings.job_pipeline.auto_send_enabled); // unchanged
+    }
+
+    #[test]
+    fn normalize_job_pipeline_settings() {
+        let mut settings = Settings {
+            job_pipeline: JobPipelineSettings {
+                job_preferences:        Some("  ".to_owned()),
+                score_threshold_auto:   85,
+                score_threshold_notify: 60,
+                auto_send_enabled:      false,
+                resume_project_path:    Some("  /home/user/resume  ".to_owned()),
+            },
+            ..Default::default()
+        };
+        settings.normalize();
+        assert_eq!(settings.job_pipeline.job_preferences, None);
+        assert_eq!(
+            settings.job_pipeline.resume_project_path,
+            Some("/home/user/resume".to_owned())
+        );
+    }
+
+    // -- gmail tests ----------------------------------------------------------
+
+    #[test]
+    fn gmail_default_values() {
+        let settings = Settings::default();
+        assert_eq!(settings.gmail.gmail_address, None);
+        assert_eq!(settings.gmail.gmail_app_password, None);
+    }
+
+    #[test]
+    fn apply_patch_gmail_settings() {
+        let mut settings = Settings::default();
+        settings.apply_patch(UpdateRequest {
+            ai:           None,
+            telegram:     None,
+            agent:        None,
+            job_pipeline: None,
+            gmail:        Some(GmailRuntimeSettingsPatch {
+                gmail_address:      Some("user@gmail.com".to_owned()),
+                gmail_app_password: Some("abcd-efgh-ijkl-mnop".to_owned()),
+            }),
+        });
+        assert_eq!(
+            settings.gmail.gmail_address,
+            Some("user@gmail.com".to_owned())
+        );
+        assert_eq!(
+            settings.gmail.gmail_app_password,
+            Some("abcd-efgh-ijkl-mnop".to_owned())
+        );
+    }
+
+    #[test]
+    fn normalize_gmail_settings() {
+        let mut settings = Settings {
+            gmail: GmailSettings {
+                gmail_address:      Some("  user@gmail.com  ".to_owned()),
+                gmail_app_password: Some("  ".to_owned()),
+            },
+            ..Default::default()
+        };
+        settings.normalize();
+        assert_eq!(
+            settings.gmail.gmail_address,
+            Some("user@gmail.com".to_owned())
+        );
+        assert_eq!(settings.gmail.gmail_app_password, None);
+    }
+
+    #[test]
+    fn serde_default_backward_compat() {
+        // Old JSON without job_pipeline and gmail fields should deserialize
+        let json = r#"{"ai":{},"telegram":{}}"#;
+        let settings: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.job_pipeline, JobPipelineSettings::default());
+        assert_eq!(settings.gmail, GmailSettings::default());
     }
 
     #[test]

@@ -270,12 +270,14 @@ async fn update_prompt_content(
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct RuntimeSettingsView {
-    pub ai:         AiSettingsView,
-    pub telegram:   TgSettingsResp,
-    pub agent:      AgentSettingsView,
+    pub ai:           AiSettingsView,
+    pub telegram:     TgSettingsResp,
+    pub agent:        AgentSettingsView,
+    pub job_pipeline: JobPipelineSettingsView,
+    pub gmail:        GmailSettingsView,
     // TODO: use jiff
     #[schema(value_type = Option<String>)]
-    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub updated_at:   Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
@@ -319,6 +321,22 @@ pub struct TgSettingsResp {
     pub token_hint:            Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+pub struct JobPipelineSettingsView {
+    pub job_preferences:        Option<String>,
+    pub score_threshold_auto:   u8,
+    pub score_threshold_notify: u8,
+    pub auto_send_enabled:      bool,
+    pub resume_project_path:    Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+pub struct GmailSettingsView {
+    pub configured:             bool,
+    pub gmail_address:          Option<String>,
+    pub gmail_app_password_hint: Option<String>,
+}
+
 impl Into<RuntimeSettingsView> for Settings {
     fn into(self) -> RuntimeSettingsView {
         fn secret_hint(secret: Option<&str>) -> Option<String> {
@@ -352,7 +370,7 @@ impl Into<RuntimeSettingsView> for Settings {
                 allowed_group_chat_id: self.telegram.allowed_group_chat_id,
                 token_hint:            secret_hint(self.telegram.bot_token.as_deref()),
             },
-            agent:      AgentSettingsView {
+            agent:        AgentSettingsView {
                 soul:               self.agent.soul.clone(),
                 chat_system_prompt: self.agent.chat_system_prompt.clone(),
                 memory:             MemorySettingsView {
@@ -365,7 +383,20 @@ impl Into<RuntimeSettingsView> for Settings {
                     entity_id: self.agent.composio.entity_id.clone(),
                 },
             },
-            updated_at: self.updated_at,
+            job_pipeline: JobPipelineSettingsView {
+                job_preferences:        self.job_pipeline.job_preferences.clone(),
+                score_threshold_auto:   self.job_pipeline.score_threshold_auto,
+                score_threshold_notify: self.job_pipeline.score_threshold_notify,
+                auto_send_enabled:      self.job_pipeline.auto_send_enabled,
+                resume_project_path:    self.job_pipeline.resume_project_path.clone(),
+            },
+            gmail:        GmailSettingsView {
+                configured:              self.gmail.gmail_address.is_some()
+                    && self.gmail.gmail_app_password.is_some(),
+                gmail_address:           self.gmail.gmail_address.clone(),
+                gmail_app_password_hint: secret_hint(self.gmail.gmail_app_password.as_deref()),
+            },
+            updated_at:   self.updated_at,
         }
     }
 }
