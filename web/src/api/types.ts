@@ -279,6 +279,8 @@ export interface RuntimeSettingsView {
       entity_id: string | null;
     };
   };
+  job_pipeline?: JobPipelineSettings;
+  gmail?: GmailSettings;
   updated_at: string | null;
 }
 
@@ -506,4 +508,25 @@ export interface CreateMcpServerRequest {
   url?: string;
   startup_timeout_secs?: number;
   tool_timeout_secs?: number;
+}
+
+// Job Pipeline Settings
+export interface JobPipelineSettings {
+  job_preferences: string | null;
+  score_threshold_auto: number;
+  score_threshold_notify: number;
+  resume_project_path: string | null;
+}
+
+// Gmail Settings
+export interface GmailSettings {
+  configured: boolean;
+  auto_send_enabled: boolean;
+  address: string | null;
+  app_password_hint: string | null;
+}
+
+// Pipeline Status
+export interface PipelineStatus {
+  running: boolean;
 }
