@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use serde_json::json;
 use tool_core::AgentTool;
 
-use crate::pipeline::PipelineService;
+use crate::service::PipelineService;
 
 // ---------------------------------------------------------------------------
 // RunJobPipelineTool

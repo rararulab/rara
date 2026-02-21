@@ -18,7 +18,7 @@ use axum::{Json, extract::State, http::StatusCode, routing::{get, post}};
 use serde::Serialize;
 use utoipa_axum::router::OpenApiRouter;
 
-use crate::pipeline::PipelineService;
+use crate::service::PipelineService;
 
 /// Build `/api/v1/pipeline/...` routes.
 pub fn routes(service: PipelineService) -> OpenApiRouter {
@@ -59,8 +59,8 @@ async fn trigger_run(
         })),
         Err(e) => {
             let status_code = match &e {
-                crate::pipeline::PipelineError::AlreadyRunning => StatusCode::CONFLICT,
-                crate::pipeline::PipelineError::AiNotConfigured => {
+                crate::service::PipelineError::AlreadyRunning => StatusCode::CONFLICT,
+                crate::service::PipelineError::AiNotConfigured => {
                     StatusCode::PRECONDITION_FAILED
                 }
                 _ => StatusCode::INTERNAL_SERVER_ERROR,

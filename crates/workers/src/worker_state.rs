@@ -66,7 +66,7 @@ pub struct AppState {
     pub mcp_manager: rara_mcp::manager::mgr::McpManager,
 
     // -- pipeline --
-    pub pipeline_service: crate::pipeline::PipelineService,
+    pub pipeline_service: rara_ext_job_pipeline::service::PipelineService,
 
     // -- worker coordination --
     pub analyze_notify:   Arc<RwLock<Option<NotifyHandle>>>,
@@ -292,7 +292,7 @@ impl AppState {
 
         // -- pipeline service ---------------------------------------------------
 
-        let pipeline_service = crate::pipeline::PipelineService::new(
+        let pipeline_service = rara_ext_job_pipeline::service::PipelineService::new(
             settings_svc.clone(),
             llm_provider.clone(),
             ai_service.clone(),
@@ -304,15 +304,7 @@ impl AppState {
         info!("Pipeline service initialized");
 
         // Register pipeline control tools on the main rara agent.
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::RunJobPipelineTool::new(pipeline_service.clone()),
-        ));
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::CancelJobPipelineTool::new(pipeline_service.clone()),
-        ));
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::PipelineStatusTool::new(pipeline_service.clone()),
-        ));
+        rara_ext_job_pipeline::register_rara_tools(&mut tool_registry, &pipeline_service);
 
         let tools = Arc::new(tool_registry);
 
@@ -434,7 +426,7 @@ impl AppState {
 
         // Pipeline routes (plain axum::Router, no OpenAPI metadata).
         let (pipeline_router, pipeline_api) =
-            crate::pipeline_routes::routes(self.pipeline_service.clone()).split_for_parts();
+            rara_ext_job_pipeline::routes::routes(self.pipeline_service.clone()).split_for_parts();
         router = router.merge(pipeline_router);
         api.merge(pipeline_api);
 
