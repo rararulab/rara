@@ -20,6 +20,7 @@ common-runtime = { workspace = true }
 common-worker = { workspace = true }
 crawl4ai = { workspace = true }
 croner.workspace = true
+git2.workspace = true
 jiff.workspace = true
 opendal.workspace = true
 async-openai = { workspace = true }

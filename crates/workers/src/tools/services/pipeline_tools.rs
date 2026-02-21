@@ -284,18 +284,28 @@ impl AgentTool for PrepareResumeWorktreeTool {
             }));
         }
 
-        // Create the git worktree.
-        let output = tokio::process::Command::new("git")
-            .args(["worktree", "add", worktree_path.to_str().unwrap_or_default(), "-b", &branch_name])
-            .current_dir(&resume_path)
-            .output()
-            .await;
+        // Create the git worktree using git2.
+        let resume_path_clone = resume_path.clone();
+        let branch_name_clone = branch_name.clone();
+        let worktree_path_clone = worktree_path.clone();
+        let worktree_dir_name_clone = worktree_dir_name.clone();
 
-        match output {
-            Ok(out) if out.status.success() => {
+        let result = tokio::task::spawn_blocking(move || {
+            git2_create_worktree(
+                &resume_path_clone,
+                &branch_name_clone,
+                &worktree_path_clone,
+                &worktree_dir_name_clone,
+            )
+        })
+        .await;
+
+        match result {
+            Ok(Ok(status)) => {
                 tracing::info!(
                     worktree = %worktree_path.display(),
                     branch = %branch_name,
+                    status = %status,
                     "resume worktree created"
                 );
                 let files = list_files_recursive(&worktree_path);
@@ -303,47 +313,14 @@ impl AgentTool for PrepareResumeWorktreeTool {
                     "worktree_path": worktree_path.display().to_string(),
                     "branch": branch_name,
                     "files": files,
-                    "status": "created",
+                    "status": status,
                 }))
             }
-            Ok(out) => {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                // If branch already exists, try without -b (just add worktree on existing branch).
-                if stderr.contains("already exists") {
-                    let retry = tokio::process::Command::new("git")
-                        .args(["worktree", "add", worktree_path.to_str().unwrap_or_default(), &branch_name])
-                        .current_dir(&resume_path)
-                        .output()
-                        .await;
-
-                    match retry {
-                        Ok(r) if r.status.success() => {
-                            let files = list_files_recursive(&worktree_path);
-                            Ok(json!({
-                                "worktree_path": worktree_path.display().to_string(),
-                                "branch": branch_name,
-                                "files": files,
-                                "status": "created_from_existing_branch",
-                            }))
-                        }
-                        Ok(r) => Ok(json!({
-                            "error": format!(
-                                "git worktree add failed (retry): {}",
-                                String::from_utf8_lossy(&r.stderr)
-                            )
-                        })),
-                        Err(e) => Ok(json!({
-                            "error": format!("failed to run git: {e}")
-                        })),
-                    }
-                } else {
-                    Ok(json!({
-                        "error": format!("git worktree add failed: {stderr}")
-                    }))
-                }
-            }
+            Ok(Err(e)) => Ok(json!({
+                "error": format!("git worktree add failed: {e}")
+            })),
             Err(e) => Ok(json!({
-                "error": format!("failed to run git: {e}")
+                "error": format!("git worktree task panicked: {e}")
             })),
         }
     }
@@ -690,73 +667,145 @@ impl AgentTool for FinalizeResumeTool {
             }));
         }
 
-        // git add .
-        let add_output = tokio::process::Command::new("git")
-            .args(["add", "."])
-            .current_dir(worktree)
-            .output()
-            .await;
-
-        if let Err(e) = &add_output {
-            return Ok(json!({
-                "error": format!("failed to run git add: {e}")
-            }));
-        }
-        let add_out = add_output.unwrap();
-        if !add_out.status.success() {
-            return Ok(json!({
-                "error": format!(
-                    "git add failed: {}",
-                    String::from_utf8_lossy(&add_out.stderr)
-                )
-            }));
-        }
-
-        // git commit
+        // Stage all changes and commit using git2.
         let commit_msg = format!("apply: {company} - {role}");
-        let commit_output = tokio::process::Command::new("git")
-            .args(["commit", "-m", &commit_msg])
-            .current_dir(worktree)
-            .output()
-            .await;
+        let worktree_owned = worktree_path.to_owned();
+        let commit_msg_clone = commit_msg.clone();
 
-        match commit_output {
-            Ok(out) if out.status.success() => {
-                tracing::info!(
-                    worktree = %worktree_path,
-                    message = %commit_msg,
-                    "resume changes committed"
-                );
-                Ok(json!({
-                    "status": "success",
-                    "commit_message": commit_msg,
-                    "pdf_path": pdf_path,
-                    "message": format!(
-                        "Resume for {company} ({role}) finalized. PDF at: {pdf_path}"
-                    ),
-                }))
-            }
-            Ok(out) => {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                // "nothing to commit" is not really an error.
-                if stderr.contains("nothing to commit") {
+        let result = tokio::task::spawn_blocking(move || {
+            git2_stage_and_commit(&worktree_owned, &commit_msg_clone)
+        })
+        .await;
+
+        match result {
+            Ok(Ok(committed)) => {
+                if committed {
+                    tracing::info!(
+                        worktree = %worktree_path,
+                        message = %commit_msg,
+                        "resume changes committed"
+                    );
+                    Ok(json!({
+                        "status": "success",
+                        "commit_message": commit_msg,
+                        "pdf_path": pdf_path,
+                        "message": format!(
+                            "Resume for {company} ({role}) finalized. PDF at: {pdf_path}"
+                        ),
+                    }))
+                } else {
                     Ok(json!({
                         "status": "success",
                         "commit_message": commit_msg,
                         "pdf_path": pdf_path,
                         "message": "No changes to commit (files may already be committed).",
                     }))
-                } else {
-                    Ok(json!({
-                        "error": format!("git commit failed: {stderr}")
-                    }))
                 }
             }
+            Ok(Err(e)) => Ok(json!({
+                "error": format!("git add/commit failed: {e}")
+            })),
             Err(e) => Ok(json!({
-                "error": format!("failed to run git commit: {e}")
+                "error": format!("git commit task panicked: {e}")
             })),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// git2 helpers (blocking — must be called from spawn_blocking)
+// ---------------------------------------------------------------------------
+
+/// Create a git worktree with a new branch, or use an existing branch if the
+/// branch already exists. Returns a status string on success.
+fn git2_create_worktree(
+    repo_path: &str,
+    branch_name: &str,
+    worktree_path: &std::path::Path,
+    worktree_dir_name: &str,
+) -> Result<String, String> {
+    let repo = git2::Repository::open(repo_path)
+        .map_err(|e| format!("failed to open repository at '{repo_path}': {e}"))?;
+
+    let head = repo
+        .head()
+        .map_err(|e| format!("failed to get HEAD: {e}"))?
+        .peel_to_commit()
+        .map_err(|e| format!("failed to peel HEAD to commit: {e}"))?;
+
+    // Try to create a new branch; if it already exists, find the existing one.
+    let (reference, status_label) =
+        match repo.branch(branch_name, &head, false) {
+            Ok(branch) => (branch.into_reference(), "created"),
+            Err(e) if e.code() == git2::ErrorCode::Exists => {
+                // Branch already exists — look it up.
+                let branch = repo
+                    .find_branch(branch_name, git2::BranchType::Local)
+                    .map_err(|e2| {
+                        format!("branch '{branch_name}' exists but failed to find it: {e2}")
+                    })?;
+                (branch.into_reference(), "created_from_existing_branch")
+            }
+            Err(e) => return Err(format!("failed to create branch '{branch_name}': {e}")),
+        };
+
+    // Add the worktree with the branch as its HEAD reference.
+    let mut opts = git2::WorktreeAddOptions::new();
+    opts.reference(Some(&reference));
+
+    repo.worktree(worktree_dir_name, worktree_path, Some(&opts))
+        .map_err(|e| format!("failed to add worktree at '{}': {e}", worktree_path.display()))?;
+
+    Ok(status_label.to_owned())
+}
+
+/// Stage all changes (git add .) and commit in a worktree repository.
+/// Returns `Ok(true)` if a commit was created, `Ok(false)` if there was
+/// nothing to commit (tree matches HEAD).
+fn git2_stage_and_commit(worktree_path: &str, commit_msg: &str) -> Result<bool, String> {
+    let repo = git2::Repository::open(worktree_path)
+        .map_err(|e| format!("failed to open worktree repo at '{worktree_path}': {e}"))?;
+
+    // Stage all files.
+    let mut index = repo
+        .index()
+        .map_err(|e| format!("failed to get index: {e}"))?;
+
+    index
+        .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+        .map_err(|e| format!("git add failed: {e}"))?;
+
+    index.write().map_err(|e| format!("index write failed: {e}"))?;
+
+    // Write the index as a tree.
+    let tree_oid = index
+        .write_tree()
+        .map_err(|e| format!("write_tree failed: {e}"))?;
+
+    // Check if there is anything to commit by comparing with HEAD's tree.
+    let parent = repo
+        .head()
+        .and_then(|h| h.peel_to_commit())
+        .map_err(|e| format!("failed to get HEAD commit: {e}"))?;
+
+    if parent.tree_id() == tree_oid {
+        // Nothing changed — equivalent to "nothing to commit".
+        return Ok(false);
+    }
+
+    let tree = repo
+        .find_tree(tree_oid)
+        .map_err(|e| format!("failed to find tree: {e}"))?;
+
+    let sig = repo
+        .signature()
+        .or_else(|_| git2::Signature::now("rara", "rara@pipeline"))
+        .map_err(|e| format!("failed to create signature: {e}"))?;
+
+    repo.commit(Some("HEAD"), &sig, &sig, commit_msg, &tree, &[&parent])
+        .map_err(|e| format!("commit failed: {e}"))?;
+
+    Ok(true)
 }
 
 // ---------------------------------------------------------------------------
