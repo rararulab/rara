@@ -15,19 +15,22 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use async_openai::types::chat::{
+    ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
+    ChatCompletionRequestAssistantMessageArgs,
+    ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
+    ChatCompletionRequestToolMessageArgs, ChatCompletionRequestUserMessageArgs,
+    ChatCompletionToolChoiceOption, CreateChatCompletionRequestArgs,
+    CreateChatCompletionResponse, FunctionCall, FinishReason, ToolChoiceOptions,
+};
 use backon::{ExponentialBuilder, Retryable};
 use base::shared_string::SharedString;
 use bon::Builder;
 use futures::StreamExt;
-use openrouter_rs::{
-    api::chat::{Content, Message},
-    types::{Choice, Role, completion::CompletionsResponse},
-};
-use snafu::ResultExt;
 use tokio::sync::mpsc;
 use tracing::{error, info, trace, warn};
 
-use crate::{err::prelude::*, model::OpenRouterLoaderRef, tool_registry::ToolRegistry};
+use crate::{err::prelude::*, model::LlmProviderLoaderRef, tool_registry::ToolRegistry};
 
 /// Maximum number of tool-call loop iterations before giving up.
 pub const MAX_ITERATIONS: usize = 25;
@@ -36,7 +39,7 @@ pub const MAX_ITERATIONS: usize = 25;
 #[derive(Debug, Clone)]
 pub struct AgentRunResponse {
     /// Raw provider response for the terminal assistant turn.
-    pub provider_response: CompletionsResponse,
+    pub provider_response: CreateChatCompletionResponse,
     /// Number of loop iterations consumed before termination.
     pub iterations:        usize,
     /// Total number of tool calls executed across all iterations.
@@ -81,14 +84,34 @@ pub enum RunnerEvent {
 /// Callback for streaming events out of the runner.
 pub type OnEvent = Box<dyn Fn(RunnerEvent) + Send + Sync>;
 
+/// User content for the agent runner — text or multimodal.
+#[derive(Debug, Clone)]
+pub enum UserContent {
+    /// Plain text content.
+    Text(String),
+    /// Multimodal content with text and image URLs.
+    Multimodal {
+        text:       String,
+        image_urls: Vec<String>,
+    },
+}
+
+impl From<String> for UserContent {
+    fn from(text: String) -> Self { UserContent::Text(text) }
+}
+
+impl From<&str> for UserContent {
+    fn from(text: &str) -> Self { UserContent::Text(text.to_owned()) }
+}
+
 #[derive(Builder)]
 #[builder(on(SharedString, into))]
 pub struct AgentRunner {
-    llm_provider:    OpenRouterLoaderRef,
+    llm_provider:    LlmProviderLoaderRef,
     model_name:      SharedString,
     system_prompt:   SharedString,
-    user_content:    Content,
-    history:         Option<Vec<Message>>,
+    user_content:    UserContent,
+    history:         Option<Vec<ChatCompletionRequestMessage>>,
     #[builder(default = MAX_ITERATIONS)]
     max_iterations:  usize,
     /// Fallback models to try (in order) when the primary model fails with a
@@ -155,38 +178,38 @@ impl AgentRunner {
         tools: &ToolRegistry,
         on_event: Option<&OnEvent>,
     ) -> Result<AgentRunResponse> {
-        let is_multimodal = matches!(self.user_content, Content::Parts(_));
+        let is_multimodal = matches!(self.user_content, UserContent::Multimodal { .. });
         info!(model_name = model, is_multimodal, "starting agent loop");
 
         // prepare messages with system prompt, optional history, and current user
         // message
-        let mut messages = {
-            let mut messages = vec![Message::new(
-                openrouter_rs::types::Role::System,
-                self.system_prompt.as_ref(),
-            )];
+        let mut messages: Vec<ChatCompletionRequestMessage> = {
+            let mut messages = vec![
+                ChatCompletionRequestSystemMessageArgs::default()
+                    .content(self.system_prompt.as_ref())
+                    .build()
+                    .map_err(|e| Error::Other {
+                        message: format!("failed to build system message: {e}").into(),
+                    })?
+                    .into(),
+            ];
             // Insert conversation history before the current user message.
             if let Some(hist) = &self.history {
                 messages.extend(hist.clone());
             }
-            messages.push(Message::new(
-                openrouter_rs::types::Role::User,
-                self.user_content.clone(),
-            ));
+            messages.push(build_user_message(&self.user_content)?);
             messages
         };
 
         let request_tools = if tools.is_empty() {
             None
         } else {
-            Some(tools.to_openrouter_tools()?)
+            Some(tools.to_chat_completion_tools()?)
         };
         let mut tool_calls_made = 0_usize;
 
         for iteration in 0..self.max_iterations {
             // ---- Phase 1: begin one loop tick ----
-            // Emit iteration and "thinking" events so upper layers (UI/logs)
-            // can show the model is actively processing this turn.
             if let Some(cb) = on_event {
                 cb(RunnerEvent::Iteration(iteration));
             }
@@ -196,35 +219,26 @@ impl AgentRunner {
                 cb(RunnerEvent::Thinking);
             }
 
-            let openrouter_client: openrouter_rs::OpenRouterClient =
-                self.llm_provider.acquire_client().await?;
+            let provider = self.llm_provider.acquire_provider().await?;
+
             // ---- Phase 2: build/send request with retry ----
-            // We retry only for transient provider failures classified as
-            // `RetryableServer` (e.g. overload / 5xx-like errors).
-            //
-            // `with_max_times(2)` means: one initial attempt + one retry.
-            // All non-retryable errors fail fast and exit this iteration.
             let response = (|| async {
-                let mut request_builder =
-                    openrouter_rs::api::chat::ChatCompletionRequest::builder();
+                let mut request_builder = CreateChatCompletionRequestArgs::default();
                 request_builder
                     .model(model)
                     .messages(messages.clone())
-                    .temperature(0.7);
+                    .temperature(0.7_f32);
 
                 if let Some(tool_defs) = &request_tools {
-                    // Advertise all registered tools to the model and let it
-                    // decide whether to call them.
                     request_builder.tools(tool_defs.clone());
-                    request_builder.tool_choice(openrouter_rs::types::ToolChoice::auto());
+                    request_builder.tool_choice(ChatCompletionToolChoiceOption::Mode(ToolChoiceOptions::Auto));
                     request_builder.parallel_tool_calls(true);
                 }
 
-                let request = request_builder.build().context(OpenRouterSnafu)?;
-                openrouter_client
-                    .send_chat_completion(&request)
-                    .await
-                    .context(OpenRouterSnafu)
+                let request = request_builder.build().map_err(|e| Error::Other {
+                    message: format!("failed to build request: {e}").into(),
+                })?;
+                provider.chat_completion(request).await
             })
             .retry(ExponentialBuilder::default().with_max_times(2))
             .sleep(tokio::time::sleep)
@@ -248,37 +262,34 @@ impl AgentRunner {
             })?;
 
             // ---- Phase 3: validate and inspect response ----
-            // We currently read only the first choice (OpenAI/OpenRouter style).
             trace!(
                 iteration = iteration,
                 has_content = !response.choices.is_empty(),
                 prompt_tokens = response.usage.as_ref().map_or(0, |it| it.prompt_tokens),
                 completion_tokens = response.usage.as_ref().map_or(0, |it| it.completion_tokens),
-                "LLM response received, contents: {:?}",
-                response.choices.iter().map(|c| c.content())
+                "LLM response received"
             );
 
-            // We intentionally consume only the first choice.
-            //
-            // This runner is a single-track agent loop: one response drives one
-            // next action (either final answer or tool calls). Handling multiple
-            // choices would require branching message histories and tool
-            // executions per branch, which is out of scope for this loop.
             let Some(choice) = response.choices.first() else {
                 return Err(Error::Other {
                     message: "LLM returned no choices".into(),
                 });
             };
 
-            if let Some(error_detail) = choice.error() {
-                return Err(Error::from((error_detail.message.as_str(), None)));
-            }
+            let assistant_text = choice.message.content.clone().unwrap_or_default();
+            let raw_tool_calls = choice.message.tool_calls.as_deref().unwrap_or(&[]);
 
-            let assistant_text = choice.content().unwrap_or_default().to_owned();
-            let tool_calls = choice.tool_calls().unwrap_or(&[]);
+            // Extract function tool calls, ignoring custom tool types.
+            let tool_calls: Vec<&ChatCompletionMessageToolCall> = raw_tool_calls
+                .iter()
+                .filter_map(|tc| match tc {
+                    ChatCompletionMessageToolCalls::Function(f) => Some(f),
+                    _ => None,
+                })
+                .collect();
+
             if tool_calls.is_empty() {
-                // Terminal path: model produced final assistant output and
-                // requested no more tools, so the loop can end successfully.
+                // Terminal path: model produced final assistant output.
                 return Ok(AgentRunResponse {
                     provider_response: response,
                     iterations: iteration + 1,
@@ -287,65 +298,67 @@ impl AgentRunner {
             }
 
             // ---- Phase 4: execute model-requested tools ----
-            // Important ordering:
-            // 1) Append assistant message that contains `tool_calls`
-            // 2) Append each tool response message
-            // This preserves the protocol expected by tool-capable models.
             info!(
                 iteration,
                 tool_calls = tool_calls.len(),
                 "assistant requested tool calls"
             );
-            messages.push(build_assistant_tool_call_message(choice, &assistant_text));
 
-            for tool_call in tool_calls {
+            // Append assistant message that contains `tool_calls`.
+            let assistant_msg = ChatCompletionRequestAssistantMessageArgs::default()
+                .content(assistant_text.as_str())
+                .tool_calls(raw_tool_calls.to_vec())
+                .build()
+                .map_err(|e| Error::Other {
+                    message: format!("failed to build assistant tool-call message: {e}").into(),
+                })?;
+            messages.push(assistant_msg.into());
+
+            for tool_call in &tool_calls {
                 tool_calls_made = tool_calls_made.saturating_add(1);
-                let tool_name = tool_call.name();
-                let tool_id = tool_call.id();
+                let tool_name = &tool_call.function.name;
+                let tool_id = &tool_call.id;
 
-                // Provider sends function args as JSON string. Parse to Value
-                // so we can pass typed-ish payload into our tool trait.
+                // Parse function args as JSON.
                 let tool_arguments =
-                    match serde_json::from_str::<serde_json::Value>(tool_call.arguments_json()) {
+                    match serde_json::from_str::<serde_json::Value>(&tool_call.function.arguments) {
                         Ok(value) => value,
                         Err(err) => {
                             let error_message = format!("invalid tool arguments: {err}");
                             if let Some(cb) = on_event {
                                 cb(RunnerEvent::ToolCallEnd {
-                                    id:      tool_id.to_owned(),
-                                    name:    tool_name.to_owned(),
+                                    id:      tool_id.clone(),
+                                    name:    tool_name.clone(),
                                     success: false,
                                     error:   Some(error_message.clone()),
                                     result:  None,
                                 });
                             }
-                            messages.push(Message::tool_response_named(
+                            messages.push(build_tool_response_message(
                                 tool_id,
-                                tool_name,
-                                serde_json::json!({ "error": error_message }).to_string(),
-                            ));
+                                &serde_json::json!({ "error": error_message }).to_string(),
+                            )?);
                             continue;
                         }
                     };
 
-                // Emit start event before invoking tool execution.
+                // Emit start event.
                 if let Some(cb) = on_event {
                     cb(RunnerEvent::ToolCallStart {
-                        id:        tool_id.to_owned(),
-                        name:      tool_name.to_owned(),
+                        id:        tool_id.clone(),
+                        name:      tool_name.clone(),
                         arguments: tool_arguments.clone(),
                     });
                 }
 
-                // Execute local tool if found; otherwise synthesize an error
-                // payload so the model can recover and choose another action.
+                // Execute tool.
                 let tool_response_payload = if let Some(tool) = tools.get(tool_name) {
                     match tool.execute(tool_arguments.clone()).await {
                         Ok(result) => {
                             if let Some(cb) = on_event {
                                 cb(RunnerEvent::ToolCallEnd {
-                                    id:      tool_id.to_owned(),
-                                    name:    tool_name.to_owned(),
+                                    id:      tool_id.clone(),
+                                    name:    tool_name.clone(),
                                     success: true,
                                     error:   None,
                                     result:  Some(result.clone()),
@@ -357,8 +370,8 @@ impl AgentRunner {
                             let error_message = err.to_string();
                             if let Some(cb) = on_event {
                                 cb(RunnerEvent::ToolCallEnd {
-                                    id:      tool_id.to_owned(),
-                                    name:    tool_name.to_owned(),
+                                    id:      tool_id.clone(),
+                                    name:    tool_name.clone(),
                                     success: false,
                                     error:   Some(error_message.clone()),
                                     result:  None,
@@ -371,8 +384,8 @@ impl AgentRunner {
                     let error_message = format!("tool not found: {tool_name}");
                     if let Some(cb) = on_event {
                         cb(RunnerEvent::ToolCallEnd {
-                            id:      tool_id.to_owned(),
-                            name:    tool_name.to_owned(),
+                            id:      tool_id.clone(),
+                            name:    tool_name.clone(),
                             success: false,
                             error:   Some(error_message.clone()),
                             result:  None,
@@ -381,14 +394,11 @@ impl AgentRunner {
                     serde_json::json!({ "error": error_message })
                 };
 
-                messages.push(Message::tool_response_named(
+                messages.push(build_tool_response_message(
                     tool_id,
-                    tool_name,
-                    tool_response_payload.to_string(),
-                ));
+                    &tool_response_payload.to_string(),
+                )?);
             }
-            // Loop continues with expanded `messages`, giving model the new
-            // tool outputs so it can either call more tools or answer finally.
         }
 
         Err(Error::Other {
@@ -399,25 +409,6 @@ impl AgentRunner {
     /// Streaming variant of [`run`]. Spawns the agent loop in a background
     /// task and returns a channel receiver yielding [`RunnerEvent`]s in
     /// real-time, including incremental text/reasoning deltas.
-    ///
-    /// Unlike [`run`], which blocks until the full response is available,
-    /// this method returns immediately with an `mpsc::Receiver`. The caller
-    /// can consume events as they arrive (e.g. to build an SSE stream or
-    /// progressively update a Telegram message).
-    ///
-    /// The channel buffer size is 128 — large enough to absorb bursts of
-    /// small `TextDelta` events without back-pressuring the LLM stream.
-    ///
-    /// # Error handling
-    ///
-    /// If the agent loop encounters a fatal error, a terminal
-    /// [`RunnerEvent::Error`] is sent before the background task exits.
-    /// The caller should treat both `Done` and `Error` as terminal events.
-    ///
-    /// # Fallback models
-    ///
-    /// Not yet implemented for streaming — only the primary model is used.
-    /// (The non-streaming [`run`] supports fallback models.)
     pub fn run_streaming(self, tools: Arc<ToolRegistry>) -> mpsc::Receiver<RunnerEvent> {
         let (tx, rx) = mpsc::channel(128);
         tokio::spawn(async move {
@@ -430,19 +421,6 @@ impl AgentRunner {
     }
 
     /// Core streaming agent loop for a single model.
-    ///
-    /// This is the streaming counterpart to [`run_with_model`]. The loop
-    /// structure is identical — prepare messages, call LLM, handle tool
-    /// calls, repeat — but differs in two key ways:
-    ///
-    /// 1. Uses `stream_chat_completion()` instead of `send_chat_completion()`
-    ///    so that partial text/reasoning/tool-call fragments arrive as SSE
-    ///    chunks. Each chunk is forwarded to the caller via the `tx` channel
-    ///    as a [`RunnerEvent`].
-    ///
-    /// 2. Tool calls are executed **concurrently** via `join_all`, not
-    ///    sequentially. This reduces total latency when the model requests
-    ///    multiple independent tool calls in a single turn.
     async fn run_streaming_inner(
         &self,
         model: &str,
@@ -452,68 +430,58 @@ impl AgentRunner {
         info!(model_name = model, "starting streaming agent loop");
 
         // ---- Prepare messages ----
-        // Identical to run_with_model: system prompt + optional history + user message.
-        let mut messages = {
-            let mut msgs = vec![Message::new(Role::System, self.system_prompt.as_ref())];
+        let mut messages: Vec<ChatCompletionRequestMessage> = {
+            let mut msgs = vec![
+                ChatCompletionRequestSystemMessageArgs::default()
+                    .content(self.system_prompt.as_ref())
+                    .build()
+                    .map_err(|e| Error::Other {
+                        message: format!("failed to build system message: {e}").into(),
+                    })?
+                    .into(),
+            ];
             if let Some(hist) = &self.history {
                 msgs.extend(hist.clone());
             }
-            msgs.push(Message::new(Role::User, self.user_content.clone()));
+            msgs.push(build_user_message(&self.user_content)?);
             msgs
         };
 
-        // Convert registered tools to the OpenRouter tool definition format.
-        // `None` means "no tools" — the model won't attempt function calls.
         let request_tools = if tools.is_empty() {
             None
         } else {
-            Some(tools.to_openrouter_tools()?)
+            Some(tools.to_chat_completion_tools()?)
         };
         let mut tool_calls_made = 0_usize;
 
         // ---- Main agent loop ----
-        // Each iteration: call LLM → consume streaming chunks → either finish
-        // (Done) or execute tool calls and loop again.
         for iteration in 0..self.max_iterations {
-            // Notify caller that a new iteration is starting.
             let _ = tx.send(RunnerEvent::Iteration(iteration)).await;
             let _ = tx.send(RunnerEvent::Thinking).await;
             info!(iteration, messages_count = messages.len(), "calling LLM (streaming)");
 
-            let openrouter_client = self.llm_provider.acquire_client().await?;
+            let provider = self.llm_provider.acquire_provider().await?;
 
             // ---- Phase 1: Build and send streaming request ----
-            let mut request_builder =
-                openrouter_rs::api::chat::ChatCompletionRequest::builder();
+            let mut request_builder = CreateChatCompletionRequestArgs::default();
             request_builder
                 .model(model)
                 .messages(messages.clone())
-                .temperature(0.7);
+                .temperature(0.7_f32);
 
             if let Some(tool_defs) = &request_tools {
                 request_builder.tools(tool_defs.clone());
-                request_builder.tool_choice(openrouter_rs::types::ToolChoice::auto());
-                // Allow the model to request multiple tool calls in a single turn.
+                request_builder.tool_choice(ChatCompletionToolChoiceOption::Mode(ToolChoiceOptions::Auto));
                 request_builder.parallel_tool_calls(true);
             }
 
-            let request = request_builder.build().context(OpenRouterSnafu)?;
+            let request = request_builder.build().map_err(|e| Error::Other {
+                message: format!("failed to build streaming request: {e}").into(),
+            })?;
 
-            // `stream_chat_completion` returns a `BoxStream` of
-            // `CompletionsResponse` chunks. Each chunk contains a
-            // `StreamingChoice` with incremental deltas.
-            let mut stream = openrouter_client
-                .stream_chat_completion(&request)
-                .await
-                .context(OpenRouterSnafu)?;
+            let mut stream = provider.chat_completion_stream(request).await?;
 
             // ---- Phase 2: Consume streaming chunks ----
-            // We accumulate three things from the stream:
-            //   - `accumulated_text`: full assistant text built from TextDelta fragments.
-            //   - `pending_tool_calls`: tool calls being assembled from incremental deltas.
-            //     Each tool call arrives across multiple chunks — first the id/name, then
-            //     argument fragments. We key them by `index` (position in the tool_calls array).
-            //   - `has_tool_calls`: set to true when finish_reason == ToolCalls.
             let mut accumulated_text = String::new();
             let mut pending_tool_calls: HashMap<u32, PendingToolCall> = HashMap::new();
             let mut has_tool_calls = false;
@@ -521,97 +489,74 @@ impl AgentRunner {
             while let Some(chunk_result) = stream.next().await {
                 let response = match chunk_result {
                     Ok(r) => r,
-                    Err(openrouter_rs::error::OpenRouterError::Serialization(e)) => {
-                        // The model returned a streaming chunk with an
-                        // unexpected JSON shape. This typically means the
-                        // model/provider is incompatible with openrouter-rs's
-                        // streaming parser. Abort and tell the user.
+                    Err(e) => {
                         error!(
                             iteration,
                             model,
                             error = %e,
-                            "model returned unparseable streaming response"
+                            "streaming chunk error"
                         );
-                        return Err(Error::Other {
+                        return Err(Error::Provider {
                             message: format!(
-                                "Model \"{model}\" returned an incompatible streaming response. \
-                                 Please switch to a different model."
+                                "Model \"{model}\" returned an error during streaming: {e}"
                             ).into(),
                         });
                     }
-                    Err(e) => {
-                        return Err(e).context(OpenRouterSnafu);
-                    }
                 };
+
                 let Some(choice) = response.choices.first() else {
                     continue;
                 };
 
-                if let Choice::Streaming(sc) = choice {
-                    // --- Text content delta ---
-                    // Each chunk may contain a fragment of the assistant's text response.
-                    if let Some(ref text) = sc.delta.content {
-                        if !text.is_empty() {
-                            accumulated_text.push_str(text);
-                            let _ = tx.send(RunnerEvent::TextDelta(text.clone())).await;
+                // --- Text content delta ---
+                if let Some(ref text) = choice.delta.content {
+                    if !text.is_empty() {
+                        accumulated_text.push_str(text);
+                        let _ = tx.send(RunnerEvent::TextDelta(text.clone())).await;
+                    }
+                }
+
+                // --- Tool call delta accumulation ---
+                if let Some(ref tool_calls_delta) = choice.delta.tool_calls {
+                    for tc in tool_calls_delta {
+                        let idx = tc.index;
+                        let entry =
+                            pending_tool_calls.entry(idx).or_insert_with(|| {
+                                PendingToolCall {
+                                    id:              String::new(),
+                                    name:            String::new(),
+                                    arguments_buf:   String::new(),
+                                }
+                            });
+                        if let Some(ref id) = tc.id {
+                            if !id.is_empty() {
+                                entry.id = id.clone();
+                            }
+                        }
+                        if let Some(ref func) = tc.function {
+                            if let Some(ref name) = func.name {
+                                if !name.is_empty() {
+                                    entry.name = name.clone();
+                                }
+                            }
+                            if let Some(ref args) = func.arguments {
+                                entry.arguments_buf.push_str(args);
+                            }
                         }
                     }
+                }
 
-                    // --- Reasoning delta ---
-                    // Some models (e.g. o1) emit chain-of-thought reasoning in a
-                    // separate field. We forward it as a distinct event type.
-                    if let Some(ref reasoning) = sc.delta.reasoning {
-                        if !reasoning.is_empty() {
-                            let _ =
-                                tx.send(RunnerEvent::ReasoningDelta(reasoning.clone())).await;
+                // --- Check finish_reason ---
+                if let Some(ref reason) = choice.finish_reason {
+                    match reason {
+                        FinishReason::ToolCalls => {
+                            has_tool_calls = true;
+                            break;
                         }
-                    }
-
-                    // --- Tool call delta accumulation ---
-                    // Tool call fragments arrive incrementally:
-                    //   Chunk 1: { index: 0, id: "call_abc", function: { name: "search", arguments: "" } }
-                    //   Chunk 2: { index: 0, id: "",          function: { name: "",       arguments: '{"q' } }
-                    //   Chunk 3: { index: 0, id: "",          function: { name: "",       arguments: '":"hello"}' } }
-                    // We accumulate by `index` until `finish_reason == ToolCalls`.
-                    if let Some(ref tool_calls_delta) = sc.delta.tool_calls {
-                        for tc in tool_calls_delta {
-                            let idx = tc.index.unwrap_or(0);
-                            let entry =
-                                pending_tool_calls.entry(idx).or_insert_with(|| {
-                                    PendingToolCall {
-                                        id:              String::new(),
-                                        name:            String::new(),
-                                        arguments_buf:   String::new(),
-                                    }
-                                });
-                            // id and name are sent once (in the first chunk for this index);
-                            // subsequent chunks have empty strings.
-                            if !tc.id.is_empty() {
-                                entry.id = tc.id.clone();
-                            }
-                            if !tc.function.name.is_empty() {
-                                entry.name = tc.function.name.clone();
-                            }
-                            // Arguments are always appended — they arrive as JSON fragments.
-                            entry.arguments_buf.push_str(&tc.function.arguments);
+                        FinishReason::Stop | FinishReason::Length => {
+                            break;
                         }
-                    }
-
-                    // --- Check finish_reason ---
-                    // `ToolCalls` means the model wants us to execute tools before continuing.
-                    // `Stop` or `Length` means the model has finished its response.
-                    if let Some(ref reason) = sc.finish_reason {
-                        match reason {
-                            openrouter_rs::types::completion::FinishReason::ToolCalls => {
-                                has_tool_calls = true;
-                                break;
-                            }
-                            openrouter_rs::types::completion::FinishReason::Stop
-                            | openrouter_rs::types::completion::FinishReason::Length => {
-                                break;
-                            }
-                            _ => {}
-                        }
+                        _ => {}
                     }
                 }
             }
@@ -631,11 +576,9 @@ impl AgentRunner {
             }
 
             // ---- Phase 4: Assemble and execute tool calls ----
-            // Sort by index to preserve the model's intended ordering.
             let mut sorted_indices: Vec<u32> = pending_tool_calls.keys().copied().collect();
             sorted_indices.sort_unstable();
 
-            // Parse accumulated JSON argument strings into serde_json::Value.
             let tool_call_list: Vec<(String, String, serde_json::Value)> = sorted_indices
                 .into_iter()
                 .filter_map(|idx| pending_tool_calls.remove(&idx))
@@ -647,37 +590,29 @@ impl AgentRunner {
                 .collect();
 
             // Reconstruct the assistant message with tool_calls for message history.
-            // This is required by the OpenRouter/OpenAI protocol — the assistant turn
-            // that requests tool calls must be in the message array, followed by the
-            // tool response messages.
-            let openrouter_tool_calls: Vec<openrouter_rs::types::completion::ToolCall> =
-                tool_call_list
-                    .iter()
-                    .map(|(id, name, args)| openrouter_rs::types::completion::ToolCall {
-                        id:        id.clone(),
-                        type_:     "function".to_string(),
-                        function:  openrouter_rs::types::completion::FunctionCall {
+            let openai_tool_calls: Vec<ChatCompletionMessageToolCalls> = tool_call_list
+                .iter()
+                .map(|(id, name, args)| {
+                    ChatCompletionMessageToolCalls::Function(ChatCompletionMessageToolCall {
+                        id:       id.clone(),
+                        function: FunctionCall {
                             name:      name.clone(),
                             arguments: serde_json::to_string(args).unwrap_or_default(),
                         },
-                        index: None,
                     })
-                    .collect();
+                })
+                .collect();
 
-            let assistant_msg = Message {
-                role:         Role::Assistant,
-                content:      if accumulated_text.is_empty() {
-                    Content::Text(String::new())
-                } else {
-                    Content::Text(accumulated_text.clone())
-                },
-                name:         None,
-                tool_call_id: None,
-                tool_calls:   Some(openrouter_tool_calls),
-            };
-            messages.push(assistant_msg);
+            let assistant_msg = ChatCompletionRequestAssistantMessageArgs::default()
+                .content(accumulated_text.clone())
+                .tool_calls(openai_tool_calls)
+                .build()
+                .map_err(|e| Error::Other {
+                    message: format!("failed to build assistant message: {e}").into(),
+                })?;
+            messages.push(assistant_msg.into());
 
-            // Emit ToolCallStart events so the caller can show tool execution progress.
+            // Emit ToolCallStart events.
             for (id, name, args) in &tool_call_list {
                 tool_calls_made += 1;
                 let _ = tx
@@ -689,10 +624,7 @@ impl AgentRunner {
                     .await;
             }
 
-            // Execute all tool calls concurrently via `join_all`.
-            // Unlike `run_with_model` which runs tools sequentially, this
-            // significantly reduces latency when multiple tools are independent
-            // (e.g. parallel web searches).
+            // Execute all tool calls concurrently.
             let tool_futures: Vec<_> = tool_call_list
                 .iter()
                 .map(|(_id, name, args)| {
@@ -719,9 +651,7 @@ impl AgentRunner {
 
             let results = futures::future::join_all(tool_futures).await;
 
-            // Emit ToolCallEnd events and append tool response messages to history.
-            // The response messages use the OpenRouter `tool_response_named` format
-            // so the model can see each tool's output keyed by call id.
+            // Emit ToolCallEnd events and append tool response messages.
             for ((id, name, _args), (success, result, err)) in
                 tool_call_list.iter().zip(results)
             {
@@ -735,10 +665,8 @@ impl AgentRunner {
                     })
                     .await;
 
-                messages.push(Message::tool_response_named(id, name, result.to_string()));
+                messages.push(build_tool_response_message(id, &result.to_string())?);
             }
-            // Loop continues — the model will see tool outputs and can call more
-            // tools or produce a final text response.
         }
 
         Err(Error::Other {
@@ -748,12 +676,6 @@ impl AgentRunner {
 }
 
 /// A tool call being incrementally assembled from streaming SSE chunks.
-///
-/// During streaming, tool call information arrives in fragments across
-/// multiple `StreamingChoice` chunks. The first chunk for a given `index`
-/// typically carries the `id` and `name`, while subsequent chunks append
-/// to `arguments_buf` with JSON fragments. Once `finish_reason == ToolCalls`,
-/// we parse `arguments_buf` as complete JSON and execute the tool.
 struct PendingToolCall {
     /// Unique tool call identifier assigned by the model (e.g. "call_abc123").
     id:            String,
@@ -763,20 +685,69 @@ struct PendingToolCall {
     arguments_buf: String,
 }
 
-fn build_assistant_tool_call_message(choice: &Choice, assistant_text: &str) -> Message {
-    let content = if assistant_text.is_empty() {
-        Content::Text(String::new())
-    } else {
-        Content::Text(assistant_text.to_owned())
-    };
+/// Build a user message from [`UserContent`].
+fn build_user_message(content: &UserContent) -> Result<ChatCompletionRequestMessage> {
+    match content {
+        UserContent::Text(text) => {
+            let msg = ChatCompletionRequestUserMessageArgs::default()
+                .content(text.as_str())
+                .build()
+                .map_err(|e| Error::Other {
+                    message: format!("failed to build user message: {e}").into(),
+                })?;
+            Ok(msg.into())
+        }
+        UserContent::Multimodal { text, image_urls } => {
+            use async_openai::types::chat::{
+                ChatCompletionRequestUserMessageContentPart,
+                ChatCompletionRequestMessageContentPartImage,
+                ChatCompletionRequestMessageContentPartText, ImageUrlArgs,
+            };
 
-    Message {
-        role: Role::Assistant,
-        content,
-        name: None,
-        tool_call_id: None,
-        tool_calls: choice.tool_calls().map(ToOwned::to_owned),
+            let mut parts: Vec<ChatCompletionRequestUserMessageContentPart> = Vec::new();
+            parts.push(ChatCompletionRequestUserMessageContentPart::Text(
+                ChatCompletionRequestMessageContentPartText {
+                    text: text.clone(),
+                },
+            ));
+            for url in image_urls {
+                let image_url = ImageUrlArgs::default()
+                    .url(url.as_str())
+                    .build()
+                    .map_err(|e| Error::Other {
+                        message: format!("failed to build image URL: {e}").into(),
+                    })?;
+                parts.push(ChatCompletionRequestUserMessageContentPart::ImageUrl(
+                    ChatCompletionRequestMessageContentPartImage {
+                        image_url,
+                    },
+                ));
+            }
+
+            let msg = ChatCompletionRequestUserMessageArgs::default()
+                .content(parts)
+                .build()
+                .map_err(|e| Error::Other {
+                    message: format!("failed to build multimodal user message: {e}").into(),
+                })?;
+            Ok(msg.into())
+        }
     }
+}
+
+/// Build a tool response message.
+fn build_tool_response_message(
+    tool_call_id: &str,
+    content: &str,
+) -> Result<ChatCompletionRequestMessage> {
+    let msg = ChatCompletionRequestToolMessageArgs::default()
+        .tool_call_id(tool_call_id)
+        .content(content)
+        .build()
+        .map_err(|e| Error::Other {
+            message: format!("failed to build tool response message: {e}").into(),
+        })?;
+    Ok(msg.into())
 }
 
 #[cfg(test)]
@@ -787,7 +758,7 @@ mod tests {
     use test_case::test_case;
 
     use super::*;
-    use crate::model::EnvOpenRouterLoader;
+    use crate::model::EnvLlmProviderLoader;
 
     /// Simple echo tool for testing.
     struct EchoTool;
@@ -824,8 +795,7 @@ mod tests {
         ; "tool_call"
     )]
     #[tokio::test]
-    // #[ignore = "requires real OpenRouter API key; runs real OpenRouter
-    // integration cases"]
+    // #[ignore = "requires real OpenRouter API key; runs real integration cases"]
     async fn run_real_openrouter_table_driven(
         case_name: &'static str,
         system_prompt: &'static str,
@@ -849,10 +819,10 @@ mod tests {
         });
 
         let runner = AgentRunner::builder()
-            .llm_provider(Arc::new(EnvOpenRouterLoader::default()))
+            .llm_provider(Arc::new(EnvLlmProviderLoader::default()) as LlmProviderLoaderRef)
             .model_name(model_name.clone())
             .system_prompt(system_prompt)
-            .user_content(Content::Text(user_prompt.to_owned()))
+            .user_content(UserContent::Text(user_prompt.to_owned()))
             .build();
 
         let result = runner
@@ -888,7 +858,7 @@ mod tests {
             .provider_response
             .choices
             .first()
-            .and_then(|choice| choice.content())
+            .and_then(|choice| choice.message.content.as_deref())
             .unwrap_or_default();
         assert!(
             !text.trim().is_empty(),

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use base::shared_string::SharedString;
-use openrouter_rs::error::OpenRouterError;
 use snafu::Snafu;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -21,15 +20,13 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub))]
 pub enum Error {
-    #[snafu(display("OpenRouter: {source}"))]
-    OpenRouter {
-        source:   openrouter_rs::error::OpenRouterError,
-        #[snafu(implicit)]
-        location: snafu::Location,
+    #[snafu(display("LLM provider error: {message}"))]
+    Provider {
+        message: SharedString,
     },
 
-    #[snafu(display("OpenRouter not configured"))]
-    OpenRouterNotConfigured {
+    #[snafu(display("LLM provider not configured"))]
+    ProviderNotConfigured {
         #[snafu(implicit)]
         location: snafu::Location,
     },
@@ -121,28 +118,20 @@ impl From<(&str, Option<u16>)> for Error {
 pub fn is_fallback_eligible(err: &Error) -> bool {
     !matches!(
         err,
-        Error::ContextWindow | Error::OpenRouterNotConfigured { .. }
+        Error::ContextWindow | Error::ProviderNotConfigured { .. }
     )
 }
 
 pub fn is_retryable_provider_error(err: &Error) -> bool {
-    fn classify_openrouter_error(err: &OpenRouterError) -> bool {
-        match err {
-            OpenRouterError::ApiError { code, message }
-            | OpenRouterError::ModerationError { code, message, .. }
-            | OpenRouterError::ProviderError { code, message, .. }
-            | OpenRouterError::ApiErrorWithMetadata { code, message, .. } => {
-                matches!(
-                    Error::from((message.as_str(), Some(u16::from(*code)))),
-                    Error::RetryableServer
-                )
-            }
-            _ => false,
-        }
-    }
-
     match err {
-        Error::OpenRouter { source, .. } => classify_openrouter_error(source),
+        Error::Provider { message } => {
+            // Classify based on error message patterns (provider-agnostic).
+            matches!(
+                Error::from((message.as_ref(), None::<u16>)),
+                Error::RetryableServer
+            )
+        }
+        Error::RetryableServer => true,
         _ => false,
     }
 }
@@ -179,7 +168,7 @@ mod tests {
 
     #[test]
     fn fallback_not_eligible_for_not_configured() {
-        assert!(!is_fallback_eligible(&Error::OpenRouterNotConfigured {
+        assert!(!is_fallback_eligible(&Error::ProviderNotConfigured {
             location: snafu::Location::new("test", 0, 0),
         }));
     }
