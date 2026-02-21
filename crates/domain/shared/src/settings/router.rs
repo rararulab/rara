@@ -99,11 +99,6 @@ const PROMPT_SPECS: &[PromptSpec] = &[
         description:     "Resume optimizer system prompt",
         default_content: include_str!("../../../../../prompts/ai/resume_optimizer.system.md"),
     },
-    PromptSpec {
-        name:            "workers/pipeline_agent.md",
-        description:     "Job pipeline agent system prompt",
-        default_content: include_str!("../../../../../prompts/workers/pipeline_agent.md"),
-    },
 ];
 
 fn prompt_spec(name: &str) -> Option<&'static PromptSpec> {

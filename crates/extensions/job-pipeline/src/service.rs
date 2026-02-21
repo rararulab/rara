@@ -39,8 +39,7 @@ use tracing::{error, info, warn};
 use crate::tools::pipeline_tools;
 
 /// Default pipeline system prompt embedded into the binary.
-const DEFAULT_PIPELINE_PROMPT: &str =
-    include_str!("../../../../prompts/workers/pipeline_agent.md");
+const DEFAULT_PIPELINE_PROMPT: &str = include_str!("prompt.md");
 
 /// Maximum agent loop iterations per pipeline run.
 const PIPELINE_MAX_ITERATIONS: usize = 25;
@@ -188,7 +187,7 @@ impl PipelineService {
 
         // Load the system prompt.
         let system_prompt = rara_paths::load_prompt_markdown(
-            "workers/pipeline_agent.md",
+            "extensions/pipeline_agent.md",
             DEFAULT_PIPELINE_PROMPT,
         );
 
