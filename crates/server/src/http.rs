@@ -157,19 +157,39 @@ where
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|request: &axum::http::Request<_>| {
-                    tracing::info_span!(
-                        "http_request",
-                        method = %request.method(),
-                        path = %request.uri().path(),
-                    )
+                    let path = request.uri().path();
+                    if path == "/health" || path.ends_with("/health") {
+                        tracing::debug_span!(
+                            "http_request",
+                            method = %request.method(),
+                            path = %path,
+                        )
+                    } else {
+                        tracing::info_span!(
+                            "http_request",
+                            method = %request.method(),
+                            path = %path,
+                        )
+                    }
                 })
                 .on_response(
-                    |response: &axum::http::Response<_>, latency: Duration, _span: &Span| {
-                        tracing::info!(
-                            status = response.status().as_u16(),
-                            latency_ms = latency.as_millis(),
-                            "response"
-                        );
+                    |response: &axum::http::Response<_>, latency: Duration, span: &Span| {
+                        let is_debug = span
+                            .metadata()
+                            .map_or(false, |m| *m.level() == tracing::Level::DEBUG);
+                        if is_debug {
+                            tracing::debug!(
+                                status = response.status().as_u16(),
+                                latency_ms = latency.as_millis(),
+                                "response"
+                            );
+                        } else {
+                            tracing::info!(
+                                status = response.status().as_u16(),
+                                latency_ms = latency.as_millis(),
+                                "response"
+                            );
+                        }
                     },
                 )
                 .on_failure(
