@@ -351,24 +351,36 @@ impl McpManager {
         result
     }
 
-    /// Return the names of all currently connected servers.
+    /// Return the names of all currently connected (transport alive) servers.
     #[instrument(skip(self))]
     pub async fn connected_servers(&self) -> Vec<String> {
-        self.inner.read().await.clients.keys().cloned().collect()
+        let inner = self.inner.read().await;
+        let mut alive = Vec::new();
+        for (name, managed) in &inner.clients {
+            if managed.is_alive().await {
+                alive.push(name.clone());
+            }
+        }
+        alive
     }
 
     /// Return the connection status for a single server.
     ///
-    /// Uses [`AsyncManagedClient::is_ready`] to distinguish between
-    /// "connecting" (future still in flight) and "connected" (handshake
-    /// completed successfully).
+    /// Checks both startup completion and transport health:
+    /// - `Disconnected` — not in the clients map at all.
+    /// - `Connecting` — startup future still in flight.
+    /// - `Connected` — handshake completed and transport is alive.
+    /// - `Disconnected` — startup succeeded but transport has since closed.
     pub async fn server_connection_status(&self, name: &str) -> ConnectionStatus {
         let inner = self.inner.read().await;
         match inner.clients.get(name) {
             None => ConnectionStatus::Disconnected,
             Some(managed) => {
-                if managed.is_ready() {
+                if managed.is_alive().await {
                     ConnectionStatus::Connected
+                } else if managed.is_ready() {
+                    // Startup succeeded but transport died — effectively disconnected.
+                    ConnectionStatus::Disconnected
                 } else {
                     ConnectionStatus::Connecting
                 }

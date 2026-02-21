@@ -818,6 +818,19 @@ impl RmcpClient {
         }
     }
 
+    /// Check whether the underlying transport has closed.
+    ///
+    /// Returns `true` if the service is in `Ready` state and the transport
+    /// channel is closed (process exited, HTTP connection dropped, etc.).
+    /// Returns `false` if still connecting or the transport is alive.
+    pub(crate) async fn is_transport_closed(&self) -> bool {
+        let guard = self.state.lock().await;
+        match &*guard {
+            ClientState::Ready { service, .. } => service.is_closed(),
+            ClientState::Connecting { .. } => false,
+        }
+    }
+
     /// Extract a non-empty string value from a tool's `meta` map.
     fn meta_string(meta: Option<&rmcp::model::Meta>, key: &str) -> Option<String> {
         meta.and_then(|meta| meta.get(key))

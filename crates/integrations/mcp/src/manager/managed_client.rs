@@ -201,6 +201,16 @@ impl AsyncManagedClient {
         self.client.peek().is_some_and(|result| result.is_ok())
     }
 
+    /// Returns `true` if the client started successfully AND the underlying
+    /// transport is still alive. Returns `false` if still connecting, startup
+    /// failed, or the transport has closed (process exited, connection dropped).
+    pub(crate) async fn is_alive(&self) -> bool {
+        match self.client.peek() {
+            Some(Ok(mc)) => !mc.client.is_transport_closed().await,
+            _ => false,
+        }
+    }
+
     /// Signal the startup pipeline to abort.
     ///
     /// If the handshake is still in progress the `tokio::select!` will
