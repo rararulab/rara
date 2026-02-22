@@ -15,10 +15,13 @@
 //! Send notification primitive.
 //!
 //! Reads the chat_id from runtime settings at call time and enqueues a
-//! telegram notification via the `NotifyClient`.
+//! telegram notification via the `NotifyClient`. When a `recipient` is
+//! specified, the contacts allowlist is checked first — unknown or disabled
+//! contacts are rejected.
 
 use async_trait::async_trait;
 use rara_domain_shared::{
+    contacts::repository::ContactRepository,
     notify::{
         client::NotifyClient,
         types::{NotificationPriority, SendTelegramNotificationRequest},
@@ -34,16 +37,27 @@ use crate::AgentTool;
 /// Enqueues a notification via PGMQ which the telegram-bot process consumes
 /// and delivers.  Supports plain text, bold subject headers, photos, and
 /// sending to arbitrary chat IDs (not just the primary one from settings).
+///
+/// When `recipient` is set, the contacts allowlist table is checked:
+/// - Not found or disabled → error returned
+/// - Found with chat_id → uses that chat_id directly
+/// - Found without chat_id → enqueues with recipient for bot to resolve
 pub struct NotifyTool {
     client:       NotifyClient,
     settings_svc: SettingsSvc,
+    contacts:     ContactRepository,
 }
 
 impl NotifyTool {
-    pub fn new(client: NotifyClient, settings_svc: SettingsSvc) -> Self {
+    pub fn new(
+        client: NotifyClient,
+        settings_svc: SettingsSvc,
+        contacts: ContactRepository,
+    ) -> Self {
         Self {
             client,
             settings_svc,
+            contacts,
         }
     }
 }
@@ -69,7 +83,7 @@ impl AgentTool for NotifyTool {
                 },
                 "recipient": {
                     "type": "string",
-                    "description": "Telegram username of the recipient (without @ prefix). The bot resolves this to a chat ID from its known contacts. Omit to send to the default chat."
+                    "description": "Telegram username of the recipient (without @ prefix). Must be in the contacts allowlist. Omit to send to the default chat."
                 },
                 "subject": {
                     "type": "string",
@@ -118,16 +132,39 @@ impl AgentTool for NotifyTool {
             })
             .unwrap_or(NotificationPriority::Normal);
 
-        // Use settings chat_id as fallback only when no recipient is specified.
-        let chat_id = if recipient.is_none() {
-            self.settings_svc.current().telegram.chat_id
+        // When a recipient is specified, enforce the contacts allowlist.
+        let (chat_id, resolved_recipient) = if let Some(ref username) = recipient {
+            match self.contacts.find_by_username(username).await {
+                Ok(Some(contact)) if contact.enabled => {
+                    // Contact found and enabled — use their chat_id if known.
+                    (contact.chat_id, Some(contact.telegram_username))
+                }
+                Ok(Some(_)) => {
+                    // Contact exists but is disabled.
+                    return Ok(json!({
+                        "error": "recipient not in contacts allowlist (contact is disabled)",
+                    }));
+                }
+                Ok(None) => {
+                    // Contact not in allowlist.
+                    return Ok(json!({
+                        "error": "recipient not in contacts allowlist",
+                    }));
+                }
+                Err(e) => {
+                    return Ok(json!({
+                        "error": format!("failed to check contacts allowlist: {e}"),
+                    }));
+                }
+            }
         } else {
-            None
+            // No recipient — use settings chat_id as fallback.
+            (self.settings_svc.current().telegram.chat_id, None)
         };
 
         let request = SendTelegramNotificationRequest {
             chat_id,
-            recipient: recipient.clone(),
+            recipient: resolved_recipient.clone(),
             subject,
             body: message.to_owned(),
             priority,
@@ -142,7 +179,7 @@ impl AgentTool for NotifyTool {
             Ok(queued) => Ok(json!({
                 "sent": true,
                 "id": queued.id.to_string(),
-                "recipient": recipient,
+                "recipient": resolved_recipient.or(recipient),
             })),
             Err(e) => Ok(json!({
                 "error": format!("{e}"),

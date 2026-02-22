@@ -171,6 +171,7 @@ impl BotConfig {
             runtime_settings.telegram.allowed_group_chat_id,
             main_http,
             cancel,
+            db_store.pool().clone(),
         ));
 
         let outbound = Arc::new(TelegramOutbound::new(bot, state.config.clone()));

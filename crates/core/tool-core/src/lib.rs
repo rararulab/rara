@@ -78,12 +78,15 @@ pub fn core_primitives_vec() -> Vec<AgentToolRef> {
 
 /// Returns domain primitives. Composio is included when configured.
 pub fn domain_primitives_vec(deps: PrimitiveDeps) -> Vec<AgentToolRef> {
+    let contacts =
+        rara_domain_shared::contacts::repository::ContactRepository::new(deps.pool.clone());
     let mut tools: Vec<AgentToolRef> = vec![
         Arc::new(domain_primitives::DbQueryTool::new(deps.pool.clone())),
         Arc::new(domain_primitives::DbMutateTool::new(deps.pool)),
         Arc::new(domain_primitives::NotifyTool::new(
             deps.notify_client,
             deps.settings_svc.clone(),
+            contacts,
         )),
         Arc::new(domain_primitives::SendEmailTool::new(deps.settings_svc)),
         Arc::new(domain_primitives::StorageReadTool::new(deps.object_store)),

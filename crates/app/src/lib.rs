@@ -276,6 +276,7 @@ impl AppConfig {
             &notify_client,
             app_state.settings_svc.subscribe(),
             &self.main_service_http_base,
+            db_store.pool().clone(),
         )
         .await
         {
@@ -341,6 +342,7 @@ impl AppConfig {
         notify_client: &NotifyClient,
         settings_rx: tokio::sync::watch::Receiver<rara_domain_shared::settings::model::Settings>,
         main_service_http_base: &str,
+        pool: sqlx::PgPool,
     ) -> Result<Option<rara_telegram_bot::BotHandle>, Whatever> {
         let telegram_config = std::env::var("TELEGRAM_BOT_TOKEN")
             .ok()
@@ -352,6 +354,7 @@ impl AppConfig {
             Arc::new(notify_client.clone()),
             telegram_config,
             main_service_http_base.to_owned(),
+            pool,
         )
         .await
         .whatever_context("Failed to initialize telegram bot")?;

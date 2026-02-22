@@ -43,8 +43,9 @@ pub struct AppState {
     pub typst_service:       rara_domain_typst::service::TypstService,
 
     // -- shared --
-    pub settings_svc:  rara_domain_shared::settings::SettingsSvc,
-    pub notify_client: rara_domain_shared::notify::client::NotifyClient,
+    pub settings_svc:   rara_domain_shared::settings::SettingsSvc,
+    pub notify_client:  rara_domain_shared::notify::client::NotifyClient,
+    pub contact_repo:   rara_domain_shared::contacts::repository::ContactRepository,
 
     // -- LLM provider --
     pub llm_provider: rara_agents::provider::LlmProviderLoaderRef,
@@ -332,6 +333,9 @@ impl AppState {
         );
         info!("Chat service initialized");
 
+        let contact_repo =
+            rara_domain_shared::contacts::repository::ContactRepository::new(pool.clone());
+
         Ok(Self {
             ai_service,
             resume_service,
@@ -344,6 +348,7 @@ impl AppState {
             typst_service,
             settings_svc,
             notify_client,
+            contact_repo,
             llm_provider,
             object_store,
             crawl_client,
@@ -417,6 +422,11 @@ impl AppState {
         merge_openapi_router(
             &mut router,
             &mut api,
+            rara_domain_shared::contacts::router::routes(self.contact_repo.clone()),
+        );
+        merge_openapi_router(
+            &mut router,
+            &mut api,
             rara_domain_chat::router::routes(self.chat_service.clone()),
         );
         router = router.merge(rara_domain_typst::router::plain_routes(
@@ -470,6 +480,7 @@ impl AppState {
                 (name = "analytics", description = "Analytics and metrics"),
                 (name = "settings", description = "Runtime settings"),
                 (name = "notifications", description = "Notification queue"),
+                (name = "contacts", description = "Telegram contacts allowlist"),
                 (name = "typst", description = "Typst document management"),
                 (name = "system", description = "System utilities")
             )

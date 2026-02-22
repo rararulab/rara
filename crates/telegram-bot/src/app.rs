@@ -89,6 +89,7 @@ impl BotApp {
         notify_client: Arc<rara_domain_shared::notify::client::NotifyClient>,
         telegram_config: Option<TelegramConfig>,
         main_service_http_base: String,
+        pool: sqlx::PgPool,
     ) -> Result<Option<Self>, Whatever> {
         // Read the current settings snapshot from the watch channel.
         let runtime_settings = settings_rx.borrow().clone();
@@ -128,6 +129,7 @@ impl BotApp {
             runtime_settings.telegram.allowed_group_chat_id,
             main_http,
             cancel,
+            pool,
         ));
 
         let outbound = Arc::new(TelegramOutbound::new(bot, state.config.clone()));
@@ -228,7 +230,7 @@ impl BotApp {
                 let chat_id = if let Some(id) = item.payload.chat_id {
                     teloxide::types::ChatId(id)
                 } else if let Some(ref username) = item.payload.recipient {
-                    match state.resolve_contact(username) {
+                    match state.resolve_contact(username).await {
                         Some(id) => teloxide::types::ChatId(id),
                         None => {
                             warn!(
