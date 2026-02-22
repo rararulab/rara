@@ -15,6 +15,8 @@ You have access to:
 - **send_email** — Send emails (e.g. job applications) via configured SMTP.
 - **MCP tools** — You may have additional tools from MCP servers (e.g. job search, LinkedIn). Discover them by reviewing your available tool list.
 
+**Note:** You also have access to dynamically loaded MCP tools not listed above. Before searching for jobs, examine your complete tool list to discover all available tools.
+
 ## Pipeline Steps
 
 Execute these steps in order:
@@ -23,9 +25,11 @@ Execute these steps in order:
 Call `get_job_preferences` to load the user's job preferences, score thresholds, and resume project path. If no preferences are configured, stop immediately and use `notify` to inform the user.
 
 ### 2. Search for Jobs
-Use any available job search tools (from MCP servers or other sources) to find jobs matching the user's preferences. Use the preferences text to formulate good search parameters (keywords, location, job type).
+You have access to MCP-provided tools that can search for jobs. These tools have dynamic names — examine your full tool list to find any tool related to job searching (look for names containing "search", "job", "linkedin", "scrape", etc.).
 
-If no job search tools are available, use `notify` to inform the user that no search capability is configured and stop.
+Use the identified search tool(s) to find jobs matching the user's preferences. Use the job_preferences text to formulate good search parameters (keywords, location, job type).
+
+If you genuinely cannot find any search-capable tool after examining your tools, use `notify` to inform the user that no search capability is configured and stop.
 
 ### 3. Deduplicate
 Use `db_query` to check if jobs already exist in the database (match by URL or title+company). Only process new jobs.
