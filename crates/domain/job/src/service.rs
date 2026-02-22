@@ -28,6 +28,7 @@ use uuid::Uuid;
 use crate::{
     dedup::{self, FuzzyKey, SourceKey},
     error::{SavedJobError, SourceError},
+    japandev::JapanDevDriver,
     jobspy::JobSpyDriver,
     repository::{JobRepository, SavedJobRepository},
     types::{
@@ -44,6 +45,7 @@ use crate::{
 #[derive(Clone)]
 pub struct JobService {
     driver:         Arc<JobSpyDriver>,
+    japandev:       Option<Arc<JapanDevDriver>>,
     saved_job_repo: Arc<dyn SavedJobRepository>,
     job_repo:       Arc<dyn JobRepository>,
     ai_service:     rara_ai::service::AiService,
@@ -54,12 +56,14 @@ impl JobService {
     /// Create a new unified job service.
     pub fn new(
         driver: JobSpyDriver,
+        japandev: Option<JapanDevDriver>,
         saved_job_repo: Arc<dyn SavedJobRepository>,
         job_repo: Arc<dyn JobRepository>,
         ai_service: rara_ai::service::AiService,
     ) -> Self {
         Self {
             driver: Arc::new(driver),
+            japandev: japandev.map(Arc::new),
             saved_job_repo,
             job_repo,
             ai_service,
@@ -152,6 +156,102 @@ impl JobService {
         DiscoveryResult {
             jobs:  deduped,
             error: None,
+        }
+    }
+
+    /// Discover jobs from all configured sources (JobSpy + JapanDev),
+    /// running them concurrently and merging the results.
+    ///
+    /// This is the async counterpart of [`discover()`] and is the
+    /// preferred entry point for callers in async contexts.
+    pub async fn discover_all(
+        &self,
+        criteria: &DiscoveryCriteria,
+        existing_source_keys: &HashSet<SourceKey>,
+        existing_fuzzy_keys: &HashSet<FuzzyKey>,
+    ) -> DiscoveryResult {
+        let mut raw_jobs = Vec::new();
+        let mut errors: Vec<SourceError> = Vec::new();
+
+        // 1. JobSpy (sync / blocking — run in spawn_blocking).
+        let driver = self.driver.clone();
+        let criteria_clone = criteria.clone();
+        let jobspy_result = tokio::task::spawn_blocking(move || {
+            driver.fetch_jobs(&criteria_clone)
+        })
+        .await;
+
+        match jobspy_result {
+            Ok(Ok(jobs)) => {
+                tracing::info!(count = jobs.len(), "JobSpy returned raw jobs");
+                raw_jobs.extend(jobs);
+            }
+            Ok(Err(e)) => {
+                tracing::error!(error = %e, "JobSpy driver failed during discovery");
+                errors.push(e);
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "JobSpy spawn_blocking join error");
+                errors.push(SourceError::NonRetryable {
+                    source_name: "jobspy".to_owned(),
+                    message:     format!("task join error: {e}"),
+                });
+            }
+        }
+
+        // 2. JapanDev (async).
+        if let Some(ref jd) = self.japandev {
+            match jd.fetch_jobs(criteria).await {
+                Ok(jobs) => {
+                    tracing::info!(count = jobs.len(), "JapanDev returned raw jobs");
+                    raw_jobs.extend(jobs);
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "JapanDev driver failed during discovery");
+                    errors.push(e);
+                }
+            }
+        }
+
+        if raw_jobs.is_empty() {
+            return DiscoveryResult {
+                jobs:  vec![],
+                error: errors.into_iter().next(),
+            };
+        }
+
+        log_description_coverage_by_source(&raw_jobs);
+
+        // Normalize raw -> NormalizedJob via TryFrom.
+        let mut normalized = Vec::with_capacity(raw_jobs.len());
+        for raw in raw_jobs {
+            match NormalizedJob::try_from(raw) {
+                Ok(job) => normalized.push(job),
+                Err(e) => {
+                    tracing::warn!(error = %e, "Skipping job that failed normalization");
+                }
+            }
+        }
+        tracing::info!(
+            normalized_count = normalized.len(),
+            "normalization complete"
+        );
+
+        let mut deduped = dedup::deduplicate(normalized, existing_source_keys, existing_fuzzy_keys);
+
+        // Sort by posted_at descending (newest first, None last).
+        deduped.sort_by(|a, b| b.posted_at.cmp(&a.posted_at));
+
+        tracing::info!(
+            deduped_count = deduped.len(),
+            "deduplication and sorting complete"
+        );
+
+        DiscoveryResult {
+            jobs:  deduped,
+            // Return only the first error if any (non-fatal — we still return
+            // whatever jobs were collected from successful drivers).
+            error: errors.into_iter().next(),
         }
     }
 

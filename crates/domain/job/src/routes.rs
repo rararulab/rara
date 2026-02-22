@@ -63,30 +63,26 @@ async fn discover_jobs(
     State(service): State<JobService>,
     Json(criteria): Json<DiscoveryCriteria>,
 ) -> Result<(StatusCode, Json<Vec<DiscoveryJobResponse>>), SourceError> {
-    tracing::info!("starting job discovery");
-    // JobService::discover() is synchronous (calls Python via PyO3),
-    // so we wrap it in spawn_blocking to avoid blocking the async runtime.
-    let result = tokio::task::spawn_blocking(move || {
-        let existing_source_keys = HashSet::new();
-        let existing_fuzzy_keys = HashSet::new();
-        service.discover(&criteria, &existing_source_keys, &existing_fuzzy_keys)
-    })
-    .await
-    .map_err(|e| SourceError::NonRetryable {
-        source_name: "system".to_owned(),
-        message:     format!("task join error: {e}"),
-    })?;
+    tracing::info!("starting job discovery (all sources)");
+
+    let existing_source_keys = HashSet::new();
+    let existing_fuzzy_keys = HashSet::new();
+    let result = service
+        .discover_all(&criteria, &existing_source_keys, &existing_fuzzy_keys)
+        .await;
 
     tracing::info!(
         job_count = result.jobs.len(),
         has_error = result.error.is_some(),
-        "discover result received from driver"
+        "discover result received from drivers"
     );
 
-    // If the driver encountered an error, propagate it.
-    if let Some(ref err) = result.error {
-        tracing::warn!(%err, "discover returning error from driver");
-        return Err(result.error.unwrap());
+    // If all drivers failed and no jobs were collected, propagate the error.
+    if result.jobs.is_empty() {
+        if let Some(err) = result.error {
+            tracing::warn!(%err, "discover returning error — no jobs collected");
+            return Err(err);
+        }
     }
 
     let job_count = result.jobs.len();
