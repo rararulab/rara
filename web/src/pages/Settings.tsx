@@ -96,6 +96,8 @@ export default function Settings() {
   const [defaultModel, setDefaultModel] = useState("");
   const [jobModels, setJobModels] = useState<string[]>([]);   // ordered: [primary, fallback1, fallback2, ...]
   const [chatModels, setChatModels] = useState<string[]>([]); // ordered: [primary, fallback1, fallback2, ...]
+  const [aiProvider, setAiProvider] = useState("openrouter");
+  const [ollamaBaseUrl, setOllamaBaseUrl] = useState("http://localhost:11434");
   const [aiApiKey, setAiApiKey] = useState("");
   const [showAiApiKey, setShowAiApiKey] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -220,6 +222,8 @@ export default function Settings() {
 
   useEffect(() => {
     if (!settingsQuery.data) return;
+    setAiProvider(settingsQuery.data.ai.provider ?? "openrouter");
+    setOllamaBaseUrl(settingsQuery.data.ai.ollama_base_url ?? "http://localhost:11434");
     setDefaultModel(settingsQuery.data.ai.default_model ?? "");
 
     // Build ordered model lists: [primary, ...fallbacks]
@@ -286,6 +290,14 @@ export default function Settings() {
     const next: RuntimeSettingsPatch = {};
 
     const aiPatch: NonNullable<RuntimeSettingsPatch["ai"]> = {};
+    const currentProvider = current.ai.provider ?? "openrouter";
+    if (aiProvider !== currentProvider) {
+      aiPatch.provider = aiProvider;
+    }
+    const currentOllamaUrl = current.ai.ollama_base_url ?? "http://localhost:11434";
+    if (ollamaBaseUrl.trim() !== currentOllamaUrl) {
+      aiPatch.ollama_base_url = ollamaBaseUrl.trim();
+    }
     const trimmedDefault = defaultModel.trim();
     if (trimmedDefault !== "" && trimmedDefault !== (current.ai.default_model ?? "")) {
       aiPatch.default_model = trimmedDefault;
@@ -323,7 +335,7 @@ export default function Settings() {
       }
     }
 
-    if (aiApiKey.trim() !== "") {
+    if (aiProvider === "openrouter" && aiApiKey.trim() !== "") {
       aiPatch.openrouter_api_key = aiApiKey.trim();
     }
     if (Object.keys(aiPatch).length > 0) {
@@ -397,6 +409,8 @@ export default function Settings() {
 
     return Object.keys(next).length > 0 ? next : null;
   }, [
+    aiProvider,
+    ollamaBaseUrl,
     aiApiKey,
     composioApiKey,
     composioEntityId,
@@ -545,11 +559,13 @@ export default function Settings() {
 
   useEffect(() => {
     if (selectedSetting !== "ai") return;
+    if (aiProvider !== "openrouter") return;
     if (!settingsQuery.data?.ai.openrouter_api_key) return;
     if (models.length > 0) return;
     if (modelsLoading) return;
     void fetchModels();
   }, [
+    aiProvider,
     fetchModels,
     models.length,
     modelsLoading,
@@ -600,9 +616,11 @@ export default function Settings() {
   const selectedPromptMeta = availablePrompts.find((p) => p.name === selectedPromptName);
   const isDialogOpen = selectedSetting !== null;
 
+  const providerLabel = (current.ai.provider ?? "openrouter") === "ollama" ? "Ollama" : "OpenRouter";
+
   const dialogTitle =
     selectedSetting === "ai"
-      ? "AI (OpenRouter)"
+      ? `AI Provider (${providerLabel})`
       : selectedSetting === "composio"
         ? "Composio"
       : selectedSetting === "agent"
@@ -848,10 +866,11 @@ export default function Settings() {
           <div className="flex items-center gap-3">
             <Sparkles className="h-4 w-4 text-muted-foreground" />
             <div className="space-y-1">
-              <p className="font-medium">AI (OpenRouter)</p>
+              <p className="font-medium">AI Provider ({providerLabel})</p>
               <p className="text-xs text-muted-foreground">
-                Default: {current.ai.default_model ?? "Not set"} · Key:{" "}
-                {current.ai.openrouter_api_key ? "Set" : "Not set"}
+                Default: {current.ai.default_model ?? "Not set"}
+                {providerLabel === "OpenRouter" && <> · Key: {current.ai.openrouter_api_key ? "Set" : "Not set"}</>}
+                {providerLabel === "Ollama" && <> · URL: {current.ai.ollama_base_url ?? "localhost:11434"}</>}
               </p>
             </div>
           </div>
@@ -1013,92 +1032,159 @@ export default function Settings() {
 
           {selectedSetting === "ai" && (
             <div className="space-y-6 px-6 py-5">
+              {/* Provider selector */}
               <div className="space-y-3 rounded-xl border bg-card p-4">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="ai-api-key" className="text-base font-semibold">
-                    OpenRouter API Key
-                  </Label>
-                  <span className="text-xs text-muted-foreground">
-                    {current.ai.openrouter_api_key ? "Current: Saved in settings" : "No key saved"}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Input
-                    id="ai-api-key"
-                    type={showAiApiKey ? "text" : "password"}
-                    value={aiApiKey}
-                    onChange={(e) => setAiApiKey(e.target.value)}
-                    placeholder={current.ai.openrouter_api_key ?? "sk-or-v1-..."}
-                    className="h-11"
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    className="h-11 w-11 shrink-0"
-                    onClick={() => setShowAiApiKey((v) => !v)}
-                  >
-                    {showAiApiKey ? <EyeOff /> : <Eye />}
-                  </Button>
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  Get your API key from{" "}
-                  <a
-                    href="https://openrouter.ai/keys"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1 text-primary hover:underline"
-                  >
-                    OpenRouter Keys <ExternalLink className="h-3 w-3" />
-                  </a>
+                <Label className="text-base font-semibold">Provider</Label>
+                <Select value={aiProvider} onValueChange={setAiProvider}>
+                  <SelectTrigger className="h-11">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="openrouter">OpenRouter (Cloud)</SelectItem>
+                    <SelectItem value="ollama">Ollama (Local)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  {aiProvider === "ollama"
+                    ? "Ollama runs models locally — no API key needed."
+                    : "OpenRouter provides access to many cloud LLM providers."}
                 </p>
               </div>
 
+              {/* OpenRouter API Key — only when provider is openrouter */}
+              {aiProvider === "openrouter" && (
+                <div className="space-y-3 rounded-xl border bg-card p-4">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="ai-api-key" className="text-base font-semibold">
+                      OpenRouter API Key
+                    </Label>
+                    <span className="text-xs text-muted-foreground">
+                      {current.ai.openrouter_api_key ? "Current: Saved in settings" : "No key saved"}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id="ai-api-key"
+                      type={showAiApiKey ? "text" : "password"}
+                      value={aiApiKey}
+                      onChange={(e) => setAiApiKey(e.target.value)}
+                      placeholder={current.ai.openrouter_api_key ?? "sk-or-v1-..."}
+                      className="h-11"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="h-11 w-11 shrink-0"
+                      onClick={() => setShowAiApiKey((v) => !v)}
+                    >
+                      {showAiApiKey ? <EyeOff /> : <Eye />}
+                    </Button>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    Get your API key from{" "}
+                    <a
+                      href="https://openrouter.ai/keys"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-primary hover:underline"
+                    >
+                      OpenRouter Keys <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </p>
+                </div>
+              )}
+
+              {/* Ollama Base URL — only when provider is ollama */}
+              {aiProvider === "ollama" && (
+                <div className="space-y-3 rounded-xl border bg-card p-4">
+                  <Label htmlFor="ollama-base-url" className="text-base font-semibold">
+                    Ollama Base URL
+                  </Label>
+                  <Input
+                    id="ollama-base-url"
+                    value={ollamaBaseUrl}
+                    onChange={(e) => setOllamaBaseUrl(e.target.value)}
+                    placeholder="http://localhost:11434"
+                    className="h-11"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Default: http://localhost:11434. Change if Ollama runs on a different host/port.
+                  </p>
+                </div>
+              )}
+
               <div className="space-y-3 rounded-xl border bg-card p-4">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="models-search" className="text-xl font-semibold">
+                  <Label htmlFor={aiProvider === "ollama" ? "ollama-default-model" : "models-search"} className="text-xl font-semibold">
                     Models
                   </Label>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={fetchModels}
-                    disabled={modelsLoading}
-                    className="h-10 px-4"
-                  >
-                    <Download className="h-4 w-4" />
-                    {modelsLoading ? "Fetching..." : "Fetch"}
-                  </Button>
+                  {aiProvider === "openrouter" && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={fetchModels}
+                      disabled={modelsLoading}
+                      className="h-10 px-4"
+                    >
+                      <Download className="h-4 w-4" />
+                      {modelsLoading ? "Fetching..." : "Fetch"}
+                    </Button>
+                  )}
                 </div>
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    id="models-search"
-                    value={modelSearch}
-                    onChange={(e) => setModelSearch(e.target.value)}
-                    placeholder="Search models..."
-                    className="h-11 pl-10"
-                  />
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  Showing {filteredModels.length} models
-                </p>
-                {modelsError && (
-                  <p className="text-sm text-destructive">{modelsError}</p>
-                )}
 
-                {renderDefaultModelSelector()}
+                {aiProvider === "ollama" ? (
+                  <div className="space-y-3">
+                    <div className="space-y-2">
+                      <Label htmlFor="ollama-default-model" className="text-sm font-semibold">
+                        Default Model
+                      </Label>
+                      <Input
+                        id="ollama-default-model"
+                        value={defaultModel}
+                        onChange={(e) => setDefaultModel(e.target.value)}
+                        placeholder="llama3.2"
+                        className="h-11"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Enter the Ollama model name (e.g. llama3.2, qwen2.5, deepseek-r1).
+                        Make sure the model is pulled locally via <code className="rounded bg-muted px-1">ollama pull &lt;model&gt;</code>.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="relative">
+                      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        id="models-search"
+                        value={modelSearch}
+                        onChange={(e) => setModelSearch(e.target.value)}
+                        placeholder="Search models..."
+                        className="h-11 pl-10"
+                      />
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      Showing {filteredModels.length} models
+                    </p>
+                    {modelsError && (
+                      <p className="text-sm text-destructive">{modelsError}</p>
+                    )}
 
-                {renderModelPicker(
-                  "Job Analysis Models",
-                  jobModels,
-                  setJobModels,
-                )}
+                    {renderDefaultModelSelector()}
 
-                {renderModelPicker(
-                  "Chat Models",
-                  chatModels,
-                  setChatModels,
+                    {renderModelPicker(
+                      "Job Analysis Models",
+                      jobModels,
+                      setJobModels,
+                    )}
+
+                    {renderModelPicker(
+                      "Chat Models",
+                      chatModels,
+                      setChatModels,
+                    )}
+                  </>
                 )}
               </div>
             </div>

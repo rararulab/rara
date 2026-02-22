@@ -201,6 +201,8 @@ export interface TaskRunRecord {
 export interface RuntimeSettingsView {
   ai: {
     configured: boolean;
+    provider: string | null;
+    ollama_base_url: string | null;
     default_model: string | null;
     job_model: string | null;
     chat_model: string | null;
@@ -235,6 +237,8 @@ export interface RuntimeSettingsView {
 
 export interface RuntimeSettingsPatch {
   ai?: {
+    provider?: string;
+    ollama_base_url?: string;
     openrouter_api_key?: string;
     default_model?: string;
     job_model?: string | null;
