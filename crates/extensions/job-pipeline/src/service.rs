@@ -251,11 +251,11 @@ impl PipelineService {
                 RunnerEvent::Thinking => PipelineStreamEvent::Thinking,
                 RunnerEvent::ThinkingDone => PipelineStreamEvent::ThinkingDone,
                 RunnerEvent::Iteration(index) => PipelineStreamEvent::Iteration { index: *index },
-                RunnerEvent::ToolCallStart { id, name, .. } => {
-                    // Strip arguments for SSE clients (may contain sensitive data).
+                RunnerEvent::ToolCallStart { id, name, arguments } => {
                     PipelineStreamEvent::ToolCallStart {
                         id: id.clone(),
                         name: name.clone(),
+                        arguments: Some(arguments.clone()),
                     }
                 }
                 RunnerEvent::ToolCallEnd {
@@ -263,14 +263,14 @@ impl PipelineService {
                     name,
                     success,
                     error,
-                    ..
+                    result,
                 } => {
-                    // Strip result for SSE clients.
                     PipelineStreamEvent::ToolCallEnd {
                         id: id.clone(),
                         name: name.clone(),
                         success: *success,
                         error: error.clone(),
+                        result: result.clone(),
                     }
                 }
                 RunnerEvent::TextDelta(text) => {

@@ -563,8 +563,8 @@ export type PipelineStreamEvent =
   | { type: "iteration"; index: number }
   | { type: "thinking" }
   | { type: "thinking_done" }
-  | { type: "tool_call_start"; id: string; name: string }
-  | { type: "tool_call_end"; id: string; name: string; success: boolean; error?: string }
+  | { type: "tool_call_start"; id: string; name: string; arguments?: unknown }
+  | { type: "tool_call_end"; id: string; name: string; success: boolean; error?: string; result?: unknown }
   | { type: "text_delta"; text: string }
   | { type: "done"; summary: string; iterations: number; tool_calls: number }
   | { type: "error"; message: string };

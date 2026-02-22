@@ -162,6 +162,91 @@ function parseSSEChunk(
 }
 
 // ---------------------------------------------------------------------------
+// CollapsibleJsonBlock: expandable JSON detail block
+// ---------------------------------------------------------------------------
+
+const MAX_JSON_DISPLAY_LENGTH = 2000;
+
+function CollapsibleJsonBlock({
+  label,
+  data,
+}: {
+  label: string;
+  data: unknown;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [showFull, setShowFull] = useState(false);
+
+  if (data == null) return null;
+
+  const fullText = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+  const isTruncated = fullText.length > MAX_JSON_DISPLAY_LENGTH;
+  const displayText =
+    !showFull && isTruncated
+      ? fullText.slice(0, MAX_JSON_DISPLAY_LENGTH) + "\n... (truncated)"
+      : fullText;
+
+  return (
+    <div className="mt-1">
+      <button
+        type="button"
+        className="text-[10px] text-muted-foreground hover:text-foreground underline"
+        onClick={() => setExpanded((e) => !e)}
+      >
+        {expanded ? `Hide ${label}` : `Show ${label}`}
+      </button>
+      {expanded && (
+        <div className="mt-1">
+          <pre className="text-xs font-mono bg-muted p-2 rounded max-h-64 overflow-auto whitespace-pre-wrap break-all">
+            {displayText}
+          </pre>
+          {isTruncated && (
+            <button
+              type="button"
+              className="text-[10px] text-muted-foreground hover:text-foreground underline mt-0.5"
+              onClick={() => setShowFull((s) => !s)}
+            >
+              {showFull ? "Show less" : "Show full"}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ToolCallDetail: renders a completed tool call with collapsible args/result
+// ---------------------------------------------------------------------------
+
+function ToolCallDetail({ tool }: { tool: CompletedToolCall }) {
+  return (
+    <div className="text-xs">
+      <div className="flex items-center gap-2">
+        {tool.success ? (
+          <CheckCircle2 className="h-3 w-3 text-green-500 shrink-0" />
+        ) : (
+          <XCircle className="h-3 w-3 text-destructive shrink-0" />
+        )}
+        <span className="font-mono">{tool.stage}</span>
+        <span className="text-muted-foreground/60">({tool.name})</span>
+        {tool.error && (
+          <span className="text-destructive">- {tool.error}</span>
+        )}
+      </div>
+      <div className="ml-5 space-y-0.5">
+        {tool.arguments != null && (
+          <CollapsibleJsonBlock label="arguments" data={tool.arguments} />
+        )}
+        {tool.result != null && (
+          <CollapsibleJsonBlock label="result" data={tool.result} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Types for SSE stream state
 // ---------------------------------------------------------------------------
 
@@ -169,6 +254,7 @@ interface ActiveToolCall {
   id: string;
   name: string;
   stage: string;
+  arguments?: unknown;
 }
 
 interface CompletedToolCall {
@@ -177,6 +263,8 @@ interface CompletedToolCall {
   stage: string;
   success: boolean;
   error?: string;
+  arguments?: unknown;
+  result?: unknown;
 }
 
 interface StreamState {
@@ -300,27 +388,33 @@ function RunDetail({
                       id: event.id,
                       name: event.name,
                       stage: inferStage(event.name),
+                      arguments: event.arguments,
                     },
                   ],
                 }));
                 break;
               case "tool_call_end":
-                setStream((s) => ({
-                  ...s,
-                  activeTools: s.activeTools.filter(
-                    (t) => t.id !== event.id,
-                  ),
-                  completedTools: [
-                    ...s.completedTools,
-                    {
-                      id: event.id,
-                      name: event.name,
-                      stage: inferStage(event.name),
-                      success: event.success,
-                      error: event.error,
-                    },
-                  ],
-                }));
+                setStream((s) => {
+                  const activeTool = s.activeTools.find((t) => t.id === event.id);
+                  return {
+                    ...s,
+                    activeTools: s.activeTools.filter(
+                      (t) => t.id !== event.id,
+                    ),
+                    completedTools: [
+                      ...s.completedTools,
+                      {
+                        id: event.id,
+                        name: event.name,
+                        stage: inferStage(event.name),
+                        success: event.success,
+                        error: event.error,
+                        arguments: activeTool?.arguments,
+                        result: event.result,
+                      },
+                    ],
+                  };
+                });
                 break;
               case "done":
                 setStream((s) => ({
@@ -405,20 +499,7 @@ function RunDetail({
               Completed ({stream.completedTools.length})
             </p>
             {stream.completedTools.map((tool) => (
-              <div
-                key={tool.id}
-                className="flex items-center gap-2 text-xs"
-              >
-                {tool.success ? (
-                  <CheckCircle2 className="h-3 w-3 text-green-500" />
-                ) : (
-                  <XCircle className="h-3 w-3 text-destructive" />
-                )}
-                <span className="font-mono">{tool.stage}</span>
-                {tool.error && (
-                  <span className="text-destructive">- {tool.error}</span>
-                )}
-              </div>
+              <ToolCallDetail key={tool.id} tool={tool} />
             ))}
           </div>
         )}
@@ -469,15 +550,9 @@ function RunDetail({
   const errorEvents = events.filter((e) => e.event_type === "error");
 
   // Build completed tool call pairs
-  const completedCalls: {
-    id: string;
-    name: string;
-    stage: string;
-    success: boolean;
-    error?: string;
-  }[] = [];
+  const completedCalls: CompletedToolCall[] = [];
   for (const start of toolCallStarts) {
-    const payload = start.payload as { id?: string; name?: string };
+    const payload = start.payload as { id?: string; name?: string; arguments?: unknown };
     const id = payload.id ?? "";
     const name = payload.name ?? "";
     const end = toolCallEnds.find(
@@ -486,6 +561,7 @@ function RunDetail({
     const endPayload = end?.payload as {
       success?: boolean;
       error?: string;
+      result?: unknown;
     } | undefined;
     completedCalls.push({
       id,
@@ -493,6 +569,8 @@ function RunDetail({
       stage: inferStage(name),
       success: endPayload?.success ?? true,
       error: endPayload?.error,
+      arguments: payload.arguments,
+      result: endPayload?.result,
     });
   }
 
@@ -525,21 +603,7 @@ function RunDetail({
             Tool Calls ({completedCalls.length})
           </p>
           {completedCalls.map((tool) => (
-            <div
-              key={tool.id}
-              className="flex items-center gap-2 text-xs"
-            >
-              {tool.success ? (
-                <CheckCircle2 className="h-3 w-3 text-green-500" />
-              ) : (
-                <XCircle className="h-3 w-3 text-destructive" />
-              )}
-              <span className="font-mono">{tool.stage}</span>
-              <span className="text-muted-foreground/60">({tool.name})</span>
-              {tool.error && (
-                <span className="text-destructive">- {tool.error}</span>
-              )}
-            </div>
+            <ToolCallDetail key={tool.id} tool={tool} />
           ))}
         </div>
       )}

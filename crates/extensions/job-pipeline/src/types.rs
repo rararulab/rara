@@ -154,13 +154,18 @@ pub enum PipelineStreamEvent {
     /// LLM finished thinking.
     ThinkingDone,
     /// A tool call has started.
-    ToolCallStart { id: String, name: String },
+    ToolCallStart {
+        id: String,
+        name: String,
+        arguments: Option<serde_json::Value>,
+    },
     /// A tool call has finished.
     ToolCallEnd {
         id: String,
         name: String,
         success: bool,
         error: Option<String>,
+        result: Option<serde_json::Value>,
     },
     /// Incremental text content from the LLM.
     TextDelta { text: String },
