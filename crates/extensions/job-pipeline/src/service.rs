@@ -487,6 +487,12 @@ impl PipelineService {
         ));
 
         // Layer 3: MCP tools (e.g. LinkedIn job search)
+        // Reconnect any disconnected MCP servers before loading tools.
+        let reconnected = self.mcp_manager.start_enabled().await;
+        if !reconnected.is_empty() {
+            info!(servers = ?reconnected, "reconnected MCP servers for pipeline");
+        }
+
         match rara_mcp::tool_bridge::McpToolBridge::from_manager(self.mcp_manager.clone()).await {
             Ok(bridges) => {
                 for bridge in bridges {
@@ -498,6 +504,8 @@ impl PipelineService {
                 warn!(error = %e, "failed to load MCP tools for pipeline agent");
             }
         }
+
+        info!(tools = ?registry.tool_names(), "pipeline agent tools loaded");
 
         registry
     }
