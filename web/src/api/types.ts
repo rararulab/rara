@@ -588,6 +588,26 @@ export interface PipelineDiscoveredJob {
   created_at: string;
 }
 
+// Discovered Jobs Stats
+export interface DiscoveredJobsStats {
+  total: number;
+  by_action: {
+    discovered: number;
+    notified: number;
+    applied: number;
+    skipped: number;
+  };
+  scored_count: number;
+  avg_score: number | null;
+}
+
+export interface PaginatedDiscoveredJobs {
+  items: PipelineDiscoveredJob[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 // Pipeline Run Event (stored in DB)
 export interface PipelineRunEvent {
   id: number;

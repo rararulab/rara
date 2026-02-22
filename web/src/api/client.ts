@@ -83,7 +83,7 @@ async function requestBlob(path: string, options?: RequestInit & { timeoutMs?: n
   }
 }
 
-import type { TypstProject, BrowseResult, JustRecipe, RunOutput, PipelineDiscoveredJob } from './types';
+import type { TypstProject, BrowseResult, JustRecipe, RunOutput, PipelineDiscoveredJob, PaginatedDiscoveredJobs, DiscoveredJobsStats } from './types';
 
 export const api = {
   get: <T>(path: string) => request<T>(path),
@@ -133,5 +133,39 @@ export const api = {
 
   fetchPipelineRunJobs(runId: string): Promise<PipelineDiscoveredJob[]> {
     return request<PipelineDiscoveredJob[]>(`/api/v1/pipeline/runs/${runId}/jobs`);
+  },
+
+  fetchDiscoveredJobs(params?: {
+    action?: string;
+    min_score?: number;
+    max_score?: number;
+    run_id?: string;
+    sort_by?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<PaginatedDiscoveredJobs> {
+    const searchParams = new URLSearchParams();
+    if (params) {
+      if (params.action) searchParams.set('action', params.action);
+      if (params.min_score != null) searchParams.set('min_score', String(params.min_score));
+      if (params.max_score != null) searchParams.set('max_score', String(params.max_score));
+      if (params.run_id) searchParams.set('run_id', params.run_id);
+      if (params.sort_by) searchParams.set('sort_by', params.sort_by);
+      if (params.limit != null) searchParams.set('limit', String(params.limit));
+      if (params.offset != null) searchParams.set('offset', String(params.offset));
+    }
+    const qs = searchParams.toString();
+    return request<PaginatedDiscoveredJobs>(`/api/v1/pipeline/discovered-jobs${qs ? `?${qs}` : ''}`);
+  },
+
+  fetchDiscoveredJobsStats(): Promise<DiscoveredJobsStats> {
+    return request<DiscoveredJobsStats>('/api/v1/pipeline/discovered-jobs/stats');
+  },
+
+  updateDiscoveredJobAction(id: string, action: string): Promise<PipelineDiscoveredJob> {
+    return request<PipelineDiscoveredJob>(`/api/v1/pipeline/discovered-jobs/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ action }),
+    });
   },
 };

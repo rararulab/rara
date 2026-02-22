@@ -18,7 +18,7 @@ use axum::{
     Json,
     extract::{Path, Query, State},
     response::sse::{Event, KeepAlive, Sse},
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use futures::stream::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -28,7 +28,9 @@ use uuid::Uuid;
 use crate::pg_repository::PgPipelineRepository;
 use crate::repository::PipelineRepository;
 use crate::service::{PipelineError, PipelineService};
-use crate::types::{DiscoveredJob, PipelineEvent, PipelineRun};
+use crate::types::{
+    DiscoveredJob, DiscoveredJobAction, DiscoveredJobsStats, PipelineEvent, PipelineRun,
+};
 
 /// Build `/api/v1/pipeline/...` routes.
 pub fn routes(service: PipelineService) -> OpenApiRouter {
@@ -41,6 +43,18 @@ pub fn routes(service: PipelineService) -> OpenApiRouter {
         .route("/api/v1/pipeline/runs/{id}", get(get_run))
         .route("/api/v1/pipeline/runs/{id}/events", get(get_run_events))
         .route("/api/v1/pipeline/runs/{id}/jobs", get(get_run_jobs))
+        .route(
+            "/api/v1/pipeline/discovered-jobs",
+            get(list_discovered_jobs),
+        )
+        .route(
+            "/api/v1/pipeline/discovered-jobs/stats",
+            get(get_discovered_jobs_stats),
+        )
+        .route(
+            "/api/v1/pipeline/discovered-jobs/{id}",
+            patch(update_discovered_job_action),
+        )
         .with_state(service)
 }
 
@@ -182,4 +196,124 @@ async fn get_run_jobs(
             message: e.to_string(),
         })?;
     Ok(Json(jobs))
+}
+
+// ---------------------------------------------------------------------------
+// Discovered Jobs (global view)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct ListDiscoveredJobsQuery {
+    action: Option<String>,
+    min_score: Option<i32>,
+    max_score: Option<i32>,
+    run_id: Option<Uuid>,
+    sort_by: Option<String>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+struct PaginatedDiscoveredJobs {
+    items: Vec<DiscoveredJob>,
+    total: i64,
+    limit: i64,
+    offset: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateDiscoveredJobActionRequest {
+    action: String,
+}
+
+fn parse_action(s: &str) -> Result<DiscoveredJobAction, PipelineError> {
+    match s {
+        "discovered" => Ok(DiscoveredJobAction::Discovered),
+        "notified" => Ok(DiscoveredJobAction::Notified),
+        "applied" => Ok(DiscoveredJobAction::Applied),
+        "skipped" => Ok(DiscoveredJobAction::Skipped),
+        other => Err(PipelineError::RunFailed {
+            message: format!(
+                "invalid action: {other} (expected discovered|notified|applied|skipped)"
+            ),
+        }),
+    }
+}
+
+/// `GET /api/v1/pipeline/discovered-jobs` -- list all discovered jobs with filters.
+async fn list_discovered_jobs(
+    State(service): State<PipelineService>,
+    Query(q): Query<ListDiscoveredJobsQuery>,
+) -> Result<Json<PaginatedDiscoveredJobs>, PipelineError> {
+    let action = q
+        .action
+        .as_deref()
+        .map(parse_action)
+        .transpose()?;
+    let limit = q.limit.unwrap_or(20);
+    let offset = q.offset.unwrap_or(0);
+
+    let repo = PgPipelineRepository::new(service.pool());
+    let items = repo
+        .list_all_discovered_jobs(
+            action,
+            q.min_score,
+            q.max_score,
+            q.run_id,
+            q.sort_by.as_deref(),
+            limit,
+            offset,
+        )
+        .await
+        .map_err(|e| PipelineError::RunFailed {
+            message: e.to_string(),
+        })?;
+
+    let total = repo
+        .count_discovered_jobs(action, q.min_score, q.max_score, q.run_id)
+        .await
+        .map_err(|e| PipelineError::RunFailed {
+            message: e.to_string(),
+        })?;
+
+    Ok(Json(PaginatedDiscoveredJobs {
+        items,
+        total,
+        limit,
+        offset,
+    }))
+}
+
+/// `GET /api/v1/pipeline/discovered-jobs/stats` -- aggregated stats.
+async fn get_discovered_jobs_stats(
+    State(service): State<PipelineService>,
+) -> Result<Json<DiscoveredJobsStats>, PipelineError> {
+    let repo = PgPipelineRepository::new(service.pool());
+    let stats = repo
+        .discovered_jobs_stats()
+        .await
+        .map_err(|e| PipelineError::RunFailed {
+            message: e.to_string(),
+        })?;
+    Ok(Json(stats))
+}
+
+/// `PATCH /api/v1/pipeline/discovered-jobs/{id}` -- update action on a discovered job.
+async fn update_discovered_job_action(
+    State(service): State<PipelineService>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<UpdateDiscoveredJobActionRequest>,
+) -> Result<Json<DiscoveredJob>, PipelineError> {
+    let action = parse_action(&body.action)?;
+    let repo = PgPipelineRepository::new(service.pool());
+    let job = repo
+        .update_discovered_job_score_action(id, None, Some(action))
+        .await
+        .map_err(|e| PipelineError::RunFailed {
+            message: e.to_string(),
+        })?
+        .ok_or_else(|| PipelineError::RunFailed {
+            message: format!("discovered job not found: {id}"),
+        })?;
+    Ok(Json(job))
 }

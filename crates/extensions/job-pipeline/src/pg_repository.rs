@@ -22,8 +22,8 @@ use uuid::Uuid;
 
 use crate::repository::{DatabaseSnafu, PipelineRepoError, PipelineRepository};
 use crate::types::{
-    DiscoveredJob, DiscoveredJobAction, DiscoveredJobRow, PipelineEvent, PipelineEventRow,
-    PipelineRun, PipelineRunRow,
+    DiscoveredJob, DiscoveredJobAction, DiscoveredJobRow, DiscoveredJobsActionCounts,
+    DiscoveredJobsStats, PipelineEvent, PipelineEventRow, PipelineRun, PipelineRunRow,
 };
 
 // ---------------------------------------------------------------------------
@@ -252,4 +252,152 @@ impl PipelineRepository for PgPipelineRepository {
 
         Ok(row.map(Into::into))
     }
+
+    async fn list_all_discovered_jobs(
+        &self,
+        action: Option<DiscoveredJobAction>,
+        min_score: Option<i32>,
+        max_score: Option<i32>,
+        run_id: Option<Uuid>,
+        sort_by: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<DiscoveredJob>, PipelineRepoError> {
+        let mut sql = String::from("SELECT * FROM pipeline_discovered_jobs WHERE 1=1");
+        let mut param_idx: usize = 0;
+
+        if action.is_some() {
+            param_idx += 1;
+            sql.push_str(&format!(" AND action = ${param_idx}"));
+        }
+        if min_score.is_some() {
+            param_idx += 1;
+            sql.push_str(&format!(" AND score >= ${param_idx}"));
+        }
+        if max_score.is_some() {
+            param_idx += 1;
+            sql.push_str(&format!(" AND score <= ${param_idx}"));
+        }
+        if run_id.is_some() {
+            param_idx += 1;
+            sql.push_str(&format!(" AND run_id = ${param_idx}"));
+        }
+
+        let order = match sort_by {
+            Some("score") => "ORDER BY score DESC NULLS LAST",
+            _ => "ORDER BY created_at DESC",
+        };
+        sql.push(' ');
+        sql.push_str(order);
+
+        param_idx += 1;
+        let limit_idx = param_idx;
+        param_idx += 1;
+        let offset_idx = param_idx;
+        sql.push_str(&format!(" LIMIT ${limit_idx} OFFSET ${offset_idx}"));
+
+        let mut query = sqlx::query_as::<_, DiscoveredJobRow>(&sql);
+        if let Some(a) = action {
+            query = query.bind(a as u8 as i16);
+        }
+        if let Some(v) = min_score {
+            query = query.bind(v);
+        }
+        if let Some(v) = max_score {
+            query = query.bind(v);
+        }
+        if let Some(v) = run_id {
+            query = query.bind(v);
+        }
+        query = query.bind(limit).bind(offset);
+
+        let rows = query.fetch_all(&self.pool).await.context(DatabaseSnafu)?;
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    async fn count_discovered_jobs(
+        &self,
+        action: Option<DiscoveredJobAction>,
+        min_score: Option<i32>,
+        max_score: Option<i32>,
+        run_id: Option<Uuid>,
+    ) -> Result<i64, PipelineRepoError> {
+        let mut sql =
+            String::from("SELECT COUNT(*) as count FROM pipeline_discovered_jobs WHERE 1=1");
+        let mut param_idx: usize = 0;
+
+        if action.is_some() {
+            param_idx += 1;
+            sql.push_str(&format!(" AND action = ${param_idx}"));
+        }
+        if min_score.is_some() {
+            param_idx += 1;
+            sql.push_str(&format!(" AND score >= ${param_idx}"));
+        }
+        if max_score.is_some() {
+            param_idx += 1;
+            sql.push_str(&format!(" AND score <= ${param_idx}"));
+        }
+        if run_id.is_some() {
+            param_idx += 1;
+            sql.push_str(&format!(" AND run_id = ${param_idx}"));
+        }
+
+        let mut query = sqlx::query_scalar::<_, i64>(&sql);
+        if let Some(a) = action {
+            query = query.bind(a as u8 as i16);
+        }
+        if let Some(v) = min_score {
+            query = query.bind(v);
+        }
+        if let Some(v) = max_score {
+            query = query.bind(v);
+        }
+        if let Some(v) = run_id {
+            query = query.bind(v);
+        }
+
+        let count = query.fetch_one(&self.pool).await.context(DatabaseSnafu)?;
+        Ok(count)
+    }
+
+    async fn discovered_jobs_stats(&self) -> Result<DiscoveredJobsStats, PipelineRepoError> {
+        let row = sqlx::query_as::<_, StatsRow>(
+            r#"SELECT
+                   COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE action = 0) AS discovered,
+                   COUNT(*) FILTER (WHERE action = 1) AS notified,
+                   COUNT(*) FILTER (WHERE action = 2) AS applied,
+                   COUNT(*) FILTER (WHERE action = 3) AS skipped,
+                   COUNT(*) FILTER (WHERE score IS NOT NULL) AS scored_count,
+                   AVG(score) FILTER (WHERE score IS NOT NULL) AS avg_score
+               FROM pipeline_discovered_jobs"#,
+        )
+        .fetch_one(&self.pool)
+        .await
+        .context(DatabaseSnafu)?;
+
+        Ok(DiscoveredJobsStats {
+            total: row.total,
+            by_action: DiscoveredJobsActionCounts {
+                discovered: row.discovered,
+                notified: row.notified,
+                applied: row.applied,
+                skipped: row.skipped,
+            },
+            scored_count: row.scored_count,
+            avg_score: row.avg_score,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct StatsRow {
+    total: i64,
+    discovered: i64,
+    notified: i64,
+    applied: i64,
+    skipped: i64,
+    scored_count: i64,
+    avg_score: Option<f64>,
 }

@@ -17,7 +17,9 @@
 use snafu::Snafu;
 use uuid::Uuid;
 
-use crate::types::{DiscoveredJob, DiscoveredJobAction, PipelineEvent, PipelineRun};
+use crate::types::{
+    DiscoveredJob, DiscoveredJobAction, DiscoveredJobsStats, PipelineEvent, PipelineRun,
+};
 
 // ---------------------------------------------------------------------------
 // Error
@@ -103,4 +105,29 @@ pub trait PipelineRepository: Send + Sync {
         score: Option<i32>,
         action: Option<DiscoveredJobAction>,
     ) -> Result<Option<DiscoveredJob>, PipelineRepoError>;
+
+    /// List discovered jobs across all runs with optional filters.
+    #[allow(clippy::too_many_arguments)]
+    async fn list_all_discovered_jobs(
+        &self,
+        action: Option<DiscoveredJobAction>,
+        min_score: Option<i32>,
+        max_score: Option<i32>,
+        run_id: Option<Uuid>,
+        sort_by: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<DiscoveredJob>, PipelineRepoError>;
+
+    /// Count discovered jobs matching filters (for pagination).
+    async fn count_discovered_jobs(
+        &self,
+        action: Option<DiscoveredJobAction>,
+        min_score: Option<i32>,
+        max_score: Option<i32>,
+        run_id: Option<Uuid>,
+    ) -> Result<i64, PipelineRepoError>;
+
+    /// Get aggregated stats for discovered jobs.
+    async fn discovered_jobs_stats(&self) -> Result<DiscoveredJobsStats, PipelineRepoError>;
 }

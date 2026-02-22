@@ -207,6 +207,28 @@ impl From<DiscoveredJobRow> for DiscoveredJob {
 }
 
 // ---------------------------------------------------------------------------
+// DiscoveredJobsStats — aggregated stats across all runs
+// ---------------------------------------------------------------------------
+
+/// Aggregated statistics for discovered jobs across all pipeline runs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveredJobsStats {
+    pub total: i64,
+    pub by_action: DiscoveredJobsActionCounts,
+    pub scored_count: i64,
+    pub avg_score: Option<f64>,
+}
+
+/// Breakdown of discovered jobs by action.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveredJobsActionCounts {
+    pub discovered: i64,
+    pub notified: i64,
+    pub applied: i64,
+    pub skipped: i64,
+}
+
+// ---------------------------------------------------------------------------
 // PipelineStreamEvent — SSE streaming events
 // ---------------------------------------------------------------------------
 
