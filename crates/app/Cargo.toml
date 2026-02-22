@@ -23,6 +23,7 @@ rara-server = { workspace = true }
 rara-telegram-bot = { workspace = true }
 rara-workers = { workspace = true }
 serde = { workspace = true }
+sqlx = { workspace = true }
 snafu = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

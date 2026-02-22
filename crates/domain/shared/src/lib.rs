@@ -16,6 +16,7 @@
 //!
 //! Shared cross-domain ID definitions.
 
+pub mod contacts;
 pub mod convert;
 pub mod id;
 pub mod notify;

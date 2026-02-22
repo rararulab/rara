@@ -83,10 +83,11 @@ pub(crate) async fn handle_message_direct(
     let bot_username = state.bot_username.as_deref();
     info!("receive message: {:?}", msg);
 
-    // Track contacts: record username → chat_id for outbound message routing.
+    // Track contacts: update chat_id in telegram_contact table if username
+    // matches an existing contact row.
     if let Some(from) = &msg.from {
         if let Some(username) = &from.username {
-            state.track_contact(username, msg.chat.id.0);
+            state.track_contact(username, msg.chat.id.0).await;
         }
     }
     if chat_is_public {

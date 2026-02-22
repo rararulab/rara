@@ -21,13 +21,12 @@
 //! runtime via the settings sync loop without restarting the process. It is
 //! protected by an `RwLock` and read on every message to check authorization.
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-};
+use std::sync::{Arc, RwLock};
 
+use rara_domain_shared::contacts::repository::ContactRepository;
 use teloxide::types::ChatId;
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 use crate::http_client::MainServiceHttpClient;
 
@@ -46,9 +45,8 @@ pub(crate) struct BotState {
     pub(crate) http_client:  Arc<MainServiceHttpClient>,
     /// Cancellation token for graceful shutdown.
     pub(crate) cancel:       CancellationToken,
-    /// Known contacts: maps lowercase telegram username → chat ID.
-    /// Populated as users interact with the bot.
-    pub(crate) contacts:     Arc<RwLock<HashMap<String, i64>>>,
+    /// Persistent contacts repository backed by the `telegram_contact` table.
+    pub(crate) contacts:     ContactRepository,
 }
 
 /// Runtime configuration that can be updated without restarting the bot.
@@ -69,6 +67,7 @@ impl BotState {
         allowed_group_chat_id: Option<i64>,
         http_client: Arc<MainServiceHttpClient>,
         cancel: CancellationToken,
+        pool: sqlx::PgPool,
     ) -> Self {
         Self {
             bot,
@@ -80,7 +79,7 @@ impl BotState {
             })),
             http_client,
             cancel,
-            contacts: Arc::new(RwLock::new(HashMap::new())),
+            contacts: ContactRepository::new(pool),
         }
     }
 
@@ -106,21 +105,24 @@ impl BotState {
 
     /// Record a contact from an incoming message.
     ///
-    /// Stores the mapping from lowercase username to chat ID so that outbound
-    /// notifications can resolve a username to a chat ID.
-    pub(crate) fn track_contact(&self, username: &str, chat_id: i64) {
-        if let Ok(mut map) = self.contacts.write() {
-            map.insert(username.to_lowercase(), chat_id);
+    /// Updates the chat_id for a contact in the `telegram_contact` table
+    /// if a matching username exists and the chat_id is not yet set.
+    pub(crate) async fn track_contact(&self, username: &str, chat_id: i64) {
+        if let Err(e) = self.contacts.set_chat_id(username, chat_id).await {
+            warn!(username, error = %e, "failed to update contact chat_id");
         }
     }
 
-    /// Resolve a username to a chat ID from known contacts.
-    pub(crate) fn resolve_contact(&self, username: &str) -> Option<i64> {
-        let normalized = username.trim_start_matches('@').to_lowercase();
-        self.contacts
-            .read()
-            .ok()
-            .and_then(|map| map.get(&normalized).copied())
+    /// Resolve a username to a chat ID from the contacts table.
+    pub(crate) async fn resolve_contact(&self, username: &str) -> Option<i64> {
+        match self.contacts.find_by_username(username).await {
+            Ok(Some(contact)) if contact.enabled => contact.chat_id,
+            Ok(_) => None,
+            Err(e) => {
+                warn!(username, error = %e, "failed to resolve contact");
+                None
+            }
+        }
     }
 
     /// Update runtime credentials and primary chat id.

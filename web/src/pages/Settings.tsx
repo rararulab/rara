@@ -18,10 +18,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import type {
+  CreateContactRequest,
   PromptFileView,
   PromptListView,
   RuntimeSettingsPatch,
   RuntimeSettingsView,
+  TelegramContact,
+  UpdateContactRequest,
 } from "@/api/types";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -55,8 +58,12 @@ import {
   EyeOff,
   Mail,
   MessageSquare,
+  Pencil,
+  Plus,
   Search,
   Sparkles,
+  Trash2,
+  Users,
   X,
 } from "lucide-react";
 
@@ -69,7 +76,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-type SettingKey = "ai" | "agent" | "telegram" | "composio";
+type SettingKey = "ai" | "agent" | "telegram" | "composio" | "contacts";
 type ToastState = { kind: "success" | "error"; message: string } | null;
 type OpenRouterModel = {
   id: string;
@@ -108,6 +115,14 @@ export default function Settings() {
   const [selectedSetting, setSelectedSetting] = useState<SettingKey | null>(null);
   const [toast, setToast] = useState<ToastState>(null);
 
+  // -- contacts state --
+  const [contactDialogOpen, setContactDialogOpen] = useState(false);
+  const [editingContact, setEditingContact] = useState<TelegramContact | null>(null);
+  const [contactName, setContactName] = useState("");
+  const [contactUsername, setContactUsername] = useState("");
+  const [contactNotes, setContactNotes] = useState("");
+  const [contactEnabled, setContactEnabled] = useState(true);
+
   const settingsQuery = useQuery({
     queryKey: ["settings"],
     queryFn: () => api.get<RuntimeSettingsView>("/api/v1/settings"),
@@ -118,6 +133,90 @@ export default function Settings() {
     queryKey: ["settings-prompts"],
     queryFn: () => api.get<PromptListView>("/api/v1/settings/prompts"),
   });
+
+  const contactsQuery = useQuery({
+    queryKey: ["contacts"],
+    queryFn: () => api.get<TelegramContact[]>("/api/v1/contacts"),
+  });
+
+  const createContactMutation = useMutation({
+    mutationFn: (req: CreateContactRequest) =>
+      api.post<TelegramContact>("/api/v1/contacts", req),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["contacts"] });
+      setContactDialogOpen(false);
+      setToast({ kind: "success", message: "Contact created." });
+    },
+    onError: (e: unknown) => {
+      const message = e instanceof Error ? e.message : "Failed to create contact";
+      setToast({ kind: "error", message });
+    },
+  });
+
+  const updateContactMutation = useMutation({
+    mutationFn: ({ id, req }: { id: string; req: UpdateContactRequest }) =>
+      api.put<TelegramContact>(`/api/v1/contacts/${id}`, req),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["contacts"] });
+      setContactDialogOpen(false);
+      setToast({ kind: "success", message: "Contact updated." });
+    },
+    onError: (e: unknown) => {
+      const message = e instanceof Error ? e.message : "Failed to update contact";
+      setToast({ kind: "error", message });
+    },
+  });
+
+  const deleteContactMutation = useMutation({
+    mutationFn: (id: string) => api.del(`/api/v1/contacts/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["contacts"] });
+      setToast({ kind: "success", message: "Contact deleted." });
+    },
+    onError: (e: unknown) => {
+      const message = e instanceof Error ? e.message : "Failed to delete contact";
+      setToast({ kind: "error", message });
+    },
+  });
+
+  const openNewContact = () => {
+    setEditingContact(null);
+    setContactName("");
+    setContactUsername("");
+    setContactNotes("");
+    setContactEnabled(true);
+    setContactDialogOpen(true);
+  };
+
+  const openEditContact = (contact: TelegramContact) => {
+    setEditingContact(contact);
+    setContactName(contact.name);
+    setContactUsername(contact.telegram_username);
+    setContactNotes(contact.notes ?? "");
+    setContactEnabled(contact.enabled);
+    setContactDialogOpen(true);
+  };
+
+  const handleSaveContact = () => {
+    if (editingContact) {
+      updateContactMutation.mutate({
+        id: editingContact.id,
+        req: {
+          name: contactName.trim() || undefined,
+          telegram_username: contactUsername.trim() || undefined,
+          notes: contactNotes.trim() || null,
+          enabled: contactEnabled,
+        },
+      });
+    } else {
+      createContactMutation.mutate({
+        name: contactName.trim(),
+        telegram_username: contactUsername.trim(),
+        notes: contactNotes.trim() || undefined,
+        enabled: contactEnabled,
+      });
+    }
+  };
 
   useEffect(() => {
     if (!settingsQuery.data) return;
@@ -508,7 +607,9 @@ export default function Settings() {
         ? "Composio"
       : selectedSetting === "agent"
         ? "Agent Personality"
-        : "Telegram Bot";
+        : selectedSetting === "contacts"
+          ? "Telegram Contacts"
+          : "Telegram Bot";
 
   /** Render the global default model selector (single-select) */
   const renderDefaultModelSelector = () => {
@@ -825,6 +926,29 @@ export default function Settings() {
           <div className="flex items-center gap-3">
             <Badge variant={current.telegram.configured ? "default" : "secondary"}>
               {current.telegram.configured ? "Configured" : "Not configured"}
+            </Badge>
+            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+          </div>
+        </button>
+
+        <button
+          type="button"
+          className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
+          onClick={() => openSetting("contacts")}
+        >
+          <div className="flex items-center gap-3">
+            <Users className="h-4 w-4 text-muted-foreground" />
+            <div className="space-y-1">
+              <p className="font-medium">Telegram Contacts</p>
+              <p className="text-xs text-muted-foreground">
+                {contactsQuery.data?.length ?? 0} contacts ·{" "}
+                {contactsQuery.data?.filter((c) => c.enabled).length ?? 0} enabled
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <Badge variant={(contactsQuery.data?.length ?? 0) > 0 ? "default" : "secondary"}>
+              {(contactsQuery.data?.length ?? 0) > 0 ? `${contactsQuery.data!.length} contacts` : "No contacts"}
             </Badge>
             <ChevronRight className="h-4 w-4 text-muted-foreground" />
           </div>
@@ -1169,18 +1293,173 @@ export default function Settings() {
             </div>
           )}
 
-          <DialogFooter className="border-t px-6 py-4">
-            <Button
-              variant="outline"
-              onClick={() => setSelectedSetting(null)}
-              disabled={updateMutation.isPending}
-            >
-              Cancel
-            </Button>
-            <Button onClick={handleSave} disabled={updateMutation.isPending}>
-              {updateMutation.isPending ? "Saving..." : "Save Settings"}
-            </Button>
-          </DialogFooter>
+          {selectedSetting === "contacts" && (
+            <div className="space-y-4 px-6 py-5">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">
+                  Manage allowed Telegram contacts. Only contacts in this list can receive messages via the send_telegram tool.
+                </p>
+                <Button type="button" variant="outline" size="sm" onClick={openNewContact}>
+                  <Plus className="mr-1 h-3 w-3" />
+                  Add
+                </Button>
+              </div>
+
+              {contactsQuery.isLoading && <Skeleton className="h-32 w-full" />}
+
+              {contactsQuery.data && contactsQuery.data.length === 0 && (
+                <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+                  No contacts yet. Add a contact to enable recipient-based messaging.
+                </div>
+              )}
+
+              {contactsQuery.data && contactsQuery.data.length > 0 && (
+                <div className="space-y-2">
+                  {contactsQuery.data.map((contact) => (
+                    <div
+                      key={contact.id}
+                      className="flex items-center justify-between gap-3 rounded-lg border bg-card p-3"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <p className="font-medium text-sm">{contact.name}</p>
+                          <Badge variant={contact.enabled ? "default" : "secondary"} className="text-[10px] px-1.5 py-0">
+                            {contact.enabled ? "Enabled" : "Disabled"}
+                          </Badge>
+                          {contact.chat_id != null && (
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                              Resolved
+                            </Badge>
+                          )}
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          @{contact.telegram_username}
+                          {contact.chat_id != null && ` · chat_id: ${contact.chat_id}`}
+                          {contact.notes && ` · ${contact.notes}`}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => openEditContact(contact)}
+                          title="Edit"
+                        >
+                          <Pencil className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                          onClick={() => {
+                            if (window.confirm(`Delete contact "${contact.name}"?`)) {
+                              deleteContactMutation.mutate(contact.id);
+                            }
+                          }}
+                          title="Delete"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Add/Edit Contact Dialog */}
+              <Dialog open={contactDialogOpen} onOpenChange={setContactDialogOpen}>
+                <DialogContent className="sm:max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>{editingContact ? "Edit Contact" : "Add Contact"}</DialogTitle>
+                    <DialogDescription>
+                      {editingContact
+                        ? "Update this contact's details."
+                        : "Add a new Telegram contact to the allowlist."}
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-4 py-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="contact-name">Name</Label>
+                      <Input
+                        id="contact-name"
+                        value={contactName}
+                        onChange={(e) => setContactName(e.target.value)}
+                        placeholder="John Doe"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="contact-username">Telegram Username</Label>
+                      <Input
+                        id="contact-username"
+                        value={contactUsername}
+                        onChange={(e) => setContactUsername(e.target.value)}
+                        placeholder="johndoe"
+                      />
+                      <p className="text-xs text-muted-foreground">Without the @ prefix.</p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="contact-notes">Notes</Label>
+                      <Input
+                        id="contact-notes"
+                        value={contactNotes}
+                        onChange={(e) => setContactNotes(e.target.value)}
+                        placeholder="Optional notes..."
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="contact-enabled">Enabled</Label>
+                      <Switch
+                        id="contact-enabled"
+                        checked={contactEnabled}
+                        onCheckedChange={setContactEnabled}
+                      />
+                    </div>
+                  </div>
+                  <DialogFooter>
+                    <Button
+                      variant="outline"
+                      onClick={() => setContactDialogOpen(false)}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={handleSaveContact}
+                      disabled={
+                        !contactName.trim() ||
+                        !contactUsername.trim() ||
+                        createContactMutation.isPending ||
+                        updateContactMutation.isPending
+                      }
+                    >
+                      {createContactMutation.isPending || updateContactMutation.isPending
+                        ? "Saving..."
+                        : editingContact
+                          ? "Update"
+                          : "Create"}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            </div>
+          )}
+
+          {selectedSetting !== "contacts" && (
+            <DialogFooter className="border-t px-6 py-4">
+              <Button
+                variant="outline"
+                onClick={() => setSelectedSetting(null)}
+                disabled={updateMutation.isPending}
+              >
+                Cancel
+              </Button>
+              <Button onClick={handleSave} disabled={updateMutation.isPending}>
+                {updateMutation.isPending ? "Saving..." : "Save Settings"}
+              </Button>
+            </DialogFooter>
+          )}
         </DialogContent>
       </Dialog>
 
