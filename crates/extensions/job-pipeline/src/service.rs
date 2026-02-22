@@ -32,7 +32,10 @@ use rara_agents::{
     runner::{AgentRunner, RunnerEvent, UserContent},
     tool_registry::ToolRegistry,
 };
-use rara_domain_shared::settings::{SettingsSvc, model::ModelScenario};
+use rara_domain_shared::{
+    notify::types::{NotificationPriority, SendTelegramNotificationRequest},
+    settings::{SettingsSvc, model::ModelScenario},
+};
 use snafu::Snafu;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
@@ -348,8 +351,59 @@ impl PipelineService {
                 .await;
         }
 
+        // 5. Send a completion notification via Telegram.
+        self.send_completion_notification(&pipeline_run).await;
+
         info!(run_id = %run_id, "pipeline run finished");
         Ok(())
+    }
+
+    /// Send a Telegram notification with the pipeline run result.
+    async fn send_completion_notification(&self, run: &crate::types::PipelineRun) {
+        let settings = self.settings_svc.current();
+        let chat_id = settings.telegram.chat_id;
+
+        let (emoji, status_label) = match run.status {
+            PipelineRunStatus::Completed => ("\u{2705}", "completed"),
+            PipelineRunStatus::Failed => ("\u{274c}", "failed"),
+            PipelineRunStatus::Cancelled => ("\u{1f6d1}", "cancelled"),
+            PipelineRunStatus::Running => return, // shouldn't happen
+        };
+
+        let mut body = format!("{emoji} Pipeline run {status_label}");
+
+        if let Some(summary) = &run.summary {
+            // Truncate summary for Telegram (max ~400 chars).
+            let truncated = if summary.len() > 400 {
+                format!("{}…", &summary[..400])
+            } else {
+                summary.clone()
+            };
+            body.push_str(&format!("\n\n{truncated}"));
+        }
+        if let Some(err) = &run.error {
+            let truncated = if err.len() > 400 {
+                format!("{}…", &err[..400])
+            } else {
+                err.clone()
+            };
+            body.push_str(&format!("\n\nError: {truncated}"));
+        }
+
+        let request = SendTelegramNotificationRequest {
+            chat_id,
+            subject: Some(format!("Pipeline {status_label}")),
+            body,
+            priority: NotificationPriority::Normal,
+            max_retries: 3,
+            reference_type: Some("pipeline_run".to_owned()),
+            reference_id: Some(run.id),
+            metadata: None,
+            photo_path: None,
+        };
+        if let Err(e) = self.notify_client.send_telegram(request).await {
+            warn!(error = %e, "failed to send pipeline completion notification");
+        }
     }
 
     /// Build the tool registry for the pipeline agent.
