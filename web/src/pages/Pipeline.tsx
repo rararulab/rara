@@ -723,11 +723,11 @@ function PipelineConfig() {
               </p>
             </div>
           )}
-          {pipeline.job_preferences && (
-            <>
-              <Separator />
-              <div className="space-y-2">
-                <p className="text-sm font-semibold">Job Preferences</p>
+          <Separator />
+          <div className="space-y-2">
+            <p className="text-sm font-semibold">Job Preferences</p>
+            {pipeline.job_preferences ? (
+              <>
                 <div className="rounded-lg border bg-muted/30 p-4">
                   <div className="whitespace-pre-wrap font-mono text-sm leading-relaxed">
                     {pipeline.job_preferences}
@@ -736,9 +736,19 @@ function PipelineConfig() {
                 <p className="text-xs text-muted-foreground">
                   Modify via chat with rara.
                 </p>
+              </>
+            ) : (
+              <div className="rounded-lg border border-dashed bg-muted/10 p-4 text-center">
+                <p className="text-sm text-muted-foreground">
+                  Not configured
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Tell rara about your ideal role, tech stack, location, and salary
+                  expectations to set up job preferences.
+                </p>
               </div>
-            </>
-          )}
+            )}
+          </div>
         </CardContent>
       )}
     </Card>
