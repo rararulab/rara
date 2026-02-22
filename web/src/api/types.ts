@@ -531,6 +531,42 @@ export interface PipelineStatus {
   running: boolean;
 }
 
+// Pipeline Run (from backend)
+export interface PipelineRun {
+  id: string;
+  status: "Running" | "Completed" | "Failed" | "Cancelled";
+  started_at: string;
+  finished_at: string | null;
+  jobs_found: number;
+  jobs_scored: number;
+  jobs_applied: number;
+  jobs_notified: number;
+  summary: string | null;
+  error: string | null;
+}
+
+// Pipeline Run Event (stored in DB)
+export interface PipelineRunEvent {
+  id: number;
+  run_id: string;
+  seq: number;
+  event_type: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+// Pipeline Stream Event (SSE)
+export type PipelineStreamEvent =
+  | { type: "started"; run_id: string }
+  | { type: "iteration"; index: number }
+  | { type: "thinking" }
+  | { type: "thinking_done" }
+  | { type: "tool_call_start"; id: string; name: string }
+  | { type: "tool_call_end"; id: string; name: string; success: boolean; error?: string }
+  | { type: "text_delta"; text: string }
+  | { type: "done"; summary: string; iterations: number; tool_calls: number }
+  | { type: "error"; message: string };
+
 // Coding Tasks
 export type CodingTaskStatus = 'Pending' | 'Cloning' | 'Running' | 'Completed' | 'Failed' | 'Merged' | 'MergeFailed';
 export type AgentType = 'Codex' | 'Claude';

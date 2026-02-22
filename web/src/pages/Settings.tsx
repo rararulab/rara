@@ -18,7 +18,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import type {
-  PipelineStatus,
   PromptFileView,
   PromptListView,
   RuntimeSettingsPatch,
@@ -54,14 +53,10 @@ import {
   ExternalLink,
   Eye,
   EyeOff,
-  FileText,
-  Loader2,
   Mail,
   MessageSquare,
-  Play,
   Search,
   Sparkles,
-  Square,
   X,
 } from "lucide-react";
 
@@ -73,7 +68,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 
 type SettingKey = "ai" | "agent" | "telegram" | "composio";
 type ToastState = { kind: "success" | "error"; message: string } | null;
@@ -459,53 +453,6 @@ export default function Settings() {
     [models],
   );
 
-  // ── Pipeline status & control ──────────────────────────────
-  const pipelineStatusQuery = useQuery({
-    queryKey: ["pipeline-status"],
-    queryFn: () => api.get<PipelineStatus>("/api/v1/pipeline/status"),
-    refetchInterval: (query) => {
-      // Poll every 5 seconds when pipeline is running
-      return query.state.data?.running ? 5000 : false;
-    },
-  });
-
-  const pipelineRunMutation = useMutation({
-    mutationFn: () => api.post<void>("/api/v1/pipeline/run"),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["pipeline-status"] });
-      setToast({ kind: "success", message: "Pipeline started." });
-    },
-    onError: (e: unknown) => {
-      if (e instanceof Error && "status" in e) {
-        const apiErr = e as Error & { status: number };
-        if (apiErr.status === 409) {
-          setToast({ kind: "error", message: "Pipeline is already running." });
-          return;
-        }
-        if (apiErr.status === 412) {
-          setToast({ kind: "error", message: "AI is not configured. Set up OpenRouter API key first." });
-          return;
-        }
-      }
-      const message = e instanceof Error ? e.message : "Failed to start pipeline";
-      setToast({ kind: "error", message });
-    },
-  });
-
-  const pipelineCancelMutation = useMutation({
-    mutationFn: () => api.post<void>("/api/v1/pipeline/cancel"),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["pipeline-status"] });
-      setToast({ kind: "success", message: "Pipeline cancelled." });
-    },
-    onError: (e: unknown) => {
-      const message = e instanceof Error ? e.message : "Failed to cancel pipeline";
-      setToast({ kind: "error", message });
-    },
-  });
-
-  const isPipelineRunning = pipelineStatusQuery.data?.running ?? false;
-
   if (settingsQuery.isLoading) {
     return (
       <div className="space-y-6">
@@ -860,133 +807,6 @@ export default function Settings() {
         </button>
 
       </div>
-
-      {/* ── Pipeline Control ─────────────────────────────────── */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div className="space-y-1">
-              <CardTitle>Pipeline Control</CardTitle>
-              <CardDescription>Run or cancel the job analysis pipeline.</CardDescription>
-            </div>
-            <div className="flex items-center gap-3">
-              <Badge variant={isPipelineRunning ? "default" : "secondary"}>
-                {isPipelineRunning ? (
-                  <span className="flex items-center gap-1.5">
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                    Running
-                  </span>
-                ) : (
-                  "Idle"
-                )}
-              </Badge>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center gap-3">
-            {isPipelineRunning ? (
-              <Button
-                variant="destructive"
-                onClick={() => pipelineCancelMutation.mutate()}
-                disabled={pipelineCancelMutation.isPending}
-              >
-                {pipelineCancelMutation.isPending ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Square className="mr-2 h-4 w-4" />
-                )}
-                Cancel Pipeline
-              </Button>
-            ) : (
-              <Button
-                onClick={() => pipelineRunMutation.mutate()}
-                disabled={pipelineRunMutation.isPending}
-              >
-                {pipelineRunMutation.isPending ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Play className="mr-2 h-4 w-4" />
-                )}
-                Run Pipeline
-              </Button>
-            )}
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => pipelineStatusQuery.refetch()}
-              disabled={pipelineStatusQuery.isFetching}
-              title="Refresh status"
-            >
-              <Loader2
-                className={`h-4 w-4 ${pipelineStatusQuery.isFetching ? "animate-spin" : ""}`}
-              />
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* ── Job Pipeline Settings ────────────────────────────── */}
-      {current.job_pipeline && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileText className="h-4 w-4" />
-              Job Pipeline Configuration
-            </CardTitle>
-            <CardDescription>
-              Score thresholds and resume path for the job analysis pipeline.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-1 rounded-lg border bg-muted/30 p-3">
-                <p className="text-xs font-medium text-muted-foreground">Auto-Apply Threshold</p>
-                <p className="text-2xl font-bold">{current.job_pipeline.score_threshold_auto}</p>
-                <p className="text-xs text-muted-foreground">
-                  Jobs scoring above this are auto-applied.
-                </p>
-              </div>
-              <div className="space-y-1 rounded-lg border bg-muted/30 p-3">
-                <p className="text-xs font-medium text-muted-foreground">Notify Threshold</p>
-                <p className="text-2xl font-bold">{current.job_pipeline.score_threshold_notify}</p>
-                <p className="text-xs text-muted-foreground">
-                  Jobs scoring above this trigger a notification.
-                </p>
-              </div>
-            </div>
-            {current.job_pipeline.resume_project_path && (
-              <div className="space-y-1 rounded-lg border bg-muted/30 p-3">
-                <p className="text-xs font-medium text-muted-foreground">Resume Project Path</p>
-                <p className="text-sm font-mono break-all">
-                  {current.job_pipeline.resume_project_path}
-                </p>
-              </div>
-            )}
-            {current.job_pipeline.job_preferences && (
-              <>
-                <Separator />
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <p className="text-sm font-semibold">Job Preferences</p>
-                    <Badge variant="secondary" className="text-[10px]">
-                      Read-only
-                    </Badge>
-                  </div>
-                  <div className="rounded-lg border bg-muted/30 p-4">
-                    <div className="whitespace-pre-wrap text-sm leading-relaxed font-mono">
-                      {current.job_pipeline.job_preferences}
-                    </div>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    Modify via chat with rara.
-                  </p>
-                </div>
-              </>
-            )}
-          </CardContent>
-        </Card>
-      )}
 
       {/* ── Gmail Status ─────────────────────────────────────── */}
       {current.gmail && (
