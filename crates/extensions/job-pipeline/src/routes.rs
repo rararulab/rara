@@ -14,11 +14,11 @@
 
 //! HTTP routes for the job pipeline service.
 
-use axum::{Json, extract::State, http::StatusCode, routing::{get, post}};
+use axum::{Json, extract::State, routing::{get, post}};
 use serde::Serialize;
 use utoipa_axum::router::OpenApiRouter;
 
-use crate::service::PipelineService;
+use crate::service::{PipelineError, PipelineService};
 
 /// Build `/api/v1/pipeline/...` routes.
 pub fn routes(service: PipelineService) -> OpenApiRouter {
@@ -35,7 +35,6 @@ pub fn routes(service: PipelineService) -> OpenApiRouter {
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 struct PipelineActionResponse {
-    status:  String,
     message: String,
 }
 
@@ -51,48 +50,21 @@ struct PipelineStatusResponse {
 /// `POST /api/v1/pipeline/run` -- trigger a pipeline run.
 async fn trigger_run(
     State(service): State<PipelineService>,
-) -> Result<Json<PipelineActionResponse>, (StatusCode, Json<PipelineActionResponse>)> {
-    match service.run().await {
-        Ok(()) => Ok(Json(PipelineActionResponse {
-            status:  "ok".to_owned(),
-            message: "Pipeline run started".to_owned(),
-        })),
-        Err(e) => {
-            let status_code = match &e {
-                crate::service::PipelineError::AlreadyRunning => StatusCode::CONFLICT,
-                crate::service::PipelineError::AiNotConfigured => {
-                    StatusCode::PRECONDITION_FAILED
-                }
-                _ => StatusCode::INTERNAL_SERVER_ERROR,
-            };
-            Err((
-                status_code,
-                Json(PipelineActionResponse {
-                    status:  "error".to_owned(),
-                    message: e.to_string(),
-                }),
-            ))
-        }
-    }
+) -> Result<Json<PipelineActionResponse>, PipelineError> {
+    service.run().await?;
+    Ok(Json(PipelineActionResponse {
+        message: "Pipeline run started".to_owned(),
+    }))
 }
 
 /// `POST /api/v1/pipeline/cancel` -- cancel a running pipeline.
 async fn cancel_run(
     State(service): State<PipelineService>,
-) -> Result<Json<PipelineActionResponse>, (StatusCode, Json<PipelineActionResponse>)> {
-    match service.cancel() {
-        Ok(()) => Ok(Json(PipelineActionResponse {
-            status:  "ok".to_owned(),
-            message: "Pipeline cancellation requested".to_owned(),
-        })),
-        Err(e) => Err((
-            StatusCode::CONFLICT,
-            Json(PipelineActionResponse {
-                status:  "error".to_owned(),
-                message: e.to_string(),
-            }),
-        )),
-    }
+) -> Result<Json<PipelineActionResponse>, PipelineError> {
+    service.cancel()?;
+    Ok(Json(PipelineActionResponse {
+        message: "Pipeline cancellation requested".to_owned(),
+    }))
 }
 
 /// `GET /api/v1/pipeline/status` -- check pipeline status.

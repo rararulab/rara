@@ -26,6 +26,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use axum::http::StatusCode;
 use rara_agents::{
     provider::LlmProviderLoaderRef,
     runner::{AgentRunner, UserContent},
@@ -68,6 +69,17 @@ pub enum PipelineError {
 
     #[snafu(display("pipeline run failed: {message}"))]
     RunFailed { message: String },
+}
+
+impl axum::response::IntoResponse for PipelineError {
+    fn into_response(self) -> axum::response::Response {
+        let status = match &self {
+            Self::AlreadyRunning | Self::NotRunning => StatusCode::CONFLICT,
+            Self::AiNotConfigured => StatusCode::PRECONDITION_FAILED,
+            Self::RunFailed { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        (status, self.to_string()).into_response()
+    }
 }
 
 // ---------------------------------------------------------------------------
