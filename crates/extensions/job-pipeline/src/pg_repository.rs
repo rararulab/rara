@@ -370,7 +370,7 @@ impl PipelineRepository for PgPipelineRepository {
                    COUNT(*) FILTER (WHERE action = 2) AS applied,
                    COUNT(*) FILTER (WHERE action = 3) AS skipped,
                    COUNT(*) FILTER (WHERE score IS NOT NULL) AS scored_count,
-                   AVG(score) FILTER (WHERE score IS NOT NULL) AS avg_score
+                   AVG(score)::FLOAT8 FILTER (WHERE score IS NOT NULL) AS avg_score
                FROM pipeline_discovered_jobs"#,
         )
         .fetch_one(&self.pool)
