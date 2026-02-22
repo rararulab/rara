@@ -95,6 +95,7 @@ impl AgentTool for ListDiscoveredJobsForScoringTool {
                 json!({
                     "id": j.id,
                     "run_id": j.run_id,
+                    "job_id": j.job_id,
                     "title": j.title,
                     "company": j.company,
                     "location": j.location,
@@ -102,7 +103,7 @@ impl AgentTool for ListDiscoveredJobsForScoringTool {
                     "description": j.description,
                     "score": j.score,
                     "action": j.action.to_string(),
-                    "date_posted": j.date_posted,
+                    "posted_at": j.posted_at,
                     "created_at": j.created_at,
                 })
             })

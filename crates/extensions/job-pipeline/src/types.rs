@@ -155,19 +155,14 @@ pub enum DiscoveredJobAction {
 // DiscoveredJob
 // ---------------------------------------------------------------------------
 
-/// A job discovered during a pipeline run.
+/// A job discovered during a pipeline run (slim, FK-only).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoveredJob {
     pub id: Uuid,
     pub run_id: Uuid,
-    pub title: String,
-    pub company: Option<String>,
-    pub location: Option<String>,
-    pub url: Option<String>,
-    pub description: Option<String>,
+    pub job_id: Uuid,
     pub score: Option<i32>,
     pub action: DiscoveredJobAction,
-    pub date_posted: Option<String>,
     pub created_at: Timestamp,
 }
 
@@ -176,14 +171,9 @@ pub struct DiscoveredJob {
 pub(crate) struct DiscoveredJobRow {
     pub id: Uuid,
     pub run_id: Uuid,
-    pub title: String,
-    pub company: Option<String>,
-    pub location: Option<String>,
-    pub url: Option<String>,
-    pub description: Option<String>,
+    pub job_id: Uuid,
     pub score: Option<i32>,
     pub action: i16,
-    pub date_posted: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -192,16 +182,71 @@ impl From<DiscoveredJobRow> for DiscoveredJob {
         Self {
             id: row.id,
             run_id: row.run_id,
+            job_id: row.job_id,
+            score: row.score,
+            action: DiscoveredJobAction::from_repr(row.action as u8)
+                .unwrap_or(DiscoveredJobAction::Discovered),
+            created_at: chrono_to_timestamp(row.created_at),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DiscoveredJobWithDetails — JOIN with job table
+// ---------------------------------------------------------------------------
+
+/// A discovered job enriched with details from the `job` table (via JOIN).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveredJobWithDetails {
+    pub id: Uuid,
+    pub run_id: Uuid,
+    pub job_id: Uuid,
+    pub score: Option<i32>,
+    pub action: DiscoveredJobAction,
+    pub created_at: Timestamp,
+    // Job details from JOIN
+    pub title: String,
+    pub company: String,
+    pub location: Option<String>,
+    pub url: Option<String>,
+    pub description: Option<String>,
+    pub posted_at: Option<Timestamp>,
+}
+
+/// Database row for the JOIN query between `pipeline_discovered_jobs` and `job`.
+#[derive(Debug, sqlx::FromRow)]
+pub(crate) struct DiscoveredJobWithDetailsRow {
+    pub id: Uuid,
+    pub run_id: Uuid,
+    pub job_id: Uuid,
+    pub score: Option<i32>,
+    pub action: i16,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    // from job table
+    pub title: String,
+    pub company: String,
+    pub location: Option<String>,
+    pub url: Option<String>,
+    pub description: Option<String>,
+    pub posted_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl From<DiscoveredJobWithDetailsRow> for DiscoveredJobWithDetails {
+    fn from(row: DiscoveredJobWithDetailsRow) -> Self {
+        Self {
+            id: row.id,
+            run_id: row.run_id,
+            job_id: row.job_id,
+            score: row.score,
+            action: DiscoveredJobAction::from_repr(row.action as u8)
+                .unwrap_or(DiscoveredJobAction::Discovered),
+            created_at: chrono_to_timestamp(row.created_at),
             title: row.title,
             company: row.company,
             location: row.location,
             url: row.url,
             description: row.description,
-            score: row.score,
-            action: DiscoveredJobAction::from_repr(row.action as u8)
-                .unwrap_or(DiscoveredJobAction::Discovered),
-            date_posted: row.date_posted,
-            created_at: chrono_to_timestamp(row.created_at),
+            posted_at: chrono_opt_to_timestamp(row.posted_at),
         }
     }
 }

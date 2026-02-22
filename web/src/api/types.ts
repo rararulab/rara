@@ -521,19 +521,21 @@ export interface PipelineRun {
   error: string | null;
 }
 
-// Pipeline Discovered Job
+// Pipeline Discovered Job (with details from job table JOIN)
 export interface PipelineDiscoveredJob {
   id: string;
   run_id: string;
+  job_id: string;
+  score: number | null;
+  action: "Discovered" | "Notified" | "Applied" | "Skipped";
+  created_at: string;
+  // Job details from JOIN
   title: string;
-  company: string | null;
+  company: string;
   location: string | null;
   url: string | null;
   description: string | null;
-  score: number | null;
-  action: "Discovered" | "Notified" | "Applied" | "Skipped";
-  date_posted: string | null;
-  created_at: string;
+  posted_at: string | null;
 }
 
 // Discovered Jobs Stats

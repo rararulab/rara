@@ -40,8 +40,9 @@ impl AgentTool for SaveDiscoveredJobTool {
 
     fn description(&self) -> &str {
         "Save a discovered job to the database for tracking. Call this for each \
-         job after scoring it, so the frontend can display all discovered jobs \
-         for a pipeline run."
+         job after it has been persisted to the job table, so the frontend can \
+         display all discovered jobs for a pipeline run. Requires the job_id \
+         (UUID) from the job table."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -52,25 +53,9 @@ impl AgentTool for SaveDiscoveredJobTool {
                     "type": "string",
                     "description": "The pipeline run ID (UUID from the kick message)"
                 },
-                "title": {
+                "job_id": {
                     "type": "string",
-                    "description": "Job title"
-                },
-                "company": {
-                    "type": "string",
-                    "description": "Company name"
-                },
-                "location": {
-                    "type": "string",
-                    "description": "Job location"
-                },
-                "url": {
-                    "type": "string",
-                    "description": "Job posting URL"
-                },
-                "description": {
-                    "type": "string",
-                    "description": "Job description or summary"
+                    "description": "The job UUID from the job table"
                 },
                 "score": {
                     "type": "integer",
@@ -80,13 +65,9 @@ impl AgentTool for SaveDiscoveredJobTool {
                     "type": "string",
                     "enum": ["discovered", "notified", "applied", "skipped"],
                     "description": "What action was taken for this job"
-                },
-                "date_posted": {
-                    "type": "string",
-                    "description": "When the job was posted"
                 }
             },
-            "required": ["run_id", "title"]
+            "required": ["run_id", "job_id"]
         })
     }
 
@@ -100,17 +81,16 @@ impl AgentTool for SaveDiscoveredJobTool {
             .parse()
             .map_err(|e| anyhow::anyhow!("invalid run_id UUID: {e}"))?;
 
-        let title = params
-            .get("title")
+        let job_id_str = params
+            .get("job_id")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: title"))?;
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: job_id"))?;
 
-        let company = params.get("company").and_then(|v| v.as_str());
-        let location = params.get("location").and_then(|v| v.as_str());
-        let url = params.get("url").and_then(|v| v.as_str());
-        let description = params.get("description").and_then(|v| v.as_str());
+        let job_id: uuid::Uuid = job_id_str
+            .parse()
+            .map_err(|e| anyhow::anyhow!("invalid job_id UUID: {e}"))?;
+
         let score = params.get("score").and_then(|v| v.as_i64()).map(|v| v as i32);
-        let date_posted = params.get("date_posted").and_then(|v| v.as_str());
 
         let action = match params.get("action").and_then(|v| v.as_str()) {
             Some("notified") => DiscoveredJobAction::Notified,
@@ -121,23 +101,13 @@ impl AgentTool for SaveDiscoveredJobTool {
 
         let repo = PgPipelineRepository::new(self.pool.clone());
         match repo
-            .insert_discovered_job(
-                run_id,
-                title,
-                company,
-                location,
-                url,
-                description,
-                score,
-                action,
-                date_posted,
-            )
+            .insert_discovered_job(run_id, job_id, score, action)
             .await
         {
             Ok(job) => Ok(json!({
                 "status": "saved",
                 "id": job.id.to_string(),
-                "title": job.title,
+                "job_id": job.job_id.to_string(),
                 "score": job.score,
                 "action": format!("{}", job.action),
             })),
