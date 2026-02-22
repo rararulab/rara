@@ -304,6 +304,8 @@ pub struct ComposioSettingsView {
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct AiSettingsView {
     pub configured:           bool,
+    pub provider:             Option<String>,
+    pub ollama_base_url:      Option<String>,
     pub default_model:        Option<String>,
     pub job_model:            Option<String>,
     pub chat_model:           Option<String>,
@@ -355,7 +357,9 @@ impl Into<RuntimeSettingsView> for Settings {
 
         RuntimeSettingsView {
             ai:         AiSettingsView {
-                configured:           self.ai.openrouter_api_key.is_some(),
+                configured:           self.ai.is_configured(),
+                provider:             self.ai.provider.clone(),
+                ollama_base_url:      self.ai.ollama_base_url.clone(),
                 default_model:        self.ai.default_model.clone(),
                 job_model:            self.ai.job_model.clone(),
                 chat_model:           self.ai.chat_model.clone(),

@@ -45,7 +45,7 @@ impl FallibleWorker<AppState> for PipelineSchedulerWorker {
         };
 
         // Guard: AI must be configured (pipeline needs it).
-        if settings.ai.openrouter_api_key.is_none() {
+        if !settings.ai.is_configured() {
             debug!("pipeline-scheduler: skipped — AI not configured");
             return Ok(());
         }

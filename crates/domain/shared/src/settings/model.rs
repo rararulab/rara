@@ -42,6 +42,12 @@ pub enum ModelScenario {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AISettings {
     pub openrouter_api_key:   Option<String>,
+    /// LLM provider: `"openrouter"` (default) or `"ollama"`.
+    #[serde(default)]
+    pub provider:             Option<String>,
+    /// Ollama API base URL. Defaults to `http://localhost:11434`.
+    #[serde(default)]
+    pub ollama_base_url:      Option<String>,
     pub default_model:        Option<String>,
     pub job_model:            Option<String>,
     pub chat_model:           Option<String>,
@@ -57,6 +63,17 @@ pub struct AISettings {
 }
 
 impl AISettings {
+    /// Whether any LLM provider is configured.
+    ///
+    /// Ollama does not require an API key, so it is always considered
+    /// configured. OpenRouter requires `openrouter_api_key` to be set.
+    pub fn is_configured(&self) -> bool {
+        match self.provider.as_deref().unwrap_or("openrouter") {
+            "ollama" => true, // Ollama doesn't need an API key
+            _ => self.openrouter_api_key.is_some(),
+        }
+    }
+
     /// Resolve the model identifier for a given scenario.
     ///
     /// Falls back to `default_model`, then to `"openai/gpt-4o"`.
@@ -215,6 +232,11 @@ pub struct UpdateRequest {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct AiRuntimeSettingsPatch {
     pub openrouter_api_key:   Option<String>,
+    /// LLM provider: `"openrouter"` or `"ollama"`. Empty string clears
+    /// (reverts to default `"openrouter"`).
+    pub provider:             Option<String>,
+    /// Ollama API base URL. Empty string clears (reverts to default).
+    pub ollama_base_url:      Option<String>,
     pub default_model:        Option<String>,
     /// `Some(model)` to set, `None` to leave unchanged.
     /// Use `Some("")` or send an empty string to clear (revert to default).
@@ -286,6 +308,12 @@ impl Settings {
         if let Some(ai) = patch.ai {
             if let Some(key) = ai.openrouter_api_key {
                 self.ai.openrouter_api_key = normalize_secret(Some(key));
+            }
+            if let Some(provider) = ai.provider {
+                self.ai.provider = normalize_text(Some(provider));
+            }
+            if let Some(url) = ai.ollama_base_url {
+                self.ai.ollama_base_url = normalize_text(Some(url));
             }
             if let Some(model) = ai.default_model {
                 self.ai.default_model = normalize_text(Some(model));
@@ -389,6 +417,8 @@ impl Settings {
     /// Sanitize values by trimming and dropping empty strings.
     pub fn normalize(&mut self) {
         self.ai.openrouter_api_key = normalize_secret(self.ai.openrouter_api_key.take());
+        self.ai.provider = normalize_text(self.ai.provider.take());
+        self.ai.ollama_base_url = normalize_text(self.ai.ollama_base_url.take());
         self.ai.default_model = normalize_text(self.ai.default_model.take());
         self.ai.job_model = normalize_text(self.ai.job_model.take());
         self.ai.chat_model = normalize_text(self.ai.chat_model.take());

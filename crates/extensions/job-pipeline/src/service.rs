@@ -181,7 +181,7 @@ impl PipelineService {
 
         // Guard: AI must be configured.
         let settings = self.settings_svc.current();
-        if settings.ai.openrouter_api_key.is_none() {
+        if !settings.ai.is_configured() {
             return Err(PipelineError::AiNotConfigured);
         }
 

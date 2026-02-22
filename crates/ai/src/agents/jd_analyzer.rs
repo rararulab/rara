@@ -14,9 +14,7 @@
 
 //! Job posting analyzer agent.
 
-use rig::{client::CompletionClient, completion::Prompt, providers::openrouter};
-
-use crate::{agents::prompt::compose_system_prompt, error::AiError};
+use crate::{agents::prompt::compose_system_prompt, client::LlmClient, error::AiError};
 
 const SYSTEM_PROMPT_FILE: &str = "ai/jd_analyzer.system.md";
 const DEFAULT_SYSTEM_PROMPT: &str = include_str!("../../../../prompts/ai/jd_analyzer.system.md");
@@ -24,14 +22,14 @@ const DEFAULT_SYSTEM_PROMPT: &str = include_str!("../../../../prompts/ai/jd_anal
 /// Analyzes a job posting in markdown format and extracts structured
 /// information using AI.
 pub struct JdAnalyzerAgent {
-    client:      openrouter::Client,
+    client:      LlmClient,
     model:       String,
     soul_prompt: Option<String>,
 }
 
 impl JdAnalyzerAgent {
     pub(crate) fn new(
-        client: openrouter::Client,
+        client: LlmClient,
         model: String,
         soul_prompt: Option<String>,
     ) -> Self {
@@ -47,17 +45,9 @@ impl JdAnalyzerAgent {
         let base_prompt =
             rara_paths::load_prompt_markdown(SYSTEM_PROMPT_FILE, DEFAULT_SYSTEM_PROMPT);
         let system_prompt = compose_system_prompt(&base_prompt, self.soul_prompt.as_deref());
-        let agent = self
-            .client
-            .agent(&self.model)
-            .preamble(&system_prompt)
-            .build();
 
-        agent
-            .prompt(markdown)
+        self.client
+            .run_agent(&self.model, &system_prompt, markdown)
             .await
-            .map_err(|e| AiError::RequestFailed {
-                message: e.to_string(),
-            })
     }
 }
