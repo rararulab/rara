@@ -311,6 +311,7 @@ impl AppState {
             pool.clone(),
             notify_client.clone(),
             composio_auth_provider,
+            mcp_manager.clone(),
         );
         info!("Pipeline service initialized");
 

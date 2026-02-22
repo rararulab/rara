@@ -103,6 +103,7 @@ pub struct PipelineService {
     pool:          sqlx::PgPool,
     notify_client: rara_domain_shared::notify::client::NotifyClient,
     composio_auth: Arc<dyn rara_composio::ComposioAuthProvider>,
+    mcp_manager:   rara_mcp::manager::mgr::McpManager,
 
     /// Whether a pipeline run is currently in progress.
     running:       Arc<AtomicBool>,
@@ -124,6 +125,7 @@ impl PipelineService {
         pool: sqlx::PgPool,
         notify_client: rara_domain_shared::notify::client::NotifyClient,
         composio_auth: Arc<dyn rara_composio::ComposioAuthProvider>,
+        mcp_manager: rara_mcp::manager::mgr::McpManager,
     ) -> Self {
         let (broadcast_tx, _) = tokio::sync::broadcast::channel(256);
         Self {
@@ -134,6 +136,7 @@ impl PipelineService {
             pool,
             notify_client,
             composio_auth,
+            mcp_manager,
             running: Arc::new(AtomicBool::new(false)),
             cancel_flag: Arc::new(AtomicBool::new(false)),
             run_lock: Arc::new(Mutex::new(())),
@@ -222,7 +225,7 @@ impl PipelineService {
         let model = settings.ai.model_for(ModelScenario::Job).to_owned();
 
         // Build pipeline-specific tool registry.
-        let tools = Arc::new(self.build_pipeline_tools());
+        let tools = Arc::new(self.build_pipeline_tools().await);
 
         let system_prompt = DEFAULT_PIPELINE_PROMPT.to_owned();
 
@@ -355,7 +358,7 @@ impl PipelineService {
     /// - Standard primitive tools (db_query, db_mutate, notify, send_email, etc.)
     /// - Pipeline-specific tools (get_job_preferences, score_job, optimize_resume)
     /// - The existing job_pipeline tool (save job URL)
-    fn build_pipeline_tools(&self) -> ToolRegistry {
+    async fn build_pipeline_tools(&self) -> ToolRegistry {
         let mut registry = ToolRegistry::new();
 
         // Layer 1: Primitive tools (db, notify, email, storage, etc.)
@@ -393,6 +396,19 @@ impl PipelineService {
         registry.register_service(Arc::new(
             crate::tools::job_pipeline_tool::JobPipelineTool::new(self.job_service.clone()),
         ));
+
+        // Layer 3: MCP tools (e.g. LinkedIn job search)
+        match rara_mcp::tool_bridge::McpToolBridge::from_manager(self.mcp_manager.clone()).await {
+            Ok(bridges) => {
+                for bridge in bridges {
+                    let server = bridge.server_name().to_string();
+                    registry.register_mcp(Arc::new(bridge), server);
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to load MCP tools for pipeline agent");
+            }
+        }
 
         registry
     }

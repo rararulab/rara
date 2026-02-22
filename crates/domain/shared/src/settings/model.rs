@@ -28,6 +28,7 @@ pub struct Settings {
     pub updated_at:   Option<chrono::DateTime<chrono::Utc>>,
 }
 
+// TODO: optimize it, we dont need to hardcode it.
 /// Which scenario an AI model will be used for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelScenario {
@@ -168,7 +169,8 @@ pub struct JobPipelineSettings {
     pub score_threshold_notify: u8,
     /// Local path to typst resume project.
     pub resume_project_path:    Option<String>,
-    /// Cron expression for automatic pipeline runs (5-field format). `None` = disabled.
+    /// Cron expression for automatic pipeline runs (5-field format). `None` =
+    /// disabled.
     pub pipeline_cron:          Option<String>,
 }
 
@@ -183,7 +185,6 @@ impl Default for JobPipelineSettings {
         }
     }
 }
-
 
 /// Gmail SMTP runtime settings.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -402,8 +403,7 @@ impl Settings {
             normalize_text(self.job_pipeline.job_preferences.take());
         self.job_pipeline.resume_project_path =
             normalize_text(self.job_pipeline.resume_project_path.take());
-        self.job_pipeline.pipeline_cron =
-            normalize_text(self.job_pipeline.pipeline_cron.take());
+        self.job_pipeline.pipeline_cron = normalize_text(self.job_pipeline.pipeline_cron.take());
     }
 }
 
@@ -494,7 +494,7 @@ mod tests {
             ..Default::default()
         };
         settings.apply_patch(UpdateRequest {
-            ai:       Some(AiRuntimeSettingsPatch {
+            ai:           Some(AiRuntimeSettingsPatch {
                 job_model: Some("".to_owned()), // empty string clears
                 ..Default::default()
             }),
