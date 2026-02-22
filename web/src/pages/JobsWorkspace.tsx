@@ -16,7 +16,6 @@
 
 import { useSearchParams } from "react-router";
 import {
-  Bookmark,
   Briefcase,
   FileText,
   Globe,
@@ -28,7 +27,6 @@ import {
 import { TabBar } from "@/components/TabBar";
 import type { Tab } from "@/components/TabBar";
 import JobDiscovery from "@/pages/JobDiscovery";
-import SavedJobs from "@/pages/SavedJobs";
 import Applications from "@/pages/Applications";
 import Resumes from "@/pages/Resumes";
 import Interviews from "@/pages/Interviews";
@@ -52,7 +50,6 @@ const JOBS_TABS: Tab[] = [
     label: "Discovery",
     icon: <Search className="h-4 w-4" />,
   },
-  { key: "saved", label: "Saved", icon: <Bookmark className="h-4 w-4" /> },
   {
     key: "applications",
     label: "Applications",
@@ -85,7 +82,6 @@ export default function JobsWorkspace() {
           {activeTab === "pipeline" && <Pipeline />}
           {activeTab === "discovered" && <DiscoveredJobs />}
           {activeTab === "discovery" && <JobDiscovery />}
-          {activeTab === "saved" && <SavedJobs />}
           {activeTab === "applications" && <Applications />}
           {activeTab === "resumes" && <Resumes />}
           {activeTab === "interviews" && <Interviews />}

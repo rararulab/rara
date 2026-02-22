@@ -20,7 +20,6 @@ import { ServerStatusProvider } from '@/components/ServerStatusProvider';
 import DashboardLayout from '@/layouts/DashboardLayout';
 import AgentConsole from '@/pages/AgentConsole';
 import JobsWorkspace from '@/pages/JobsWorkspace';
-import SavedJobMarkdownPreview from '@/pages/SavedJobMarkdownPreview';
 import Settings from '@/pages/Settings';
 import TypstProjects from '@/pages/TypstProjects';
 import TypstEditor from '@/pages/TypstEditor';
@@ -34,9 +33,6 @@ export default function App() {
       <ServerStatusProvider>
         <BrowserRouter>
           <Routes>
-            {/* Standalone full-page routes */}
-            <Route path="saved-jobs/:id/markdown" element={<SavedJobMarkdownPreview />} />
-
             {/* Main layout */}
             <Route element={<DashboardLayout />}>
               <Route index element={<Navigate to="/agent" replace />} />
@@ -53,7 +49,6 @@ export default function App() {
               <Route path="scheduler" element={<Navigate to="/agent?tab=scheduler" replace />} />
               <Route path="notifications" element={<Navigate to="/agent?tab=notifications" replace />} />
               <Route path="discovery" element={<Navigate to="/jobs?tab=discovery" replace />} />
-              <Route path="saved-jobs" element={<Navigate to="/jobs?tab=saved" replace />} />
               <Route path="applications" element={<Navigate to="/jobs?tab=applications" replace />} />
               <Route path="resumes" element={<Navigate to="/jobs?tab=resumes" replace />} />
               <Route path="interviews" element={<Navigate to="/jobs?tab=interviews" replace />} />

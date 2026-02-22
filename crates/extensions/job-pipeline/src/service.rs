@@ -560,11 +560,6 @@ impl PipelineService {
         registry.register_service(Arc::new(pipeline_tools::RenderResumeTool::new()));
         registry.register_service(Arc::new(pipeline_tools::FinalizeResumeTool::new()));
 
-        // Re-use the existing job_pipeline tool (save job URL).
-        registry.register_service(Arc::new(
-            crate::tools::job_pipeline_tool::JobPipelineTool::new(self.job_service.clone()),
-        ));
-
         // Layer 3: MCP tools (e.g. LinkedIn job search)
         // Reconnect any disconnected MCP servers before loading tools.
         let reconnected = self.mcp_manager.reconnect_dead().await;

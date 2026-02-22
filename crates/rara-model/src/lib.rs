@@ -26,7 +26,6 @@ pub mod job;
 pub mod metrics;
 pub mod notify;
 pub mod resume;
-pub mod saved_job;
 pub mod scheduler;
 pub mod session;
 pub mod skill;

@@ -26,23 +26,6 @@ use crate::AgentTool;
 /// Allowed tables and their queryable columns.
 const TABLE_WHITELIST: &[(&str, &[&str])] = &[
     (
-        "saved_job",
-        &[
-            "id",
-            "url",
-            "title",
-            "company",
-            "status",
-            "match_score",
-            "error_message",
-            "crawled_at",
-            "analyzed_at",
-            "expires_at",
-            "created_at",
-            "updated_at",
-        ],
-    ),
-    (
         "application",
         &[
             "id",
@@ -109,7 +92,7 @@ impl AgentTool for DbQueryTool {
     fn name(&self) -> &str { "db_query" }
 
     fn description(&self) -> &str {
-        "Query database tables (read-only). Allowed tables: saved_job, application, resume, \
+        "Query database tables (read-only). Allowed tables: application, resume, \
          interview_plan. Use filters to narrow results. Returns a JSON array of matching rows."
     }
 
@@ -119,7 +102,7 @@ impl AgentTool for DbQueryTool {
             "properties": {
                 "table": {
                     "type": "string",
-                    "description": "Table to query: saved_job, application, resume, interview_plan"
+                    "description": "Table to query: application, resume, interview_plan"
                 },
                 "filters": {
                     "type": "object",
@@ -239,13 +222,13 @@ mod tests {
     #[test]
     fn whitelist_rejects_unknown_table() {
         assert!(allowed_columns("users").is_none());
-        assert!(allowed_columns("saved_job").is_some());
+        assert!(allowed_columns("application").is_some());
     }
 
     #[test]
     fn whitelist_rejects_unknown_column() {
-        let cols = allowed_columns("saved_job").unwrap();
-        assert!(cols.contains(&"url"));
+        let cols = allowed_columns("application").unwrap();
+        assert!(cols.contains(&"status"));
         assert!(!cols.contains(&"password"));
     }
 

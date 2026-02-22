@@ -20,7 +20,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use common_worker::{IntervalOrNotifyHandle, NotifyHandle};
+use common_worker::IntervalOrNotifyHandle;
 use opendal::Operator;
 use snafu::{ResultExt, Whatever};
 use tracing::{info, warn};
@@ -52,7 +52,6 @@ pub struct AppState {
 
     // -- infra --
     pub object_store: Operator,
-    pub crawl_client: crawl4ai::Crawl4AiClient,
 
     // -- memory --
     pub memory_manager: Arc<rara_memory::MemoryManager>,
@@ -73,7 +72,6 @@ pub struct AppState {
     pub coding_task_service: rara_coding_task::service::CodingTaskService,
 
     // -- worker coordination --
-    pub analyze_notify:   Arc<RwLock<Option<NotifyHandle>>>,
     pub proactive_notify: Arc<RwLock<Option<IntervalOrNotifyHandle>>>,
 }
 
@@ -83,7 +81,6 @@ impl AppState {
         db_store: &DBStore,
         object_store: Operator,
         notify_client: rara_domain_shared::notify::client::NotifyClient,
-        crawl4ai_url: &str,
     ) -> Result<Self, Whatever> {
         let pool = db_store.pool().clone();
 
@@ -119,11 +116,6 @@ impl AppState {
         let typst_service =
             rara_domain_typst::wire_typst_service(pool.clone(), object_store.clone());
         info!("Typst service initialized");
-
-        // -- infra clients ---------------------------------------------------
-
-        let crawl_client = crawl4ai::Crawl4AiClient::new(crawl4ai_url);
-        info!("Crawl4AI client configured");
 
         // -- chat service ----------------------------------------------------
 
@@ -172,9 +164,6 @@ impl AppState {
         }
 
         // Layer 2: Services
-        tool_registry.register_service(Arc::new(crate::tools::services::JobPipelineTool::new(
-            job_service.clone(),
-        )));
         tool_registry.register_service(Arc::new(crate::tools::services::ListResumesTool::new(
             resume_service.clone(),
         )));
@@ -183,7 +172,6 @@ impl AppState {
         ));
         tool_registry.register_service(Arc::new(crate::tools::services::AnalyzeResumeTool::new(
             resume_service.clone(),
-            job_service.clone(),
             ai_service.clone(),
         )));
         tool_registry.register_service(Arc::new(crate::tools::services::MemorySearchTool::new(
@@ -351,14 +339,12 @@ impl AppState {
             contact_repo,
             llm_provider,
             object_store,
-            crawl_client,
             memory_manager,
             agent_scheduler,
             skill_registry,
             mcp_manager,
             pipeline_service,
             coding_task_service,
-            analyze_notify: Arc::new(RwLock::new(None)),
             proactive_notify: Arc::new(RwLock::new(None)),
         })
     }
@@ -399,15 +385,12 @@ impl AppState {
         merge_openapi_router(
             &mut router,
             &mut api,
-            rara_domain_job::routes::management_routes(
-                self.job_service.clone(),
-                self.object_store.clone(),
-            ),
+            rara_domain_job::routes::discovery_routes(self.job_service.clone()),
         );
         merge_openapi_router(
             &mut router,
             &mut api,
-            rara_domain_job::routes::discovery_routes(self.job_service.clone()),
+            rara_domain_job::routes::bot_routes(self.job_service.clone()),
         );
         merge_openapi_router(
             &mut router,
