@@ -18,14 +18,45 @@
 use std::fmt::Write;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use rara_domain_shared::id::{ApplicationId, InterviewId};
-use rara_model::interview::InterviewPlan as StoreInterviewPlan;
-use sqlx::PgPool;
+use sqlx::{FromRow, PgPool};
+use uuid::Uuid;
 
 use crate::{
     error::InterviewError,
     types::{self, InterviewFilter, InterviewPlan},
 };
+
+// ---------------------------------------------------------------------------
+// DB row types (inlined from rara-model)
+// ---------------------------------------------------------------------------
+
+/// An interview preparation plan (DB row).
+#[derive(Debug, Clone, FromRow)]
+pub(crate) struct InterviewPlanRow {
+    pub id:              Uuid,
+    pub application_id:  Uuid,
+    pub title:           String,
+    pub company:         String,
+    pub position:        String,
+    pub job_description: Option<String>,
+    pub round:           String,
+    pub description:     Option<String>,
+    pub scheduled_at:    Option<DateTime<Utc>>,
+    pub task_status:     i16,
+    pub materials:       Option<serde_json::Value>,
+    pub notes:           Option<String>,
+    pub trace_id:        Option<String>,
+    pub is_deleted:      bool,
+    pub deleted_at:      Option<DateTime<Utc>>,
+    pub created_at:      DateTime<Utc>,
+    pub updated_at:      DateTime<Utc>,
+}
+
+// ---------------------------------------------------------------------------
+// PgInterviewPlanRepository
+// ---------------------------------------------------------------------------
 
 /// PostgreSQL implementation of the interview plan repository.
 pub struct PgInterviewPlanRepository {
@@ -48,9 +79,9 @@ fn map_err(e: sqlx::Error) -> InterviewError {
 #[async_trait]
 impl crate::repository::InterviewPlanRepository for PgInterviewPlanRepository {
     async fn save(&self, plan: &InterviewPlan) -> Result<InterviewPlan, InterviewError> {
-        let store: StoreInterviewPlan = plan.clone().into();
+        let store: InterviewPlanRow = plan.clone().into();
 
-        let row = sqlx::query_as::<_, StoreInterviewPlan>(
+        let row = sqlx::query_as::<_, InterviewPlanRow>(
             r#"INSERT INTO interview_plan
                    (id, application_id, title, company, position, job_description, round,
                     description, scheduled_at, task_status, materials, notes, trace_id,
@@ -85,7 +116,7 @@ impl crate::repository::InterviewPlanRepository for PgInterviewPlanRepository {
     }
 
     async fn find_by_id(&self, id: InterviewId) -> Result<Option<InterviewPlan>, InterviewError> {
-        let row = sqlx::query_as::<_, StoreInterviewPlan>(
+        let row = sqlx::query_as::<_, InterviewPlanRow>(
             "SELECT * FROM interview_plan WHERE id = $1 AND is_deleted = FALSE",
         )
         .bind(id.into_inner())
@@ -100,7 +131,7 @@ impl crate::repository::InterviewPlanRepository for PgInterviewPlanRepository {
         &self,
         app_id: ApplicationId,
     ) -> Result<Vec<InterviewPlan>, InterviewError> {
-        let rows = sqlx::query_as::<_, StoreInterviewPlan>(
+        let rows = sqlx::query_as::<_, InterviewPlanRow>(
             r#"SELECT * FROM interview_plan
                WHERE application_id = $1 AND is_deleted = FALSE
                ORDER BY created_at ASC"#,
@@ -150,7 +181,7 @@ impl crate::repository::InterviewPlanRepository for PgInterviewPlanRepository {
 
         sql.push_str(" ORDER BY created_at DESC");
 
-        let rows = sqlx::query_as::<_, StoreInterviewPlan>(&sql)
+        let rows = sqlx::query_as::<_, InterviewPlanRow>(&sql)
             .fetch_all(&self.pool)
             .await
             .map_err(map_err)?;
@@ -159,9 +190,9 @@ impl crate::repository::InterviewPlanRepository for PgInterviewPlanRepository {
     }
 
     async fn update(&self, plan: &InterviewPlan) -> Result<InterviewPlan, InterviewError> {
-        let store: StoreInterviewPlan = plan.clone().into();
+        let store: InterviewPlanRow = plan.clone().into();
 
-        let row = sqlx::query_as::<_, StoreInterviewPlan>(
+        let row = sqlx::query_as::<_, InterviewPlanRow>(
             r#"UPDATE interview_plan
                SET title = $2, company = $3, position = $4, job_description = $5,
                    round = $6, description = $7, scheduled_at = $8,

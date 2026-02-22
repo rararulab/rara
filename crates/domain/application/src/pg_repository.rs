@@ -18,14 +18,56 @@
 use std::fmt::Write;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use rara_domain_shared::id::ApplicationId;
-use rara_model::application::{Application as StoreApplication, ApplicationStatusHistory};
-use sqlx::PgPool;
+use sqlx::{FromRow, PgPool};
+use uuid::Uuid;
 
 use crate::{
     error::ApplicationError,
     types::{Application, ApplicationFilter, StatusChangeRecord},
 };
+
+// ---------------------------------------------------------------------------
+// DB row types (inlined from rara-model)
+// ---------------------------------------------------------------------------
+
+/// A job application record (DB row).
+#[derive(Debug, Clone, FromRow)]
+pub(crate) struct ApplicationRow {
+    pub id:           Uuid,
+    pub job_id:       Uuid,
+    pub resume_id:    Option<Uuid>,
+    pub channel:      i16,
+    pub status:       i16,
+    pub cover_letter: Option<String>,
+    pub notes:        Option<String>,
+    pub tags:         Vec<String>,
+    pub priority:     i16,
+    pub trace_id:     Option<String>,
+    pub is_deleted:   bool,
+    pub deleted_at:   Option<DateTime<Utc>>,
+    pub submitted_at: Option<DateTime<Utc>>,
+    pub created_at:   DateTime<Utc>,
+    pub updated_at:   DateTime<Utc>,
+}
+
+/// An immutable record of an application status transition (DB row).
+#[derive(Debug, Clone, FromRow)]
+pub(crate) struct ApplicationStatusHistoryRow {
+    pub id:             Uuid,
+    pub application_id: Uuid,
+    pub from_status:    Option<i16>,
+    pub to_status:      i16,
+    pub changed_by:     Option<String>,
+    pub note:           Option<String>,
+    pub trace_id:       Option<String>,
+    pub created_at:     DateTime<Utc>,
+}
+
+// ---------------------------------------------------------------------------
+// PgApplicationRepository
+// ---------------------------------------------------------------------------
 
 /// PostgreSQL implementation of the application repository.
 pub struct PgApplicationRepository {
@@ -48,9 +90,9 @@ fn map_err(e: sqlx::Error) -> ApplicationError {
 #[async_trait]
 impl crate::repository::ApplicationRepository for PgApplicationRepository {
     async fn save(&self, app: &Application) -> Result<Application, ApplicationError> {
-        let store: StoreApplication = app.clone().into();
+        let store: ApplicationRow = app.clone().into();
 
-        let row = sqlx::query_as::<_, StoreApplication>(
+        let row = sqlx::query_as::<_, ApplicationRow>(
             r#"INSERT INTO application
                    (id, job_id, resume_id, channel, status, cover_letter, notes,
                     tags, priority, trace_id, is_deleted, submitted_at, created_at, updated_at)
@@ -80,7 +122,7 @@ impl crate::repository::ApplicationRepository for PgApplicationRepository {
     }
 
     async fn find_by_id(&self, id: ApplicationId) -> Result<Option<Application>, ApplicationError> {
-        let row = sqlx::query_as::<_, StoreApplication>(
+        let row = sqlx::query_as::<_, ApplicationRow>(
             "SELECT * FROM application WHERE id = $1 AND is_deleted = FALSE",
         )
         .bind(id.into_inner())
@@ -130,7 +172,7 @@ impl crate::repository::ApplicationRepository for PgApplicationRepository {
 
         sql.push_str(" ORDER BY created_at DESC");
 
-        let rows = sqlx::query_as::<_, StoreApplication>(&sql)
+        let rows = sqlx::query_as::<_, ApplicationRow>(&sql)
             .fetch_all(&self.pool)
             .await
             .map_err(map_err)?;
@@ -146,9 +188,9 @@ impl crate::repository::ApplicationRepository for PgApplicationRepository {
     }
 
     async fn update(&self, app: &Application) -> Result<Application, ApplicationError> {
-        let store: StoreApplication = app.clone().into();
+        let store: ApplicationRow = app.clone().into();
 
-        let row = sqlx::query_as::<_, StoreApplication>(
+        let row = sqlx::query_as::<_, ApplicationRow>(
             r#"UPDATE application
                SET job_id = $2, resume_id = $3, channel = $4, status = $5,
                    cover_letter = $6, notes = $7, tags = $8, priority = $9,
@@ -194,7 +236,7 @@ impl crate::repository::ApplicationRepository for PgApplicationRepository {
         &self,
         record: &StatusChangeRecord,
     ) -> Result<(), ApplicationError> {
-        let store: ApplicationStatusHistory = record.clone().into();
+        let store: ApplicationStatusHistoryRow = record.clone().into();
 
         sqlx::query(
             r#"INSERT INTO application_status_history
@@ -220,7 +262,7 @@ impl crate::repository::ApplicationRepository for PgApplicationRepository {
         &self,
         application_id: ApplicationId,
     ) -> Result<Vec<StatusChangeRecord>, ApplicationError> {
-        let rows = sqlx::query_as::<_, ApplicationStatusHistory>(
+        let rows = sqlx::query_as::<_, ApplicationStatusHistoryRow>(
             r#"SELECT * FROM application_status_history
                WHERE application_id = $1
                ORDER BY created_at ASC"#,

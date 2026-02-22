@@ -15,14 +15,53 @@
 //! PostgreSQL implementation of [`JobRepository`].
 
 use async_trait::async_trait;
-use rara_model::job::Job;
-use sqlx::PgPool;
+use chrono::{DateTime, Utc};
+use sqlx::{FromRow, PgPool};
+use uuid::Uuid;
 
 use crate::{
     error::SourceError,
     repository::JobRepository,
     types::NormalizedJob,
 };
+
+// ---------------------------------------------------------------------------
+// DB row types (inlined from rara-model)
+// ---------------------------------------------------------------------------
+
+/// PostgreSQL enum mapping for `job_status`.
+#[derive(Debug, Clone, sqlx::Type)]
+#[sqlx(type_name = "job_status", rename_all = "snake_case")]
+pub(crate) enum JobStatusDb {
+    Active,
+    Archived,
+    Closed,
+}
+
+/// A job posting row from the `job` table.
+#[derive(Debug, Clone, FromRow)]
+pub(crate) struct JobRow {
+    pub id:              Uuid,
+    pub source_job_id:   String,
+    pub source_name:     String,
+    pub title:           String,
+    pub company:         String,
+    pub location:        Option<String>,
+    pub description:     Option<String>,
+    pub url:             Option<String>,
+    pub salary_min:      Option<i32>,
+    pub salary_max:      Option<i32>,
+    pub salary_currency: Option<String>,
+    pub tags:            Vec<String>,
+    pub status:          JobStatusDb,
+    pub raw_data:        Option<serde_json::Value>,
+    pub trace_id:        Option<String>,
+    pub is_deleted:      bool,
+    pub deleted_at:      Option<DateTime<Utc>>,
+    pub posted_at:       Option<DateTime<Utc>>,
+    pub created_at:      DateTime<Utc>,
+    pub updated_at:      DateTime<Utc>,
+}
 
 // ===========================================================================
 // PgJobRepository (discovery)
@@ -40,9 +79,9 @@ impl PgJobRepository {
 #[async_trait]
 impl JobRepository for PgJobRepository {
     async fn save(&self, job: &NormalizedJob) -> Result<NormalizedJob, SourceError> {
-        let db_job: Job = Job::from(job.clone());
+        let db_job: JobRow = JobRow::from(job.clone());
 
-        let row: Job = sqlx::query_as(
+        let row: JobRow = sqlx::query_as(
             r#"
             INSERT INTO job (
                 id, source_job_id, source_name, title, company,

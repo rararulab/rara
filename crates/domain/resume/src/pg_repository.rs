@@ -17,10 +17,10 @@
 use std::fmt::Write;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use jiff::{Zoned, tz::TimeZone};
 use rara_domain_shared::convert::timestamp_to_chrono;
-use rara_model::resume::Resume as StoreResume;
-use sqlx::PgPool;
+use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
 use crate::{
@@ -29,6 +29,37 @@ use crate::{
         CreateResumeRequest, Resume, ResumeError, ResumeFilter, ResumeSource, UpdateResumeRequest,
     },
 };
+
+// ---------------------------------------------------------------------------
+// DB row types (inlined from rara-model)
+// ---------------------------------------------------------------------------
+
+/// A versioned resume document (DB row).
+#[derive(Debug, Clone, FromRow)]
+pub(crate) struct ResumeRow {
+    pub id:                  Uuid,
+    pub title:               String,
+    pub version_tag:         String,
+    pub content_hash:        String,
+    pub source:              i16,
+    pub content:             Option<String>,
+    pub parent_resume_id:    Option<Uuid>,
+    pub target_job_id:       Option<Uuid>,
+    pub customization_notes: Option<String>,
+    pub tags:                Vec<String>,
+    pub metadata:            Option<serde_json::Value>,
+    pub pdf_object_key:      Option<String>,
+    pub pdf_file_size:       Option<i64>,
+    pub trace_id:            Option<String>,
+    pub is_deleted:          bool,
+    pub deleted_at:          Option<DateTime<Utc>>,
+    pub created_at:          DateTime<Utc>,
+    pub updated_at:          DateTime<Utc>,
+}
+
+// ---------------------------------------------------------------------------
+// PgResumeRepository
+// ---------------------------------------------------------------------------
 
 /// PostgreSQL implementation of the resume repository.
 pub struct PgResumeRepository {
@@ -61,7 +92,7 @@ impl crate::repository::ResumeRepository for PgResumeRepository {
         );
         let source_code = req.source as u8 as i16;
 
-        let row = sqlx::query_as::<_, StoreResume>(
+        let row = sqlx::query_as::<_, ResumeRow>(
             r#"INSERT INTO resume (id, title, version_tag, content_hash, source, content,
                    parent_resume_id, target_job_id, customization_notes, tags)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
@@ -85,7 +116,7 @@ impl crate::repository::ResumeRepository for PgResumeRepository {
     }
 
     async fn get_by_id(&self, id: Uuid) -> Result<Option<Resume>, ResumeError> {
-        let row = sqlx::query_as::<_, StoreResume>(
+        let row = sqlx::query_as::<_, ResumeRow>(
             "SELECT * FROM resume WHERE id = $1 AND is_deleted = FALSE",
         )
         .bind(id)
@@ -98,7 +129,7 @@ impl crate::repository::ResumeRepository for PgResumeRepository {
 
     async fn update(&self, id: Uuid, req: UpdateResumeRequest) -> Result<Resume, ResumeError> {
         // Fetch current row first to merge partial updates.
-        let current = sqlx::query_as::<_, StoreResume>(
+        let current = sqlx::query_as::<_, ResumeRow>(
             "SELECT * FROM resume WHERE id = $1 AND is_deleted = FALSE",
         )
         .bind(id)
@@ -126,7 +157,7 @@ impl crate::repository::ResumeRepository for PgResumeRepository {
             .map(content_hash)
             .unwrap_or(current.content_hash);
 
-        let row = sqlx::query_as::<_, StoreResume>(
+        let row = sqlx::query_as::<_, ResumeRow>(
             r#"UPDATE resume
                SET title = $2, content = $3, content_hash = $4, source = $5,
                    target_job_id = $6, customization_notes = $7, tags = $8
@@ -198,7 +229,7 @@ impl crate::repository::ResumeRepository for PgResumeRepository {
 
         sql.push_str(" ORDER BY created_at DESC");
 
-        let mut query = sqlx::query_as::<_, StoreResume>(&sql);
+        let mut query = sqlx::query_as::<_, ResumeRow>(&sql);
 
         if let Some(target_job_id) = filter.target_job_id {
             query = query.bind(target_job_id);
@@ -225,7 +256,7 @@ impl crate::repository::ResumeRepository for PgResumeRepository {
 
     async fn get_baseline(&self) -> Result<Option<Resume>, ResumeError> {
         let manual_source = ResumeSource::Manual as u8 as i16;
-        let row = sqlx::query_as::<_, StoreResume>(
+        let row = sqlx::query_as::<_, ResumeRow>(
             r#"SELECT * FROM resume
                WHERE source = $1
                  AND parent_resume_id IS NULL
@@ -242,7 +273,7 @@ impl crate::repository::ResumeRepository for PgResumeRepository {
     }
 
     async fn get_children(&self, parent_id: Uuid) -> Result<Vec<Resume>, ResumeError> {
-        let rows = sqlx::query_as::<_, StoreResume>(
+        let rows = sqlx::query_as::<_, ResumeRow>(
             "SELECT * FROM resume WHERE parent_resume_id = $1 AND is_deleted = FALSE ORDER BY \
              created_at",
         )
@@ -255,7 +286,7 @@ impl crate::repository::ResumeRepository for PgResumeRepository {
     }
 
     async fn get_version_history(&self, resume_id: Uuid) -> Result<Vec<Resume>, ResumeError> {
-        let rows = sqlx::query_as::<_, StoreResume>(
+        let rows = sqlx::query_as::<_, ResumeRow>(
             r#"WITH RECURSIVE ancestry AS (
                    SELECT * FROM resume WHERE id = $1 AND is_deleted = FALSE
                    UNION ALL
@@ -277,7 +308,7 @@ impl crate::repository::ResumeRepository for PgResumeRepository {
         &self,
         content_hash: &str,
     ) -> Result<Option<Resume>, ResumeError> {
-        let row = sqlx::query_as::<_, StoreResume>(
+        let row = sqlx::query_as::<_, ResumeRow>(
             "SELECT * FROM resume WHERE content_hash = $1 AND is_deleted = FALSE",
         )
         .bind(content_hash)
@@ -310,7 +341,7 @@ impl crate::repository::ResumeRepository for PgResumeRepository {
             Some(&req.content)
         };
 
-        let row = sqlx::query_as::<_, StoreResume>(
+        let row = sqlx::query_as::<_, ResumeRow>(
             r#"INSERT INTO resume (id, title, version_tag, content_hash, source, content,
                    parent_resume_id, target_job_id, customization_notes, tags,
                    pdf_object_key, pdf_file_size)

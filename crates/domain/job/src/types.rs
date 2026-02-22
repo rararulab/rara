@@ -16,7 +16,6 @@
 
 use jiff::Timestamp;
 use rara_domain_shared::convert;
-use rara_model::job::{Job, JobStatus};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -331,11 +330,13 @@ fn build_location(
 }
 
 // ---------------------------------------------------------------------------
-// Job (DB model) -> NormalizedJob
+// JobRow (DB model) -> NormalizedJob
 // ---------------------------------------------------------------------------
 
-impl From<Job> for NormalizedJob {
-    fn from(row: Job) -> Self {
+use crate::pg_repository::{JobRow, JobStatusDb};
+
+impl From<JobRow> for NormalizedJob {
+    fn from(row: JobRow) -> Self {
         Self {
             id:              row.id,
             source_job_id:   row.source_job_id,
@@ -356,10 +357,10 @@ impl From<Job> for NormalizedJob {
 }
 
 // ---------------------------------------------------------------------------
-// NormalizedJob -> Job (for INSERT -- fills in defaults)
+// NormalizedJob -> JobRow (for INSERT -- fills in defaults)
 // ---------------------------------------------------------------------------
 
-impl From<NormalizedJob> for Job {
+impl From<NormalizedJob> for JobRow {
     fn from(nj: NormalizedJob) -> Self {
         let now = chrono::Utc::now();
         Self {
@@ -375,7 +376,7 @@ impl From<NormalizedJob> for Job {
             salary_max:      nj.salary_max,
             salary_currency: nj.salary_currency,
             tags:            nj.tags,
-            status:          JobStatus::Active,
+            status:          JobStatusDb::Active,
             raw_data:        nj.raw_data,
             trace_id:        None,
             is_deleted:      false,

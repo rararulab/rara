@@ -275,7 +275,8 @@ use rara_domain_shared::convert::{
     chrono_opt_to_timestamp, chrono_to_timestamp, timestamp_opt_to_chrono, timestamp_to_chrono,
     u8_from_i16,
 };
-use rara_model::interview::InterviewPlan as StoreInterviewPlan;
+
+use crate::pg_repository::InterviewPlanRow;
 
 /// Parse a round string from the DB into a domain `InterviewRound`.
 pub fn parse_interview_round(s: &str) -> InterviewRound {
@@ -311,12 +312,12 @@ fn interview_task_status_from_i16(value: i16) -> InterviewTaskStatus {
         .unwrap_or_else(|| panic!("invalid interview_plan.task_status: {value}"))
 }
 
-/// Store `InterviewPlan` -> Domain `InterviewPlan`.
+/// `InterviewPlanRow` (DB) -> Domain `InterviewPlan`.
 ///
 /// `materials` (JSONB) is deserialized into `PrepMaterials`; on failure
 /// we fall back to `PrepMaterials::default()`.
-impl From<StoreInterviewPlan> for InterviewPlan {
-    fn from(p: StoreInterviewPlan) -> Self {
+impl From<InterviewPlanRow> for InterviewPlan {
+    fn from(p: InterviewPlanRow) -> Self {
         let prep_materials: PrepMaterials = p
             .materials
             .as_ref()
@@ -344,10 +345,10 @@ impl From<StoreInterviewPlan> for InterviewPlan {
     }
 }
 
-/// Domain `InterviewPlan` -> Store `InterviewPlan`.
+/// Domain `InterviewPlan` -> `InterviewPlanRow` (DB).
 ///
 /// `prep_materials` is serialised to JSONB.
-impl From<InterviewPlan> for StoreInterviewPlan {
+impl From<InterviewPlan> for InterviewPlanRow {
     fn from(p: InterviewPlan) -> Self {
         let materials = serde_json::to_value(&p.prep_materials).ok();
 

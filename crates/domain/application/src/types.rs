@@ -319,7 +319,8 @@ use rara_domain_shared::convert::{
     chrono_opt_to_timestamp, chrono_to_timestamp, timestamp_opt_to_chrono, timestamp_to_chrono,
     u8_from_i16,
 };
-use rara_model::application::{Application as StoreApplication, ApplicationStatusHistory};
+
+use crate::pg_repository::{ApplicationRow, ApplicationStatusHistoryRow};
 
 fn application_status_from_i16(value: i16) -> ApplicationStatus {
     let repr = u8_from_i16(value, "application.status");
@@ -338,13 +339,13 @@ fn application_priority_from_i16(value: i16) -> Priority {
     Priority::from_repr(repr).unwrap_or_else(|| panic!("invalid application.priority: {value}"))
 }
 
-/// Store `Application` -> Domain `Application`.
+/// `ApplicationRow` (DB) -> Domain `Application`.
 ///
 /// `resume_id` in the store is `Option<Uuid>`, but in the domain it is
 /// a `ResumeId` (mandatory). We fall back to `Uuid::nil()` when the
 /// store row has no resume linked.
-impl From<StoreApplication> for Application {
-    fn from(a: StoreApplication) -> Self {
+impl From<ApplicationRow> for Application {
+    fn from(a: ApplicationRow) -> Self {
         Self {
             id:           ApplicationId::from(a.id),
             job_id:       JobSourceId::from(a.job_id),
@@ -364,11 +365,11 @@ impl From<StoreApplication> for Application {
     }
 }
 
-/// Domain `Application` -> Store `Application`.
+/// Domain `Application` -> `ApplicationRow` (DB).
 ///
 /// `resume_id` is stored as `Option<Uuid>`; if the domain id is nil we
 /// store `None`.
-impl From<Application> for StoreApplication {
+impl From<Application> for ApplicationRow {
     fn from(a: Application) -> Self {
         let resume_uuid = a.resume_id.into_inner();
         Self {
@@ -396,7 +397,7 @@ impl From<Application> for StoreApplication {
 }
 
 // ---------------------------------------------------------------------------
-// ApplicationStatusHistory / StatusChangeRecord conversions
+// ApplicationStatusHistoryRow / StatusChangeRecord conversions
 // ---------------------------------------------------------------------------
 
 /// Parse a `changed_by` string into a domain `ChangeSource`.
@@ -412,11 +413,11 @@ fn parse_change_source(s: Option<&str>) -> ChangeSource {
     }
 }
 
-/// Store `ApplicationStatusHistory` -> Domain `StatusChangeRecord`.
+/// `ApplicationStatusHistoryRow` (DB) -> Domain `StatusChangeRecord`.
 ///
 /// `from_status` in the store is `Option`; if absent we default to `Draft`.
-impl From<ApplicationStatusHistory> for StatusChangeRecord {
-    fn from(h: ApplicationStatusHistory) -> Self {
+impl From<ApplicationStatusHistoryRow> for StatusChangeRecord {
+    fn from(h: ApplicationStatusHistoryRow) -> Self {
         Self {
             id:             h.id,
             application_id: ApplicationId::from(h.application_id),
@@ -432,8 +433,8 @@ impl From<ApplicationStatusHistory> for StatusChangeRecord {
     }
 }
 
-/// Domain `StatusChangeRecord` -> Store `ApplicationStatusHistory`.
-impl From<StatusChangeRecord> for ApplicationStatusHistory {
+/// Domain `StatusChangeRecord` -> `ApplicationStatusHistoryRow` (DB).
+impl From<StatusChangeRecord> for ApplicationStatusHistoryRow {
     fn from(r: StatusChangeRecord) -> Self {
         Self {
             id:             r.id,

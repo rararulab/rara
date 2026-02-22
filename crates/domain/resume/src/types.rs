@@ -240,16 +240,17 @@ use rara_domain_shared::convert::{
     chrono_opt_to_timestamp, chrono_to_timestamp, timestamp_opt_to_chrono, timestamp_to_chrono,
     u8_from_i16,
 };
-use rara_model::resume::Resume as StoreResume;
+
+use crate::pg_repository::ResumeRow;
 
 fn resume_source_from_i16(value: i16) -> ResumeSource {
     let repr = u8_from_i16(value, "resume.source");
     ResumeSource::from_repr(repr).unwrap_or_else(|| panic!("invalid resume.source: {value}"))
 }
 
-/// Store `Resume` -> Domain `Resume`.
-impl From<StoreResume> for Resume {
-    fn from(r: StoreResume) -> Self {
+/// `ResumeRow` (DB) -> Domain `Resume`.
+impl From<ResumeRow> for Resume {
+    fn from(r: ResumeRow) -> Self {
         Self {
             id:                  r.id,
             title:               r.title,
@@ -273,8 +274,8 @@ impl From<StoreResume> for Resume {
     }
 }
 
-/// Domain `Resume` -> Store `Resume`.
-impl From<Resume> for StoreResume {
+/// Domain `Resume` -> `ResumeRow` (DB).
+impl From<Resume> for ResumeRow {
     fn from(r: Resume) -> Self {
         Self {
             id:                  r.id,
