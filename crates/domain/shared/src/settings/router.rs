@@ -315,10 +315,11 @@ pub struct AiSettingsView {
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct TgSettingsResp {
-    pub configured:            bool,
-    pub chat_id:               Option<i64>,
-    pub allowed_group_chat_id: Option<i64>,
-    pub token_hint:            Option<String>,
+    pub configured:              bool,
+    pub chat_id:                 Option<i64>,
+    pub allowed_group_chat_id:   Option<i64>,
+    pub notification_channel_id: Option<i64>,
+    pub token_hint:              Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
@@ -364,11 +365,12 @@ impl Into<RuntimeSettingsView> for Settings {
                 job_model_fallbacks:  self.ai.job_model_fallbacks.clone(),
             },
             telegram:   TgSettingsResp {
-                configured:            self.telegram.bot_token.is_some()
+                configured:              self.telegram.bot_token.is_some()
                     && self.telegram.chat_id.is_some(),
-                chat_id:               self.telegram.chat_id,
-                allowed_group_chat_id: self.telegram.allowed_group_chat_id,
-                token_hint:            secret_hint(self.telegram.bot_token.as_deref()),
+                chat_id:                 self.telegram.chat_id,
+                allowed_group_chat_id:   self.telegram.allowed_group_chat_id,
+                notification_channel_id: self.telegram.notification_channel_id,
+                token_hint:              secret_hint(self.telegram.bot_token.as_deref()),
             },
             agent:        AgentSettingsView {
                 soul:               self.agent.soul.clone(),

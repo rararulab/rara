@@ -18,6 +18,7 @@ git2.workspace = true
 jiff.workspace = true
 opendal.workspace = true
 rara-agents = { workspace = true }
+reqwest = { workspace = true }
 rara-ai = { workspace = true }
 rara-mcp = { workspace = true }
 rara-composio = { workspace = true }

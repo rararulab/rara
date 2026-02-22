@@ -264,6 +264,7 @@ export interface RuntimeSettingsView {
     configured: boolean;
     chat_id: number | null;
     allowed_group_chat_id: number | null;
+    notification_channel_id: number | null;
     token_hint: string | null;
   };
   agent: {
@@ -297,6 +298,7 @@ export interface RuntimeSettingsPatch {
     bot_token?: string;
     chat_id?: number;
     allowed_group_chat_id?: number;
+    notification_channel_id?: number | null;
   };
   agent?: {
     soul?: string | null;

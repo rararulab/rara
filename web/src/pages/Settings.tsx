@@ -98,6 +98,7 @@ export default function Settings() {
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramChatId, setTelegramChatId] = useState("");
   const [telegramAllowedGroupChatId, setTelegramAllowedGroupChatId] = useState("");
+  const [telegramNotificationChannelId, setTelegramNotificationChannelId] = useState("");
   const [composioApiKey, setComposioApiKey] = useState("");
   const [showComposioApiKey, setShowComposioApiKey] = useState(false);
   const [composioEntityId, setComposioEntityId] = useState("");
@@ -141,6 +142,11 @@ export default function Settings() {
       settingsQuery.data.telegram.allowed_group_chat_id == null
         ? ""
         : String(settingsQuery.data.telegram.allowed_group_chat_id),
+    );
+    setTelegramNotificationChannelId(
+      settingsQuery.data.telegram.notification_channel_id == null
+        ? ""
+        : String(settingsQuery.data.telegram.notification_channel_id),
     );
     setComposioApiKey(settingsQuery.data.agent.composio.api_key ?? "");
     setComposioEntityId(settingsQuery.data.agent.composio.entity_id ?? "");
@@ -247,6 +253,22 @@ export default function Settings() {
         telegramPatch.allowed_group_chat_id = parsed;
       }
     }
+    // notification_channel_id: empty string means clear (send null), number means set
+    const trimmedNotifChannel = telegramNotificationChannelId.trim();
+    if (trimmedNotifChannel === "") {
+      // User cleared the field — if currently set, send null to clear it
+      if (current.telegram.notification_channel_id != null) {
+        telegramPatch.notification_channel_id = null;
+      }
+    } else {
+      const parsed = Number.parseInt(trimmedNotifChannel, 10);
+      if (!Number.isFinite(parsed)) {
+        return null;
+      }
+      if (parsed !== current.telegram.notification_channel_id) {
+        telegramPatch.notification_channel_id = parsed;
+      }
+    }
     if (Object.keys(telegramPatch).length > 0) {
       next.telegram = telegramPatch;
     }
@@ -285,6 +307,7 @@ export default function Settings() {
     settingsQuery.data,
     telegramAllowedGroupChatId,
     telegramChatId,
+    telegramNotificationChannelId,
     telegramToken,
   ]);
 
@@ -794,7 +817,8 @@ export default function Settings() {
               <p className="text-xs text-muted-foreground">
                 Chat ID: {current.telegram.chat_id ?? "Not set"} · Token:{" "}
                 {current.telegram.token_hint ?? "Not set"} · Group:{" "}
-                {current.telegram.allowed_group_chat_id ?? "Not set"}
+                {current.telegram.allowed_group_chat_id ?? "Not set"} · Notif Channel:{" "}
+                {current.telegram.notification_channel_id ?? "Not set"}
               </p>
             </div>
           </div>
@@ -1104,6 +1128,25 @@ export default function Settings() {
                   />
                   <p className="text-xs text-muted-foreground">
                     Bot only responds in this group when mentioned. Private chats still work.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label
+                    htmlFor="telegram-notification-channel-id"
+                    className="text-base font-semibold"
+                  >
+                    Notification Channel ID
+                  </Label>
+                  <Input
+                    id="telegram-notification-channel-id"
+                    value={telegramNotificationChannelId}
+                    onChange={(e) => setTelegramNotificationChannelId(e.target.value)}
+                    placeholder="-1001234567890"
+                    className="h-11"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Telegram channel ID for automated notifications (e.g. pipeline results).
+                    Leave empty to use private chat.
                   </p>
                 </div>
                 <div className="space-y-2">

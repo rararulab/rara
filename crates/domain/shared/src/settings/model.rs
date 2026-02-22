@@ -95,9 +95,14 @@ impl AISettings {
 /// Telegram-specific runtime settings.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TelegramSettings {
-    pub bot_token:             Option<String>,
-    pub chat_id:               Option<i64>,
-    pub allowed_group_chat_id: Option<i64>,
+    pub bot_token:               Option<String>,
+    pub chat_id:                 Option<i64>,
+    pub allowed_group_chat_id:   Option<i64>,
+    /// Dedicated Telegram channel/group ID for automated notifications
+    /// (e.g. pipeline results). When set, pipeline notifications are sent
+    /// directly via the Bot API instead of going through PGMQ.
+    #[serde(default)]
+    pub notification_channel_id: Option<i64>,
 }
 
 /// Agent personality and proactive messaging settings.
@@ -227,9 +232,12 @@ pub struct AiRuntimeSettingsPatch {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct TelegramRuntimeSettingsPatch {
-    pub bot_token:             Option<String>,
-    pub chat_id:               Option<i64>,
-    pub allowed_group_chat_id: Option<i64>,
+    pub bot_token:               Option<String>,
+    pub chat_id:                 Option<i64>,
+    pub allowed_group_chat_id:   Option<i64>,
+    /// Double-Option: `None` = leave unchanged, `Some(None)` = clear,
+    /// `Some(Some(id))` = set.
+    pub notification_channel_id: Option<Option<i64>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
@@ -308,6 +316,9 @@ impl Settings {
             }
             if let Some(allowed_group_chat_id) = telegram.allowed_group_chat_id {
                 self.telegram.allowed_group_chat_id = Some(allowed_group_chat_id);
+            }
+            if let Some(notification_channel_id) = telegram.notification_channel_id {
+                self.telegram.notification_channel_id = notification_channel_id;
             }
         }
 

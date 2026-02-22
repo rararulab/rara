@@ -359,9 +359,12 @@ impl PipelineService {
     }
 
     /// Send a Telegram notification with the pipeline run result.
+    ///
+    /// When `notification_channel_id` is configured, sends directly via the
+    /// Telegram Bot API (fire-and-forget, no PGMQ persistence). Otherwise
+    /// falls back to the PGMQ-based `notify_client`.
     async fn send_completion_notification(&self, run: &crate::types::PipelineRun) {
         let settings = self.settings_svc.current();
-        let chat_id = settings.telegram.chat_id;
 
         let (emoji, status_label) = match run.status {
             PipelineRunStatus::Completed => ("\u{2705}", "completed"),
@@ -390,8 +393,40 @@ impl PipelineService {
             body.push_str(&format!("\n\nError: {truncated}"));
         }
 
+        // Fast path: send directly to the dedicated notification channel via
+        // Bot API, bypassing PGMQ entirely.
+        if let (Some(token), Some(channel_id)) = (
+            settings.telegram.bot_token.as_deref(),
+            settings.telegram.notification_channel_id,
+        ) {
+            let url = format!("https://api.telegram.org/bot{token}/sendMessage");
+            let payload = serde_json::json!({
+                "chat_id": channel_id,
+                "text": body,
+                "parse_mode": "Markdown",
+            });
+            match reqwest::Client::new().post(&url).json(&payload).send().await {
+                Ok(resp) if !resp.status().is_success() => {
+                    let status = resp.status();
+                    let text = resp.text().await.unwrap_or_default();
+                    warn!(
+                        %status, body = %text,
+                        "telegram channel notification failed"
+                    );
+                }
+                Err(e) => {
+                    warn!(error = %e, "failed to send telegram channel notification");
+                }
+                Ok(_) => {
+                    info!("pipeline notification sent to channel {channel_id}");
+                }
+            }
+            return;
+        }
+
+        // Fallback: enqueue via PGMQ-based notify client.
         let request = SendTelegramNotificationRequest {
-            chat_id,
+            chat_id: settings.telegram.chat_id,
             subject: Some(format!("Pipeline {status_label}")),
             body,
             priority: NotificationPriority::Normal,
