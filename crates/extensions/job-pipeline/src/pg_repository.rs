@@ -389,6 +389,23 @@ impl PipelineRepository for PgPipelineRepository {
             avg_score: row.avg_score,
         })
     }
+
+    async fn reconcile_stale_runs(&self) -> Result<u64, PipelineRepoError> {
+        let result = sqlx::query(
+            r#"UPDATE pipeline_runs
+               SET status = $1,
+                   finished_at = COALESCE(finished_at, now()),
+                   error = COALESCE(error, 'Pipeline service restarted while run was in progress')
+               WHERE status = $2"#,
+        )
+        .bind(crate::types::PipelineRunStatus::Cancelled as u8 as i16)
+        .bind(crate::types::PipelineRunStatus::Running as u8 as i16)
+        .execute(&self.pool)
+        .await
+        .context(DatabaseSnafu)?;
+
+        Ok(result.rows_affected())
+    }
 }
 
 #[derive(Debug, sqlx::FromRow)]

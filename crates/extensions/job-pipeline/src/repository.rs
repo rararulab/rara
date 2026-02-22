@@ -130,4 +130,8 @@ pub trait PipelineRepository: Send + Sync {
 
     /// Get aggregated stats for discovered jobs.
     async fn discovered_jobs_stats(&self) -> Result<DiscoveredJobsStats, PipelineRepoError>;
+
+    /// Cancel all runs still marked as `Running` (stale after process restart).
+    /// Returns the number of rows updated.
+    async fn reconcile_stale_runs(&self) -> Result<u64, PipelineRepoError>;
 }

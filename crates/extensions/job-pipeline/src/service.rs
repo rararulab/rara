@@ -226,24 +226,10 @@ impl PipelineService {
             return;
         }
 
-        let result = sqlx::query(
-            r#"UPDATE pipeline_runs
-               SET status = $1,
-                   finished_at = COALESCE(finished_at, now()),
-                   error = COALESCE(error, 'Pipeline service restarted while run was in progress')
-               WHERE status = $2"#,
-        )
-        .bind(PipelineRunStatus::Cancelled as u8 as i16)
-        .bind(PipelineRunStatus::Running as u8 as i16)
-        .execute(&self.pool)
-        .await;
-
-        match result {
-            Ok(r) if r.rows_affected() > 0 => {
-                warn!(
-                    rows = r.rows_affected(),
-                    "reconciled stale pipeline runs after startup"
-                );
+        let repo = PgPipelineRepository::new(self.pool.clone());
+        match repo.reconcile_stale_runs().await {
+            Ok(n) if n > 0 => {
+                warn!(rows = n, "reconciled stale pipeline runs after startup");
             }
             Ok(_) => {}
             Err(e) => {
