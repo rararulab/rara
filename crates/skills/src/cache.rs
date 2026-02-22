@@ -20,6 +20,7 @@
 
 use std::{collections::HashMap, path::PathBuf};
 
+use chrono::{DateTime, Utc};
 use snafu::ResultExt;
 use sqlx::PgPool;
 
@@ -27,6 +28,27 @@ use crate::{
     error::{InvalidInputSnafu, Result, SqlxSnafu},
     types::{SkillMetadata, SkillSource},
 };
+
+// ---------------------------------------------------------------------------
+// DB row type (sqlx::FromRow)
+// ---------------------------------------------------------------------------
+
+/// Cached skill metadata row from `skill_cache` table.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub(crate) struct SkillCacheRow {
+    pub name:          String,
+    pub description:   String,
+    pub homepage:      Option<String>,
+    pub license:       Option<String>,
+    pub compatibility: Option<String>,
+    pub allowed_tools: Vec<String>,
+    pub dockerfile:    Option<String>,
+    pub requires:      serde_json::Value,
+    pub path:          String,
+    pub source:        i16,
+    pub content_hash:  String,
+    pub cached_at:     DateTime<Utc>,
+}
 
 /// PostgreSQL-backed skill cache (backing store, not a SkillRegistry).
 pub struct PgSkillCache {
@@ -45,7 +67,7 @@ impl PgSkillCache {
 
     /// Load all cached skill metadata from the database.
     pub async fn load_all(&self) -> Result<HashMap<String, CachedSkill>> {
-        let rows = sqlx::query_as::<_, rara_model::skill::SkillCache>(
+        let rows = sqlx::query_as::<_, SkillCacheRow>(
             "SELECT * FROM skill_cache ORDER BY name",
         )
         .fetch_all(&self.pool)
@@ -230,7 +252,7 @@ pub fn spawn_background_sync(pool: PgPool, registry: crate::registry::InMemoryRe
 }
 
 impl CachedSkill {
-    fn from_db_row(row: rara_model::skill::SkillCache) -> Result<Self> {
+    fn from_db_row(row: SkillCacheRow) -> Result<Self> {
         let requires = serde_json::from_value(row.requires).map_err(|e| {
             InvalidInputSnafu {
                 message: format!("failed to deserialize requires: {e}"),

@@ -23,10 +23,38 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use chrono::Utc;
-use rara_model::session::{ChannelBindingRow, ChatSessionRow};
+use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use tracing::instrument;
+
+// ---------------------------------------------------------------------------
+// DB row types (sqlx::FromRow)
+// ---------------------------------------------------------------------------
+
+/// Database row representation of a `chat_session` record.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub(crate) struct ChatSessionRow {
+    pub key:           String,
+    pub title:         Option<String>,
+    pub model:         Option<String>,
+    pub system_prompt: Option<String>,
+    pub message_count: i64,
+    pub preview:       Option<String>,
+    pub metadata:      Option<serde_json::Value>,
+    pub created_at:    DateTime<Utc>,
+    pub updated_at:    DateTime<Utc>,
+}
+
+/// Database row representation of a `channel_binding` record.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub(crate) struct ChannelBindingRow {
+    pub channel_type: String,
+    pub account:      String,
+    pub chat_id:      String,
+    pub session_key:  String,
+    pub created_at:   DateTime<Utc>,
+    pub updated_at:   DateTime<Utc>,
+}
 
 use crate::{
     error::SessionError,

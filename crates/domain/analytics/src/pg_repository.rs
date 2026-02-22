@@ -18,7 +18,7 @@
 use std::fmt::Write;
 
 use async_trait::async_trait;
-use rara_model::metrics::MetricsSnapshot as StoreMetricsSnapshot;
+use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -26,6 +26,28 @@ use crate::{
     error::{AnalyticsError, DuplicateSnapshotSnafu, NotFoundSnafu, RepositorySnafu},
     types::{MetricsPeriod, MetricsSnapshot, SnapshotFilter},
 };
+
+// ---------------------------------------------------------------------------
+// DB row type (sqlx::FromRow)
+// ---------------------------------------------------------------------------
+
+/// A point-in-time statistics snapshot for a given period (DB row).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub(crate) struct MetricsSnapshotRow {
+    pub id:                   Uuid,
+    pub period:               i16,
+    pub snapshot_date:        NaiveDate,
+    pub jobs_discovered:      i32,
+    pub applications_sent:    i32,
+    pub interviews_scheduled: i32,
+    pub offers_received:      i32,
+    pub rejections:           i32,
+    pub ai_runs_count:        i32,
+    pub ai_total_cost_cents:  i32,
+    pub extra:                Option<serde_json::Value>,
+    pub trace_id:             Option<String>,
+    pub created_at:           DateTime<Utc>,
+}
 
 /// PostgreSQL implementation of the analytics repository.
 pub struct PgAnalyticsRepository {
@@ -61,9 +83,9 @@ impl crate::repository::AnalyticsRepository for PgAnalyticsRepository {
         &self,
         snapshot: &MetricsSnapshot,
     ) -> Result<MetricsSnapshot, AnalyticsError> {
-        let store: StoreMetricsSnapshot = snapshot.clone().into();
+        let store: MetricsSnapshotRow = snapshot.clone().into();
 
-        let row = sqlx::query_as::<_, StoreMetricsSnapshot>(
+        let row = sqlx::query_as::<_, MetricsSnapshotRow>(
             r#"INSERT INTO metrics_snapshot
                (id, period, snapshot_date, jobs_discovered, applications_sent,
                 interviews_scheduled, offers_received, rejections,
@@ -105,7 +127,7 @@ impl crate::repository::AnalyticsRepository for PgAnalyticsRepository {
     }
 
     async fn find_by_id(&self, id: Uuid) -> Result<Option<MetricsSnapshot>, AnalyticsError> {
-        let row = sqlx::query_as::<_, StoreMetricsSnapshot>(
+        let row = sqlx::query_as::<_, MetricsSnapshotRow>(
             "SELECT * FROM metrics_snapshot WHERE id = $1",
         )
         .bind(id)
@@ -122,7 +144,7 @@ impl crate::repository::AnalyticsRepository for PgAnalyticsRepository {
     ) -> Result<Option<MetricsSnapshot>, AnalyticsError> {
         let period_i16 = period as u8 as i16;
 
-        let row = sqlx::query_as::<_, StoreMetricsSnapshot>(
+        let row = sqlx::query_as::<_, MetricsSnapshotRow>(
             r#"SELECT * FROM metrics_snapshot
                WHERE period = $1
                ORDER BY snapshot_date DESC
@@ -165,7 +187,7 @@ impl crate::repository::AnalyticsRepository for PgAnalyticsRepository {
             let _ = write!(sql, " LIMIT ${param_idx}");
         }
 
-        let mut query = sqlx::query_as::<_, StoreMetricsSnapshot>(&sql);
+        let mut query = sqlx::query_as::<_, MetricsSnapshotRow>(&sql);
 
         if let Some(period) = filter.period {
             query = query.bind(period as u8 as i16);

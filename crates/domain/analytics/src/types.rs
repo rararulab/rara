@@ -105,16 +105,17 @@ pub struct SnapshotFilter {
 use rara_domain_shared::convert::{
     chrono_to_timestamp, civil_to_naive_date, naive_date_to_civil, timestamp_to_chrono, u8_from_i16,
 };
-use rara_model::metrics::MetricsSnapshot as StoreMetricsSnapshot;
+
+use crate::pg_repository::MetricsSnapshotRow;
 
 fn period_from_i16(value: i16) -> MetricsPeriod {
     let repr = u8_from_i16(value, "metrics.period");
     MetricsPeriod::from_repr(repr).unwrap_or_else(|| panic!("invalid metrics.period: {value}"))
 }
 
-/// Store `MetricsSnapshot` -> Domain `MetricsSnapshot`.
-impl From<StoreMetricsSnapshot> for MetricsSnapshot {
-    fn from(r: StoreMetricsSnapshot) -> Self {
+/// Store `MetricsSnapshotRow` -> Domain `MetricsSnapshot`.
+impl From<MetricsSnapshotRow> for MetricsSnapshot {
+    fn from(r: MetricsSnapshotRow) -> Self {
         Self {
             id:                   r.id,
             period:               period_from_i16(r.period),
@@ -133,8 +134,8 @@ impl From<StoreMetricsSnapshot> for MetricsSnapshot {
     }
 }
 
-/// Domain `MetricsSnapshot` -> Store `MetricsSnapshot`.
-impl From<MetricsSnapshot> for StoreMetricsSnapshot {
+/// Domain `MetricsSnapshot` -> Store `MetricsSnapshotRow`.
+impl From<MetricsSnapshot> for MetricsSnapshotRow {
     fn from(r: MetricsSnapshot) -> Self {
         Self {
             id:                   r.id,
