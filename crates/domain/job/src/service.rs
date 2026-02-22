@@ -139,42 +139,62 @@ impl JobService {
         let mut raw_jobs = Vec::new();
         let mut errors: Vec<SourceError> = Vec::new();
 
-        // 1. JobSpy (sync / blocking — run in spawn_blocking).
-        let driver = self.driver.clone();
-        let criteria_clone = criteria.clone();
-        let jobspy_result = tokio::task::spawn_blocking(move || {
-            driver.fetch_jobs(&criteria_clone)
-        })
-        .await;
+        // Determine which drivers to run based on `criteria.sites`.
+        // If sites is empty, run all drivers. Otherwise, run only those
+        // explicitly listed. "japandev" enables the JapanDev driver;
+        // any other site name is forwarded to JobSpy.
+        let sites = &criteria.sites;
+        let run_all = sites.is_empty();
+        let run_japandev =
+            run_all || sites.iter().any(|s| s.eq_ignore_ascii_case("japandev"));
+        let jobspy_sites: Vec<String> = sites
+            .iter()
+            .filter(|s| !s.eq_ignore_ascii_case("japandev"))
+            .cloned()
+            .collect();
+        let run_jobspy = run_all || !jobspy_sites.is_empty();
 
-        match jobspy_result {
-            Ok(Ok(jobs)) => {
-                tracing::info!(count = jobs.len(), "JobSpy returned raw jobs");
-                raw_jobs.extend(jobs);
-            }
-            Ok(Err(e)) => {
-                tracing::error!(error = %e, "JobSpy driver failed during discovery");
-                errors.push(e);
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "JobSpy spawn_blocking join error");
-                errors.push(SourceError::NonRetryable {
-                    source_name: "jobspy".to_owned(),
-                    message:     format!("task join error: {e}"),
-                });
+        // 1. JobSpy (sync / blocking — run in spawn_blocking).
+        if run_jobspy {
+            let driver = self.driver.clone();
+            let mut criteria_clone = criteria.clone();
+            criteria_clone.sites = jobspy_sites;
+            let jobspy_result = tokio::task::spawn_blocking(move || {
+                driver.fetch_jobs(&criteria_clone)
+            })
+            .await;
+
+            match jobspy_result {
+                Ok(Ok(jobs)) => {
+                    tracing::info!(count = jobs.len(), "JobSpy returned raw jobs");
+                    raw_jobs.extend(jobs);
+                }
+                Ok(Err(e)) => {
+                    tracing::error!(error = %e, "JobSpy driver failed during discovery");
+                    errors.push(e);
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "JobSpy spawn_blocking join error");
+                    errors.push(SourceError::NonRetryable {
+                        source_name: "jobspy".to_owned(),
+                        message:     format!("task join error: {e}"),
+                    });
+                }
             }
         }
 
         // 2. JapanDev (async).
-        if let Some(ref jd) = self.japandev {
-            match jd.fetch_jobs(criteria).await {
-                Ok(jobs) => {
-                    tracing::info!(count = jobs.len(), "JapanDev returned raw jobs");
-                    raw_jobs.extend(jobs);
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "JapanDev driver failed during discovery");
-                    errors.push(e);
+        if run_japandev {
+            if let Some(ref jd) = self.japandev {
+                match jd.fetch_jobs(criteria).await {
+                    Ok(jobs) => {
+                        tracing::info!(count = jobs.len(), "JapanDev returned raw jobs");
+                        raw_jobs.extend(jobs);
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "JapanDev driver failed during discovery");
+                        errors.push(e);
+                    }
                 }
             }
         }

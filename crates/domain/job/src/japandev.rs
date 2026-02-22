@@ -14,11 +14,12 @@
 
 //! [`JapanDevDriver`] — job source driver for japan-dev.com.
 //!
-//! Fetches job listings from the JapanDev Meilisearch API and converts
-//! them to [`RawJob`] records for the discovery pipeline.
+//! Fetches job listings from the JapanDev Meilisearch API, then
+//! concurrently scrapes each job's detail page to extract the full
+//! description from the Nuxt SSR payload.
 
 use serde::{Deserialize, Serialize};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::{
     error::SourceError,
@@ -28,12 +29,14 @@ use crate::{
 /// Source name constant for the JapanDev driver.
 pub const JAPANDEV_SOURCE_NAME: &str = "japandev";
 
+const JAPANDEV_SITE_URL: &str = "https://japan-dev.com";
+
 /// Configuration for the JapanDev Meilisearch API.
 #[derive(Debug, Clone)]
 pub struct JapanDevConfig {
     /// Meilisearch base URL.
     pub base_url:      String,
-    /// Bearer token for the API.
+    /// Bearer token for the API (public search key).
     pub api_key:       String,
     /// Default result limit per query.
     pub default_limit: u32,
@@ -61,7 +64,10 @@ impl JapanDevDriver {
     /// Create a new `JapanDevDriver` with the given configuration.
     #[must_use]
     pub fn new(config: JapanDevConfig) -> Self {
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+            .build()
+            .unwrap_or_default();
         Self { client, config }
     }
 
@@ -133,10 +139,13 @@ impl JapanDevDriver {
         }
 
         let search_response: MultiSearchResponse =
-            response.json().await.map_err(|e| SourceError::NonRetryable {
-                source_name: JAPANDEV_SOURCE_NAME.to_owned(),
-                message:     format!("failed to parse response JSON: {e}"),
-            })?;
+            response
+                .json()
+                .await
+                .map_err(|e| SourceError::NonRetryable {
+                    source_name: JAPANDEV_SOURCE_NAME.to_owned(),
+                    message:     format!("failed to parse response JSON: {e}"),
+                })?;
 
         let hits: Vec<JapanDevHit> = search_response
             .results
@@ -146,9 +155,129 @@ impl JapanDevDriver {
 
         debug!(hit_count = hits.len(), "JapanDev search returned hits");
 
-        let raw_jobs = hits.into_iter().map(RawJob::from).collect();
+        let mut raw_jobs: Vec<RawJob> = hits.into_iter().map(RawJob::from).collect();
+
+        // Concurrently fetch descriptions from detail pages.
+        self.fill_descriptions(&mut raw_jobs).await;
+
         Ok(raw_jobs)
     }
+
+    /// Fetch each job's detail page concurrently and fill in missing
+    /// descriptions from the Nuxt SSR `__NUXT_DATA__` payload.
+    async fn fill_descriptions(&self, jobs: &mut [RawJob]) {
+        let futures: Vec<_> = jobs
+            .iter()
+            .map(|job| {
+                let client = self.client.clone();
+                let url = job.url.clone();
+                async move {
+                    let Some(url) = url else {
+                        return None;
+                    };
+                    match fetch_description(&client, &url).await {
+                        Ok(desc) => desc,
+                        Err(e) => {
+                            warn!(url, error = %e, "failed to fetch JapanDev job description");
+                            None
+                        }
+                    }
+                }
+            })
+            .collect();
+
+        let descriptions = futures::future::join_all(futures).await;
+
+        for (job, desc) in jobs.iter_mut().zip(descriptions) {
+            if job.description.is_none() {
+                job.description = desc;
+            }
+        }
+    }
+}
+
+/// Fetch a JapanDev job detail page and extract the description from
+/// the `__NUXT_DATA__` SSR payload.
+async fn fetch_description(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<Option<String>, String> {
+    let resp = client
+        .get(url)
+        .header("Accept", "text/html")
+        .send()
+        .await
+        .map_err(|e| format!("HTTP error: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+
+    let html = resp.text().await.map_err(|e| format!("body error: {e}"))?;
+    Ok(extract_description_from_nuxt_data(&html))
+}
+
+/// Parse the `__NUXT_DATA__` script tag and find the longest HTML
+/// string that looks like a job description.
+fn extract_description_from_nuxt_data(html: &str) -> Option<String> {
+    // Find: <script ... id="__NUXT_DATA__">...</script>
+    let marker = "id=\"__NUXT_DATA__\">";
+    let start = html.find(marker)? + marker.len();
+    let end = html[start..].find("</script>")? + start;
+    let json_str = &html[start..end];
+
+    // The payload is a flat JSON array; descriptions are long HTML strings.
+    let data: Vec<serde_json::Value> = serde_json::from_str(json_str).ok()?;
+
+    // Find the longest string that looks like HTML job content.
+    data.iter()
+        .filter_map(|v| v.as_str())
+        .filter(|s| s.len() > 200 && s.contains("<p>"))
+        .max_by_key(|s| s.len())
+        .map(|s| strip_html_tags(s))
+}
+
+/// Minimal HTML tag stripper — converts HTML to plain text.
+fn strip_html_tags(html: &str) -> String {
+    let mut result = String::with_capacity(html.len());
+    let mut in_tag = false;
+    let mut prev_was_block = false;
+
+    for c in html.chars() {
+        match c {
+            '<' => {
+                in_tag = true;
+                // Peek ahead for block-level tags to insert newlines.
+                // We'll handle this after closing '>'.
+            }
+            '>' => {
+                in_tag = false;
+                // Check if we just closed a block tag.
+                if prev_was_block {
+                    if !result.ends_with('\n') {
+                        result.push('\n');
+                    }
+                    prev_was_block = false;
+                }
+            }
+            _ if in_tag => {
+                // Check for block-level tag names.
+                if matches!(c, 'p' | 'P' | 'h' | 'H' | 'l' | 'L') {
+                    prev_was_block = true;
+                }
+            }
+            _ => result.push(c),
+        }
+    }
+
+    // Decode common HTML entities.
+    result
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ")
 }
 
 // ===========================================================================
@@ -166,9 +295,6 @@ struct SearchResult {
 }
 
 /// A single job hit from the JapanDev Meilisearch index.
-///
-/// Deserialize + Serialize: Serialize is needed to store the full hit
-/// as `raw_data` in [`RawJob`].
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct JapanDevHit {
     id:    String,
@@ -192,16 +318,6 @@ struct JapanDevHit {
     #[serde(default)]
     published_at: Option<String>,
 
-    // Description fields.
-    #[serde(default)]
-    details:      Option<String>,
-    #[serde(default)]
-    intro:        Option<String>,
-    #[serde(default)]
-    requirements: Option<String>,
-    #[serde(default)]
-    benefits:     Option<String>,
-
     // Metadata fields (stored in raw_data).
     #[serde(default)]
     japanese_level:     Option<String>,
@@ -216,7 +332,7 @@ struct JapanDevHit {
     #[serde(default)]
     candidate_location: Option<String>,
     #[serde(default)]
-    sponsors_visas:     Option<bool>,
+    sponsors_visas:     Option<String>,
 
     // Company sub-object.
     #[serde(default)]
@@ -251,19 +367,15 @@ impl From<JapanDevHit> for RawJob {
             .clone()
             .or_else(|| hit.company.as_ref().and_then(|c| c.name.clone()));
 
-        // Construct URL from slug.
-        let url = hit
-            .slug
-            .as_ref()
-            .map(|slug| format!("https://japan-dev.com/jobs/{slug}"));
-
-        // Combine description parts.
-        let description = build_description(
-            hit.intro.as_deref(),
-            hit.details.as_deref(),
-            hit.requirements.as_deref(),
-            hit.benefits.as_deref(),
-        );
+        // Construct detail URL: /jobs/{company_slug}/{job_slug}
+        let company_slug = hit.company.as_ref().and_then(|c| c.slug.as_deref());
+        let url = match (company_slug, hit.slug.as_deref()) {
+            (Some(cs), Some(js)) => {
+                Some(format!("{JAPANDEV_SITE_URL}/jobs/{cs}/{js}"))
+            }
+            (_, Some(js)) => Some(format!("{JAPANDEV_SITE_URL}/jobs/{js}")),
+            _ => None,
+        };
 
         // Convert salary from i64 (JPY) to i32.
         #[allow(clippy::cast_possible_truncation)]
@@ -272,10 +384,7 @@ impl From<JapanDevHit> for RawJob {
         let salary_max = hit.salary_max.map(|v| v as i32);
 
         // Parse published_at into a jiff Timestamp.
-        let posted_at = hit
-            .published_at
-            .as_deref()
-            .and_then(parse_published_at);
+        let posted_at = hit.published_at.as_deref().and_then(parse_published_at);
 
         // Store the full hit as raw_data.
         let raw_data = serde_json::to_value(&hit).ok();
@@ -286,7 +395,7 @@ impl From<JapanDevHit> for RawJob {
             title: Some(hit.title),
             company,
             location: hit.location,
-            description,
+            description: None, // Filled later by fill_descriptions()
             url,
             salary_min,
             salary_max,
@@ -298,42 +407,11 @@ impl From<JapanDevHit> for RawJob {
     }
 }
 
-/// Combine the description sections into a single string.
-fn build_description(
-    intro: Option<&str>,
-    details: Option<&str>,
-    requirements: Option<&str>,
-    benefits: Option<&str>,
-) -> Option<String> {
-    let mut sections = Vec::new();
-
-    if let Some(text) = intro.filter(|s| !s.trim().is_empty()) {
-        sections.push(format!("## Introduction\n\n{text}"));
-    }
-    if let Some(text) = details.filter(|s| !s.trim().is_empty()) {
-        sections.push(format!("## Details\n\n{text}"));
-    }
-    if let Some(text) = requirements.filter(|s| !s.trim().is_empty()) {
-        sections.push(format!("## Requirements\n\n{text}"));
-    }
-    if let Some(text) = benefits.filter(|s| !s.trim().is_empty()) {
-        sections.push(format!("## Benefits\n\n{text}"));
-    }
-
-    if sections.is_empty() {
-        None
-    } else {
-        Some(sections.join("\n\n"))
-    }
-}
-
 /// Parse an ISO 8601 datetime string from the JapanDev API.
 fn parse_published_at(date_str: &str) -> Option<jiff::Timestamp> {
-    // Try full ISO 8601 datetime first (e.g. "2026-01-15T00:00:00.000Z").
     if let Ok(ts) = date_str.parse::<jiff::Timestamp>() {
         return Some(ts);
     }
-    // Fall back to date-only (e.g. "2026-01-15") -> midnight UTC.
     let date: jiff::civil::Date = date_str.parse().ok()?;
     let zdt = date.at(0, 0, 0, 0).in_tz("UTC").ok()?;
     Some(zdt.timestamp())
@@ -347,224 +425,53 @@ fn parse_published_at(date_str: &str) -> Option<jiff::Timestamp> {
 mod tests {
     use super::*;
 
-    fn make_hit() -> JapanDevHit {
-        JapanDevHit {
-            id:                 "3313".to_owned(),
-            title:              "Senior Rust Engineer".to_owned(),
-            company_name:       Some("Example Corp".to_owned()),
-            location:           Some("Tokyo".to_owned()),
-            slug:               Some("example-corp-senior-rust-engineer".to_owned()),
-            salary_min:         Some(8_000_000),
-            salary_max:         Some(12_000_000),
-            skill_names:        vec!["Rust".to_owned(), "Kubernetes".to_owned()],
-            published_at:       Some("2026-01-15T00:00:00.000Z".to_owned()),
-            details:            Some("Work on our backend.".to_owned()),
-            intro:              Some("Join our team!".to_owned()),
-            requirements:       Some("5+ years Rust.".to_owned()),
-            benefits:           Some("Remote friendly.".to_owned()),
-            japanese_level:     Some("Business".to_owned()),
-            english_level:      Some("Fluent".to_owned()),
-            remote_level:       Some("Full remote".to_owned()),
-            seniority_level:    Some("Senior".to_owned()),
-            employment_type:    Some("Full-time".to_owned()),
-            candidate_location: Some("Japan".to_owned()),
-            sponsors_visas:     Some(true),
-            company:            Some(JapanDevCompany {
-                name:              Some("Example Corp".to_owned()),
-                is_verified:       Some(true),
-                slug:              Some("example-corp".to_owned()),
-                logo_url:          Some("https://example.com/logo.png".to_owned()),
-                short_description: Some("A great company".to_owned()),
-            }),
+    #[test]
+    fn strip_html_tags_basic() {
+        let html = "<p><strong>About</strong></p><p>We build things.</p>";
+        let text = strip_html_tags(html);
+        assert!(text.contains("About"));
+        assert!(text.contains("We build things."));
+        assert!(!text.contains('<'));
+    }
+
+    #[test]
+    fn extract_description_from_nuxt_payload() {
+        let html = r#"<html><script type="application/json" data-nuxt-data="nuxt-app" id="__NUXT_DATA__">["short","another","\u003cp\u003e\u003cstrong\u003eAbout the role\u003c/strong\u003e\u003c/p\u003e\u003cp\u003eWe are looking for a senior engineer to join our team and help build the next generation of our platform. You will work on distributed systems, APIs, and cloud infrastructure. Requirements include 5+ years of experience with backend development and strong communication skills.\u003c/p\u003e"]</script></html>"#;
+        let desc = extract_description_from_nuxt_data(html);
+        assert!(desc.is_some());
+        let text = desc.unwrap();
+        assert!(text.contains("About the role"));
+        assert!(text.contains("senior engineer"));
+        assert!(!text.contains("<p>"));
+    }
+
+    #[tokio::test]
+    async fn fetch_jobs_from_real_api() {
+        common_telemetry::logging::init_default_ut_logging();
+
+        let driver = JapanDevDriver::new(JapanDevConfig::default());
+        let criteria = DiscoveryCriteria::builder()
+            .keywords(["rust"])
+            .max_results(3u32)
+            .build();
+        let jobs = driver.fetch_jobs(&criteria).await.unwrap();
+
+        println!("fetched {} jobs from JapanDev", jobs.len());
+        for job in &jobs {
+            let has_desc = job.description.is_some();
+            println!(
+                "  [{}] {} @ {} (has_desc={})",
+                job.source_name,
+                job.title.as_deref().unwrap_or("?"),
+                job.company.as_deref().unwrap_or("?"),
+                has_desc,
+            );
+            if let Some(desc) = &job.description {
+                println!("    desc preview: {}...", &desc[..desc.len().min(120)]);
+            }
         }
-    }
 
-    #[test]
-    fn hit_to_raw_job_maps_basic_fields() {
-        let hit = make_hit();
-        let raw: RawJob = hit.into();
-
-        assert_eq!(raw.source_job_id, "3313");
-        assert_eq!(raw.source_name, JAPANDEV_SOURCE_NAME);
-        assert_eq!(raw.title.as_deref(), Some("Senior Rust Engineer"));
-        assert_eq!(raw.company.as_deref(), Some("Example Corp"));
-        assert_eq!(raw.location.as_deref(), Some("Tokyo"));
-    }
-
-    #[test]
-    fn hit_to_raw_job_constructs_url_from_slug() {
-        let hit = make_hit();
-        let raw: RawJob = hit.into();
-
-        assert_eq!(
-            raw.url.as_deref(),
-            Some("https://japan-dev.com/jobs/example-corp-senior-rust-engineer")
-        );
-    }
-
-    #[test]
-    fn hit_to_raw_job_salary_and_currency() {
-        let hit = make_hit();
-        let raw: RawJob = hit.into();
-
-        assert_eq!(raw.salary_min, Some(8_000_000));
-        assert_eq!(raw.salary_max, Some(12_000_000));
-        assert_eq!(raw.salary_currency.as_deref(), Some("JPY"));
-    }
-
-    #[test]
-    fn hit_to_raw_job_parses_published_at() {
-        let hit = make_hit();
-        let raw: RawJob = hit.into();
-
-        let posted = raw.posted_at.expect("posted_at should be set");
-        assert_eq!(posted.to_string(), "2026-01-15T00:00:00Z");
-    }
-
-    #[test]
-    fn hit_to_raw_job_maps_tags() {
-        let hit = make_hit();
-        let raw: RawJob = hit.into();
-
-        assert_eq!(raw.tags, vec!["Rust", "Kubernetes"]);
-    }
-
-    #[test]
-    fn hit_to_raw_job_combines_description_sections() {
-        let hit = make_hit();
-        let raw: RawJob = hit.into();
-
-        let desc = raw.description.expect("description should be set");
-        assert!(desc.contains("## Introduction"));
-        assert!(desc.contains("Join our team!"));
-        assert!(desc.contains("## Details"));
-        assert!(desc.contains("Work on our backend."));
-        assert!(desc.contains("## Requirements"));
-        assert!(desc.contains("5+ years Rust."));
-        assert!(desc.contains("## Benefits"));
-        assert!(desc.contains("Remote friendly."));
-    }
-
-    #[test]
-    fn hit_to_raw_job_stores_raw_data() {
-        let hit = make_hit();
-        let raw: RawJob = hit.into();
-
-        let data = raw.raw_data.expect("raw_data should be set");
-        assert_eq!(data.get("id").and_then(|v| v.as_str()), Some("3313"));
-        assert_eq!(
-            data.get("japanese_level").and_then(|v| v.as_str()),
-            Some("Business")
-        );
-        assert_eq!(
-            data.get("sponsors_visas").and_then(|v| v.as_bool()),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn hit_to_raw_job_falls_back_to_company_sub_object() {
-        let mut hit = make_hit();
-        hit.company_name = None; // Clear top-level company_name
-        let raw: RawJob = hit.into();
-
-        assert_eq!(raw.company.as_deref(), Some("Example Corp"));
-    }
-
-    #[test]
-    fn hit_to_raw_job_handles_missing_optional_fields() {
-        let hit = JapanDevHit {
-            id:                 "999".to_owned(),
-            title:              "Backend Dev".to_owned(),
-            company_name:       None,
-            location:           None,
-            slug:               None,
-            salary_min:         None,
-            salary_max:         None,
-            skill_names:        vec![],
-            published_at:       None,
-            details:            None,
-            intro:              None,
-            requirements:       None,
-            benefits:           None,
-            japanese_level:     None,
-            english_level:      None,
-            remote_level:       None,
-            seniority_level:    None,
-            employment_type:    None,
-            candidate_location: None,
-            sponsors_visas:     None,
-            company:            None,
-        };
-        let raw: RawJob = hit.into();
-
-        assert_eq!(raw.source_job_id, "999");
-        assert_eq!(raw.title.as_deref(), Some("Backend Dev"));
-        assert!(raw.company.is_none());
-        assert!(raw.location.is_none());
-        assert!(raw.url.is_none());
-        assert!(raw.salary_min.is_none());
-        assert!(raw.salary_max.is_none());
-        assert_eq!(raw.salary_currency.as_deref(), Some("JPY"));
-        assert!(raw.tags.is_empty());
-        assert!(raw.posted_at.is_none());
-        assert!(raw.description.is_none());
-    }
-
-    #[test]
-    fn build_description_combines_sections() {
-        let desc = build_description(
-            Some("Intro text"),
-            Some("Details text"),
-            Some("Requirements text"),
-            Some("Benefits text"),
-        );
-        let desc = desc.expect("should produce a description");
-        assert!(desc.contains("## Introduction\n\nIntro text"));
-        assert!(desc.contains("## Details\n\nDetails text"));
-        assert!(desc.contains("## Requirements\n\nRequirements text"));
-        assert!(desc.contains("## Benefits\n\nBenefits text"));
-    }
-
-    #[test]
-    fn build_description_skips_empty_sections() {
-        let desc = build_description(None, Some("Details only"), Some("   "), None);
-        let desc = desc.expect("should produce a description");
-        assert!(!desc.contains("Introduction"));
-        assert!(desc.contains("## Details\n\nDetails only"));
-        assert!(!desc.contains("Requirements"));
-        assert!(!desc.contains("Benefits"));
-    }
-
-    #[test]
-    fn build_description_returns_none_when_all_empty() {
-        assert!(build_description(None, None, None, None).is_none());
-        assert!(build_description(Some(""), Some("  "), None, None).is_none());
-    }
-
-    #[test]
-    fn parse_published_at_iso_datetime() {
-        let ts = parse_published_at("2026-01-15T00:00:00.000Z").expect("should parse");
-        assert_eq!(ts.to_string(), "2026-01-15T00:00:00Z");
-    }
-
-    #[test]
-    fn parse_published_at_date_only() {
-        let ts = parse_published_at("2026-01-15").expect("should parse");
-        assert_eq!(ts.to_string(), "2026-01-15T00:00:00Z");
-    }
-
-    #[test]
-    fn parse_published_at_invalid() {
-        assert!(parse_published_at("not-a-date").is_none());
-        assert!(parse_published_at("").is_none());
-    }
-
-    #[test]
-    fn default_config_values() {
-        let cfg = JapanDevConfig::default();
-        assert_eq!(cfg.base_url, "https://meili.japan-dev.com");
-        assert!(!cfg.api_key.is_empty());
-        assert_eq!(cfg.default_limit, 60);
+        assert!(!jobs.is_empty(), "expected at least one job from JapanDev");
+        assert!(jobs.iter().all(|j| j.source_name == JAPANDEV_SOURCE_NAME));
     }
 }

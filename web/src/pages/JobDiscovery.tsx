@@ -68,6 +68,7 @@ const JOB_SITES = [
   { id: "glassdoor", label: "Glassdoor" },
   { id: "google", label: "Google" },
   { id: "ziprecruiter", label: "ZipRecruiter" },
+  { id: "japandev", label: "JapanDev" },
 ] as const;
 
 function formatSalary(
