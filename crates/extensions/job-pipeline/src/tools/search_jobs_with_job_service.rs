@@ -141,19 +141,12 @@ impl AgentTool for SearchJobsWithJobServiceTool {
             sites: parsed.sites,
         };
 
-        let job_service = self.job_service.clone();
-        let criteria_for_discovery = criteria.clone();
-        let discovery_result = tokio::task::spawn_blocking(move || {
-            let existing_source_keys = HashSet::new();
-            let existing_fuzzy_keys = HashSet::new();
-            job_service.discover(
-                &criteria_for_discovery,
-                &existing_source_keys,
-                &existing_fuzzy_keys,
-            )
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("job discovery task join error: {e}"))?;
+        let existing_source_keys = HashSet::new();
+        let existing_fuzzy_keys = HashSet::new();
+        let discovery_result = self
+            .job_service
+            .discover_all(&criteria, &existing_source_keys, &existing_fuzzy_keys)
+            .await;
 
         if let Some(err) = discovery_result.error {
             return Ok(json!({

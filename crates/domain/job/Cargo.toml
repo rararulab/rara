@@ -23,6 +23,7 @@ jobspy-sys = { workspace = true }
 opendal.workspace = true
 rara-ai = { workspace = true }
 rara-domain-shared = { workspace = true }
+reqwest = { workspace = true }
 rara-model = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
