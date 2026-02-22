@@ -17,9 +17,7 @@
 //! Evaluates a resume across multiple dimensions and provides actionable
 //! optimization suggestions.
 
-use rig::{client::CompletionClient, completion::Prompt, providers::openrouter};
-
-use crate::{agents::prompt::compose_system_prompt, error::AiError};
+use crate::{agents::prompt::compose_system_prompt, client::LlmClient, error::AiError};
 
 const SYSTEM_PROMPT_FILE: &str = "ai/resume_analyzer.system.md";
 const DEFAULT_SYSTEM_PROMPT: &str =
@@ -28,14 +26,14 @@ const DEFAULT_SYSTEM_PROMPT: &str =
 /// Analyzes a resume and provides a structured report with scores and
 /// improvement suggestions.
 pub struct ResumeAnalyzerAgent {
-    client:      openrouter::Client,
+    client:      LlmClient,
     model:       String,
     soul_prompt: Option<String>,
 }
 
 impl ResumeAnalyzerAgent {
     pub(crate) fn new(
-        client: openrouter::Client,
+        client: LlmClient,
         model: String,
         soul_prompt: Option<String>,
     ) -> Self {
@@ -52,17 +50,9 @@ impl ResumeAnalyzerAgent {
         let base_prompt =
             rara_paths::load_prompt_markdown(SYSTEM_PROMPT_FILE, DEFAULT_SYSTEM_PROMPT);
         let system_prompt = compose_system_prompt(&base_prompt, self.soul_prompt.as_deref());
-        let agent = self
-            .client
-            .agent(&self.model)
-            .preamble(&system_prompt)
-            .build();
 
-        agent
-            .prompt(prompt)
+        self.client
+            .run_agent(&self.model, &system_prompt, prompt)
             .await
-            .map_err(|e| AiError::RequestFailed {
-                message: e.to_string(),
-            })
     }
 }

@@ -92,7 +92,7 @@ impl FallibleWorker<AppState> for ProactiveAgentWorker {
         let settings = state.settings_svc.current();
 
         // Guard: AI not configured
-        if settings.ai.openrouter_api_key.is_none() {
+        if !settings.ai.is_configured() {
             warn!("proactive agent skipped: AI not configured");
             return Ok(());
         }

@@ -14,9 +14,7 @@
 
 //! Resume optimization agent.
 
-use rig::{client::CompletionClient, completion::Prompt, providers::openrouter};
-
-use crate::{agents::prompt::compose_system_prompt, error::AiError};
+use crate::{agents::prompt::compose_system_prompt, client::LlmClient, error::AiError};
 
 const SYSTEM_PROMPT_FILE: &str = "ai/resume_optimizer.system.md";
 const DEFAULT_SYSTEM_PROMPT: &str =
@@ -24,14 +22,14 @@ const DEFAULT_SYSTEM_PROMPT: &str =
 
 /// Optimizes a resume for a specific job posting.
 pub struct ResumeOptimizerAgent {
-    client:      openrouter::Client,
+    client:      LlmClient,
     model:       String,
     soul_prompt: Option<String>,
 }
 
 impl ResumeOptimizerAgent {
     pub(crate) fn new(
-        client: openrouter::Client,
+        client: LlmClient,
         model: String,
         soul_prompt: Option<String>,
     ) -> Self {
@@ -50,17 +48,8 @@ impl ResumeOptimizerAgent {
             rara_paths::load_prompt_markdown(SYSTEM_PROMPT_FILE, DEFAULT_SYSTEM_PROMPT);
         let system_prompt = compose_system_prompt(&base_prompt, self.soul_prompt.as_deref());
 
-        let agent = self
-            .client
-            .agent(&self.model)
-            .preamble(&system_prompt)
-            .build();
-
-        agent
-            .prompt(&user_input)
+        self.client
+            .run_agent(&self.model, &system_prompt, &user_input)
             .await
-            .map_err(|e| AiError::RequestFailed {
-                message: e.to_string(),
-            })
     }
 }

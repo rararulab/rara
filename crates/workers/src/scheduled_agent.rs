@@ -70,7 +70,7 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
         let settings = state.settings_svc.current();
 
         // Guard: AI must be configured.
-        if settings.ai.openrouter_api_key.is_none() {
+        if !settings.ai.is_configured() {
             warn!("agent-scheduler skipped: AI not configured");
             return Ok(());
         }

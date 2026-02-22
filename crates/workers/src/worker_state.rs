@@ -94,7 +94,7 @@ impl AppState {
         // -- AI service ------------------------------------------------------
 
         let ai_service = rara_ai::service::AiService::new(settings_svc.clone());
-        if settings_svc.current().ai.openrouter_api_key.is_some() {
+        if settings_svc.current().ai.is_configured() {
             info!("AI service configured from runtime settings");
         } else {
             warn!("AI service not configured yet; set it via POST /api/v1/settings");

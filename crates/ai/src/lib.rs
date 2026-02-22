@@ -19,5 +19,6 @@
 //! preparation, follow-up drafting, and cover letter generation.
 
 pub mod agents;
+pub(crate) mod client;
 pub mod error;
 pub mod service;

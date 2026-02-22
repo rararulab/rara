@@ -14,12 +14,16 @@
 
 //! AI service — a factory for creating task-specific agents.
 //!
-//! [`AiService`] holds a [`SettingsSvc`] and creates an OpenRouter client
-//! on-demand from runtime settings. If the user hasn't configured an API
-//! key, agent factory methods return [`AiError::NotConfigured`].
+//! [`AiService`] holds a [`SettingsSvc`] and creates an LLM client
+//! on-demand from runtime settings. Supports OpenRouter and Ollama as
+//! providers. If no provider is properly configured, agent factory methods
+//! return [`AiError::NotConfigured`].
 
 use rara_domain_shared::settings::{SettingsSvc, model::ModelScenario};
-use rig::providers::openrouter;
+use rig::{
+    client::Nothing,
+    providers::{ollama, openrouter},
+};
 
 use crate::{
     agents::{
@@ -28,13 +32,16 @@ use crate::{
         job_fit::JobFitAgent, resume_analyzer::ResumeAnalyzerAgent,
         resume_optimizer::ResumeOptimizerAgent,
     },
+    client::LlmClient,
     error::AiError,
 };
 
 /// The AI service — a factory for creating task-specific agents.
 ///
-/// Reads the OpenRouter API key and model from [`SettingsSvc`] on every
+/// Reads the LLM provider, API key, and model from [`SettingsSvc`] on every
 /// call, so configuration changes take effect immediately without restart.
+///
+/// Supports `"openrouter"` (default) and `"ollama"` as providers.
 #[derive(Clone)]
 pub struct AiService {
     settings: SettingsSvc,
@@ -44,21 +51,44 @@ impl AiService {
     /// Create a new `AiService` backed by the given settings service.
     pub fn new(settings: SettingsSvc) -> Self { Self { settings } }
 
-    /// Build an OpenRouter client + model from current settings.
+    /// Build an LLM client + model from current settings.
     ///
-    /// Returns `Err(AiError::NotConfigured)` when no API key is set.
-    fn client(&self, scenario: ModelScenario) -> Result<(openrouter::Client, String), AiError> {
+    /// Returns `Err(AiError::NotConfigured)` when the active provider is
+    /// not properly configured (e.g. missing API key for OpenRouter).
+    fn client(&self, scenario: ModelScenario) -> Result<(LlmClient, String), AiError> {
         let current = self.settings.current();
-        let api_key = current
-            .ai
-            .openrouter_api_key
-            .as_deref()
-            .ok_or(AiError::NotConfigured)?;
+        let provider = current.ai.provider.as_deref().unwrap_or("openrouter");
         let model = current.ai.model_for(scenario).to_owned();
-        let client = openrouter::Client::builder()
-            .api_key(api_key)
-            .build()
-            .expect("failed to build OpenRouter client");
+
+        let client = match provider {
+            "ollama" => {
+                let base_url = current
+                    .ai
+                    .ollama_base_url
+                    .as_deref()
+                    .unwrap_or("http://localhost:11434");
+                let client = ollama::Client::builder()
+                    .api_key(Nothing)
+                    .base_url(base_url)
+                    .build()
+                    .expect("failed to build Ollama client");
+                LlmClient::Ollama(client)
+            }
+            _ => {
+                // Default: OpenRouter
+                let api_key = current
+                    .ai
+                    .openrouter_api_key
+                    .as_deref()
+                    .ok_or(AiError::NotConfigured)?;
+                let client = openrouter::Client::builder()
+                    .api_key(api_key)
+                    .build()
+                    .expect("failed to build OpenRouter client");
+                LlmClient::OpenRouter(client)
+            }
+        };
+
         Ok((client, model))
     }
 
