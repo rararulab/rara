@@ -117,6 +117,8 @@ pub struct PipelineService {
     run_lock:      Arc<Mutex<()>>,
     /// Broadcast channel for streaming pipeline events to SSE clients.
     broadcast_tx:  Arc<tokio::sync::broadcast::Sender<PipelineStreamEvent>>,
+    /// One-shot guard for stale DB run reconciliation after process startup.
+    startup_reconciled: Arc<AtomicBool>,
 }
 
 impl PipelineService {
@@ -145,6 +147,7 @@ impl PipelineService {
             cancel_flag: Arc::new(AtomicBool::new(false)),
             run_lock: Arc::new(Mutex::new(())),
             broadcast_tx: Arc::new(broadcast_tx),
+            startup_reconciled: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -163,6 +166,8 @@ impl PipelineService {
     ///
     /// Returns `Err(PipelineError::AlreadyRunning)` if a run is in progress.
     pub async fn run(&self) -> Result<(), PipelineError> {
+        self.reconcile_stale_runs_if_needed().await;
+
         // Quick atomic check (non-blocking).
         if self.running.load(Ordering::SeqCst) {
             return Err(PipelineError::AlreadyRunning);
@@ -206,6 +211,47 @@ impl PipelineService {
 
     /// Check if the pipeline is currently running.
     pub fn is_running(&self) -> bool { self.running.load(Ordering::SeqCst) }
+
+    /// Best-effort repair for runs left as `Running` after process restart/crash.
+    pub async fn reconcile_stale_runs_if_needed(&self) {
+        if self.is_running() {
+            return;
+        }
+
+        if self
+            .startup_reconciled
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
+
+        let result = sqlx::query(
+            r#"UPDATE pipeline_runs
+               SET status = $1,
+                   finished_at = COALESCE(finished_at, now()),
+                   error = COALESCE(error, 'Pipeline service restarted while run was in progress')
+               WHERE status = $2"#,
+        )
+        .bind(PipelineRunStatus::Cancelled as u8 as i16)
+        .bind(PipelineRunStatus::Running as u8 as i16)
+        .execute(&self.pool)
+        .await;
+
+        match result {
+            Ok(r) if r.rows_affected() > 0 => {
+                warn!(
+                    rows = r.rows_affected(),
+                    "reconciled stale pipeline runs after startup"
+                );
+            }
+            Ok(_) => {}
+            Err(e) => {
+                warn!(error = %e, "failed to reconcile stale pipeline runs");
+                self.startup_reconciled.store(false, Ordering::SeqCst);
+            }
+        }
+    }
 
     // -----------------------------------------------------------------------
     // Internal
@@ -493,6 +539,18 @@ impl PipelineService {
             self.ai_service.clone(),
             self.settings_svc.clone(),
         )));
+        registry.register_service(Arc::new(
+            crate::tools::SearchJobsWithJobServiceTool::new(
+                self.job_service.clone(),
+                self.pool.clone(),
+            ),
+        ));
+        registry.register_service(Arc::new(
+            crate::tools::ListDiscoveredJobsForScoringTool::new(self.pool.clone()),
+        ));
+        registry.register_service(Arc::new(
+            crate::tools::UpdateDiscoveredJobScoreActionTool::new(self.pool.clone()),
+        ));
         // Resume optimization sub-tools (worktree-based workflow)
         registry.register_service(Arc::new(pipeline_tools::PrepareResumeWorktreeTool::new(
             self.settings_svc.clone(),

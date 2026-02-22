@@ -205,4 +205,51 @@ impl PipelineRepository for PgPipelineRepository {
 
         Ok(rows.into_iter().map(Into::into).collect())
     }
+
+    async fn list_unscored_discovered_jobs(
+        &self,
+        run_id: Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<DiscoveredJob>, PipelineRepoError> {
+        let rows = sqlx::query_as::<_, DiscoveredJobRow>(
+            r#"SELECT * FROM pipeline_discovered_jobs
+               WHERE run_id = $1
+                 AND score IS NULL
+               ORDER BY created_at ASC
+               LIMIT $2 OFFSET $3"#,
+        )
+        .bind(run_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await
+        .context(DatabaseSnafu)?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    async fn update_discovered_job_score_action(
+        &self,
+        id: Uuid,
+        score: Option<i32>,
+        action: Option<DiscoveredJobAction>,
+    ) -> Result<Option<DiscoveredJob>, PipelineRepoError> {
+        let action_i16 = action.map(|a| a as u8 as i16);
+        let row = sqlx::query_as::<_, DiscoveredJobRow>(
+            r#"UPDATE pipeline_discovered_jobs
+               SET score = COALESCE($2, score),
+                   action = COALESCE($3, action)
+               WHERE id = $1
+               RETURNING *"#,
+        )
+        .bind(id)
+        .bind(score)
+        .bind(action_i16)
+        .fetch_optional(&self.pool)
+        .await
+        .context(DatabaseSnafu)?;
+
+        Ok(row.map(Into::into))
+    }
 }

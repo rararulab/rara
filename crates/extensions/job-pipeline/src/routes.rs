@@ -90,6 +90,7 @@ async fn cancel_run(
 
 /// `GET /api/v1/pipeline/status` -- check pipeline status.
 async fn get_status(State(service): State<PipelineService>) -> Json<PipelineStatusResponse> {
+    service.reconcile_stale_runs_if_needed().await;
     Json(PipelineStatusResponse {
         running: service.is_running(),
     })
@@ -123,6 +124,7 @@ async fn list_runs(
     State(service): State<PipelineService>,
     Query(q): Query<ListRunsQuery>,
 ) -> Result<Json<Vec<PipelineRun>>, PipelineError> {
+    service.reconcile_stale_runs_if_needed().await;
     let repo = PgPipelineRepository::new(service.pool());
     let runs = repo
         .list_runs(q.limit.unwrap_or(20), q.offset.unwrap_or(0))
@@ -138,6 +140,7 @@ async fn get_run(
     State(service): State<PipelineService>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<PipelineRun>, PipelineError> {
+    service.reconcile_stale_runs_if_needed().await;
     let repo = PgPipelineRepository::new(service.pool());
     let run = repo
         .get_run(id)

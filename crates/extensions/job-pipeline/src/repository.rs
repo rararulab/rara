@@ -87,4 +87,20 @@ pub trait PipelineRepository: Send + Sync {
         &self,
         run_id: Uuid,
     ) -> Result<Vec<DiscoveredJob>, PipelineRepoError>;
+
+    /// List discovered jobs that still need scoring for a pipeline run.
+    async fn list_unscored_discovered_jobs(
+        &self,
+        run_id: Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<DiscoveredJob>, PipelineRepoError>;
+
+    /// Update score/action for a discovered job and return the updated row.
+    async fn update_discovered_job_score_action(
+        &self,
+        id: Uuid,
+        score: Option<i32>,
+        action: Option<DiscoveredJobAction>,
+    ) -> Result<Option<DiscoveredJob>, PipelineRepoError>;
 }
