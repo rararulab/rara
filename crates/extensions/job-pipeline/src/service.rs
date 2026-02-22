@@ -233,6 +233,9 @@ impl PipelineService {
         tools.register_service(Arc::new(
             crate::tools::ReportPipelineStatsTool::new(self.pool.clone()),
         ));
+        tools.register_service(Arc::new(
+            crate::tools::SaveDiscoveredJobTool::new(self.pool.clone()),
+        ));
         let tools = Arc::new(tools);
 
         let system_prompt = DEFAULT_PIPELINE_PROMPT.to_owned();

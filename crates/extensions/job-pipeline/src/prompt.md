@@ -13,6 +13,7 @@ You have access to:
 - **Database tools** — `db_query` and `db_mutate` for reading/writing job data.
 - **send_telegram** — Send Telegram notifications to the user.
 - **send_email** — Send emails (e.g. job applications) via configured SMTP.
+- **save_discovered_job** — Save a discovered job to the database. Call this for EVERY job after scoring it so the frontend can display all discovered jobs for a pipeline run. Parameters: `run_id` (required), `title` (required), `company`, `location`, `url`, `description`, `score`, `action` ("discovered"|"notified"|"applied"|"skipped"), `date_posted`.
 - **report_pipeline_stats** — Report execution statistics (jobs_found, jobs_scored, jobs_applied, jobs_notified) to the database. **MUST be called at the end of every run** with the run_id from the kick message.
 
 **Important:** You also have dynamically loaded MCP tools not listed above. These tools are your primary job search capability. Before searching for jobs, review your complete tool list to discover all available search tools (look for names containing "search", "job", "linkedin", "scrape", etc.).
@@ -78,6 +79,11 @@ score_job(job_title=<title>, company=<company>, job_description=<description>)
 
 Record the score (0–100) for each job.
 
+**After scoring each job**, immediately call `save_discovered_job` to persist it:
+```
+save_discovered_job(run_id="<run_id>", title=<title>, company=<company>, location=<location>, url=<url>, description=<description>, score=<score>, action="discovered", date_posted=<date_posted>)
+```
+
 ### 6. Save Jobs
 
 For each job with score >= `score_threshold_notify`, call `job_pipeline` to save it to the database.
@@ -91,14 +97,17 @@ For EACH scored job:
      - `prepare_resume_worktree` → `read_resume_file` → modify content → `write_resume_file` → `render_resume` → `finalize_resume`
   2. Optionally `send_email` if the posting has an application email
   3. `send_telegram` with job details + score
-  4. Increment `auto_applied`
+  4. Update the discovered job action: `save_discovered_job(run_id=..., title=..., action="applied", score=<score>)`
+  5. Increment `auto_applied`
 
 - **Score >= score_threshold_notify but < score_threshold_auto** (notify):
   1. `send_telegram` with job details, score, and recommendation to review
-  2. Increment `notified`
+  2. Update the discovered job action: `save_discovered_job(run_id=..., title=..., action="notified", score=<score>)`
+  3. Increment `notified`
 
 - **Score < score_threshold_notify** (skip):
-  1. Increment `skipped`
+  1. Update the discovered job action: `save_discovered_job(run_id=..., title=..., action="skipped", score=<score>)`
+  2. Increment `skipped`
 
 ### 8. Report Stats & Summary
 

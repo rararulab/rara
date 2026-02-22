@@ -20,6 +20,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "@/api/client";
 import type {
+  PipelineDiscoveredJob,
   PipelineRun,
   PipelineRunEvent,
   PipelineStatus,
@@ -39,10 +40,12 @@ import {
 } from "@/components/ui/card";
 import {
   AlertCircle,
+  Briefcase,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   Clock,
+  ExternalLink,
   FileText,
   Loader2,
   Play,
@@ -242,6 +245,130 @@ function ToolCallDetail({ tool }: { tool: CompletedToolCall }) {
           <CollapsibleJsonBlock label="result" data={tool.result} />
         )}
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// DiscoveredJobsTable: table of jobs discovered during a pipeline run
+// ---------------------------------------------------------------------------
+
+function actionVariant(
+  action: PipelineDiscoveredJob["action"],
+): "default" | "secondary" | "destructive" | "outline" {
+  switch (action) {
+    case "Applied":
+      return "default";
+    case "Notified":
+      return "secondary";
+    case "Skipped":
+      return "outline";
+    default:
+      return "outline";
+  }
+}
+
+function DiscoveredJobsTable({ runId }: { runId: string }) {
+  const jobsQuery = useQuery({
+    queryKey: ["pipeline-run-jobs", runId],
+    queryFn: () => api.fetchPipelineRunJobs(runId),
+  });
+
+  const [expanded, setExpanded] = useState(false);
+  const jobs = jobsQuery.data ?? [];
+
+  if (jobsQuery.isLoading) {
+    return <Skeleton className="h-8 w-48" />;
+  }
+
+  if (jobs.length === 0) return null;
+
+  return (
+    <div className="space-y-2">
+      <button
+        type="button"
+        className="flex items-center gap-2 text-xs font-medium text-muted-foreground hover:text-foreground"
+        onClick={() => setExpanded((e) => !e)}
+      >
+        <Briefcase className="h-3 w-3" />
+        Discovered Jobs ({jobs.length})
+        {expanded ? (
+          <ChevronDown className="h-3 w-3" />
+        ) : (
+          <ChevronRight className="h-3 w-3" />
+        )}
+      </button>
+      {expanded && (
+        <div className="overflow-x-auto rounded border">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b bg-muted/50">
+                <th className="px-3 py-2 text-left font-medium">Title</th>
+                <th className="px-3 py-2 text-left font-medium">Company</th>
+                <th className="px-3 py-2 text-left font-medium">Location</th>
+                <th className="px-3 py-2 text-center font-medium">Score</th>
+                <th className="px-3 py-2 text-center font-medium">Action</th>
+                <th className="px-3 py-2 text-center font-medium">Link</th>
+              </tr>
+            </thead>
+            <tbody>
+              {jobs.map((job) => (
+                <tr key={job.id} className="border-b last:border-b-0 hover:bg-muted/30">
+                  <td className="max-w-[200px] truncate px-3 py-2" title={job.title}>
+                    {job.title}
+                  </td>
+                  <td className="px-3 py-2 text-muted-foreground">
+                    {job.company ?? "--"}
+                  </td>
+                  <td className="px-3 py-2 text-muted-foreground">
+                    {job.location ?? "--"}
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    {job.score != null ? (
+                      <Badge
+                        variant={
+                          job.score >= 80
+                            ? "default"
+                            : job.score >= 60
+                              ? "secondary"
+                              : "outline"
+                        }
+                        className="text-[10px]"
+                      >
+                        {job.score}
+                      </Badge>
+                    ) : (
+                      "--"
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    <Badge
+                      variant={actionVariant(job.action)}
+                      className="text-[10px]"
+                    >
+                      {job.action}
+                    </Badge>
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    {job.url ? (
+                      <a
+                        href={job.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex text-primary hover:text-primary/80"
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    ) : (
+                      "--"
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -595,6 +722,9 @@ function RunDetail({
           <p className="text-sm text-destructive">{run.error}</p>
         </div>
       )}
+
+      {/* Discovered Jobs */}
+      <DiscoveredJobsTable runId={run.id} />
 
       {/* Tool calls */}
       {completedCalls.length > 0 && (

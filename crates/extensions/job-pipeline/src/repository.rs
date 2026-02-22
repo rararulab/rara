@@ -17,7 +17,7 @@
 use snafu::Snafu;
 use uuid::Uuid;
 
-use crate::types::{PipelineEvent, PipelineRun};
+use crate::types::{DiscoveredJob, DiscoveredJobAction, PipelineEvent, PipelineRun};
 
 // ---------------------------------------------------------------------------
 // Error
@@ -66,4 +66,25 @@ pub trait PipelineRepository: Send + Sync {
 
     /// Retrieve all events for a pipeline run, ordered by sequence number.
     async fn get_events(&self, run_id: Uuid) -> Result<Vec<PipelineEvent>, PipelineRepoError>;
+
+    /// Insert a discovered job for a pipeline run.
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_discovered_job(
+        &self,
+        run_id: Uuid,
+        title: &str,
+        company: Option<&str>,
+        location: Option<&str>,
+        url: Option<&str>,
+        description: Option<&str>,
+        score: Option<i32>,
+        action: DiscoveredJobAction,
+        date_posted: Option<&str>,
+    ) -> Result<DiscoveredJob, PipelineRepoError>;
+
+    /// List all discovered jobs for a pipeline run, ordered by score descending.
+    async fn list_discovered_jobs(
+        &self,
+        run_id: Uuid,
+    ) -> Result<Vec<DiscoveredJob>, PipelineRepoError>;
 }

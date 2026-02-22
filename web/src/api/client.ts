@@ -83,7 +83,7 @@ async function requestBlob(path: string, options?: RequestInit & { timeoutMs?: n
   }
 }
 
-import type { TypstProject, BrowseResult, JustRecipe, RunOutput } from './types';
+import type { TypstProject, BrowseResult, JustRecipe, RunOutput, PipelineDiscoveredJob } from './types';
 
 export const api = {
   get: <T>(path: string) => request<T>(path),
@@ -127,5 +127,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     });
+  },
+
+  // -- Pipeline --
+
+  fetchPipelineRunJobs(runId: string): Promise<PipelineDiscoveredJob[]> {
+    return request<PipelineDiscoveredJob[]>(`/api/v1/pipeline/runs/${runId}/jobs`);
   },
 };

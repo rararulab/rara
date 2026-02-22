@@ -138,6 +138,75 @@ impl From<PipelineEventRow> for PipelineEvent {
 }
 
 // ---------------------------------------------------------------------------
+// DiscoveredJobAction
+// ---------------------------------------------------------------------------
+
+/// What happened to a discovered job during the pipeline run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, FromRepr)]
+#[repr(u8)]
+pub enum DiscoveredJobAction {
+    Discovered = 0,
+    Notified = 1,
+    Applied = 2,
+    Skipped = 3,
+}
+
+// ---------------------------------------------------------------------------
+// DiscoveredJob
+// ---------------------------------------------------------------------------
+
+/// A job discovered during a pipeline run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveredJob {
+    pub id: Uuid,
+    pub run_id: Uuid,
+    pub title: String,
+    pub company: Option<String>,
+    pub location: Option<String>,
+    pub url: Option<String>,
+    pub description: Option<String>,
+    pub score: Option<i32>,
+    pub action: DiscoveredJobAction,
+    pub date_posted: Option<String>,
+    pub created_at: Timestamp,
+}
+
+/// Database row representation of a discovered job.
+#[derive(Debug, sqlx::FromRow)]
+pub(crate) struct DiscoveredJobRow {
+    pub id: Uuid,
+    pub run_id: Uuid,
+    pub title: String,
+    pub company: Option<String>,
+    pub location: Option<String>,
+    pub url: Option<String>,
+    pub description: Option<String>,
+    pub score: Option<i32>,
+    pub action: i16,
+    pub date_posted: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<DiscoveredJobRow> for DiscoveredJob {
+    fn from(row: DiscoveredJobRow) -> Self {
+        Self {
+            id: row.id,
+            run_id: row.run_id,
+            title: row.title,
+            company: row.company,
+            location: row.location,
+            url: row.url,
+            description: row.description,
+            score: row.score,
+            action: DiscoveredJobAction::from_repr(row.action as u8)
+                .unwrap_or(DiscoveredJobAction::Discovered),
+            date_posted: row.date_posted,
+            created_at: chrono_to_timestamp(row.created_at),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // PipelineStreamEvent — SSE streaming events
 // ---------------------------------------------------------------------------
 

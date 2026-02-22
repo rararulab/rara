@@ -547,6 +547,21 @@ export interface PipelineRun {
   error: string | null;
 }
 
+// Pipeline Discovered Job
+export interface PipelineDiscoveredJob {
+  id: string;
+  run_id: string;
+  title: string;
+  company: string | null;
+  location: string | null;
+  url: string | null;
+  description: string | null;
+  score: number | null;
+  action: "Discovered" | "Notified" | "Applied" | "Skipped";
+  date_posted: string | null;
+  created_at: string;
+}
+
 // Pipeline Run Event (stored in DB)
 export interface PipelineRunEvent {
   id: number;

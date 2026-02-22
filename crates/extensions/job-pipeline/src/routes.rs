@@ -28,7 +28,7 @@ use uuid::Uuid;
 use crate::pg_repository::PgPipelineRepository;
 use crate::repository::PipelineRepository;
 use crate::service::{PipelineError, PipelineService};
-use crate::types::{PipelineEvent, PipelineRun};
+use crate::types::{DiscoveredJob, PipelineEvent, PipelineRun};
 
 /// Build `/api/v1/pipeline/...` routes.
 pub fn routes(service: PipelineService) -> OpenApiRouter {
@@ -40,6 +40,7 @@ pub fn routes(service: PipelineService) -> OpenApiRouter {
         .route("/api/v1/pipeline/runs", get(list_runs))
         .route("/api/v1/pipeline/runs/{id}", get(get_run))
         .route("/api/v1/pipeline/runs/{id}/events", get(get_run_events))
+        .route("/api/v1/pipeline/runs/{id}/jobs", get(get_run_jobs))
         .with_state(service)
 }
 
@@ -163,4 +164,19 @@ async fn get_run_events(
             message: e.to_string(),
         })?;
     Ok(Json(events))
+}
+
+/// `GET /api/v1/pipeline/runs/{id}/jobs` -- get discovered jobs for a pipeline run.
+async fn get_run_jobs(
+    State(service): State<PipelineService>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<DiscoveredJob>>, PipelineError> {
+    let repo = PgPipelineRepository::new(service.pool());
+    let jobs = repo
+        .list_discovered_jobs(id)
+        .await
+        .map_err(|e| PipelineError::RunFailed {
+            message: e.to_string(),
+        })?;
+    Ok(Json(jobs))
 }

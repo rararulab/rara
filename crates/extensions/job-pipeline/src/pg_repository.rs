@@ -21,7 +21,10 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::repository::{DatabaseSnafu, PipelineRepoError, PipelineRepository};
-use crate::types::{PipelineEvent, PipelineEventRow, PipelineRun, PipelineRunRow};
+use crate::types::{
+    DiscoveredJob, DiscoveredJobAction, DiscoveredJobRow, PipelineEvent, PipelineEventRow,
+    PipelineRun, PipelineRunRow,
+};
 
 // ---------------------------------------------------------------------------
 // PgPipelineRepository
@@ -143,6 +146,57 @@ impl PipelineRepository for PgPipelineRepository {
             r#"SELECT * FROM pipeline_events
                WHERE run_id = $1
                ORDER BY seq ASC"#,
+        )
+        .bind(run_id)
+        .fetch_all(&self.pool)
+        .await
+        .context(DatabaseSnafu)?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    async fn insert_discovered_job(
+        &self,
+        run_id: Uuid,
+        title: &str,
+        company: Option<&str>,
+        location: Option<&str>,
+        url: Option<&str>,
+        description: Option<&str>,
+        score: Option<i32>,
+        action: DiscoveredJobAction,
+        date_posted: Option<&str>,
+    ) -> Result<DiscoveredJob, PipelineRepoError> {
+        let row = sqlx::query_as::<_, DiscoveredJobRow>(
+            r#"INSERT INTO pipeline_discovered_jobs
+                   (run_id, title, company, location, url, description, score, action, date_posted)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+               RETURNING *"#,
+        )
+        .bind(run_id)
+        .bind(title)
+        .bind(company)
+        .bind(location)
+        .bind(url)
+        .bind(description)
+        .bind(score)
+        .bind(action as u8 as i16)
+        .bind(date_posted)
+        .fetch_one(&self.pool)
+        .await
+        .context(DatabaseSnafu)?;
+
+        Ok(row.into())
+    }
+
+    async fn list_discovered_jobs(
+        &self,
+        run_id: Uuid,
+    ) -> Result<Vec<DiscoveredJob>, PipelineRepoError> {
+        let rows = sqlx::query_as::<_, DiscoveredJobRow>(
+            r#"SELECT * FROM pipeline_discovered_jobs
+               WHERE run_id = $1
+               ORDER BY score DESC NULLS LAST"#,
         )
         .bind(run_id)
         .fetch_all(&self.pool)
