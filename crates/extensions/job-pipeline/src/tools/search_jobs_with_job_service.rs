@@ -183,18 +183,12 @@ impl AgentTool for SearchJobsWithJobServiceTool {
             }
         }
         for job in &persisted_jobs {
-            let date_posted = job.posted_at.map(|ts| ts.to_string());
             match pipeline_repo
                 .insert_discovered_job(
                     parsed.run_id,
-                    &job.title,
-                    Some(&job.company),
-                    job.location.as_deref(),
-                    job.url.as_deref(),
-                    job.description.as_deref(),
+                    job.id,
                     None,
                     DiscoveredJobAction::Discovered,
-                    date_posted.as_deref(),
                 )
                 .await
             {

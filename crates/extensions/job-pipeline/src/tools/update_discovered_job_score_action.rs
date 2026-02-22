@@ -108,8 +108,7 @@ impl AgentTool for UpdateDiscoveredJobScoreActionTool {
                 "job": {
                     "id": job.id,
                     "run_id": job.run_id,
-                    "title": job.title,
-                    "company": job.company,
+                    "job_id": job.job_id,
                     "score": job.score,
                     "action": job.action.to_string(),
                 }

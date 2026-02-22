@@ -29,7 +29,8 @@ use crate::pg_repository::PgPipelineRepository;
 use crate::repository::PipelineRepository;
 use crate::service::{PipelineError, PipelineService};
 use crate::types::{
-    DiscoveredJob, DiscoveredJobAction, DiscoveredJobsStats, PipelineEvent, PipelineRun,
+    DiscoveredJob, DiscoveredJobAction, DiscoveredJobWithDetails, DiscoveredJobsStats,
+    PipelineEvent, PipelineRun,
 };
 
 /// Build `/api/v1/pipeline/...` routes.
@@ -187,7 +188,7 @@ async fn get_run_events(
 async fn get_run_jobs(
     State(service): State<PipelineService>,
     Path(id): Path<Uuid>,
-) -> Result<Json<Vec<DiscoveredJob>>, PipelineError> {
+) -> Result<Json<Vec<DiscoveredJobWithDetails>>, PipelineError> {
     let repo = PgPipelineRepository::new(service.pool());
     let jobs = repo
         .list_discovered_jobs(id)
@@ -215,7 +216,7 @@ struct ListDiscoveredJobsQuery {
 
 #[derive(Debug, Serialize)]
 struct PaginatedDiscoveredJobs {
-    items: Vec<DiscoveredJob>,
+    items: Vec<DiscoveredJobWithDetails>,
     total: i64,
     limit: i64,
     offset: i64,

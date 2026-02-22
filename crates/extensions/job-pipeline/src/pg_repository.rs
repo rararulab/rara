@@ -22,8 +22,9 @@ use uuid::Uuid;
 
 use crate::repository::{DatabaseSnafu, PipelineRepoError, PipelineRepository};
 use crate::types::{
-    DiscoveredJob, DiscoveredJobAction, DiscoveredJobRow, DiscoveredJobsActionCounts,
-    DiscoveredJobsStats, PipelineEvent, PipelineEventRow, PipelineRun, PipelineRunRow,
+    DiscoveredJob, DiscoveredJobAction, DiscoveredJobRow, DiscoveredJobWithDetails,
+    DiscoveredJobWithDetailsRow, DiscoveredJobsActionCounts, DiscoveredJobsStats, PipelineEvent,
+    PipelineEventRow, PipelineRun, PipelineRunRow,
 };
 
 // ---------------------------------------------------------------------------
@@ -158,30 +159,19 @@ impl PipelineRepository for PgPipelineRepository {
     async fn insert_discovered_job(
         &self,
         run_id: Uuid,
-        title: &str,
-        company: Option<&str>,
-        location: Option<&str>,
-        url: Option<&str>,
-        description: Option<&str>,
+        job_id: Uuid,
         score: Option<i32>,
         action: DiscoveredJobAction,
-        date_posted: Option<&str>,
     ) -> Result<DiscoveredJob, PipelineRepoError> {
         let row = sqlx::query_as::<_, DiscoveredJobRow>(
-            r#"INSERT INTO pipeline_discovered_jobs
-                   (run_id, title, company, location, url, description, score, action, date_posted)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            r#"INSERT INTO pipeline_discovered_jobs (run_id, job_id, score, action)
+               VALUES ($1, $2, $3, $4)
                RETURNING *"#,
         )
         .bind(run_id)
-        .bind(title)
-        .bind(company)
-        .bind(location)
-        .bind(url)
-        .bind(description)
+        .bind(job_id)
         .bind(score)
         .bind(action as u8 as i16)
-        .bind(date_posted)
         .fetch_one(&self.pool)
         .await
         .context(DatabaseSnafu)?;
@@ -192,11 +182,14 @@ impl PipelineRepository for PgPipelineRepository {
     async fn list_discovered_jobs(
         &self,
         run_id: Uuid,
-    ) -> Result<Vec<DiscoveredJob>, PipelineRepoError> {
-        let rows = sqlx::query_as::<_, DiscoveredJobRow>(
-            r#"SELECT * FROM pipeline_discovered_jobs
-               WHERE run_id = $1
-               ORDER BY score DESC NULLS LAST"#,
+    ) -> Result<Vec<DiscoveredJobWithDetails>, PipelineRepoError> {
+        let rows = sqlx::query_as::<_, DiscoveredJobWithDetailsRow>(
+            r#"SELECT dj.id, dj.run_id, dj.job_id, dj.score, dj.action, dj.created_at,
+                      j.title, j.company, j.location, j.url, j.description, j.posted_at
+               FROM pipeline_discovered_jobs dj
+               JOIN job j ON dj.job_id = j.id
+               WHERE dj.run_id = $1
+               ORDER BY dj.score DESC NULLS LAST"#,
         )
         .bind(run_id)
         .fetch_all(&self.pool)
@@ -211,12 +204,15 @@ impl PipelineRepository for PgPipelineRepository {
         run_id: Uuid,
         limit: i64,
         offset: i64,
-    ) -> Result<Vec<DiscoveredJob>, PipelineRepoError> {
-        let rows = sqlx::query_as::<_, DiscoveredJobRow>(
-            r#"SELECT * FROM pipeline_discovered_jobs
-               WHERE run_id = $1
-                 AND score IS NULL
-               ORDER BY created_at ASC
+    ) -> Result<Vec<DiscoveredJobWithDetails>, PipelineRepoError> {
+        let rows = sqlx::query_as::<_, DiscoveredJobWithDetailsRow>(
+            r#"SELECT dj.id, dj.run_id, dj.job_id, dj.score, dj.action, dj.created_at,
+                      j.title, j.company, j.location, j.url, j.description, j.posted_at
+               FROM pipeline_discovered_jobs dj
+               JOIN job j ON dj.job_id = j.id
+               WHERE dj.run_id = $1
+                 AND dj.score IS NULL
+               ORDER BY dj.created_at ASC
                LIMIT $2 OFFSET $3"#,
         )
         .bind(run_id)
@@ -262,30 +258,36 @@ impl PipelineRepository for PgPipelineRepository {
         sort_by: Option<&str>,
         limit: i64,
         offset: i64,
-    ) -> Result<Vec<DiscoveredJob>, PipelineRepoError> {
-        let mut sql = String::from("SELECT * FROM pipeline_discovered_jobs WHERE 1=1");
+    ) -> Result<Vec<DiscoveredJobWithDetails>, PipelineRepoError> {
+        let mut sql = String::from(
+            "SELECT dj.id, dj.run_id, dj.job_id, dj.score, dj.action, dj.created_at, \
+                    j.title, j.company, j.location, j.url, j.description, j.posted_at \
+             FROM pipeline_discovered_jobs dj \
+             JOIN job j ON dj.job_id = j.id \
+             WHERE 1=1",
+        );
         let mut param_idx: usize = 0;
 
         if action.is_some() {
             param_idx += 1;
-            sql.push_str(&format!(" AND action = ${param_idx}"));
+            sql.push_str(&format!(" AND dj.action = ${param_idx}"));
         }
         if min_score.is_some() {
             param_idx += 1;
-            sql.push_str(&format!(" AND score >= ${param_idx}"));
+            sql.push_str(&format!(" AND dj.score >= ${param_idx}"));
         }
         if max_score.is_some() {
             param_idx += 1;
-            sql.push_str(&format!(" AND score <= ${param_idx}"));
+            sql.push_str(&format!(" AND dj.score <= ${param_idx}"));
         }
         if run_id.is_some() {
             param_idx += 1;
-            sql.push_str(&format!(" AND run_id = ${param_idx}"));
+            sql.push_str(&format!(" AND dj.run_id = ${param_idx}"));
         }
 
         let order = match sort_by {
-            Some("score") => "ORDER BY score DESC NULLS LAST",
-            _ => "ORDER BY created_at DESC",
+            Some("score") => "ORDER BY dj.score DESC NULLS LAST",
+            _ => "ORDER BY dj.created_at DESC",
         };
         sql.push(' ');
         sql.push_str(order);
@@ -296,7 +298,7 @@ impl PipelineRepository for PgPipelineRepository {
         let offset_idx = param_idx;
         sql.push_str(&format!(" LIMIT ${limit_idx} OFFSET ${offset_idx}"));
 
-        let mut query = sqlx::query_as::<_, DiscoveredJobRow>(&sql);
+        let mut query = sqlx::query_as::<_, DiscoveredJobWithDetailsRow>(&sql);
         if let Some(a) = action {
             query = query.bind(a as u8 as i16);
         }
@@ -322,25 +324,26 @@ impl PipelineRepository for PgPipelineRepository {
         max_score: Option<i32>,
         run_id: Option<Uuid>,
     ) -> Result<i64, PipelineRepoError> {
-        let mut sql =
-            String::from("SELECT COUNT(*) as count FROM pipeline_discovered_jobs WHERE 1=1");
+        let mut sql = String::from(
+            "SELECT COUNT(*) as count FROM pipeline_discovered_jobs dj WHERE 1=1",
+        );
         let mut param_idx: usize = 0;
 
         if action.is_some() {
             param_idx += 1;
-            sql.push_str(&format!(" AND action = ${param_idx}"));
+            sql.push_str(&format!(" AND dj.action = ${param_idx}"));
         }
         if min_score.is_some() {
             param_idx += 1;
-            sql.push_str(&format!(" AND score >= ${param_idx}"));
+            sql.push_str(&format!(" AND dj.score >= ${param_idx}"));
         }
         if max_score.is_some() {
             param_idx += 1;
-            sql.push_str(&format!(" AND score <= ${param_idx}"));
+            sql.push_str(&format!(" AND dj.score <= ${param_idx}"));
         }
         if run_id.is_some() {
             param_idx += 1;
-            sql.push_str(&format!(" AND run_id = ${param_idx}"));
+            sql.push_str(&format!(" AND dj.run_id = ${param_idx}"));
         }
 
         let mut query = sqlx::query_scalar::<_, i64>(&sql);

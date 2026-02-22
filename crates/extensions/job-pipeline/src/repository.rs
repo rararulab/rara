@@ -18,7 +18,8 @@ use snafu::Snafu;
 use uuid::Uuid;
 
 use crate::types::{
-    DiscoveredJob, DiscoveredJobAction, DiscoveredJobsStats, PipelineEvent, PipelineRun,
+    DiscoveredJob, DiscoveredJobAction, DiscoveredJobWithDetails, DiscoveredJobsStats,
+    PipelineEvent, PipelineRun,
 };
 
 // ---------------------------------------------------------------------------
@@ -70,33 +71,29 @@ pub trait PipelineRepository: Send + Sync {
     async fn get_events(&self, run_id: Uuid) -> Result<Vec<PipelineEvent>, PipelineRepoError>;
 
     /// Insert a discovered job for a pipeline run.
-    #[allow(clippy::too_many_arguments)]
     async fn insert_discovered_job(
         &self,
         run_id: Uuid,
-        title: &str,
-        company: Option<&str>,
-        location: Option<&str>,
-        url: Option<&str>,
-        description: Option<&str>,
+        job_id: Uuid,
         score: Option<i32>,
         action: DiscoveredJobAction,
-        date_posted: Option<&str>,
     ) -> Result<DiscoveredJob, PipelineRepoError>;
 
-    /// List all discovered jobs for a pipeline run, ordered by score descending.
+    /// List all discovered jobs for a pipeline run (with job details), ordered
+    /// by score descending.
     async fn list_discovered_jobs(
         &self,
         run_id: Uuid,
-    ) -> Result<Vec<DiscoveredJob>, PipelineRepoError>;
+    ) -> Result<Vec<DiscoveredJobWithDetails>, PipelineRepoError>;
 
-    /// List discovered jobs that still need scoring for a pipeline run.
+    /// List discovered jobs that still need scoring for a pipeline run (with
+    /// job details for the AI agent to evaluate).
     async fn list_unscored_discovered_jobs(
         &self,
         run_id: Uuid,
         limit: i64,
         offset: i64,
-    ) -> Result<Vec<DiscoveredJob>, PipelineRepoError>;
+    ) -> Result<Vec<DiscoveredJobWithDetails>, PipelineRepoError>;
 
     /// Update score/action for a discovered job and return the updated row.
     async fn update_discovered_job_score_action(
@@ -106,7 +103,8 @@ pub trait PipelineRepository: Send + Sync {
         action: Option<DiscoveredJobAction>,
     ) -> Result<Option<DiscoveredJob>, PipelineRepoError>;
 
-    /// List discovered jobs across all runs with optional filters.
+    /// List discovered jobs across all runs with optional filters (with job
+    /// details via JOIN).
     #[allow(clippy::too_many_arguments)]
     async fn list_all_discovered_jobs(
         &self,
@@ -117,7 +115,7 @@ pub trait PipelineRepository: Send + Sync {
         sort_by: Option<&str>,
         limit: i64,
         offset: i64,
-    ) -> Result<Vec<DiscoveredJob>, PipelineRepoError>;
+    ) -> Result<Vec<DiscoveredJobWithDetails>, PipelineRepoError>;
 
     /// Count discovered jobs matching filters (for pagination).
     async fn count_discovered_jobs(
