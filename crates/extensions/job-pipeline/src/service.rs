@@ -29,7 +29,7 @@ use std::sync::{
 use axum::http::StatusCode;
 use rara_agents::{
     provider::LlmProviderLoaderRef,
-    runner::{AgentRunner, UserContent},
+    runner::{AgentRunner, RunnerEvent, UserContent},
     tool_registry::ToolRegistry,
 };
 use rara_domain_shared::settings::{SettingsSvc, model::ModelScenario};
@@ -37,7 +37,10 @@ use snafu::Snafu;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
+use crate::pg_repository::PgPipelineRepository;
+use crate::repository::PipelineRepository;
 use crate::tools::pipeline_tools;
+use crate::types::{PipelineRunStatus, PipelineStreamEvent};
 
 /// Default pipeline system prompt embedded into the binary.
 const DEFAULT_PIPELINE_PROMPT: &str = include_str!("prompt.md");
@@ -107,6 +110,8 @@ pub struct PipelineService {
     cancel_flag:   Arc<AtomicBool>,
     /// Mutex to serialize concurrent `run()` attempts.
     run_lock:      Arc<Mutex<()>>,
+    /// Broadcast channel for streaming pipeline events to SSE clients.
+    broadcast_tx:  Arc<tokio::sync::broadcast::Sender<PipelineStreamEvent>>,
 }
 
 impl PipelineService {
@@ -120,6 +125,7 @@ impl PipelineService {
         notify_client: rara_domain_shared::notify::client::NotifyClient,
         composio_auth: Arc<dyn rara_composio::ComposioAuthProvider>,
     ) -> Self {
+        let (broadcast_tx, _) = tokio::sync::broadcast::channel(256);
         Self {
             settings_svc,
             llm_provider,
@@ -131,7 +137,18 @@ impl PipelineService {
             running: Arc::new(AtomicBool::new(false)),
             cancel_flag: Arc::new(AtomicBool::new(false)),
             run_lock: Arc::new(Mutex::new(())),
+            broadcast_tx: Arc::new(broadcast_tx),
         }
+    }
+
+    /// Subscribe to pipeline stream events (for SSE clients).
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<PipelineStreamEvent> {
+        self.broadcast_tx.subscribe()
+    }
+
+    /// Get a reference to the database pool.
+    pub fn pool(&self) -> sqlx::PgPool {
+        self.pool.clone()
     }
 
     /// Trigger a pipeline run. Returns immediately after spawning the
@@ -191,15 +208,25 @@ impl PipelineService {
     async fn run_inner(&self) -> Result<(), PipelineError> {
         info!("pipeline run started");
 
+        // 1. Create a persistent pipeline run record.
+        let repo = PgPipelineRepository::new(self.pool.clone());
+        let mut pipeline_run = repo.create_run().await.map_err(|e| PipelineError::RunFailed {
+            message: format!("failed to create pipeline run: {e}"),
+        })?;
+        let run_id = pipeline_run.id;
+
+        // 2. Broadcast Started event.
+        let _ = self.broadcast_tx.send(PipelineStreamEvent::Started { run_id });
+
         let settings = self.settings_svc.current();
         let model = settings.ai.model_for(ModelScenario::Job).to_owned();
 
         // Build pipeline-specific tool registry.
-        let tools = self.build_pipeline_tools();
+        let tools = Arc::new(self.build_pipeline_tools());
 
         let system_prompt = DEFAULT_PIPELINE_PROMPT.to_owned();
 
-        // Build and run the agent.
+        // Build the agent runner and start streaming.
         let runner = AgentRunner::builder()
             .llm_provider(self.llm_provider.clone())
             .model_name(model)
@@ -208,31 +235,118 @@ impl PipelineService {
             .max_iterations(PIPELINE_MAX_ITERATIONS)
             .build();
 
-        match runner.run(&tools, None).await {
-            Ok(result) => {
-                let response_text = result
-                    .provider_response
-                    .choices
-                    .first()
-                    .and_then(|c| c.message.content.as_deref())
-                    .unwrap_or_default();
+        let mut rx = runner.run_streaming(tools);
+        let mut seq: i32 = 0;
+        let mut completed = false;
 
-                info!(
-                    iterations = result.iterations,
-                    tool_calls = result.tool_calls_made,
-                    response_len = response_text.len(),
-                    "pipeline run completed"
-                );
+        // 3. Consume streaming events from the agent runner.
+        while let Some(runner_event) = rx.recv().await {
+            let stream_event = match &runner_event {
+                RunnerEvent::Thinking => PipelineStreamEvent::Thinking,
+                RunnerEvent::ThinkingDone => PipelineStreamEvent::ThinkingDone,
+                RunnerEvent::Iteration(index) => PipelineStreamEvent::Iteration { index: *index },
+                RunnerEvent::ToolCallStart { id, name, .. } => {
+                    // Strip arguments for SSE clients (may contain sensitive data).
+                    PipelineStreamEvent::ToolCallStart {
+                        id: id.clone(),
+                        name: name.clone(),
+                    }
+                }
+                RunnerEvent::ToolCallEnd {
+                    id,
+                    name,
+                    success,
+                    error,
+                    ..
+                } => {
+                    // Strip result for SSE clients.
+                    PipelineStreamEvent::ToolCallEnd {
+                        id: id.clone(),
+                        name: name.clone(),
+                        success: *success,
+                        error: error.clone(),
+                    }
+                }
+                RunnerEvent::TextDelta(text) => {
+                    PipelineStreamEvent::TextDelta { text: text.clone() }
+                }
+                RunnerEvent::ReasoningDelta(_) => {
+                    // Skip reasoning deltas for pipeline events.
+                    continue;
+                }
+                RunnerEvent::Done {
+                    text,
+                    iterations,
+                    tool_calls_made,
+                } => {
+                    completed = true;
 
-                Ok(())
+                    // Update pipeline run as completed.
+                    pipeline_run.status = PipelineRunStatus::Completed;
+                    pipeline_run.summary = Some(text.clone());
+                    pipeline_run.finished_at = Some(jiff::Timestamp::now());
+                    if let Err(e) = repo.update_run(&pipeline_run).await {
+                        error!(error = %e, "failed to update pipeline run as completed");
+                    }
+
+                    PipelineStreamEvent::Done {
+                        summary: text.clone(),
+                        iterations: *iterations,
+                        tool_calls: *tool_calls_made,
+                    }
+                }
+                RunnerEvent::Error(msg) => {
+                    completed = true;
+
+                    // Update pipeline run as failed.
+                    pipeline_run.status = PipelineRunStatus::Failed;
+                    pipeline_run.error = Some(msg.clone());
+                    pipeline_run.finished_at = Some(jiff::Timestamp::now());
+                    if let Err(e) = repo.update_run(&pipeline_run).await {
+                        error!(error = %e, "failed to update pipeline run as failed");
+                    }
+
+                    PipelineStreamEvent::Error {
+                        message: msg.clone(),
+                    }
+                }
+            };
+
+            // Broadcast event to SSE subscribers.
+            let _ = self.broadcast_tx.send(stream_event.clone());
+
+            // Persist event to the database.
+            let event_type = stream_event.event_type_name();
+            let payload = serde_json::to_value(&stream_event).unwrap_or_default();
+            if let Err(e) = repo.insert_event(run_id, seq, event_type, payload).await {
+                warn!(error = %e, seq, event_type, "failed to persist pipeline event");
             }
-            Err(e) => {
-                warn!(error = %e, "pipeline agent run failed");
-                Err(PipelineError::RunFailed {
-                    message: e.to_string(),
-                })
-            }
+            seq += 1;
         }
+
+        // 4. If the channel closed without Done/Error, mark as failed.
+        if !completed {
+            warn!("pipeline runner channel closed without terminal event");
+            pipeline_run.status = PipelineRunStatus::Failed;
+            pipeline_run.error = Some("runner channel closed unexpectedly".to_owned());
+            pipeline_run.finished_at = Some(jiff::Timestamp::now());
+            if let Err(e) = repo.update_run(&pipeline_run).await {
+                error!(error = %e, "failed to update pipeline run as failed (channel closed)");
+            }
+
+            let err_event = PipelineStreamEvent::Error {
+                message: "runner channel closed unexpectedly".to_owned(),
+            };
+            let _ = self.broadcast_tx.send(err_event.clone());
+
+            let payload = serde_json::to_value(&err_event).unwrap_or_default();
+            let _ = repo
+                .insert_event(run_id, seq, err_event.event_type_name(), payload)
+                .await;
+        }
+
+        info!(run_id = %run_id, "pipeline run finished");
+        Ok(())
     }
 
     /// Build the tool registry for the pipeline agent.

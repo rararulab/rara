@@ -136,3 +136,57 @@ impl From<PipelineEventRow> for PipelineEvent {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// PipelineStreamEvent — SSE streaming events
+// ---------------------------------------------------------------------------
+
+/// Events emitted during a pipeline run, streamed to SSE clients.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PipelineStreamEvent {
+    /// Pipeline run has started with the given run ID.
+    Started { run_id: Uuid },
+    /// Agent loop entered a new iteration.
+    Iteration { index: usize },
+    /// LLM is processing (show a "thinking" indicator).
+    Thinking,
+    /// LLM finished thinking.
+    ThinkingDone,
+    /// A tool call has started.
+    ToolCallStart { id: String, name: String },
+    /// A tool call has finished.
+    ToolCallEnd {
+        id: String,
+        name: String,
+        success: bool,
+        error: Option<String>,
+    },
+    /// Incremental text content from the LLM.
+    TextDelta { text: String },
+    /// Pipeline run completed successfully.
+    Done {
+        summary: String,
+        iterations: usize,
+        tool_calls: usize,
+    },
+    /// Pipeline run failed with an error.
+    Error { message: String },
+}
+
+impl PipelineStreamEvent {
+    /// Returns the SSE event type name for this event variant.
+    pub fn event_type_name(&self) -> &'static str {
+        match self {
+            Self::Started { .. } => "started",
+            Self::Iteration { .. } => "iteration",
+            Self::Thinking => "thinking",
+            Self::ThinkingDone => "thinking_done",
+            Self::ToolCallStart { .. } => "tool_call_start",
+            Self::ToolCallEnd { .. } => "tool_call_end",
+            Self::TextDelta { .. } => "text_delta",
+            Self::Done { .. } => "done",
+            Self::Error { .. } => "error",
+        }
+    }
+}
