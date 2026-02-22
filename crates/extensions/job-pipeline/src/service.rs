@@ -185,11 +185,7 @@ impl PipelineService {
         // Build pipeline-specific tool registry.
         let tools = self.build_pipeline_tools();
 
-        // Load the system prompt.
-        let system_prompt = rara_paths::load_prompt_markdown(
-            "extensions/pipeline_agent.md",
-            DEFAULT_PIPELINE_PROMPT,
-        );
+        let system_prompt = DEFAULT_PIPELINE_PROMPT.to_owned();
 
         // Build and run the agent.
         let runner = AgentRunner::builder()
