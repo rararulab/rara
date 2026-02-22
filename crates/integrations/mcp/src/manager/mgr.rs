@@ -388,6 +388,83 @@ impl McpManager {
         }
     }
 
+    /// Reconnect servers whose transport has died, and start any enabled
+    /// servers not yet in the clients map. Alive servers are left untouched.
+    ///
+    /// Returns the names of servers that were (re)started.
+    #[instrument(skip(self))]
+    pub async fn reconnect_dead(&self) -> Vec<String> {
+        // 1. Find dead servers (in clients map, startup completed, but transport closed)
+        let dead_names: Vec<String> = {
+            let inner = self.inner.read().await;
+            let mut dead = Vec::new();
+            for (name, managed) in &inner.clients {
+                // is_ready() = startup succeeded, !is_alive() = transport died
+                if managed.is_ready() && !managed.is_alive().await {
+                    dead.push(name.clone());
+                }
+            }
+            dead
+        };
+
+        // 2. Find enabled servers not in clients map at all
+        let missing: Vec<(String, McpServerConfig)> = {
+            let inner = self.inner.read().await;
+            match inner.registry.enabled_servers().await {
+                Ok(servers) => servers
+                    .into_iter()
+                    .filter(|(name, _)| !inner.clients.contains_key(name))
+                    .collect(),
+                Err(e) => {
+                    warn!(error = %e, "failed to load enabled servers for reconnect");
+                    Vec::new()
+                }
+            }
+        };
+
+        let mut reconnected = Vec::new();
+
+        // 3. Restart dead servers
+        for name in dead_names {
+            info!(server = %name, "reconnecting dead MCP server");
+            match self.restart_server(&name).await {
+                Ok(()) => reconnected.push(name),
+                Err(e) => warn!(server = %name, error = %e, "failed to reconnect dead MCP server"),
+            }
+        }
+
+        // 4. Start missing servers
+        for (name, config) in missing {
+            info!(server = %name, "starting missing MCP server");
+            match self.start_server(&name, &config).await {
+                Ok(()) => reconnected.push(name),
+                Err(e) => warn!(server = %name, error = %e, "failed to start missing MCP server"),
+            }
+        }
+
+        reconnected
+    }
+
+    /// Spawn a background task that periodically checks for dead MCP servers
+    /// and reconnects them. Returns the task handle.
+    pub fn spawn_heartbeat(
+        &self,
+        interval: std::time::Duration,
+    ) -> tokio::task::JoinHandle<()> {
+        let manager = self.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            ticker.tick().await; // skip the immediate first tick
+            loop {
+                ticker.tick().await;
+                let reconnected = manager.reconnect_dead().await;
+                if !reconnected.is_empty() {
+                    info!(servers = ?reconnected, "MCP heartbeat reconnected servers");
+                }
+            }
+        })
+    }
+
     // ── Private helpers ─────────────────────────────────────────────
 
     async fn get_managed_client(&self, name: &str) -> Result<AsyncManagedClient> {

@@ -290,6 +290,10 @@ impl AppState {
             info!(servers = ?started, "MCP servers started");
         }
 
+        // Spawn MCP heartbeat to auto-reconnect dead servers.
+        mcp_manager.spawn_heartbeat(std::time::Duration::from_secs(30));
+        info!("MCP heartbeat started (30s interval)");
+
         // -- MCP management tools -----------------------------------------------
         tool_registry.register_service(Arc::new(
             crate::tools::services::InstallMcpServerTool::new(mcp_manager.clone()),

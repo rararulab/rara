@@ -498,7 +498,7 @@ impl PipelineService {
 
         // Layer 3: MCP tools (e.g. LinkedIn job search)
         // Reconnect any disconnected MCP servers before loading tools.
-        let reconnected = self.mcp_manager.start_enabled().await;
+        let reconnected = self.mcp_manager.reconnect_dead().await;
         if !reconnected.is_empty() {
             info!(servers = ?reconnected, "reconnected MCP servers for pipeline");
         }
