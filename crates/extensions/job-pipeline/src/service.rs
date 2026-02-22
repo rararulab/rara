@@ -373,7 +373,8 @@ impl PipelineService {
             PipelineRunStatus::Running => return, // shouldn't happen
         };
 
-        let mut body = format!("{emoji} Pipeline run {status_label}");
+        let short_id = &run.id.to_string()[..8];
+        let mut body = format!("{emoji} Pipeline run {status_label} ({short_id})");
 
         if let Some(summary) = &run.summary {
             // Truncate summary for Telegram (max ~400 chars).
@@ -463,6 +464,15 @@ impl PipelineService {
         for tool in tool_core::default_primitives(deps) {
             registry.register_primitive(tool);
         }
+
+        // Override the default `send_telegram` with pipeline-specific version
+        // that routes to the dedicated notification channel when configured.
+        registry.register_service(Arc::new(
+            crate::tools::pipeline_notify::PipelineNotifyTool::new(
+                self.settings_svc.clone(),
+                self.notify_client.clone(),
+            ),
+        ));
 
         // Layer 2: Pipeline-specific tools
         registry.register_service(Arc::new(pipeline_tools::GetJobPreferencesTool::new(

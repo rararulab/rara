@@ -669,6 +669,9 @@ function RunRow({
 
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
+            <span className="font-mono text-[10px] text-muted-foreground/70">
+              {run.id.slice(0, 8)}
+            </span>
             <Badge
               variant={statusVariant(run.status)}
               className="gap-1 text-[10px]"
