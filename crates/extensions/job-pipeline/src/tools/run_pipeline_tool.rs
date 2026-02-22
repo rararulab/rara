@@ -21,6 +21,11 @@ use async_trait::async_trait;
 use serde_json::json;
 use tool_core::AgentTool;
 
+use rara_domain_shared::settings::{
+    SettingsSvc,
+    model::{JobPipelineRuntimeSettingsPatch, UpdateRequest},
+};
+
 use crate::service::PipelineService;
 
 // ---------------------------------------------------------------------------
@@ -141,6 +146,80 @@ impl AgentTool for PipelineStatusTool {
     async fn execute(&self, _params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         Ok(json!({
             "running": self.service.is_running()
+        }))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// UpdateJobPreferencesTool
+// ---------------------------------------------------------------------------
+
+/// Tool that lets the main rara agent update job preferences.
+pub struct UpdateJobPreferencesTool {
+    settings_svc: SettingsSvc,
+}
+
+impl UpdateJobPreferencesTool {
+    pub fn new(settings_svc: SettingsSvc) -> Self { Self { settings_svc } }
+}
+
+#[async_trait]
+impl AgentTool for UpdateJobPreferencesTool {
+    fn name(&self) -> &str { "update_job_preferences" }
+
+    fn description(&self) -> &str {
+        "Update the user's job search preferences. The preferences are stored as markdown \
+         describing target roles, tech stack, location, salary expectations, company preferences, \
+         etc. These preferences are used by the job pipeline to search and score jobs."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "job_preferences": {
+                    "type": "string",
+                    "description": "Markdown text describing the user's job search preferences: target roles, tech stack, location, salary range, company types, etc."
+                }
+            },
+            "required": ["job_preferences"]
+        })
+    }
+
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        let prefs = params
+            .get("job_preferences")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned();
+
+        if prefs.trim().is_empty() {
+            return Ok(json!({
+                "status": "error",
+                "message": "job_preferences cannot be empty"
+            }));
+        }
+
+        self.settings_svc
+            .update(UpdateRequest {
+                ai:           None,
+                telegram:     None,
+                agent:        None,
+                job_pipeline: Some(JobPipelineRuntimeSettingsPatch {
+                    job_preferences:        Some(prefs.clone()),
+                    score_threshold_auto:   None,
+                    score_threshold_notify: None,
+                    resume_project_path:    None,
+                    pipeline_cron:          None,
+                }),
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        Ok(json!({
+            "status": "ok",
+            "message": "Job preferences updated successfully.",
+            "job_preferences": prefs
         }))
     }
 }

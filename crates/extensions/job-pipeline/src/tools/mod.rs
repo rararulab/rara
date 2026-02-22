@@ -19,4 +19,6 @@ pub mod pipeline_tools;
 pub mod run_pipeline_tool;
 
 pub use job_pipeline_tool::JobPipelineTool;
-pub use run_pipeline_tool::{CancelJobPipelineTool, PipelineStatusTool, RunJobPipelineTool};
+pub use run_pipeline_tool::{
+    CancelJobPipelineTool, PipelineStatusTool, RunJobPipelineTool, UpdateJobPreferencesTool,
+};

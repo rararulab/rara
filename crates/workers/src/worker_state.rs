@@ -315,7 +315,7 @@ impl AppState {
         info!("Pipeline service initialized");
 
         // Register pipeline control tools on the main rara agent.
-        rara_ext_job_pipeline::register_rara_tools(&mut tool_registry, &pipeline_service);
+        rara_ext_job_pipeline::register_rara_tools(&mut tool_registry, &pipeline_service, &settings_svc);
 
         let tools = Arc::new(tool_registry);
 

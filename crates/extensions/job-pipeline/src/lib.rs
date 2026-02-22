@@ -34,13 +34,18 @@ pub mod types;
 use std::sync::Arc;
 
 use rara_agents::tool_registry::ToolRegistry;
+use rara_domain_shared::settings::SettingsSvc;
 use service::PipelineService;
 
-/// Register rara-facing tools (run/cancel/status pipeline) on the main
+/// Register rara-facing tools (run/cancel/status/preferences) on the main
 /// chat agent's tool registry.
 ///
 /// Called by the composition root for the main chat agent.
-pub fn register_rara_tools(registry: &mut ToolRegistry, service: &PipelineService) {
+pub fn register_rara_tools(
+    registry: &mut ToolRegistry,
+    service: &PipelineService,
+    settings_svc: &SettingsSvc,
+) {
     registry.register_service(Arc::new(
         tools::RunJobPipelineTool::new(service.clone()),
     ));
@@ -49,5 +54,8 @@ pub fn register_rara_tools(registry: &mut ToolRegistry, service: &PipelineServic
     ));
     registry.register_service(Arc::new(
         tools::PipelineStatusTool::new(service.clone()),
+    ));
+    registry.register_service(Arc::new(
+        tools::UpdateJobPreferencesTool::new(settings_svc.clone()),
     ));
 }
