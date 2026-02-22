@@ -17,10 +17,12 @@
 pub mod job_pipeline_tool;
 pub mod pipeline_notify;
 pub mod pipeline_tools;
+pub mod report_stats;
 pub mod run_pipeline_tool;
 
 pub use job_pipeline_tool::JobPipelineTool;
 pub use pipeline_notify::PipelineNotifyTool;
+pub use report_stats::ReportPipelineStatsTool;
 pub use run_pipeline_tool::{
     CancelJobPipelineTool, PipelineStatusTool, RunJobPipelineTool, UpdateJobPreferencesTool,
 };

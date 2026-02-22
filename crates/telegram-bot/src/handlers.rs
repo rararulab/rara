@@ -82,6 +82,13 @@ pub(crate) async fn handle_message_direct(
     let chat_is_public = matches!(msg.chat.kind, teloxide::types::ChatKind::Public(..));
     let bot_username = state.bot_username.as_deref();
     info!("receive message: {:?}", msg);
+
+    // Track contacts: record username → chat_id for outbound message routing.
+    if let Some(from) = &msg.from {
+        if let Some(username) = &from.username {
+            state.track_contact(username, msg.chat.id.0);
+        }
+    }
     if chat_is_public {
         // In small groups (≤ SMALL_GROUP_THRESHOLD members), respond to all
         // messages like a private chat. In larger groups, require @mention or

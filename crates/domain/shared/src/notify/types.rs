@@ -69,6 +69,10 @@ impl Default for NotificationPriority {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendTelegramNotificationRequest {
     pub chat_id:        Option<i64>,
+    /// Telegram username (without `@` prefix) to resolve to a chat ID.
+    /// When set, the bot consumer looks up the username in its contacts
+    /// registry and uses the resolved chat ID for delivery.
+    pub recipient:      Option<String>,
     pub subject:        Option<String>,
     pub body:           String,
     pub priority:       NotificationPriority,
@@ -86,6 +90,7 @@ pub struct SendTelegramNotificationRequest {
 pub struct QueuedTelegramNotification {
     pub id:             Uuid,
     pub chat_id:        Option<i64>,
+    pub recipient:      Option<String>,
     pub subject:        Option<String>,
     pub body:           String,
     pub priority:       NotificationPriority,

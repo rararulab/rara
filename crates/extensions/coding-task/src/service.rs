@@ -366,6 +366,7 @@ impl CodingTaskService {
 
         let request = SendTelegramNotificationRequest {
             chat_id,
+            recipient: None,
             subject: None,
             body: msg,
             priority: NotificationPriority::Normal,

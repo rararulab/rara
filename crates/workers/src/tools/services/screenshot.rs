@@ -159,6 +159,7 @@ impl AgentTool for ScreenshotTool {
 
             let request = SendTelegramNotificationRequest {
                 chat_id,
+                recipient: None,
                 subject: None,
                 body: caption_text,
                 priority: NotificationPriority::Normal,

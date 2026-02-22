@@ -51,12 +51,13 @@ const DEFAULT_PIPELINE_PROMPT: &str = include_str!("prompt.md");
 /// Maximum agent loop iterations per pipeline run.
 const PIPELINE_MAX_ITERATIONS: usize = 25;
 
-/// The user message sent to the pipeline agent to kick off a run.
-const PIPELINE_KICK_MESSAGE: &str =
-    "Execute the job pipeline: read preferences, search for matching jobs, \
-     score them against my preferences, and process high-scoring ones \
-     (optimize resume, create applications, send notifications). \
-     Provide a summary at the end.";
+/// Template for the user message sent to the pipeline agent.
+/// `{run_id}` is replaced at runtime with the actual pipeline run UUID.
+const PIPELINE_KICK_TEMPLATE: &str =
+    "Execute the job pipeline. Your pipeline run ID is: {run_id}\n\n\
+     Read preferences, search for matching jobs across ALL listed locations, \
+     parse results into structured records, score every new job, process \
+     high-scoring ones, and report stats at the end using report_pipeline_stats.";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -227,17 +228,23 @@ impl PipelineService {
         let settings = self.settings_svc.current();
         let model = settings.ai.model_for(ModelScenario::Job).to_owned();
 
-        // Build pipeline-specific tool registry.
-        let tools = Arc::new(self.build_pipeline_tools().await);
+        // Build pipeline-specific tool registry (includes report_pipeline_stats).
+        let mut tools = self.build_pipeline_tools().await;
+        tools.register_service(Arc::new(
+            crate::tools::ReportPipelineStatsTool::new(self.pool.clone()),
+        ));
+        let tools = Arc::new(tools);
 
         let system_prompt = DEFAULT_PIPELINE_PROMPT.to_owned();
+        let kick_message =
+            PIPELINE_KICK_TEMPLATE.replace("{run_id}", &run_id.to_string());
 
         // Build the agent runner and start streaming.
         let runner = AgentRunner::builder()
             .llm_provider(self.llm_provider.clone())
             .model_name(model)
             .system_prompt(system_prompt)
-            .user_content(UserContent::Text(PIPELINE_KICK_MESSAGE.to_owned()))
+            .user_content(UserContent::Text(kick_message))
             .max_iterations(PIPELINE_MAX_ITERATIONS)
             .build();
 
@@ -428,6 +435,7 @@ impl PipelineService {
         // Fallback: enqueue via PGMQ-based notify client.
         let request = SendTelegramNotificationRequest {
             chat_id: settings.telegram.chat_id,
+            recipient: None,
             subject: Some(format!("Pipeline {status_label}")),
             body,
             priority: NotificationPriority::Normal,

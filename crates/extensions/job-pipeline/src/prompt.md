@@ -13,6 +13,7 @@ You have access to:
 - **Database tools** — `db_query` and `db_mutate` for reading/writing job data.
 - **send_telegram** — Send Telegram notifications to the user.
 - **send_email** — Send emails (e.g. job applications) via configured SMTP.
+- **report_pipeline_stats** — Report execution statistics (jobs_found, jobs_scored, jobs_applied, jobs_notified) to the database. **MUST be called at the end of every run** with the run_id from the kick message.
 
 **Important:** You also have dynamically loaded MCP tools not listed above. These tools are your primary job search capability. Before searching for jobs, review your complete tool list to discover all available search tools (look for names containing "search", "job", "linkedin", "scrape", etc.).
 
@@ -99,9 +100,20 @@ For EACH scored job:
 - **Score < score_threshold_notify** (skip):
   1. Increment `skipped`
 
-### 8. Summary
+### 8. Report Stats & Summary
 
-Send a SINGLE summary notification via `send_telegram`:
+**First**, call `report_pipeline_stats` to persist your counts to the database:
+```
+report_pipeline_stats(
+  run_id="<from kick message>",
+  jobs_found=<total_found>,
+  jobs_scored=<number scored>,
+  jobs_applied=<auto_applied>,
+  jobs_notified=<notified>
+)
+```
+
+**Then**, send a SINGLE summary notification via `send_telegram`:
 ```
 Pipeline complete:
 - Total jobs found: {total_found}

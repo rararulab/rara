@@ -63,6 +63,7 @@ impl NotifyClient {
         let payload = QueuedTelegramNotification {
             id:             Uuid::new_v4(),
             chat_id:        request.chat_id,
+            recipient:      request.recipient,
             subject:        request.subject,
             body:           request.body,
             priority:       request.priority,

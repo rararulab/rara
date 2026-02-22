@@ -21,7 +21,10 @@
 //! runtime via the settings sync loop without restarting the process. It is
 //! protected by an `RwLock` and read on every message to check authorization.
 
-use std::sync::{Arc, RwLock};
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 
 use teloxide::types::ChatId;
 use tokio_util::sync::CancellationToken;
@@ -43,6 +46,9 @@ pub(crate) struct BotState {
     pub(crate) http_client:  Arc<MainServiceHttpClient>,
     /// Cancellation token for graceful shutdown.
     pub(crate) cancel:       CancellationToken,
+    /// Known contacts: maps lowercase telegram username → chat ID.
+    /// Populated as users interact with the bot.
+    pub(crate) contacts:     Arc<RwLock<HashMap<String, i64>>>,
 }
 
 /// Runtime configuration that can be updated without restarting the bot.
@@ -74,6 +80,7 @@ impl BotState {
             })),
             http_client,
             cancel,
+            contacts: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -95,6 +102,25 @@ impl BotState {
             Ok(g) => g.clone(),
             Err(e) => e.into_inner().clone(),
         }
+    }
+
+    /// Record a contact from an incoming message.
+    ///
+    /// Stores the mapping from lowercase username to chat ID so that outbound
+    /// notifications can resolve a username to a chat ID.
+    pub(crate) fn track_contact(&self, username: &str, chat_id: i64) {
+        if let Ok(mut map) = self.contacts.write() {
+            map.insert(username.to_lowercase(), chat_id);
+        }
+    }
+
+    /// Resolve a username to a chat ID from known contacts.
+    pub(crate) fn resolve_contact(&self, username: &str) -> Option<i64> {
+        let normalized = username.trim_start_matches('@').to_lowercase();
+        self.contacts
+            .read()
+            .ok()
+            .and_then(|map| map.get(&normalized).copied())
     }
 
     /// Update runtime credentials and primary chat id.

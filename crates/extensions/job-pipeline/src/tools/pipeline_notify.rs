@@ -171,6 +171,7 @@ impl AgentTool for PipelineNotifyTool {
 
         let request = SendTelegramNotificationRequest {
             chat_id,
+            recipient: None,
             subject,
             body: message.to_owned(),
             priority,

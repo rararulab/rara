@@ -29,7 +29,11 @@ use serde_json::json;
 
 use crate::AgentTool;
 
-/// Layer 1 primitive: enqueue a notification message.
+/// Layer 1 primitive: send a Telegram message.
+///
+/// Enqueues a notification via PGMQ which the telegram-bot process consumes
+/// and delivers.  Supports plain text, bold subject headers, photos, and
+/// sending to arbitrary chat IDs (not just the primary one from settings).
 pub struct NotifyTool {
     client:       NotifyClient,
     settings_svc: SettingsSvc,
@@ -46,71 +50,102 @@ impl NotifyTool {
 
 #[async_trait]
 impl AgentTool for NotifyTool {
-    fn name(&self) -> &str { "notify" }
+    fn name(&self) -> &str { "send_telegram" }
 
     fn description(&self) -> &str {
-        "Send a notification message. Currently supports the telegram channel. The chat_id is read \
-         from runtime settings automatically. Returns the queued notification id."
+        "Send a message to a Telegram chat. Use this to proactively notify or communicate with \
+         users via Telegram. Supports text, bold subject headers, and photo attachments. Specify \
+         a recipient by Telegram username (e.g. \"ryan\") to send to a specific person. Omit \
+         recipient to send to the default chat."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
-                "channel": {
-                    "type": "string",
-                    "enum": ["telegram"],
-                    "description": "Notification channel (currently only telegram)"
-                },
                 "message": {
                     "type": "string",
-                    "description": "The notification message body"
+                    "description": "The message body text (supports Markdown)"
+                },
+                "recipient": {
+                    "type": "string",
+                    "description": "Telegram username of the recipient (without @ prefix). The bot resolves this to a chat ID from its known contacts. Omit to send to the default chat."
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "Optional bold subject line displayed above the message body"
+                },
+                "photo_path": {
+                    "type": "string",
+                    "description": "Local file path of an image to send as a photo message"
+                },
+                "priority": {
+                    "type": "string",
+                    "enum": ["low", "normal", "high", "urgent"],
+                    "description": "Message priority (default: normal)"
                 }
             },
-            "required": ["channel", "message"]
+            "required": ["message"]
         })
     }
 
     async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
-        let channel = params
-            .get("channel")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing required parameter: channel"))?;
-
         let message = params
             .get("message")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("missing required parameter: message"))?;
 
-        match channel {
-            "telegram" => {
-                let settings = self.settings_svc.current();
-                let chat_id = settings.telegram.chat_id;
+        let recipient = params
+            .get("recipient")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim_start_matches('@').to_owned());
 
-                let request = SendTelegramNotificationRequest {
-                    chat_id,
-                    subject: None,
-                    body: message.to_owned(),
-                    priority: NotificationPriority::Normal,
-                    max_retries: 3,
-                    reference_type: None,
-                    reference_id: None,
-                    metadata: None,
-                    photo_path: None,
-                };
+        let subject = params.get("subject").and_then(|v| v.as_str()).map(String::from);
 
-                match self.client.send_telegram(request).await {
-                    Ok(queued) => Ok(json!({
-                        "sent": true,
-                        "id": queued.id.to_string(),
-                    })),
-                    Err(e) => Ok(json!({
-                        "error": format!("{e}"),
-                    })),
-                }
-            }
-            other => Ok(json!({
-                "error": format!("unsupported channel: {other}"),
+        let photo_path = params
+            .get("photo_path")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let priority = params
+            .get("priority")
+            .and_then(|v| v.as_str())
+            .map(|s| match s {
+                "low" => NotificationPriority::Low,
+                "high" => NotificationPriority::High,
+                "urgent" => NotificationPriority::Urgent,
+                _ => NotificationPriority::Normal,
+            })
+            .unwrap_or(NotificationPriority::Normal);
+
+        // Use settings chat_id as fallback only when no recipient is specified.
+        let chat_id = if recipient.is_none() {
+            self.settings_svc.current().telegram.chat_id
+        } else {
+            None
+        };
+
+        let request = SendTelegramNotificationRequest {
+            chat_id,
+            recipient: recipient.clone(),
+            subject,
+            body: message.to_owned(),
+            priority,
+            max_retries: 3,
+            reference_type: None,
+            reference_id: None,
+            metadata: None,
+            photo_path,
+        };
+
+        match self.client.send_telegram(request).await {
+            Ok(queued) => Ok(json!({
+                "sent": true,
+                "id": queued.id.to_string(),
+                "recipient": recipient,
+            })),
+            Err(e) => Ok(json!({
+                "error": format!("{e}"),
             })),
         }
     }

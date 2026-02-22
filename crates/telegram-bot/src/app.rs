@@ -156,7 +156,7 @@ impl BotApp {
         let notify_consumer_handle = tokio::spawn(Self::notify_consumer_loop(
             self.notify_client.clone(),
             self.outbound.clone(),
-            self.state.cancel.clone(),
+            self.state.clone(),
         ));
 
         let settings_sync_handle = tokio::spawn(Self::settings_watch_loop(
@@ -195,11 +195,11 @@ impl BotApp {
     async fn notify_consumer_loop(
         notify_client: Arc<rara_domain_shared::notify::client::NotifyClient>,
         outbound: Arc<TelegramOutbound>,
-        cancellation_token: CancellationToken,
+        state: Arc<BotState>,
     ) {
         loop {
             tokio::select! {
-                () = cancellation_token.cancelled() => break,
+                () = state.cancel.cancelled() => break,
                 () = tokio::time::sleep(std::time::Duration::from_secs(Self::NOTIFY_IDLE_SLEEP_SECS)) => {}
             }
 
@@ -220,15 +220,30 @@ impl BotApp {
 
             for item in batch {
                 let text = Self::format_notification_message(&item.payload);
-                let chat_id = item
-                    .payload
-                    .chat_id
-                    .map(teloxide::types::ChatId)
-                    .unwrap_or_else(|| {
-                        // Use primary chat when no explicit chat_id is set.
-                        let config = outbound.primary_config();
-                        teloxide::types::ChatId(config.primary_chat_id)
-                    });
+
+                // Resolve target chat ID:
+                // 1. Explicit chat_id in payload
+                // 2. Resolve recipient username via contacts registry
+                // 3. Fall back to primary chat
+                let chat_id = if let Some(id) = item.payload.chat_id {
+                    teloxide::types::ChatId(id)
+                } else if let Some(ref username) = item.payload.recipient {
+                    match state.resolve_contact(username) {
+                        Some(id) => teloxide::types::ChatId(id),
+                        None => {
+                            warn!(
+                                recipient = %username,
+                                msg_id = item.msg_id,
+                                "unknown recipient, falling back to primary chat"
+                            );
+                            let config = outbound.primary_config();
+                            teloxide::types::ChatId(config.primary_chat_id)
+                        }
+                    }
+                } else {
+                    let config = outbound.primary_config();
+                    teloxide::types::ChatId(config.primary_chat_id)
+                };
 
                 // Send photo if present, otherwise send text.
                 let delivery = if let Some(ref photo_path) = item.payload.photo_path {
