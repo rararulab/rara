@@ -15,6 +15,7 @@
 //! PostgreSQL implementation of [`CodingTaskRepository`].
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -22,7 +23,31 @@ use crate::error::{CodingTaskError, NotFoundSnafu, RepositorySnafu};
 use crate::repository::CodingTaskRepository;
 use crate::types::{CodingTask, CodingTaskStatus};
 
-use rara_model::coding_task::CodingTaskRow;
+// ---------------------------------------------------------------------------
+// DB row type (sqlx::FromRow)
+// ---------------------------------------------------------------------------
+
+/// Database row representation of a `coding_task` record.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub(crate) struct CodingTaskRow {
+    pub id:             Uuid,
+    pub status:         i16,
+    pub agent_type:     i16,
+    pub repo_url:       String,
+    pub branch:         String,
+    pub prompt:         String,
+    pub pr_url:         Option<String>,
+    pub pr_number:      Option<i32>,
+    pub session_key:    Option<String>,
+    pub tmux_session:   String,
+    pub workspace_path: String,
+    pub output:         String,
+    pub exit_code:      Option<i32>,
+    pub error:          Option<String>,
+    pub created_at:     DateTime<Utc>,
+    pub started_at:     Option<DateTime<Utc>>,
+    pub completed_at:   Option<DateTime<Utc>>,
+}
 
 /// PostgreSQL-backed repository for coding tasks.
 #[derive(Clone)]

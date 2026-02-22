@@ -15,7 +15,6 @@
 //! Domain types for coding tasks.
 
 use jiff::Timestamp;
-use rara_model::coding_task::CodingTaskRow;
 use serde::{Deserialize, Serialize};
 use strum_macros::{Display, FromRepr};
 use uuid::Uuid;
@@ -136,8 +135,8 @@ fn opt_chrono_to_timestamp(dt: Option<chrono::DateTime<chrono::Utc>>) -> Option<
     dt.map(chrono_to_timestamp)
 }
 
-impl From<CodingTaskRow> for CodingTask {
-    fn from(row: CodingTaskRow) -> Self {
+impl From<crate::pg_repository::CodingTaskRow> for CodingTask {
+    fn from(row: crate::pg_repository::CodingTaskRow) -> Self {
         Self {
             id:             row.id,
             status:         CodingTaskStatus::from_repr(row.status as u8)

@@ -18,14 +18,50 @@
 use std::fmt::Write;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use rara_domain_shared::id::SchedulerTaskId;
-use rara_model::scheduler::{SchedulerTask, TaskRunHistory};
 use sqlx::PgPool;
 
 use crate::{
     error::SchedulerError,
     types::{ScheduledTask, TaskFilter, TaskRunRecord, TaskRunStatus},
 };
+
+// ---------------------------------------------------------------------------
+// DB row types (sqlx::FromRow)
+// ---------------------------------------------------------------------------
+
+/// A scheduled task row from `scheduler_task` table.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub(crate) struct SchedulerTaskRow {
+    pub id:            uuid::Uuid,
+    pub name:          String,
+    pub cron_expr:     String,
+    pub enabled:       bool,
+    pub last_run_at:   Option<DateTime<Utc>>,
+    pub last_status:   Option<i16>,
+    pub last_error:    Option<String>,
+    pub run_count:     i64,
+    pub failure_count: i64,
+    pub is_deleted:    bool,
+    pub deleted_at:    Option<DateTime<Utc>>,
+    pub created_at:    DateTime<Utc>,
+    pub updated_at:    DateTime<Utc>,
+}
+
+/// A task run history row from `task_run_history` table.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub(crate) struct TaskRunHistoryRow {
+    pub id:          uuid::Uuid,
+    pub task_id:     uuid::Uuid,
+    pub status:      i16,
+    pub started_at:  DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub duration_ms: Option<i64>,
+    pub error:       Option<String>,
+    pub output:      Option<serde_json::Value>,
+    pub created_at:  DateTime<Utc>,
+}
 
 /// PostgreSQL implementation of the scheduler repository.
 pub struct PgSchedulerRepository {
@@ -48,9 +84,9 @@ fn map_err(e: sqlx::Error) -> SchedulerError {
 #[async_trait]
 impl crate::repository::SchedulerRepository for PgSchedulerRepository {
     async fn save_task(&self, task: &ScheduledTask) -> Result<ScheduledTask, SchedulerError> {
-        let store: SchedulerTask = task.clone().into();
+        let store: SchedulerTaskRow = task.clone().into();
 
-        let row = sqlx::query_as::<_, SchedulerTask>(
+        let row = sqlx::query_as::<_, SchedulerTaskRow>(
             r#"INSERT INTO scheduler_task
                    (id, name, cron_expr, enabled, last_run_at, last_status,
                     last_error, run_count, failure_count, is_deleted, created_at, updated_at)
@@ -82,7 +118,7 @@ impl crate::repository::SchedulerRepository for PgSchedulerRepository {
         &self,
         id: SchedulerTaskId,
     ) -> Result<Option<ScheduledTask>, SchedulerError> {
-        let row = sqlx::query_as::<_, SchedulerTask>(
+        let row = sqlx::query_as::<_, SchedulerTaskRow>(
             "SELECT * FROM scheduler_task WHERE id = $1 AND is_deleted = FALSE",
         )
         .bind(id.into_inner())
@@ -94,7 +130,7 @@ impl crate::repository::SchedulerRepository for PgSchedulerRepository {
     }
 
     async fn find_task_by_name(&self, name: &str) -> Result<Option<ScheduledTask>, SchedulerError> {
-        let row = sqlx::query_as::<_, SchedulerTask>(
+        let row = sqlx::query_as::<_, SchedulerTaskRow>(
             "SELECT * FROM scheduler_task WHERE name = $1 AND is_deleted = FALSE",
         )
         .bind(name)
@@ -119,7 +155,7 @@ impl crate::repository::SchedulerRepository for PgSchedulerRepository {
 
         sql.push_str(" ORDER BY created_at DESC");
 
-        let rows = sqlx::query_as::<_, SchedulerTask>(&sql)
+        let rows = sqlx::query_as::<_, SchedulerTaskRow>(&sql)
             .fetch_all(&self.pool)
             .await
             .map_err(map_err)?;
@@ -128,9 +164,9 @@ impl crate::repository::SchedulerRepository for PgSchedulerRepository {
     }
 
     async fn update_task(&self, task: &ScheduledTask) -> Result<ScheduledTask, SchedulerError> {
-        let store: SchedulerTask = task.clone().into();
+        let store: SchedulerTaskRow = task.clone().into();
 
-        let row = sqlx::query_as::<_, SchedulerTask>(
+        let row = sqlx::query_as::<_, SchedulerTaskRow>(
             r#"UPDATE scheduler_task
                SET name = $2, cron_expr = $3, enabled = $4, last_run_at = $5,
                    last_status = $6, last_error = $7,
@@ -173,7 +209,7 @@ impl crate::repository::SchedulerRepository for PgSchedulerRepository {
     }
 
     async fn record_run(&self, record: &TaskRunRecord) -> Result<(), SchedulerError> {
-        let store: TaskRunHistory = record.clone().into();
+        let store: TaskRunHistoryRow = record.clone().into();
 
         sqlx::query(
             r#"INSERT INTO task_run_history
@@ -201,7 +237,7 @@ impl crate::repository::SchedulerRepository for PgSchedulerRepository {
         task_id: SchedulerTaskId,
         limit: i64,
     ) -> Result<Vec<TaskRunRecord>, SchedulerError> {
-        let rows = sqlx::query_as::<_, TaskRunHistory>(
+        let rows = sqlx::query_as::<_, TaskRunHistoryRow>(
             r#"SELECT * FROM task_run_history
                WHERE task_id = $1
                ORDER BY started_at DESC

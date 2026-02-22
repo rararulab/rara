@@ -116,16 +116,17 @@ use rara_domain_shared::convert::{
     chrono_opt_to_timestamp, chrono_to_timestamp, timestamp_opt_to_chrono, timestamp_to_chrono,
     u8_from_i16,
 };
-use rara_model::scheduler::{SchedulerTask, TaskRunHistory};
+
+use crate::pg_repository::{SchedulerTaskRow, TaskRunHistoryRow};
 
 fn task_run_status_from_i16(value: i16) -> TaskRunStatus {
     let repr = u8_from_i16(value, "scheduler_task.last_status/task_run_history.status");
     TaskRunStatus::from_repr(repr).unwrap_or_else(|| panic!("invalid task run status: {value}"))
 }
 
-/// Store `SchedulerTask` -> Domain `ScheduledTask`.
-impl From<SchedulerTask> for ScheduledTask {
-    fn from(t: SchedulerTask) -> Self {
+/// Store `SchedulerTaskRow` -> Domain `ScheduledTask`.
+impl From<SchedulerTaskRow> for ScheduledTask {
+    fn from(t: SchedulerTaskRow) -> Self {
         Self {
             id:            SchedulerTaskId::from(t.id),
             name:          t.name,
@@ -142,8 +143,8 @@ impl From<SchedulerTask> for ScheduledTask {
     }
 }
 
-/// Domain `ScheduledTask` -> Store `SchedulerTask`.
-impl From<ScheduledTask> for SchedulerTask {
+/// Domain `ScheduledTask` -> Store `SchedulerTaskRow`.
+impl From<ScheduledTask> for SchedulerTaskRow {
     fn from(t: ScheduledTask) -> Self {
         Self {
             id:            t.id.into_inner(),
@@ -163,9 +164,9 @@ impl From<ScheduledTask> for SchedulerTask {
     }
 }
 
-/// Store `TaskRunHistory` -> Domain `TaskRunRecord`.
-impl From<TaskRunHistory> for TaskRunRecord {
-    fn from(r: TaskRunHistory) -> Self {
+/// Store `TaskRunHistoryRow` -> Domain `TaskRunRecord`.
+impl From<TaskRunHistoryRow> for TaskRunRecord {
+    fn from(r: TaskRunHistoryRow) -> Self {
         Self {
             id:          r.id,
             task_id:     SchedulerTaskId::from(r.task_id),
@@ -180,8 +181,8 @@ impl From<TaskRunHistory> for TaskRunRecord {
     }
 }
 
-/// Domain `TaskRunRecord` -> Store `TaskRunHistory`.
-impl From<TaskRunRecord> for TaskRunHistory {
+/// Domain `TaskRunRecord` -> Store `TaskRunHistoryRow`.
+impl From<TaskRunRecord> for TaskRunHistoryRow {
     fn from(r: TaskRunRecord) -> Self {
         Self {
             id:          r.id,
