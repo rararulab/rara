@@ -16,6 +16,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { api } from "@/api/client";
 import type {
   PipelineRun,
@@ -728,10 +730,10 @@ function PipelineConfig() {
             <p className="text-sm font-semibold">Job Preferences</p>
             {pipeline.job_preferences ? (
               <>
-                <div className="rounded-lg border bg-muted/30 p-4">
-                  <div className="whitespace-pre-wrap font-mono text-sm leading-relaxed">
+                <div className="rounded-lg border bg-muted/30 p-4 prose prose-sm dark:prose-invert max-w-none">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
                     {pipeline.job_preferences}
-                  </div>
+                  </ReactMarkdown>
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Modify via chat with rara.
