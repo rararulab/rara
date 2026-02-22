@@ -15,7 +15,6 @@
 //! Layer 2 service tools: complex business workflows.
 
 mod codex;
-mod job_pipeline;
 mod mcp_tools;
 mod memory_tools;
 mod resume_tools;
@@ -25,7 +24,6 @@ mod skill_tools;
 mod typst_tools;
 
 pub use codex::{CodexListTool, CodexRunTool, CodexStatusTool};
-pub use job_pipeline::JobPipelineTool;
 pub use mcp_tools::{InstallMcpServerTool, ListMcpServersTool, RemoveMcpServerTool};
 pub use memory_tools::{MemoryGetTool, MemorySearchTool, MemoryUpdateProfileTool, MemoryWriteTool};
 pub use resume_tools::{AnalyzeResumeTool, GetResumeContentTool, ListResumesTool};

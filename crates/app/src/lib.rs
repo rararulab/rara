@@ -37,21 +37,6 @@ use yunara_store::{config::DatabaseConfig, db::DBStore};
 // Static config types (immutable after startup)
 // ---------------------------------------------------------------------------
 
-/// Crawl4AI service configuration.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(default)]
-pub struct Crawl4AiConfig {
-    pub url: String,
-}
-
-impl Default for Crawl4AiConfig {
-    fn default() -> Self {
-        Self {
-            url: "http://localhost:11235".to_owned(),
-        }
-    }
-}
-
 /// Static application configuration — immutable after startup.
 ///
 /// Deserializable from `config.toml` + environment variables via the `config`
@@ -69,10 +54,6 @@ pub struct AppConfig {
     /// S3-compatible object store.
     #[serde(alias = "minio")]
     pub object_store:           object_store::ObjectStoreConfig,
-    /// Crawl4AI service.
-    pub crawl4ai:               Crawl4AiConfig,
-    /// Saved-job GC interval in hours.
-    pub gc_interval_hours:      u64,
     /// Main service HTTP base URL (for telegram bot → main service calls).
     pub main_service_http_base: String,
 }
@@ -86,8 +67,6 @@ impl Default for AppConfig {
             http: RestServerConfig::default(),
             grpc: GrpcServerConfig::default(),
             object_store,
-            crawl4ai: Crawl4AiConfig::default(),
-            gc_interval_hours: 24,
             main_service_http_base: "http://127.0.0.1:3000".to_owned(),
         }
     }
@@ -137,7 +116,6 @@ impl AppConfig {
             &db_store,
             object_store,
             notify_client.clone(),
-            &self.crawl4ai.url,
         )
         .await
         .whatever_context("Failed to initialize application state")?;
@@ -203,34 +181,6 @@ impl AppConfig {
         };
         let mut worker_manager =
             common_worker::Manager::with_state_and_config(app_state.clone(), manager_config);
-
-        let analyze_handle = worker_manager
-            .fallible_worker(rara_workers::saved_job_analyze::SavedJobAnalyzeWorker)
-            .name("saved-rara-analyze")
-            .eager()
-            .on_notify()
-            .spawn();
-
-        if let Ok(mut guard) = app_state.analyze_notify.write() {
-            *guard = Some(analyze_handle);
-        }
-
-        let crawl_handle = worker_manager
-            .fallible_worker(rara_workers::saved_job_crawl::SavedJobCrawlWorker)
-            .name("saved-rara-crawl")
-            .eager()
-            .on_notify()
-            .spawn();
-        app_state.job_service.set_notify_trigger(crawl_handle);
-
-        let gc_interval_secs = self.gc_interval_hours * 3600;
-        let _gc_handle = worker_manager
-            .fallible_worker(rara_workers::saved_job_gc::SavedJobGcWorker::new(
-                rara_workers::saved_job_gc::GcConfig::default(),
-            ))
-            .name("saved-rara-gc")
-            .interval(std::time::Duration::from_secs(gc_interval_secs))
-            .spawn();
 
         let proactive_handle = worker_manager
             .fallible_worker(rara_workers::proactive::ProactiveAgentWorker)
@@ -452,8 +402,6 @@ mod tests {
         let config = AppConfig::default();
         assert_eq!(config.object_store.endpoint, "http://localhost:9000");
         assert_eq!(config.object_store.bucket, "raramarkdown");
-        assert_eq!(config.crawl4ai.url, "http://localhost:11235");
-        assert_eq!(config.gc_interval_hours, 24);
     }
 
     #[tokio::test]

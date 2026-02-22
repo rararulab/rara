@@ -177,19 +177,16 @@ impl AgentTool for GetResumeContentTool {
 /// wording quality, structure, ATS compatibility, and job match.
 pub struct AnalyzeResumeTool {
     resume_service: rara_domain_resume::ResumeAppService,
-    job_service:    rara_domain_job::service::JobService,
     ai_service:     rara_ai::service::AiService,
 }
 
 impl AnalyzeResumeTool {
     pub fn new(
         resume_service: rara_domain_resume::ResumeAppService,
-        job_service: rara_domain_job::service::JobService,
         ai_service: rara_ai::service::AiService,
     ) -> Self {
         Self {
             resume_service,
-            job_service,
             ai_service,
         }
     }
@@ -277,32 +274,8 @@ impl AgentTool for AnalyzeResumeTool {
             }));
         }
 
-        // -- optionally fetch target job ----------------------------------------
-        let job_description = if let Some(job_id) = resume.target_job_id {
-            match self.job_service.get(job_id).await {
-                Ok(Some(job)) => {
-                    // Build a compact job summary from available fields.
-                    let mut parts = Vec::new();
-                    if let Some(ref title) = job.title {
-                        parts.push(format!("Title: {title}"));
-                    }
-                    if let Some(ref company) = job.company {
-                        parts.push(format!("Company: {company}"));
-                    }
-                    if let Some(ref preview) = job.markdown_preview {
-                        parts.push(format!("Description:\n{preview}"));
-                    }
-                    if parts.is_empty() {
-                        None
-                    } else {
-                        Some(parts.join("\n"))
-                    }
-                }
-                _ => None,
-            }
-        } else {
-            None
-        };
+        // Target job description is not available (saved jobs feature removed).
+        let job_description: Option<String> = None;
 
         // -- build prompt and call AI -------------------------------------------
         let prompt = Self::build_analysis_prompt(resume_content, job_description.as_deref());

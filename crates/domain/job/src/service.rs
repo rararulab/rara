@@ -12,44 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Unified job service — discovery, saved-job tracking, and AI-powered JD
-//! parsing.
+//! Unified job service — discovery and AI-powered JD parsing.
 
 use std::{
     collections::{BTreeMap, HashSet},
-    sync::{Arc, RwLock},
+    sync::Arc,
 };
-
-use common_worker::{Notifiable, NotifyHandle};
-use jiff::Timestamp;
-use tracing::{instrument, warn};
-use uuid::Uuid;
 
 use crate::{
     dedup::{self, FuzzyKey, SourceKey},
-    error::{SavedJobError, SourceError},
+    error::SourceError,
     japandev::JapanDevDriver,
     jobspy::JobSpyDriver,
-    repository::{JobRepository, SavedJobRepository},
-    types::{
-        DiscoveryCriteria, NormalizedJob, ParsedJob, PipelineEvent, PipelineEventKind,
-        PipelineStage, RawJob, SavedJob, SavedJobStatus,
-    },
+    repository::JobRepository,
+    types::{DiscoveryCriteria, NormalizedJob, ParsedJob, RawJob},
 };
 
 // ===========================================================================
 // JobService
 // ===========================================================================
 
-/// Unified service for job discovery, saved-job management, and JD parsing.
+/// Unified service for job discovery and JD parsing.
 #[derive(Clone)]
 pub struct JobService {
-    driver:         Arc<JobSpyDriver>,
-    japandev:       Option<Arc<JapanDevDriver>>,
-    saved_job_repo: Arc<dyn SavedJobRepository>,
-    job_repo:       Arc<dyn JobRepository>,
-    ai_service:     rara_ai::service::AiService,
-    notify_trigger: Arc<RwLock<Option<NotifyHandle>>>,
+    driver:     Arc<JobSpyDriver>,
+    japandev:   Option<Arc<JapanDevDriver>>,
+    job_repo:   Arc<dyn JobRepository>,
+    ai_service: rara_ai::service::AiService,
 }
 
 impl JobService {
@@ -57,17 +46,14 @@ impl JobService {
     pub fn new(
         driver: JobSpyDriver,
         japandev: Option<JapanDevDriver>,
-        saved_job_repo: Arc<dyn SavedJobRepository>,
         job_repo: Arc<dyn JobRepository>,
         ai_service: rara_ai::service::AiService,
     ) -> Self {
         Self {
             driver: Arc::new(driver),
             japandev: japandev.map(Arc::new),
-            saved_job_repo,
             job_repo,
             ai_service,
-            notify_trigger: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -78,26 +64,6 @@ impl JobService {
 
     /// Access the job repository directly.
     pub fn job_repo(&self) -> &Arc<dyn JobRepository> { &self.job_repo }
-
-    // -- Worker coordination ------------------------------------------------
-
-    /// Registers the runtime notify handle used to trigger immediate
-    /// pipeline processing when new jobs are saved.
-    pub fn set_notify_trigger(&self, handle: NotifyHandle) {
-        if let Ok(mut guard) = self.notify_trigger.write() {
-            *guard = Some(handle);
-        } else {
-            warn!("failed to acquire saved-job notify trigger write lock");
-        }
-    }
-
-    fn trigger_pipeline(&self) {
-        if let Ok(guard) = self.notify_trigger.read() {
-            if let Some(handle) = guard.as_ref() {
-                handle.notify();
-            }
-        }
-    }
 
     // -----------------------------------------------------------------------
     // Discovery
@@ -253,172 +219,6 @@ impl JobService {
             // whatever jobs were collected from successful drivers).
             error: errors.into_iter().next(),
         }
-    }
-
-    // -----------------------------------------------------------------------
-    // Saved job CRUD
-    // -----------------------------------------------------------------------
-
-    /// Save a new job by URL.
-    #[instrument(skip(self))]
-    pub async fn create(&self, url: &str) -> Result<SavedJob, SavedJobError> {
-        let url = url.trim();
-        if url.is_empty() {
-            return Err(SavedJobError::ValidationError {
-                message: "url must not be empty".to_owned(),
-            });
-        }
-        let job = self.saved_job_repo.create(url).await?;
-        let _ = self
-            .log_event(
-                job.id,
-                PipelineStage::Crawl,
-                PipelineEventKind::Info,
-                "job saved, pending crawl",
-                None,
-            )
-            .await;
-        self.trigger_pipeline();
-        Ok(job)
-    }
-
-    /// Get a saved job by id.
-    #[instrument(skip(self))]
-    pub async fn get(&self, id: Uuid) -> Result<Option<SavedJob>, SavedJobError> {
-        self.saved_job_repo.get_by_id(id).await
-    }
-
-    /// List saved jobs, optionally filtered by status.
-    #[instrument(skip(self))]
-    pub async fn list(
-        &self,
-        status: Option<SavedJobStatus>,
-    ) -> Result<Vec<SavedJob>, SavedJobError> {
-        self.saved_job_repo.list(status).await
-    }
-
-    /// Delete a saved job.
-    #[instrument(skip(self))]
-    pub async fn delete(&self, id: Uuid) -> Result<(), SavedJobError> {
-        self.saved_job_repo.delete(id).await
-    }
-
-    /// Update the pipeline status (and optionally record an error).
-    #[instrument(skip(self))]
-    pub async fn update_status(
-        &self,
-        id: Uuid,
-        status: SavedJobStatus,
-        error_message: Option<String>,
-    ) -> Result<(), SavedJobError> {
-        self.saved_job_repo
-            .update_status(id, status, error_message)
-            .await
-    }
-
-    /// Store the crawl result.
-    #[instrument(skip(self, preview))]
-    pub async fn update_crawl_result(
-        &self,
-        id: Uuid,
-        s3_key: &str,
-        preview: &str,
-    ) -> Result<(), SavedJobError> {
-        self.saved_job_repo
-            .update_crawl_result(id, s3_key, preview)
-            .await
-    }
-
-    /// Store the analysis result.
-    #[instrument(skip(self, result))]
-    pub async fn update_analysis(
-        &self,
-        id: Uuid,
-        result: serde_json::Value,
-        score: f32,
-    ) -> Result<(), SavedJobError> {
-        self.saved_job_repo.update_analysis(id, result, score).await
-    }
-
-    /// Retry a failed or expired saved job by resetting its status to
-    /// `PendingCrawl` and clearing the error.
-    #[instrument(skip(self))]
-    pub async fn retry(&self, id: Uuid) -> Result<(), SavedJobError> {
-        self.saved_job_repo
-            .update_status(id, SavedJobStatus::PendingCrawl, None)
-            .await?;
-        let _ = self
-            .log_event(
-                id,
-                PipelineStage::Crawl,
-                PipelineEventKind::Info,
-                "retry initiated",
-                None,
-            )
-            .await;
-        self.trigger_pipeline();
-        Ok(())
-    }
-
-    /// List saved jobs older than the given timestamp that are not in a
-    /// terminal status (Failed or Expired).
-    #[instrument(skip(self))]
-    pub async fn list_stale(&self, older_than: Timestamp) -> Result<Vec<SavedJob>, SavedJobError> {
-        self.saved_job_repo.list_stale(older_than).await
-    }
-
-    /// List saved jobs matching the given statuses that have S3 keys set.
-    #[instrument(skip(self))]
-    pub async fn list_with_s3_keys_by_status(
-        &self,
-        statuses: &[SavedJobStatus],
-    ) -> Result<Vec<SavedJob>, SavedJobError> {
-        self.saved_job_repo
-            .list_with_s3_keys_by_status(statuses)
-            .await
-    }
-
-    /// Clear the S3 key for a saved job after object cleanup.
-    #[instrument(skip(self))]
-    pub async fn clear_s3_key(&self, id: Uuid) -> Result<(), SavedJobError> {
-        self.saved_job_repo.clear_s3_key(id).await
-    }
-
-    /// Update the title and/or company extracted from AI analysis.
-    #[instrument(skip(self))]
-    pub async fn update_title_company(
-        &self,
-        id: Uuid,
-        title: Option<String>,
-        company: Option<String>,
-    ) -> Result<(), SavedJobError> {
-        self.saved_job_repo
-            .update_title_company(id, title, company)
-            .await
-    }
-
-    /// Record a pipeline event for a saved job.
-    #[instrument(skip(self, metadata))]
-    pub async fn log_event(
-        &self,
-        saved_job_id: Uuid,
-        stage: PipelineStage,
-        event_kind: PipelineEventKind,
-        message: &str,
-        metadata: Option<serde_json::Value>,
-    ) -> Result<PipelineEvent, SavedJobError> {
-        self.saved_job_repo
-            .create_event(saved_job_id, stage, event_kind, message, metadata)
-            .await
-    }
-
-    /// List all pipeline events for a saved job.
-    #[instrument(skip(self))]
-    pub async fn list_events(
-        &self,
-        saved_job_id: Uuid,
-    ) -> Result<Vec<PipelineEvent>, SavedJobError> {
-        self.saved_job_repo.list_events(saved_job_id).await
     }
 
     // -----------------------------------------------------------------------

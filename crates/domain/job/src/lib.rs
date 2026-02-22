@@ -14,7 +14,7 @@
 
 //! # raradomain-job
 //!
-//! Unified job domain: discovery, tracking, and pipeline management.
+//! Unified job domain: discovery and pipeline management.
 
 use std::sync::Arc;
 
@@ -36,19 +36,13 @@ pub fn wire_job_service(
     ai_service: rara_ai::service::AiService,
 ) -> Result<service::JobService, error::SourceError> {
     let driver = jobspy::JobSpyDriver::new()?;
-
-    // JapanDev driver — lightweight HTTP client, always enabled.
     let japandev_driver =
         japandev::JapanDevDriver::new(japandev::JapanDevConfig::default());
-
-    let saved_job_repo: Arc<dyn repository::SavedJobRepository> =
-        Arc::new(pg_repository::PgSavedJobRepository::new(pool.clone()));
     let job_repo: Arc<dyn repository::JobRepository> =
         Arc::new(pg_repository::PgJobRepository::new(pool));
     Ok(service::JobService::new(
         driver,
         Some(japandev_driver),
-        saved_job_repo,
         job_repo,
         ai_service,
     ))

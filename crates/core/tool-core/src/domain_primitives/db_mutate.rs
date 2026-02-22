@@ -29,22 +29,6 @@ use crate::AgentTool;
 /// database manages those via defaults and triggers.
 const MUTABLE_WHITELIST: &[(&str, &[&str])] = &[
     (
-        "saved_job",
-        &[
-            "url",
-            "title",
-            "company",
-            "status",
-            "markdown_s3_key",
-            "markdown_preview",
-            "match_score",
-            "error_message",
-            "crawled_at",
-            "analyzed_at",
-            "expires_at",
-        ],
-    ),
-    (
         "application",
         &[
             "job_id",
@@ -108,7 +92,7 @@ impl AgentTool for DbMutateTool {
     fn name(&self) -> &str { "db_mutate" }
 
     fn description(&self) -> &str {
-        "Create or update records in database tables. Allowed tables: saved_job, application, \
+        "Create or update records in database tables. Allowed tables: application, \
          resume, interview_plan. Actions: \"create\" (INSERT) or \"update\" (UPDATE by id). DELETE \
          is not supported. Returns the created/updated record id."
     }
@@ -119,7 +103,7 @@ impl AgentTool for DbMutateTool {
             "properties": {
                 "table": {
                     "type": "string",
-                    "description": "Table to mutate: saved_job, application, resume, interview_plan"
+                    "description": "Table to mutate: application, resume, interview_plan"
                 },
                 "action": {
                     "type": "string",
@@ -278,12 +262,12 @@ mod tests {
     #[test]
     fn whitelist_rejects_unknown_table() {
         assert!(mutable_columns("users").is_none());
-        assert!(mutable_columns("saved_job").is_some());
+        assert!(mutable_columns("application").is_some());
     }
 
     #[test]
     fn whitelist_excludes_id_and_timestamps() {
-        let cols = mutable_columns("saved_job").unwrap();
+        let cols = mutable_columns("application").unwrap();
         assert!(!cols.contains(&"id"));
         assert!(!cols.contains(&"created_at"));
         assert!(!cols.contains(&"updated_at"));
