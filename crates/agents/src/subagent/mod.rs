@@ -89,4 +89,5 @@ pub mod executor;
 pub mod tool;
 
 pub use definition::{AgentDefinition, AgentDefinitionRegistry};
+pub use executor::SubagentExecutor;
 pub use tool::SubagentTool;

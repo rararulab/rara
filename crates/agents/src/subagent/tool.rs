@@ -1,9 +1,9 @@
 //! Sub-agent tool — the LLM-callable tool that dispatches sub-agents.
 //!
 //! This module defines [`SubagentTool`], an implementation of [`tool_core::AgentTool`]
-//! that the parent agent can invoke to spawn specialized child agents. It acts as the
-//! bridge between the LLM's tool-calling interface and the executor functions in
-//! [`super::executor`].
+//! that the parent agent can invoke to spawn specialized child agents. It acts as
+//! a thin adapter between the LLM's JSON tool-calling interface and the
+//! [`SubagentExecutor`](super::executor::SubagentExecutor) which does the real work.
 //!
 //! # JSON Parameter Formats
 //!
@@ -45,7 +45,7 @@ use serde::Deserialize;
 
 use crate::{model::LlmProviderLoaderRef, tool_registry::ToolRegistry};
 
-use super::{definition::AgentDefinitionRegistry, executor};
+use super::{definition::AgentDefinitionRegistry, executor::SubagentExecutor};
 
 /// Hard upper limit on the number of parallel sub-agent tasks in a single
 /// invocation. Prevents the LLM from spawning an unbounded number of
@@ -118,29 +118,17 @@ pub enum SubagentParams {
 /// The `"subagent"` tool — registered in the parent agent's [`ToolRegistry`]
 /// to allow the LLM to dispatch specialized child agents.
 ///
-/// When the parent LLM calls this tool, it:
-/// 1. Deserializes the JSON parameters into [`SubagentParams`].
-/// 2. Looks up agent definitions by name from [`AgentDefinitionRegistry`].
-/// 3. Delegates to the appropriate executor function ([`executor::run_single`],
-///    [`executor::run_chain`], or [`executor::run_parallel`]).
-/// 4. Returns the result(s) as serialized JSON back to the parent LLM.
+/// This is a thin adapter that:
+/// 1. Deserializes JSON parameters into [`SubagentParams`].
+/// 2. Validates constraints (non-empty, task count limits).
+/// 3. Delegates to [`SubagentExecutor`] methods for actual execution.
+/// 4. Serializes results back to JSON for the parent LLM.
 ///
-/// # Recursion Prevention
-///
-/// The `parent_tools` snapshot passed to this struct should be taken **before**
-/// the `SubagentTool` itself is registered, ensuring sub-agents never have
-/// access to the `"subagent"` tool. Additionally, [`executor::build_subagent_tools`]
-/// explicitly filters out `"subagent"` as a safety net.
+/// All shared state (LLM provider, definitions, parent tools, default model)
+/// lives in the inner [`SubagentExecutor`].
 pub struct SubagentTool {
-    /// Reference to the LLM provider loader, shared with sub-agents via `Arc`.
-    llm_provider:  LlmProviderLoaderRef,
-    /// Registry of all available agent definitions (loaded from `agents/` dirs).
-    definitions:   Arc<AgentDefinitionRegistry>,
-    /// Snapshot of the parent agent's tools, taken before this tool was registered.
-    /// Sub-agents receive a filtered subset of these tools.
-    parent_tools:  Arc<ToolRegistry>,
-    /// Fallback model name used when an agent definition doesn't specify one.
-    default_model: String,
+    /// The executor that holds shared state and runs sub-agents.
+    executor: SubagentExecutor,
 }
 
 impl SubagentTool {
@@ -161,25 +149,18 @@ impl SubagentTool {
         default_model: impl Into<String>,
     ) -> Self {
         Self {
-            llm_provider,
-            definitions,
-            parent_tools,
-            default_model: default_model.into(),
+            executor: SubagentExecutor::new(
+                llm_provider,
+                definitions,
+                parent_tools,
+                default_model,
+            ),
         }
     }
 }
 
 /// Implementation of the [`tool_core::AgentTool`] trait, making `SubagentTool`
 /// callable by the parent agent's LLM through the standard tool-calling protocol.
-///
-/// - [`name()`](tool_core::AgentTool::name) returns `"subagent"`.
-/// - [`description()`](tool_core::AgentTool::description) returns a human-readable
-///   summary of the three execution modes, shown to the LLM in the tool list.
-/// - [`parameters_schema()`](tool_core::AgentTool::parameters_schema) returns a
-///   JSON Schema describing the accepted parameter shapes, dynamically including
-///   the names and descriptions of all registered agent definitions.
-/// - [`execute()`](tool_core::AgentTool::execute) deserializes parameters, dispatches
-///   to the appropriate executor, and returns serialized results.
 #[async_trait]
 impl tool_core::AgentTool for SubagentTool {
     /// Tool name used by the LLM to invoke this tool in a tool_call.
@@ -202,11 +183,11 @@ impl tool_core::AgentTool for SubagentTool {
     ///
     /// The schema is built dynamically at runtime so that it includes the
     /// current list of registered agent definitions (name + description) in
-    /// the `agent` field's description. This helps the LLM know which agents
-    /// are available without needing a separate lookup step.
+    /// the `agent` field's description.
     fn parameters_schema(&self) -> serde_json::Value {
         let agents: Vec<String> = self
-            .definitions
+            .executor
+            .definitions()
             .list()
             .iter()
             .map(|d| format!("{}: {}", d.name, d.description))
@@ -262,33 +243,20 @@ impl tool_core::AgentTool for SubagentTool {
 
     /// Execute the sub-agent tool with the given JSON parameters.
     ///
-    /// Deserializes `params` into [`SubagentParams`] and dispatches to the
-    /// appropriate executor function based on the detected mode:
-    ///
-    /// - **Single**: Looks up the agent definition by name, then calls
-    ///   [`executor::run_single`]. Returns an error if the agent name is not
-    ///   found (with a helpful message listing available agents).
-    ///
-    /// - **Chain**: Validates the chain is non-empty, converts steps to
-    ///   `(name, task)` tuples, then calls [`executor::run_chain`].
-    ///
-    /// - **Parallel**: Validates the task list is non-empty and within
-    ///   [`MAX_PARALLEL_TASKS`], clamps concurrency to [`DEFAULT_CONCURRENCY`],
-    ///   then calls [`executor::run_parallel`].
-    ///
-    /// The return value is the executor's result serialized to JSON, which the
-    /// parent agent's LLM can inspect to decide its next action.
+    /// Deserializes `params` into [`SubagentParams`], validates constraints,
+    /// and delegates to the appropriate [`SubagentExecutor`] method.
     async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let params: SubagentParams = serde_json::from_value(params)?;
 
         match params {
             SubagentParams::Single { agent, task } => {
                 // Look up the agent definition; fail with available names if not found.
-                let def = self.definitions.get(&agent).ok_or_else(|| {
+                let def = self.executor.definitions().get(&agent).ok_or_else(|| {
                     anyhow::anyhow!(
                         "agent '{}' not found. Available: {}",
                         agent,
-                        self.definitions
+                        self.executor
+                            .definitions()
                             .list()
                             .iter()
                             .map(|d| d.name.as_str())
@@ -296,33 +264,17 @@ impl tool_core::AgentTool for SubagentTool {
                             .join(", ")
                     )
                 })?;
-                let result = executor::run_single(
-                    def,
-                    &task,
-                    &self.llm_provider,
-                    &self.parent_tools,
-                    &self.default_model,
-                )
-                .await;
+                let result = self.executor.run_single(def, &task).await;
                 Ok(serde_json::to_value(&result)?)
             }
 
             SubagentParams::Chain { chain } => {
-                // Validate at least one step exists.
                 if chain.is_empty() {
                     anyhow::bail!("chain must have at least one step");
                 }
-                // Convert SubagentStep structs to (name, task) tuples for the executor.
                 let steps: Vec<(String, String)> =
                     chain.into_iter().map(|s| (s.agent, s.task)).collect();
-                let results = executor::run_chain(
-                    &steps,
-                    &self.definitions,
-                    &self.llm_provider,
-                    &self.parent_tools,
-                    &self.default_model,
-                )
-                .await;
+                let results = self.executor.run_chain(&steps).await;
                 Ok(serde_json::to_value(&results)?)
             }
 
@@ -330,7 +282,6 @@ impl tool_core::AgentTool for SubagentTool {
                 parallel,
                 max_concurrency,
             } => {
-                // Validate task count constraints.
                 if parallel.is_empty() {
                     anyhow::bail!("parallel must have at least one task");
                 }
@@ -343,15 +294,7 @@ impl tool_core::AgentTool for SubagentTool {
                     .min(DEFAULT_CONCURRENCY);
                 let tasks: Vec<(String, String)> =
                     parallel.into_iter().map(|s| (s.agent, s.task)).collect();
-                let results = executor::run_parallel(
-                    &tasks,
-                    &self.definitions,
-                    &self.llm_provider,
-                    &self.parent_tools,
-                    &self.default_model,
-                    concurrency,
-                )
-                .await;
+                let results = self.executor.run_parallel(&tasks, concurrency).await;
                 Ok(serde_json::to_value(&results)?)
             }
         }
