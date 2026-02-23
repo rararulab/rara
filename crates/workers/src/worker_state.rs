@@ -40,8 +40,6 @@ pub struct AppState {
     pub analytics_service:   rara_domain_analytics::service::AnalyticsService,
     pub job_service:         rara_domain_job::service::JobService,
     pub chat_service:        rara_domain_chat::service::ChatService,
-    pub typst_service:       rara_domain_typst::service::TypstService,
-
     // -- shared --
     pub settings_svc:   rara_domain_shared::settings::SettingsSvc,
     pub notify_client:  rara_domain_shared::notify::client::NotifyClient,
@@ -111,12 +109,6 @@ impl AppState {
             .whatever_context("Failed to initialize job service")?;
         info!("Job service initialized");
 
-        // -- typst service ---------------------------------------------------
-
-        let typst_service =
-            rara_domain_typst::wire_typst_service(pool.clone(), object_store.clone());
-        info!("Typst service initialized");
-
         // -- chat service ----------------------------------------------------
 
         let session_repo = Arc::new(
@@ -164,16 +156,6 @@ impl AppState {
         }
 
         // Layer 2: Services
-        tool_registry.register_service(Arc::new(crate::tools::services::ListResumesTool::new(
-            resume_service.clone(),
-        )));
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::GetResumeContentTool::new(resume_service.clone()),
-        ));
-        tool_registry.register_service(Arc::new(crate::tools::services::AnalyzeResumeTool::new(
-            resume_service.clone(),
-            ai_service.clone(),
-        )));
         tool_registry.register_service(Arc::new(crate::tools::services::MemorySearchTool::new(
             Arc::clone(&memory_manager),
         )));
@@ -186,22 +168,6 @@ impl AppState {
         tool_registry.register_service(Arc::new(
             crate::tools::services::MemoryUpdateProfileTool::new(Arc::clone(&memory_manager)),
         ));
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::ListTypstProjectsTool::new(typst_service.clone()),
-        ));
-        tool_registry.register_service(Arc::new(crate::tools::services::ListTypstFilesTool::new(
-            typst_service.clone(),
-        )));
-        tool_registry.register_service(Arc::new(crate::tools::services::ReadTypstFileTool::new(
-            typst_service.clone(),
-        )));
-        tool_registry.register_service(Arc::new(crate::tools::services::UpdateTypstFileTool::new(
-            typst_service.clone(),
-        )));
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::CompileTypstProjectTool::new(typst_service.clone()),
-        ));
-
         // -- agent scheduler -------------------------------------------------
         let agent_scheduler = Arc::new(crate::agent_scheduler::AgentScheduler::new(
             rara_paths::agent_jobs_file().clone(),
@@ -333,7 +299,6 @@ impl AppState {
             analytics_service,
             job_service,
             chat_service,
-            typst_service,
             settings_svc,
             notify_client,
             contact_repo,
@@ -357,10 +322,7 @@ impl AppState {
         merge_openapi_router(
             &mut router,
             &mut api,
-            rara_domain_resume::routes::routes(
-                self.resume_service.clone(),
-                self.object_store.clone(),
-            ),
+            rara_domain_resume::routes::routes(self.resume_service.clone()),
         );
         merge_openapi_router(
             &mut router,
@@ -412,9 +374,6 @@ impl AppState {
             &mut api,
             rara_domain_chat::router::routes(self.chat_service.clone()),
         );
-        router = router.merge(rara_domain_typst::router::plain_routes(
-            self.typst_service.clone(),
-        ));
         merge_openapi_router(&mut router, &mut api, crate::system_routes::routes());
         merge_openapi_router(
             &mut router,
@@ -464,7 +423,6 @@ impl AppState {
                 (name = "settings", description = "Runtime settings"),
                 (name = "notifications", description = "Notification queue"),
                 (name = "contacts", description = "Telegram contacts allowlist"),
-                (name = "typst", description = "Typst document management"),
                 (name = "system", description = "System utilities")
             )
         )]
