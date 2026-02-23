@@ -21,23 +21,12 @@
 
 use std::sync::Arc;
 
-use async_openai::types::chat::{
-    ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
-    ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestToolMessageArgs,
-    ChatCompletionRequestUserMessageArgs,
-    ChatCompletionRequestUserMessageContentPart,
-    ChatCompletionRequestMessageContentPartImage,
-    ChatCompletionRequestMessageContentPartText, ImageUrlArgs,
-};
 use chrono::Utc;
 use rara_agents::{
-    model::LlmProviderLoaderRef,
-    runner::{AgentRunner, UserContent},
+    orchestrator::AgentOrchestrator,
+    runner::UserContent,
     tool_registry::ToolRegistry,
 };
-use rara_domain_shared::settings::model::{ModelScenario, Settings};
-use rara_mcp::{manager::mgr::McpManager, tool_bridge::McpToolBridge};
-use rara_memory::MemoryManager;
 use rara_sessions::{
     repository::SessionRepository,
     types::{
@@ -45,8 +34,10 @@ use rara_sessions::{
         SessionKey,
     },
 };
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 use tracing::{info, instrument};
+
+pub use rara_agents::orchestrator::context::to_chat_message;
 
 use crate::stream::ChatStreamEvent;
 
@@ -54,39 +45,6 @@ use crate::{
     error::ChatError,
     model_catalog::{ChatModel, ModelCatalog},
 };
-
-/// Default system prompt used when no custom prompt is configured in settings
-/// and no session-level override is provided.
-const SYSTEM_PROMPT_FILE: &str = "chat/default_system.md";
-const DEFAULT_SYSTEM_PROMPT: &str = include_str!("../../../../prompts/chat/default_system.md");
-
-fn compose_system_prompt(base_prompt: &str, soul_prompt: Option<&str>) -> String {
-    if let Some(soul) = soul_prompt.filter(|s| !s.trim().is_empty()) {
-        // Avoid duplicating soul when a persisted session prompt already
-        // contains it (e.g. prompt was previously composed and stored).
-        if base_prompt.contains(soul.trim()) {
-            return base_prompt.to_owned();
-        }
-        return format!("{soul}\n\n# Chat Instructions\n{base_prompt}");
-    }
-    base_prompt.to_owned()
-}
-
-fn resolve_soul_prompt(settings: &Settings) -> Option<String> {
-    if settings
-        .agent
-        .soul
-        .as_deref()
-        .is_some_and(|s| !s.trim().is_empty())
-    {
-        return settings.agent.soul.clone();
-    }
-    let markdown_soul = rara_paths::load_agent_soul_prompt();
-    if markdown_soul.trim().is_empty() {
-        return None;
-    }
-    Some(markdown_soul)
-}
 
 /// Central orchestrator for session-based AI chat.
 ///
@@ -104,75 +62,44 @@ fn resolve_soul_prompt(settings: &Settings) -> Option<String> {
 #[derive(Clone)]
 pub struct ChatService {
     /// Persistence layer for sessions, messages, and channel bindings.
-    session_repo:   Arc<dyn SessionRepository>,
-    /// Factory for creating LLM provider clients.
-    llm_provider:   LlmProviderLoaderRef,
-    /// Registry of tools available to the agent during execution.
-    tools:          Arc<ToolRegistry>,
-    /// Watch receiver for runtime settings — provides dynamic model and
-    /// system prompt configuration.
-    settings_rx:    watch::Receiver<Settings>,
-    /// Optional memory manager for pre-fetching relevant context on first
-    /// turn of a session.
-    memory_manager: Option<Arc<MemoryManager>>,
+    session_repo:  Arc<dyn SessionRepository>,
     /// Cached catalog of models fetched from OpenRouter.
-    model_catalog:  ModelCatalog,
+    model_catalog: ModelCatalog,
     /// Settings service for persisting favorite models.
-    settings_svc:   rara_domain_shared::settings::SettingsSvc,
-    /// Skills registry for available skills listing in system prompt.
-    skill_registry: rara_skills::registry::InMemoryRegistry,
-    /// MCP manager for dynamic per-request MCP tool discovery.
-    mcp_manager:    McpManager,
+    settings_svc:  rara_domain_shared::settings::SettingsSvc,
+    /// Agent orchestrator — assembles prompts, tools, and runners.
+    orchestrator:  AgentOrchestrator,
 }
 
 impl ChatService {
     /// Create a new chat service with the given dependencies.
     ///
-    /// The `settings_rx` watch receiver supplies the current runtime settings,
-    /// from which the default model and system prompt are read dynamically.
-    /// The optional `memory_manager` enables automatic memory pre-fetch on
-    /// the first turn of a session.
+    /// The `orchestrator` handles LLM provider access, tool management,
+    /// prompt assembly, and memory reflection. The `settings_svc` is used
+    /// for persisting user preferences such as favorite models.
     #[must_use]
     pub fn new(
         session_repo: Arc<dyn SessionRepository>,
-        llm_provider: LlmProviderLoaderRef,
-        tools: Arc<ToolRegistry>,
-        settings_rx: watch::Receiver<Settings>,
-        memory_manager: Option<Arc<MemoryManager>>,
         settings_svc: rara_domain_shared::settings::SettingsSvc,
-        skill_registry: rara_skills::registry::InMemoryRegistry,
-        mcp_manager: McpManager,
+        orchestrator: AgentOrchestrator,
     ) -> Self {
         Self {
             session_repo,
-            llm_provider,
-            tools,
-            settings_rx,
-            memory_manager,
             model_catalog: ModelCatalog::new(),
             settings_svc,
-            skill_registry,
-            mcp_manager,
+            orchestrator,
         }
     }
 
     /// Read the current default model from runtime settings.
     fn current_default_model(&self) -> String {
-        self.settings_rx
-            .borrow()
-            .ai
-            .model_for(ModelScenario::Chat)
-            .to_owned()
+        self.orchestrator.current_default_model()
     }
 
     /// Read the current system prompt from runtime settings, falling back
-    /// to [`DEFAULT_SYSTEM_PROMPT`] when no custom prompt is configured.
+    /// to a built-in default when no custom prompt is configured.
     fn current_system_prompt(&self) -> String {
-        let settings = self.settings_rx.borrow();
-        let base_prompt =
-            rara_paths::load_prompt_markdown(SYSTEM_PROMPT_FILE, DEFAULT_SYSTEM_PROMPT);
-        let soul_prompt = resolve_soul_prompt(&settings);
-        compose_system_prompt(&base_prompt, soul_prompt.as_deref())
+        self.orchestrator.current_system_prompt()
     }
 
     // -- model catalog ------------------------------------------------------
@@ -180,7 +107,7 @@ impl ChatService {
     /// List available models, dynamically fetching from OpenRouter when an
     /// API key is configured. Favorites are marked and sorted to the top.
     pub async fn list_models(&self) -> Vec<ChatModel> {
-        let settings = self.settings_rx.borrow().clone();
+        let settings = self.orchestrator.settings();
         let api_key = settings.ai.openrouter_api_key.as_deref();
         let favorites = &settings.ai.favorite_models;
         self.model_catalog.list_models(api_key, favorites).await
@@ -381,7 +308,7 @@ impl ChatService {
     }
 
     /// Return a reference to the tools registry shared by this service.
-    pub fn tools(&self) -> &Arc<ToolRegistry> { &self.tools }
+    pub fn tools(&self) -> &Arc<ToolRegistry> { self.orchestrator.tools() }
 
     // -- send message (LLM) -------------------------------------------------
 
@@ -437,14 +364,12 @@ impl ChatService {
             .unwrap_or_else(|| self.current_default_model());
 
         // 4a. Check if context compaction is needed
-        let history_tokens = estimate_history_tokens(&history);
         let model_context = self
             .model_catalog
             .get_context_length(&model)
-            .unwrap_or(128_000);
-        let threshold = (model_context as f64 * 0.80) as usize;
+            .unwrap_or(128_000) as usize;
 
-        let history = if history_tokens > threshold {
+        let history = if self.orchestrator.needs_compaction(&history, model_context) {
             self.compact_history(key, &history, &model).await?
         } else {
             history
@@ -456,79 +381,18 @@ impl ChatService {
             .map(to_chat_message)
             .collect::<Vec<_>>();
 
-        // 5. Build system prompt
+        // 5. Build system prompt (includes soul, memory profile, memory search, skills)
         let base_system_prompt = session
             .system_prompt
             .clone()
             .unwrap_or_else(|| self.current_system_prompt());
-        let soul_prompt = {
-            let settings = self.settings_rx.borrow();
-            resolve_soul_prompt(&settings)
-        };
-        let mut system_prompt = compose_system_prompt(&base_system_prompt, soul_prompt.as_deref());
+        let system_prompt = self
+            .orchestrator
+            .build_chat_system_prompt(&base_system_prompt, user_text, history.len())
+            .await;
 
-        // Inject core user profile into system prompt.
-        if let Some(ref mm) = self.memory_manager {
-            if let Ok(profile) = mm.read_core_profile().await {
-                if !profile.trim().is_empty() {
-                    system_prompt = format!("{profile}\n\n---\n\n{system_prompt}");
-                }
-            }
-        }
-
-        // Pre-fetch relevant memory context for new / short sessions.
-        if history.len() < 3 {
-            if let Some(ref mm) = self.memory_manager {
-                match mm.search(user_text, 5).await {
-                    Ok(results) if !results.is_empty() => {
-                        system_prompt.push_str("\n\n## Relevant Memory Context\n");
-                        for hit in &results {
-                            system_prompt.push_str(&format!("- [{}] {}\n", hit.path, hit.snippet,));
-                        }
-                        info!(
-                            hits = results.len(),
-                            "memory pre-fetch injected into system prompt"
-                        );
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        tracing::warn!(error = %e, "memory pre-fetch failed, continuing without context");
-                    }
-                }
-            }
-        }
-
-        // -- skill listing injection --
-        let tool_whitelist = {
-            let all_skills = self.skill_registry.list_all();
-            let skills_xml = rara_skills::prompt_gen::generate_skills_prompt(&all_skills);
-            if !skills_xml.is_empty() {
-                system_prompt.push_str(&format!("\n\n{skills_xml}"));
-            }
-            Vec::<String>::new()
-        };
-
-        // Build effective tool registry with dynamic MCP tools
-        let effective_tools = {
-            let mut registry = if tool_whitelist.is_empty() {
-                self.tools.filtered(&[])
-            } else {
-                self.tools.filtered(&tool_whitelist)
-            };
-            // Dynamically add MCP tools (per-request, cached by ManagedClient 5min TTL)
-            match McpToolBridge::from_manager(self.mcp_manager.clone()).await {
-                Ok(bridges) => {
-                    for bridge in bridges {
-                        let server = bridge.server_name().to_string();
-                        registry.register_mcp(Arc::new(bridge), server);
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "failed to fetch dynamic MCP tools");
-                }
-            }
-            Arc::new(registry)
-        };
+        // 6. Build effective tool registry (includes dynamic MCP tools)
+        let effective_tools = self.orchestrator.build_effective_tools().await;
 
         let user_content = if has_images {
             let urls = image_urls.as_ref().unwrap();
@@ -540,25 +404,10 @@ impl ChatService {
             UserContent::Text(user_text.to_owned())
         };
 
-        // Resolve fallback models from settings.
-        let fallback_models = {
-            let settings = self.settings_rx.borrow();
-            let chain = settings.ai.fallback_chain(ModelScenario::Chat);
-            chain
-                .into_iter()
-                .skip(1)
-                .map(|s| s.to_owned().into())
-                .collect()
-        };
-
-        let runner = AgentRunner::builder()
-            .llm_provider(self.llm_provider.clone())
-            .model_name(model)
-            .system_prompt(system_prompt)
-            .user_content(user_content)
-            .history(chat_history)
-            .fallback_models(fallback_models)
-            .build();
+        // 7. Build the agent runner
+        let runner = self
+            .orchestrator
+            .build_runner(model, system_prompt, user_content, chat_history);
 
         Ok(AgentRunSetup {
             runner,
@@ -620,29 +469,8 @@ impl ChatService {
         );
 
         // Fire-and-forget: reflect on what was learned and update memory.
-        if let Some(ref mm) = self.memory_manager {
-            let mm = Arc::clone(mm);
-            let user_text_clone = user_text.clone();
-            let assistant_text_clone = assistant_text.clone();
-            let llm = self.llm_provider.clone();
-            let tools = Arc::clone(&self.tools);
-            let model = self.current_default_model();
-
-            tokio::spawn(async move {
-                if let Err(e) = memory_reflection(
-                    &mm,
-                    &llm,
-                    &tools,
-                    &model,
-                    &user_text_clone,
-                    &assistant_text_clone,
-                )
-                .await
-                {
-                    tracing::warn!(error = %e, "memory reflection failed");
-                }
-            });
-        }
+        self.orchestrator
+            .spawn_memory_reflection(&user_text, &assistant_text);
 
         Ok(persisted)
     }
@@ -671,10 +499,7 @@ impl ChatService {
         // handles persistence on completion.
         let session_repo = Arc::clone(&self.session_repo);
         let session_key = key.clone();
-        let memory_manager = self.memory_manager.clone();
-        let llm_provider = self.llm_provider.clone();
-        let tools = Arc::clone(&self.tools);
-        let default_model = self.current_default_model();
+        let orchestrator = self.orchestrator.clone();
 
         tokio::spawn(async move {
             while let Some(runner_event) = runner_rx.recv().await {
@@ -701,29 +526,7 @@ impl ChatService {
                     info!(key = %session_key, "streaming message exchange complete");
 
                     // Fire-and-forget memory reflection.
-                    if let Some(ref mm) = memory_manager {
-                        let mm = Arc::clone(mm);
-                        let user_text_clone = user_text.clone();
-                        let assistant_text_clone = text.clone();
-                        let llm = llm_provider.clone();
-                        let tools = Arc::clone(&tools);
-                        let model = default_model.clone();
-
-                        tokio::spawn(async move {
-                            if let Err(e) = memory_reflection(
-                                &mm,
-                                &llm,
-                                &tools,
-                                &model,
-                                &user_text_clone,
-                                &assistant_text_clone,
-                            )
-                            .await
-                            {
-                                tracing::warn!(error = %e, "memory reflection failed");
-                            }
-                        });
-                    }
+                    orchestrator.spawn_memory_reflection(&user_text, text);
                 }
 
                 // Forward the event to the SSE stream; if the receiver is
@@ -899,48 +702,13 @@ impl ChatService {
             "compacting conversation context"
         );
 
-        // Build summarization prompt from history
-        let history_text: String = history
-            .iter()
-            .map(|m| format!("{}: {}", m.role, m.content.as_text()))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let summary_prompt = format!(
-            "Summarize the following conversation history into a concise summary. Preserve key \
-             facts, decisions, user preferences, and action items. Keep it under 500 words. \
-             Respond in the same language as the conversation.\n\n{history_text}"
-        );
-
-        // Single-turn LLM call for summarization (no tools)
-        let runner = AgentRunner::builder()
-            .llm_provider(self.llm_provider.clone())
-            .model_name(model.to_owned())
-            .system_prompt(
-                "You are a conversation summarizer. Be concise and preserve important details.",
-            )
-            .user_content(UserContent::Text(summary_prompt))
-            .max_iterations(1_usize)
-            .build();
-
-        let empty_tools = ToolRegistry::default();
-        let result = runner
-            .run(&empty_tools, None)
+        let summary_msg = self
+            .orchestrator
+            .summarize_history(history, model)
             .await
             .map_err(|e| ChatError::AgentError {
-                message: format!("compact failed: {e}"),
+                message: e.to_string(),
             })?;
-
-        let summary = result
-            .provider_response
-            .choices
-            .first()
-            .and_then(|c| c.message.content.as_deref())
-            .unwrap_or("[Summary unavailable]")
-            .to_owned();
-
-        // Create summary message
-        let summary_msg = ChatMessage::assistant(format!("[Conversation Summary]\n{summary}"));
 
         // Replace old messages: clear, then insert the summary
         self.session_repo
@@ -958,7 +726,6 @@ impl ChatService {
 
         info!(
             session = %session_key,
-            summary_len = summary.len(),
             "context compacted successfully"
         );
 
@@ -981,147 +748,9 @@ impl std::fmt::Debug for ChatService {
 /// Bundle returned by [`ChatService::prepare_agent_run`] containing
 /// everything needed to execute the agent loop (sync or streaming).
 struct AgentRunSetup {
-    runner:          AgentRunner,
+    runner:          rara_agents::runner::AgentRunner,
     effective_tools: Arc<ToolRegistry>,
     session:         SessionEntry,
-}
-
-// ---------------------------------------------------------------------------
-// Conversion helpers
-// ---------------------------------------------------------------------------
-
-/// Convert a session [`ChatMessage`] to an
-/// [`async_openai::types::ChatCompletionRequestMessage`].
-///
-/// Maps domain roles to async-openai message types and converts text /
-/// multimodal content to the appropriate message variant. Tool-related
-/// fields (`tool_call_id`, `tool_name`) are carried over when present.
-pub fn to_chat_message(msg: &ChatMessage) -> ChatCompletionRequestMessage {
-    match msg.role {
-        MessageRole::System => {
-            ChatCompletionRequestSystemMessageArgs::default()
-                .content(msg.content.as_text())
-                .build()
-                .expect("system message build should not fail")
-                .into()
-        }
-        MessageRole::User => {
-            match &msg.content {
-                MessageContent::Text(text) => {
-                    ChatCompletionRequestUserMessageArgs::default()
-                        .content(text.as_str())
-                        .build()
-                        .expect("user message build should not fail")
-                        .into()
-                }
-                MessageContent::Multimodal(blocks) => {
-                    let parts: Vec<ChatCompletionRequestUserMessageContentPart> = blocks
-                        .iter()
-                        .map(|b| match b {
-                            ContentBlock::Text { text } => {
-                                ChatCompletionRequestUserMessageContentPart::Text(
-                                    ChatCompletionRequestMessageContentPartText {
-                                        text: text.clone(),
-                                    },
-                                )
-                            }
-                            ContentBlock::ImageUrl { url } => {
-                                let image_url = ImageUrlArgs::default()
-                                    .url(url.as_str())
-                                    .build()
-                                    .expect("image URL build should not fail");
-                                ChatCompletionRequestUserMessageContentPart::ImageUrl(
-                                    ChatCompletionRequestMessageContentPartImage {
-                                        image_url,
-                                    },
-                                )
-                            }
-                        })
-                        .collect();
-                    ChatCompletionRequestUserMessageArgs::default()
-                        .content(parts)
-                        .build()
-                        .expect("multimodal user message build should not fail")
-                        .into()
-                }
-            }
-        }
-        MessageRole::Assistant => {
-            ChatCompletionRequestAssistantMessageArgs::default()
-                .content(msg.content.as_text())
-                .build()
-                .expect("assistant message build should not fail")
-                .into()
-        }
-        MessageRole::Tool | MessageRole::ToolResult => {
-            let tool_call_id = msg
-                .tool_call_id
-                .as_deref()
-                .unwrap_or("unknown");
-            ChatCompletionRequestToolMessageArgs::default()
-                .tool_call_id(tool_call_id)
-                .content(msg.content.as_text())
-                .build()
-                .expect("tool message build should not fail")
-                .into()
-        }
-    }
-}
-
-/// Run a lightweight memory reflection after a conversation turn.
-async fn memory_reflection(
-    _mm: &Arc<MemoryManager>,
-    llm: &LlmProviderLoaderRef,
-    tools: &Arc<ToolRegistry>,
-    model: &str,
-    user_text: &str,
-    assistant_text: &str,
-) -> Result<(), ChatError> {
-    // Only expose memory-related tools for the reflection agent.
-    let mut reflection_tools = ToolRegistry::default();
-    if let Some(tool) = tools.get("memory_update_profile") {
-        reflection_tools.register_service(Arc::clone(tool));
-    }
-    if let Some(tool) = tools.get("memory_write") {
-        reflection_tools.register_service(Arc::clone(tool));
-    }
-
-    // If neither tool is available, skip reflection entirely.
-    if reflection_tools.is_empty() {
-        return Ok(());
-    }
-
-    let reflection_prompt = format!(
-        "You are a memory maintenance agent. Based on the following exchange, extract any new \
-         facts about the user (name, role, location, preferences, goals, important context). If \
-         you learned something new, use memory_update_profile to update the relevant section \
-         (\"Basic Info\", \"Preferences\", \"Current Goals\", or \"Key Context\"). If nothing new \
-         was learned, do nothing — do NOT call any tools.\n\nKeep updates concise (3-5 bullet \
-         points per section max). Only add genuinely useful information.\n\n## User \
-         Message\n{user_text}\n\n## Assistant Response\n{assistant_text}"
-    );
-
-    let runner = AgentRunner::builder()
-        .llm_provider(llm.clone())
-        .model_name(model.to_owned())
-        .system_prompt(
-            "You are a silent memory maintenance agent. Your only job is to update the user \
-             profile if new facts were learned. Never produce conversational output."
-                .to_owned(),
-        )
-        .user_content(UserContent::Text(reflection_prompt))
-        .max_iterations(1_usize)
-        .build();
-
-    let _result = runner
-        .run(&reflection_tools, None)
-        .await
-        .map_err(|e| ChatError::AgentError {
-            message: format!("memory reflection agent: {e}"),
-        })?;
-
-    tracing::debug!("memory reflection complete");
-    Ok(())
 }
 
 /// Truncate a string to at most `max_len` characters.
@@ -1132,21 +761,6 @@ fn truncate_preview(s: &str, max_len: usize) -> String {
         let truncated: String = s.chars().take(max_len.saturating_sub(3)).collect();
         format!("{truncated}...")
     }
-}
-
-// ---------------------------------------------------------------------------
-// Token estimation
-// ---------------------------------------------------------------------------
-
-/// Rough token estimate: ~3 chars per token (balanced for mixed EN/CN content).
-fn estimate_tokens(text: &str) -> usize { (text.chars().count() + 2) / 3 }
-
-/// Estimate total tokens for a message history.
-fn estimate_history_tokens(messages: &[ChatMessage]) -> usize {
-    messages
-        .iter()
-        .map(|m| estimate_tokens(&m.content.as_text()) + 4)
-        .sum()
 }
 
 #[cfg(test)]
@@ -1168,6 +782,9 @@ mod tests {
 
     #[test]
     fn to_chat_message_text() {
+        use async_openai::types::chat::ChatCompletionRequestMessage;
+        use rara_sessions::types::ChatMessage;
+
         let msg = ChatMessage::user("hello");
         let converted = to_chat_message(&msg);
         assert!(matches!(
@@ -1178,6 +795,9 @@ mod tests {
 
     #[test]
     fn to_chat_message_assistant() {
+        use async_openai::types::chat::ChatCompletionRequestMessage;
+        use rara_sessions::types::ChatMessage;
+
         let msg = ChatMessage::assistant("response");
         let converted = to_chat_message(&msg);
         assert!(matches!(
@@ -1188,32 +808,14 @@ mod tests {
 
     #[test]
     fn to_chat_message_system() {
+        use async_openai::types::chat::ChatCompletionRequestMessage;
+        use rara_sessions::types::ChatMessage;
+
         let msg = ChatMessage::system("you are helpful");
         let converted = to_chat_message(&msg);
         assert!(matches!(
             converted,
             ChatCompletionRequestMessage::System(_)
         ));
-    }
-
-    #[test]
-    fn estimate_tokens_basic() {
-        // "hello" = 5 chars -> (5 + 2) / 3 = 2 tokens
-        assert_eq!(estimate_tokens("hello"), 2);
-        // empty string -> (0 + 2) / 3 = 0 tokens
-        assert_eq!(estimate_tokens(""), 0);
-        // 300 chars -> (300 + 2) / 3 = 100 tokens
-        let long = "a".repeat(300);
-        assert_eq!(estimate_tokens(&long), 100);
-    }
-
-    #[test]
-    fn estimate_history_tokens_sums_correctly() {
-        let messages = vec![
-            ChatMessage::user("hello"),       // 2 + 4 = 6
-            ChatMessage::assistant("world!"), // 2 + 4 = 6
-        ];
-        let total = estimate_history_tokens(&messages);
-        assert_eq!(total, 12);
     }
 }

@@ -12,18 +12,15 @@ categories.workspace = true
 description = "Chat domain service — session-based conversations backed by LLM agents"
 
 [dependencies]
+async-openai.workspace = true
 async-trait.workspace = true
 axum.workspace = true
 chrono.workspace = true
 futures.workspace = true
-async-openai.workspace = true
 rara-agents.workspace = true
 rara-domain-shared.workspace = true
-rara-mcp.workspace = true
-rara-memory.workspace = true
 rara-paths.workspace = true
 rara-sessions.workspace = true
-rara-skills.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
