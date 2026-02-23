@@ -307,6 +307,48 @@ impl AppState {
         // Register pipeline control tools on the main rara agent.
         rara_ext_job_pipeline::register_rara_tools(&mut tool_registry, &pipeline_service, &settings_svc);
 
+        // -- subagent tool -------------------------------------------------------
+
+        // Snapshot current tools BEFORE adding SubagentTool (prevents recursion).
+        let subagent_parent_tools = Arc::new(tool_registry.filtered(&[]));
+
+        // Load agent definitions: bundled first, then user-defined (override).
+        let agent_defs = {
+            let mut registry = rara_agents::subagent::AgentDefinitionRegistry::new();
+            // Bundled agent definitions (shipped with the binary)
+            let bundled_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../agents");
+            if let Ok(bundled) = rara_agents::subagent::AgentDefinitionRegistry::load_dir(&bundled_dir) {
+                for def in bundled.list() {
+                    registry.register(def.clone());
+                }
+            }
+            // User-defined agent definitions (override bundled)
+            let user_dir = rara_paths::data_dir().join("agents");
+            if let Ok(user) = rara_agents::subagent::AgentDefinitionRegistry::load_dir(&user_dir) {
+                for def in user.list() {
+                    registry.register(def.clone());
+                }
+            }
+            let count = registry.list().len();
+            if count > 0 {
+                info!(count, "agent definitions loaded");
+            }
+            Arc::new(registry)
+        };
+
+        // Default model for sub-agents: use the chat model from settings.
+        let subagent_default_model = {
+            let s = settings_svc.current();
+            s.ai.model_for(rara_domain_shared::settings::model::ModelScenario::Chat).to_owned()
+        };
+
+        tool_registry.register_service(Arc::new(rara_agents::subagent::SubagentTool::new(
+            llm_provider.clone(),
+            agent_defs,
+            subagent_parent_tools,
+            subagent_default_model,
+        )));
+
         let tools = Arc::new(tool_registry);
 
         let chat_service = rara_domain_chat::service::ChatService::new(
