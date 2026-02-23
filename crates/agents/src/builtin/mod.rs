@@ -1,0 +1,20 @@
+//! Built-in agents -- Rust-defined agents with lifecycle hooks.
+//!
+//! Each built-in agent encapsulates its own prompt strategy, tool selection,
+//! and pre/post processing. The lifecycle hooks (`prepare` / `post_process`)
+//! are intentionally minimal now; #190 will fill them with Goal/Task/Journal
+//! capabilities.
+
+pub mod chat;
+pub mod proactive;
+pub mod scheduled;
+
+/// Output from a built-in agent execution.
+pub struct AgentOutput {
+    /// The assistant's response text.
+    pub response_text: String,
+    /// Number of LLM iterations used.
+    pub iterations: usize,
+    /// Number of tool calls made.
+    pub tool_calls_made: usize,
+}
