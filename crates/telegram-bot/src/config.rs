@@ -55,7 +55,7 @@ pub struct BotConfig {
     pub telegram:               Option<TelegramConfig>,
     /// Base URL of the main HTTP service that this bot calls for job
     /// discovery and JD parsing.
-    #[default(_code = "\"http://127.0.0.1:3000\".to_owned()")]
+    #[default(_code = "\"http://127.0.0.1:25555\".to_owned()")]
     pub main_service_http_base: String,
 }
 
@@ -70,7 +70,7 @@ impl BotConfig {
     /// | `TELEGRAM_CHAT_ID`       | No       | (loaded from runtime settings)                   |
     /// | `DATABASE_URL`           | No       | `postgres://postgres:postgres@localhost:5432/job` |
     /// | `MIGRATION_DIRECTORY`    | No       | `crates/rara-model/migrations`                   |
-    /// | `MAIN_SERVICE_HTTP_BASE` | No       | `http://127.0.0.1:3000`                          |
+    /// | `MAIN_SERVICE_HTTP_BASE` | No       | `http://127.0.0.1:25555`                         |
     pub fn from_env() -> Self {
         let db_config =
             DatabaseConfig::builder()
@@ -88,7 +88,7 @@ impl BotConfig {
             .map(|token| TelegramConfig { bot_token: token });
 
         let main_service_http_base = std::env::var("MAIN_SERVICE_HTTP_BASE")
-            .unwrap_or_else(|_| "http://127.0.0.1:3000".to_owned());
+            .unwrap_or_else(|_| "http://127.0.0.1:25555".to_owned());
 
         Self {
             db_config,

@@ -67,7 +67,7 @@ impl Default for AppConfig {
             http: RestServerConfig::default(),
             grpc: GrpcServerConfig::default(),
             object_store,
-            main_service_http_base: "http://127.0.0.1:3000".to_owned(),
+            main_service_http_base: "http://127.0.0.1:25555".to_owned(),
         }
     }
 }

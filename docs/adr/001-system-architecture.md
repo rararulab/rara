@@ -338,7 +338,7 @@ CREATE INDEX idx_audit_log_module_action ON audit_log (module, action, timestamp
 |                                           |
 |  +-------------------------------------+ |
 |  |  job (single binary)                | |
-|  |  - HTTP :3000                        | |
+|  |  - HTTP :25555                       | |
 |  |  - gRPC :50051                       | |
 |  |  - Worker threads (tokio tasks)      | |
 |  +-------------------------------------+ |
@@ -364,7 +364,7 @@ services:
     build: .
     command: job server
     ports:
-      - "3000:3000"
+      - "25555:25555"
       - "50051:50051"
     environment:
       DATABASE_URL: postgres://job:job@postgres:5432/job

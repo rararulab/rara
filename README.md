@@ -40,6 +40,6 @@
 ### Relevant Environment Variables
 
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
-- `MAIN_SERVICE_HTTP_BASE` (default: `http://127.0.0.1:3000`)
+- `MAIN_SERVICE_HTTP_BASE` (default: `http://127.0.0.1:25555`)
 - `TELEGRAM_BOT_GRPC_BIND` (default: `127.0.0.1:50061`)
 - `TELEGRAM_BOT_GRPC_TARGET` (main service uses this to send telegram commands via bot gRPC)

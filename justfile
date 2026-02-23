@@ -258,7 +258,7 @@ build-docker:
 up:
     docker compose up --build -d
 
-[doc("start frontend dev server (proxies /api to localhost:3000)")]
+[doc("start frontend dev server (proxies /api to localhost:25555)")]
 [group("🔧 Development")]
 web:
     cd web && bun run dev

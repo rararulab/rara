@@ -103,7 +103,7 @@ submits it to the main service for parsing.
 | `TELEGRAM_CHAT_ID`      | Yes*     | —                                                | Primary authorized chat ID      |
 | `DATABASE_URL`           | No       | `postgres://postgres:postgres@localhost:5432/job` | PostgreSQL connection string    |
 | `MIGRATION_DIRECTORY`    | No       | `crates/rara-model/migrations`                   | SQL migration directory         |
-| `MAIN_SERVICE_HTTP_BASE` | No       | `http://127.0.0.1:3000`                          | Main service HTTP base URL      |
+| `MAIN_SERVICE_HTTP_BASE` | No       | `http://127.0.0.1:25555`                         | Main service HTTP base URL      |
 
 \* Can also be set via the runtime settings API (`/api/v1/settings`), which
 takes precedence over environment variables.

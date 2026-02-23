@@ -62,7 +62,7 @@ crates/domain/{name}/
 - **Stack**: React 19 + Tailwind v4 + shadcn/ui + TanStack Query v5 + React Router v7
 - **API client**: `web/src/api/client.ts` (fetch-based), types in `web/src/api/types.ts`
 - **Layout**: `DashboardLayout.tsx` with collapsible sidebar
-- **Dev server**: Vite proxies `/api` to `localhost:3000`
+- **Dev server**: Vite proxies `/api` to `localhost:25555`
 - **Build check**: `cd web && npm run build`
 
 ## Development Workflow

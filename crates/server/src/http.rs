@@ -47,7 +47,7 @@ pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 60;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, SmartDefault, bon::Builder)]
 pub struct RestServerConfig {
     /// The address to bind the REST server
-    #[default = "127.0.0.1:3000"]
+    #[default = "127.0.0.1:25555"]
     pub bind_address:    String,
     /// Maximum HTTP request body size
     #[default(_code = "DEFAULT_MAX_HTTP_BODY_SIZE")]

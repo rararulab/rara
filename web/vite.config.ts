@@ -32,7 +32,7 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:3000',
+        target: 'http://localhost:25555',
         changeOrigin: true,
         configure: (proxy) => {
           proxy.on('proxyRes', (proxyRes, req) => {
@@ -50,7 +50,7 @@ export default defineConfig({
         },
       },
       '/swagger-ui': {
-        target: 'http://localhost:3000',
+        target: 'http://localhost:25555',
         changeOrigin: true,
       },
     },
