@@ -136,6 +136,8 @@ pub struct AgentRunner {
     history:         Option<Vec<ChatCompletionRequestMessage>>,
     #[builder(default = MAX_ITERATIONS)]
     max_iterations:  usize,
+    /// Optional session ID for Langfuse session tracking.
+    session_id:      Option<String>,
     /// Fallback models to try (in order) when the primary model fails with a
     /// fallback-eligible error. Empty means no fallback.
     #[builder(default)]
@@ -200,8 +202,23 @@ impl AgentRunner {
         tools: &ToolRegistry,
         on_event: Option<&OnEvent>,
     ) -> Result<AgentRunResponse> {
+        use tracing::Instrument;
+        use tracing_opentelemetry::OpenTelemetrySpanExt;
+
         let is_multimodal = matches!(self.user_content, UserContent::Multimodal { .. });
         info!(model_name = model, is_multimodal, "starting agent loop");
+
+        let run_span = tracing::info_span!("agent_run");
+        run_span.set_attribute("gen_ai.system", "openai");
+        run_span.set_attribute("gen_ai.request.model", model.to_owned());
+        run_span.set_attribute(
+            "agent.max_iterations",
+            self.max_iterations as i64,
+        );
+        if let Some(ref sid) = self.session_id {
+            run_span.set_attribute("langfuse.session.id", sid.clone());
+        }
+        let _run_guard = run_span.enter();
 
         // prepare messages with system prompt, optional history, and current user
         // message
@@ -244,38 +261,62 @@ impl AgentRunner {
             let provider = self.llm_provider.acquire_provider().await?;
 
             // ---- Phase 2: build/send request with retry ----
-            let response = (|| async {
-                let mut request_builder = CreateChatCompletionRequestArgs::default();
-                request_builder
-                    .model(model)
-                    .messages(messages.clone())
-                    .temperature(0.7_f32);
+            let llm_span = tracing::info_span!("llm_call", iteration);
+            llm_span.set_attribute("gen_ai.system", "openai");
+            llm_span.set_attribute("gen_ai.request.model", model.to_owned());
+            llm_span.set_attribute("langfuse.observation.type", "generation");
 
-                if let Some(tool_defs) = &request_tools {
-                    request_builder.tools(tool_defs.clone());
-                    request_builder.tool_choice(ChatCompletionToolChoiceOption::Mode(ToolChoiceOptions::Auto));
-                    request_builder.parallel_tool_calls(true);
-                }
+            let response = async {
+                (|| async {
+                    let mut request_builder = CreateChatCompletionRequestArgs::default();
+                    request_builder
+                        .model(model)
+                        .messages(messages.clone())
+                        .temperature(0.7_f32);
 
-                let request = request_builder.build().map_err(|e| Error::Other {
-                    message: format!("failed to build request: {e}").into(),
-                })?;
-                provider.chat_completion(request).await
-            })
-            .retry(ExponentialBuilder::default().with_max_times(2))
-            .sleep(tokio::time::sleep)
-            .when(is_retryable_provider_error)
-            .notify(|err: &Error, dur| {
-                error!(
-                    iteration,
-                    error = %err,
-                    retry_in_ms = dur.as_millis(),
-                    "LLM call failed, retrying"
-                );
-            })
+                    if let Some(tool_defs) = &request_tools {
+                        request_builder.tools(tool_defs.clone());
+                        request_builder.tool_choice(ChatCompletionToolChoiceOption::Mode(ToolChoiceOptions::Auto));
+                        request_builder.parallel_tool_calls(true);
+                    }
+
+                    let request = request_builder.build().map_err(|e| Error::Other {
+                        message: format!("failed to build request: {e}").into(),
+                    })?;
+                    provider.chat_completion(request).await
+                })
+                .retry(ExponentialBuilder::default().with_max_times(2))
+                .sleep(tokio::time::sleep)
+                .when(is_retryable_provider_error)
+                .notify(|err: &Error, dur| {
+                    error!(
+                        iteration,
+                        error = %err,
+                        retry_in_ms = dur.as_millis(),
+                        "LLM call failed, retrying"
+                    );
+                })
+                .await
+            }
+            .instrument(llm_span.clone())
             .await;
+
             if let Some(cb) = on_event {
                 cb(RunnerEvent::ThinkingDone);
+            }
+
+            // Record token usage on the llm_span after getting the response.
+            if let Ok(ref resp) = response {
+                if let Some(ref usage) = resp.usage {
+                    llm_span.set_attribute(
+                        "gen_ai.usage.input_tokens",
+                        usage.prompt_tokens as i64,
+                    );
+                    llm_span.set_attribute(
+                        "gen_ai.usage.output_tokens",
+                        usage.completion_tokens as i64,
+                    );
+                }
             }
 
             // If retries are exhausted, convert to domain error and abort run.
@@ -449,7 +490,22 @@ impl AgentRunner {
         tools: &ToolRegistry,
         tx: &mpsc::Sender<RunnerEvent>,
     ) -> Result<()> {
+        use tracing::Instrument;
+        use tracing_opentelemetry::OpenTelemetrySpanExt;
+
         info!(model_name = model, "starting streaming agent loop");
+
+        let run_span = tracing::info_span!("agent_run_streaming");
+        run_span.set_attribute("gen_ai.system", "openai");
+        run_span.set_attribute("gen_ai.request.model", model.to_owned());
+        run_span.set_attribute(
+            "agent.max_iterations",
+            self.max_iterations as i64,
+        );
+        if let Some(ref sid) = self.session_id {
+            run_span.set_attribute("langfuse.session.id", sid.clone());
+        }
+        let _run_guard = run_span.enter();
 
         // ---- Prepare messages ----
         let mut messages: Vec<ChatCompletionRequestMessage> = {
@@ -484,6 +540,11 @@ impl AgentRunner {
 
             let provider = self.llm_provider.acquire_provider().await?;
 
+            let llm_span = tracing::info_span!("llm_call_streaming", iteration);
+            llm_span.set_attribute("gen_ai.system", "openai");
+            llm_span.set_attribute("gen_ai.request.model", model.to_owned());
+            llm_span.set_attribute("langfuse.observation.type", "generation");
+
             // ---- Phase 1: Build and send streaming request ----
             let mut request_builder = CreateChatCompletionRequestArgs::default();
             request_builder
@@ -501,7 +562,9 @@ impl AgentRunner {
                 message: format!("failed to build streaming request: {e}").into(),
             })?;
 
-            let mut stream = provider.chat_completion_stream(request).await?;
+            let mut stream = provider.chat_completion_stream(request)
+                .instrument(llm_span.clone())
+                .await?;
 
             // ---- Phase 2: Consume streaming chunks ----
             let mut accumulated_text = String::new();

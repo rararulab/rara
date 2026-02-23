@@ -24,10 +24,12 @@ rara-sessions.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"] }
 snafu.workspace = true
 tokio.workspace = true
 tokio-stream = "0.1"
 tracing.workspace = true
+tracing-opentelemetry = "0.32.0"
 utoipa.workspace = true
 utoipa-axum.workspace = true
 uuid.workspace = true

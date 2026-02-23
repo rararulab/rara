@@ -44,7 +44,7 @@ struct ServerArgs {}
 
 impl ServerArgs {
     async fn run() -> Result<(), Whatever> {
-        let _guards = common_telemetry::logging::init_tracing_subscriber("rara");
+        let _guards = common_telemetry::logging::init_tracing_with_langfuse("rara");
         let config = AppConfig::new().whatever_context("Failed to load config")?;
         config.run().await
     }

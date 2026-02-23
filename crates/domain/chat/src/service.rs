@@ -36,6 +36,7 @@ use rara_sessions::{
 };
 use tokio::sync::mpsc;
 use tracing::{info, instrument};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::stream::ChatStreamEvent;
 
@@ -429,6 +430,9 @@ impl ChatService {
         user_text: String,
         image_urls: Option<Vec<String>>,
     ) -> Result<ChatMessage, ChatError> {
+        let span = tracing::Span::current();
+        span.set_attribute("langfuse.session.id", key.to_string());
+
         let SessionData {
             mut session,
             history,
@@ -484,6 +488,9 @@ impl ChatService {
         user_text: String,
         image_urls: Option<Vec<String>>,
     ) -> Result<mpsc::Receiver<ChatStreamEvent>, ChatError> {
+        let span = tracing::Span::current();
+        span.set_attribute("langfuse.session.id", key.to_string());
+
         let SessionData {
             mut session,
             history,
