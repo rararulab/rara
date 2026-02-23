@@ -23,7 +23,7 @@ use super::{
 
 /// Default system prompt used when no custom prompt is configured.
 const SYSTEM_PROMPT_FILE: &str = "chat/default_system.md";
-const DEFAULT_SYSTEM_PROMPT: &str = include_str!("../../../../../../prompts/chat/default_system.md");
+const DEFAULT_SYSTEM_PROMPT: &str = include_str!("../../../../prompts/chat/default_system.md");
 
 /// Orchestrates agent creation and execution by assembling system prompts,
 /// constructing tool registries, and managing conversation context.

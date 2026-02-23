@@ -39,7 +39,7 @@ pub fn compose_policy(base_policy: &str, soul_prompt: Option<&str>) -> String {
 /// Load the agent behavioral policy from on-disk file or built-in default.
 pub async fn load_agent_policy(settings: &Settings) -> String {
     const DEFAULT_AGENT_POLICY: &str =
-        include_str!("../../../../../../prompts/workers/agent_policy.md");
+        include_str!("../../../../prompts/workers/agent_policy.md");
 
     let soul_prompt = resolve_soul_prompt(settings);
     let policy_path = rara_paths::agent_policy_file();
