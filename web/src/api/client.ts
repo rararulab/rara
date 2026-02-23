@@ -83,7 +83,7 @@ async function requestBlob(path: string, options?: RequestInit & { timeoutMs?: n
   }
 }
 
-import type { TypstProject, BrowseResult, JustRecipe, RunOutput, PipelineDiscoveredJob, PaginatedDiscoveredJobs, DiscoveredJobsStats } from './types';
+import type { PipelineDiscoveredJob, PaginatedDiscoveredJobs, DiscoveredJobsStats } from './types';
 
 export const api = {
   get: <T>(path: string) => request<T>(path),
@@ -95,39 +95,6 @@ export const api = {
     request<T>(path, { method: 'PATCH', body: body ? JSON.stringify(body) : undefined }),
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
   blob: (path: string) => requestBlob(path),
-
-  // -- System --
-
-  browseDirectory(path?: string): Promise<BrowseResult> {
-    const params = path ? `?path=${encodeURIComponent(path)}` : '';
-    return request<BrowseResult>(`/api/v1/system/browse${params}`);
-  },
-
-  // -- Typst --
-
-  importTypstFromGit(data: { url: string; name?: string; target_dir: string }): Promise<TypstProject> {
-    return request<TypstProject>('/api/v1/typst/projects/import-git', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  },
-
-  syncTypstGit(projectId: string): Promise<TypstProject> {
-    return request<TypstProject>(`/api/v1/typst/projects/${projectId}/git-sync`, {
-      method: 'POST',
-    });
-  },
-
-  listRecipes(projectId: string): Promise<JustRecipe[]> {
-    return request<JustRecipe[]>(`/api/v1/typst/projects/${projectId}/recipes`);
-  },
-
-  runProjectCommand(projectId: string, data: { recipe?: string; command?: string }): Promise<RunOutput> {
-    return request<RunOutput>(`/api/v1/typst/projects/${projectId}/run`, {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  },
 
   // -- Pipeline --
 

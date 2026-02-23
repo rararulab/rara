@@ -116,8 +116,8 @@ function useIsWide(): boolean {
 /** Routes that need zero padding in the main content area. */
 const FULL_BLEED_ROUTES = new Set(['/agent', '/jobs']);
 
-/** Routes that need full bleed when they match as a prefix (e.g. /typst/:id). */
-const FULL_BLEED_PREFIXES = ['/jobs/typst/'];
+/** Routes that need full bleed when they match as a prefix. */
+const FULL_BLEED_PREFIXES: string[] = [];
 
 export default function DashboardLayout() {
   const [collapsed, setCollapsed] = useLocalStorage('sidebar-collapsed', false);

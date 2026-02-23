@@ -113,6 +113,7 @@ pub fn routes(svc: SettingsSvc) -> OpenApiRouter {
             OpenApiRouter::new()
                 .routes(routes!(get_settings, update_settings))
                 .routes(routes!(list_prompts))
+                .routes(routes!(get_ssh_key))
                 .route(
                     "/settings/prompts/{*name}",
                     get(get_prompt_content).put(update_prompt_content),
@@ -338,6 +339,26 @@ pub struct GmailSettingsView {
     pub auto_send_enabled:   bool,
     pub address:             Option<String>,
     pub app_password_hint:   Option<String>,
+}
+
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub struct SshKeyResponse {
+    pub public_key: String,
+}
+
+#[utoipa::path(
+    get,
+    path = "/settings/ssh-key",
+    tag = "settings",
+    responses(
+        (status = 200, description = "SSH public key", body = SshKeyResponse),
+    )
+)]
+async fn get_ssh_key() -> Result<Json<SshKeyResponse>, (StatusCode, String)> {
+    let ssh_dir = rara_paths::data_dir().join("ssh");
+    let public_key = rara_git::get_public_key(&ssh_dir)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(SshKeyResponse { public_key }))
 }
 
 impl Into<RuntimeSettingsView> for Settings {

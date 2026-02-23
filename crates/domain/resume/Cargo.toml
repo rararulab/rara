@@ -13,20 +13,18 @@ description = "Resume version management and tailoring"
 
 [dependencies]
 async-trait.workspace = true
-axum = { workspace = true, features = ["multipart"] }
-bytes.workspace = true
+axum.workspace = true
 chrono.workspace = true
+git2.workspace = true
 jiff.workspace = true
-opendal.workspace = true
 rara-domain-shared = { workspace = true }
+rara-git = { workspace = true }
+rara-paths = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
-sha2 = "0.10"
 snafu.workspace = true
 sqlx = { workspace = true }
-strum.workspace = true
-strum_macros.workspace = true
-tracing.workspace = true
+tokio.workspace = true
 utoipa.workspace = true
 utoipa-axum.workspace = true
 uuid.workspace = true

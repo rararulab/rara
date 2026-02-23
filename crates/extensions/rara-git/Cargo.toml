@@ -1,0 +1,21 @@
+[package]
+name = "rara-git"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Git operations library — SSH key management, clone, worktree, commit, push"
+
+[lints]
+workspace = true
+
+[dependencies]
+git2 = { workspace = true }
+rand_core = { version = "0.6", features = ["getrandom"] }
+rara-paths = { workspace = true }
+snafu.workspace = true
+ssh-key = { version = "0.6", features = ["ed25519", "rand_core"] }
+tokio = { workspace = true }
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

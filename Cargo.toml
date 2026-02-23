@@ -59,7 +59,6 @@ members = [
     "crates/sessions",
     "crates/domain/chat",
     "crates/extensions/skill-admin",
-    "crates/domain/typst",
     "crates/memory",
     "crates/skills",
     "crates/integrations/mcp",
@@ -70,6 +69,7 @@ members = [
     "crates/integrations/composio",
     "crates/extensions/workspace",
     "crates/extensions/coding-task",
+    "crates/extensions/rara-git",
 ]
 
 [workspace.dependencies]
@@ -164,8 +164,8 @@ rara-domain-job = { path = "crates/domain/job" }
 rara-domain-resume = { path = "crates/domain/resume" }
 rara-domain-scheduler = { path = "crates/domain/scheduler" }
 rara-domain-shared = { path = "crates/domain/shared" }
-rara-domain-typst = { path = "crates/domain/typst" }
 rara-error = { path = "crates/common/error" }
+rara-git = { path = "crates/extensions/rara-git" }
 rara-ext-job-pipeline = { path = "crates/extensions/job-pipeline" }
 rara-keyring-store = { path = "crates/integrations/keyring-store" }
 rara-mcp = { path = "crates/integrations/mcp" }
