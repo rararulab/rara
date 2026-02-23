@@ -1,9 +1,7 @@
 //! Proactive agent -- reviews recent activity and takes autonomous actions.
 
-use crate::{
-    orchestrator::{context::to_chat_message, AgentOrchestrator, error::OrchestratorError},
-    runner::UserContent,
-};
+use agent_core::runner::UserContent;
+use crate::orchestrator::{context::to_chat_message, AgentOrchestrator, error::OrchestratorError};
 use rara_sessions::types::ChatMessage;
 
 use super::AgentOutput;
@@ -50,7 +48,7 @@ impl ProactiveAgent {
         let tools = self.orchestrator.tools().clone();
         let chat_history = history.iter().map(to_chat_message).collect();
 
-        let runner = crate::runner::AgentRunner::builder()
+        let runner = agent_core::runner::AgentRunner::builder()
             .llm_provider(self.orchestrator.llm_provider().clone())
             .model_name(model)
             .system_prompt(policy)

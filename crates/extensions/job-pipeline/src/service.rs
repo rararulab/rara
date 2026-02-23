@@ -27,8 +27,8 @@ use std::sync::{
 };
 
 use axum::http::StatusCode;
-use rara_agents::{
-    provider::LlmProviderLoaderRef,
+use agent_core::{
+    model::LlmProviderLoaderRef,
     runner::{AgentRunner, RunnerEvent, UserContent},
     tool_registry::ToolRegistry,
 };

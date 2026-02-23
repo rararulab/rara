@@ -2,14 +2,14 @@
 
 use std::sync::Arc;
 
-use crate::{
-    orchestrator::{
-        context::to_chat_message,
-        AgentOrchestrator,
-        error::OrchestratorError,
-    },
+use agent_core::{
     runner::{AgentRunner, UserContent},
     tool_registry::ToolRegistry,
+};
+use crate::orchestrator::{
+    context::to_chat_message,
+    AgentOrchestrator,
+    error::OrchestratorError,
 };
 use rara_sessions::types::ChatMessage;
 

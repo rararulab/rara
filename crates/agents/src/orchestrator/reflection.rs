@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use rara_memory::MemoryManager;
 
-use crate::{
+use agent_core::{
     model::LlmProviderLoaderRef,
     runner::{AgentRunner, UserContent},
     tool_registry::ToolRegistry,
