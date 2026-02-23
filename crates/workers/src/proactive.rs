@@ -18,10 +18,7 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use common_worker::{FallibleWorker, WorkError, WorkResult, WorkerContext};
-use rara_agents::{
-    orchestrator::context::to_chat_message,
-    runner::{AgentRunner, UserContent},
-};
+use rara_agents::builtin::proactive::ProactiveAgent;
 use rara_sessions::types::SessionKey;
 use tracing::{info, warn};
 
@@ -29,9 +26,6 @@ use crate::worker_state::AppState;
 
 /// Fixed session key for all proactive agent interactions.
 const PROACTIVE_SESSION_KEY: &str = "agent:proactive";
-
-/// Maximum number of agent loop iterations per proactive run.
-const PROACTIVE_MAX_ITERATIONS: usize = 15;
 
 /// Maximum number of historical messages loaded for context.
 const PROACTIVE_HISTORY_LIMIT: i64 = 50;
@@ -65,10 +59,7 @@ impl FallibleWorker<AppState> for ProactiveAgentWorker {
             return Ok(());
         }
 
-        // 2. Load agent behavior policy
-        let policy = state.orchestrator.build_worker_policy().await;
-
-        // 3. Ensure proactive session exists and load history
+        // 2. Ensure proactive session exists and load history
         let session_key = SessionKey::from_raw(PROACTIVE_SESSION_KEY);
         let _ = state
             .chat_service
@@ -80,51 +71,23 @@ impl FallibleWorker<AppState> for ProactiveAgentWorker {
             .await
             .unwrap_or_default();
 
-        // 4. Build user prompt with activity summary
-        let user_prompt = format!(
-            "以下是最近24小时的用户活动摘要：\n\n{}\n\n根据你的行为策略，\
-             决定是否需要主动联系用户。\n你可以使用工具查询更多信息、发送通知、或安排后续任务。\\
-             n如果没有值得做的事情，直接回复 DONE。",
-            activity_summary
-        );
-
-        // 5. Resolve model
-        let model = settings
-            .ai
-            .model_for(rara_domain_shared::settings::model::ModelScenario::Chat)
-            .to_owned();
-
-        // 6. Convert history to async-openai message format
-        let chat_history: Vec<_> = history.iter().map(to_chat_message).collect();
-
-        // 7. Build and run multi-turn AgentRunner with full tools
-        let tools = state.orchestrator.tools().clone();
-
-        let runner = AgentRunner::builder()
-            .llm_provider(state.orchestrator.llm_provider().clone())
-            .model_name(model)
-            .system_prompt(policy)
-            .user_content(UserContent::Text(user_prompt.clone()))
-            .history(chat_history)
-            .max_iterations(PROACTIVE_MAX_ITERATIONS)
-            .build();
-
-        let result = runner
-            .run(&tools, None)
+        // 3. Delegate to ProactiveAgent
+        let agent = ProactiveAgent::new(state.orchestrator.clone());
+        let output = agent
+            .run(&activity_summary, &history)
             .await
             .map_err(|e| WorkError::transient(format!("agent run failed: {e}")))?;
 
-        // 8. Extract assistant response
-        let response_text = result
-            .provider_response
-            .choices
-            .first()
-            .and_then(|c| c.message.content.as_deref())
-            .unwrap_or("")
-            .trim()
-            .to_owned();
+        let response_text = output.response_text;
 
-        // 9. Persist conversation turns to the proactive session
+        // 4. Persist conversation turns to the proactive session
+        //    Reconstruct the user prompt for persistence (mirrors ProactiveAgent).
+        let user_prompt = format!(
+            "以下是最近24小时的用户活动摘要：\n\n{}\n\n根据你的行为策略，\
+             决定是否需要主动联系用户。\n你可以使用工具查询更多信息、发送通知、或安排后续任务。\
+             \n如果没有值得做的事情，直接回复 DONE。",
+            activity_summary
+        );
         state
             .chat_service
             .append_message_raw(
@@ -142,13 +105,13 @@ impl FallibleWorker<AppState> for ProactiveAgentWorker {
             .await
             .ok();
 
-        // 10. Log outcome
+        // 5. Log outcome
         if response_text == "DONE" || response_text == "SKIP" || response_text.is_empty() {
             info!("proactive agent: nothing to report");
         } else {
             info!(
-                iterations = result.iterations,
-                tool_calls = result.tool_calls_made,
+                iterations = output.iterations,
+                tool_calls = output.tool_calls_made,
                 response_len = response_text.len(),
                 "proactive agent completed: {}",
                 &response_text[..response_text.len().min(200)]

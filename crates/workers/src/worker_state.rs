@@ -329,10 +329,11 @@ impl AppState {
             settings_svc.subscribe(),
         );
 
+        let chat_agent = rara_agents::builtin::chat::ChatAgent::new(orchestrator.clone());
         let chat_service = rara_domain_chat::service::ChatService::new(
             session_repo,
             settings_svc.clone(),
-            orchestrator.clone(),
+            chat_agent,
         );
         info!("Chat service initialized");
 

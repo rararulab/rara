@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use rara_agents::{
-    orchestrator::AgentOrchestrator,
+    builtin::chat::ChatAgent,
     runner::UserContent,
     tool_registry::ToolRegistry,
 };
@@ -67,39 +67,41 @@ pub struct ChatService {
     model_catalog: ModelCatalog,
     /// Settings service for persisting favorite models.
     settings_svc:  rara_domain_shared::settings::SettingsSvc,
-    /// Agent orchestrator — assembles prompts, tools, and runners.
-    orchestrator:  AgentOrchestrator,
+    /// Built-in chat agent — encapsulates prompt assembly, tool construction,
+    /// context compaction, and memory reflection.
+    chat_agent:    ChatAgent,
 }
 
 impl ChatService {
     /// Create a new chat service with the given dependencies.
     ///
-    /// The `orchestrator` handles LLM provider access, tool management,
-    /// prompt assembly, and memory reflection. The `settings_svc` is used
-    /// for persisting user preferences such as favorite models.
+    /// The `chat_agent` encapsulates the orchestrator and handles LLM
+    /// provider access, tool management, prompt assembly, and memory
+    /// reflection. The `settings_svc` is used for persisting user
+    /// preferences such as favorite models.
     #[must_use]
     pub fn new(
         session_repo: Arc<dyn SessionRepository>,
         settings_svc: rara_domain_shared::settings::SettingsSvc,
-        orchestrator: AgentOrchestrator,
+        chat_agent: ChatAgent,
     ) -> Self {
         Self {
             session_repo,
             model_catalog: ModelCatalog::new(),
             settings_svc,
-            orchestrator,
+            chat_agent,
         }
     }
 
     /// Read the current default model from runtime settings.
     fn current_default_model(&self) -> String {
-        self.orchestrator.current_default_model()
+        self.chat_agent.orchestrator().current_default_model()
     }
 
     /// Read the current system prompt from runtime settings, falling back
     /// to a built-in default when no custom prompt is configured.
     fn current_system_prompt(&self) -> String {
-        self.orchestrator.current_system_prompt()
+        self.chat_agent.orchestrator().current_system_prompt()
     }
 
     // -- model catalog ------------------------------------------------------
@@ -107,7 +109,7 @@ impl ChatService {
     /// List available models, dynamically fetching from OpenRouter when an
     /// API key is configured. Favorites are marked and sorted to the top.
     pub async fn list_models(&self) -> Vec<ChatModel> {
-        let settings = self.orchestrator.settings();
+        let settings = self.chat_agent.orchestrator().settings();
         let api_key = settings.ai.openrouter_api_key.as_deref();
         let favorites = &settings.ai.favorite_models;
         self.model_catalog.list_models(api_key, favorites).await
@@ -308,17 +310,22 @@ impl ChatService {
     }
 
     /// Return a reference to the tools registry shared by this service.
-    pub fn tools(&self) -> &Arc<ToolRegistry> { self.orchestrator.tools() }
+    pub fn tools(&self) -> &Arc<ToolRegistry> { self.chat_agent.orchestrator().tools() }
 
     // -- send message (LLM) -------------------------------------------------
 
-    /// Common setup for `send_message` and `send_message_streaming`.
-    async fn prepare_agent_run(
+    /// Common session-level setup for `send_message` and
+    /// `send_message_streaming`.
+    ///
+    /// Handles: session creation, history retrieval, user message persistence,
+    /// model resolution, and context length lookup. Returns the data needed
+    /// by the [`ChatAgent`] to run.
+    async fn prepare_session_data(
         &self,
         key: &SessionKey,
         user_text: &str,
         image_urls: &Option<Vec<String>>,
-    ) -> Result<AgentRunSetup, ChatError> {
+    ) -> Result<SessionData, ChatError> {
         if user_text.trim().is_empty() {
             return Err(ChatError::InvalidRequest {
                 message: "message text cannot be empty".to_owned(),
@@ -334,7 +341,7 @@ impl ChatService {
         // 2. Read existing history
         let history = self.session_repo.read_messages(key, None, None).await?;
 
-        // 3. Persist user message — multimodal if images are present
+        // 3. Persist user message -- multimodal if images are present
         let has_images = image_urls.as_ref().is_some_and(|urls| !urls.is_empty());
         let user_msg = if has_images {
             let urls = image_urls.as_ref().unwrap();
@@ -357,43 +364,23 @@ impl ChatService {
         };
         self.session_repo.append_message(key, &user_msg).await?;
 
-        // 4. Resolve model
+        // 4. Resolve model and context length
         let model = session
             .model
             .clone()
             .unwrap_or_else(|| self.current_default_model());
-
-        // 4a. Check if context compaction is needed
-        let model_context = self
+        let context_length = self
             .model_catalog
             .get_context_length(&model)
             .unwrap_or(128_000) as usize;
 
-        let history = if self.orchestrator.needs_compaction(&history, model_context) {
-            self.compact_history(key, &history, &model).await?
-        } else {
-            history
-        };
-
-        // 4b. Convert history to async-openai message format
-        let chat_history = history
-            .iter()
-            .map(to_chat_message)
-            .collect::<Vec<_>>();
-
-        // 5. Build system prompt (includes soul, memory profile, memory search, skills)
+        // 5. Resolve base system prompt
         let base_system_prompt = session
             .system_prompt
             .clone()
             .unwrap_or_else(|| self.current_system_prompt());
-        let system_prompt = self
-            .orchestrator
-            .build_chat_system_prompt(&base_system_prompt, user_text, history.len())
-            .await;
 
-        // 6. Build effective tool registry (includes dynamic MCP tools)
-        let effective_tools = self.orchestrator.build_effective_tools().await;
-
+        // 6. Build UserContent
         let user_content = if has_images {
             let urls = image_urls.as_ref().unwrap();
             UserContent::Multimodal {
@@ -404,15 +391,13 @@ impl ChatService {
             UserContent::Text(user_text.to_owned())
         };
 
-        // 7. Build the agent runner
-        let runner = self
-            .orchestrator
-            .build_runner(model, system_prompt, user_content, chat_history);
-
-        Ok(AgentRunSetup {
-            runner,
-            effective_tools,
+        Ok(SessionData {
             session,
+            history,
+            model,
+            context_length,
+            base_system_prompt,
+            user_content,
         })
     }
 
@@ -424,37 +409,32 @@ impl ChatService {
         user_text: String,
         image_urls: Option<Vec<String>>,
     ) -> Result<ChatMessage, ChatError> {
-        let AgentRunSetup {
-            runner,
-            effective_tools,
+        let SessionData {
             mut session,
-        } = self.prepare_agent_run(key, &user_text, &image_urls).await?;
+            history,
+            model,
+            context_length,
+            base_system_prompt,
+            user_content,
+        } = self.prepare_session_data(key, &user_text, &image_urls).await?;
 
-        let result =
-            runner
-                .run(&effective_tools, None)
-                .await
-                .map_err(|e| ChatError::AgentError {
-                    message: e.to_string(),
-                })?;
+        // Delegate agent execution to ChatAgent.
+        let output = self
+            .chat_agent
+            .run(&base_system_prompt, user_content, &history, &model, context_length)
+            .await
+            .map_err(|e| ChatError::AgentError {
+                message: e.to_string(),
+            })?;
 
-        // 6. Extract assistant text from response
-        let assistant_text = result
-            .provider_response
-            .choices
-            .first()
-            .and_then(|choice| choice.message.content.as_deref())
-            .unwrap_or_default()
-            .to_owned();
-
-        // 7. Persist assistant response
-        let assistant_msg = ChatMessage::assistant(&assistant_text);
+        // Persist assistant response
+        let assistant_msg = ChatMessage::assistant(&output.response_text);
         let persisted = self
             .session_repo
             .append_message(key, &assistant_msg)
             .await?;
 
-        // 8. Update session metadata
+        // Update session metadata
         session.message_count += 2; // user + assistant
         if session.preview.is_none() {
             session.preview = Some(truncate_preview(&user_text, 100));
@@ -463,14 +443,10 @@ impl ChatService {
 
         info!(
             key = %key,
-            iterations = result.iterations,
-            tool_calls = result.tool_calls_made,
+            iterations = output.iterations,
+            tool_calls = output.tool_calls_made,
             "message exchange complete"
         );
-
-        // Fire-and-forget: reflect on what was learned and update memory.
-        self.orchestrator
-            .spawn_memory_reflection(&user_text, &assistant_text);
 
         Ok(persisted)
     }
@@ -483,14 +459,32 @@ impl ChatService {
         user_text: String,
         image_urls: Option<Vec<String>>,
     ) -> Result<mpsc::Receiver<ChatStreamEvent>, ChatError> {
-        let AgentRunSetup {
-            runner,
-            effective_tools,
+        let SessionData {
             mut session,
-        } = self.prepare_agent_run(key, &user_text, &image_urls).await?;
+            history,
+            model,
+            context_length,
+            base_system_prompt,
+            user_content,
+        } = self.prepare_session_data(key, &user_text, &image_urls).await?;
+
+        // Delegate streaming setup to ChatAgent.
+        let stream_setup = self
+            .chat_agent
+            .prepare_streaming(
+                &base_system_prompt,
+                user_content,
+                &history,
+                &model,
+                context_length,
+            )
+            .await
+            .map_err(|e| ChatError::AgentError {
+                message: e.to_string(),
+            })?;
 
         // Start the streaming agent loop.
-        let mut runner_rx = runner.run_streaming(effective_tools);
+        let mut runner_rx = stream_setup.runner.run_streaming(stream_setup.effective_tools);
 
         // Channel for ChatStreamEvents sent to the SSE handler.
         let (tx, rx) = mpsc::channel::<ChatStreamEvent>(128);
@@ -499,7 +493,7 @@ impl ChatService {
         // handles persistence on completion.
         let session_repo = Arc::clone(&self.session_repo);
         let session_key = key.clone();
-        let orchestrator = self.orchestrator.clone();
+        let orchestrator = stream_setup.orchestrator;
 
         tokio::spawn(async move {
             while let Some(runner_event) = runner_rx.recv().await {
@@ -686,51 +680,6 @@ impl ChatService {
         Ok(())
     }
 
-    // -- context compaction --------------------------------------------------
-
-    /// Summarize the conversation history via LLM and replace it with a
-    /// single `[Conversation Summary]` message.
-    async fn compact_history(
-        &self,
-        session_key: &SessionKey,
-        history: &[ChatMessage],
-        model: &str,
-    ) -> Result<Vec<ChatMessage>, ChatError> {
-        info!(
-            session = %session_key,
-            original_messages = history.len(),
-            "compacting conversation context"
-        );
-
-        let summary_msg = self
-            .orchestrator
-            .summarize_history(history, model)
-            .await
-            .map_err(|e| ChatError::AgentError {
-                message: e.to_string(),
-            })?;
-
-        // Replace old messages: clear, then insert the summary
-        self.session_repo
-            .clear_messages(session_key)
-            .await
-            .map_err(|e| ChatError::SessionError {
-                message: format!("failed to clear messages during compaction: {e}"),
-            })?;
-        self.session_repo
-            .append_message(session_key, &summary_msg)
-            .await
-            .map_err(|e| ChatError::SessionError {
-                message: format!("failed to append summary during compaction: {e}"),
-            })?;
-
-        info!(
-            session = %session_key,
-            "context compacted successfully"
-        );
-
-        Ok(vec![summary_msg])
-    }
 }
 
 impl std::fmt::Debug for ChatService {
@@ -745,12 +694,15 @@ impl std::fmt::Debug for ChatService {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Bundle returned by [`ChatService::prepare_agent_run`] containing
-/// everything needed to execute the agent loop (sync or streaming).
-struct AgentRunSetup {
-    runner:          rara_agents::runner::AgentRunner,
-    effective_tools: Arc<ToolRegistry>,
-    session:         SessionEntry,
+/// Bundle returned by [`ChatService::prepare_session_data`] containing
+/// session-level data needed by the [`ChatAgent`].
+struct SessionData {
+    session:           SessionEntry,
+    history:           Vec<ChatMessage>,
+    model:             String,
+    context_length:    usize,
+    base_system_prompt: String,
+    user_content:      UserContent,
 }
 
 /// Truncate a string to at most `max_len` characters.

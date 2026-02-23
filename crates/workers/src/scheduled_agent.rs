@@ -19,10 +19,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use common_worker::{FallibleWorker, WorkResult, WorkerContext};
-use rara_agents::{
-    orchestrator::context::to_chat_message,
-    runner::{AgentRunner, UserContent},
-};
+use rara_agents::builtin::scheduled::ScheduledAgent;
 use rara_sessions::types::SessionKey;
 use tracing::{info, warn};
 
@@ -60,11 +57,7 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
             "agent-scheduler: executing due jobs"
         );
 
-        let policy = state.orchestrator.build_worker_policy().await;
-        let model = settings
-            .ai
-            .model_for(rara_domain_shared::settings::model::ModelScenario::Chat)
-            .to_owned();
+        let agent = ScheduledAgent::new(state.orchestrator.clone());
 
         for job in &due_jobs {
             info!(
@@ -80,10 +73,7 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
                 .get_messages(&session_key, None, Some(50))
                 .await
             {
-                Ok(msgs) => {
-                    let hist: Vec<_> = msgs.iter().map(to_chat_message).collect();
-                    Some(hist)
-                }
+                Ok(msgs) => Some(msgs),
                 Err(e) => {
                     warn!(
                         session = %session_key,
@@ -94,39 +84,21 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
                 }
             };
 
-            // Build and run the agent.
-            let runner = AgentRunner::builder()
-                .llm_provider(state.orchestrator.llm_provider().clone())
-                .model_name(model.clone())
-                .system_prompt(policy.clone())
-                .user_content(UserContent::Text(job.message.clone()))
-                .maybe_history(history)
-                .max_iterations(15_usize)
-                .build();
-
-            let tools = state.orchestrator.tools();
-            match runner.run(tools, None).await {
-                Ok(result) => {
-                    let response_text = result
-                        .provider_response
-                        .choices
-                        .first()
-                        .and_then(|c| c.message.content.as_deref())
-                        .unwrap_or_default()
-                        .to_owned();
-
+            // Delegate to ScheduledAgent.
+            match agent.run(&job.message, history.as_deref()).await {
+                Ok(output) => {
                     info!(
                         job_id = %job.id,
-                        iterations = result.iterations,
-                        tool_calls = result.tool_calls_made,
-                        response_len = response_text.len(),
+                        iterations = output.iterations,
+                        tool_calls = output.tool_calls_made,
+                        response_len = output.response_text.len(),
                         "agent-scheduler: job completed"
                     );
 
                     // Append user + assistant messages to session.
                     if let Err(e) = state
                         .chat_service
-                        .append_messages(&session_key, &job.message, &response_text)
+                        .append_messages(&session_key, &job.message, &output.response_text)
                         .await
                     {
                         warn!(
