@@ -1,3 +1,31 @@
+//! Agent definition types and markdown parser.
+//!
+//! An agent definition is a markdown file with YAML frontmatter that describes
+//! a specialized sub-agent: its name, LLM model, available tools, iteration
+//! limit, and system prompt. The format mirrors the skills system.
+//!
+//! # File Format
+//!
+//! ```markdown
+//! ---
+//! name: scout                          # required, unique identifier
+//! description: "Fast codebase recon"   # optional, shown in tool schema
+//! model: "deepseek/deepseek-chat"      # optional, falls back to default
+//! tools:                               # optional, empty = all parent tools
+//!   - read_file
+//!   - grep
+//! max_iterations: 15                   # optional, default 15
+//! ---
+//!
+//! System prompt body goes here (markdown).
+//! ```
+//!
+//! # Loading
+//!
+//! Definitions are loaded from two directories (user overrides bundled):
+//! 1. Bundled: `<project_root>/agents/` — shipped with the binary
+//! 2. User: `<data_dir>/agents/` — user-defined, can override bundled by name
+
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -6,7 +34,8 @@ use tracing::warn;
 
 use crate::err::prelude::*;
 
-/// YAML frontmatter from an agent definition markdown file.
+/// Internal deserialization target for the YAML frontmatter section.
+/// All fields except `name` are optional with serde defaults.
 #[derive(Debug, Clone, Deserialize)]
 struct AgentFrontmatter {
     name:           String,
@@ -20,19 +49,50 @@ struct AgentFrontmatter {
     max_iterations: Option<usize>,
 }
 
-/// A parsed agent definition: frontmatter metadata + system prompt body.
+/// A fully parsed agent definition, combining frontmatter metadata with the
+/// markdown body as the system prompt.
+///
+/// Created by [`AgentDefinition::parse`] from raw markdown content, or loaded
+/// in bulk via [`AgentDefinitionRegistry::load_dir`].
 #[derive(Debug, Clone)]
 pub struct AgentDefinition {
+    /// Unique identifier for this agent (e.g. "scout", "planner", "worker").
+    /// Used as the lookup key in [`AgentDefinitionRegistry`] and as the
+    /// `agent` field in [`SubagentParams`](super::tool::SubagentParams).
     pub name:           String,
+    /// Human-readable description shown in the SubagentTool's JSON schema,
+    /// helping the LLM understand what this agent specializes in.
     pub description:    String,
+    /// LLM model to use for this agent (e.g. "deepseek/deepseek-chat").
+    /// When `None`, the executor falls back to the default model configured
+    /// in settings (typically the Chat scenario model).
     pub model:          Option<String>,
+    /// Tool whitelist — only these tools are available to the sub-agent.
+    /// When empty, all parent tools are inherited (minus "subagent" itself).
+    /// Tool names must match those registered in the parent [`ToolRegistry`].
     pub tools:          Vec<String>,
+    /// Maximum LLM round-trips before the sub-agent gives up.
+    /// When `None`, defaults to 15 in the executor.
     pub max_iterations: Option<usize>,
+    /// The markdown body below the frontmatter, used as the sub-agent's
+    /// system prompt. This defines the agent's persona, output format,
+    /// and behavioral guidelines.
     pub system_prompt:  String,
 }
 
 impl AgentDefinition {
-    /// Parse a markdown string with YAML frontmatter into an AgentDefinition.
+    /// Parse a markdown string with YAML frontmatter into an [`AgentDefinition`].
+    ///
+    /// The content must start with `---`, followed by valid YAML, then a
+    /// closing `---` line. Everything after the closing delimiter becomes
+    /// the `system_prompt`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The content doesn't start with `---` (missing frontmatter)
+    /// - No closing `---` delimiter is found
+    /// - The YAML frontmatter is malformed or missing required `name` field
     pub fn parse(content: &str) -> Result<Self> {
         let (frontmatter, body) = split_frontmatter(content)?;
         let meta: AgentFrontmatter =
@@ -50,7 +110,16 @@ impl AgentDefinition {
     }
 }
 
-/// Registry holding named agent definitions.
+/// In-memory registry of named agent definitions.
+///
+/// Holds all loaded [`AgentDefinition`]s keyed by name. Definitions are
+/// registered at startup from the `agents/` directory and queried at runtime
+/// by the [`SubagentTool`](super::tool::SubagentTool) when the LLM requests
+/// a sub-agent by name.
+///
+/// Registering a definition with a name that already exists will silently
+/// overwrite the previous one. This allows user-defined agents to override
+/// bundled ones.
 #[derive(Debug, Clone, Default)]
 pub struct AgentDefinitionRegistry {
     defs: HashMap<String, AgentDefinition>,
@@ -61,19 +130,25 @@ impl AgentDefinitionRegistry {
         Self::default()
     }
 
+    /// Register (or replace) an agent definition.
     pub fn register(&mut self, def: AgentDefinition) {
         self.defs.insert(def.name.clone(), def);
     }
 
+    /// Look up an agent definition by name.
     pub fn get(&self, name: &str) -> Option<&AgentDefinition> {
         self.defs.get(name)
     }
 
+    /// Return all registered definitions (unordered).
     pub fn list(&self) -> Vec<&AgentDefinition> {
         self.defs.values().collect()
     }
 
-    /// Load all `.md` files from a directory as agent definitions.
+    /// Scan a directory for `.md` files and parse each as an agent definition.
+    ///
+    /// Non-existent directories are silently ignored (returns empty registry).
+    /// Individual files that fail to parse are logged as warnings and skipped.
     pub fn load_dir(dir: &Path) -> Result<Self> {
         let mut registry = Self::new();
         if !dir.is_dir() {
@@ -108,7 +183,10 @@ impl AgentDefinitionRegistry {
     }
 }
 
-/// Split markdown content at `---` delimiters into (frontmatter, body).
+/// Split markdown content at `---` delimiters into `(frontmatter_yaml, body)`.
+///
+/// Expects the content to start with `---` (after optional leading whitespace),
+/// followed by YAML content, then a line containing only `---`, then the body.
 fn split_frontmatter(content: &str) -> Result<(String, String)> {
     let trimmed = content.trim_start();
     if !trimmed.starts_with("---") {
