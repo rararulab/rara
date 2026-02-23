@@ -17,305 +17,195 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
-import type { Resume } from "@/api/types";
+import type { ResumeProject, SshKeyResponse } from "@/api/types";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "@/components/ui/dialog";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-
-interface ResumeForm {
-  title: string;
-  target_role: string;
-  content: string;
-}
-
-const emptyForm: ResumeForm = { title: "", target_role: "", content: "" };
+import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
+import { GitBranch, Copy, RefreshCw, Trash2, Check } from "lucide-react";
 
 export default function Resumes() {
   const queryClient = useQueryClient();
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingResume, setEditingResume] = useState<Resume | null>(null);
-  const [form, setForm] = useState<ResumeForm>(emptyForm);
-  const [deleteTarget, setDeleteTarget] = useState<Resume | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [name, setName] = useState("");
+  const [gitUrl, setGitUrl] = useState("");
 
-  const { data: resumes, isLoading } = useQuery({
-    queryKey: ["resumes"],
-    queryFn: () => api.get<Resume[]>("/api/v1/resumes"),
+  const { data: sshKey, isLoading: sshLoading } = useQuery({
+    queryKey: ["ssh-key"],
+    queryFn: () => api.get<SshKeyResponse>("/api/v1/settings/ssh-key"),
   });
 
-  const createMutation = useMutation({
-    mutationFn: (data: Partial<ResumeForm>) =>
-      api.post<Resume>("/api/v1/resumes", {
-        title: data.title,
-        target_role: data.target_role || null,
-        content: data.content || null,
-      }),
+  const { data: project, isLoading: projectLoading } = useQuery({
+    queryKey: ["resume-project"],
+    queryFn: () => api.get<ResumeProject | null>("/api/v1/resume-project"),
+  });
+
+  const setupMutation = useMutation({
+    mutationFn: (data: { name: string; git_url: string }) =>
+      api.post<ResumeProject>("/api/v1/resume-project", data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["resumes"] });
-      closeDialog();
+      queryClient.invalidateQueries({ queryKey: ["resume-project"] });
+      setName("");
+      setGitUrl("");
     },
   });
 
-  const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<ResumeForm> }) =>
-      api.put<Resume>(`/api/v1/resumes/${id}`, {
-        title: data.title || undefined,
-        target_role: data.target_role || null,
-        content: data.content || null,
-      }),
+  const syncMutation = useMutation({
+    mutationFn: () => api.post<ResumeProject>("/api/v1/resume-project/sync"),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["resumes"] });
-      closeDialog();
+      queryClient.invalidateQueries({ queryKey: ["resume-project"] });
     },
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => api.del(`/api/v1/resumes/${id}`),
+    mutationFn: () => api.del("/api/v1/resume-project"),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["resumes"] });
-      setDeleteTarget(null);
+      queryClient.invalidateQueries({ queryKey: ["resume-project"] });
     },
   });
 
-  function openCreate() {
-    setEditingResume(null);
-    setForm(emptyForm);
-    setDialogOpen(true);
-  }
-
-  function openEdit(resume: Resume) {
-    setEditingResume(resume);
-    setForm({
-      title: resume.title,
-      target_role: resume.target_role ?? "",
-      content: resume.content ?? "",
-    });
-    setDialogOpen(true);
-  }
-
-  function closeDialog() {
-    setDialogOpen(false);
-    setEditingResume(null);
-    setForm(emptyForm);
-  }
-
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!form.title.trim()) return;
-    if (editingResume) {
-      updateMutation.mutate({ id: editingResume.id, data: form });
-    } else {
-      createMutation.mutate(form);
+  const copyKey = async () => {
+    if (sshKey?.public_key) {
+      await navigator.clipboard.writeText(sshKey.public_key);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     }
-  }
+  };
 
-  const isSaving = createMutation.isPending || updateMutation.isPending;
+  const isLoading = sshLoading || projectLoading;
 
-  function formatDate(dateStr: string) {
-    return new Date(dateStr).toLocaleDateString(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
+  if (isLoading) {
+    return (
+      <div className="space-y-4 p-6">
+        <Skeleton className="h-8 w-48" />
+        <Skeleton className="h-32 w-full" />
+      </div>
+    );
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Resumes</h1>
-          <p className="text-muted-foreground mt-1">
-            Manage and optimize your resumes.
-          </p>
-        </div>
-        <Button onClick={openCreate}>New Resume</Button>
-      </div>
+    <div className="space-y-6 p-6">
+      <h2 className="text-2xl font-bold">Resume Project</h2>
 
-      {isLoading ? (
-        <div className="space-y-3">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-14 w-full" />
-          ))}
-        </div>
-      ) : !resumes || resumes.length === 0 ? (
-        <div className="rounded-lg border border-dashed p-8 text-center">
-          <p className="text-muted-foreground">
-            No resumes yet. Create your first resume to get started.
-          </p>
-        </div>
-      ) : (
-        <div className="rounded-lg border">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b bg-muted/50">
-                <th className="px-4 py-3 text-left text-sm font-medium">
-                  Title
-                </th>
-                <th className="px-4 py-3 text-left text-sm font-medium">
-                  Target Role
-                </th>
-                <th className="px-4 py-3 text-left text-sm font-medium">
-                  Version
-                </th>
-                <th className="px-4 py-3 text-left text-sm font-medium">
-                  Last Updated
-                </th>
-                <th className="px-4 py-3 text-right text-sm font-medium">
-                  Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {resumes.map((resume) => (
-                <tr key={resume.id} className="border-b last:border-b-0">
-                  <td className="px-4 py-3 text-sm font-medium">
-                    {resume.title}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground">
-                    {resume.target_role ?? "-"}
-                  </td>
-                  <td className="px-4 py-3 text-sm">
-                    <Badge variant="secondary">v{resume.version}</Badge>
-                  </td>
-                  <td className="px-4 py-3 text-sm text-muted-foreground">
-                    {formatDate(resume.updated_at)}
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="flex items-center justify-end gap-2">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => openEdit(resume)}
-                      >
-                        Edit
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-destructive"
-                        onClick={() => setDeleteTarget(resume)}
-                      >
-                        Delete
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {/* SSH Key Section */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">SSH Key</CardTitle>
+          <CardDescription>
+            Add this public key to your GitHub account (Settings → SSH Keys) to allow cloning.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 rounded bg-muted p-3 text-xs font-mono break-all">
+              {sshKey?.public_key || "Loading..."}
+            </code>
+            <Button variant="outline" size="icon" onClick={copyKey}>
+              {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
-      {/* Create / Edit Dialog */}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {editingResume ? "Edit Resume" : "New Resume"}
-            </DialogTitle>
-            <DialogDescription>
-              {editingResume
-                ? "Update your resume details below."
-                : "Fill in the details to create a new resume."}
-            </DialogDescription>
-          </DialogHeader>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="title">Title *</Label>
-              <Input
-                id="title"
-                value={form.title}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, title: e.target.value }))
-                }
-                placeholder="e.g. Senior Frontend Engineer Resume"
-                required
-              />
+      {/* Project Config */}
+      {project ? (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <GitBranch className="h-5 w-5" />
+                {project.name}
+              </CardTitle>
+              <Badge variant="secondary">Connected</Badge>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="target_role">Target Role</Label>
-              <Input
-                id="target_role"
-                value={form.target_role}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, target_role: e.target.value }))
-                }
-                placeholder="e.g. Frontend Engineer"
-              />
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-2 text-sm">
+              <div>
+                <span className="text-muted-foreground">Repository:</span>{" "}
+                <code className="text-xs">{project.git_url}</code>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Local Path:</span>{" "}
+                <code className="text-xs">{project.local_path}</code>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Last Synced:</span>{" "}
+                {project.last_synced_at
+                  ? new Date(project.last_synced_at).toLocaleString()
+                  : "Never"}
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="content">Content</Label>
-              <Textarea
-                id="content"
-                value={form.content}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, content: e.target.value }))
-                }
-                placeholder="Paste or write your resume content..."
-                rows={8}
-              />
-            </div>
-            <DialogFooter>
+            <div className="flex gap-2">
               <Button
-                type="button"
                 variant="outline"
-                onClick={closeDialog}
+                size="sm"
+                onClick={() => syncMutation.mutate()}
+                disabled={syncMutation.isPending}
               >
-                Cancel
+                <RefreshCw className={`h-4 w-4 mr-1 ${syncMutation.isPending ? "animate-spin" : ""}`} />
+                Sync
               </Button>
-              <Button type="submit" disabled={isSaving || !form.title.trim()}>
-                {isSaving
-                  ? "Saving..."
-                  : editingResume
-                    ? "Update"
-                    : "Create"}
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => {
+                  if (confirm("Remove this resume project? Local files will be deleted.")) {
+                    deleteMutation.mutate();
+                  }
+                }}
+                disabled={deleteMutation.isPending}
+              >
+                <Trash2 className="h-4 w-4 mr-1" />
+                Remove
               </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* Delete Confirmation Dialog */}
-      <Dialog
-        open={deleteTarget !== null}
-        onOpenChange={(open) => {
-          if (!open) setDeleteTarget(null);
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete Resume</DialogTitle>
-            <DialogDescription>
-              Are you sure you want to delete "{deleteTarget?.title}"? This
-              action cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteTarget(null)}>
-              Cancel
-            </Button>
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">Setup Resume Project</CardTitle>
+            <CardDescription>
+              Connect your GitHub resume repository (Typst project).
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="name">Project Name</Label>
+              <Input
+                id="name"
+                placeholder="My Resume"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="git-url">Git SSH URL</Label>
+              <Input
+                id="git-url"
+                placeholder="git@github.com:user/resume.git"
+                value={gitUrl}
+                onChange={(e) => setGitUrl(e.target.value)}
+              />
+            </div>
             <Button
-              variant="destructive"
-              disabled={deleteMutation.isPending}
-              onClick={() => {
-                if (deleteTarget) deleteMutation.mutate(deleteTarget.id);
-              }}
+              onClick={() => setupMutation.mutate({ name, git_url: gitUrl })}
+              disabled={!name || !gitUrl || setupMutation.isPending}
             >
-              {deleteMutation.isPending ? "Deleting..." : "Delete"}
+              <GitBranch className="h-4 w-4 mr-1" />
+              {setupMutation.isPending ? "Cloning..." : "Clone & Setup"}
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            {setupMutation.isError && (
+              <p className="text-sm text-destructive">
+                {(setupMutation.error as Error).message}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

@@ -104,15 +104,19 @@ export const APPLICATION_STATUSES = [
 
 export type ApplicationStatus = (typeof APPLICATION_STATUSES)[number];
 
-// Resumes
-export interface Resume {
+// Resume Project
+export interface ResumeProject {
   id: string;
-  title: string;
-  target_role: string | null;
-  content: string | null;
-  version: number;
+  name: string;
+  git_url: string;
+  local_path: string;
+  last_synced_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface SshKeyResponse {
+  public_key: string;
 }
 
 // Interviews
@@ -285,62 +289,6 @@ export interface ChatModel {
   is_favorite: boolean;
 }
 
-// Typst
-export interface TypstProject {
-  id: string;
-  name: string;
-  local_path: string;
-  main_file: string;
-  git_url: string | null;
-  git_last_synced_at: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface FileEntry {
-  path: string;
-  is_dir: boolean;
-  children?: FileEntry[];
-}
-
-export interface FileContent {
-  path: string;
-  content: string;
-}
-
-export interface RenderResult {
-  id: string;
-  project_id: string;
-  pdf_object_key: string;
-  source_hash: string;
-  page_count: number;
-  file_size: number;
-  created_at: string;
-}
-
-export interface JustRecipe {
-  name: string;
-  description: string | null;
-}
-
-export interface RunOutput {
-  exit_code: number;
-  stdout: string;
-  stderr: string;
-}
-
-// System / Directory Browser
-export interface BrowseResult {
-  current_path: string;
-  parent_path: string | null;
-  entries: BrowseDirEntry[];
-}
-
-export interface BrowseDirEntry {
-  name: string;
-  path: string;
-  has_typ_files: boolean;
-}
 
 // Chat Sessions
 export interface ChatSession {

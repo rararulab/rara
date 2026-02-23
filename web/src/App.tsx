@@ -21,8 +21,6 @@ import DashboardLayout from '@/layouts/DashboardLayout';
 import AgentConsole from '@/pages/AgentConsole';
 import JobsWorkspace from '@/pages/JobsWorkspace';
 import Settings from '@/pages/Settings';
-import TypstProjects from '@/pages/TypstProjects';
-import TypstEditor from '@/pages/TypstEditor';
 import CodingTasks from '@/pages/CodingTasks';
 
 const queryClient = new QueryClient();
@@ -38,8 +36,6 @@ export default function App() {
               <Route index element={<Navigate to="/agent" replace />} />
               <Route path="agent" element={<AgentConsole />} />
               <Route path="jobs" element={<JobsWorkspace />} />
-              <Route path="jobs/typst" element={<TypstProjects />} />
-              <Route path="jobs/typst/:projectId" element={<TypstEditor />} />
               <Route path="tasks" element={<CodingTasks />} />
               <Route path="settings" element={<Settings />} />
 
@@ -54,8 +50,6 @@ export default function App() {
               <Route path="interviews" element={<Navigate to="/jobs?tab=interviews" replace />} />
               <Route path="dashboard" element={<Navigate to="/jobs?tab=dashboard" replace />} />
 
-              {/* Redirect old typst route */}
-              <Route path="typst" element={<Navigate to="/jobs/typst" replace />} />
             </Route>
           </Routes>
         </BrowserRouter>
