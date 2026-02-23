@@ -8,7 +8,7 @@ use rara_sessions::types::ChatMessage;
 use tokio::sync::watch;
 use tracing::info;
 
-use crate::{
+use agent_core::{
     model::LlmProviderLoaderRef,
     runner::{AgentRunner, UserContent},
     tool_registry::ToolRegistry,

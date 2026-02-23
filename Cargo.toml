@@ -65,6 +65,7 @@ members = [
     "crates/integrations/keyring-store",
     "crates/extensions/job-pipeline",
     "crates/extensions/mcp-admin",
+    "crates/core/agent-core",
     "crates/core/tool-core",
     "crates/integrations/composio",
     "crates/extensions/workspace",
@@ -181,6 +182,7 @@ rara-telegram-bot = { path = "crates/telegram-bot" }
 rara-workspace = { path = "crates/extensions/workspace" }
 rara-coding-task = { path = "crates/extensions/coding-task" }
 rara-workers = { path = "crates/workers" }
+agent-core = { path = "crates/core/agent-core" }
 tool-core = { path = "crates/core/tool-core" }
 yunara-store = { path = "crates/common/yunara-store" }
 

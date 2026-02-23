@@ -22,7 +22,7 @@
 //!
 //! - Managing the lifecycle of chat sessions (create, list, get, delete).
 //! - Persisting user and assistant messages.
-//! - Invoking the [`AgentRunner`](rara_agents::runner::AgentRunner) with the
+//! - Invoking the [`AgentRunner`](agent_core::runner::AgentRunner) with the
 //!   session's conversation history and tool registry.
 //! - Forking sessions to explore alternative conversation branches.
 //! - Mapping external messaging channels to internal sessions via channel

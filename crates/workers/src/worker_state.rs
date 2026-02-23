@@ -46,7 +46,7 @@ pub struct AppState {
     pub contact_repo:   rara_domain_shared::contacts::repository::ContactRepository,
 
     // -- LLM provider --
-    pub llm_provider: rara_agents::provider::LlmProviderLoaderRef,
+    pub llm_provider: agent_core::provider::LlmProviderLoaderRef,
 
     // -- infra --
     pub object_store: Operator,
@@ -122,11 +122,11 @@ impl AppState {
             .await
             .whatever_context("Failed to initialize session repository")?,
         );
-        let llm_provider: rara_agents::provider::LlmProviderLoaderRef =
+        let llm_provider: agent_core::provider::LlmProviderLoaderRef =
             Arc::new(SettingsLlmProviderLoader::new(settings_svc.clone()));
         let composio_auth_provider: Arc<dyn rara_composio::ComposioAuthProvider> =
             Arc::new(SettingsComposioAuthProvider::new(settings_svc.clone()));
-        let mut tool_registry = rara_agents::tool_registry::ToolRegistry::new();
+        let mut tool_registry = agent_core::tool_registry::ToolRegistry::new();
         for tool in tool_core::default_primitives(tool_core::PrimitiveDeps {
             pool:                   pool.clone(),
             notify_client:          notify_client.clone(),
@@ -283,17 +283,17 @@ impl AppState {
 
         // Load agent definitions: bundled first, then user-defined (override).
         let agent_defs = {
-            let mut registry = rara_agents::subagent::AgentDefinitionRegistry::new();
+            let mut registry = agent_core::subagent::AgentDefinitionRegistry::new();
             // Bundled agent definitions (shipped with the binary)
             let bundled_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../agents");
-            if let Ok(bundled) = rara_agents::subagent::AgentDefinitionRegistry::load_dir(&bundled_dir) {
+            if let Ok(bundled) = agent_core::subagent::AgentDefinitionRegistry::load_dir(&bundled_dir) {
                 for def in bundled.list() {
                     registry.register(def.clone());
                 }
             }
             // User-defined agent definitions (override bundled)
             let user_dir = rara_paths::data_dir().join("agents");
-            if let Ok(user) = rara_agents::subagent::AgentDefinitionRegistry::load_dir(&user_dir) {
+            if let Ok(user) = agent_core::subagent::AgentDefinitionRegistry::load_dir(&user_dir) {
                 for def in user.list() {
                     registry.register(def.clone());
                 }
@@ -311,7 +311,7 @@ impl AppState {
             s.ai.model_for(rara_domain_shared::settings::model::ModelScenario::Chat).to_owned()
         };
 
-        tool_registry.register_service(Arc::new(rara_agents::subagent::SubagentTool::new(
+        tool_registry.register_service(Arc::new(agent_core::subagent::SubagentTool::new(
             llm_provider.clone(),
             agent_defs,
             subagent_parent_tools,
@@ -496,12 +496,12 @@ fn merge_openapi_router(
 // SettingsLlmProviderLoader
 // ---------------------------------------------------------------------------
 
-/// [`LlmProviderLoader`](rara_agents::provider::LlmProviderLoader)
+/// [`LlmProviderLoader`](agent_core::provider::LlmProviderLoader)
 /// implementation that reads the API key from
 /// [`SettingsSvc`](rara_domain_shared::settings::SettingsSvc) runtime settings
 /// rather than from environment variables.
 ///
-/// A fresh [`OpenAiProvider`](rara_agents::provider::OpenAiProvider) is created
+/// A fresh [`OpenAiProvider`](agent_core::provider::OpenAiProvider) is created
 /// on every call so that runtime API-key changes take effect immediately.
 struct SettingsLlmProviderLoader {
     settings: rara_domain_shared::settings::SettingsSvc,
@@ -537,19 +537,19 @@ impl SettingsLlmProviderLoader {
 }
 
 #[async_trait]
-impl rara_agents::provider::LlmProviderLoader for SettingsLlmProviderLoader {
+impl agent_core::provider::LlmProviderLoader for SettingsLlmProviderLoader {
     async fn acquire_provider(
         &self,
-    ) -> rara_agents::err::Result<Arc<dyn rara_agents::provider::LlmProvider>> {
+    ) -> agent_core::err::Result<Arc<dyn agent_core::provider::LlmProvider>> {
         let api_key = self
             .settings
             .current()
             .ai
             .openrouter_api_key
             .clone()
-            .ok_or(rara_agents::err::ProviderNotConfiguredSnafu.build())?;
+            .ok_or(agent_core::err::ProviderNotConfiguredSnafu.build())?;
 
-        Ok(Arc::new(rara_agents::provider::OpenAiProvider::new(
+        Ok(Arc::new(agent_core::provider::OpenAiProvider::new(
             api_key,
         )))
     }

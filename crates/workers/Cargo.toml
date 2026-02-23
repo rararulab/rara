@@ -23,6 +23,7 @@ croner.workspace = true
 jiff.workspace = true
 opendal.workspace = true
 async-openai = { workspace = true }
+agent-core = { workspace = true }
 rara-agents = { workspace = true }
 rara-ai = { workspace = true }
 rara-coding-task = { workspace = true }

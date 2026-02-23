@@ -33,7 +33,7 @@ pub mod types;
 
 use std::sync::Arc;
 
-use rara_agents::tool_registry::ToolRegistry;
+use agent_core::tool_registry::ToolRegistry;
 use rara_domain_shared::settings::SettingsSvc;
 use service::PipelineService;
 

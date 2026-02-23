@@ -1,9 +1,7 @@
 //! Scheduled agent -- executes due jobs from the agent scheduler.
 
-use crate::{
-    orchestrator::{context::to_chat_message, AgentOrchestrator, error::OrchestratorError},
-    runner::UserContent,
-};
+use agent_core::runner::UserContent;
+use crate::orchestrator::{context::to_chat_message, AgentOrchestrator, error::OrchestratorError};
 use rara_sessions::types::ChatMessage;
 
 use super::AgentOutput;
@@ -39,7 +37,7 @@ impl ScheduledAgent {
             .map(|h| h.iter().map(to_chat_message).collect())
             .unwrap_or_default();
 
-        let runner = crate::runner::AgentRunner::builder()
+        let runner = agent_core::runner::AgentRunner::builder()
             .llm_provider(self.orchestrator.llm_provider().clone())
             .model_name(model)
             .system_prompt(policy)

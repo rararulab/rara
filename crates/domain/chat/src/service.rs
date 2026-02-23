@@ -22,11 +22,11 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use rara_agents::{
-    builtin::chat::ChatAgent,
+use agent_core::{
     runner::UserContent,
     tool_registry::ToolRegistry,
 };
+use rara_agents::builtin::chat::ChatAgent;
 use rara_sessions::{
     repository::SessionRepository,
     types::{
