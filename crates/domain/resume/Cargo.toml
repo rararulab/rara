@@ -15,6 +15,7 @@ description = "Resume version management and tailoring"
 async-trait.workspace = true
 axum.workspace = true
 chrono.workspace = true
+git2.workspace = true
 jiff.workspace = true
 rara-domain-shared = { workspace = true }
 rara-git = { workspace = true }
@@ -23,7 +24,7 @@ serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true
 sqlx = { workspace = true }
-tracing.workspace = true
+tokio.workspace = true
 utoipa.workspace = true
 utoipa-axum.workspace = true
 uuid.workspace = true
