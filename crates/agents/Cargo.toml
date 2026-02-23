@@ -19,9 +19,11 @@ rara-memory.workspace = true
 rara-paths.workspace = true
 rara-sessions.workspace = true
 rara-skills.workspace = true
+opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"] }
 snafu.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+tracing-opentelemetry = "0.32.0"
 
 [lints]
 workspace = true
