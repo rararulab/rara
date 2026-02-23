@@ -8,6 +8,7 @@
 pub mod chat;
 pub mod proactive;
 pub mod scheduled;
+pub mod tasks;
 
 /// Output from a built-in agent execution.
 pub struct AgentOutput {

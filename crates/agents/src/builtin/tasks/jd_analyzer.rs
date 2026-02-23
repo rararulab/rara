@@ -12,42 +12,47 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! rarafit analysis agent.
+//! Job posting analyzer agent.
 
-use crate::{agents::prompt::compose_system_prompt, client::LlmClient, error::AiError};
+use std::sync::Arc;
 
-const SYSTEM_PROMPT_FILE: &str = "ai/job_fit.system.md";
-const DEFAULT_SYSTEM_PROMPT: &str = include_str!("../../../../prompts/ai/job_fit.system.md");
+use agent_core::provider::LlmProvider;
 
-/// Evaluates how well a candidate's resume matches a job posting.
-pub struct JobFitAgent {
-    client:      LlmClient,
+use crate::builtin::tasks::{
+    completion::run_completion, error::TaskAgentError, prompt::compose_system_prompt,
+};
+
+const SYSTEM_PROMPT_FILE: &str = "ai/jd_analyzer.system.md";
+const DEFAULT_SYSTEM_PROMPT: &str =
+    include_str!("../../../../../prompts/ai/jd_analyzer.system.md");
+
+/// Analyzes a job posting in markdown format and extracts structured
+/// information using AI.
+pub struct JdAnalyzerAgent {
+    provider:    Arc<dyn LlmProvider>,
     model:       String,
     soul_prompt: Option<String>,
 }
 
-impl JobFitAgent {
+impl JdAnalyzerAgent {
     pub(crate) fn new(
-        client: LlmClient,
+        provider: Arc<dyn LlmProvider>,
         model: String,
         soul_prompt: Option<String>,
     ) -> Self {
         Self {
-            client,
+            provider,
             model,
             soul_prompt,
         }
     }
 
-    /// Analyze the fit between a job description and a resume.
-    pub async fn analyze(&self, job_description: &str, resume: &str) -> Result<String, AiError> {
-        let user_input = format!("## Job Description\n{job_description}\n\n## Resume\n{resume}");
+    /// Analyze a job posting markdown and return structured JSON.
+    pub async fn analyze(&self, markdown: &str) -> Result<String, TaskAgentError> {
         let base_prompt =
             rara_paths::load_prompt_markdown(SYSTEM_PROMPT_FILE, DEFAULT_SYSTEM_PROMPT);
         let system_prompt = compose_system_prompt(&base_prompt, self.soul_prompt.as_deref());
 
-        self.client
-            .run_agent(&self.model, &system_prompt, &user_input)
-            .await
+        run_completion(&*self.provider, &self.model, &system_prompt, markdown).await
     }
 }

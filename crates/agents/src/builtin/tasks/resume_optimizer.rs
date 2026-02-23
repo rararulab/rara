@@ -12,47 +12,52 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Resume analysis agent.
-//!
-//! Evaluates a resume across multiple dimensions and provides actionable
-//! optimization suggestions.
+//! Resume optimization agent.
 
-use crate::{agents::prompt::compose_system_prompt, client::LlmClient, error::AiError};
+use std::sync::Arc;
 
-const SYSTEM_PROMPT_FILE: &str = "ai/resume_analyzer.system.md";
+use agent_core::provider::LlmProvider;
+
+use crate::builtin::tasks::{
+    completion::run_completion, error::TaskAgentError, prompt::compose_system_prompt,
+};
+
+const SYSTEM_PROMPT_FILE: &str = "ai/resume_optimizer.system.md";
 const DEFAULT_SYSTEM_PROMPT: &str =
-    include_str!("../../../../prompts/ai/resume_analyzer.system.md");
+    include_str!("../../../../../prompts/ai/resume_optimizer.system.md");
 
-/// Analyzes a resume and provides a structured report with scores and
-/// improvement suggestions.
-pub struct ResumeAnalyzerAgent {
-    client:      LlmClient,
+/// Optimizes a resume for a specific job posting.
+pub struct ResumeOptimizerAgent {
+    provider:    Arc<dyn LlmProvider>,
     model:       String,
     soul_prompt: Option<String>,
 }
 
-impl ResumeAnalyzerAgent {
+impl ResumeOptimizerAgent {
     pub(crate) fn new(
-        client: LlmClient,
+        provider: Arc<dyn LlmProvider>,
         model: String,
         soul_prompt: Option<String>,
     ) -> Self {
         Self {
-            client,
+            provider,
             model,
             soul_prompt,
         }
     }
 
-    /// Analyze a resume (with optional job context) and return a structured
-    /// report.
-    pub async fn analyze(&self, prompt: &str) -> Result<String, AiError> {
+    /// Optimize a resume to better match a job description.
+    pub async fn optimize(
+        &self,
+        resume: &str,
+        job_description: &str,
+    ) -> Result<String, TaskAgentError> {
+        let user_input =
+            format!("## Current Resume\n{resume}\n\n## Target Job Description\n{job_description}");
         let base_prompt =
             rara_paths::load_prompt_markdown(SYSTEM_PROMPT_FILE, DEFAULT_SYSTEM_PROMPT);
         let system_prompt = compose_system_prompt(&base_prompt, self.soul_prompt.as_deref());
 
-        self.client
-            .run_agent(&self.model, &system_prompt, prompt)
-            .await
+        run_completion(&*self.provider, &self.model, &system_prompt, &user_input).await
     }
 }

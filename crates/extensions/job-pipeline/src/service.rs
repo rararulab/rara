@@ -102,7 +102,7 @@ impl axum::response::IntoResponse for PipelineError {
 pub struct PipelineService {
     settings_svc:  SettingsSvc,
     llm_provider:  LlmProviderLoaderRef,
-    ai_service:    rara_ai::service::AiService,
+    ai_service:    rara_agents::builtin::tasks::TaskAgentService,
     job_service:   rara_domain_job::service::JobService,
     pool:          sqlx::PgPool,
     notify_client: rara_domain_shared::notify::client::NotifyClient,
@@ -126,7 +126,7 @@ impl PipelineService {
     pub fn new(
         settings_svc: SettingsSvc,
         llm_provider: LlmProviderLoaderRef,
-        ai_service: rara_ai::service::AiService,
+        ai_service: rara_agents::builtin::tasks::TaskAgentService,
         job_service: rara_domain_job::service::JobService,
         pool: sqlx::PgPool,
         notify_client: rara_domain_shared::notify::client::NotifyClient,

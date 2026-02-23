@@ -12,44 +12,45 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Resume optimization agent.
+//! Follow-up email drafting agent.
 
-use crate::{agents::prompt::compose_system_prompt, client::LlmClient, error::AiError};
+use std::sync::Arc;
 
-const SYSTEM_PROMPT_FILE: &str = "ai/resume_optimizer.system.md";
-const DEFAULT_SYSTEM_PROMPT: &str =
-    include_str!("../../../../prompts/ai/resume_optimizer.system.md");
+use agent_core::provider::LlmProvider;
 
-/// Optimizes a resume for a specific job posting.
-pub struct ResumeOptimizerAgent {
-    client:      LlmClient,
+use crate::builtin::tasks::{
+    completion::run_completion, error::TaskAgentError, prompt::compose_system_prompt,
+};
+
+const SYSTEM_PROMPT_FILE: &str = "ai/follow_up.system.md";
+const DEFAULT_SYSTEM_PROMPT: &str = include_str!("../../../../../prompts/ai/follow_up.system.md");
+
+/// Drafts follow-up emails after interviews or applications.
+pub struct FollowUpDraftAgent {
+    provider:    Arc<dyn LlmProvider>,
     model:       String,
     soul_prompt: Option<String>,
 }
 
-impl ResumeOptimizerAgent {
+impl FollowUpDraftAgent {
     pub(crate) fn new(
-        client: LlmClient,
+        provider: Arc<dyn LlmProvider>,
         model: String,
         soul_prompt: Option<String>,
     ) -> Self {
         Self {
-            client,
+            provider,
             model,
             soul_prompt,
         }
     }
 
-    /// Optimize a resume to better match a job description.
-    pub async fn optimize(&self, resume: &str, job_description: &str) -> Result<String, AiError> {
-        let user_input =
-            format!("## Current Resume\n{resume}\n\n## Target Job Description\n{job_description}");
+    /// Draft a follow-up email based on the given context.
+    pub async fn draft(&self, context: &str) -> Result<String, TaskAgentError> {
         let base_prompt =
             rara_paths::load_prompt_markdown(SYSTEM_PROMPT_FILE, DEFAULT_SYSTEM_PROMPT);
         let system_prompt = compose_system_prompt(&base_prompt, self.soul_prompt.as_deref());
 
-        self.client
-            .run_agent(&self.model, &system_prompt, &user_input)
-            .await
+        run_completion(&*self.provider, &self.model, &system_prompt, context).await
     }
 }
