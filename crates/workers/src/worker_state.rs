@@ -63,6 +63,9 @@ pub struct AppState {
     // -- MCP --
     pub mcp_manager: rara_mcp::manager::mgr::McpManager,
 
+    // -- orchestrator --
+    pub orchestrator: rara_agents::orchestrator::AgentOrchestrator,
+
     // -- pipeline --
     pub pipeline_service: rara_ext_job_pipeline::service::PipelineService,
 
@@ -317,15 +320,19 @@ impl AppState {
 
         let tools = Arc::new(tool_registry);
 
+        let orchestrator = rara_agents::orchestrator::AgentOrchestrator::new(
+            llm_provider.clone(),
+            tools.clone(),
+            mcp_manager.clone(),
+            skill_registry.clone(),
+            Some(Arc::clone(&memory_manager)),
+            settings_svc.subscribe(),
+        );
+
         let chat_service = rara_domain_chat::service::ChatService::new(
             session_repo,
-            llm_provider.clone(),
-            tools,
-            settings_svc.subscribe(),
-            Some(Arc::clone(&memory_manager)),
             settings_svc.clone(),
-            skill_registry.clone(),
-            mcp_manager.clone(),
+            orchestrator.clone(),
         );
         info!("Chat service initialized");
 
@@ -350,6 +357,7 @@ impl AppState {
             agent_scheduler,
             skill_registry,
             mcp_manager,
+            orchestrator,
             pipeline_service,
             coding_task_service,
             proactive_notify: Arc::new(RwLock::new(None)),

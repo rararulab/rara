@@ -18,9 +18,10 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use common_worker::{FallibleWorker, WorkError, WorkResult, WorkerContext};
-use rara_agents::runner::{AgentRunner, UserContent};
-use rara_domain_chat::service::to_chat_message;
-use rara_domain_shared::settings::model::Settings;
+use rara_agents::{
+    orchestrator::context::to_chat_message,
+    runner::{AgentRunner, UserContent},
+};
 use rara_sessions::types::SessionKey;
 use tracing::{info, warn};
 
@@ -34,52 +35,6 @@ const PROACTIVE_MAX_ITERATIONS: usize = 15;
 
 /// Maximum number of historical messages loaded for context.
 const PROACTIVE_HISTORY_LIMIT: i64 = 50;
-
-/// Default agent behavior policy embedded into the binary.
-const DEFAULT_AGENT_POLICY: &str = include_str!("../../../prompts/workers/agent_policy.md");
-
-fn compose_policy(base_policy: &str, soul_prompt: Option<&str>) -> String {
-    if let Some(soul) = soul_prompt.filter(|s| !s.trim().is_empty()) {
-        return format!("{soul}\n\n# Operational Policy\n{base_policy}");
-    }
-    base_policy.to_owned()
-}
-
-fn resolve_soul_prompt(settings: &Settings) -> Option<String> {
-    if settings
-        .agent
-        .soul
-        .as_deref()
-        .is_some_and(|s| !s.trim().is_empty())
-    {
-        return settings.agent.soul.clone();
-    }
-    let markdown_soul = rara_paths::load_agent_soul_prompt();
-    if markdown_soul.trim().is_empty() {
-        return None;
-    }
-    Some(markdown_soul)
-}
-
-/// Load the agent behavior policy from settings, file, or built-in default.
-pub async fn load_agent_policy(settings: &Settings) -> String {
-    let soul_prompt = resolve_soul_prompt(settings);
-    // 1. On-disk policy file
-    let policy_path = rara_paths::agent_policy_file();
-    if let Ok(content) = tokio::fs::read_to_string(policy_path).await
-        && !content.trim().is_empty()
-    {
-        return compose_policy(&content, soul_prompt.as_deref());
-    }
-
-    let prompt_content =
-        rara_paths::load_prompt_markdown("workers/agent_policy.md", DEFAULT_AGENT_POLICY);
-    if !prompt_content.trim().is_empty() {
-        return compose_policy(&prompt_content, soul_prompt.as_deref());
-    }
-    // 2. Built-in default
-    compose_policy(DEFAULT_AGENT_POLICY, soul_prompt.as_deref())
-}
 
 /// Background worker that reviews recent chat sessions and proactively
 /// takes action via a multi-turn agent loop with full tool access.
@@ -111,7 +66,7 @@ impl FallibleWorker<AppState> for ProactiveAgentWorker {
         }
 
         // 2. Load agent behavior policy
-        let policy = load_agent_policy(&settings).await;
+        let policy = state.orchestrator.build_worker_policy().await;
 
         // 3. Ensure proactive session exists and load history
         let session_key = SessionKey::from_raw(PROACTIVE_SESSION_KEY);
@@ -143,10 +98,10 @@ impl FallibleWorker<AppState> for ProactiveAgentWorker {
         let chat_history: Vec<_> = history.iter().map(to_chat_message).collect();
 
         // 7. Build and run multi-turn AgentRunner with full tools
-        let tools = state.chat_service.tools().clone();
+        let tools = state.orchestrator.tools().clone();
 
         let runner = AgentRunner::builder()
-            .llm_provider(state.llm_provider.clone())
+            .llm_provider(state.orchestrator.llm_provider().clone())
             .model_name(model)
             .system_prompt(policy)
             .user_content(UserContent::Text(user_prompt.clone()))

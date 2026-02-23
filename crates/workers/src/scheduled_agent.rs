@@ -19,39 +19,14 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use common_worker::{FallibleWorker, WorkResult, WorkerContext};
-use rara_agents::runner::{AgentRunner, UserContent};
-use rara_domain_chat::service::to_chat_message;
-use rara_domain_shared::settings::model::Settings;
+use rara_agents::{
+    orchestrator::context::to_chat_message,
+    runner::{AgentRunner, UserContent},
+};
 use rara_sessions::types::SessionKey;
 use tracing::{info, warn};
 
 use crate::{agent_scheduler::AgentScheduler, worker_state::AppState};
-
-/// Default behavioural policy used when no custom policy is configured.
-const DEFAULT_AGENT_POLICY: &str = include_str!("../../../prompts/workers/agent_policy.md");
-
-fn compose_policy(base_policy: &str, soul_prompt: Option<&str>) -> String {
-    if let Some(soul) = soul_prompt.filter(|s| !s.trim().is_empty()) {
-        return format!("{soul}\n\n# Operational Policy\n{base_policy}");
-    }
-    base_policy.to_owned()
-}
-
-fn resolve_soul_prompt(settings: &Settings) -> Option<String> {
-    if settings
-        .agent
-        .soul
-        .as_deref()
-        .is_some_and(|s| !s.trim().is_empty())
-    {
-        return settings.agent.soul.clone();
-    }
-    let markdown_soul = rara_paths::load_agent_soul_prompt();
-    if markdown_soul.trim().is_empty() {
-        return None;
-    }
-    Some(markdown_soul)
-}
 
 /// Worker that periodically checks the agent scheduler for due jobs and
 /// executes each one through the full agent runner pipeline.
@@ -85,7 +60,7 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
             "agent-scheduler: executing due jobs"
         );
 
-        let policy = load_agent_policy(&settings).await;
+        let policy = state.orchestrator.build_worker_policy().await;
         let model = settings
             .ai
             .model_for(rara_domain_shared::settings::model::ModelScenario::Chat)
@@ -121,7 +96,7 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
 
             // Build and run the agent.
             let runner = AgentRunner::builder()
-                .llm_provider(state.llm_provider.clone())
+                .llm_provider(state.orchestrator.llm_provider().clone())
                 .model_name(model.clone())
                 .system_prompt(policy.clone())
                 .user_content(UserContent::Text(job.message.clone()))
@@ -129,7 +104,7 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
                 .max_iterations(15_usize)
                 .build();
 
-            let tools = &state.chat_service.tools();
+            let tools = state.orchestrator.tools();
             match runner.run(tools, None).await {
                 Ok(result) => {
                     let response_text = result
@@ -184,24 +159,3 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
     }
 }
 
-/// Load the agent behavioural policy from settings or file system.
-async fn load_agent_policy(settings: &Settings) -> String {
-    let soul_prompt = resolve_soul_prompt(settings);
-    // 1. Try reading from the policy file.
-    let policy_path = rara_paths::agent_policy_file();
-    if let Ok(content) = tokio::fs::read_to_string(policy_path).await {
-        let trimmed = content.trim();
-        if !trimmed.is_empty() {
-            return compose_policy(trimmed, soul_prompt.as_deref());
-        }
-    }
-
-    let prompt_content =
-        rara_paths::load_prompt_markdown("workers/agent_policy.md", DEFAULT_AGENT_POLICY);
-    if !prompt_content.trim().is_empty() {
-        return compose_policy(&prompt_content, soul_prompt.as_deref());
-    }
-
-    // 2. Fall back to built-in default.
-    compose_policy(DEFAULT_AGENT_POLICY, soul_prompt.as_deref())
-}
