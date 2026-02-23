@@ -15,6 +15,12 @@ use rara_sessions::types::ChatMessage;
 
 use super::AgentOutput;
 
+/// Effect returned when compaction occurs, so the caller can persist.
+pub struct CompactionEffect {
+    /// The summary message that replaced the full history.
+    pub summary: ChatMessage,
+}
+
 /// Interactive chat agent with memory injection, MCP tools, and context compaction.
 #[derive(Clone)]
 pub struct ChatAgent {
@@ -32,6 +38,10 @@ impl ChatAgent {
     /// messages). This method handles: compaction check, system prompt assembly
     /// (memory + skills injection), effective tool building (MCP), and agent
     /// execution.
+    ///
+    /// Returns `(AgentOutput, Option<CompactionEffect>)`. When compaction
+    /// occurred the caller **must** persist the effect (clear old messages,
+    /// store the summary) so subsequent requests see the compacted history.
     pub async fn run(
         &self,
         base_system_prompt: &str,
@@ -39,10 +49,10 @@ impl ChatAgent {
         history: &[ChatMessage],
         model: &str,
         context_length: usize,
-    ) -> Result<AgentOutput, OrchestratorError> {
+    ) -> Result<(AgentOutput, Option<CompactionEffect>), OrchestratorError> {
         let user_text = user_content.text().to_owned();
 
-        let (runner, effective_tools) = self
+        let PrepareResult { runner, effective_tools, compaction } = self
             .prepare(base_system_prompt, user_content, history, model, context_length)
             .await?;
 
@@ -59,7 +69,7 @@ impl ChatAgent {
         self.orchestrator
             .spawn_memory_reflection(&user_text, &output.response_text);
 
-        Ok(output)
+        Ok((output, compaction))
     }
 
     /// Streaming variant -- returns the runner and tools for the caller to drive.
@@ -75,7 +85,7 @@ impl ChatAgent {
         model: &str,
         context_length: usize,
     ) -> Result<ChatAgentStreamSetup, OrchestratorError> {
-        let (runner, effective_tools) = self
+        let PrepareResult { runner, effective_tools, compaction } = self
             .prepare(base_system_prompt, user_content, history, model, context_length)
             .await?;
 
@@ -83,6 +93,7 @@ impl ChatAgent {
             runner,
             effective_tools,
             orchestrator: self.orchestrator.clone(),
+            compaction,
         })
     }
 
@@ -102,14 +113,16 @@ impl ChatAgent {
         history: &[ChatMessage],
         model: &str,
         context_length: usize,
-    ) -> Result<(AgentRunner, Arc<ToolRegistry>), OrchestratorError> {
+    ) -> Result<PrepareResult, OrchestratorError> {
         // 1. Check if compaction is needed
-        let effective_history = if self.orchestrator.needs_compaction(history, context_length) {
-            let summary = self.orchestrator.summarize_history(history, model).await?;
-            vec![summary]
-        } else {
-            history.to_vec()
-        };
+        let (effective_history, compaction) =
+            if self.orchestrator.needs_compaction(history, context_length) {
+                let summary = self.orchestrator.summarize_history(history, model).await?;
+                let effect = CompactionEffect { summary: summary.clone() };
+                (vec![summary], Some(effect))
+            } else {
+                (history.to_vec(), None)
+            };
 
         // 2. Build system prompt (soul + memory profile + memory prefetch + skills)
         let user_text = user_content.text();
@@ -130,8 +143,15 @@ impl ChatAgent {
             chat_history,
         );
 
-        Ok((runner, effective_tools))
+        Ok(PrepareResult { runner, effective_tools, compaction })
     }
+}
+
+/// Internal result from [`ChatAgent::prepare`].
+struct PrepareResult {
+    runner: AgentRunner,
+    effective_tools: Arc<ToolRegistry>,
+    compaction: Option<CompactionEffect>,
 }
 
 /// Setup bundle for streaming chat -- caller drives the stream loop.
@@ -139,4 +159,6 @@ pub struct ChatAgentStreamSetup {
     pub runner: AgentRunner,
     pub effective_tools: Arc<ToolRegistry>,
     pub orchestrator: AgentOrchestrator,
+    /// If compaction occurred, the caller must persist this.
+    pub compaction: Option<CompactionEffect>,
 }

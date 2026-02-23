@@ -310,6 +310,28 @@ impl ChatService {
     /// Return a reference to the tools registry shared by this service.
     pub fn tools(&self) -> &Arc<ToolRegistry> { self.chat_agent.orchestrator().tools() }
 
+    /// Persist a compaction effect: clear old messages, store the summary.
+    async fn persist_compaction(
+        &self,
+        key: &SessionKey,
+        summary: &ChatMessage,
+    ) -> Result<(), ChatError> {
+        info!(session = %key, "persisting compaction to session store");
+        self.session_repo
+            .clear_messages(key)
+            .await
+            .map_err(|e| ChatError::SessionError {
+                message: format!("failed to clear messages during compaction: {e}"),
+            })?;
+        self.session_repo
+            .append_message(key, summary)
+            .await
+            .map_err(|e| ChatError::SessionError {
+                message: format!("failed to append summary during compaction: {e}"),
+            })?;
+        Ok(())
+    }
+
     // -- send message (LLM) -------------------------------------------------
 
     /// Common session-level setup for `send_message` and
@@ -417,13 +439,18 @@ impl ChatService {
         } = self.prepare_session_data(key, &user_text, &image_urls).await?;
 
         // Delegate agent execution to ChatAgent.
-        let output = self
+        let (output, compaction) = self
             .chat_agent
             .run(&base_system_prompt, user_content, &history, &model, context_length)
             .await
             .map_err(|e| ChatError::AgentError {
                 message: e.to_string(),
             })?;
+
+        // Persist compaction if it occurred.
+        if let Some(effect) = compaction {
+            self.persist_compaction(key, &effect.summary).await?;
+        }
 
         // Persist assistant response
         let assistant_msg = ChatMessage::assistant(&output.response_text);
@@ -480,6 +507,11 @@ impl ChatService {
             .map_err(|e| ChatError::AgentError {
                 message: e.to_string(),
             })?;
+
+        // Persist compaction if it occurred.
+        if let Some(effect) = stream_setup.compaction {
+            self.persist_compaction(key, &effect.summary).await?;
+        }
 
         // Start the streaming agent loop.
         let mut runner_rx = stream_setup.runner.run_streaming(stream_setup.effective_tools);
