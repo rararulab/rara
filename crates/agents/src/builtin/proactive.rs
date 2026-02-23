@@ -22,6 +22,18 @@ impl ProactiveAgent {
         Self { orchestrator }
     }
 
+    /// Build the user prompt for a proactive review cycle.
+    ///
+    /// This is also used by the worker to persist the user turn.
+    pub fn build_user_prompt(activity_summary: &str) -> String {
+        format!(
+            "以下是最近24小时的用户活动摘要：\n\n{}\n\n根据你的行为策略，\
+             决定是否需要主动联系用户。\n你可以使用工具查询更多信息、发送通知、或安排后续任务。\
+             \n如果没有值得做的事情，直接回复 DONE。",
+            activity_summary
+        )
+    }
+
     /// Execute a proactive review cycle.
     ///
     /// `activity_summary` is pre-collected by the caller (worker).
@@ -31,12 +43,7 @@ impl ProactiveAgent {
         activity_summary: &str,
         history: &[ChatMessage],
     ) -> Result<AgentOutput, OrchestratorError> {
-        let user_prompt = format!(
-            "以下是最近24小时的用户活动摘要：\n\n{}\n\n根据你的行为策略，\
-             决定是否需要主动联系用户。\n你可以使用工具查询更多信息、发送通知、或安排后续任务。\
-             \n如果没有值得做的事情，直接回复 DONE。",
-            activity_summary
-        );
+        let user_prompt = Self::build_user_prompt(activity_summary);
 
         let policy = self.orchestrator.build_worker_policy().await;
         let model = self.orchestrator.current_default_model();
@@ -59,19 +66,6 @@ impl ProactiveAgent {
                 message: format!("proactive agent run failed: {e}"),
             })?;
 
-        let response_text = result
-            .provider_response
-            .choices
-            .first()
-            .and_then(|c| c.message.content.as_deref())
-            .unwrap_or("")
-            .trim()
-            .to_owned();
-
-        Ok(AgentOutput {
-            response_text,
-            iterations: result.iterations,
-            tool_calls_made: result.tool_calls_made,
-        })
+        Ok(AgentOutput::from_run_response(&result))
     }
 }

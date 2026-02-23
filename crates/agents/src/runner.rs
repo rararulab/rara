@@ -46,6 +46,18 @@ pub struct AgentRunResponse {
     pub tool_calls_made:   usize,
 }
 
+impl AgentRunResponse {
+    /// Extract the assistant's text content from the terminal response.
+    pub fn response_text(&self) -> String {
+        self.provider_response
+            .choices
+            .first()
+            .and_then(|c| c.message.content.as_deref())
+            .unwrap_or_default()
+            .to_owned()
+    }
+}
+
 /// Events emitted during the agent run.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -94,6 +106,16 @@ pub enum UserContent {
         text:       String,
         image_urls: Vec<String>,
     },
+}
+
+impl UserContent {
+    /// Return the text portion of the user content.
+    pub fn text(&self) -> &str {
+        match self {
+            UserContent::Text(t) => t,
+            UserContent::Multimodal { text, .. } => text,
+        }
+    }
 }
 
 impl From<String> for UserContent {

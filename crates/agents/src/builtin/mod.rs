@@ -18,3 +18,14 @@ pub struct AgentOutput {
     /// Number of tool calls made.
     pub tool_calls_made: usize,
 }
+
+impl AgentOutput {
+    /// Build from an [`AgentRunResponse`], extracting the response text.
+    pub fn from_run_response(response: &crate::runner::AgentRunResponse) -> Self {
+        Self {
+            response_text: response.response_text(),
+            iterations: response.iterations,
+            tool_calls_made: response.tool_calls_made,
+        }
+    }
+}

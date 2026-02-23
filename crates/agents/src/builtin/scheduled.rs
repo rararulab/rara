@@ -55,18 +55,6 @@ impl ScheduledAgent {
                 message: format!("scheduled agent run failed: {e}"),
             })?;
 
-        let response_text = result
-            .provider_response
-            .choices
-            .first()
-            .and_then(|c| c.message.content.as_deref())
-            .unwrap_or_default()
-            .to_owned();
-
-        Ok(AgentOutput {
-            response_text,
-            iterations: result.iterations,
-            tool_calls_made: result.tool_calls_made,
-        })
+        Ok(AgentOutput::from_run_response(&result))
     }
 }

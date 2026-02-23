@@ -37,8 +37,6 @@ use rara_sessions::{
 use tokio::sync::mpsc;
 use tracing::{info, instrument};
 
-pub use rara_agents::orchestrator::context::to_chat_message;
-
 use crate::stream::ChatStreamEvent;
 
 use crate::{
@@ -732,42 +730,4 @@ mod tests {
         assert!(result.ends_with("..."));
     }
 
-    #[test]
-    fn to_chat_message_text() {
-        use async_openai::types::chat::ChatCompletionRequestMessage;
-        use rara_sessions::types::ChatMessage;
-
-        let msg = ChatMessage::user("hello");
-        let converted = to_chat_message(&msg);
-        assert!(matches!(
-            converted,
-            ChatCompletionRequestMessage::User(_)
-        ));
-    }
-
-    #[test]
-    fn to_chat_message_assistant() {
-        use async_openai::types::chat::ChatCompletionRequestMessage;
-        use rara_sessions::types::ChatMessage;
-
-        let msg = ChatMessage::assistant("response");
-        let converted = to_chat_message(&msg);
-        assert!(matches!(
-            converted,
-            ChatCompletionRequestMessage::Assistant(_)
-        ));
-    }
-
-    #[test]
-    fn to_chat_message_system() {
-        use async_openai::types::chat::ChatCompletionRequestMessage;
-        use rara_sessions::types::ChatMessage;
-
-        let msg = ChatMessage::system("you are helpful");
-        let converted = to_chat_message(&msg);
-        assert!(matches!(
-            converted,
-            ChatCompletionRequestMessage::System(_)
-        ));
-    }
 }

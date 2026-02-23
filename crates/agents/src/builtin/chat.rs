@@ -8,7 +8,7 @@ use crate::{
         AgentOrchestrator,
         error::OrchestratorError,
     },
-    runner::UserContent,
+    runner::{AgentRunner, UserContent},
     tool_registry::ToolRegistry,
 };
 use rara_sessions::types::ChatMessage;
@@ -40,37 +40,12 @@ impl ChatAgent {
         model: &str,
         context_length: usize,
     ) -> Result<AgentOutput, OrchestratorError> {
-        // 1. Check if compaction is needed
-        let effective_history = if self.orchestrator.needs_compaction(history, context_length) {
-            let summary = self.orchestrator.summarize_history(history, model).await?;
-            vec![summary]
-        } else {
-            history.to_vec()
-        };
+        let user_text = user_content.text().to_owned();
 
-        // 2. Build system prompt (soul + memory profile + memory prefetch + skills)
-        let user_text = match &user_content {
-            UserContent::Text(t) => t.clone(),
-            UserContent::Multimodal { text, .. } => text.clone(),
-        };
-        let system_prompt = self
-            .orchestrator
-            .build_chat_system_prompt(base_system_prompt, &user_text, effective_history.len())
-            .await;
+        let (runner, effective_tools) = self
+            .prepare(base_system_prompt, user_content, history, model, context_length)
+            .await?;
 
-        // 3. Build effective tools (static + MCP)
-        let effective_tools = self.orchestrator.build_effective_tools().await;
-
-        // 4. Convert history and build runner
-        let chat_history = effective_history.iter().map(to_chat_message).collect();
-        let runner = self.orchestrator.build_runner(
-            model.to_owned(),
-            system_prompt,
-            user_content,
-            chat_history,
-        );
-
-        // 5. Execute
         let result = runner
             .run(&effective_tools, None)
             .await
@@ -78,23 +53,13 @@ impl ChatAgent {
                 message: e.to_string(),
             })?;
 
-        let response_text = result
-            .provider_response
-            .choices
-            .first()
-            .and_then(|c| c.message.content.as_deref())
-            .unwrap_or_default()
-            .to_owned();
+        let output = AgentOutput::from_run_response(&result);
 
-        // 6. Post-process: memory reflection (fire-and-forget)
+        // Post-process: memory reflection (fire-and-forget)
         self.orchestrator
-            .spawn_memory_reflection(&user_text, &response_text);
+            .spawn_memory_reflection(&user_text, &output.response_text);
 
-        Ok(AgentOutput {
-            response_text,
-            iterations: result.iterations,
-            tool_calls_made: result.tool_calls_made,
-        })
+        Ok(output)
     }
 
     /// Streaming variant -- returns the runner and tools for the caller to drive.
@@ -110,29 +75,9 @@ impl ChatAgent {
         model: &str,
         context_length: usize,
     ) -> Result<ChatAgentStreamSetup, OrchestratorError> {
-        let effective_history = if self.orchestrator.needs_compaction(history, context_length) {
-            let summary = self.orchestrator.summarize_history(history, model).await?;
-            vec![summary]
-        } else {
-            history.to_vec()
-        };
-
-        let user_text = match &user_content {
-            UserContent::Text(t) => t.clone(),
-            UserContent::Multimodal { text, .. } => text.clone(),
-        };
-        let system_prompt = self
-            .orchestrator
-            .build_chat_system_prompt(base_system_prompt, &user_text, effective_history.len())
-            .await;
-        let effective_tools = self.orchestrator.build_effective_tools().await;
-        let chat_history = effective_history.iter().map(to_chat_message).collect();
-        let runner = self.orchestrator.build_runner(
-            model.to_owned(),
-            system_prompt,
-            user_content,
-            chat_history,
-        );
+        let (runner, effective_tools) = self
+            .prepare(base_system_prompt, user_content, history, model, context_length)
+            .await?;
 
         Ok(ChatAgentStreamSetup {
             runner,
@@ -145,11 +90,53 @@ impl ChatAgent {
     pub fn orchestrator(&self) -> &AgentOrchestrator {
         &self.orchestrator
     }
+
+    /// Common preparation logic shared by [`run`] and [`prepare_streaming`].
+    ///
+    /// Handles: compaction check, system prompt assembly, effective tool
+    /// building, history conversion, and runner construction.
+    async fn prepare(
+        &self,
+        base_system_prompt: &str,
+        user_content: UserContent,
+        history: &[ChatMessage],
+        model: &str,
+        context_length: usize,
+    ) -> Result<(AgentRunner, Arc<ToolRegistry>), OrchestratorError> {
+        // 1. Check if compaction is needed
+        let effective_history = if self.orchestrator.needs_compaction(history, context_length) {
+            let summary = self.orchestrator.summarize_history(history, model).await?;
+            vec![summary]
+        } else {
+            history.to_vec()
+        };
+
+        // 2. Build system prompt (soul + memory profile + memory prefetch + skills)
+        let user_text = user_content.text();
+        let system_prompt = self
+            .orchestrator
+            .build_chat_system_prompt(base_system_prompt, user_text, effective_history.len())
+            .await;
+
+        // 3. Build effective tools (static + MCP)
+        let effective_tools = self.orchestrator.build_effective_tools().await;
+
+        // 4. Convert history and build runner
+        let chat_history = effective_history.iter().map(to_chat_message).collect();
+        let runner = self.orchestrator.build_runner(
+            model.to_owned(),
+            system_prompt,
+            user_content,
+            chat_history,
+        );
+
+        Ok((runner, effective_tools))
+    }
 }
 
 /// Setup bundle for streaming chat -- caller drives the stream loop.
 pub struct ChatAgentStreamSetup {
-    pub runner: crate::runner::AgentRunner,
+    pub runner: AgentRunner,
     pub effective_tools: Arc<ToolRegistry>,
     pub orchestrator: AgentOrchestrator,
 }
