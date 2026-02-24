@@ -12,10 +12,10 @@ use rara_domain_shared::settings::{
 pub fn routes(svc: SettingsSvc) -> OpenApiRouter {
     OpenApiRouter::new()
         .merge(runtime_routes())
-        .merge(crate::ai::routes())
-        .merge(crate::gmail::routes())
-        .merge(crate::auth::routes())
-        .merge(crate::tg::routes())
+        .merge(super::ai::routes())
+        .merge(super::gmail::routes())
+        .merge(super::auth::routes())
+        .merge(super::tg::routes())
         .with_state(svc)
 }
 
@@ -108,8 +108,6 @@ pub struct AgentSettingsAdminPatch {
 impl From<AgentSettingsAdminPatch> for AgentRuntimeSettingsPatch {
     fn from(value: AgentSettingsAdminPatch) -> Self {
         Self {
-            soul: None,
-            chat_system_prompt: None,
             proactive_enabled: None,
             proactive_cron: None,
             memory: None,

@@ -1,5 +1,5 @@
 [package]
-name = "rara-prompt-admin"
+name = "rara-backend-admin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,8 +11,18 @@ workspace = true
 agent-core = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
+chrono = { workspace = true }
+jiff = { workspace = true }
+llmfit-core = { workspace = true }
 notify = "8"
+rara-agents = { workspace = true }
+rara-domain-shared = { workspace = true }
+rara-git = { workspace = true }
+rara-mcp = { workspace = true }
+rara-paths = { workspace = true }
+rara-skills = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 snafu = { workspace = true }
 tokio = { workspace = true, features = ["sync", "fs", "rt"] }
 tracing = { workspace = true }

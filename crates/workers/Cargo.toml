@@ -26,7 +26,7 @@ async-openai = { workspace = true }
 agent-core = { workspace = true }
 rara-agents = { workspace = true }
 rara-coding-task = { workspace = true }
-rara-dispatcher-admin = { workspace = true }
+rara-backend-admin = { workspace = true }
 rara-workspace = { workspace = true }
 rara-composio = { workspace = true }
 rara-domain-analytics = { workspace = true }
@@ -39,15 +39,10 @@ rara-domain-resume = { workspace = true }
 rara-domain-scheduler = { workspace = true }
 rara-domain-shared = { workspace = true }
 rara-mcp = { workspace = true }
-rara-mcp-admin = { workspace = true }
-rara-model-admin = { workspace = true }
 rara-memory = { workspace = true }
 rara-paths = { workspace = true }
-rara-prompt-admin = { workspace = true }
-rara-settings-admin = { workspace = true }
 rara-server = { workspace = true }
 rara-sessions = { workspace = true }
-rara-skill-admin = { workspace = true }
 rara-skills = { workspace = true }
 reqwest.workspace = true
 serde.workspace = true

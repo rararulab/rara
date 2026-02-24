@@ -57,22 +57,17 @@ members = [
     "crates/agents",
     "crates/sessions",
     "crates/domain/chat",
-    "crates/extensions/skill-admin",
     "crates/memory",
     "crates/skills",
     "crates/integrations/mcp",
     "crates/integrations/keyring-store",
     "crates/extensions/job-pipeline",
-    "crates/extensions/mcp-admin",
     "crates/core/agent-core",
     "crates/core/tool-core",
     "crates/integrations/composio",
     "crates/extensions/workspace",
     "crates/extensions/coding-task",
-    "crates/extensions/dispatcher-admin",
-    "crates/extensions/model-admin",
-    "crates/extensions/prompt-admin",
-    "crates/extensions/settings-admin",
+    "crates/extensions/backend-admin",
     "crates/extensions/rara-git",
     "crates/common/infisical",
 ]
@@ -160,7 +155,7 @@ rara-api = { path = "api" }
 rara-app = { path = "crates/app" }
 rara-cli = { path = "crates/cmd" }
 rara-composio = { path = "crates/integrations/composio" }
-rara-dispatcher-admin = { path = "crates/extensions/dispatcher-admin" }
+rara-backend-admin = { path = "crates/extensions/backend-admin" }
 rara-domain-analytics = { path = "crates/domain/analytics" }
 rara-domain-application = { path = "crates/domain/application" }
 rara-domain-chat = { path = "crates/domain/chat" }
@@ -175,16 +170,11 @@ rara-git = { path = "crates/extensions/rara-git" }
 rara-ext-job-pipeline = { path = "crates/extensions/job-pipeline" }
 rara-keyring-store = { path = "crates/integrations/keyring-store" }
 rara-mcp = { path = "crates/integrations/mcp" }
-rara-mcp-admin = { path = "crates/extensions/mcp-admin" }
-rara-model-admin = { path = "crates/extensions/model-admin" }
-rara-settings-admin = { path = "crates/extensions/settings-admin" }
 rara-memory = { path = "crates/memory" }
 rara-model = { path = "crates/rara-model" }
 rara-paths = { path = "crates/paths" }
-rara-prompt-admin = { path = "crates/extensions/prompt-admin" }
 rara-server = { path = "crates/server" }
 rara-sessions = { path = "crates/sessions" }
-rara-skill-admin = { path = "crates/extensions/skill-admin" }
 rara-skills = { path = "crates/skills" }
 rara-telegram-bot = { path = "crates/telegram-bot" }
 rara-workspace = { path = "crates/extensions/workspace" }

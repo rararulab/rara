@@ -22,7 +22,7 @@ use rara_mcp::manager::{
     mgr::{ConnectionStatus, McpManager},
 };
 
-use crate::{
+use super::{
     error::{McpAdminError, McpSnafu, RegistrySnafu, ServerNotFoundSnafu},
     types::{
         CreateServerRequest, McpResourceView, McpServerConfigView, McpServerInfo, McpServerStatus,

@@ -104,9 +104,9 @@ impl AppState {
         // -- prompt repo -------------------------------------------------------
 
         let prompt_repo: Arc<dyn agent_core::prompt::PromptRepo> = Arc::new(
-            rara_prompt_admin::FilePromptRepo::new(
+            rara_backend_admin::prompts::FilePromptRepo::new(
                 rara_paths::prompts_dir().clone(),
-                rara_prompt_admin::all_builtin_prompts(),
+                rara_backend_admin::prompts::all_builtin_prompts(),
             )
             .await
             .whatever_context("Failed to initialize prompt repository")?,
@@ -444,7 +444,7 @@ impl AppState {
         merge_openapi_router(
             &mut router,
             &mut api,
-            rara_settings_admin::routes(self.settings_svc.clone()),
+            rara_backend_admin::settings::routes(self.settings_svc.clone()),
         );
         merge_openapi_router(
             &mut router,
@@ -469,12 +469,12 @@ impl AppState {
         );
 
         // skill_routes returns a plain axum::Router (no OpenAPI metadata).
-        router = router.merge(rara_skill_admin::router::skill_routes(
+        router = router.merge(rara_backend_admin::skills::skill_routes(
             self.skill_registry.clone(),
         ));
 
         // MCP admin routes (plain axum::Router, no OpenAPI metadata).
-        router = router.merge(rara_mcp_admin::router(self.mcp_manager.clone()));
+        router = router.merge(rara_backend_admin::mcp::mcp_router(self.mcp_manager.clone()));
 
         // Coding task routes (plain axum::Router, no OpenAPI metadata).
         router = router.merge(rara_coding_task::router::routes(
@@ -489,23 +489,23 @@ impl AppState {
 
         // Model admin routes (OpenAPI).
         let model_repo: std::sync::Arc<dyn agent_core::model_repo::ModelRepo> =
-            std::sync::Arc::new(rara_model_admin::SettingsModelRepo::new(
+            std::sync::Arc::new(rara_backend_admin::models::SettingsModelRepo::new(
                 self.settings_svc.clone(),
             ));
         merge_openapi_router(
             &mut router,
             &mut api,
-            rara_model_admin::routes(model_repo),
+            rara_backend_admin::models::routes(model_repo),
         );
 
         // Dispatcher routes (plain axum::Router, no OpenAPI metadata).
-        router = router.merge(rara_dispatcher_admin::router(
+        router = router.merge(rara_backend_admin::dispatcher::dispatcher_router(
             self.dispatcher.clone(),
         ));
 
         // Prompt admin routes.
         let (prompt_router, prompt_api) =
-            rara_prompt_admin::routes(self.prompt_repo.clone()).split_for_parts();
+            rara_backend_admin::prompts::routes(self.prompt_repo.clone()).split_for_parts();
         router = router.merge(prompt_router);
         api.merge(prompt_api);
 
