@@ -17,7 +17,7 @@
 use std::{path::PathBuf, str::FromStr};
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::warn;
 
 /// A scheduled job that the agent should execute when its trigger fires.
@@ -53,8 +53,9 @@ pub enum AgentTrigger {
 
 /// File-backed scheduler that persists agent jobs as JSON.
 pub struct AgentScheduler {
-    jobs_path: PathBuf,
-    jobs:      RwLock<Vec<AgentJob>>,
+    jobs_path:  PathBuf,
+    jobs:       RwLock<Vec<AgentJob>>,
+    save_mutex: Mutex<()>,
 }
 
 impl AgentScheduler {
@@ -62,22 +63,88 @@ impl AgentScheduler {
     pub fn new(jobs_path: PathBuf) -> Self {
         Self {
             jobs_path,
-            jobs: RwLock::new(Vec::new()),
+            jobs:       RwLock::new(Vec::new()),
+            save_mutex: Mutex::new(()),
         }
     }
 
     /// Load jobs from the backing JSON file. Tolerates missing files.
+    ///
+    /// If the main file is corrupted, the loader tries the `.json.tmp`
+    /// backup. If that also fails, the corrupted file is renamed to
+    /// `.json.corrupted` and the scheduler starts with an empty job list
+    /// (graceful degradation).
     ///
     /// If no jobs exist after loading (file missing or empty), a default
     /// daily diary cron job is seeded so the agent writes a diary entry
     /// every evening at 22:00.
     pub async fn load(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let path = &self.jobs_path;
+        let tmp_path = self.jobs_path.with_extension("json.tmp");
+
         if path.exists() {
-            let data = tokio::fs::read_to_string(path).await?;
-            let loaded: Vec<AgentJob> = serde_json::from_str(&data)?;
-            let mut jobs = self.jobs.write().await;
-            *jobs = loaded;
+            match Self::try_load_from(path).await {
+                Ok(loaded) => {
+                    let mut jobs = self.jobs.write().await;
+                    *jobs = loaded;
+                }
+                Err(main_err) => {
+                    warn!(
+                        path = %path.display(),
+                        error = %main_err,
+                        "failed to parse jobs file, attempting .tmp backup"
+                    );
+
+                    // Try the .tmp file as a backup.
+                    if tmp_path.exists() {
+                        match Self::try_load_from(&tmp_path).await {
+                            Ok(loaded) => {
+                                warn!(
+                                    path = %tmp_path.display(),
+                                    "recovered jobs from .tmp backup"
+                                );
+                                let mut jobs = self.jobs.write().await;
+                                *jobs = loaded;
+                            }
+                            Err(tmp_err) => {
+                                warn!(
+                                    path = %tmp_path.display(),
+                                    error = %tmp_err,
+                                    "backup .tmp file also corrupted, starting empty"
+                                );
+                            }
+                        }
+                    }
+
+                    // Rename the corrupted main file for investigation.
+                    let corrupted_path = self.jobs_path.with_extension("json.corrupted");
+                    if let Err(e) = tokio::fs::rename(path, &corrupted_path).await {
+                        warn!(
+                            error = %e,
+                            "failed to rename corrupted file to .corrupted"
+                        );
+                    }
+                }
+            }
+        } else if tmp_path.exists() {
+            // Main file missing but .tmp exists — recover from it.
+            match Self::try_load_from(&tmp_path).await {
+                Ok(loaded) => {
+                    warn!(
+                        path = %tmp_path.display(),
+                        "main file missing, recovered jobs from .tmp backup"
+                    );
+                    let mut jobs = self.jobs.write().await;
+                    *jobs = loaded;
+                }
+                Err(e) => {
+                    warn!(
+                        path = %tmp_path.display(),
+                        error = %e,
+                        "main file missing and .tmp backup corrupted, starting empty"
+                    );
+                }
+            }
         }
 
         // Seed a default daily-diary job when no jobs exist.
@@ -104,15 +171,27 @@ impl AgentScheduler {
         Ok(())
     }
 
-    /// Persist current jobs to the backing JSON file.
+    /// Persist current jobs to the backing JSON file using atomic
+    /// write-then-rename to prevent corruption from partial writes.
     pub async fn save(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let _guard = self.save_mutex.lock().await;
+
         let jobs = self.jobs.read().await;
         let data = serde_json::to_string_pretty(&*jobs)?;
+        drop(jobs);
+
         // Ensure parent directory exists.
         if let Some(parent) = self.jobs_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        tokio::fs::write(&self.jobs_path, data).await?;
+
+        // Write to temp file first.
+        let tmp_path = self.jobs_path.with_extension("json.tmp");
+        tokio::fs::write(&tmp_path, &data).await?;
+
+        // Atomic rename (POSIX guarantees atomicity for same-directory rename).
+        tokio::fs::rename(&tmp_path, &self.jobs_path).await?;
+
         Ok(())
     }
 
@@ -172,6 +251,15 @@ impl AgentScheduler {
             jobs.retain(|j| !(j.id == id && matches!(j.trigger, AgentTrigger::Delay { .. })));
         }
         self.save().await
+    }
+
+    /// Try to read and deserialize jobs from the given path.
+    async fn try_load_from(
+        path: &std::path::Path,
+    ) -> Result<Vec<AgentJob>, Box<dyn std::error::Error + Send + Sync>> {
+        let data = tokio::fs::read_to_string(path).await?;
+        let loaded: Vec<AgentJob> = serde_json::from_str(&data)?;
+        Ok(loaded)
     }
 
     /// Check whether a single job is due at the given instant.
@@ -278,12 +366,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn load_missing_file_is_ok() {
+    async fn load_missing_file_seeds_default_job() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nonexistent.json");
         let scheduler = AgentScheduler::new(path);
         scheduler.load().await.unwrap();
-        assert!(scheduler.list().await.is_empty());
+        // When no file exists, load() seeds a default daily-diary job.
+        assert_eq!(scheduler.list().await.len(), 1);
     }
 
     #[tokio::test]
@@ -364,5 +453,127 @@ mod tests {
 
         let due = scheduler.get_due_jobs().await;
         assert!(due.is_empty());
+    }
+
+    #[tokio::test]
+    async fn save_uses_atomic_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("jobs.json");
+        let scheduler = AgentScheduler::new(path.clone());
+
+        scheduler
+            .add(AgentJob {
+                id:          "atomic-1".to_owned(),
+                message:     "atomic test".to_owned(),
+                trigger:     AgentTrigger::Interval { seconds: 60 },
+                session_key: "agent:proactive".to_owned(),
+                created_at:  jiff::Timestamp::now(),
+                last_run_at: None,
+                enabled:     true,
+            })
+            .await
+            .unwrap();
+
+        // After atomic save, main file should exist and .tmp should NOT
+        // (it was renamed to the main file).
+        assert!(path.exists());
+        let tmp_path = path.with_extension("json.tmp");
+        assert!(!tmp_path.exists());
+    }
+
+    #[tokio::test]
+    async fn load_corrupted_file_recovers_gracefully() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("jobs.json");
+
+        // Write corrupted JSON to the main file.
+        tokio::fs::write(&path, "NOT VALID JSON{{{").await.unwrap();
+
+        let scheduler = AgentScheduler::new(path.clone());
+        // load() should not return an error — it degrades gracefully.
+        scheduler.load().await.unwrap();
+
+        // The corrupted file should be renamed to .corrupted.
+        let corrupted_path = path.with_extension("json.corrupted");
+        assert!(corrupted_path.exists());
+
+        // After corruption recovery the scheduler starts empty, which triggers
+        // the seed logic (writes a default diary job), so the main path exists
+        // again with the seeded content.
+        assert!(path.exists());
+        // The seeded default diary job should be present.
+        assert_eq!(scheduler.list().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn load_corrupted_file_recovers_from_tmp() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("jobs.json");
+        let tmp_path = path.with_extension("json.tmp");
+
+        // First, create a valid scheduler with a job and save it.
+        {
+            let scheduler = AgentScheduler::new(path.clone());
+            scheduler
+                .add(AgentJob {
+                    id:          "backup-1".to_owned(),
+                    message:     "backed up".to_owned(),
+                    trigger:     AgentTrigger::Interval { seconds: 120 },
+                    session_key: "agent:proactive".to_owned(),
+                    created_at:  jiff::Timestamp::now(),
+                    last_run_at: None,
+                    enabled:     true,
+                })
+                .await
+                .unwrap();
+            // Copy the valid main file as .tmp backup.
+            tokio::fs::copy(&path, &tmp_path).await.unwrap();
+        }
+
+        // Now corrupt the main file.
+        tokio::fs::write(&path, "CORRUPTED!!!").await.unwrap();
+
+        // Load should recover from .tmp.
+        let scheduler = AgentScheduler::new(path.clone());
+        scheduler.load().await.unwrap();
+        let jobs = scheduler.list().await;
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].id, "backup-1");
+    }
+
+    #[tokio::test]
+    async fn load_recovers_from_tmp_when_main_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("jobs.json");
+        let tmp_path = path.with_extension("json.tmp");
+
+        // Create a valid .tmp file without a main file.
+        {
+            let scheduler = AgentScheduler::new(path.clone());
+            scheduler
+                .add(AgentJob {
+                    id:          "tmp-only-1".to_owned(),
+                    message:     "from tmp".to_owned(),
+                    trigger:     AgentTrigger::Interval { seconds: 60 },
+                    session_key: "agent:proactive".to_owned(),
+                    created_at:  jiff::Timestamp::now(),
+                    last_run_at: None,
+                    enabled:     true,
+                })
+                .await
+                .unwrap();
+            // Copy main to tmp, then delete main.
+            tokio::fs::copy(&path, &tmp_path).await.unwrap();
+            tokio::fs::remove_file(&path).await.unwrap();
+        }
+
+        assert!(!path.exists());
+        assert!(tmp_path.exists());
+
+        let scheduler = AgentScheduler::new(path);
+        scheduler.load().await.unwrap();
+        let jobs = scheduler.list().await;
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].id, "tmp-only-1");
     }
 }
