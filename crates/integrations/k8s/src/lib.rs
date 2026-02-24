@@ -12,23 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Domain primitives: application-specific atomic operations (db, notify,
-//! storage).
+//! Generic Kubernetes Pod management.
+//!
+//! Provides [`PodManager`] for creating, deleting, and inspecting ephemeral
+//! pods. This crate is transport-agnostic — it knows nothing about MCP,
+//! agents, or any particular use case. Higher-level crates (e.g. `rara-mcp`,
+//! `tool-core`) wrap `PodManager` with domain-specific defaults.
 
-mod composio;
-mod db_mutate;
-mod db_query;
-mod notify;
-#[cfg(feature = "k8s")]
-pub mod pod;
-mod send_email;
-mod storage_read;
+pub mod error;
+pub mod manager;
+pub mod types;
 
-pub use composio::ComposioTool;
-pub use db_mutate::DbMutateTool;
-pub use db_query::DbQueryTool;
-pub use notify::NotifyTool;
-#[cfg(feature = "k8s")]
-pub use pod::PodTool;
-pub use send_email::SendEmailTool;
-pub use storage_read::StorageReadTool;
+pub use error::K8sError;
+pub use manager::PodManager;
+pub use types::*;
