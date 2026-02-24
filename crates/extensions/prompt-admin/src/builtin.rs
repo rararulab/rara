@@ -1,4 +1,4 @@
-use crate::types::PromptSpec;
+use agent_core::prompt::PromptSpec;
 
 /// Returns all built-in prompt specifications with their compiled-in defaults.
 ///

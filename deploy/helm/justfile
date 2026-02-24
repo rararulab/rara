@@ -1,0 +1,239 @@
+CHART := "rara-infra"
+RELEASE := env("HELM_RELEASE", "rara-infra")
+NAMESPACE := env("HELM_NAMESPACE", "rara")
+VALUES_DEV := "rara-infra/values-dev.yaml"
+
+[group("📒 Help")]
+[private]
+default:
+    @just --list --list-heading '⎈ helm justfile:\n'
+
+# --------------------------------------------------------------------------
+# Dependencies
+# --------------------------------------------------------------------------
+
+[doc("download / update subchart dependencies")]
+[group("📦 Dependencies")]
+deps:
+    helm dependency build {{ CHART }}
+
+[doc("list current subchart dependency versions")]
+[group("📦 Dependencies")]
+deps-list:
+    helm dependency list {{ CHART }}
+
+[doc("update subchart dependencies to latest allowed versions")]
+[group("📦 Dependencies")]
+deps-update:
+    helm dependency update {{ CHART }}
+
+# --------------------------------------------------------------------------
+# Validate
+# --------------------------------------------------------------------------
+
+[doc("lint chart with default values")]
+[group("✅ Validate")]
+lint:
+    helm lint {{ CHART }}
+
+[doc("lint chart with dev overlay")]
+[group("✅ Validate")]
+lint-dev:
+    helm lint {{ CHART }} -f {{ VALUES_DEV }}
+
+[doc("render templates locally (dry-run)")]
+[group("✅ Validate")]
+template:
+    helm template {{ RELEASE }} {{ CHART }}
+
+[doc("render templates with dev overlay")]
+[group("✅ Validate")]
+template-dev:
+    helm template {{ RELEASE }} {{ CHART }} -f {{ VALUES_DEV }}
+
+[doc("diff upcoming changes against live release")]
+[group("✅ Validate")]
+diff *ARGS:
+    helm diff upgrade {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} {{ ARGS }}
+
+# --------------------------------------------------------------------------
+# Install / Upgrade / Uninstall
+# --------------------------------------------------------------------------
+
+[doc("install chart (production values, server-side apply)")]
+[group("🚀 Deploy")]
+install:
+    helm install {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} --create-namespace --server-side
+
+[doc("install chart (dev values, server-side apply)")]
+[group("🚀 Deploy")]
+install-dev:
+    helm install {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} --create-namespace --server-side -f {{ VALUES_DEV }}
+
+[doc("upgrade existing release (server-side apply)")]
+[group("🚀 Deploy")]
+upgrade *ARGS:
+    helm upgrade {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} --server-side {{ ARGS }}
+
+[doc("upgrade with dev overlay (server-side apply)")]
+[group("🚀 Deploy")]
+upgrade-dev *ARGS:
+    helm upgrade {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} --server-side -f {{ VALUES_DEV }} {{ ARGS }}
+
+[doc("upgrade with rollback on failure")]
+[group("🚀 Deploy")]
+upgrade-safe *ARGS:
+    helm upgrade {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} --server-side --rollback-on-failure {{ ARGS }}
+
+[doc("uninstall release")]
+[group("🚀 Deploy")]
+uninstall:
+    helm uninstall {{ RELEASE }} -n {{ NAMESPACE }}
+
+# --------------------------------------------------------------------------
+# Status
+# --------------------------------------------------------------------------
+
+[doc("show release status")]
+[group("📊 Status")]
+status:
+    helm status {{ RELEASE }} -n {{ NAMESPACE }}
+
+[doc("list all releases in namespace")]
+[group("📊 Status")]
+list:
+    helm list -n {{ NAMESPACE }}
+
+[doc("show deployed values")]
+[group("📊 Status")]
+values:
+    helm get values {{ RELEASE }} -n {{ NAMESPACE }}
+
+[doc("show release history")]
+[group("📊 Status")]
+history:
+    helm history {{ RELEASE }} -n {{ NAMESPACE }}
+
+# --------------------------------------------------------------------------
+# Doctor — Infrastructure health check
+# --------------------------------------------------------------------------
+
+[doc("check infrastructure health across all components")]
+[group("🩺 Doctor")]
+doctor:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    NS="{{ NAMESPACE }}"
+    PASS="\033[32m✔\033[0m"
+    FAIL="\033[31m✘\033[0m"
+    WARN="\033[33m⚠\033[0m"
+    SKIP="\033[90m–\033[0m"
+    ok=0; fail=0; skip=0
+
+    check() {
+      local name="$1"; shift
+      if result=$("$@" 2>&1); then
+        printf " ${PASS}  %-28s %s\n" "$name" "$result"
+        ((ok++))
+      else
+        printf " ${FAIL}  %-28s %s\n" "$name" "$result"
+        ((fail++))
+      fi
+    }
+
+    check_pod_ready() {
+      local name="$1" selector="$2"
+      local line
+      line=$(kubectl get pods -n "$NS" -l "$selector" --no-headers 2>/dev/null | head -1)
+      if [ -z "$line" ]; then
+        printf " ${SKIP}  %-28s %s\n" "$name" "no pods found"
+        ((skip++)); return
+      fi
+      local ready status
+      ready=$(echo "$line" | awk '{print $2}')
+      status=$(echo "$line" | awk '{print $3}')
+      if [ "$status" = "Running" ]; then
+        printf " ${PASS}  %-28s %s\n" "$name" "$ready $status"
+        ((ok++))
+      else
+        printf " ${FAIL}  %-28s %s\n" "$name" "$ready $status"
+        ((fail++))
+      fi
+    }
+
+    check_endpoint() {
+      local name="$1" svc="$2" port="$3" path="${4:-/}"
+      if kubectl get svc "$svc" -n "$NS" &>/dev/null; then
+        local code
+        code=$(kubectl exec deploy/"$(kubectl get deploy -n "$NS" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)" \
+          -n "$NS" -- curl -s -o /dev/null -w '%{http_code}' "http://${svc}:${port}${path}" 2>/dev/null || echo "000")
+        if [[ "$code" =~ ^[23] ]]; then
+          printf " ${PASS}  %-28s %s\n" "$name" "HTTP $code"
+          ((ok++))
+        else
+          printf " ${FAIL}  %-28s %s\n" "$name" "HTTP $code"
+          ((fail++))
+        fi
+      else
+        printf " ${SKIP}  %-28s %s\n" "$name" "service not found"
+        ((skip++))
+      fi
+    }
+
+    echo ""
+    echo "🩺 rara-infra doctor — namespace: $NS"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    # -- Helm release --
+    echo ""
+    echo "📦 Helm Release"
+    check "release deployed" bash -c "helm status {{ RELEASE }} -n $NS -o json 2>/dev/null | jq -r '.info.status'"
+
+    # -- Core infra --
+    echo ""
+    echo "🗄️  Core Infrastructure"
+    check_pod_ready "PostgreSQL"     "app.kubernetes.io/name=postgresql"
+    check_pod_ready "MinIO"          "app=minio"
+    check_pod_ready "ChromaDB"       "app.kubernetes.io/name=chromadb"
+    check_pod_ready "Crawl4AI"       "app.kubernetes.io/name=crawl4ai"
+
+    # -- Ingress & TLS --
+    echo ""
+    echo "🌐 Ingress & TLS"
+    check_pod_ready "Traefik"        "app.kubernetes.io/name=traefik"
+    check_pod_ready "cert-manager"   "app.kubernetes.io/name=cert-manager"
+    check "wildcard certificate" bash -c \
+      "kubectl get certificate -n $NS -o jsonpath='{.items[?(@.spec.dnsNames[0]==\"*.rara.local\")].status.conditions[0].status}' 2>/dev/null | grep -q True && echo 'Ready' || echo 'Not Ready'"
+
+    # -- Observability --
+    echo ""
+    echo "📈 Observability"
+    check_pod_ready "Prometheus"     "app.kubernetes.io/name=prometheus"
+    check_pod_ready "Grafana"        "app.kubernetes.io/name=grafana"
+    check_pod_ready "AlertManager"   "app.kubernetes.io/name=alertmanager"
+    check_pod_ready "Tempo"          "app.kubernetes.io/name=tempo"
+    check_pod_ready "Alloy"          "app.kubernetes.io/name=alloy"
+    check_pod_ready "Quickwit"       "app.kubernetes.io/name=quickwit"
+
+    # -- Platform services --
+    echo ""
+    echo "🔧 Platform Services"
+    check_pod_ready "Langfuse"       "app.kubernetes.io/name=langfuse"
+    check_pod_ready "Infisical"      "app.kubernetes.io/name=infisical"
+
+    # -- PVCs --
+    echo ""
+    echo "💾 Persistent Volumes"
+    check "PVC status" bash -c \
+      "total=\$(kubectl get pvc -n $NS --no-headers 2>/dev/null | wc -l | tr -d ' '); \
+       bound=\$(kubectl get pvc -n $NS --no-headers 2>/dev/null | grep -c Bound || true); \
+       echo \"\${bound}/\${total} Bound\""
+
+    # -- Summary --
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    printf "  ✔ %d passed" "$ok"
+    [ "$fail" -gt 0 ] && printf "  ✘ %d failed" "$fail"
+    [ "$skip" -gt 0 ] && printf "  – %d skipped" "$skip"
+    echo ""
+    [ "$fail" -gt 0 ] && exit 1 || exit 0

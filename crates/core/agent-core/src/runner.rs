@@ -253,7 +253,21 @@ impl AgentRunner {
         if let Some(ref sid) = self.session_id {
             run_span.set_attribute("langfuse.session.id", sid.clone());
         }
-        let _run_guard = run_span.enter();
+        self.run_agent_loop(model, tools, on_event)
+            .instrument(run_span)
+            .await
+    }
+
+    /// Agent loop body — always called inside an instrumented span from
+    /// [`run_with_model`].
+    async fn run_agent_loop(
+        &self,
+        model: &str,
+        tools: &ToolRegistry,
+        on_event: Option<&OnEvent>,
+    ) -> Result<AgentRunResponse> {
+        use tracing::Instrument;
+        use tracing_opentelemetry::OpenTelemetrySpanExt;
 
         // prepare messages with system prompt, optional history, and current user
         // message
@@ -536,7 +550,21 @@ impl AgentRunner {
         if let Some(ref sid) = self.session_id {
             run_span.set_attribute("langfuse.session.id", sid.clone());
         }
-        let _run_guard = run_span.enter();
+        self.run_streaming_loop(model, tools, tx)
+            .instrument(run_span)
+            .await
+    }
+
+    /// Streaming agent loop body — always called inside an instrumented span
+    /// from [`run_streaming_inner`].
+    async fn run_streaming_loop(
+        &self,
+        model: &str,
+        tools: &ToolRegistry,
+        tx: &mpsc::Sender<RunnerEvent>,
+    ) -> Result<()> {
+        use tracing::Instrument;
+        use tracing_opentelemetry::OpenTelemetrySpanExt;
 
         // ---- Prepare messages ----
         let mut messages: Vec<ChatCompletionRequestMessage> = {
@@ -590,7 +618,7 @@ impl AgentRunner {
             })?;
 
             let mut stream = provider.chat_completion_stream(request)
-                .instrument(llm_span.clone())
+                .instrument(llm_span)
                 .await?;
 
             // ---- Phase 2: Consume streaming chunks ----

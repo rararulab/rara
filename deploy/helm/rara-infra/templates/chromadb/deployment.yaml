@@ -35,7 +35,7 @@ spec:
               value: "FALSE"
           livenessProbe:
             httpGet:
-              path: /api/v1/heartbeat
+              path: /api/v2/heartbeat
               port: http
             initialDelaySeconds: 15
             periodSeconds: 15
@@ -43,7 +43,7 @@ spec:
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /api/v1/heartbeat
+              path: /api/v2/heartbeat
               port: http
             initialDelaySeconds: 10
             periodSeconds: 10

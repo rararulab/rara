@@ -6,6 +6,8 @@
 # ------------------------------------------------------------------------------
 kube-prometheus-stack:
   grafana:
+    persistence:
+      size: 512Mi
     resources:
       requests:
         cpu: 100m
@@ -121,37 +123,43 @@ langfuse:
   langfuse:
     resources:
       requests:
-        cpu: 100m
-        memory: 256Mi
-      limits:
-        cpu: 500m
+        cpu: 200m
         memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
   redis:
     deploy: true
     master:
+      persistence:
+        size: 256Mi
       resources:
         requests:
           cpu: 50m
           memory: 64Mi
   clickhouse:
     deploy: true
+    persistence:
+      size: 2Gi
     resources:
       requests:
         cpu: 100m
         memory: 256Mi
 
 # ------------------------------------------------------------------------------
-# Infisical
+# Consul
 # ------------------------------------------------------------------------------
-infisical:
-  infisical:
+consul:
+  server:
+    replicas: 1
+    storage: 1Gi
     resources:
       requests:
         cpu: 100m
         memory: 128Mi
       limits:
         cpu: 500m
-        memory: 512Mi
+        memory: 256Mi
 
 # ------------------------------------------------------------------------------
 # MinIO

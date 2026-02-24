@@ -4,11 +4,10 @@ use std::{
     sync::Arc,
 };
 
+use agent_core::prompt::types::{NotFoundSnafu, PromptEntry, PromptError, PromptSpec, WatcherSnafu};
+use agent_core::prompt::PromptRepo;
 use notify::{EventKind, RecursiveMode, Watcher};
 use tokio::sync::RwLock;
-
-use crate::types::{NotFoundSnafu, PromptEntry, PromptError, PromptSpec};
-use crate::PromptRepo;
 
 /// File-system backed prompt repository with in-memory cache and fs-notify watcher.
 pub struct FilePromptRepo {
@@ -91,11 +90,11 @@ impl FilePromptRepo {
         let (sync_tx, sync_rx) = std::sync::mpsc::channel();
 
         let mut watcher = notify::recommended_watcher(sync_tx)
-            .map_err(|e| PromptError::Watcher { source: e })?;
+            .map_err(|e| WatcherSnafu { message: e.to_string() }.build())?;
 
         watcher
             .watch(prompt_dir, RecursiveMode::Recursive)
-            .map_err(|e| PromptError::Watcher { source: e })?;
+            .map_err(|e| WatcherSnafu { message: e.to_string() }.build())?;
 
         // Bridge: spawn_blocking drains the std channel into a tokio channel.
         let (async_tx, mut async_rx) = tokio::sync::mpsc::channel::<notify::Event>(64);

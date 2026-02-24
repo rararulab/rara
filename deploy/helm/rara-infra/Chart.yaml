@@ -41,10 +41,10 @@ dependencies:
     repository: "https://langfuse.github.io/langfuse-k8s"
     condition: langfuse.enabled
 
-  - name: infisical
-    version: "0.4.2"
-    repository: "https://dl.cloudsmith.io/public/infisical/helm-charts/helm/charts/"
-    condition: infisical.enabled
+  - name: consul
+    version: "1.9.3"
+    repository: "https://helm.releases.hashicorp.com"
+    condition: consul.enabled
 
   - name: minio
     version: "5.4.0"

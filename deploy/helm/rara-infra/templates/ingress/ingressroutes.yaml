@@ -67,7 +67,7 @@ spec:
     - match: Host(`prometheus.{{ $domain }}`)
       kind: Rule
       services:
-        - name: {{ .Release.Name }}-kube-prometheus-stack-prometheus
+        - name: {{ .Release.Name }}-kube-prometheus-prometheus
           port: 9090
   tls:
     secretName: {{ $tlsSecret }}
@@ -89,7 +89,7 @@ spec:
     - match: Host(`alertmanager.{{ $domain }}`)
       kind: Rule
       services:
-        - name: {{ .Release.Name }}-kube-prometheus-stack-alertmanager
+        - name: {{ .Release.Name }}-kube-prometheus-alertmanager
           port: 9093
   tls:
     secretName: {{ $tlsSecret }}
@@ -164,21 +164,21 @@ spec:
     - match: Host(`langfuse.{{ $domain }}`)
       kind: Rule
       services:
-        - name: {{ .Release.Name }}-langfuse
+        - name: {{ .Release.Name }}-langfuse-web
           port: 3000
   tls:
     secretName: {{ $tlsSecret }}
 {{- end }}
 
-{{- if .Values.infisical.enabled }}
+{{- if .Values.consul.enabled }}
 ---
 # --------------------------------------------------------------------------
-# Infisical
+# Consul UI
 # --------------------------------------------------------------------------
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
-  name: {{ $fullName }}-infisical
+  name: {{ $fullName }}-consul
   namespace: {{ .Release.Namespace }}
   labels:
     {{- $labels | nindent 4 }}
@@ -186,11 +186,11 @@ spec:
   entryPoints:
     - websecure
   routes:
-    - match: Host(`infisical.{{ $domain }}`)
+    - match: Host(`consul.{{ $domain }}`)
       kind: Rule
       services:
-        - name: {{ .Release.Name }}-infisical
-          port: 8080
+        - name: consul-ui
+          port: 80
   tls:
     secretName: {{ $tlsSecret }}
 {{- end }}

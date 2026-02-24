@@ -65,7 +65,6 @@ members = [
     "crates/extensions/job-pipeline",
     "crates/extensions/mcp-admin",
     "crates/core/agent-core",
-    "crates/core/rara-prompt",
     "crates/core/tool-core",
     "crates/integrations/composio",
     "crates/extensions/workspace",
@@ -180,7 +179,6 @@ rara-model-admin = { path = "crates/extensions/model-admin" }
 rara-memory = { path = "crates/memory" }
 rara-model = { path = "crates/rara-model" }
 rara-paths = { path = "crates/paths" }
-rara-prompt = { path = "crates/core/rara-prompt" }
 rara-prompt-admin = { path = "crates/extensions/prompt-admin" }
 rara-server = { path = "crates/server" }
 rara-sessions = { path = "crates/sessions" }

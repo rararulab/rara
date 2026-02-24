@@ -105,7 +105,7 @@ pub struct PipelineService {
     notify_client: rara_domain_shared::notify::client::NotifyClient,
     composio_auth: Arc<dyn rara_composio::ComposioAuthProvider>,
     mcp_manager:   rara_mcp::manager::mgr::McpManager,
-    prompt_repo:   Arc<dyn rara_prompt::PromptRepo>,
+    prompt_repo:   Arc<dyn agent_core::prompt::PromptRepo>,
 
     /// Whether a pipeline run is currently in progress.
     running:       Arc<AtomicBool>,
@@ -130,7 +130,7 @@ impl PipelineService {
         notify_client: rara_domain_shared::notify::client::NotifyClient,
         composio_auth: Arc<dyn rara_composio::ComposioAuthProvider>,
         mcp_manager: rara_mcp::manager::mgr::McpManager,
-        prompt_repo: Arc<dyn rara_prompt::PromptRepo>,
+        prompt_repo: Arc<dyn agent_core::prompt::PromptRepo>,
     ) -> Self {
         let (broadcast_tx, _) = tokio::sync::broadcast::channel(256);
         Self {

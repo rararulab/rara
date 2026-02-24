@@ -20,6 +20,8 @@ fullnameOverride: ""
 # ------------------------------------------------------------------------------
 traefik:
   enabled: true
+  gateway:
+    enabled: false  # We use IngressRoute CRDs, not Gateway API
   ingressRoute:
     dashboard:
       enabled: false  # We manage IngressRoutes ourselves
@@ -54,6 +56,9 @@ kube-prometheus-stack:
     enabled: true
     adminUser: admin
     adminPassword: admin
+    persistence:
+      enabled: true
+      size: 2Gi
     sidecar:
       datasources:
         enabled: true
@@ -157,7 +162,7 @@ alloy:
 
         prometheus.remote_write "default" {
           endpoint {
-            url = "http://rara-infra-kube-prometheus-stack-prometheus:9090/api/v1/write"
+            url = "http://rara-infra-kube-prometheus-prometheus:9090/api/v1/write"
           }
         }
 
@@ -180,7 +185,7 @@ quickwit:
         endpoint: http://rara-infra-minio:9000
         access_key_id: minioadmin
         secret_access_key: minioadmin
-        force_path_style: true
+        force_path_style_access: true
         region: us-east-1
   searcher:
     replicaCount: 1
@@ -207,23 +212,27 @@ langfuse:
       value: "rara-langfuse-salt-change-me"
     features:
       telemetryEnabled: false
-  # Use the shared PostgreSQL instance
+  # Deploy Langfuse's own PostgreSQL instance (independent from rara's PG)
   postgresql:
-    deploy: false
-    host: rara-infra-postgresql
-    port: 5432
+    deploy: true
     auth:
-      username: postgres
-      password: postgres
-      database: langfuse
-    directUrl: "postgresql://postgres:postgres@rara-infra-postgresql:5432/langfuse"
+      password: langfuse
   # Deploy ClickHouse and Redis as Langfuse subcharts
   clickhouse:
     deploy: true
+    host: rara-infra-clickhouse
     auth:
       password: clickhouse
+    persistence:
+      enabled: true
+      size: 10Gi
   redis:
     deploy: true
+    host: rara-infra-redis-primary
+    master:
+      persistence:
+        enabled: true
+        size: 1Gi
   # Use the shared MinIO instance for S3 storage
   s3:
     deploy: false
@@ -243,10 +252,23 @@ langfuse:
       bucket: langfuse
 
 # ------------------------------------------------------------------------------
-# Infisical — Secrets management
+# Consul — Configuration center (KV store)
 # ------------------------------------------------------------------------------
-infisical:
+consul:
   enabled: true
+  global:
+    name: consul
+    datacenter: rara-dc1
+  server:
+    replicas: 1
+    storage: 5Gi
+    storageClass: null
+  client:
+    enabled: true
+  ui:
+    enabled: true
+  connectInject:
+    enabled: false  # We don't need service mesh, just KV config
 
 # ------------------------------------------------------------------------------
 # MinIO — Object storage
@@ -293,10 +315,11 @@ postgresql:
     postgresPassword: postgres
     database: rara
   primary:
-    initdb:
-      scripts:
-        create-langfuse-db.sql: |
-          CREATE DATABASE langfuse;
+    # pgmq image is not Bitnami — disable their security context overrides
+    podSecurityContext:
+      enabled: false
+    containerSecurityContext:
+      enabled: false
     persistence:
       enabled: true
       size: 10Gi

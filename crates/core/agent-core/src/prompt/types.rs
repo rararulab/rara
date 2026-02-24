@@ -31,6 +31,6 @@ pub enum PromptError {
     #[snafu(display("io error: {source}"))]
     Io { source: std::io::Error },
 
-    #[snafu(display("watcher error: {source}"))]
-    Watcher { source: notify::Error },
+    #[snafu(display("watcher error: {message}"))]
+    Watcher { message: String },
 }

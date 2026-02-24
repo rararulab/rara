@@ -15,6 +15,7 @@
 pub mod err;
 pub mod model;
 pub mod model_repo;
+pub mod prompt;
 pub mod provider;
 pub mod runner;
 pub mod subagent;

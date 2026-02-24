@@ -1,4 +1,4 @@
-use crate::PromptRepo;
+use super::PromptRepo;
 
 /// Compose a base prompt with an optional soul/personality prefix.
 ///
@@ -35,7 +35,7 @@ pub async fn resolve_soul(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{PromptEntry, PromptError};
+    use super::super::types::{PromptEntry, PromptError};
 
     // ---------------------------------------------------------------
     // compose_with_soul tests
