@@ -138,8 +138,8 @@ fn ollama_base_url(svc: &SettingsSvc) -> Result<String, OllamaError> {
 
 #[utoipa::path(
     get,
-    path = "/settings/ollama/health",
-    tag = "settings",
+    path = "/ai/ollama/health",
+    tag = "ai-admin",
     responses(
         (status = 200, description = "Ollama health status", body = OllamaHealthResponse),
     )
@@ -190,8 +190,8 @@ async fn ollama_health(
 
 #[utoipa::path(
     get,
-    path = "/settings/ollama/models",
-    tag = "settings",
+    path = "/ai/ollama/models",
+    tag = "ai-admin",
     responses(
         (status = 200, description = "Local Ollama models", body = OllamaModelListResponse),
     )
@@ -376,8 +376,8 @@ async fn ollama_pull_model(
 
 #[utoipa::path(
     delete,
-    path = "/settings/ollama/models",
-    tag = "settings",
+    path = "/ai/ollama/models",
+    tag = "ai-admin",
     request_body = DeleteModelRequest,
     responses(
         (status = 204, description = "Model deleted"),
@@ -422,8 +422,8 @@ async fn ollama_delete_model(
 
 #[utoipa::path(
     get,
-    path = "/settings/ollama/models/{name}/info",
-    tag = "settings",
+    path = "/ai/ollama/models/{name}/info",
+    tag = "ai-admin",
     params(("name" = String, Path, description = "Model name")),
     responses(
         (status = 200, description = "Model info", body = OllamaModelInfo),
@@ -504,7 +504,7 @@ pub fn ollama_management_routes() -> OpenApiRouter<SettingsSvc> {
         .routes(routes!(ollama_delete_model))
         .routes(routes!(ollama_model_info))
         .route(
-            "/settings/ollama/models/pull",
+            "/ai/ollama/models/pull",
             axum::routing::post(ollama_pull_model),
         )
 }

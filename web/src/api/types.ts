@@ -203,12 +203,6 @@ export interface TaskRunRecord {
 
 // Runtime Settings
 export interface RuntimeSettingsView {
-  ai: {
-    configured: boolean;
-    provider: string | null;
-    ollama_base_url: string | null;
-    openrouter_api_key: string | null;
-  };
   agent: {
     composio: {
       api_key: string | null;
@@ -216,16 +210,10 @@ export interface RuntimeSettingsView {
     };
   };
   job_pipeline?: JobPipelineSettings;
-  gmail?: GmailSettings;
   updated_at: string | null;
 }
 
 export interface RuntimeSettingsPatch {
-  ai?: {
-    provider?: string;
-    ollama_base_url?: string;
-    openrouter_api_key?: string;
-  };
   agent?: {
     composio?: {
       api_key?: string;
@@ -239,6 +227,20 @@ export interface RuntimeSettingsPatch {
     resume_project_path?: string;
     pipeline_cron?: string;
   };
+}
+
+export interface AiAdminSettingsView {
+  configured: boolean;
+  provider: string | null;
+  ollama_base_url: string | null;
+  openrouter_api_key: string | null;
+  updated_at: string | null;
+}
+
+export interface AiAdminUpdateRequest {
+  provider?: string;
+  ollama_base_url?: string;
+  openrouter_api_key?: string;
 }
 
 export interface ModelEntryView {
@@ -435,6 +437,16 @@ export interface GmailSettings {
   auto_send_enabled: boolean;
   address: string | null;
   app_password_hint: string | null;
+}
+
+export interface GmailAdminSettingsView extends GmailSettings {
+  updated_at: string | null;
+}
+
+export interface GmailAdminUpdateRequest {
+  address?: string;
+  app_password?: string;
+  auto_send_enabled?: boolean;
 }
 
 // Pipeline Status

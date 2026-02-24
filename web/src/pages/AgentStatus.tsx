@@ -16,18 +16,13 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
-import type { PromptFileView, RuntimeSettingsView, ScheduledTask } from "@/api/types";
+import type { PromptFileView, ScheduledTask } from "@/api/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Activity, Bot, Clock } from "lucide-react";
 
 export default function AgentStatus() {
-  const settingsQuery = useQuery({
-    queryKey: ["settings"],
-    queryFn: () => api.get<RuntimeSettingsView>("/api/v1/settings"),
-  });
-
   const agentJobsQuery = useQuery({
     queryKey: ["scheduler", "tasks"],
     queryFn: () => api.get<ScheduledTask[]>("/api/v1/scheduler/tasks"),
@@ -59,7 +54,7 @@ export default function AgentStatus() {
             <Bot className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            {settingsQuery.isLoading ? (
+            {soulPromptQuery.isLoading ? (
               <Skeleton className="h-6 w-24" />
             ) : (
               <Badge

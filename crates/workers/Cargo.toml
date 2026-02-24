@@ -26,11 +26,14 @@ async-openai = { workspace = true }
 agent-core = { workspace = true }
 rara-agents = { workspace = true }
 rara-coding-task = { workspace = true }
+rara-ai-admin = { workspace = true }
+rara-auth-admin = { workspace = true }
 rara-dispatcher-admin = { workspace = true }
 rara-workspace = { workspace = true }
 rara-composio = { workspace = true }
 rara-domain-analytics = { workspace = true }
 rara-ext-job-pipeline = { workspace = true }
+rara-gmail-admin = { workspace = true }
 rara-domain-application = { workspace = true }
 rara-domain-chat = { workspace = true }
 rara-domain-interview = { workspace = true }

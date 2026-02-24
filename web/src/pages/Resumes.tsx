@@ -34,7 +34,7 @@ export default function Resumes() {
 
   const { data: sshKey, isLoading: sshLoading } = useQuery({
     queryKey: ["ssh-key"],
-    queryFn: () => api.get<SshKeyResponse>("/api/v1/settings/ssh-key"),
+    queryFn: () => api.get<SshKeyResponse>("/api/v1/auth/ssh-key"),
   });
 
   const { data: project, isLoading: projectLoading } = useQuery({

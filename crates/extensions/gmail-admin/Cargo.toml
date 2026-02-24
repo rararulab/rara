@@ -1,0 +1,16 @@
+[package]
+name = "rara-gmail-admin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+axum = { workspace = true }
+chrono = { workspace = true }
+rara-domain-shared = { workspace = true }
+utoipa = { workspace = true }
+utoipa-axum = { workspace = true }
+serde = { workspace = true }

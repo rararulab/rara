@@ -18,14 +18,19 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import type {
+  AiAdminSettingsView,
+  AiAdminUpdateRequest,
   CreateContactRequest,
   FallbackModelsView,
+  GmailAdminUpdateRequest,
+  GmailAdminSettingsView,
   ModelListView,
   PullProgressEvent,
   PromptFileView,
   PromptListView,
   RuntimeSettingsPatch,
   RuntimeSettingsView,
+  SshKeyResponse,
   TelegramContact,
   UpdateContactRequest,
 } from "@/api/types";
@@ -80,7 +85,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-type SettingKey = "ai" | "agent" | "telegram" | "composio" | "contacts";
+type SettingKey = "ai" | "agent" | "telegram" | "gmail" | "composio" | "contacts" | "auth";
 type ToastState = { kind: "success" | "error"; message: string } | null;
 type OpenRouterModel = {
   id: string;
@@ -130,6 +135,10 @@ export default function Settings() {
   const [composioApiKey, setComposioApiKey] = useState("");
   const [showComposioApiKey, setShowComposioApiKey] = useState(false);
   const [composioEntityId, setComposioEntityId] = useState("");
+  const [gmailAddress, setGmailAddress] = useState("");
+  const [gmailAppPassword, setGmailAppPassword] = useState("");
+  const [showGmailAppPassword, setShowGmailAppPassword] = useState(false);
+  const [gmailAutoSendEnabled, setGmailAutoSendEnabled] = useState(false);
   const [selectedPromptName, setSelectedPromptName] = useState("");
   const [selectedPromptContent, setSelectedPromptContent] = useState("");
   const [promptDirty, setPromptDirty] = useState(false);
@@ -167,6 +176,11 @@ export default function Settings() {
     queryFn: () => api.get<FallbackModelsView>("/api/v1/models/fallbacks"),
   });
 
+  const aiSettingsQuery = useQuery({
+    queryKey: ["ai-admin-settings"],
+    queryFn: () => api.get<AiAdminSettingsView>("/api/v1/ai/settings"),
+  });
+
 
   const promptsQuery = useQuery({
     queryKey: ["prompt-admin"],
@@ -176,6 +190,17 @@ export default function Settings() {
   const tgSettingsQuery = useQuery({
     queryKey: ["tg-admin-settings"],
     queryFn: () => api.get<TgAdminSettingsView>("/api/v1/tg/settings"),
+  });
+
+  const gmailSettingsQuery = useQuery({
+    queryKey: ["gmail-admin-settings"],
+    queryFn: () => api.get<GmailAdminSettingsView>("/api/v1/gmail/settings"),
+  });
+
+  const sshKeyQuery = useQuery({
+    queryKey: ["auth-admin", "ssh-key"],
+    queryFn: () => api.get<SshKeyResponse>("/api/v1/auth/ssh-key"),
+    enabled: false,
   });
 
   const contactsQuery = useQuery({
@@ -244,7 +269,7 @@ export default function Settings() {
     setPullError(null);
 
     try {
-      const res = await fetch(`${BASE_URL}/api/v1/settings/ollama/models/pull`, {
+      const res = await fetch(`${BASE_URL}/api/v1/ai/ollama/models/pull`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
@@ -389,10 +414,14 @@ export default function Settings() {
   };
 
   useEffect(() => {
+    if (!aiSettingsQuery.data) return;
+    setAiProvider(aiSettingsQuery.data.provider ?? "openrouter");
+    setOllamaBaseUrl(aiSettingsQuery.data.ollama_base_url ?? "http://localhost:11434");
+    setAiApiKey(aiSettingsQuery.data.openrouter_api_key ?? "");
+  }, [aiSettingsQuery.data]);
+
+  useEffect(() => {
     if (!settingsQuery.data) return;
-    setAiProvider(settingsQuery.data.ai.provider ?? "openrouter");
-    setOllamaBaseUrl(settingsQuery.data.ai.ollama_base_url ?? "http://localhost:11434");
-    setAiApiKey(settingsQuery.data.ai.openrouter_api_key ?? "");
     setComposioApiKey(settingsQuery.data.agent.composio.api_key ?? "");
     setComposioEntityId(settingsQuery.data.agent.composio.entity_id ?? "");
   }, [settingsQuery.data]);
@@ -408,6 +437,14 @@ export default function Settings() {
       tg.notification_channel_id == null ? "" : String(tg.notification_channel_id),
     );
   }, [tgSettingsQuery.data]);
+
+  useEffect(() => {
+    const gmail = gmailSettingsQuery.data;
+    if (!gmail) return;
+    setGmailAddress(gmail.address ?? "");
+    setGmailAppPassword("");
+    setGmailAutoSendEnabled(gmail.auto_send_enabled);
+  }, [gmailSettingsQuery.data]);
 
   useEffect(() => {
     if (!modelListQuery.data) return;
@@ -456,23 +493,6 @@ export default function Settings() {
     if (!current) return null;
     const next: RuntimeSettingsPatch = {};
 
-    const aiPatch: NonNullable<RuntimeSettingsPatch["ai"]> = {};
-    const currentProvider = current.ai.provider ?? "openrouter";
-    if (aiProvider !== currentProvider) {
-      aiPatch.provider = aiProvider;
-    }
-    const currentOllamaUrl = current.ai.ollama_base_url ?? "http://localhost:11434";
-    if (ollamaBaseUrl.trim() !== currentOllamaUrl) {
-      aiPatch.ollama_base_url = ollamaBaseUrl.trim();
-    }
-
-    if (aiProvider === "openrouter" && aiApiKey.trim() !== "") {
-      aiPatch.openrouter_api_key = aiApiKey.trim();
-    }
-    if (Object.keys(aiPatch).length > 0) {
-      next.ai = aiPatch;
-    }
-
     const agentPatch: NonNullable<RuntimeSettingsPatch["agent"]> = {};
     const currentComposioApiKey = current.agent.composio.api_key ?? "";
     const currentComposioEntityId = current.agent.composio.entity_id ?? "";
@@ -498,13 +518,28 @@ export default function Settings() {
 
     return Object.keys(next).length > 0 ? next : null;
   }, [
-    aiProvider,
-    ollamaBaseUrl,
-    aiApiKey,
     composioApiKey,
     composioEntityId,
     settingsQuery.data,
   ]);
+
+  const aiPatch = useMemo<AiAdminUpdateRequest | null>(() => {
+    const current = aiSettingsQuery.data;
+    if (!current) return null;
+    const next: AiAdminUpdateRequest = {};
+    const currentProvider = current.provider ?? "openrouter";
+    if (aiProvider !== currentProvider) {
+      next.provider = aiProvider;
+    }
+    const currentOllamaUrl = current.ollama_base_url ?? "http://localhost:11434";
+    if (ollamaBaseUrl.trim() !== currentOllamaUrl) {
+      next.ollama_base_url = ollamaBaseUrl.trim();
+    }
+    if (aiProvider === "openrouter" && aiApiKey.trim() !== "") {
+      next.openrouter_api_key = aiApiKey.trim();
+    }
+    return Object.keys(next).length > 0 ? next : null;
+  }, [aiApiKey, aiProvider, aiSettingsQuery.data, ollamaBaseUrl]);
 
   const modelAdminDiff = useMemo(() => {
     const currentModels: Record<string, string> = {};
@@ -580,13 +615,31 @@ export default function Settings() {
     telegramToken,
   ]);
 
+  const gmailPatch = useMemo<GmailAdminUpdateRequest | null>(() => {
+    const current = gmailSettingsQuery.data;
+    if (!current) return null;
+
+    const next: GmailAdminUpdateRequest = {};
+    const nextAddress = gmailAddress.trim();
+    const currentAddress = current.address ?? "";
+    if (nextAddress !== currentAddress) {
+      next.address = nextAddress;
+    }
+    if (gmailAppPassword.trim() !== "") {
+      next.app_password = gmailAppPassword.trim();
+    }
+    if (gmailAutoSendEnabled !== current.auto_send_enabled) {
+      next.auto_send_enabled = gmailAutoSendEnabled;
+    }
+
+    return Object.keys(next).length > 0 ? next : null;
+  }, [gmailAddress, gmailAppPassword, gmailAutoSendEnabled, gmailSettingsQuery.data]);
+
   const updateMutation = useMutation({
     mutationFn: (payload: RuntimeSettingsPatch) =>
       api.post<RuntimeSettingsView>("/api/v1/settings", payload),
     onSuccess: (updated) => {
       queryClient.setQueryData(["settings"], updated);
-      setAiApiKey(updated.ai.openrouter_api_key ?? "");
-      setShowAiApiKey(false);
       setComposioApiKey(updated.agent.composio.api_key ?? "");
       setComposioEntityId(updated.agent.composio.entity_id ?? "");
       setShowComposioApiKey(false);
@@ -622,10 +675,34 @@ export default function Settings() {
     },
   });
 
+  const gmailUpdateMutation = useMutation({
+    mutationFn: (payload: GmailAdminUpdateRequest) =>
+      api.put<GmailAdminSettingsView>("/api/v1/gmail/settings", payload),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(["gmail-admin-settings"], updated);
+      queryClient.setQueryData<RuntimeSettingsView>(["settings"], (prev) =>
+        prev
+          ? {
+              ...prev,
+              updated_at: updated.updated_at ?? prev.updated_at,
+            }
+          : prev,
+      );
+      setGmailAppPassword("");
+      setShowGmailAppPassword(false);
+      setSelectedSetting(null);
+      setToast({ kind: "success", message: "Gmail admin settings updated." });
+    },
+    onError: (e: unknown) => {
+      const message = e instanceof Error ? e.message : "Failed to update Gmail settings";
+      setToast({ kind: "error", message });
+    },
+  });
+
   const aiAdminSaveMutation = useMutation({
     mutationFn: async () => {
-      if (patch?.ai) {
-        await api.post<RuntimeSettingsView>("/api/v1/settings", { ai: patch.ai });
+      if (aiPatch) {
+        await api.put<AiAdminSettingsView>("/api/v1/ai/settings", aiPatch);
       }
       await Promise.all(
         Object.entries(modelAdminDiff.setOps).map(([key, model]) =>
@@ -644,6 +721,7 @@ export default function Settings() {
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["settings"] }),
+        queryClient.invalidateQueries({ queryKey: ["ai-admin-settings"] }),
         queryClient.invalidateQueries({ queryKey: ["model-admin", "models"] }),
         queryClient.invalidateQueries({ queryKey: ["model-admin", "fallbacks"] }),
       ]);
@@ -685,22 +763,29 @@ export default function Settings() {
   });
 
   const handleSave = () => {
-    if (!settingsQuery.data) return;
     if (selectedSetting === "ai") {
-      const aiSettingsPatch = patch?.ai ? { ai: patch.ai } : null;
-      if (!aiSettingsPatch && !modelAdminDiff.hasChanges) {
+      if (!aiPatch && !modelAdminDiff.hasChanges) {
         setToast({ kind: "error", message: "No valid AI/model admin changes to save." });
         return;
       }
       aiAdminSaveMutation.mutate();
       return;
     }
+    if (!settingsQuery.data) return;
     if (selectedSetting === "telegram") {
       if (!tgPatch) {
         setToast({ kind: "error", message: "No valid Telegram settings changes to save." });
         return;
       }
       tgUpdateMutation.mutate(tgPatch);
+      return;
+    }
+    if (selectedSetting === "gmail") {
+      if (!gmailPatch) {
+        setToast({ kind: "error", message: "No valid Gmail settings changes to save." });
+        return;
+      }
+      gmailUpdateMutation.mutate(gmailPatch);
       return;
     }
     if (!patch) {
@@ -723,17 +808,22 @@ export default function Settings() {
 
   const openSetting = (setting: SettingKey) => {
     setSelectedSetting(setting);
+    if (setting === "auth") {
+      void sshKeyQuery.refetch();
+    }
     if (setting === "ai") {
       setModelSearch("");
       setModelsError(null);
       setShowAiApiKey(false);
+    } else if (setting === "gmail") {
+      setShowGmailAppPassword(false);
     } else if (setting === "composio") {
       setShowComposioApiKey(false);
     }
   };
 
   const fetchModels = useCallback(async () => {
-    const key = aiApiKey.trim() || settingsQuery.data?.ai.openrouter_api_key?.trim() || "";
+    const key = aiApiKey.trim() || aiSettingsQuery.data?.openrouter_api_key?.trim() || "";
     if (!key) {
       setModelsError("Please enter your OpenRouter API key first.");
       return;
@@ -779,7 +869,7 @@ export default function Settings() {
     } finally {
       setModelsLoading(false);
     }
-  }, [aiApiKey, settingsQuery.data?.ai.openrouter_api_key]);
+  }, [aiApiKey, aiSettingsQuery.data?.openrouter_api_key]);
 
   useEffect(() => {
     if (!toast) return;
@@ -790,7 +880,7 @@ export default function Settings() {
   useEffect(() => {
     if (selectedSetting !== "ai") return;
     if (aiProvider !== "openrouter") return;
-    if (!settingsQuery.data?.ai.openrouter_api_key) return;
+    if (!aiSettingsQuery.data?.openrouter_api_key) return;
     if (models.length > 0) return;
     if (modelsLoading) return;
     void fetchModels();
@@ -800,7 +890,7 @@ export default function Settings() {
     models.length,
     modelsLoading,
     selectedSetting,
-    settingsQuery.data?.ai.openrouter_api_key,
+    aiSettingsQuery.data?.openrouter_api_key,
   ]);
 
   if (settingsQuery.isLoading) {
@@ -828,21 +918,28 @@ export default function Settings() {
   const selectedPromptMeta = availablePrompts.find((p) => p.name === selectedPromptName);
   const isDialogOpen = selectedSetting !== null;
   const currentTelegram = tgSettingsQuery.data;
-
-  const providerLabel = (current.ai.provider ?? "openrouter") === "ollama" ? "Ollama" : "OpenRouter";
+  const aiCurrent = aiSettingsQuery.data;
+  const gmailCurrent = gmailSettingsQuery.data;
+  const providerLabel = (aiCurrent?.provider ?? "openrouter") === "ollama" ? "Ollama" : "OpenRouter";
 
   const dialogTitle =
     selectedSetting === "ai"
       ? `Model Admin (${providerLabel})`
+      : selectedSetting === "gmail"
+        ? "Gmail Admin"
       : selectedSetting === "composio"
         ? "Composio"
       : selectedSetting === "agent"
         ? "Prompt Admin"
+        : selectedSetting === "auth"
+          ? "Auth"
         : selectedSetting === "contacts"
           ? "Telegram Contacts"
           : "Telegram Admin";
   const dialogSaving = selectedSetting === "telegram"
     ? tgUpdateMutation.isPending
+    : selectedSetting === "gmail"
+      ? gmailUpdateMutation.isPending
     : selectedSetting === "ai"
       ? aiAdminSaveMutation.isPending
     : updateMutation.isPending;
@@ -1034,169 +1131,178 @@ export default function Settings() {
         </p>
       </div>
 
-      <div className="space-y-3">
-        <button
-          type="button"
-          className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
-          onClick={() => openSetting("ai")}
-        >
-          <div className="flex items-center gap-3">
-            <Sparkles className="h-4 w-4 text-muted-foreground" />
-            <div className="space-y-1">
-              <p className="font-medium">Model Admin ({providerLabel})</p>
-              <p className="text-xs text-muted-foreground">
-                Default: {modelMap["default"] ?? "openai/gpt-4o"}
-                {providerLabel === "OpenRouter" && <> · Key: {current.ai.openrouter_api_key ? "Set" : "Not set"}</>}
-                {providerLabel === "Ollama" && <> · URL: {current.ai.ollama_base_url ?? "localhost:11434"}</>}
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <Badge variant={current.ai.configured ? "default" : "secondary"}>
-              {current.ai.configured ? "Configured" : "Not configured"}
-            </Badge>
-            <ChevronRight className="h-4 w-4 text-muted-foreground" />
-          </div>
-        </button>
-
-        <button
-          type="button"
-          className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
-          onClick={() => openSetting("composio")}
-        >
-          <div className="flex items-center gap-3">
-            <Sparkles className="h-4 w-4 text-muted-foreground" />
-            <div className="space-y-1">
-              <p className="font-medium">Composio</p>
-              <p className="text-xs text-muted-foreground">
-                Entity: {current.agent.composio.entity_id ?? "default"} · Key:{" "}
-                {current.agent.composio.api_key ? "Set" : "Not set"}
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <Badge variant={current.agent.composio.api_key ? "default" : "secondary"}>
-              {current.agent.composio.api_key ? "Configured" : "Not configured"}
-            </Badge>
-            <ChevronRight className="h-4 w-4 text-muted-foreground" />
-          </div>
-        </button>
-
-        <button
-          type="button"
-          className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
-          onClick={() => openSetting("agent")}
-        >
-          <div className="flex items-center gap-3">
-            <Bot className="h-4 w-4 text-muted-foreground" />
-            <div className="space-y-1">
-              <p className="font-medium">Prompt Admin</p>
-              <p className="text-xs text-muted-foreground">
-                {availablePrompts.length} prompt files · Runtime prompt editor
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <Badge variant="default">Enabled</Badge>
-            <ChevronRight className="h-4 w-4 text-muted-foreground" />
-          </div>
-        </button>
-
-        <button
-          type="button"
-          className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
-          onClick={() => openSetting("telegram")}
-        >
-          <div className="flex items-center gap-3">
-            <MessageSquare className="h-4 w-4 text-muted-foreground" />
-            <div className="space-y-1">
-              <p className="font-medium">Telegram Admin</p>
-              <p className="text-xs text-muted-foreground">
-                Chat ID: {currentTelegram?.chat_id ?? "Not set"} · Token:{" "}
-                {currentTelegram?.token_hint ?? "Not set"} · Group:{" "}
-                {currentTelegram?.allowed_group_chat_id ?? "Not set"} · Notif Channel:{" "}
-                {currentTelegram?.notification_channel_id ?? "Not set"}
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <Badge variant={currentTelegram?.configured ? "default" : "secondary"}>
-              {currentTelegram?.configured ? "Configured" : "Not configured"}
-            </Badge>
-            <ChevronRight className="h-4 w-4 text-muted-foreground" />
-          </div>
-        </button>
-
-        <button
-          type="button"
-          className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
-          onClick={() => openSetting("contacts")}
-        >
-          <div className="flex items-center gap-3">
-            <Users className="h-4 w-4 text-muted-foreground" />
-            <div className="space-y-1">
-              <p className="font-medium">Telegram Contacts</p>
-              <p className="text-xs text-muted-foreground">
-                {contactsQuery.data?.length ?? 0} contacts ·{" "}
-                {contactsQuery.data?.filter((c) => c.enabled).length ?? 0} enabled
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <Badge variant={(contactsQuery.data?.length ?? 0) > 0 ? "default" : "secondary"}>
-              {(contactsQuery.data?.length ?? 0) > 0 ? `${contactsQuery.data!.length} contacts` : "No contacts"}
-            </Badge>
-            <ChevronRight className="h-4 w-4 text-muted-foreground" />
-          </div>
-        </button>
-
-      </div>
-
-      {/* ── Gmail Status ─────────────────────────────────────── */}
-      {current.gmail && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Mail className="h-4 w-4" />
-              Gmail Integration
-            </CardTitle>
-            <CardDescription>
-              Gmail account used for sending job applications.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid gap-4 sm:grid-cols-3">
-              <div className="space-y-1 rounded-lg border bg-muted/30 p-3">
-                <p className="text-xs font-medium text-muted-foreground">Status</p>
-                <div className="mt-1">
-                  <Badge variant={current.gmail.configured ? "default" : "secondary"}>
-                    {current.gmail.configured ? "Configured" : "Not configured"}
-                  </Badge>
-                </div>
-              </div>
-              <div className="space-y-1 rounded-lg border bg-muted/30 p-3">
-                <p className="text-xs font-medium text-muted-foreground">Email Address</p>
-                <p className="text-sm font-medium">
-                  {current.gmail.address ?? "Not set"}
+      <div className="space-y-6">
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">AI</p>
+          <button
+            type="button"
+            className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
+            onClick={() => openSetting("ai")}
+          >
+            <div className="flex items-center gap-3">
+              <Sparkles className="h-4 w-4 text-muted-foreground" />
+              <div className="space-y-1">
+                <p className="font-medium">Model Admin ({providerLabel})</p>
+                <p className="text-xs text-muted-foreground">
+                  Default: {modelMap["default"] ?? "openai/gpt-4o"}
+                  {providerLabel === "OpenRouter" && <> · Key: {aiCurrent?.openrouter_api_key ? "Set" : "Not set"}</>}
+                  {providerLabel === "Ollama" && <> · URL: {aiCurrent?.ollama_base_url ?? "localhost:11434"}</>}
                 </p>
-                {current.gmail.app_password_hint && (
-                  <p className="text-xs text-muted-foreground">
-                    Password: {current.gmail.app_password_hint}
-                  </p>
-                )}
-              </div>
-              <div className="space-y-1 rounded-lg border bg-muted/30 p-3">
-                <p className="text-xs font-medium text-muted-foreground">Auto-Send</p>
-                <div className="mt-1">
-                  <Badge variant={current.gmail.auto_send_enabled ? "default" : "secondary"}>
-                    {current.gmail.auto_send_enabled ? "Enabled" : "Disabled"}
-                  </Badge>
-                </div>
               </div>
             </div>
-          </CardContent>
-        </Card>
-      )}
+            <div className="flex items-center gap-3">
+              <Badge variant={aiCurrent?.configured ? "default" : "secondary"}>
+                {aiCurrent?.configured ? "Configured" : "Not configured"}
+              </Badge>
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+            </div>
+          </button>
+
+          <button
+            type="button"
+            className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
+            onClick={() => openSetting("agent")}
+          >
+            <div className="flex items-center gap-3">
+              <Bot className="h-4 w-4 text-muted-foreground" />
+              <div className="space-y-1">
+                <p className="font-medium">Prompt Admin</p>
+                <p className="text-xs text-muted-foreground">
+                  {availablePrompts.length} prompt files · Runtime prompt editor
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <Badge variant="default">Enabled</Badge>
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+            </div>
+          </button>
+        </div>
+
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Channels</p>
+          <button
+            type="button"
+            className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
+            onClick={() => openSetting("telegram")}
+          >
+            <div className="flex items-center gap-3">
+              <MessageSquare className="h-4 w-4 text-muted-foreground" />
+              <div className="space-y-1">
+                <p className="font-medium">Telegram Admin</p>
+                <p className="text-xs text-muted-foreground">
+                  Chat ID: {currentTelegram?.chat_id ?? "Not set"} · Token:{" "}
+                  {currentTelegram?.token_hint ?? "Not set"} · Group:{" "}
+                  {currentTelegram?.allowed_group_chat_id ?? "Not set"} · Notif Channel:{" "}
+                  {currentTelegram?.notification_channel_id ?? "Not set"}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <Badge variant={currentTelegram?.configured ? "default" : "secondary"}>
+                {currentTelegram?.configured ? "Configured" : "Not configured"}
+              </Badge>
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+            </div>
+          </button>
+
+          <button
+            type="button"
+            className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
+            onClick={() => openSetting("contacts")}
+          >
+            <div className="flex items-center gap-3">
+              <Users className="h-4 w-4 text-muted-foreground" />
+              <div className="space-y-1">
+                <p className="font-medium">Telegram Contacts</p>
+                <p className="text-xs text-muted-foreground">
+                  {contactsQuery.data?.length ?? 0} contacts ·{" "}
+                  {contactsQuery.data?.filter((c) => c.enabled).length ?? 0} enabled
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <Badge variant={(contactsQuery.data?.length ?? 0) > 0 ? "default" : "secondary"}>
+                {(contactsQuery.data?.length ?? 0) > 0 ? `${contactsQuery.data!.length} contacts` : "No contacts"}
+              </Badge>
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+            </div>
+          </button>
+
+          <button
+            type="button"
+            className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
+            onClick={() => openSetting("gmail")}
+          >
+            <div className="flex items-center gap-3">
+              <Mail className="h-4 w-4 text-muted-foreground" />
+              <div className="space-y-1">
+                <p className="font-medium">Gmail Admin</p>
+                <p className="text-xs text-muted-foreground">
+                  Address: {gmailCurrent?.address ?? "Not set"} · Password: {gmailCurrent?.app_password_hint ?? "Not set"} · Auto-Send: {gmailCurrent?.auto_send_enabled ? "On" : "Off"}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <Badge variant={gmailCurrent?.configured ? "default" : "secondary"}>
+                {gmailCurrent?.configured ? "Configured" : "Not configured"}
+              </Badge>
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+            </div>
+          </button>
+        </div>
+
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Auth</p>
+          <button
+            type="button"
+            className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
+            onClick={() => openSetting("auth")}
+          >
+            <div className="flex items-center gap-3">
+              <ExternalLink className="h-4 w-4 text-muted-foreground" />
+              <div className="space-y-1">
+                <p className="font-medium">SSH Key</p>
+                <p className="text-xs text-muted-foreground">
+                  {sshKeyQuery.data?.public_key ? "Public key available" : "Load and copy public key"}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <Badge variant={sshKeyQuery.data?.public_key ? "default" : "secondary"}>
+                {sshKeyQuery.data?.public_key ? "Ready" : "Not loaded"}
+              </Badge>
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+            </div>
+          </button>
+        </div>
+
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Runtime</p>
+          <button
+            type="button"
+            className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
+            onClick={() => openSetting("composio")}
+          >
+            <div className="flex items-center gap-3">
+              <Sparkles className="h-4 w-4 text-muted-foreground" />
+              <div className="space-y-1">
+                <p className="font-medium">Composio</p>
+                <p className="text-xs text-muted-foreground">
+                  Entity: {current.agent.composio.entity_id ?? "default"} · Key:{" "}
+                  {current.agent.composio.api_key ? "Set" : "Not set"}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <Badge variant={current.agent.composio.api_key ? "default" : "secondary"}>
+                {current.agent.composio.api_key ? "Configured" : "Not configured"}
+              </Badge>
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+            </div>
+          </button>
+        </div>
+      </div>
 
       <Dialog open={isDialogOpen} onOpenChange={(open) => !open && setSelectedSetting(null)}>
         <DialogContent className="max-h-[85vh] overflow-y-auto p-0 sm:max-w-3xl">
@@ -1236,7 +1342,7 @@ export default function Settings() {
                       OpenRouter API Key
                     </Label>
                     <span className="text-xs text-muted-foreground">
-                      {current.ai.openrouter_api_key ? "Current: Saved in settings" : "No key saved"}
+                      {aiCurrent?.openrouter_api_key ? "Current: Saved in settings" : "No key saved"}
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
@@ -1245,7 +1351,7 @@ export default function Settings() {
                       type={showAiApiKey ? "text" : "password"}
                       value={aiApiKey}
                       onChange={(e) => setAiApiKey(e.target.value)}
-                      placeholder={current.ai.openrouter_api_key ?? "sk-or-v1-..."}
+                      placeholder={aiCurrent?.openrouter_api_key ?? "sk-or-v1-..."}
                       className="h-11"
                     />
                     <Button
@@ -1549,7 +1655,7 @@ export default function Settings() {
               </div>
 
               {/* llmfit model recommendations — on-demand */}
-              {settingsQuery.data?.ai.provider === "ollama" && (
+              {aiCurrent?.provider === "ollama" && (
                 <Card>
                   <CardHeader>
                     <div className="flex items-center justify-between">
@@ -1836,6 +1942,114 @@ export default function Settings() {
             </div>
           )}
 
+          {selectedSetting === "gmail" && (
+            <div className="space-y-6 px-6 py-5">
+              <div className="space-y-4 rounded-xl border bg-card p-4">
+                <div className="space-y-2">
+                  <Label htmlFor="gmail-address" className="text-base font-semibold">
+                    Gmail Address
+                  </Label>
+                  <Input
+                    id="gmail-address"
+                    type="email"
+                    value={gmailAddress}
+                    onChange={(e) => setGmailAddress(e.target.value)}
+                    placeholder="you@gmail.com"
+                    className="h-11"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="gmail-app-password" className="text-base font-semibold">
+                    App Password
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id="gmail-app-password"
+                      type={showGmailAppPassword ? "text" : "password"}
+                      value={gmailAppPassword}
+                      onChange={(e) => setGmailAppPassword(e.target.value)}
+                      placeholder={gmailCurrent?.app_password_hint ?? "xxxx xxxx xxxx xxxx"}
+                      className="h-11"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="h-11 w-11 shrink-0"
+                      onClick={() => setShowGmailAppPassword((v) => !v)}
+                    >
+                      {showGmailAppPassword ? <EyeOff /> : <Eye />}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Leave empty to keep the current app password.
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-between rounded-lg border bg-muted/30 p-3">
+                  <div>
+                    <p className="text-sm font-medium">Auto-Send</p>
+                    <p className="text-xs text-muted-foreground">
+                      Allow the pipeline to send emails automatically.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={gmailAutoSendEnabled}
+                    onCheckedChange={setGmailAutoSendEnabled}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {selectedSetting === "auth" && (
+            <div className="space-y-6 px-6 py-5">
+              <div className="space-y-3 rounded-xl border bg-card p-4">
+                <div className="flex items-center justify-between">
+                  <Label className="text-base font-semibold">SSH Public Key</Label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => sshKeyQuery.refetch()}
+                    disabled={sshKeyQuery.isFetching}
+                  >
+                    {sshKeyQuery.isFetching ? "Refreshing..." : "Refresh"}
+                  </Button>
+                </div>
+                <Textarea
+                  readOnly
+                  rows={6}
+                  className="font-mono text-xs"
+                  value={sshKeyQuery.data?.public_key ?? ""}
+                  placeholder={sshKeyQuery.isLoading ? "Loading SSH public key..." : "No SSH public key available"}
+                />
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={!sshKeyQuery.data?.public_key}
+                    onClick={async () => {
+                      if (!sshKeyQuery.data?.public_key) return;
+                      try {
+                        await navigator.clipboard.writeText(sshKeyQuery.data.public_key);
+                        setToast({ kind: "success", message: "SSH public key copied." });
+                      } catch (e) {
+                        setToast({
+                          kind: "error",
+                          message: e instanceof Error ? e.message : "Failed to copy SSH key",
+                        });
+                      }
+                    }}
+                  >
+                    Copy Public Key
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {selectedSetting === "contacts" && (
             <div className="space-y-4 px-6 py-5">
               <div className="flex items-center justify-between">
@@ -1989,7 +2203,7 @@ export default function Settings() {
             </div>
           )}
 
-          {selectedSetting !== "contacts" && (
+          {selectedSetting !== "contacts" && selectedSetting !== "auth" && selectedSetting !== "agent" && (
             <DialogFooter className="border-t px-6 py-4">
               <Button
                 variant="outline"

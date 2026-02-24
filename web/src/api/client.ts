@@ -130,17 +130,17 @@ export const api = {
   },
 
   getOllamaModelRecommendations: (limit = 10) =>
-    request<LlmfitRecommendationsResponse>(`/api/v1/settings/ollama/model-recommendations?limit=${limit}`),
+    request<LlmfitRecommendationsResponse>(`/api/v1/ai/ollama/model-recommendations?limit=${limit}`),
 
-  ollamaHealth: () => request<OllamaHealthResponse>('/api/v1/settings/ollama/health'),
-  ollamaListModels: () => request<OllamaModelListResponse>('/api/v1/settings/ollama/models'),
+  ollamaHealth: () => request<OllamaHealthResponse>('/api/v1/ai/ollama/health'),
+  ollamaListModels: () => request<OllamaModelListResponse>('/api/v1/ai/ollama/models'),
   ollamaDeleteModel: (name: string) =>
-    request<void>('/api/v1/settings/ollama/models', {
+    request<void>('/api/v1/ai/ollama/models', {
       method: 'DELETE',
       body: JSON.stringify({ name }),
     }),
   ollamaModelInfo: (name: string) =>
-    request<OllamaModelInfo>(`/api/v1/settings/ollama/models/${encodeURIComponent(name)}/info`),
+    request<OllamaModelInfo>(`/api/v1/ai/ollama/models/${encodeURIComponent(name)}/info`),
 
   updateDiscoveredJobAction(id: string, action: string): Promise<PipelineDiscoveredJob> {
     return request<PipelineDiscoveredJob>(`/api/v1/pipeline/discovered-jobs/${id}`, {
