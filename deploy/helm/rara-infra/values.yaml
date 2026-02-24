@@ -1,0 +1,350 @@
+# rara-infra — Umbrella chart values
+# Each component can be toggled with `enabled: true/false`
+#
+# NOTE: Helm template expressions ({{ .Release.Name }}) cannot be used in
+# values.yaml. Service references use the default release name "rara-infra".
+# If you install with a different release name, update the service hostnames
+# accordingly.
+
+global:
+  domain: rara.local
+  # Allow custom (non-Bitnami) container images for PostgreSQL
+  security:
+    allowInsecureImages: true
+
+nameOverride: ""
+fullnameOverride: ""
+
+# ------------------------------------------------------------------------------
+# Traefik — Ingress controller
+# ------------------------------------------------------------------------------
+traefik:
+  enabled: true
+  ingressRoute:
+    dashboard:
+      enabled: false  # We manage IngressRoutes ourselves
+  ports:
+    web:
+      http:
+        redirections:
+          entryPoint:
+            to: websecure
+            scheme: https
+            permanent: true
+  additionalArguments:
+    - "--serversTransport.insecureSkipVerify=true"
+
+# ------------------------------------------------------------------------------
+# cert-manager — TLS certificate management
+# ------------------------------------------------------------------------------
+cert-manager:
+  enabled: true
+  crds:
+    enabled: true
+    keep: true
+  prometheus:
+    enabled: true
+
+# ------------------------------------------------------------------------------
+# kube-prometheus-stack — Prometheus + Grafana + AlertManager
+# ------------------------------------------------------------------------------
+kube-prometheus-stack:
+  enabled: true
+  grafana:
+    enabled: true
+    adminUser: admin
+    adminPassword: admin
+    sidecar:
+      datasources:
+        enabled: true
+    additionalDataSources:
+      - name: Tempo
+        type: tempo
+        access: proxy
+        url: http://rara-infra-tempo:3100
+        jsonData:
+          tracesToLogsV2:
+            datasourceUid: quickwit
+          nodeGraph:
+            enabled: true
+      - name: Quickwit
+        type: quickwit-quickwit-datasource
+        access: proxy
+        url: http://rara-infra-quickwit-searcher:7280/api/v1
+  prometheus:
+    prometheusSpec:
+      enableRemoteWriteReceiver: true
+      retention: 7d
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: 10Gi
+  alertmanager:
+    enabled: true
+    alertmanagerSpec:
+      storage:
+        volumeClaimTemplate:
+          spec:
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: 2Gi
+
+# ------------------------------------------------------------------------------
+# Tempo — Distributed tracing backend (single binary mode)
+# ------------------------------------------------------------------------------
+tempo:
+  enabled: true
+  tempo:
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: "0.0.0.0:4317"
+          http:
+            endpoint: "0.0.0.0:4318"
+    storage:
+      trace:
+        backend: local
+        local:
+          path: /var/tempo/traces
+        wal:
+          path: /var/tempo/wal
+  persistence:
+    enabled: true
+    size: 5Gi
+
+# ------------------------------------------------------------------------------
+# Alloy — OpenTelemetry collector
+# ------------------------------------------------------------------------------
+alloy:
+  enabled: true
+  alloy:
+    configMap:
+      content: |
+        // OTLP receiver for traces, metrics, and logs
+        otelcol.receiver.otlp "default" {
+          grpc {
+            endpoint = "0.0.0.0:4317"
+          }
+          http {
+            endpoint = "0.0.0.0:4318"
+          }
+          output {
+            traces  = [otelcol.exporter.otlp.tempo.input]
+            metrics = [otelcol.exporter.prometheus.default.input]
+            logs    = [otelcol.exporter.otlphttp.quickwit.input]
+          }
+        }
+
+        // Export traces to Tempo
+        otelcol.exporter.otlp "tempo" {
+          client {
+            endpoint = "rara-infra-tempo:4317"
+            tls {
+              insecure = true
+            }
+          }
+        }
+
+        // Export metrics to Prometheus remote write
+        otelcol.exporter.prometheus "default" {
+          forward_to = [prometheus.remote_write.default.receiver]
+        }
+
+        prometheus.remote_write "default" {
+          endpoint {
+            url = "http://rara-infra-kube-prometheus-stack-prometheus:9090/api/v1/write"
+          }
+        }
+
+        // Export logs to Quickwit via OTLP HTTP
+        otelcol.exporter.otlphttp "quickwit" {
+          client {
+            endpoint = "http://rara-infra-quickwit-indexer:7281"
+          }
+        }
+
+# ------------------------------------------------------------------------------
+# Quickwit — Log search engine (single node)
+# ------------------------------------------------------------------------------
+quickwit:
+  enabled: true
+  config:
+    default_index_root_uri: s3://quickwit/indexes
+    storage:
+      s3:
+        endpoint: http://rara-infra-minio:9000
+        access_key_id: minioadmin
+        secret_access_key: minioadmin
+        force_path_style: true
+        region: us-east-1
+  searcher:
+    replicaCount: 1
+  indexer:
+    replicaCount: 1
+  metastore:
+    replicaCount: 1
+  control_plane:
+    replicaCount: 1
+  janitor:
+    enabled: true
+
+# ------------------------------------------------------------------------------
+# Langfuse — LLM observability platform
+# ------------------------------------------------------------------------------
+langfuse:
+  enabled: true
+  langfuse:
+    nextauth:
+      url: https://langfuse.rara.local
+      secret:
+        value: "rara-langfuse-nextauth-secret-change-me"
+    salt:
+      value: "rara-langfuse-salt-change-me"
+    features:
+      telemetryEnabled: false
+  # Use the shared PostgreSQL instance
+  postgresql:
+    deploy: false
+    host: rara-infra-postgresql
+    port: 5432
+    auth:
+      username: postgres
+      password: postgres
+      database: langfuse
+    directUrl: "postgresql://postgres:postgres@rara-infra-postgresql:5432/langfuse"
+  # Deploy ClickHouse and Redis as Langfuse subcharts
+  clickhouse:
+    deploy: true
+    auth:
+      password: clickhouse
+  redis:
+    deploy: true
+  # Use the shared MinIO instance for S3 storage
+  s3:
+    deploy: false
+    bucket: langfuse
+    region: us-east-1
+    endpoint: "http://rara-infra-minio:9000"
+    forcePathStyle: true
+    accessKeyId:
+      value: minioadmin
+    secretAccessKey:
+      value: minioadmin
+    eventUpload:
+      bucket: langfuse
+    batchExport:
+      bucket: langfuse
+    mediaUpload:
+      bucket: langfuse
+
+# ------------------------------------------------------------------------------
+# Infisical — Secrets management
+# ------------------------------------------------------------------------------
+infisical:
+  enabled: true
+
+# ------------------------------------------------------------------------------
+# MinIO — Object storage
+# ------------------------------------------------------------------------------
+minio:
+  enabled: true
+  mode: standalone
+  rootUser: minioadmin
+  rootPassword: minioadmin
+  consoleService:
+    type: ClusterIP
+    port: 9001
+  service:
+    type: ClusterIP
+    port: 9000
+  buckets:
+    - name: rara
+      policy: none
+      purge: false
+    - name: langfuse
+      policy: none
+      purge: false
+    - name: quickwit
+      policy: none
+      purge: false
+  persistence:
+    enabled: true
+    size: 10Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+
+# ------------------------------------------------------------------------------
+# PostgreSQL — Primary database (with pgmq extension)
+# ------------------------------------------------------------------------------
+postgresql:
+  enabled: true
+  image:
+    registry: ghcr.io
+    repository: pgmq/pg18-pgmq
+    tag: "v1.10.0"
+  auth:
+    postgresPassword: postgres
+    database: rara
+  primary:
+    initdb:
+      scripts:
+        create-langfuse-db.sql: |
+          CREATE DATABASE langfuse;
+    persistence:
+      enabled: true
+      size: 10Gi
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+
+# ------------------------------------------------------------------------------
+# ChromaDB — Vector database (custom template)
+# ------------------------------------------------------------------------------
+chromadb:
+  enabled: true
+  image:
+    repository: chromadb/chroma
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8000
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClass: ""
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+# ------------------------------------------------------------------------------
+# Crawl4AI — Web crawling service (custom template)
+# ------------------------------------------------------------------------------
+crawl4ai:
+  enabled: true
+  image:
+    repository: unclecode/crawl4ai
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 11235
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi

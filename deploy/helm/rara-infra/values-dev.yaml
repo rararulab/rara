@@ -1,0 +1,209 @@
+# rara-infra — Dev overlay
+# Minimal resources, single replicas, smaller PVCs
+
+# ------------------------------------------------------------------------------
+# kube-prometheus-stack
+# ------------------------------------------------------------------------------
+kube-prometheus-stack:
+  grafana:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  prometheus:
+    prometheusSpec:
+      retention: 2d
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            resources:
+              requests:
+                storage: 2Gi
+  alertmanager:
+    alertmanagerSpec:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 250m
+          memory: 256Mi
+      storage:
+        volumeClaimTemplate:
+          spec:
+            resources:
+              requests:
+                storage: 512Mi
+
+# ------------------------------------------------------------------------------
+# Tempo
+# ------------------------------------------------------------------------------
+tempo:
+  tempo:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  persistence:
+    size: 1Gi
+
+# ------------------------------------------------------------------------------
+# Alloy
+# ------------------------------------------------------------------------------
+alloy:
+  alloy:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+
+# ------------------------------------------------------------------------------
+# Quickwit
+# ------------------------------------------------------------------------------
+quickwit:
+  searcher:
+    replicaCount: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  indexer:
+    replicaCount: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  metastore:
+    replicaCount: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+  control_plane:
+    replicaCount: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+
+# ------------------------------------------------------------------------------
+# Langfuse
+# ------------------------------------------------------------------------------
+langfuse:
+  langfuse:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  redis:
+    deploy: true
+    master:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+  clickhouse:
+    deploy: true
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+
+# ------------------------------------------------------------------------------
+# Infisical
+# ------------------------------------------------------------------------------
+infisical:
+  infisical:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+# ------------------------------------------------------------------------------
+# MinIO
+# ------------------------------------------------------------------------------
+minio:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  persistence:
+    size: 2Gi
+
+# ------------------------------------------------------------------------------
+# PostgreSQL
+# ------------------------------------------------------------------------------
+postgresql:
+  primary:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    persistence:
+      size: 2Gi
+
+# ------------------------------------------------------------------------------
+# ChromaDB
+# ------------------------------------------------------------------------------
+chromadb:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  persistence:
+    size: 512Mi
+
+# ------------------------------------------------------------------------------
+# Crawl4AI
+# ------------------------------------------------------------------------------
+crawl4ai:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi

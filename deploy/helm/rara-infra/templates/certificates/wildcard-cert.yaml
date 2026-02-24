@@ -1,0 +1,24 @@
+{{- if index .Values "cert-manager" "enabled" }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "rara-infra.fullname" . }}-wildcard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rara-infra.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "rara-infra.fullname" . }}-wildcard-tls
+  duration: 8760h # 1 year
+  renewBefore: 720h # 30 days
+  commonName: "*.{{ .Values.global.domain }}"
+  dnsNames:
+    - "*.{{ .Values.global.domain }}"
+    - "{{ .Values.global.domain }}"
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ include "rara-infra.fullname" . }}-ca-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+{{- end }}

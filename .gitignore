@@ -64,3 +64,7 @@ public/
 # Node (Playwright screenshot script)
 node_modules/
 package-lock.json
+
+# Helm chart dependencies (downloaded via helm dependency build)
+deploy/helm/*/charts/
+deploy/helm/*/Chart.lock

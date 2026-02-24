@@ -1,0 +1,18 @@
+{{- if .Values.crawl4ai.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rara-infra.fullname" . }}-crawl4ai
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rara-infra.componentLabels" (dict "root" . "component" "crawl4ai") | nindent 4 }}
+spec:
+  type: {{ .Values.crawl4ai.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.crawl4ai.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "rara-infra.componentSelectorLabels" (dict "root" . "component" "crawl4ai") | nindent 4 }}
+{{- end }}

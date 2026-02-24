@@ -1,0 +1,223 @@
+{{- if .Values.traefik.enabled }}
+{{- $fullName := include "rara-infra.fullname" . -}}
+{{- $domain := .Values.global.domain -}}
+{{- $tlsSecret := printf "%s-wildcard-tls" $fullName -}}
+{{- $labels := include "rara-infra.labels" . -}}
+
+# --------------------------------------------------------------------------
+# Traefik Dashboard
+# --------------------------------------------------------------------------
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ $fullName }}-traefik-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`traefik.{{ $domain }}`)
+      kind: Rule
+      services:
+        - name: api@internal
+          kind: TraefikService
+  tls:
+    secretName: {{ $tlsSecret }}
+
+{{- if index .Values "kube-prometheus-stack" "enabled" }}
+---
+# --------------------------------------------------------------------------
+# Grafana
+# --------------------------------------------------------------------------
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ $fullName }}-grafana
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`grafana.{{ $domain }}`)
+      kind: Rule
+      services:
+        - name: {{ .Release.Name }}-grafana
+          port: 80
+  tls:
+    secretName: {{ $tlsSecret }}
+---
+# --------------------------------------------------------------------------
+# Prometheus
+# --------------------------------------------------------------------------
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ $fullName }}-prometheus
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`prometheus.{{ $domain }}`)
+      kind: Rule
+      services:
+        - name: {{ .Release.Name }}-kube-prometheus-stack-prometheus
+          port: 9090
+  tls:
+    secretName: {{ $tlsSecret }}
+---
+# --------------------------------------------------------------------------
+# AlertManager
+# --------------------------------------------------------------------------
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ $fullName }}-alertmanager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`alertmanager.{{ $domain }}`)
+      kind: Rule
+      services:
+        - name: {{ .Release.Name }}-kube-prometheus-stack-alertmanager
+          port: 9093
+  tls:
+    secretName: {{ $tlsSecret }}
+{{- end }}
+
+{{- if .Values.tempo.enabled }}
+---
+# --------------------------------------------------------------------------
+# Tempo
+# --------------------------------------------------------------------------
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ $fullName }}-tempo
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`tempo.{{ $domain }}`)
+      kind: Rule
+      services:
+        - name: {{ .Release.Name }}-tempo
+          port: 3100
+  tls:
+    secretName: {{ $tlsSecret }}
+{{- end }}
+
+{{- if .Values.quickwit.enabled }}
+---
+# --------------------------------------------------------------------------
+# Quickwit UI
+# --------------------------------------------------------------------------
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ $fullName }}-quickwit
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`quickwit.{{ $domain }}`)
+      kind: Rule
+      services:
+        - name: {{ .Release.Name }}-quickwit-searcher
+          port: 7280
+  tls:
+    secretName: {{ $tlsSecret }}
+{{- end }}
+
+{{- if .Values.langfuse.enabled }}
+---
+# --------------------------------------------------------------------------
+# Langfuse
+# --------------------------------------------------------------------------
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ $fullName }}-langfuse
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`langfuse.{{ $domain }}`)
+      kind: Rule
+      services:
+        - name: {{ .Release.Name }}-langfuse
+          port: 3000
+  tls:
+    secretName: {{ $tlsSecret }}
+{{- end }}
+
+{{- if .Values.infisical.enabled }}
+---
+# --------------------------------------------------------------------------
+# Infisical
+# --------------------------------------------------------------------------
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ $fullName }}-infisical
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`infisical.{{ $domain }}`)
+      kind: Rule
+      services:
+        - name: {{ .Release.Name }}-infisical
+          port: 8080
+  tls:
+    secretName: {{ $tlsSecret }}
+{{- end }}
+
+{{- if .Values.minio.enabled }}
+---
+# --------------------------------------------------------------------------
+# MinIO Console
+# --------------------------------------------------------------------------
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ $fullName }}-minio-console
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`minio.{{ $domain }}`)
+      kind: Rule
+      services:
+        - name: {{ .Release.Name }}-minio-console
+          port: 9001
+  tls:
+    secretName: {{ $tlsSecret }}
+{{- end }}
+
+{{- end }}

@@ -1,0 +1,47 @@
+{{- if .Values.crawl4ai.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rara-infra.fullname" . }}-crawl4ai
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rara-infra.componentLabels" (dict "root" . "component" "crawl4ai") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "rara-infra.componentSelectorLabels" (dict "root" . "component" "crawl4ai") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "rara-infra.componentLabels" (dict "root" . "component" "crawl4ai") | nindent 8 }}
+    spec:
+      containers:
+        - name: crawl4ai
+          image: "{{ .Values.crawl4ai.image.repository }}:{{ .Values.crawl4ai.image.tag }}"
+          imagePullPolicy: {{ .Values.crawl4ai.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 11235
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          {{- with .Values.crawl4ai.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}
