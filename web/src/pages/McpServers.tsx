@@ -49,6 +49,7 @@ import {
 
   ChevronDown,
   ChevronRight,
+  ExternalLink,
   FileText,
   Pencil,
   Play,
@@ -959,11 +960,29 @@ function ToolsList({ serverName }: { serverName: string }) {
             </Badge>
           )}
         </div>
-        {expanded ? (
-          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
-        )}
+        <div className="flex items-center gap-1">
+          {expanded && (
+            <a
+              href={`/grafana/explore?orgId=1&left=${encodeURIComponent(JSON.stringify({
+                datasource: "Quickwit",
+                queries: [{ refId: "A", expr: `{mcp_server="${serverName}"}` }],
+                range: { from: "now-1h", to: "now" },
+              }))}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="text-muted-foreground hover:text-foreground"
+              title="View in Grafana"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          )}
+          {expanded ? (
+            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+          )}
+        </div>
       </button>
       {expanded && (
         <div className="border-t px-3 pb-3 pt-2 space-y-1">
@@ -1058,11 +1077,29 @@ function ResourcesList({ serverName }: { serverName: string }) {
             </Badge>
           )}
         </div>
-        {expanded ? (
-          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
-        )}
+        <div className="flex items-center gap-1">
+          {expanded && (
+            <a
+              href={`/grafana/explore?orgId=1&left=${encodeURIComponent(JSON.stringify({
+                datasource: "Quickwit",
+                queries: [{ refId: "A", expr: `{mcp_server="${serverName}"}` }],
+                range: { from: "now-1h", to: "now" },
+              }))}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="text-muted-foreground hover:text-foreground"
+              title="View in Grafana"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          )}
+          {expanded ? (
+            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+          )}
+        </div>
       </button>
       {expanded && (
         <div className="border-t px-3 pb-3 pt-2 space-y-1">
@@ -1147,11 +1184,29 @@ function LogsList({ serverName }: { serverName: string }) {
             </Badge>
           )}
         </div>
-        {expanded ? (
-          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
-        )}
+        <div className="flex items-center gap-1">
+          {expanded && (
+            <a
+              href={`/grafana/explore?orgId=1&left=${encodeURIComponent(JSON.stringify({
+                datasource: "Quickwit",
+                queries: [{ refId: "A", expr: `{mcp_server="${serverName}"}` }],
+                range: { from: "now-1h", to: "now" },
+              }))}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="text-muted-foreground hover:text-foreground"
+              title="View in Grafana"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          )}
+          {expanded ? (
+            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+          )}
+        </div>
       </button>
       {expanded && (
         <div className="border-t px-3 pb-3 pt-2">
