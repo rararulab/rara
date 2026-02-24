@@ -50,8 +50,14 @@ impl JobFitAgent {
         let base = self.prompt_repo.get("ai/job_fit.system.md").await
             .map(|e| e.content)
             .unwrap_or_default();
-        let soul = agent_core::prompt::resolve_soul(self.prompt_repo.as_ref(), None).await;
-        let system_prompt = agent_core::prompt::compose_with_soul(&base, soul.as_deref(), "Task Instructions");
+        let soul = self.prompt_repo.get("agent/soul.md").await
+            .map(|e| e.content)
+            .unwrap_or_default();
+        let system_prompt = if soul.trim().is_empty() {
+            base
+        } else {
+            format!("{soul}\n\n# Task Instructions\n{base}")
+        };
 
         run_completion(&*self.provider, &self.model, &system_prompt, &user_input).await
     }

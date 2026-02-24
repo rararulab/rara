@@ -1,7 +1,5 @@
-mod compose;
 pub mod types;
 
-pub use compose::{compose_with_soul, resolve_soul};
 pub use types::{PromptEntry, PromptError, PromptSpec};
 
 /// Async trait for prompt storage and retrieval.

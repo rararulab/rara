@@ -63,16 +63,15 @@ impl AgentOrchestrator {
         user_text: &str,
         history_len: usize,
     ) -> String {
-        let settings_soul = self.settings_rx.borrow().agent.soul.clone();
-        let soul_prompt = agent_core::prompt::resolve_soul(
-            self.prompt_repo.as_ref(),
-            settings_soul.as_deref(),
-        ).await;
-        let mut system_prompt = agent_core::prompt::compose_with_soul(
-            base_prompt,
-            soul_prompt.as_deref(),
-            "Chat Instructions",
-        );
+        let soul = self.prompt_repo.get("agent/soul.md").await
+            .map(|e| e.content)
+            .unwrap_or_default();
+
+        let mut system_prompt = if soul.trim().is_empty() {
+            base_prompt.to_owned()
+        } else {
+            format!("{soul}\n\n# Chat Instructions\n{base_prompt}")
+        };
 
         // Inject core user profile.
         if let Some(ref mm) = self.memory_manager {
@@ -123,12 +122,15 @@ impl AgentOrchestrator {
         let policy = self.prompt_repo.get("workers/agent_policy.md").await
             .map(|e| e.content)
             .unwrap_or_default();
-        let settings_soul = self.settings_rx.borrow().agent.soul.clone();
-        let soul = agent_core::prompt::resolve_soul(
-            self.prompt_repo.as_ref(),
-            settings_soul.as_deref(),
-        ).await;
-        agent_core::prompt::compose_with_soul(&policy, soul.as_deref(), "Operational Policy")
+        let soul = self.prompt_repo.get("agent/soul.md").await
+            .map(|e| e.content)
+            .unwrap_or_default();
+
+        if soul.trim().is_empty() {
+            policy
+        } else {
+            format!("{soul}\n\n# Operational Policy\n{policy}")
+        }
     }
 
     // -- tool construction --------------------------------------------------
@@ -308,18 +310,20 @@ impl AgentOrchestrator {
 
     /// Resolve the current system prompt asynchronously.
     ///
-    /// Loads the base prompt from the prompt repo, then composes with the
-    /// soul prompt (settings override > repo file).
+    /// Loads the base prompt and soul from the prompt repo and composes them.
     pub async fn current_system_prompt(&self) -> String {
         let base_prompt = self.prompt_repo.get("chat/default_system.md").await
             .map(|e| e.content)
             .unwrap_or_default();
-        let settings_soul = self.settings_rx.borrow().agent.soul.clone();
-        let soul_prompt = agent_core::prompt::resolve_soul(
-            self.prompt_repo.as_ref(),
-            settings_soul.as_deref(),
-        ).await;
-        agent_core::prompt::compose_with_soul(&base_prompt, soul_prompt.as_deref(), "Chat Instructions")
+        let soul = self.prompt_repo.get("agent/soul.md").await
+            .map(|e| e.content)
+            .unwrap_or_default();
+
+        if soul.trim().is_empty() {
+            base_prompt
+        } else {
+            format!("{soul}\n\n# Chat Instructions\n{base_prompt}")
+        }
     }
 
     /// Return a reference to the prompt repository.

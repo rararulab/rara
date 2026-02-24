@@ -220,8 +220,6 @@ export interface RuntimeSettingsView {
     token_hint: string | null;
   };
   agent: {
-    soul: string | null;
-    chat_system_prompt: string | null;
     memory: {
       chroma_url: string | null;
       chroma_collection: string | null;
@@ -253,8 +251,6 @@ export interface RuntimeSettingsPatch {
     notification_channel_id?: number | null;
   };
   agent?: {
-    soul?: string | null;
-    chat_system_prompt?: string | null;
     memory?: {
       chroma_url?: string;
       chroma_collection?: string;

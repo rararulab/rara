@@ -57,19 +57,10 @@ export default function AgentStatus() {
             {settingsQuery.isLoading ? (
               <Skeleton className="h-6 w-24" />
             ) : (
-              <Badge
-                variant={
-                  settingsQuery.data?.agent?.soul ? "default" : "secondary"
-                }
-              >
-                {settingsQuery.data?.agent?.soul
-                  ? "Configured"
-                  : "Not Configured"}
-              </Badge>
+              <Badge variant="default">Active</Badge>
             )}
             <p className="text-xs text-muted-foreground mt-2">
-              Soul prompt:{" "}
-              {settingsQuery.data?.agent?.soul ? "Loaded" : "Not set"}
+              Soul prompt managed via Prompt Admin API
             </p>
           </CardContent>
         </Card>

@@ -94,11 +94,6 @@ pub struct TelegramSettings {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct AgentSettings {
-    /// The agent's personality/soul prompt. `None` uses the built-in default.
-    pub soul:               Option<String>,
-    /// Custom system prompt for chat sessions. `None` uses the built-in
-    /// default.
-    pub chat_system_prompt: Option<String>,
     /// Whether proactive messaging is enabled.
     pub proactive_enabled:  bool,
     /// Cron expression for proactive check schedule (5-field format).
@@ -227,8 +222,6 @@ pub struct TelegramRuntimeSettingsPatch {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct AgentRuntimeSettingsPatch {
-    pub soul:               Option<String>,
-    pub chat_system_prompt: Option<String>,
     pub proactive_enabled:  Option<bool>,
     pub proactive_cron:     Option<String>,
     pub memory:             Option<MemoryRuntimeSettingsPatch>,
@@ -314,12 +307,6 @@ impl Settings {
         }
 
         if let Some(agent) = patch.agent {
-            if let Some(soul) = agent.soul {
-                self.agent.soul = normalize_text(Some(soul));
-            }
-            if let Some(prompt) = agent.chat_system_prompt {
-                self.agent.chat_system_prompt = normalize_text(Some(prompt));
-            }
             if let Some(enabled) = agent.proactive_enabled {
                 self.agent.proactive_enabled = enabled;
             }
@@ -398,8 +385,6 @@ impl Settings {
         self.ai.favorite_models.retain(|s| !s.trim().is_empty());
         self.ai.favorite_models.dedup();
         self.telegram.bot_token = normalize_secret(self.telegram.bot_token.take());
-        self.agent.soul = normalize_text(self.agent.soul.take());
-        self.agent.chat_system_prompt = normalize_text(self.agent.chat_system_prompt.take());
         self.agent.proactive_cron = normalize_text(self.agent.proactive_cron.take());
         self.agent.memory.chroma_url = normalize_text(self.agent.memory.chroma_url.take());
         self.agent.memory.chroma_collection =
@@ -609,7 +594,6 @@ mod tests {
     #[test]
     fn agent_settings_default_values() {
         let settings = Settings::default();
-        assert_eq!(settings.agent.soul, None);
         assert!(!settings.agent.proactive_enabled);
         assert_eq!(settings.agent.proactive_cron, None);
     }
@@ -621,8 +605,6 @@ mod tests {
             ai:           None,
             telegram:     None,
             agent:        Some(AgentRuntimeSettingsPatch {
-                soul:               Some("You are a cheerful assistant.".to_owned()),
-                chat_system_prompt: None,
                 proactive_enabled:  Some(true),
                 proactive_cron:     Some("0 9 * * *".to_owned()),
                 memory:             None,
@@ -631,10 +613,6 @@ mod tests {
             }),
             job_pipeline: None,
         });
-        assert_eq!(
-            settings.agent.soul,
-            Some("You are a cheerful assistant.".to_owned())
-        );
         assert!(settings.agent.proactive_enabled);
         assert_eq!(settings.agent.proactive_cron, Some("0 9 * * *".to_owned()));
     }
@@ -643,8 +621,6 @@ mod tests {
     fn apply_patch_agent_partial() {
         let mut settings = Settings {
             agent: AgentSettings {
-                soul:               Some("existing soul".to_owned()),
-                chat_system_prompt: None,
                 proactive_enabled:  true,
                 proactive_cron:     Some("0 9 * * *".to_owned()),
                 memory:             MemorySettings::default(),
@@ -657,8 +633,6 @@ mod tests {
             ai:           None,
             telegram:     None,
             agent:        Some(AgentRuntimeSettingsPatch {
-                soul:               None,
-                chat_system_prompt: None,
                 proactive_enabled:  Some(false),
                 proactive_cron:     None,
                 memory:             None,
@@ -667,7 +641,6 @@ mod tests {
             }),
             job_pipeline: None,
         });
-        assert_eq!(settings.agent.soul, Some("existing soul".to_owned()));
         assert!(!settings.agent.proactive_enabled);
         assert_eq!(settings.agent.proactive_cron, Some("0 9 * * *".to_owned()));
     }
@@ -676,8 +649,6 @@ mod tests {
     fn normalize_agent_settings() {
         let mut settings = Settings {
             agent: AgentSettings {
-                soul:               Some("  ".to_owned()),
-                chat_system_prompt: None,
                 proactive_enabled:  true,
                 proactive_cron:     Some("  0 9 * * *  ".to_owned()),
                 memory:             MemorySettings::default(),
@@ -687,7 +658,6 @@ mod tests {
             ..Default::default()
         };
         settings.normalize();
-        assert_eq!(settings.agent.soul, None);
         assert_eq!(settings.agent.proactive_cron, Some("0 9 * * *".to_owned()));
     }
 
@@ -705,8 +675,6 @@ mod tests {
             ai:           None,
             telegram:     None,
             agent:        Some(AgentRuntimeSettingsPatch {
-                soul:               None,
-                chat_system_prompt: None,
                 proactive_enabled:  None,
                 proactive_cron:     None,
                 memory:             Some(MemoryRuntimeSettingsPatch {
@@ -828,8 +796,6 @@ mod tests {
             ai:           None,
             telegram:     None,
             agent:        Some(AgentRuntimeSettingsPatch {
-                soul:               None,
-                chat_system_prompt: None,
                 proactive_enabled:  None,
                 proactive_cron:     None,
                 memory:             None,

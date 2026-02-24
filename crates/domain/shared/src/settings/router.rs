@@ -92,8 +92,6 @@ pub struct RuntimeSettingsView {
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct AgentSettingsView {
-    pub soul:               Option<String>,
-    pub chat_system_prompt: Option<String>,
     pub memory:             MemorySettingsView,
     pub composio:           ComposioSettingsView,
 }
@@ -312,8 +310,6 @@ impl Into<RuntimeSettingsView> for Settings {
                 token_hint:              secret_hint(self.telegram.bot_token.as_deref()),
             },
             agent:        AgentSettingsView {
-                soul:               self.agent.soul.clone(),
-                chat_system_prompt: self.agent.chat_system_prompt.clone(),
                 memory:             MemorySettingsView {
                     chroma_url:          self.agent.memory.chroma_url.clone(),
                     chroma_collection:   self.agent.memory.chroma_collection.clone(),
