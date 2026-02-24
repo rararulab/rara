@@ -509,13 +509,6 @@ impl AppState {
         router = router.merge(prompt_router);
         api.merge(prompt_api);
 
-        // Telegram settings admin routes (OpenAPI).
-        merge_openapi_router(
-            &mut router,
-            &mut api,
-            rara_tg_admin::routes(self.settings_svc.clone()),
-        );
-
         (router, api)
     }
 

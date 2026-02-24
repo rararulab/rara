@@ -49,7 +49,6 @@ rara-server = { workspace = true }
 rara-sessions = { workspace = true }
 rara-skill-admin = { workspace = true }
 rara-skills = { workspace = true }
-rara-tg-admin = { workspace = true }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

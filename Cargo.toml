@@ -73,7 +73,6 @@ members = [
     "crates/extensions/model-admin",
     "crates/extensions/prompt-admin",
     "crates/extensions/settings-admin",
-    "crates/extensions/tg-admin",
     "crates/extensions/rara-git",
     "crates/common/infisical",
 ]
@@ -183,7 +182,6 @@ rara-memory = { path = "crates/memory" }
 rara-model = { path = "crates/rara-model" }
 rara-paths = { path = "crates/paths" }
 rara-prompt-admin = { path = "crates/extensions/prompt-admin" }
-rara-tg-admin = { path = "crates/extensions/tg-admin" }
 rara-server = { path = "crates/server" }
 rara-sessions = { path = "crates/sessions" }
 rara-skill-admin = { path = "crates/extensions/skill-admin" }

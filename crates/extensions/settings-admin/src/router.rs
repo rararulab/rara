@@ -15,6 +15,7 @@ pub fn routes(svc: SettingsSvc) -> OpenApiRouter {
         .merge(crate::ai::routes())
         .merge(crate::gmail::routes())
         .merge(crate::auth::routes())
+        .merge(crate::tg::routes())
         .with_state(svc)
 }
 
