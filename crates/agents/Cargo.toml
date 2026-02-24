@@ -13,15 +13,23 @@ categories.workspace = true
 [dependencies]
 agent-core.workspace = true
 async-openai.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+bon.workspace = true
+jiff.workspace = true
+prometheus.workspace = true
 rara-domain-shared.workspace = true
 rara-mcp.workspace = true
 rara-memory.workspace = true
 rara-paths.workspace = true
 rara-sessions.workspace = true
 rara-skills.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 snafu.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+ulid.workspace = true
 
 [lints]
 workspace = true

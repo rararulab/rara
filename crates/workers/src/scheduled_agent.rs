@@ -12,21 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Background worker that polls the [`AgentScheduler`] and executes due jobs
-//! via the agent runner.
+//! Background worker that polls the [`AgentScheduler`] and submits due jobs
+//! to the [`AgentDispatcher`].
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use common_worker::{FallibleWorker, WorkResult, WorkerContext};
-use rara_agents::builtin::scheduled::ScheduledAgent;
+use rara_agents::dispatcher::{AgentTaskKind, Priority};
 use rara_sessions::types::SessionKey;
 use tracing::{info, warn};
 
 use crate::{agent_scheduler::AgentScheduler, worker_state::AppState};
 
 /// Worker that periodically checks the agent scheduler for due jobs and
-/// executes each one through the full agent runner pipeline.
+/// submits each one to the dispatcher.
 pub struct AgentSchedulerWorker {
     scheduler: Arc<AgentScheduler>,
 }
@@ -54,18 +54,10 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
 
         info!(
             count = due_jobs.len(),
-            "agent-scheduler: executing due jobs"
+            "agent-scheduler: submitting due jobs to dispatcher"
         );
 
-        let agent = ScheduledAgent::new(state.orchestrator.clone());
-
         for job in &due_jobs {
-            info!(
-                job_id = %job.id,
-                message = %job.message,
-                "agent-scheduler: running job"
-            );
-
             // Load recent session history for context.
             let session_key = SessionKey::from_raw(job.session_key.clone());
             let history = match state
@@ -73,57 +65,42 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
                 .get_messages(&session_key, None, Some(50))
                 .await
             {
-                Ok(msgs) => Some(msgs),
+                Ok(msgs) => msgs,
                 Err(e) => {
                     warn!(
                         session = %session_key,
                         error = %e,
                         "agent-scheduler: failed to load session history"
                     );
-                    None
+                    Vec::new()
                 }
             };
 
-            // Delegate to ScheduledAgent.
-            match agent.run(&job.message, history.as_deref()).await {
-                Ok(output) => {
+            let task = rara_agents::dispatcher::AgentTask::builder()
+                .kind(AgentTaskKind::Scheduled {
+                    job_id: job.id.clone(),
+                })
+                .priority(Priority::Normal)
+                .session_key(job.session_key.clone())
+                .message(job.message.clone())
+                .history(history)
+                .dedup_key(format!("scheduled:{}", job.id))
+                .build();
+
+            match state.dispatcher.submit(task).await {
+                Ok(_rx) => {
                     info!(
                         job_id = %job.id,
-                        iterations = output.iterations,
-                        tool_calls = output.tool_calls_made,
-                        response_len = output.response_text.len(),
-                        "agent-scheduler: job completed"
+                        "agent-scheduler: job submitted to dispatcher"
                     );
-
-                    // Append user + assistant messages to session.
-                    if let Err(e) = state
-                        .chat_service
-                        .append_messages(&session_key, &job.message, &output.response_text)
-                        .await
-                    {
-                        warn!(
-                            job_id = %job.id,
-                            error = %e,
-                            "agent-scheduler: failed to persist session messages"
-                        );
-                    }
                 }
                 Err(e) => {
                     warn!(
                         job_id = %job.id,
                         error = %e,
-                        "agent-scheduler: agent run failed"
+                        "agent-scheduler: failed to submit job to dispatcher"
                     );
                 }
-            }
-
-            // Mark job executed (updates last_run_at, removes Delay jobs).
-            if let Err(e) = self.scheduler.mark_executed(&job.id).await {
-                warn!(
-                    job_id = %job.id,
-                    error = %e,
-                    "agent-scheduler: failed to mark job executed"
-                );
             }
         }
 

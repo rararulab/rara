@@ -13,12 +13,12 @@
 // limitations under the License.
 
 //! Proactive agent worker that periodically reviews recent chat activity
-//! and takes autonomous actions via a multi-turn agent loop with full tools.
+//! and submits a task to the [`AgentDispatcher`] for autonomous action.
 
 use async_trait::async_trait;
 use chrono::Utc;
 use common_worker::{FallibleWorker, WorkError, WorkResult, WorkerContext};
-use rara_agents::builtin::proactive::ProactiveAgent;
+use rara_agents::dispatcher::{AgentTaskKind, Priority};
 use rara_sessions::types::SessionKey;
 use tracing::{info, warn};
 
@@ -30,8 +30,8 @@ const PROACTIVE_SESSION_KEY: &str = "agent:proactive";
 /// Maximum number of historical messages loaded for context.
 const PROACTIVE_HISTORY_LIMIT: i64 = 50;
 
-/// Background worker that reviews recent chat sessions and proactively
-/// takes action via a multi-turn agent loop with full tool access.
+/// Background worker that reviews recent chat sessions and submits a
+/// proactive agent task to the dispatcher.
 pub struct ProactiveAgentWorker;
 
 #[async_trait]
@@ -71,45 +71,23 @@ impl FallibleWorker<AppState> for ProactiveAgentWorker {
             .await
             .unwrap_or_default();
 
-        // 3. Delegate to ProactiveAgent
-        let agent = ProactiveAgent::new(state.orchestrator.clone());
-        let output = agent
-            .run(&activity_summary, &history)
-            .await
-            .map_err(|e| WorkError::transient(format!("agent run failed: {e}")))?;
+        // 3. Submit task to dispatcher (fire-and-forget)
+        let task = rara_agents::dispatcher::AgentTask::builder()
+            .kind(AgentTaskKind::Proactive)
+            .priority(Priority::Low)
+            .session_key(PROACTIVE_SESSION_KEY.to_owned())
+            .message(activity_summary)
+            .history(history)
+            .dedup_key("proactive".to_owned())
+            .build();
 
-        let response_text = output.response_text;
-
-        // 4. Persist conversation turns to the proactive session
-        let user_prompt = ProactiveAgent::build_user_prompt(&activity_summary);
-        state
-            .chat_service
-            .append_message_raw(
-                &session_key,
-                &rara_sessions::types::ChatMessage::user(&user_prompt),
-            )
-            .await
-            .ok();
-        state
-            .chat_service
-            .append_message_raw(
-                &session_key,
-                &rara_sessions::types::ChatMessage::assistant(&response_text),
-            )
-            .await
-            .ok();
-
-        // 5. Log outcome
-        if response_text == "DONE" || response_text == "SKIP" || response_text.is_empty() {
-            info!("proactive agent: nothing to report");
-        } else {
-            info!(
-                iterations = output.iterations,
-                tool_calls = output.tool_calls_made,
-                response_len = response_text.len(),
-                "proactive agent completed: {}",
-                &response_text[..response_text.len().min(200)]
-            );
+        match state.dispatcher.submit(task).await {
+            Ok(_rx) => {
+                info!("proactive agent: task submitted to dispatcher");
+            }
+            Err(e) => {
+                warn!(error = %e, "proactive agent: failed to submit task to dispatcher");
+            }
         }
 
         Ok(())

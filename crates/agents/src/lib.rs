@@ -13,4 +13,5 @@
 // limitations under the License.
 
 pub mod builtin;
+pub mod dispatcher;
 pub mod orchestrator;

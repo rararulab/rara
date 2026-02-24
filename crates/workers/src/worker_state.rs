@@ -72,6 +72,9 @@ pub struct AppState {
     // -- coding tasks --
     pub coding_task_service: rara_coding_task::service::CodingTaskService,
 
+    // -- dispatcher --
+    pub dispatcher: Arc<rara_agents::dispatcher::AgentDispatcher>,
+
     // -- worker coordination --
     pub proactive_notify: Arc<RwLock<Option<IntervalOrNotifyHandle>>>,
 }
@@ -341,6 +344,22 @@ impl AppState {
         let contact_repo =
             rara_domain_shared::contacts::repository::ContactRepository::new(pool.clone());
 
+        // -- agent dispatcher ---------------------------------------------------
+
+        let session_persister: Arc<dyn rara_agents::dispatcher::SessionPersister> =
+            Arc::new(ChatServicePersister(chat_service.clone()));
+        let job_callback: Arc<dyn rara_agents::dispatcher::ScheduledJobCallback> =
+            Arc::new(AgentSchedulerCallback(agent_scheduler.clone()));
+        let log_store: Arc<dyn rara_agents::dispatcher::DispatcherLogStore> =
+            Arc::new(rara_agents::dispatcher::InMemoryLogStore::new(200));
+        let dispatcher = Arc::new(rara_agents::dispatcher::AgentDispatcher::new(
+            orchestrator.clone(),
+            session_persister,
+            job_callback,
+            log_store,
+        ));
+        info!("Agent dispatcher initialized");
+
         Ok(Self {
             ai_service,
             resume_service,
@@ -362,6 +381,7 @@ impl AppState {
             orchestrator,
             pipeline_service,
             coding_task_service,
+            dispatcher,
             proactive_notify: Arc::new(RwLock::new(None)),
         })
     }
@@ -452,6 +472,11 @@ impl AppState {
         router = router.merge(pipeline_router);
         api.merge(pipeline_api);
 
+        // Dispatcher routes (plain axum::Router, no OpenAPI metadata).
+        router = router.merge(rara_agents::dispatcher::router::routes(
+            self.dispatcher.clone(),
+        ));
+
         (router, api)
     }
 
@@ -535,6 +560,60 @@ impl rara_composio::ComposioAuthProvider for SettingsComposioAuthProvider {
 
 impl SettingsLlmProviderLoader {
     fn new(settings: rara_domain_shared::settings::SettingsSvc) -> Self { Self { settings } }
+}
+
+// ---------------------------------------------------------------------------
+// Dispatcher trait adapters
+// ---------------------------------------------------------------------------
+
+/// Adapter that implements [`SessionPersister`] by delegating to [`ChatService`].
+struct ChatServicePersister(rara_domain_chat::service::ChatService);
+
+#[async_trait]
+impl rara_agents::dispatcher::SessionPersister for ChatServicePersister {
+    async fn persist_messages(
+        &self,
+        session_key: &str,
+        user_text: &str,
+        assistant_text: &str,
+    ) -> Result<(), String> {
+        let key = rara_sessions::types::SessionKey::from_raw(session_key);
+        self.0
+            .append_messages(&key, user_text, assistant_text)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn persist_raw_message(
+        &self,
+        session_key: &str,
+        message: &rara_sessions::types::ChatMessage,
+    ) -> Result<(), String> {
+        let key = rara_sessions::types::SessionKey::from_raw(session_key);
+        self.0
+            .append_message_raw(&key, message)
+            .await
+            .map_err(|e| e.to_string())
+            .map(|_| ())
+    }
+
+    async fn ensure_session(&self, session_key: &str) {
+        let key = rara_sessions::types::SessionKey::from_raw(session_key);
+        let _ = self.0.ensure_session(&key, None, None, None).await;
+    }
+}
+
+/// Adapter that implements [`ScheduledJobCallback`] by delegating to [`AgentScheduler`].
+struct AgentSchedulerCallback(Arc<crate::agent_scheduler::AgentScheduler>);
+
+#[async_trait]
+impl rara_agents::dispatcher::ScheduledJobCallback for AgentSchedulerCallback {
+    async fn mark_executed(&self, job_id: &str) -> Result<(), String> {
+        self.0
+            .mark_executed(job_id)
+            .await
+            .map_err(|e| e.to_string())
+    }
 }
 
 #[async_trait]
