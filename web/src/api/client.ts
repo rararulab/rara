@@ -83,7 +83,7 @@ async function requestBlob(path: string, options?: RequestInit & { timeoutMs?: n
   }
 }
 
-import type { PipelineDiscoveredJob, PaginatedDiscoveredJobs, DiscoveredJobsStats, LlmfitRecommendationsResponse } from './types';
+import type { PipelineDiscoveredJob, PaginatedDiscoveredJobs, DiscoveredJobsStats, LlmfitRecommendationsResponse, OllamaHealthResponse, OllamaModelListResponse, OllamaModelInfo } from './types';
 
 export const api = {
   get: <T>(path: string) => request<T>(path),
@@ -131,6 +131,16 @@ export const api = {
 
   getOllamaModelRecommendations: (limit = 10) =>
     request<LlmfitRecommendationsResponse>(`/api/v1/settings/ollama/model-recommendations?limit=${limit}`),
+
+  ollamaHealth: () => request<OllamaHealthResponse>('/api/v1/settings/ollama/health'),
+  ollamaListModels: () => request<OllamaModelListResponse>('/api/v1/settings/ollama/models'),
+  ollamaDeleteModel: (name: string) =>
+    request<void>('/api/v1/settings/ollama/models', {
+      method: 'DELETE',
+      body: JSON.stringify({ name }),
+    }),
+  ollamaModelInfo: (name: string) =>
+    request<OllamaModelInfo>(`/api/v1/settings/ollama/models/${encodeURIComponent(name)}/info`),
 
   updateDiscoveredJobAction(id: string, action: string): Promise<PipelineDiscoveredJob> {
     return request<PipelineDiscoveredJob>(`/api/v1/pipeline/discovered-jobs/${id}`, {
