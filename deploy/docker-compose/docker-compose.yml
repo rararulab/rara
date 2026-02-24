@@ -1,0 +1,185 @@
+# =============================================================================
+# docker-compose for local development
+#
+# Usage:
+#   cd deploy/docker-compose
+#   cp .env.example .env   # adjust values if needed
+#   docker compose up -d
+#
+# Build contexts reference the repo root (../../) so that Dockerfiles in
+# docker/ can access the full workspace.
+# =============================================================================
+
+services:
+  # --------------------------------------------------------------------------
+  # PostgreSQL — primary database (with pgmq extension)
+  # --------------------------------------------------------------------------
+  postgres:
+    image: ghcr.io/pgmq/pg18-pgmq:v1.10.0
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-rara}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # --------------------------------------------------------------------------
+  # MinIO — S3-compatible object storage
+  # --------------------------------------------------------------------------
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # --------------------------------------------------------------------------
+  # MinIO init — create the default bucket
+  # --------------------------------------------------------------------------
+  minio-init:
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set myminio http://minio:9000 $${MINIO_ROOT_USER:-minioadmin} $${MINIO_ROOT_PASSWORD:-minioadmin};
+      mc mb myminio/${MINIO_BUCKET:-rara} --ignore-existing;
+      exit 0;
+      "
+
+  # --------------------------------------------------------------------------
+  # ChromaDB — vector store
+  # --------------------------------------------------------------------------
+  chroma:
+    image: chromadb/chroma
+    ports:
+      - "${CHROMA_PORT:-8000}:8000"
+    volumes:
+      - chroma-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --------------------------------------------------------------------------
+  # Crawl4AI — web crawler service
+  # --------------------------------------------------------------------------
+  crawl4ai:
+    image: unclecode/crawl4ai:latest
+    ports:
+      - "${CRAWL4AI_PORT:-11235}:11235"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11235/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --------------------------------------------------------------------------
+  # Consul — configuration center (dev mode, KV only)
+  # --------------------------------------------------------------------------
+  consul:
+    image: hashicorp/consul:1.20
+    command: agent -dev -client=0.0.0.0
+    ports:
+      - "${CONSUL_PORT:-8500}:8500"
+    healthcheck:
+      test: ["CMD", "consul", "members"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # --------------------------------------------------------------------------
+  # Consul init — seed KV with config values (mirrors Helm consul-kv-seed Job)
+  # --------------------------------------------------------------------------
+  consul-init:
+    image: curlimages/curl:latest
+    depends_on:
+      consul:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        CONSUL_ADDR="http://consul:8500"
+
+        put_kv() {
+          echo "Setting $$1"
+          curl -sf -X PUT -d "$$2" "$${CONSUL_ADDR}/v1/kv/$$1" > /dev/null
+        }
+
+        echo "Seeding Consul KV at $${CONSUL_ADDR} ..."
+
+        # Database
+        put_kv "rara/config/database/database_url" \
+          "postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-rara}"
+
+        # Object store (MinIO)
+        put_kv "rara/config/object_store/endpoint"        "http://minio:9000"
+        put_kv "rara/config/object_store/access_key_id"   "${MINIO_ROOT_USER:-minioadmin}"
+        put_kv "rara/config/object_store/secret_access_key" "${MINIO_ROOT_PASSWORD:-minioadmin}"
+        put_kv "rara/config/object_store/bucket"           "${MINIO_BUCKET:-rara}"
+
+        # Memory (ChromaDB)
+        put_kv "rara/config/memory/chroma_url" "http://chroma:8000"
+
+        echo "Consul KV seed complete."
+
+  # --------------------------------------------------------------------------
+  # App — backend (rara-cli server)
+  # --------------------------------------------------------------------------
+  app:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "${APP_HTTP_PORT:-25555}:25555"
+      - "${APP_GRPC_PORT:-50051}:50051"
+    environment:
+      CONSUL_HTTP_ADDR: http://consul:8500
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      chroma:
+        condition: service_healthy
+      consul-init:
+        condition: service_completed_successfully
+
+  # --------------------------------------------------------------------------
+  # Web — frontend (nginx + React SPA)
+  # --------------------------------------------------------------------------
+  web:
+    build:
+      context: ../..
+      dockerfile: docker/web.Dockerfile
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    environment:
+      API_URL: http://app:25555
+    depends_on:
+      - app
+
+volumes:
+  pgdata:
+  minio-data:
+  chroma-data:
