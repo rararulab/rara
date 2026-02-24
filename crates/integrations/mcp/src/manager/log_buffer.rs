@@ -41,6 +41,12 @@ pub struct McpLogBuffer {
 
 impl McpLogBuffer {
     pub async fn push(&self, server_name: &str, level: &str, message: String) {
+        match level {
+            "error" => tracing::error!(mcp_server = server_name, "{}", message),
+            "warn" => tracing::warn!(mcp_server = server_name, "{}", message),
+            "debug" => tracing::debug!(mcp_server = server_name, "{}", message),
+            _ => tracing::info!(mcp_server = server_name, "{}", message),
+        }
         let mut map = self.inner.write().await;
         let entries = map.entry(server_name.to_string()).or_default();
         if entries.len() >= MAX_ENTRIES_PER_SERVER {
