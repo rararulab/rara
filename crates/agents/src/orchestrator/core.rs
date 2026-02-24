@@ -150,18 +150,21 @@ impl AgentOrchestrator {
         user_content: UserContent,
         chat_history: Vec<ChatCompletionRequestMessage>,
     ) -> AgentRunner {
-        let fallback_models = {
+        let (provider_hint, fallback_models) = {
             let settings = self.settings_rx.borrow();
+            let provider_hint = settings.ai.provider.clone();
             let chain = settings.ai.fallback_chain(ModelScenario::Chat);
-            chain
+            let fallback_models = chain
                 .into_iter()
                 .skip(1)
                 .map(|s| s.to_owned().into())
-                .collect()
+                .collect();
+            (provider_hint, fallback_models)
         };
 
         AgentRunner::builder()
             .llm_provider(self.llm_provider.clone())
+            .provider_hint(provider_hint.unwrap_or_default())
             .model_name(model)
             .system_prompt(system_prompt)
             .user_content(user_content)
@@ -191,6 +194,14 @@ impl AgentOrchestrator {
 
         let runner = AgentRunner::builder()
             .llm_provider(self.llm_provider.clone())
+            .provider_hint(
+                self.settings_rx
+                    .borrow()
+                    .ai
+                    .provider
+                    .clone()
+                    .unwrap_or_default(),
+            )
             .model_name(model.to_owned())
             .system_prompt(
                 "You are a conversation summarizer. Be concise and preserve important details.",

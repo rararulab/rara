@@ -20,7 +20,8 @@ use async_openai::types::chat::{
     ChatCompletionRequestAssistantMessageArgs,
     ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
     ChatCompletionRequestToolMessageArgs, ChatCompletionRequestUserMessageArgs,
-    ChatCompletionToolChoiceOption, CreateChatCompletionRequestArgs,
+    ChatCompletionToolChoiceOption, ChatCompletionTools,
+    CreateChatCompletionRequestArgs,
     CreateChatCompletionResponse, FunctionCall, FinishReason, ToolChoiceOptions,
 };
 use backon::{ExponentialBuilder, Retryable};
@@ -30,7 +31,11 @@ use futures::StreamExt;
 use tokio::sync::mpsc;
 use tracing::{error, info, trace, warn};
 
-use crate::{err::prelude::*, model::LlmProviderLoaderRef, tool_registry::ToolRegistry};
+use crate::{
+    err::prelude::*,
+    model::{LlmProviderLoaderRef, ModelCapabilities},
+    tool_registry::ToolRegistry,
+};
 
 /// Maximum number of tool-call loop iterations before giving up.
 pub const MAX_ITERATIONS: usize = 25;
@@ -130,6 +135,8 @@ impl From<&str> for UserContent {
 #[builder(on(SharedString, into))]
 pub struct AgentRunner {
     llm_provider:    LlmProviderLoaderRef,
+    #[builder(default)]
+    provider_hint:   SharedString,
     model_name:      SharedString,
     system_prompt:   SharedString,
     user_content:    UserContent,
@@ -145,6 +152,34 @@ pub struct AgentRunner {
 }
 
 impl AgentRunner {
+    fn request_tools_for_model(
+        &self,
+        model: &str,
+        tools: &ToolRegistry,
+    ) -> Result<Option<Vec<ChatCompletionTools>>> {
+        if tools.is_empty() {
+            return Ok(None);
+        }
+
+        let provider_hint = if self.provider_hint.is_empty() {
+            None
+        } else {
+            Some(self.provider_hint.as_ref())
+        };
+        let capabilities = ModelCapabilities::detect(provider_hint, model);
+        if !capabilities.supports_tools {
+            warn!(
+                model_name = model,
+                provider_hint = ?provider_hint,
+                reason = capabilities.tools_disabled_reason.unwrap_or("unknown"),
+                "disabling tool calling for model without tool support"
+            );
+            return Ok(None);
+        }
+
+        Ok(Some(tools.to_chat_completion_tools()?))
+    }
+
     /// Run the agent loop: send messages to the LLM, execute tool calls,
     /// repeat.
     ///
@@ -240,11 +275,7 @@ impl AgentRunner {
             messages
         };
 
-        let request_tools = if tools.is_empty() {
-            None
-        } else {
-            Some(tools.to_chat_completion_tools()?)
-        };
+        let request_tools = self.request_tools_for_model(model, tools)?;
         let mut tool_calls_made = 0_usize;
 
         for iteration in 0..self.max_iterations {
@@ -525,11 +556,7 @@ impl AgentRunner {
             msgs
         };
 
-        let request_tools = if tools.is_empty() {
-            None
-        } else {
-            Some(tools.to_chat_completion_tools()?)
-        };
+        let request_tools = self.request_tools_for_model(model, tools)?;
         let mut tool_calls_made = 0_usize;
 
         // ---- Main agent loop ----

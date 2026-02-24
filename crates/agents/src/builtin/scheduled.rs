@@ -31,6 +31,7 @@ impl ScheduledAgent {
     ) -> Result<AgentOutput, OrchestratorError> {
         let policy = self.orchestrator.build_worker_policy().await;
         let model = self.orchestrator.current_default_model();
+        let provider_hint = self.orchestrator.settings().ai.provider;
         let tools = self.orchestrator.tools().clone();
 
         let chat_history = history
@@ -39,6 +40,7 @@ impl ScheduledAgent {
 
         let runner = agent_core::runner::AgentRunner::builder()
             .llm_provider(self.orchestrator.llm_provider().clone())
+            .provider_hint(provider_hint.unwrap_or_default())
             .model_name(model)
             .system_prompt(policy)
             .user_content(UserContent::Text(message.to_owned()))

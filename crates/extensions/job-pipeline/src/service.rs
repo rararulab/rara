@@ -258,6 +258,7 @@ impl PipelineService {
         let _ = self.broadcast_tx.send(PipelineStreamEvent::Started { run_id });
 
         let settings = self.settings_svc.current();
+        let provider_hint = settings.ai.provider.clone();
         let model = settings.ai.model_for(ModelScenario::Job).to_owned();
 
         // Build pipeline-specific tool registry (includes report_pipeline_stats).
@@ -277,6 +278,7 @@ impl PipelineService {
         // Build the agent runner and start streaming.
         let runner = AgentRunner::builder()
             .llm_provider(self.llm_provider.clone())
+            .provider_hint(provider_hint.unwrap_or_default())
             .model_name(model)
             .system_prompt(system_prompt)
             .user_content(UserContent::Text(kick_message))
