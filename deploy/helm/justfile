@@ -63,27 +63,27 @@ diff *ARGS:
 [doc("install chart (production values, server-side apply)")]
 [group("🚀 Deploy")]
 install:
-    helm install {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} --create-namespace --server-side
+    helm install {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} --create-namespace --server-side=true
 
 [doc("install chart (dev values, server-side apply)")]
 [group("🚀 Deploy")]
 install-dev:
-    helm install {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} --create-namespace --server-side -f {{ VALUES_DEV }}
+    helm install {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} --create-namespace --server-side=true -f {{ VALUES_DEV }}
 
 [doc("upgrade existing release (server-side apply)")]
 [group("🚀 Deploy")]
 upgrade *ARGS:
-    helm upgrade {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} --server-side {{ ARGS }}
+    helm upgrade {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} --server-side=true {{ ARGS }}
 
 [doc("upgrade with dev overlay (server-side apply)")]
 [group("🚀 Deploy")]
 upgrade-dev *ARGS:
-    helm upgrade {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} --server-side -f {{ VALUES_DEV }} {{ ARGS }}
+    helm upgrade {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} --server-side=true -f {{ VALUES_DEV }} {{ ARGS }}
 
 [doc("upgrade with rollback on failure")]
 [group("🚀 Deploy")]
 upgrade-safe *ARGS:
-    helm upgrade {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} --server-side --rollback-on-failure {{ ARGS }}
+    helm upgrade {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} --server-side=true --rollback-on-failure {{ ARGS }}
 
 [doc("uninstall release")]
 [group("🚀 Deploy")]
