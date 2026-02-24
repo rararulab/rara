@@ -85,7 +85,7 @@ bon = "^3.6"
 bytes = "^1.11"
 chrono = { version = "^0.4", features = ["serde"] }
 clap = { version = "4.4", features = ["derive"] }
-config = { version = "0.15", features = ["toml", "async"] }
+config = { version = "0.15", features = ["async"] }
 croner = "3"
 derive_more = { version = "2.0", features = ["full"] }
 dirs = "^6"

@@ -39,8 +39,8 @@ use yunara_store::{config::DatabaseConfig, db::DBStore};
 
 /// Static application configuration — immutable after startup.
 ///
-/// Deserializable from `config.toml` + environment variables via the `config`
-/// crate. For runtime-changeable values (OpenRouter key, Telegram token, …) see
+/// Loaded from Infisical (optional) + `RARA__`-prefixed environment variables.
+/// For runtime-changeable values (OpenRouter key, Telegram token, …) see
 /// [`rara_domain_shared::settings::SettingsSvc`].
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
@@ -73,16 +73,14 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
-    /// Load config from config file + Infisical (optional) + environment variables.
+    /// Load config from Infisical (optional) + environment variables.
     ///
     /// Source priority (highest first):
     /// 1. `RARA__`-prefixed environment variables
     /// 2. Infisical secrets (if configured)
-    /// 3. `config.toml` file in the working directory
-    /// 4. Code defaults
+    /// 3. Code defaults
     pub async fn new() -> Result<Self, config::ConfigError> {
-        let mut builder = config::ConfigBuilder::<config::builder::AsyncState>::default()
-            .add_source(config::File::with_name("config").required(false));
+        let mut builder = config::ConfigBuilder::<config::builder::AsyncState>::default();
 
         // Optional: add Infisical as async source (middle priority)
         if let Some(infisical_cfg) =
