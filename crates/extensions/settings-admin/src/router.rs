@@ -18,7 +18,10 @@ use axum::{Json, extract::State, http::StatusCode};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use rara_domain_shared::settings::{
-    model::{Settings, UpdateRequest},
+    model::{
+        AgentRuntimeSettingsPatch, AiRuntimeSettingsPatch, ComposioRuntimeSettingsPatch,
+        JobPipelineRuntimeSettingsPatch, MemoryRuntimeSettingsPatch, Settings, UpdateRequest,
+    },
     service::SettingsSvc,
 };
 
@@ -55,16 +58,16 @@ async fn get_settings(
     post,
     path = "/settings",
     tag = "settings",
-    request_body = UpdateRequest,
+    request_body = SettingsAdminUpdateRequest,
     responses(
         (status = 200, description = "Settings updated", body = RuntimeSettingsView),
     )
 )]
 async fn update_settings(
     State(state): State<SettingsSvc>,
-    Json(req): Json<UpdateRequest>,
+    Json(req): Json<SettingsAdminUpdateRequest>,
 ) -> Result<Json<RuntimeSettingsView>, (StatusCode, String)> {
-    let updated = state.update(req).await.map_err(|e| {
+    let updated = state.update(req.into()).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("failed to update runtime settings: {e}"),
@@ -77,7 +80,6 @@ async fn update_settings(
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct RuntimeSettingsView {
     pub ai: AiSettingsView,
-    pub telegram: TgSettingsResp,
     pub agent: AgentSettingsView,
     pub job_pipeline: JobPipelineSettingsView,
     pub gmail: GmailSettingsView,
@@ -88,8 +90,6 @@ pub struct RuntimeSettingsView {
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct AgentSettingsView {
-    pub soul: Option<String>,
-    pub chat_system_prompt: Option<String>,
     pub memory: MemorySettingsView,
     pub composio: ComposioSettingsView,
 }
@@ -109,23 +109,100 @@ pub struct ComposioSettingsView {
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct AiSettingsView {
-    pub configured: bool,
-    pub provider: Option<String>,
-    pub ollama_base_url: Option<String>,
+    pub configured:         bool,
+    pub provider:           Option<String>,
+    pub ollama_base_url:    Option<String>,
     pub openrouter_api_key: Option<String>,
-    #[schema(value_type = HashMap<String, String>)]
-    pub models: std::collections::HashMap<String, String>,
-    pub fallback_models: Vec<String>,
-    pub favorite_models: Vec<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
-pub struct TgSettingsResp {
-    pub configured: bool,
-    pub chat_id: Option<i64>,
-    pub allowed_group_chat_id: Option<i64>,
-    pub notification_channel_id: Option<i64>,
-    pub token_hint: Option<String>,
+#[derive(Debug, Clone, Default, serde::Deserialize, utoipa::ToSchema)]
+pub struct SettingsAdminUpdateRequest {
+    pub ai:           Option<AiSettingsAdminPatch>,
+    pub agent:        Option<AgentSettingsAdminPatch>,
+    pub job_pipeline: Option<JobPipelineRuntimeSettingsPatch>,
+}
+
+impl From<SettingsAdminUpdateRequest> for UpdateRequest {
+    fn from(value: SettingsAdminUpdateRequest) -> Self {
+        Self {
+            ai: value.ai.map(Into::into),
+            agent: value.agent.map(Into::into),
+            job_pipeline: value.job_pipeline,
+            telegram: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize, utoipa::ToSchema)]
+pub struct AiSettingsAdminPatch {
+    pub openrouter_api_key: Option<String>,
+    pub provider:           Option<String>,
+    pub ollama_base_url:    Option<String>,
+}
+
+impl From<AiSettingsAdminPatch> for AiRuntimeSettingsPatch {
+    fn from(value: AiSettingsAdminPatch) -> Self {
+        Self {
+            openrouter_api_key: value.openrouter_api_key,
+            provider: value.provider,
+            ollama_base_url: value.ollama_base_url,
+            models: None,
+            fallback_models: None,
+            favorite_models: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize, utoipa::ToSchema)]
+pub struct AgentSettingsAdminPatch {
+    pub memory:   Option<MemorySettingsAdminPatch>,
+    pub composio: Option<ComposioSettingsAdminPatch>,
+}
+
+impl From<AgentSettingsAdminPatch> for AgentRuntimeSettingsPatch {
+    fn from(value: AgentSettingsAdminPatch) -> Self {
+        Self {
+            soul: None,
+            chat_system_prompt: None,
+            proactive_enabled: None,
+            proactive_cron: None,
+            memory: value.memory.map(Into::into),
+            composio: value.composio.map(Into::into),
+            gmail: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize, utoipa::ToSchema)]
+pub struct MemorySettingsAdminPatch {
+    pub chroma_url:        Option<String>,
+    pub chroma_collection: Option<String>,
+    pub chroma_api_key:    Option<String>,
+}
+
+impl From<MemorySettingsAdminPatch> for MemoryRuntimeSettingsPatch {
+    fn from(value: MemorySettingsAdminPatch) -> Self {
+        Self {
+            chroma_url: value.chroma_url,
+            chroma_collection: value.chroma_collection,
+            chroma_api_key: value.chroma_api_key,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize, utoipa::ToSchema)]
+pub struct ComposioSettingsAdminPatch {
+    pub api_key:   Option<String>,
+    pub entity_id: Option<String>,
+}
+
+impl From<ComposioSettingsAdminPatch> for ComposioRuntimeSettingsPatch {
+    fn from(value: ComposioSettingsAdminPatch) -> Self {
+        Self {
+            api_key: value.api_key,
+            entity_id: value.entity_id,
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
@@ -296,20 +373,8 @@ impl Into<RuntimeSettingsView> for Settings {
                 provider: self.ai.provider.clone(),
                 ollama_base_url: self.ai.ollama_base_url.clone(),
                 openrouter_api_key: self.ai.openrouter_api_key.clone(),
-                models: self.ai.models.clone(),
-                fallback_models: self.ai.fallback_models.clone(),
-                favorite_models: self.ai.favorite_models.clone(),
-            },
-            telegram: TgSettingsResp {
-                configured: self.telegram.bot_token.is_some() && self.telegram.chat_id.is_some(),
-                chat_id: self.telegram.chat_id,
-                allowed_group_chat_id: self.telegram.allowed_group_chat_id,
-                notification_channel_id: self.telegram.notification_channel_id,
-                token_hint: secret_hint(self.telegram.bot_token.as_deref()),
             },
             agent: AgentSettingsView {
-                soul: self.agent.soul.clone(),
-                chat_system_prompt: self.agent.chat_system_prompt.clone(),
                 memory: MemorySettingsView {
                     chroma_url: self.agent.memory.chroma_url.clone(),
                     chroma_collection: self.agent.memory.chroma_collection.clone(),

@@ -19,6 +19,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import type {
   CreateContactRequest,
+  FallbackModelsView,
+  ModelListView,
   PullProgressEvent,
   PromptFileView,
   PromptListView,
@@ -153,6 +155,16 @@ export default function Settings() {
   const settingsQuery = useQuery({
     queryKey: ["settings"],
     queryFn: () => api.get<RuntimeSettingsView>("/api/v1/settings"),
+  });
+
+  const modelListQuery = useQuery({
+    queryKey: ["model-admin", "models"],
+    queryFn: () => api.get<ModelListView>("/api/v1/models"),
+  });
+
+  const modelFallbacksQuery = useQuery({
+    queryKey: ["model-admin", "fallbacks"],
+    queryFn: () => api.get<FallbackModelsView>("/api/v1/models/fallbacks"),
   });
 
 
@@ -378,12 +390,16 @@ export default function Settings() {
 
   useEffect(() => {
     if (!settingsQuery.data) return;
-    const tg = tgSettingsQuery.data ?? settingsQuery.data.telegram;
     setAiProvider(settingsQuery.data.ai.provider ?? "openrouter");
     setOllamaBaseUrl(settingsQuery.data.ai.ollama_base_url ?? "http://localhost:11434");
-    setModelMap(settingsQuery.data.ai.models ?? {});
-    setFallbackModels(settingsQuery.data.ai.fallback_models ?? []);
     setAiApiKey(settingsQuery.data.ai.openrouter_api_key ?? "");
+    setComposioApiKey(settingsQuery.data.agent.composio.api_key ?? "");
+    setComposioEntityId(settingsQuery.data.agent.composio.entity_id ?? "");
+  }, [settingsQuery.data]);
+
+  useEffect(() => {
+    const tg = tgSettingsQuery.data;
+    if (!tg) return;
     setTelegramChatId(tg.chat_id == null ? "" : String(tg.chat_id));
     setTelegramAllowedGroupChatId(
       tg.allowed_group_chat_id == null ? "" : String(tg.allowed_group_chat_id),
@@ -391,9 +407,20 @@ export default function Settings() {
     setTelegramNotificationChannelId(
       tg.notification_channel_id == null ? "" : String(tg.notification_channel_id),
     );
-    setComposioApiKey(settingsQuery.data.agent.composio.api_key ?? "");
-    setComposioEntityId(settingsQuery.data.agent.composio.entity_id ?? "");
-  }, [settingsQuery.data, tgSettingsQuery.data]);
+  }, [tgSettingsQuery.data]);
+
+  useEffect(() => {
+    if (!modelListQuery.data) return;
+    const next: Record<string, string> = {};
+    for (const entry of modelListQuery.data.models) {
+      next[entry.key] = entry.model;
+    }
+    setModelMap(next);
+  }, [modelListQuery.data]);
+
+  useEffect(() => {
+    setFallbackModels(modelFallbacksQuery.data?.models ?? []);
+  }, [modelFallbacksQuery.data]);
 
   useEffect(() => {
     const prompts = promptsQuery.data?.prompts ?? [];
@@ -439,78 +466,11 @@ export default function Settings() {
       aiPatch.ollama_base_url = ollamaBaseUrl.trim();
     }
 
-    // Compute models patch: diff modelMap vs current.ai.models
-    const currentModels = current.ai.models ?? {};
-    const modelsPatch: Record<string, string | null> = {};
-    // Keys that changed or were added
-    for (const [key, value] of Object.entries(modelMap)) {
-      if (currentModels[key] !== value) {
-        modelsPatch[key] = value;
-      }
-    }
-    // Keys that were removed
-    for (const key of Object.keys(currentModels)) {
-      if (!(key in modelMap)) {
-        modelsPatch[key] = null;
-      }
-    }
-    if (Object.keys(modelsPatch).length > 0) {
-      aiPatch.models = modelsPatch;
-    }
-
-    // Fallback models diff
-    const currentFallbacks = current.ai.fallback_models ?? [];
-    if (JSON.stringify(fallbackModels) !== JSON.stringify(currentFallbacks)) {
-      aiPatch.fallback_models = fallbackModels;
-    }
-
     if (aiProvider === "openrouter" && aiApiKey.trim() !== "") {
       aiPatch.openrouter_api_key = aiApiKey.trim();
     }
     if (Object.keys(aiPatch).length > 0) {
       next.ai = aiPatch;
-    }
-
-    const telegramPatch: NonNullable<RuntimeSettingsPatch["telegram"]> = {};
-    if (telegramToken.trim() !== "") {
-      telegramPatch.bot_token = telegramToken.trim();
-    }
-    if (telegramChatId.trim() !== "") {
-      const parsed = Number.parseInt(telegramChatId.trim(), 10);
-      if (!Number.isFinite(parsed)) {
-        return null;
-      }
-      if (parsed !== current.telegram.chat_id) {
-        telegramPatch.chat_id = parsed;
-      }
-    }
-    if (telegramAllowedGroupChatId.trim() !== "") {
-      const parsed = Number.parseInt(telegramAllowedGroupChatId.trim(), 10);
-      if (!Number.isFinite(parsed)) {
-        return null;
-      }
-      if (parsed !== current.telegram.allowed_group_chat_id) {
-        telegramPatch.allowed_group_chat_id = parsed;
-      }
-    }
-    // notification_channel_id: empty string means clear (send null), number means set
-    const trimmedNotifChannel = telegramNotificationChannelId.trim();
-    if (trimmedNotifChannel === "") {
-      // User cleared the field — if currently set, send null to clear it
-      if (current.telegram.notification_channel_id != null) {
-        telegramPatch.notification_channel_id = null;
-      }
-    } else {
-      const parsed = Number.parseInt(trimmedNotifChannel, 10);
-      if (!Number.isFinite(parsed)) {
-        return null;
-      }
-      if (parsed !== current.telegram.notification_channel_id) {
-        telegramPatch.notification_channel_id = parsed;
-      }
-    }
-    if (Object.keys(telegramPatch).length > 0) {
-      next.telegram = telegramPatch;
     }
 
     const agentPatch: NonNullable<RuntimeSettingsPatch["agent"]> = {};
@@ -543,9 +503,77 @@ export default function Settings() {
     aiApiKey,
     composioApiKey,
     composioEntityId,
-    modelMap,
-    fallbackModels,
     settingsQuery.data,
+  ]);
+
+  const modelAdminDiff = useMemo(() => {
+    const currentModels: Record<string, string> = {};
+    for (const entry of modelListQuery.data?.models ?? []) {
+      currentModels[entry.key] = entry.model;
+    }
+    const setOps: Record<string, string> = {};
+    const deleteOps: string[] = [];
+
+    for (const [key, value] of Object.entries(modelMap)) {
+      if (currentModels[key] !== value) {
+        setOps[key] = value;
+      }
+    }
+    for (const key of Object.keys(currentModels)) {
+      if (!(key in modelMap)) {
+        deleteOps.push(key);
+      }
+    }
+
+    const currentFallbacks = modelFallbacksQuery.data?.models ?? [];
+    const fallbackChanged = JSON.stringify(fallbackModels) !== JSON.stringify(currentFallbacks);
+
+    return {
+      setOps,
+      deleteOps,
+      fallbackChanged,
+      hasChanges: Object.keys(setOps).length > 0 || deleteOps.length > 0 || fallbackChanged,
+    };
+  }, [fallbackModels, modelFallbacksQuery.data, modelListQuery.data, modelMap]);
+
+  const tgPatch = useMemo<TgAdminUpdateRequest | null>(() => {
+    const current = tgSettingsQuery.data;
+    if (!current) return null;
+
+    const next: TgAdminUpdateRequest = {};
+    if (telegramToken.trim() !== "") {
+      next.bot_token = telegramToken.trim();
+    }
+    if (telegramChatId.trim() !== "") {
+      const parsed = Number.parseInt(telegramChatId.trim(), 10);
+      if (!Number.isFinite(parsed)) return null;
+      if (parsed !== current.chat_id) {
+        next.chat_id = parsed;
+      }
+    }
+    if (telegramAllowedGroupChatId.trim() !== "") {
+      const parsed = Number.parseInt(telegramAllowedGroupChatId.trim(), 10);
+      if (!Number.isFinite(parsed)) return null;
+      if (parsed !== current.allowed_group_chat_id) {
+        next.allowed_group_chat_id = parsed;
+      }
+    }
+    const trimmedNotifChannel = telegramNotificationChannelId.trim();
+    if (trimmedNotifChannel === "") {
+      if (current.notification_channel_id != null) {
+        next.notification_channel_id = null;
+      }
+    } else {
+      const parsed = Number.parseInt(trimmedNotifChannel, 10);
+      if (!Number.isFinite(parsed)) return null;
+      if (parsed !== current.notification_channel_id) {
+        next.notification_channel_id = parsed;
+      }
+    }
+
+    return Object.keys(next).length > 0 ? next : null;
+  }, [
+    tgSettingsQuery.data,
     telegramAllowedGroupChatId,
     telegramChatId,
     telegramNotificationChannelId,
@@ -562,7 +590,6 @@ export default function Settings() {
       setComposioApiKey(updated.agent.composio.api_key ?? "");
       setComposioEntityId(updated.agent.composio.entity_id ?? "");
       setShowComposioApiKey(false);
-      setTelegramToken("");
       setSelectedSetting(null);
       setToast({ kind: "success", message: "Settings updated successfully." });
     },
@@ -581,14 +608,6 @@ export default function Settings() {
         prev
           ? {
               ...prev,
-              telegram: {
-                ...prev.telegram,
-                configured: updated.configured,
-                chat_id: updated.chat_id,
-                allowed_group_chat_id: updated.allowed_group_chat_id,
-                notification_channel_id: updated.notification_channel_id,
-                token_hint: updated.token_hint,
-              },
               updated_at: updated.updated_at ?? prev.updated_at,
             }
           : prev,
@@ -599,6 +618,41 @@ export default function Settings() {
     },
     onError: (e: unknown) => {
       const message = e instanceof Error ? e.message : "Failed to update Telegram settings";
+      setToast({ kind: "error", message });
+    },
+  });
+
+  const aiAdminSaveMutation = useMutation({
+    mutationFn: async () => {
+      if (patch?.ai) {
+        await api.post<RuntimeSettingsView>("/api/v1/settings", { ai: patch.ai });
+      }
+      await Promise.all(
+        Object.entries(modelAdminDiff.setOps).map(([key, model]) =>
+          api.put(`/api/v1/models/${encodeURIComponent(key)}`, { model }),
+        ),
+      );
+      await Promise.all(
+        modelAdminDiff.deleteOps.map((key) =>
+          api.del(`/api/v1/models/${encodeURIComponent(key)}`),
+        ),
+      );
+      if (modelAdminDiff.fallbackChanged) {
+        await api.put<FallbackModelsView>("/api/v1/models/fallbacks", { models: fallbackModels });
+      }
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["settings"] }),
+        queryClient.invalidateQueries({ queryKey: ["model-admin", "models"] }),
+        queryClient.invalidateQueries({ queryKey: ["model-admin", "fallbacks"] }),
+      ]);
+      setShowAiApiKey(false);
+      setSelectedSetting(null);
+      setToast({ kind: "success", message: "Model admin settings updated." });
+    },
+    onError: (e: unknown) => {
+      const message = e instanceof Error ? e.message : "Failed to update model admin settings";
       setToast({ kind: "error", message });
     },
   });
@@ -632,13 +686,21 @@ export default function Settings() {
 
   const handleSave = () => {
     if (!settingsQuery.data) return;
+    if (selectedSetting === "ai") {
+      const aiSettingsPatch = patch?.ai ? { ai: patch.ai } : null;
+      if (!aiSettingsPatch && !modelAdminDiff.hasChanges) {
+        setToast({ kind: "error", message: "No valid AI/model admin changes to save." });
+        return;
+      }
+      aiAdminSaveMutation.mutate();
+      return;
+    }
     if (selectedSetting === "telegram") {
-      const telegramPatch = patch?.telegram;
-      if (!telegramPatch || Object.keys(telegramPatch).length === 0) {
+      if (!tgPatch) {
         setToast({ kind: "error", message: "No valid Telegram settings changes to save." });
         return;
       }
-      tgUpdateMutation.mutate(telegramPatch);
+      tgUpdateMutation.mutate(tgPatch);
       return;
     }
     if (!patch) {
@@ -765,7 +827,7 @@ export default function Settings() {
   const availablePrompts = promptsQuery.data?.prompts ?? [];
   const selectedPromptMeta = availablePrompts.find((p) => p.name === selectedPromptName);
   const isDialogOpen = selectedSetting !== null;
-  const currentTelegram = tgSettingsQuery.data ?? current.telegram;
+  const currentTelegram = tgSettingsQuery.data;
 
   const providerLabel = (current.ai.provider ?? "openrouter") === "ollama" ? "Ollama" : "OpenRouter";
 
@@ -781,6 +843,8 @@ export default function Settings() {
           : "Telegram Admin";
   const dialogSaving = selectedSetting === "telegram"
     ? tgUpdateMutation.isPending
+    : selectedSetting === "ai"
+      ? aiAdminSaveMutation.isPending
     : updateMutation.isPending;
 
   /** Well-known model keys displayed in the settings UI */
@@ -981,7 +1045,7 @@ export default function Settings() {
             <div className="space-y-1">
               <p className="font-medium">Model Admin ({providerLabel})</p>
               <p className="text-xs text-muted-foreground">
-                Default: {current.ai.models?.["default"] ?? "openai/gpt-4o"}
+                Default: {modelMap["default"] ?? "openai/gpt-4o"}
                 {providerLabel === "OpenRouter" && <> · Key: {current.ai.openrouter_api_key ? "Set" : "Not set"}</>}
                 {providerLabel === "Ollama" && <> · URL: {current.ai.ollama_base_url ?? "localhost:11434"}</>}
               </p>
@@ -1048,16 +1112,16 @@ export default function Settings() {
             <div className="space-y-1">
               <p className="font-medium">Telegram Admin</p>
               <p className="text-xs text-muted-foreground">
-                Chat ID: {currentTelegram.chat_id ?? "Not set"} · Token:{" "}
-                {currentTelegram.token_hint ?? "Not set"} · Group:{" "}
-                {currentTelegram.allowed_group_chat_id ?? "Not set"} · Notif Channel:{" "}
-                {currentTelegram.notification_channel_id ?? "Not set"}
+                Chat ID: {currentTelegram?.chat_id ?? "Not set"} · Token:{" "}
+                {currentTelegram?.token_hint ?? "Not set"} · Group:{" "}
+                {currentTelegram?.allowed_group_chat_id ?? "Not set"} · Notif Channel:{" "}
+                {currentTelegram?.notification_channel_id ?? "Not set"}
               </p>
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <Badge variant={currentTelegram.configured ? "default" : "secondary"}>
-              {currentTelegram.configured ? "Configured" : "Not configured"}
+            <Badge variant={currentTelegram?.configured ? "default" : "secondary"}>
+              {currentTelegram?.configured ? "Configured" : "Not configured"}
             </Badge>
             <ChevronRight className="h-4 w-4 text-muted-foreground" />
           </div>
@@ -1563,7 +1627,7 @@ export default function Settings() {
                                   size="sm"
                                   variant="outline"
                                   onClick={() => {
-                                    updateMutation.mutate({ ai: { models: { default: model.name } } });
+                                    setModelKey("default", model.name);
                                   }}
                                 >
                                   选用
@@ -1761,11 +1825,11 @@ export default function Settings() {
                     type="password"
                     value={telegramToken}
                     onChange={(e) => setTelegramToken(e.target.value)}
-                    placeholder={currentTelegram.token_hint ?? "123456:ABC..."}
+                    placeholder={currentTelegram?.token_hint ?? "123456:ABC..."}
                     className="h-11"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Current token hint: {currentTelegram.token_hint ?? "Not set"}
+                    Current token hint: {currentTelegram?.token_hint ?? "Not set"}
                   </p>
                 </div>
               </div>

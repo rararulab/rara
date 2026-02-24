@@ -16,7 +16,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
-import type { RuntimeSettingsView, ScheduledTask } from "@/api/types";
+import type { PromptFileView, RuntimeSettingsView, ScheduledTask } from "@/api/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -31,6 +31,11 @@ export default function AgentStatus() {
   const agentJobsQuery = useQuery({
     queryKey: ["scheduler", "tasks"],
     queryFn: () => api.get<ScheduledTask[]>("/api/v1/scheduler/tasks"),
+  });
+  const soulPromptQuery = useQuery({
+    queryKey: ["prompt-admin", "agent/soul.md"],
+    queryFn: () => api.get<PromptFileView>("/api/v1/prompts/agent/soul.md"),
+    retry: false,
   });
 
   const agentJobCount = agentJobsQuery.data?.length ?? 0;
@@ -57,10 +62,19 @@ export default function AgentStatus() {
             {settingsQuery.isLoading ? (
               <Skeleton className="h-6 w-24" />
             ) : (
-              <Badge variant="default">Active</Badge>
+              <Badge
+                variant={
+                  soulPromptQuery.data?.content ? "default" : "secondary"
+                }
+              >
+                {soulPromptQuery.data?.content
+                  ? "Configured"
+                  : "Not Configured"}
+              </Badge>
             )}
             <p className="text-xs text-muted-foreground mt-2">
-              Soul prompt managed via Prompt Admin API
+              Soul prompt:{" "}
+              {soulPromptQuery.data?.content ? "Loaded" : "Not set"}
             </p>
           </CardContent>
         </Card>

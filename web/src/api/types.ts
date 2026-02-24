@@ -208,16 +208,6 @@ export interface RuntimeSettingsView {
     provider: string | null;
     ollama_base_url: string | null;
     openrouter_api_key: string | null;
-    models: Record<string, string>;
-    fallback_models: string[];
-    favorite_models: string[];
-  };
-  telegram: {
-    configured: boolean;
-    chat_id: number | null;
-    allowed_group_chat_id: number | null;
-    notification_channel_id: number | null;
-    token_hint: string | null;
   };
   agent: {
     memory: {
@@ -240,15 +230,6 @@ export interface RuntimeSettingsPatch {
     provider?: string;
     ollama_base_url?: string;
     openrouter_api_key?: string;
-    models?: Record<string, string | null>;
-    fallback_models?: string[];
-    favorite_models?: string[];
-  };
-  telegram?: {
-    bot_token?: string;
-    chat_id?: number;
-    allowed_group_chat_id?: number;
-    notification_channel_id?: number | null;
   };
   agent?: {
     memory?: {
@@ -261,6 +242,26 @@ export interface RuntimeSettingsPatch {
       entity_id?: string;
     };
   };
+  job_pipeline?: {
+    job_preferences?: string;
+    score_threshold_auto?: number;
+    score_threshold_notify?: number;
+    resume_project_path?: string;
+    pipeline_cron?: string;
+  };
+}
+
+export interface ModelEntryView {
+  key: string;
+  model: string;
+}
+
+export interface ModelListView {
+  models: ModelEntryView[];
+}
+
+export interface FallbackModelsView {
+  models: string[];
 }
 
 export interface PromptFileView {
