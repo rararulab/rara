@@ -15,13 +15,18 @@
 //! # rara-prompt-admin
 //!
 //! Prompt management extension -- HTTP API for listing, viewing,
-//! updating, and resetting agent prompts.
+//! updating, and resetting agent prompts, plus filesystem-backed
+//! prompt repository and built-in prompt registration.
 //!
 //! ## HTTP API
 //!
 //! The [`router`] module exposes endpoints under `/api/v1/prompts/`.
 //! See [`router::routes`] for the full route table.
 
+mod builtin;
+mod file_repo;
 mod router;
 
+pub use builtin::all_builtin_prompts;
+pub use file_repo::FilePromptRepo;
 pub use router::{PromptFileView, PromptListView, PromptUpdateRequest, routes};

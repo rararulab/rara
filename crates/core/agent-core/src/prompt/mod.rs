@@ -1,12 +1,8 @@
-pub mod builtin;
-pub mod compose;
-pub mod file_repo;
+mod compose;
 pub mod types;
 
-pub use crate::builtin::all_builtin_prompts;
-pub use crate::compose::{compose_with_soul, resolve_soul};
-pub use crate::file_repo::FilePromptRepo;
-pub use crate::types::{PromptEntry, PromptError, PromptSpec};
+pub use compose::{compose_with_soul, resolve_soul};
+pub use types::{PromptEntry, PromptError, PromptSpec};
 
 /// Async trait for prompt storage and retrieval.
 #[async_trait::async_trait]

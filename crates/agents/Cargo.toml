@@ -21,7 +21,6 @@ prometheus.workspace = true
 rara-domain-shared.workspace = true
 rara-mcp.workspace = true
 rara-memory.workspace = true
-rara-prompt.workspace = true
 rara-sessions.workspace = true
 rara-skills.workspace = true
 serde.workspace = true

@@ -35,7 +35,7 @@ use axum::{
     http::StatusCode,
     routing::get,
 };
-use rara_prompt::{PromptError, PromptRepo};
+use agent_core::prompt::{PromptError, PromptRepo};
 use serde::{Deserialize, Serialize};
 use utoipa_axum::router::OpenApiRouter;
 

@@ -76,7 +76,7 @@ pub struct AppState {
     pub dispatcher: Arc<rara_agents::dispatcher::AgentDispatcher>,
 
     // -- prompt repo --
-    pub prompt_repo: Arc<dyn rara_prompt::PromptRepo>,
+    pub prompt_repo: Arc<dyn agent_core::prompt::PromptRepo>,
 
     // -- worker coordination --
     pub proactive_notify: Arc<RwLock<Option<IntervalOrNotifyHandle>>>,
@@ -100,10 +100,10 @@ impl AppState {
 
         // -- prompt repo -------------------------------------------------------
 
-        let prompt_repo: Arc<dyn rara_prompt::PromptRepo> = Arc::new(
-            rara_prompt::FilePromptRepo::new(
+        let prompt_repo: Arc<dyn agent_core::prompt::PromptRepo> = Arc::new(
+            rara_prompt_admin::FilePromptRepo::new(
                 rara_paths::prompts_dir().clone(),
-                rara_prompt::all_builtin_prompts(),
+                rara_prompt_admin::all_builtin_prompts(),
             )
             .await
             .whatever_context("Failed to initialize prompt repository")?,

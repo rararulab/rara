@@ -49,7 +49,7 @@ use crate::builtin::tasks::{
 pub struct TaskAgentService {
     settings:     SettingsSvc,
     llm_provider: LlmProviderLoaderRef,
-    prompt_repo:  Arc<dyn rara_prompt::PromptRepo>,
+    prompt_repo:  Arc<dyn agent_core::prompt::PromptRepo>,
 }
 
 impl TaskAgentService {
@@ -57,7 +57,7 @@ impl TaskAgentService {
     pub fn new(
         settings: SettingsSvc,
         llm_provider: LlmProviderLoaderRef,
-        prompt_repo: Arc<dyn rara_prompt::PromptRepo>,
+        prompt_repo: Arc<dyn agent_core::prompt::PromptRepo>,
     ) -> Self {
         Self {
             settings,

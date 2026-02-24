@@ -28,14 +28,14 @@ use crate::builtin::tasks::{completion::run_completion, error::TaskAgentError};
 pub struct ResumeAnalyzerAgent {
     provider:    Arc<dyn LlmProvider>,
     model:       String,
-    prompt_repo: Arc<dyn rara_prompt::PromptRepo>,
+    prompt_repo: Arc<dyn agent_core::prompt::PromptRepo>,
 }
 
 impl ResumeAnalyzerAgent {
     pub(crate) fn new(
         provider: Arc<dyn LlmProvider>,
         model: String,
-        prompt_repo: Arc<dyn rara_prompt::PromptRepo>,
+        prompt_repo: Arc<dyn agent_core::prompt::PromptRepo>,
     ) -> Self {
         Self {
             provider,
@@ -50,8 +50,8 @@ impl ResumeAnalyzerAgent {
         let base = self.prompt_repo.get("ai/resume_analyzer.system.md").await
             .map(|e| e.content)
             .unwrap_or_default();
-        let soul = rara_prompt::resolve_soul(self.prompt_repo.as_ref(), None).await;
-        let system_prompt = rara_prompt::compose_with_soul(&base, soul.as_deref(), "Task Instructions");
+        let soul = agent_core::prompt::resolve_soul(self.prompt_repo.as_ref(), None).await;
+        let system_prompt = agent_core::prompt::compose_with_soul(&base, soul.as_deref(), "Task Instructions");
 
         run_completion(&*self.provider, &self.model, &system_prompt, prompt).await
     }

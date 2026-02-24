@@ -14,6 +14,7 @@
 
 pub mod err;
 pub mod model;
+pub mod prompt;
 pub mod provider;
 pub mod runner;
 pub mod subagent;

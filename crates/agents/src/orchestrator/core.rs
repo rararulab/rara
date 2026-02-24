@@ -30,7 +30,7 @@ pub struct AgentOrchestrator {
     skill_registry: rara_skills::registry::InMemoryRegistry,
     memory_manager: Option<Arc<MemoryManager>>,
     settings_rx:    watch::Receiver<Settings>,
-    prompt_repo:    Arc<dyn rara_prompt::PromptRepo>,
+    prompt_repo:    Arc<dyn agent_core::prompt::PromptRepo>,
 }
 
 impl AgentOrchestrator {
@@ -42,7 +42,7 @@ impl AgentOrchestrator {
         skill_registry: rara_skills::registry::InMemoryRegistry,
         memory_manager: Option<Arc<MemoryManager>>,
         settings_rx: watch::Receiver<Settings>,
-        prompt_repo: Arc<dyn rara_prompt::PromptRepo>,
+        prompt_repo: Arc<dyn agent_core::prompt::PromptRepo>,
     ) -> Self {
         Self {
             llm_provider,
@@ -64,11 +64,11 @@ impl AgentOrchestrator {
         history_len: usize,
     ) -> String {
         let settings_soul = self.settings_rx.borrow().agent.soul.clone();
-        let soul_prompt = rara_prompt::resolve_soul(
+        let soul_prompt = agent_core::prompt::resolve_soul(
             self.prompt_repo.as_ref(),
             settings_soul.as_deref(),
         ).await;
-        let mut system_prompt = rara_prompt::compose_with_soul(
+        let mut system_prompt = agent_core::prompt::compose_with_soul(
             base_prompt,
             soul_prompt.as_deref(),
             "Chat Instructions",
@@ -124,11 +124,11 @@ impl AgentOrchestrator {
             .map(|e| e.content)
             .unwrap_or_default();
         let settings_soul = self.settings_rx.borrow().agent.soul.clone();
-        let soul = rara_prompt::resolve_soul(
+        let soul = agent_core::prompt::resolve_soul(
             self.prompt_repo.as_ref(),
             settings_soul.as_deref(),
         ).await;
-        rara_prompt::compose_with_soul(&policy, soul.as_deref(), "Operational Policy")
+        agent_core::prompt::compose_with_soul(&policy, soul.as_deref(), "Operational Policy")
     }
 
     // -- tool construction --------------------------------------------------
@@ -311,15 +311,15 @@ impl AgentOrchestrator {
             .map(|e| e.content)
             .unwrap_or_default();
         let settings_soul = self.settings_rx.borrow().agent.soul.clone();
-        let soul_prompt = rara_prompt::resolve_soul(
+        let soul_prompt = agent_core::prompt::resolve_soul(
             self.prompt_repo.as_ref(),
             settings_soul.as_deref(),
         ).await;
-        rara_prompt::compose_with_soul(&base_prompt, soul_prompt.as_deref(), "Chat Instructions")
+        agent_core::prompt::compose_with_soul(&base_prompt, soul_prompt.as_deref(), "Chat Instructions")
     }
 
     /// Return a reference to the prompt repository.
-    pub fn prompt_repo(&self) -> &Arc<dyn rara_prompt::PromptRepo> {
+    pub fn prompt_repo(&self) -> &Arc<dyn agent_core::prompt::PromptRepo> {
         &self.prompt_repo
     }
 }
