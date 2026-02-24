@@ -1,0 +1,15 @@
+[package]
+name = "rara-prompt-admin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+axum = { workspace = true }
+rara-prompt = { workspace = true }
+serde = { workspace = true }
+utoipa = { workspace = true }
+utoipa-axum = { workspace = true }
