@@ -610,6 +610,7 @@ async fn execute_task(
                 response_text: "pipeline not implemented".to_owned(),
                 iterations: 0,
                 tool_calls_made: 0,
+                truncated: false,
             })
         }
     }

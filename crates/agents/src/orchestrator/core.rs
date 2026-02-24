@@ -10,7 +10,7 @@ use tracing::info;
 
 use agent_core::{
     model::LlmProviderLoaderRef,
-    runner::{AgentRunner, UserContent},
+    runner::{AgentRunner, MAX_ITERATIONS, UserContent},
     tool_registry::ToolRegistry,
 };
 
@@ -162,7 +162,7 @@ impl AgentOrchestrator {
         user_content: UserContent,
         chat_history: Vec<ChatCompletionRequestMessage>,
     ) -> AgentRunner {
-        let (provider_hint, fallback_models) = {
+        let (provider_hint, fallback_models, max_iterations) = {
             let settings = self.settings_rx.borrow();
             let provider_hint = settings.ai.provider.clone();
             let fallback_models = settings
@@ -171,7 +171,9 @@ impl AgentOrchestrator {
                 .iter()
                 .map(|s| s.clone().into())
                 .collect();
-            (provider_hint, fallback_models)
+            let max_iterations = settings.agent.max_iterations
+                .map(|n| n as usize);
+            (provider_hint, fallback_models, max_iterations)
         };
 
         AgentRunner::builder()
@@ -181,6 +183,7 @@ impl AgentOrchestrator {
             .system_prompt(system_prompt)
             .user_content(user_content)
             .history(chat_history)
+            .max_iterations(max_iterations.unwrap_or(MAX_ITERATIONS))
             .fallback_models(fallback_models)
             .build()
     }

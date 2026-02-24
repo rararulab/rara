@@ -99,6 +99,9 @@ pub struct AgentSettings {
     /// Cron expression for proactive check schedule (5-field format).
     /// Changes take effect after service restart.
     pub proactive_cron:     Option<String>,
+    /// Maximum number of tool-call loop iterations for agent runs.
+    /// `None` uses the compile-time default (25).
+    pub max_iterations:     Option<u32>,
     /// Memory retrieval runtime configuration.
     #[serde(default)]
     pub memory:             MemorySettings,
@@ -224,6 +227,9 @@ pub struct TelegramRuntimeSettingsPatch {
 pub struct AgentRuntimeSettingsPatch {
     pub proactive_enabled:  Option<bool>,
     pub proactive_cron:     Option<String>,
+    /// Set the max iterations limit. `Some(0)` or `None` leaves it unchanged.
+    /// Use `Some(n)` where `n > 0` to override.
+    pub max_iterations:     Option<u32>,
     pub memory:             Option<MemoryRuntimeSettingsPatch>,
     pub composio:           Option<ComposioRuntimeSettingsPatch>,
     pub gmail:              Option<GmailRuntimeSettingsPatch>,
@@ -312,6 +318,10 @@ impl Settings {
             }
             if let Some(cron) = agent.proactive_cron {
                 self.agent.proactive_cron = normalize_text(Some(cron));
+            }
+            if let Some(max_iter) = agent.max_iterations {
+                // 0 clears the override (reverts to code default).
+                self.agent.max_iterations = if max_iter == 0 { None } else { Some(max_iter) };
             }
             if let Some(memory) = agent.memory {
                 if let Some(chroma_url) = memory.chroma_url {

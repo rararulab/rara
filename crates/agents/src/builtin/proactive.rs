@@ -6,8 +6,8 @@ use rara_sessions::types::ChatMessage;
 
 use super::AgentOutput;
 
-/// Maximum number of agent loop iterations per proactive run.
-const MAX_ITERATIONS: usize = 15;
+/// Default maximum number of agent loop iterations per proactive run.
+const DEFAULT_MAX_ITERATIONS: usize = 15;
 
 /// Proactive agent that reviews recent activity and takes autonomous action.
 #[derive(Clone)]
@@ -44,8 +44,12 @@ impl ProactiveAgent {
         let user_prompt = Self::build_user_prompt(activity_summary);
 
         let policy = self.orchestrator.build_worker_policy().await;
-        let model = self.orchestrator.model_for_key("proactive");
-        let provider_hint = self.orchestrator.settings().ai.provider;
+        let settings = self.orchestrator.settings();
+        let model = settings.ai.model_for_key("proactive");
+        let provider_hint = settings.ai.provider.clone();
+        let max_iterations = settings.agent.max_iterations
+            .map(|n| n as usize)
+            .unwrap_or(DEFAULT_MAX_ITERATIONS);
         let tools = self.orchestrator.tools().clone();
         let chat_history = history.iter().map(to_chat_message).collect();
 
@@ -56,7 +60,7 @@ impl ProactiveAgent {
             .system_prompt(policy)
             .user_content(UserContent::Text(user_prompt))
             .history(chat_history)
-            .max_iterations(MAX_ITERATIONS)
+            .max_iterations(max_iterations)
             .build();
 
         let result = runner
