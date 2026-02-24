@@ -19,9 +19,9 @@ use axum::routing::{get, post};
 use axum::Json;
 use uuid::Uuid;
 
-use crate::error::CodingTaskError;
-use crate::service::CodingTaskService;
-use crate::types::{CodingTaskDetail, CodingTaskSummary, CreateCodingTaskRequest};
+use rara_coding_task::error::CodingTaskError;
+use rara_coding_task::service::CodingTaskService;
+use rara_coding_task::types::{CodingTaskDetail, CodingTaskSummary, CreateCodingTaskRequest};
 
 /// Build the coding-task routes. Returns a plain `axum::Router` (no OpenAPI).
 pub fn routes(service: CodingTaskService) -> axum::Router {

@@ -25,10 +25,10 @@ use serde::{Deserialize, Serialize};
 use utoipa_axum::router::OpenApiRouter;
 use uuid::Uuid;
 
-use crate::pg_repository::PgPipelineRepository;
-use crate::repository::PipelineRepository;
-use crate::service::{PipelineError, PipelineService};
-use crate::types::{
+use rara_ext_job_pipeline::pg_repository::PgPipelineRepository;
+use rara_ext_job_pipeline::repository::PipelineRepository;
+use rara_ext_job_pipeline::service::{PipelineError, PipelineService};
+use rara_ext_job_pipeline::types::{
     DiscoveredJob, DiscoveredJobAction, DiscoveredJobWithDetails, DiscoveredJobsStats,
     PipelineEvent, PipelineRun,
 };

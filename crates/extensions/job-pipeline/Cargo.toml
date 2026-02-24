@@ -13,7 +13,6 @@ anyhow.workspace = true
 async-trait.workspace = true
 axum = { workspace = true }
 chrono.workspace = true
-futures.workspace = true
 git2.workspace = true
 jiff.workspace = true
 opendal.workspace = true
@@ -30,9 +29,6 @@ snafu.workspace = true
 sqlx.workspace = true
 strum_macros.workspace = true
 tokio = { workspace = true }
-tokio-stream = { version = "0.1", features = ["sync"] }
 tool-core.workspace = true
 tracing.workspace = true
-utoipa.workspace = true
-utoipa-axum.workspace = true
 uuid.workspace = true

@@ -20,13 +20,11 @@
 //! ## Public API
 //!
 //! - [`service::PipelineService`] -- manages the pipeline agent lifecycle.
-//! - [`routes::routes`] -- HTTP routes for pipeline management.
 //! - [`tools`] -- agent tools (pipeline-internal and rara-facing).
 //! - [`register_rara_tools`] -- register rara-facing pipeline tools.
 
 pub mod pg_repository;
 pub mod repository;
-pub mod routes;
 pub mod service;
 pub mod tools;
 pub mod types;

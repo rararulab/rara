@@ -12,10 +12,13 @@ agent-core = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 chrono = { workspace = true }
+futures = { workspace = true }
 jiff = { workspace = true }
 llmfit-core = { workspace = true }
 rara-agents = { workspace = true }
+rara-coding-task = { workspace = true }
 rara-domain-shared = { workspace = true }
+rara-ext-job-pipeline = { workspace = true }
 rara-git = { workspace = true }
 rara-mcp = { workspace = true }
 rara-paths = { workspace = true }
@@ -24,7 +27,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 snafu = { workspace = true }
 tokio = { workspace = true, features = ["sync", "fs", "rt"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
 tracing = { workspace = true }
 utoipa = { workspace = true }
 utoipa-axum = { workspace = true }
+uuid = { workspace = true }
 

@@ -12,14 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # rara-coding-task
-//!
-//! Persistent coding task management — dispatch CLI agents (Claude Code / Codex)
-//! with PG-backed storage, git workspace isolation, tmux observability,
-//! and PR lifecycle management.
+mod router;
 
-pub mod error;
-pub mod pg_repository;
-pub mod repository;
-pub mod service;
-pub mod types;
+pub use router::routes;

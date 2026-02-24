@@ -474,13 +474,13 @@ impl AppState {
         router = router.merge(rara_backend_admin::mcp::mcp_router(self.mcp_manager.clone()));
 
         // Coding task routes (plain axum::Router, no OpenAPI metadata).
-        router = router.merge(rara_coding_task::router::routes(
+        router = router.merge(rara_backend_admin::coding_task::routes(
             self.coding_task_service.clone(),
         ));
 
-        // Pipeline routes (plain axum::Router, no OpenAPI metadata).
+        // Pipeline routes (OpenAPI).
         let (pipeline_router, pipeline_api) =
-            rara_ext_job_pipeline::routes::routes(self.pipeline_service.clone()).split_for_parts();
+            rara_backend_admin::pipeline::routes(self.pipeline_service.clone()).split_for_parts();
         router = router.merge(pipeline_router);
         api.merge(pipeline_api);
 
