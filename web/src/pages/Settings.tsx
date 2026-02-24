@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
@@ -1133,20 +1134,41 @@ export default function Settings() {
     });
   };
 
-  const sectionHeader = (category: SettingCategory, label: string) => {
+  const sectionHeader = (
+    category: SettingCategory,
+    label: string,
+    summary: string,
+    icon: ReactNode,
+    count?: string,
+  ) => {
     const expanded = expandedCategories.has(category);
     return (
       <button
         type="button"
-        className="flex w-full items-center justify-between rounded-lg border bg-muted/20 px-3 py-2 text-left transition-colors hover:bg-muted/40"
+        className="flex w-full items-center justify-between rounded-xl border bg-card px-4 py-3 text-left shadow-sm transition-colors hover:bg-accent/40"
         onClick={() => toggleCategory(category)}
       >
-        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          {label}
-        </p>
-        <ChevronRight
-          className={`h-4 w-4 text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`}
-        />
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
+            {icon}
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold">{label}</p>
+            <p className="truncate text-xs text-muted-foreground">{summary}</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {count && (
+            <Badge variant="secondary" className="text-[10px]">
+              {count}
+            </Badge>
+          )}
+          <div className="flex h-7 w-7 items-center justify-center rounded-md border bg-background">
+            <ChevronRight
+              className={`h-4 w-4 text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`}
+            />
+          </div>
+        </div>
       </button>
     );
   };
@@ -1165,9 +1187,15 @@ export default function Settings() {
 
       <div className="space-y-6">
         <div className="space-y-2">
-          {sectionHeader("ai", "AI")}
+          {sectionHeader(
+            "ai",
+            "AI",
+            `${providerLabel} provider, model mappings, prompts`,
+            <Sparkles className="h-4 w-4" />,
+            "2 items",
+          )}
           {expandedCategories.has("ai") && (
-            <div className="space-y-2 pt-1">
+            <div className="space-y-2 rounded-xl border border-dashed bg-muted/10 p-2">
               <button
                 type="button"
                 className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
@@ -1216,9 +1244,15 @@ export default function Settings() {
         </div>
 
         <div className="space-y-2">
-          {sectionHeader("channels", "Channels")}
+          {sectionHeader(
+            "channels",
+            "Channels",
+            "Telegram bot, contacts, Gmail sending",
+            <MessageSquare className="h-4 w-4" />,
+            "3 items",
+          )}
           {expandedCategories.has("channels") && (
-            <div className="space-y-2 pt-1">
+            <div className="space-y-2 rounded-xl border border-dashed bg-muted/10 p-2">
               <button
                 type="button"
                 className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
@@ -1293,9 +1327,15 @@ export default function Settings() {
         </div>
 
         <div className="space-y-2">
-          {sectionHeader("auth", "Auth")}
+          {sectionHeader(
+            "auth",
+            "Auth",
+            "SSH key management",
+            <ExternalLink className="h-4 w-4" />,
+            "1 item",
+          )}
           {expandedCategories.has("auth") && (
-            <div className="space-y-2 pt-1">
+            <div className="space-y-2 rounded-xl border border-dashed bg-muted/10 p-2">
               <button
                 type="button"
                 className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
@@ -1322,9 +1362,15 @@ export default function Settings() {
         </div>
 
         <div className="space-y-2">
-          {sectionHeader("runtime", "Runtime")}
+          {sectionHeader(
+            "runtime",
+            "Runtime",
+            "Operational settings not yet split out",
+            <Bot className="h-4 w-4" />,
+            "1 item",
+          )}
           {expandedCategories.has("runtime") && (
-            <div className="space-y-2 pt-1">
+            <div className="space-y-2 rounded-xl border border-dashed bg-muted/10 p-2">
               <button
                 type="button"
                 className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
