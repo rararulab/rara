@@ -619,6 +619,7 @@ export interface OllamaLocalModel {
   quantization_level: string | null;
   family: string | null;
   modified_at: string;
+  capabilities: string[];
 }
 
 export interface OllamaModelListResponse {

@@ -76,6 +76,7 @@ pub struct OllamaLocalModel {
     pub quantization_level: Option<String>,
     pub family: Option<String>,
     pub modified_at: String,
+    pub capabilities: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -256,6 +257,15 @@ async fn ollama_list_models(
                         .and_then(|d| d.get("family"))
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_owned());
+                    let capabilities = m
+                        .get("capabilities")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(|s| s.to_owned()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
                     OllamaLocalModel {
                         name,
                         size,
@@ -263,6 +273,7 @@ async fn ollama_list_models(
                         quantization_level,
                         family,
                         modified_at,
+                        capabilities,
                     }
                 })
                 .collect()

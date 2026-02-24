@@ -126,6 +126,9 @@ export default function Settings() {
   const [pullProgress, setPullProgress] = useState<{ status: string; pct: number } | null>(null);
   const [pullError, setPullError] = useState<string | null>(null);
 
+  // -- ollama capability filter --
+  const [capabilityFilter, setCapabilityFilter] = useState<Set<string>>(new Set(["tools"]));
+
   // -- contacts state --
   const [contactDialogOpen, setContactDialogOpen] = useState(false);
   const [editingContact, setEditingContact] = useState<TelegramContact | null>(null);
@@ -182,6 +185,27 @@ export default function Settings() {
       setToast({ kind: "error", message });
     },
   });
+
+  const ollamaModels = ollamaModelsQuery.data?.models ?? [];
+
+  // Collect all unique capabilities across all models
+  const allCapabilities = useMemo(() => {
+    const caps = new Set<string>();
+    for (const model of ollamaModels) {
+      for (const cap of model.capabilities) {
+        caps.add(cap);
+      }
+    }
+    return Array.from(caps).sort();
+  }, [ollamaModels]);
+
+  // Filter models by selected capabilities (intersection — model must have ALL selected caps)
+  const filteredOllamaModels = useMemo(() => {
+    if (capabilityFilter.size === 0) return ollamaModels;
+    return ollamaModels.filter((model) =>
+      Array.from(capabilityFilter).every((cap) => model.capabilities.includes(cap))
+    );
+  }, [ollamaModels, capabilityFilter]);
 
   const handlePullModel = async () => {
     const name = pullModelName.trim();
@@ -1310,18 +1334,62 @@ export default function Settings() {
                             Refresh
                           </Button>
                         </div>
+                        {/* Capability filters */}
+                        {allCapabilities.length > 0 && (
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs text-muted-foreground shrink-0">Filter:</span>
+                            {allCapabilities.map((cap) => (
+                              <Button
+                                key={cap}
+                                type="button"
+                                variant={capabilityFilter.has(cap) ? "default" : "outline"}
+                                size="sm"
+                                className="h-6 text-xs px-2"
+                                onClick={() => {
+                                  setCapabilityFilter((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(cap)) {
+                                      next.delete(cap);
+                                    } else {
+                                      next.add(cap);
+                                    }
+                                    return next;
+                                  });
+                                }}
+                              >
+                                {cap}
+                              </Button>
+                            ))}
+                            {capabilityFilter.size > 0 && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 text-xs px-2 text-muted-foreground"
+                                onClick={() => setCapabilityFilter(new Set())}
+                              >
+                                Clear
+                              </Button>
+                            )}
+                          </div>
+                        )}
+                        <p className="text-xs text-muted-foreground">
+                          Showing {filteredOllamaModels.length} of {ollamaModels.length} models
+                        </p>
                         {ollamaModelsQuery.isLoading ? (
                           <div className="space-y-2">
                             <Skeleton className="h-8 w-full" />
                             <Skeleton className="h-8 w-full" />
                           </div>
-                        ) : (ollamaModelsQuery.data?.models ?? []).length === 0 ? (
+                        ) : filteredOllamaModels.length === 0 ? (
                           <p className="text-sm text-muted-foreground py-2">
-                            No models pulled yet. Pull a model below to get started.
+                            {ollamaModels.length === 0
+                              ? "No models pulled yet. Pull a model below to get started."
+                              : "No models match the selected filters."}
                           </p>
                         ) : (
                           <div className="max-h-56 overflow-y-auto rounded border bg-background">
-                            {(ollamaModelsQuery.data?.models ?? []).map((model) => (
+                            {filteredOllamaModels.map((model) => (
                               <div
                                 key={model.name}
                                 className="flex items-center justify-between gap-3 border-b px-3 py-2 last:border-b-0"
@@ -1339,6 +1407,19 @@ export default function Settings() {
                                     {model.quantization_level ? ` \u00B7 ${model.quantization_level}` : ""}
                                     {model.family ? ` \u00B7 ${model.family}` : ""}
                                   </p>
+                                  {model.capabilities.length > 0 && (
+                                    <div className="flex items-center gap-1 mt-0.5">
+                                      {model.capabilities.map((cap) => (
+                                        <Badge
+                                          key={cap}
+                                          variant={cap === "tools" ? "default" : "secondary"}
+                                          className="text-[9px] px-1 py-0"
+                                        >
+                                          {cap}
+                                        </Badge>
+                                      ))}
+                                    </div>
+                                  )}
                                 </div>
                                 <div className="flex items-center gap-1 shrink-0">
                                   <Button
