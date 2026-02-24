@@ -86,6 +86,7 @@ import {
 } from "@/components/ui/select";
 
 type SettingKey = "ai" | "agent" | "telegram" | "gmail" | "composio" | "contacts" | "auth";
+type SettingCategory = "ai" | "channels" | "auth" | "runtime";
 type ToastState = { kind: "success" | "error"; message: string } | null;
 type OpenRouterModel = {
   id: string;
@@ -143,6 +144,7 @@ export default function Settings() {
   const [selectedPromptContent, setSelectedPromptContent] = useState("");
   const [promptDirty, setPromptDirty] = useState(false);
   const [selectedSetting, setSelectedSetting] = useState<SettingKey | null>(null);
+  const [expandedCategories, setExpandedCategories] = useState<Set<SettingCategory>>(new Set());
   const [toast, setToast] = useState<ToastState>(null);
 
   // -- ollama pull state --
@@ -1119,6 +1121,36 @@ export default function Settings() {
     );
   };
 
+  const toggleCategory = (category: SettingCategory) => {
+    setExpandedCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(category)) {
+        next.delete(category);
+      } else {
+        next.add(category);
+      }
+      return next;
+    });
+  };
+
+  const sectionHeader = (category: SettingCategory, label: string) => {
+    const expanded = expandedCategories.has(category);
+    return (
+      <button
+        type="button"
+        className="flex w-full items-center justify-between rounded-lg border bg-muted/20 px-3 py-2 text-left transition-colors hover:bg-muted/40"
+        onClick={() => toggleCategory(category)}
+      >
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          {label}
+        </p>
+        <ChevronRight
+          className={`h-4 w-4 text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`}
+        />
+      </button>
+    );
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -1133,174 +1165,190 @@ export default function Settings() {
 
       <div className="space-y-6">
         <div className="space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">AI</p>
-          <button
-            type="button"
-            className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
-            onClick={() => openSetting("ai")}
-          >
-            <div className="flex items-center gap-3">
-              <Sparkles className="h-4 w-4 text-muted-foreground" />
-              <div className="space-y-1">
-                <p className="font-medium">Model Admin ({providerLabel})</p>
-                <p className="text-xs text-muted-foreground">
-                  Default: {modelMap["default"] ?? "openai/gpt-4o"}
-                  {providerLabel === "OpenRouter" && <> · Key: {aiCurrent?.openrouter_api_key ? "Set" : "Not set"}</>}
-                  {providerLabel === "Ollama" && <> · URL: {aiCurrent?.ollama_base_url ?? "localhost:11434"}</>}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <Badge variant={aiCurrent?.configured ? "default" : "secondary"}>
-                {aiCurrent?.configured ? "Configured" : "Not configured"}
-              </Badge>
-              <ChevronRight className="h-4 w-4 text-muted-foreground" />
-            </div>
-          </button>
+          {sectionHeader("ai", "AI")}
+          {expandedCategories.has("ai") && (
+            <div className="space-y-2 pt-1">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
+                onClick={() => openSetting("ai")}
+              >
+                <div className="flex items-center gap-3">
+                  <Sparkles className="h-4 w-4 text-muted-foreground" />
+                  <div className="space-y-1">
+                    <p className="font-medium">Model Admin ({providerLabel})</p>
+                    <p className="text-xs text-muted-foreground">
+                      Default: {modelMap["default"] ?? "openai/gpt-4o"}
+                      {providerLabel === "OpenRouter" && <> · Key: {aiCurrent?.openrouter_api_key ? "Set" : "Not set"}</>}
+                      {providerLabel === "Ollama" && <> · URL: {aiCurrent?.ollama_base_url ?? "localhost:11434"}</>}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Badge variant={aiCurrent?.configured ? "default" : "secondary"}>
+                    {aiCurrent?.configured ? "Configured" : "Not configured"}
+                  </Badge>
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                </div>
+              </button>
 
-          <button
-            type="button"
-            className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
-            onClick={() => openSetting("agent")}
-          >
-            <div className="flex items-center gap-3">
-              <Bot className="h-4 w-4 text-muted-foreground" />
-              <div className="space-y-1">
-                <p className="font-medium">Prompt Admin</p>
-                <p className="text-xs text-muted-foreground">
-                  {availablePrompts.length} prompt files · Runtime prompt editor
-                </p>
-              </div>
+              <button
+                type="button"
+                className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
+                onClick={() => openSetting("agent")}
+              >
+                <div className="flex items-center gap-3">
+                  <Bot className="h-4 w-4 text-muted-foreground" />
+                  <div className="space-y-1">
+                    <p className="font-medium">Prompt Admin</p>
+                    <p className="text-xs text-muted-foreground">
+                      {availablePrompts.length} prompt files · Runtime prompt editor
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Badge variant="default">Enabled</Badge>
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                </div>
+              </button>
             </div>
-            <div className="flex items-center gap-3">
-              <Badge variant="default">Enabled</Badge>
-              <ChevronRight className="h-4 w-4 text-muted-foreground" />
-            </div>
-          </button>
+          )}
         </div>
 
         <div className="space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Channels</p>
-          <button
-            type="button"
-            className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
-            onClick={() => openSetting("telegram")}
-          >
-            <div className="flex items-center gap-3">
-              <MessageSquare className="h-4 w-4 text-muted-foreground" />
-              <div className="space-y-1">
-                <p className="font-medium">Telegram Admin</p>
-                <p className="text-xs text-muted-foreground">
-                  Chat ID: {currentTelegram?.chat_id ?? "Not set"} · Token:{" "}
-                  {currentTelegram?.token_hint ?? "Not set"} · Group:{" "}
-                  {currentTelegram?.allowed_group_chat_id ?? "Not set"} · Notif Channel:{" "}
-                  {currentTelegram?.notification_channel_id ?? "Not set"}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <Badge variant={currentTelegram?.configured ? "default" : "secondary"}>
-                {currentTelegram?.configured ? "Configured" : "Not configured"}
-              </Badge>
-              <ChevronRight className="h-4 w-4 text-muted-foreground" />
-            </div>
-          </button>
+          {sectionHeader("channels", "Channels")}
+          {expandedCategories.has("channels") && (
+            <div className="space-y-2 pt-1">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
+                onClick={() => openSetting("telegram")}
+              >
+                <div className="flex items-center gap-3">
+                  <MessageSquare className="h-4 w-4 text-muted-foreground" />
+                  <div className="space-y-1">
+                    <p className="font-medium">Telegram Admin</p>
+                    <p className="text-xs text-muted-foreground">
+                      Chat ID: {currentTelegram?.chat_id ?? "Not set"} · Token:{" "}
+                      {currentTelegram?.token_hint ?? "Not set"} · Group:{" "}
+                      {currentTelegram?.allowed_group_chat_id ?? "Not set"} · Notif Channel:{" "}
+                      {currentTelegram?.notification_channel_id ?? "Not set"}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Badge variant={currentTelegram?.configured ? "default" : "secondary"}>
+                    {currentTelegram?.configured ? "Configured" : "Not configured"}
+                  </Badge>
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                </div>
+              </button>
 
-          <button
-            type="button"
-            className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
-            onClick={() => openSetting("contacts")}
-          >
-            <div className="flex items-center gap-3">
-              <Users className="h-4 w-4 text-muted-foreground" />
-              <div className="space-y-1">
-                <p className="font-medium">Telegram Contacts</p>
-                <p className="text-xs text-muted-foreground">
-                  {contactsQuery.data?.length ?? 0} contacts ·{" "}
-                  {contactsQuery.data?.filter((c) => c.enabled).length ?? 0} enabled
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <Badge variant={(contactsQuery.data?.length ?? 0) > 0 ? "default" : "secondary"}>
-                {(contactsQuery.data?.length ?? 0) > 0 ? `${contactsQuery.data!.length} contacts` : "No contacts"}
-              </Badge>
-              <ChevronRight className="h-4 w-4 text-muted-foreground" />
-            </div>
-          </button>
+              <button
+                type="button"
+                className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
+                onClick={() => openSetting("contacts")}
+              >
+                <div className="flex items-center gap-3">
+                  <Users className="h-4 w-4 text-muted-foreground" />
+                  <div className="space-y-1">
+                    <p className="font-medium">Telegram Contacts</p>
+                    <p className="text-xs text-muted-foreground">
+                      {contactsQuery.data?.length ?? 0} contacts ·{" "}
+                      {contactsQuery.data?.filter((c) => c.enabled).length ?? 0} enabled
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Badge variant={(contactsQuery.data?.length ?? 0) > 0 ? "default" : "secondary"}>
+                    {(contactsQuery.data?.length ?? 0) > 0 ? `${contactsQuery.data!.length} contacts` : "No contacts"}
+                  </Badge>
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                </div>
+              </button>
 
-          <button
-            type="button"
-            className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
-            onClick={() => openSetting("gmail")}
-          >
-            <div className="flex items-center gap-3">
-              <Mail className="h-4 w-4 text-muted-foreground" />
-              <div className="space-y-1">
-                <p className="font-medium">Gmail Admin</p>
-                <p className="text-xs text-muted-foreground">
-                  Address: {gmailCurrent?.address ?? "Not set"} · Password: {gmailCurrent?.app_password_hint ?? "Not set"} · Auto-Send: {gmailCurrent?.auto_send_enabled ? "On" : "Off"}
-                </p>
-              </div>
+              <button
+                type="button"
+                className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
+                onClick={() => openSetting("gmail")}
+              >
+                <div className="flex items-center gap-3">
+                  <Mail className="h-4 w-4 text-muted-foreground" />
+                  <div className="space-y-1">
+                    <p className="font-medium">Gmail Admin</p>
+                    <p className="text-xs text-muted-foreground">
+                      Address: {gmailCurrent?.address ?? "Not set"} · Password: {gmailCurrent?.app_password_hint ?? "Not set"} · Auto-Send: {gmailCurrent?.auto_send_enabled ? "On" : "Off"}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Badge variant={gmailCurrent?.configured ? "default" : "secondary"}>
+                    {gmailCurrent?.configured ? "Configured" : "Not configured"}
+                  </Badge>
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                </div>
+              </button>
             </div>
-            <div className="flex items-center gap-3">
-              <Badge variant={gmailCurrent?.configured ? "default" : "secondary"}>
-                {gmailCurrent?.configured ? "Configured" : "Not configured"}
-              </Badge>
-              <ChevronRight className="h-4 w-4 text-muted-foreground" />
-            </div>
-          </button>
+          )}
         </div>
 
         <div className="space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Auth</p>
-          <button
-            type="button"
-            className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
-            onClick={() => openSetting("auth")}
-          >
-            <div className="flex items-center gap-3">
-              <ExternalLink className="h-4 w-4 text-muted-foreground" />
-              <div className="space-y-1">
-                <p className="font-medium">SSH Key</p>
-                <p className="text-xs text-muted-foreground">
-                  {sshKeyQuery.data?.public_key ? "Public key available" : "Load and copy public key"}
-                </p>
-              </div>
+          {sectionHeader("auth", "Auth")}
+          {expandedCategories.has("auth") && (
+            <div className="space-y-2 pt-1">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
+                onClick={() => openSetting("auth")}
+              >
+                <div className="flex items-center gap-3">
+                  <ExternalLink className="h-4 w-4 text-muted-foreground" />
+                  <div className="space-y-1">
+                    <p className="font-medium">SSH Key</p>
+                    <p className="text-xs text-muted-foreground">
+                      {sshKeyQuery.data?.public_key ? "Public key available" : "Load and copy public key"}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Badge variant={sshKeyQuery.data?.public_key ? "default" : "secondary"}>
+                    {sshKeyQuery.data?.public_key ? "Ready" : "Not loaded"}
+                  </Badge>
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                </div>
+              </button>
             </div>
-            <div className="flex items-center gap-3">
-              <Badge variant={sshKeyQuery.data?.public_key ? "default" : "secondary"}>
-                {sshKeyQuery.data?.public_key ? "Ready" : "Not loaded"}
-              </Badge>
-              <ChevronRight className="h-4 w-4 text-muted-foreground" />
-            </div>
-          </button>
+          )}
         </div>
 
         <div className="space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Runtime</p>
-          <button
-            type="button"
-            className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
-            onClick={() => openSetting("composio")}
-          >
-            <div className="flex items-center gap-3">
-              <Sparkles className="h-4 w-4 text-muted-foreground" />
-              <div className="space-y-1">
-                <p className="font-medium">Composio</p>
-                <p className="text-xs text-muted-foreground">
-                  Entity: {current.agent.composio.entity_id ?? "default"} · Key:{" "}
-                  {current.agent.composio.api_key ? "Set" : "Not set"}
-                </p>
-              </div>
+          {sectionHeader("runtime", "Runtime")}
+          {expandedCategories.has("runtime") && (
+            <div className="space-y-2 pt-1">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
+                onClick={() => openSetting("composio")}
+              >
+                <div className="flex items-center gap-3">
+                  <Sparkles className="h-4 w-4 text-muted-foreground" />
+                  <div className="space-y-1">
+                    <p className="font-medium">Composio</p>
+                    <p className="text-xs text-muted-foreground">
+                      Entity: {current.agent.composio.entity_id ?? "default"} · Key:{" "}
+                      {current.agent.composio.api_key ? "Set" : "Not set"}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Badge variant={current.agent.composio.api_key ? "default" : "secondary"}>
+                    {current.agent.composio.api_key ? "Configured" : "Not configured"}
+                  </Badge>
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                </div>
+              </button>
             </div>
-            <div className="flex items-center gap-3">
-              <Badge variant={current.agent.composio.api_key ? "default" : "secondary"}>
-                {current.agent.composio.api_key ? "Configured" : "Not configured"}
-              </Badge>
-              <ChevronRight className="h-4 w-4 text-muted-foreground" />
-            </div>
-          </button>
+          )}
         </div>
       </div>
 
