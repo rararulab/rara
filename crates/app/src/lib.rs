@@ -147,11 +147,9 @@ impl AppConfig {
             &db_store,
             object_store,
             notify_client.clone(),
-            rara_workers::worker_state::MemoryConfig {
-                chroma_url: self.memory.chroma_url.clone(),
-                chroma_collection: self.memory.chroma_collection.clone(),
-                chroma_api_key: self.memory.chroma_api_key.clone(),
-            },
+            self.memory.chroma_url.clone(),
+            self.memory.chroma_collection.clone(),
+            self.memory.chroma_api_key.clone(),
         )
         .await
         .whatever_context("Failed to initialize application state")?;
