@@ -604,3 +604,36 @@ export interface LlmfitRecommendationsResponse {
   models: LlmfitModelEntry[];
   error: string | null;
 }
+
+// Ollama Management
+export interface OllamaHealthResponse {
+  healthy: boolean;
+  version: string | null;
+  url: string;
+}
+
+export interface OllamaLocalModel {
+  name: string;
+  size: number;
+  parameter_size: string | null;
+  quantization_level: string | null;
+  family: string | null;
+  modified_at: string;
+}
+
+export interface OllamaModelListResponse {
+  models: OllamaLocalModel[];
+}
+
+export interface OllamaModelInfo {
+  name: string;
+  model_info: Record<string, unknown>;
+  template: string | null;
+  system: string | null;
+  parameters: string | null;
+}
+
+export type PullProgressEvent =
+  | { type: "progress"; status: string; completed: number | null; total: number | null }
+  | { type: "done"; status: string }
+  | { type: "error"; message: string };

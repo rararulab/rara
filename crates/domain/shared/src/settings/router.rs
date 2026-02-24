@@ -118,7 +118,8 @@ pub fn routes(svc: SettingsSvc) -> OpenApiRouter {
                 .route(
                     "/settings/prompts/{*name}",
                     get(get_prompt_content).put(update_prompt_content),
-                ),
+                )
+                .merge(crate::settings::ollama::ollama_management_routes()),
         )
         .with_state(svc)
 }

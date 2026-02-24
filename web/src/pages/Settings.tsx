@@ -19,6 +19,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import type {
   CreateContactRequest,
+  PullProgressEvent,
   PromptFileView,
   PromptListView,
   RuntimeSettingsPatch,
@@ -92,6 +93,8 @@ function formatUpdatedAt(value: string | null): string {
   return d.toLocaleString();
 }
 
+const BASE_URL = import.meta.env.VITE_API_URL || '';
+
 export default function Settings() {
   const queryClient = useQueryClient();
   const [defaultModel, setDefaultModel] = useState("");
@@ -117,6 +120,11 @@ export default function Settings() {
   const [promptDirty, setPromptDirty] = useState(false);
   const [selectedSetting, setSelectedSetting] = useState<SettingKey | null>(null);
   const [toast, setToast] = useState<ToastState>(null);
+
+  // -- ollama pull state --
+  const [pullModelName, setPullModelName] = useState("");
+  const [pullProgress, setPullProgress] = useState<{ status: string; pct: number } | null>(null);
+  const [pullError, setPullError] = useState<string | null>(null);
 
   // -- contacts state --
   const [contactDialogOpen, setContactDialogOpen] = useState(false);
@@ -148,6 +156,104 @@ export default function Settings() {
     enabled: settingsQuery.data?.ai.provider === "ollama",
     staleTime: 5 * 60 * 1000,
   });
+
+  const ollamaHealthQuery = useQuery({
+    queryKey: ["ollama-health"],
+    queryFn: () => api.ollamaHealth(),
+    enabled: aiProvider === "ollama",
+    refetchInterval: 30_000,
+    retry: false,
+  });
+
+  const ollamaModelsQuery = useQuery({
+    queryKey: ["ollama-models"],
+    queryFn: () => api.ollamaListModels(),
+    enabled: aiProvider === "ollama" && ollamaHealthQuery.data?.healthy === true,
+  });
+
+  const ollamaDeleteMutation = useMutation({
+    mutationFn: (name: string) => api.ollamaDeleteModel(name),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ollama-models"] });
+      setToast({ kind: "success", message: "Model deleted." });
+    },
+    onError: (e: unknown) => {
+      const message = e instanceof Error ? e.message : "Failed to delete model";
+      setToast({ kind: "error", message });
+    },
+  });
+
+  const handlePullModel = async () => {
+    const name = pullModelName.trim();
+    if (!name) return;
+    setPullProgress({ status: "Starting...", pct: 0 });
+    setPullError(null);
+
+    try {
+      const res = await fetch(`${BASE_URL}/api/v1/settings/ollama/models/pull`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        setPullError(text || "Pull failed");
+        setPullProgress(null);
+        return;
+      }
+
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      if (!reader) {
+        setPullError("No response body");
+        setPullProgress(null);
+        return;
+      }
+
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const json = line.slice(6).trim();
+          if (!json) continue;
+          try {
+            const event = JSON.parse(json) as PullProgressEvent;
+            if (event.type === "progress") {
+              const pct =
+                event.total && event.total > 0
+                  ? Math.round(((event.completed ?? 0) / event.total) * 100)
+                  : 0;
+              setPullProgress({ status: event.status, pct });
+            } else if (event.type === "done") {
+              setPullProgress(null);
+              setPullModelName("");
+              queryClient.invalidateQueries({ queryKey: ["ollama-models"] });
+              setToast({
+                kind: "success",
+                message: `Model "${name}" pulled successfully.`,
+              });
+            } else if (event.type === "error") {
+              setPullError(event.message);
+              setPullProgress(null);
+            }
+          } catch {
+            // skip malformed JSON
+          }
+        }
+      }
+    } catch (e) {
+      setPullError(e instanceof Error ? e.message : "Pull failed");
+      setPullProgress(null);
+    }
+  };
 
   const createContactMutation = useMutation({
     mutationFn: (req: CreateContactRequest) =>
@@ -1142,7 +1248,36 @@ export default function Settings() {
                 </div>
 
                 {aiProvider === "ollama" ? (
-                  <div className="space-y-3">
+                  <div className="space-y-4">
+                    {/* Health indicator */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">Status:</span>
+                      {ollamaHealthQuery.isLoading ? (
+                        <Skeleton className="h-5 w-28" />
+                      ) : ollamaHealthQuery.data?.healthy ? (
+                        <Badge variant="default" className="gap-1">
+                          <span className="inline-block h-2 w-2 rounded-full bg-green-400" />
+                          Connected{ollamaHealthQuery.data.version ? ` v${ollamaHealthQuery.data.version}` : ""}
+                        </Badge>
+                      ) : (
+                        <Badge variant="destructive" className="gap-1">
+                          <span className="inline-block h-2 w-2 rounded-full bg-red-400" />
+                          Unreachable
+                        </Badge>
+                      )}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => ollamaHealthQuery.refetch()}
+                        disabled={ollamaHealthQuery.isFetching}
+                      >
+                        <RefreshCw className={`h-3 w-3 ${ollamaHealthQuery.isFetching ? "animate-spin" : ""}`} />
+                      </Button>
+                    </div>
+
+                    {/* Default Model input */}
                     <div className="space-y-2">
                       <Label htmlFor="ollama-default-model" className="text-sm font-semibold">
                         Default Model
@@ -1155,10 +1290,130 @@ export default function Settings() {
                         className="h-11"
                       />
                       <p className="text-xs text-muted-foreground">
-                        Enter the Ollama model name (e.g. llama3.2, qwen2.5, deepseek-r1).
-                        Make sure the model is pulled locally via <code className="rounded bg-muted px-1">ollama pull &lt;model&gt;</code>.
+                        Enter the Ollama model name or select from local models below.
                       </p>
                     </div>
+
+                    {/* Local models list */}
+                    {ollamaHealthQuery.data?.healthy && (
+                      <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
+                        <div className="flex items-center justify-between">
+                          <p className="text-sm font-semibold">Local Models</p>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => ollamaModelsQuery.refetch()}
+                            disabled={ollamaModelsQuery.isFetching}
+                          >
+                            <RefreshCw className={`h-3 w-3 mr-1 ${ollamaModelsQuery.isFetching ? "animate-spin" : ""}`} />
+                            Refresh
+                          </Button>
+                        </div>
+                        {ollamaModelsQuery.isLoading ? (
+                          <div className="space-y-2">
+                            <Skeleton className="h-8 w-full" />
+                            <Skeleton className="h-8 w-full" />
+                          </div>
+                        ) : (ollamaModelsQuery.data?.models ?? []).length === 0 ? (
+                          <p className="text-sm text-muted-foreground py-2">
+                            No models pulled yet. Pull a model below to get started.
+                          </p>
+                        ) : (
+                          <div className="max-h-56 overflow-y-auto rounded border bg-background">
+                            {(ollamaModelsQuery.data?.models ?? []).map((model) => (
+                              <div
+                                key={model.name}
+                                className="flex items-center justify-between gap-3 border-b px-3 py-2 last:border-b-0"
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-2">
+                                    <p className="truncate text-sm font-medium font-mono">{model.name}</p>
+                                    {model.name === defaultModel && (
+                                      <Badge variant="default" className="text-[10px] px-1.5 py-0 shrink-0">Active</Badge>
+                                    )}
+                                  </div>
+                                  <p className="text-xs text-muted-foreground">
+                                    {(model.size / 1e9).toFixed(1)} GB
+                                    {model.parameter_size ? ` \u00B7 ${model.parameter_size}` : ""}
+                                    {model.quantization_level ? ` \u00B7 ${model.quantization_level}` : ""}
+                                    {model.family ? ` \u00B7 ${model.family}` : ""}
+                                  </p>
+                                </div>
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-7 text-xs"
+                                    onClick={() => setDefaultModel(model.name)}
+                                  >
+                                    Use
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                                    onClick={() => {
+                                      if (window.confirm(`Delete model "${model.name}"?`)) {
+                                        ollamaDeleteMutation.mutate(model.name);
+                                      }
+                                    }}
+                                    disabled={ollamaDeleteMutation.isPending}
+                                    title="Delete model"
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                  </Button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Pull model */}
+                        <div className="space-y-2 pt-2 border-t">
+                          <p className="text-sm font-semibold">Pull Model</p>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              value={pullModelName}
+                              onChange={(e) => setPullModelName(e.target.value)}
+                              placeholder="e.g. llama3.2, qwen2.5, deepseek-r1"
+                              className="h-9"
+                              disabled={!!pullProgress}
+                            />
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-9 shrink-0"
+                              onClick={handlePullModel}
+                              disabled={!pullModelName.trim() || !!pullProgress}
+                            >
+                              <Download className="h-3 w-3 mr-1" />
+                              Pull
+                            </Button>
+                          </div>
+                          {pullProgress && (
+                            <div className="space-y-1">
+                              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                <span className="truncate">{pullProgress.status}</span>
+                                <span className="shrink-0">{pullProgress.pct}%</span>
+                              </div>
+                              <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                                <div
+                                  className="h-full rounded-full bg-primary transition-all duration-300"
+                                  style={{ width: `${pullProgress.pct}%` }}
+                                />
+                              </div>
+                            </div>
+                          )}
+                          {pullError && (
+                            <p className="text-sm text-destructive">{pullError}</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <>
@@ -1232,7 +1487,7 @@ export default function Settings() {
                       <div className="text-sm text-destructive p-4 bg-muted rounded-lg">
                         <p>{recommendations.error}</p>
                       </div>
-                    ) : (
+                    ) : recommendations ? (
                       <>
                         {recommendations.system && (
                           <div className="text-xs text-muted-foreground mb-3 flex gap-4 flex-wrap">
@@ -1286,7 +1541,7 @@ export default function Settings() {
                           <p className="mt-2 text-xs text-destructive">{recommendations.error}</p>
                         )}
                       </>
-                    )}
+                    ) : null}
                   </CardContent>
                 </Card>
               )}

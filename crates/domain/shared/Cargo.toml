@@ -15,11 +15,14 @@ description = "Shared domain interfaces, traits, and types for cross-crate contr
 axum.workspace = true
 chrono.workspace = true
 derive_more.workspace = true
+futures.workspace = true
 jiff.workspace = true
+ollama-rs = { workspace = true }
 pgmq = "0.31.2"
 llmfit-core = { workspace = true }
 rara-git = { workspace = true }
 rara-paths.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true

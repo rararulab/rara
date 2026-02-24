@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod model;
+pub mod ollama;
 pub mod router;
 pub mod service;
 
