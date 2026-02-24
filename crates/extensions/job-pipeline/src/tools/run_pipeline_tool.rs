@@ -212,6 +212,7 @@ impl AgentTool for UpdateJobPreferencesTool {
                     resume_project_path:    None,
                     pipeline_cron:          None,
                 }),
+                workers:      None,
             })
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;

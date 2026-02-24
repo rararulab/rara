@@ -177,7 +177,7 @@ impl AgentScheduler {
     /// Check whether a single job is due at the given instant.
     fn is_due(job: &AgentJob, now: jiff::Timestamp) -> bool {
         match &job.trigger {
-            AgentTrigger::Cron { expr } => Self::is_cron_due(expr, now),
+            AgentTrigger::Cron { expr } => Self::is_cron_due(expr, job.last_run_at, now),
             AgentTrigger::Delay { run_at } => *run_at <= now,
             AgentTrigger::Interval { seconds } => match job.last_run_at {
                 None => true,
@@ -191,22 +191,37 @@ impl AgentScheduler {
         }
     }
 
-    /// Check if the cron expression has a firing point within the current
-    /// 60-second window.
-    fn is_cron_due(expr: &str, now: jiff::Timestamp) -> bool {
+    /// Forward-looking cron check that uses `last_run_at` to prevent
+    /// duplicate execution.
+    ///
+    /// Finds the next cron occurrence after `last_run_at` (or epoch if never
+    /// run) and returns `true` when that occurrence falls at or before `now`.
+    /// This is safe regardless of how long the worker poll interval is — a
+    /// delayed poll simply fires the missed trigger on the next tick, and
+    /// once `mark_executed` updates `last_run_at` the same trigger will not
+    /// fire again.
+    fn is_cron_due(
+        expr: &str,
+        last_run_at: Option<jiff::Timestamp>,
+        now: jiff::Timestamp,
+    ) -> bool {
         let Ok(cron) = croner::Cron::from_str(expr) else {
             warn!(expr, "invalid cron expression in agent job");
             return false;
         };
 
-        // Convert jiff Timestamp to chrono DateTime for croner.
+        // Anchor: find the next occurrence after last_run_at (or epoch).
+        let anchor = last_run_at
+            .map(|ts| ts.as_second())
+            .unwrap_or(0);
+        let anchor_chrono =
+            chrono::DateTime::from_timestamp(anchor, 0).unwrap_or_else(chrono::Utc::now);
+
         let now_chrono =
             chrono::DateTime::from_timestamp(now.as_second(), 0).unwrap_or_else(chrono::Utc::now);
 
-        let window_start = now_chrono - chrono::Duration::seconds(60);
-
-        // Check if there is any firing point between (now - 60s) and now.
-        cron.find_next_occurrence(&window_start, false)
+        // Find the first occurrence strictly after the anchor.
+        cron.find_next_occurrence(&anchor_chrono, false)
             .is_ok_and(|next| next <= now_chrono)
     }
 }
@@ -283,7 +298,9 @@ mod tests {
         let path = dir.path().join("nonexistent.json");
         let scheduler = AgentScheduler::new(path);
         scheduler.load().await.unwrap();
-        assert!(scheduler.list().await.is_empty());
+        // load() seeds a default diary job when no jobs exist, so list
+        // should contain exactly 1 seeded job.
+        assert_eq!(scheduler.list().await.len(), 1);
     }
 
     #[tokio::test]
@@ -364,5 +381,39 @@ mod tests {
 
         let due = scheduler.get_due_jobs().await;
         assert!(due.is_empty());
+    }
+
+    // -- is_cron_due unit tests ------------------------------------------------
+
+    #[test]
+    fn cron_due_never_run_fires_if_past() {
+        // "every minute" — with no last_run_at (treated as epoch), the next
+        // occurrence after epoch is long past, so it should be due.
+        let now = jiff::Timestamp::now();
+        assert!(AgentScheduler::is_cron_due("* * * * *", None, now));
+    }
+
+    #[test]
+    fn cron_due_recently_run_does_not_fire_again() {
+        // "every minute" — if last_run_at is recent (10 seconds ago),
+        // the next occurrence is still in the future.
+        let now = jiff::Timestamp::now();
+        let ten_secs_ago = now - std::time::Duration::from_secs(10);
+        assert!(!AgentScheduler::is_cron_due("* * * * *", Some(ten_secs_ago), now));
+    }
+
+    #[test]
+    fn cron_due_fires_after_interval_elapsed() {
+        // "every minute" — if last_run_at is 70 seconds ago, the next
+        // occurrence (at the next minute boundary) should have passed.
+        let now = jiff::Timestamp::now();
+        let seventy_secs_ago = now - std::time::Duration::from_secs(70);
+        assert!(AgentScheduler::is_cron_due("* * * * *", Some(seventy_secs_ago), now));
+    }
+
+    #[test]
+    fn cron_invalid_expression() {
+        let now = jiff::Timestamp::now();
+        assert!(!AgentScheduler::is_cron_due("not a cron", None, now));
     }
 }

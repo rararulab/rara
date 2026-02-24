@@ -15,10 +15,11 @@
 //! Background worker that triggers the job pipeline on a configurable cron
 //! schedule.
 //!
-//! The worker runs on a fixed 60-second interval. On each tick it reads the
-//! `pipeline_cron` field from [`JobPipelineSettings`]. If the cron expression
-//! has a firing point within the last 60 seconds, the worker calls
-//! [`PipelineService::run()`].
+//! The worker polls on a configurable interval (default 60s). On each tick it
+//! reads the `pipeline_cron` field from [`JobPipelineSettings`]. It uses a
+//! forward-looking cron check anchored on `last_run_at` to determine whether
+//! the cron has fired, preventing duplicate execution regardless of poll
+//! interval.
 
 use std::str::FromStr;
 
@@ -28,9 +29,24 @@ use tracing::{debug, info, warn};
 
 use crate::worker_state::AppState;
 
-/// Worker that checks the `pipeline_cron` setting every 60 seconds and
-/// triggers a pipeline run when the cron expression fires.
-pub struct PipelineSchedulerWorker;
+/// Worker that checks the `pipeline_cron` setting on each tick and triggers
+/// a pipeline run when the cron expression fires.
+///
+/// Tracks `last_run_at` internally to prevent duplicate execution even when
+/// the worker poll interval is longer or shorter than the cron period.
+pub struct PipelineSchedulerWorker {
+    last_run_at: Option<jiff::Timestamp>,
+}
+
+impl PipelineSchedulerWorker {
+    pub fn new() -> Self {
+        Self { last_run_at: None }
+    }
+}
+
+impl Default for PipelineSchedulerWorker {
+    fn default() -> Self { Self::new() }
+}
 
 #[async_trait]
 impl FallibleWorker<AppState> for PipelineSchedulerWorker {
@@ -50,14 +66,17 @@ impl FallibleWorker<AppState> for PipelineSchedulerWorker {
             return Ok(());
         }
 
-        // Check if the cron expression fires within the last 60-second window.
-        if !is_cron_due(&cron_expr) {
+        // Forward-looking cron check using last_run_at.
+        if !is_cron_due(&cron_expr, self.last_run_at) {
             return Ok(());
         }
 
         // Trigger pipeline run.
         match state.pipeline_service.run().await {
-            Ok(()) => info!("pipeline-scheduler: triggered pipeline run"),
+            Ok(()) => {
+                self.last_run_at = Some(jiff::Timestamp::now());
+                info!("pipeline-scheduler: triggered pipeline run");
+            }
             Err(e) => debug!("pipeline-scheduler: skipped — {e}"),
         }
 
@@ -65,17 +84,21 @@ impl FallibleWorker<AppState> for PipelineSchedulerWorker {
     }
 }
 
-/// Check if the cron expression has a firing point within the current
-/// 60-second window (now - 60s .. now].
-fn is_cron_due(expr: &str) -> bool {
+/// Forward-looking cron check anchored on `last_run_at`.
+///
+/// Finds the next cron occurrence after `last_run_at` (or epoch if never run)
+/// and returns `true` when that occurrence falls at or before now.
+fn is_cron_due(expr: &str, last_run_at: Option<jiff::Timestamp>) -> bool {
     let Ok(cron) = croner::Cron::from_str(expr) else {
         warn!(expr, "pipeline-scheduler: invalid cron expression");
         return false;
     };
 
+    let anchor_secs = last_run_at.map(|ts| ts.as_second()).unwrap_or(0);
+    let anchor =
+        chrono::DateTime::from_timestamp(anchor_secs, 0).unwrap_or_else(chrono::Utc::now);
     let now = chrono::Utc::now();
-    let window_start = now - chrono::Duration::seconds(60);
 
-    cron.find_next_occurrence(&window_start, false)
+    cron.find_next_occurrence(&anchor, false)
         .is_ok_and(|next| next <= now)
 }
