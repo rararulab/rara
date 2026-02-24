@@ -188,6 +188,7 @@ postgresql:
         cpu: 500m
         memory: 512Mi
     persistence:
+      # Must match the originally deployed VCT size (immutable after creation)
       size: 2Gi
 
 # ------------------------------------------------------------------------------

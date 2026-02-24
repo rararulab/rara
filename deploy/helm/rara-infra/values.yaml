@@ -215,6 +215,12 @@ langfuse:
   # Deploy Langfuse's own PostgreSQL instance (independent from rara's PG)
   postgresql:
     deploy: true
+    # Disambiguate from the top-level PostgreSQL subchart:
+    # - fullnameOverride: changes resource names (Service, StatefulSet)
+    # - nameOverride: changes app.kubernetes.io/name label (fixes selector overlap)
+    fullnameOverride: rara-infra-langfuse-pg
+    nameOverride: langfuse-pg
+    host: rara-infra-langfuse-pg
     auth:
       password: langfuse
   # Deploy ClickHouse and Redis as Langfuse subcharts
@@ -229,6 +235,8 @@ langfuse:
   redis:
     deploy: true
     host: rara-infra-redis-primary
+    auth:
+      enabled: false
     master:
       persistence:
         enabled: true
@@ -314,15 +322,23 @@ postgresql:
   auth:
     postgresPassword: postgres
     database: rara
+    usePasswordFiles: false
+  volumePermissions:
+    enabled: true
   primary:
-    # pgmq image is not Bitnami — disable their security context overrides
+    # pgmq image runs as UID 999 (standard postgres), not Bitnami's UID 1001
     podSecurityContext:
-      enabled: false
+      enabled: true
+      fsGroup: 999
     containerSecurityContext:
-      enabled: false
+      enabled: true
+      runAsUser: 999
+      runAsGroup: 999
+      readOnlyRootFilesystem: false
     persistence:
       enabled: true
-      size: 10Gi
+      # Bitnami default is 8Gi — do NOT change after initial install
+      # (StatefulSet VolumeClaimTemplates are immutable)
     resources:
       requests:
         cpu: 250m

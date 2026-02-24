@@ -118,6 +118,36 @@ history:
 # Doctor — Infrastructure health check
 # --------------------------------------------------------------------------
 
+[doc("export CA cert and trust it in macOS keychain (requires sudo)")]
+[group("🩺 Doctor")]
+trust-ca:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    CA_FILE="/tmp/rara-infra-ca.crt"
+    kubectl get secret rara-infra-ca-tls -n {{ NAMESPACE }} -o jsonpath='{.data.ca\.crt}' | base64 -d > "$CA_FILE"
+    echo "Exported CA certificate to $CA_FILE"
+    sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "$CA_FILE"
+    echo "CA trusted in macOS keychain. Restart browser to take effect."
+
+[doc("add *.rara.local entries to /etc/hosts (requires sudo)")]
+[group("🩺 Doctor")]
+hosts:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    LB_IP=$(kubectl get svc {{ RELEASE }}-traefik -n {{ NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
+    if [ -z "$LB_IP" ]; then echo "ERROR: Traefik LoadBalancer IP not found"; exit 1; fi
+    DOMAIN=$(helm get values {{ RELEASE }} -n {{ NAMESPACE }} -o json 2>/dev/null | jq -r '.global.domain // "rara.local"')
+    SERVICES="grafana prometheus alertmanager langfuse quickwit consul minio traefik tempo"
+    HOSTS_LINE="${LB_IP}  $(for s in $SERVICES; do printf "%s.${DOMAIN} " "$s"; done)"
+    MARKER="# rara-infra managed"
+    # Remove old entries
+    if grep -q "$MARKER" /etc/hosts 2>/dev/null; then
+      sudo sed -i '' "/$MARKER/d" /etc/hosts
+    fi
+    echo "${HOSTS_LINE} ${MARKER}" | sudo tee -a /etc/hosts > /dev/null
+    echo "Added to /etc/hosts:"
+    grep "$MARKER" /etc/hosts
+
 [doc("check infrastructure health across all components")]
 [group("🩺 Doctor")]
 doctor:
@@ -134,10 +164,10 @@ doctor:
       local name="$1"; shift
       if result=$("$@" 2>&1); then
         printf " ${PASS}  %-28s %s\n" "$name" "$result"
-        ((ok++))
+        ok=$((ok + 1))
       else
         printf " ${FAIL}  %-28s %s\n" "$name" "$result"
-        ((fail++))
+        fail=$((fail + 1))
       fi
     }
 
@@ -147,17 +177,17 @@ doctor:
       line=$(kubectl get pods -n "$NS" -l "$selector" --no-headers 2>/dev/null | head -1)
       if [ -z "$line" ]; then
         printf " ${SKIP}  %-28s %s\n" "$name" "no pods found"
-        ((skip++)); return
+        skip=$((skip + 1)); return
       fi
       local ready status
       ready=$(echo "$line" | awk '{print $2}')
       status=$(echo "$line" | awk '{print $3}')
       if [ "$status" = "Running" ]; then
         printf " ${PASS}  %-28s %s\n" "$name" "$ready $status"
-        ((ok++))
+        ok=$((ok + 1))
       else
         printf " ${FAIL}  %-28s %s\n" "$name" "$ready $status"
-        ((fail++))
+        fail=$((fail + 1))
       fi
     }
 
@@ -169,14 +199,14 @@ doctor:
           -n "$NS" -- curl -s -o /dev/null -w '%{http_code}' "http://${svc}:${port}${path}" 2>/dev/null || echo "000")
         if [[ "$code" =~ ^[23] ]]; then
           printf " ${PASS}  %-28s %s\n" "$name" "HTTP $code"
-          ((ok++))
+          ok=$((ok + 1))
         else
           printf " ${FAIL}  %-28s %s\n" "$name" "HTTP $code"
-          ((fail++))
+          fail=$((fail + 1))
         fi
       else
         printf " ${SKIP}  %-28s %s\n" "$name" "service not found"
-        ((skip++))
+        skip=$((skip + 1))
       fi
     }
 
@@ -218,8 +248,12 @@ doctor:
     # -- Platform services --
     echo ""
     echo "🔧 Platform Services"
-    check_pod_ready "Langfuse"       "app.kubernetes.io/name=langfuse"
-    check_pod_ready "Infisical"      "app.kubernetes.io/name=infisical"
+    check_pod_ready "Langfuse Web"   "app=web,app.kubernetes.io/name=langfuse"
+    check_pod_ready "Langfuse Worker" "app=worker,app.kubernetes.io/name=langfuse"
+    check_pod_ready "Langfuse PG"    "statefulset.kubernetes.io/pod-name=rara-infra-langfuse-pg-0"
+    check_pod_ready "Redis"          "app.kubernetes.io/name=redis"
+    check_pod_ready "Consul Server"  "app=consul,component=server"
+    check_pod_ready "Consul Client"  "app=consul,component=client"
 
     # -- PVCs --
     echo ""
@@ -229,11 +263,28 @@ doctor:
        bound=\$(kubectl get pvc -n $NS --no-headers 2>/dev/null | grep -c Bound || true); \
        echo \"\${bound}/\${total} Bound\""
 
+    # -- Endpoints --
+    DOMAIN=$(helm get values {{ RELEASE }} -n "$NS" -o json 2>/dev/null | jq -r '.global.domain // "rara.local"')
+    LB_IP=$(kubectl get svc {{ RELEASE }}-traefik -n "$NS" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "pending")
+    echo ""
+    echo "🔗 Endpoints (https://*.${DOMAIN}  LB: ${LB_IP})"
+    for svc in grafana prometheus alertmanager langfuse quickwit consul minio traefik; do
+      url="https://${svc}.${DOMAIN}"
+      code=$(curl -skL --noproxy "*" --max-time 5 --resolve "${svc}.${DOMAIN}:443:${LB_IP}" -o /dev/null -w '%{http_code}' "$url" 2>/dev/null || echo "000")
+      if [[ "$code" =~ ^[23] ]]; then
+        printf " ${PASS}  %-28s %s\n" "$svc" "$url  (HTTP $code)"
+        ok=$((ok + 1))
+      else
+        printf " ${FAIL}  %-28s %s\n" "$svc" "$url  (HTTP $code)"
+        fail=$((fail + 1))
+      fi
+    done
+
     # -- Summary --
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     printf "  ✔ %d passed" "$ok"
-    [ "$fail" -gt 0 ] && printf "  ✘ %d failed" "$fail"
-    [ "$skip" -gt 0 ] && printf "  – %d skipped" "$skip"
+    if [ "$fail" -gt 0 ]; then printf "  ✘ %d failed" "$fail"; fi
+    if [ "$skip" -gt 0 ]; then printf "  – %d skipped" "$skip"; fi
     echo ""
-    [ "$fail" -gt 0 ] && exit 1 || exit 0
+    if [ "$fail" -gt 0 ]; then exit 1; else exit 0; fi
