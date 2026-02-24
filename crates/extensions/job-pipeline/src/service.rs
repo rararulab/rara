@@ -45,9 +45,6 @@ use crate::repository::PipelineRepository;
 use crate::tools::pipeline_tools;
 use crate::types::{PipelineRunStatus, PipelineStreamEvent};
 
-/// Default pipeline system prompt embedded into the binary.
-const DEFAULT_PIPELINE_PROMPT: &str = include_str!("prompt.md");
-
 /// Maximum agent loop iterations per pipeline run.
 const PIPELINE_MAX_ITERATIONS: usize = 25;
 
@@ -108,6 +105,7 @@ pub struct PipelineService {
     notify_client: rara_domain_shared::notify::client::NotifyClient,
     composio_auth: Arc<dyn rara_composio::ComposioAuthProvider>,
     mcp_manager:   rara_mcp::manager::mgr::McpManager,
+    prompt_repo:   Arc<dyn rara_prompt::PromptRepo>,
 
     /// Whether a pipeline run is currently in progress.
     running:       Arc<AtomicBool>,
@@ -132,6 +130,7 @@ impl PipelineService {
         notify_client: rara_domain_shared::notify::client::NotifyClient,
         composio_auth: Arc<dyn rara_composio::ComposioAuthProvider>,
         mcp_manager: rara_mcp::manager::mgr::McpManager,
+        prompt_repo: Arc<dyn rara_prompt::PromptRepo>,
     ) -> Self {
         let (broadcast_tx, _) = tokio::sync::broadcast::channel(256);
         Self {
@@ -143,6 +142,7 @@ impl PipelineService {
             notify_client,
             composio_auth,
             mcp_manager,
+            prompt_repo,
             running: Arc::new(AtomicBool::new(false)),
             cancel_flag: Arc::new(AtomicBool::new(false)),
             run_lock: Arc::new(Mutex::new(())),
@@ -271,7 +271,9 @@ impl PipelineService {
         ));
         let tools = Arc::new(tools);
 
-        let system_prompt = DEFAULT_PIPELINE_PROMPT.to_owned();
+        let system_prompt = self.prompt_repo.get("pipeline/pipeline.md").await
+            .map(|e| e.content)
+            .unwrap_or_default();
         let kick_message =
             PIPELINE_KICK_TEMPLATE.replace("{run_id}", &run_id.to_string());
 

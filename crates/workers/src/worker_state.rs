@@ -75,6 +75,9 @@ pub struct AppState {
     // -- dispatcher --
     pub dispatcher: Arc<rara_agents::dispatcher::AgentDispatcher>,
 
+    // -- prompt repo --
+    pub prompt_repo: Arc<dyn rara_prompt::PromptRepo>,
+
     // -- worker coordination --
     pub proactive_notify: Arc<RwLock<Option<IntervalOrNotifyHandle>>>,
 }
@@ -95,6 +98,18 @@ impl AppState {
             .whatever_context("Failed to initialize runtime settings")?;
         info!("Runtime settings service loaded");
 
+        // -- prompt repo -------------------------------------------------------
+
+        let prompt_repo: Arc<dyn rara_prompt::PromptRepo> = Arc::new(
+            rara_prompt::FilePromptRepo::new(
+                rara_paths::prompts_dir().clone(),
+                rara_prompt::all_builtin_prompts(),
+            )
+            .await
+            .whatever_context("Failed to initialize prompt repository")?,
+        );
+        info!("Prompt repository initialized");
+
         // -- LLM provider ----------------------------------------------------
 
         let llm_provider: agent_core::provider::LlmProviderLoaderRef =
@@ -105,6 +120,7 @@ impl AppState {
         let ai_service = rara_agents::builtin::tasks::TaskAgentService::new(
             settings_svc.clone(),
             llm_provider.clone(),
+            prompt_repo.clone(),
         );
 
         // -- domain services -------------------------------------------------
@@ -274,6 +290,7 @@ impl AppState {
             notify_client.clone(),
             composio_auth_provider,
             mcp_manager.clone(),
+            prompt_repo.clone(),
         );
         info!("Pipeline service initialized");
 
@@ -331,6 +348,7 @@ impl AppState {
             skill_registry.clone(),
             Some(Arc::clone(&memory_manager)),
             settings_svc.subscribe(),
+            prompt_repo.clone(),
         );
 
         let chat_agent = rara_agents::builtin::chat::ChatAgent::new(orchestrator.clone());
@@ -382,6 +400,7 @@ impl AppState {
             pipeline_service,
             coding_task_service,
             dispatcher,
+            prompt_repo,
             proactive_notify: Arc::new(RwLock::new(None)),
         })
     }
@@ -476,6 +495,12 @@ impl AppState {
         router = router.merge(rara_dispatcher_admin::router(
             self.dispatcher.clone(),
         ));
+
+        // Prompt admin routes.
+        let (prompt_router, prompt_api) =
+            rara_prompt_admin::routes(self.prompt_repo.clone()).split_for_parts();
+        router = router.merge(prompt_router);
+        api.merge(prompt_api);
 
         (router, api)
     }

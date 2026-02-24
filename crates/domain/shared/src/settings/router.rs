@@ -16,94 +16,15 @@
 
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::State,
     http::StatusCode,
-    routing::get,
 };
-use serde::Deserialize;
-use tokio::fs;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::settings::{
     model::{Settings, UpdateRequest},
     service::SettingsSvc,
 };
-
-#[derive(Debug, Clone, Copy)]
-struct PromptSpec {
-    name:            &'static str,
-    description:     &'static str,
-    default_content: &'static str,
-}
-
-const PROMPT_SPECS: &[PromptSpec] = &[
-    PromptSpec {
-        name:            "agent/soul.md",
-        description:     "Global personality / soul prompt",
-        default_content: rara_paths::default_agent_soul_prompt(),
-    },
-    PromptSpec {
-        name:            "chat/default_system.md",
-        description:     "Default chat system prompt",
-        default_content: include_str!("../../../../../prompts/chat/default_system.md"),
-    },
-    PromptSpec {
-        name:            "workers/agent_policy.md",
-        description:     "Proactive/scheduled agent operating policy",
-        default_content: include_str!("../../../../../prompts/workers/agent_policy.md"),
-    },
-    PromptSpec {
-        name:            "workers/resume_analysis_instructions.md",
-        description:     "Resume analysis tool instructions",
-        default_content: include_str!(
-            "../../../../../prompts/workers/resume_analysis_instructions.md"
-        ),
-    },
-    PromptSpec {
-        name:            "ai/cover_letter.system.md",
-        description:     "Cover letter agent system prompt",
-        default_content: include_str!("../../../../../prompts/ai/cover_letter.system.md"),
-    },
-    PromptSpec {
-        name:            "ai/follow_up.system.md",
-        description:     "Follow-up email agent system prompt",
-        default_content: include_str!("../../../../../prompts/ai/follow_up.system.md"),
-    },
-    PromptSpec {
-        name:            "ai/interview_prep.system.md",
-        description:     "Interview prep agent system prompt",
-        default_content: include_str!("../../../../../prompts/ai/interview_prep.system.md"),
-    },
-    PromptSpec {
-        name:            "ai/jd_analyzer.system.md",
-        description:     "Job description analyzer system prompt",
-        default_content: include_str!("../../../../../prompts/ai/jd_analyzer.system.md"),
-    },
-    PromptSpec {
-        name:            "ai/jd_parser.system.md",
-        description:     "Job description parser system prompt",
-        default_content: include_str!("../../../../../prompts/ai/jd_parser.system.md"),
-    },
-    PromptSpec {
-        name:            "ai/job_fit.system.md",
-        description:     "Job fit agent system prompt",
-        default_content: include_str!("../../../../../prompts/ai/job_fit.system.md"),
-    },
-    PromptSpec {
-        name:            "ai/resume_analyzer.system.md",
-        description:     "Resume analyzer system prompt",
-        default_content: include_str!("../../../../../prompts/ai/resume_analyzer.system.md"),
-    },
-    PromptSpec {
-        name:            "ai/resume_optimizer.system.md",
-        description:     "Resume optimizer system prompt",
-        default_content: include_str!("../../../../../prompts/ai/resume_optimizer.system.md"),
-    },
-];
-
-fn prompt_spec(name: &str) -> Option<&'static PromptSpec> {
-    PROMPT_SPECS.iter().find(|spec| spec.name == name)
-}
 
 /// Build `/api/v1/settings` routes.
 pub fn routes(svc: SettingsSvc) -> OpenApiRouter {
@@ -112,13 +33,8 @@ pub fn routes(svc: SettingsSvc) -> OpenApiRouter {
             "/api/v1",
             OpenApiRouter::new()
                 .routes(routes!(get_settings, update_settings))
-                .routes(routes!(list_prompts))
                 .routes(routes!(get_ssh_key))
                 .routes(routes!(get_ollama_model_recommendations))
-                .route(
-                    "/settings/prompts/{*name}",
-                    get(get_prompt_content).put(update_prompt_content),
-                )
                 .merge(crate::settings::ollama::ollama_management_routes()),
         )
         .with_state(svc)
@@ -160,115 +76,6 @@ async fn update_settings(
     })?;
 
     Ok(Json(updated.into()))
-}
-
-#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
-pub struct PromptFileView {
-    pub name:        String,
-    pub description: String,
-    pub content:     String,
-}
-
-#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
-pub struct PromptListView {
-    pub prompts: Vec<PromptFileView>,
-}
-
-#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
-pub struct PromptUpdateRequest {
-    pub content: String,
-}
-
-#[utoipa::path(
-    get,
-    path = "/settings/prompts",
-    tag = "settings",
-    responses(
-        (status = 200, description = "List of prompt files", body = PromptListView),
-    )
-)]
-async fn list_prompts() -> Result<Json<PromptListView>, (StatusCode, String)> {
-    let prompts = PROMPT_SPECS
-        .iter()
-        .map(|spec| PromptFileView {
-            name:        spec.name.to_owned(),
-            description: spec.description.to_owned(),
-            content:     rara_paths::load_prompt_markdown(spec.name, spec.default_content),
-        })
-        .collect();
-
-    Ok(Json(PromptListView { prompts }))
-}
-
-#[utoipa::path(
-    get,
-    path = "/settings/prompts/{name}",
-    tag = "settings",
-    params(("name" = String, Path, description = "Prompt file name")),
-    responses(
-        (status = 200, description = "Prompt content", body = PromptFileView),
-    )
-)]
-async fn get_prompt_content(
-    Path(name): Path<String>,
-) -> Result<Json<PromptFileView>, (StatusCode, String)> {
-    let name = name.trim_start_matches('/');
-    let spec = prompt_spec(name)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("prompt not found: {name}")))?;
-
-    Ok(Json(PromptFileView {
-        name:        spec.name.to_owned(),
-        description: spec.description.to_owned(),
-        content:     rara_paths::load_prompt_markdown(spec.name, spec.default_content),
-    }))
-}
-
-#[utoipa::path(
-    put,
-    path = "/settings/prompts/{name}",
-    tag = "settings",
-    params(("name" = String, Path, description = "Prompt file name")),
-    request_body = PromptUpdateRequest,
-    responses(
-        (status = 200, description = "Prompt updated", body = PromptFileView),
-    )
-)]
-async fn update_prompt_content(
-    Path(name): Path<String>,
-    Json(req): Json<PromptUpdateRequest>,
-) -> Result<Json<PromptFileView>, (StatusCode, String)> {
-    let name = name.trim_start_matches('/');
-    let spec = prompt_spec(name)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("prompt not found: {name}")))?;
-
-    let path = rara_paths::prompt_markdown_file(spec.name);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).await.map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("failed to create prompt directory: {e}"),
-            )
-        })?;
-    }
-
-    let content = if req.content.trim().is_empty() {
-        spec.default_content.to_owned()
-    } else {
-        req.content
-    };
-
-    fs::write(path, &content).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to write prompt markdown: {e}"),
-        )
-    })?;
-
-    Ok(Json(PromptFileView {
-        name: spec.name.to_owned(),
-        description: spec.description.to_owned(),
-        content,
-    }))
 }
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]

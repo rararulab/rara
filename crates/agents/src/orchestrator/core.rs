@@ -17,13 +17,8 @@ use agent_core::{
 use super::{
     context::estimate_history_tokens,
     error::OrchestratorError,
-    prompt::{compose_system_prompt, resolve_soul_prompt},
     reflection,
 };
-
-/// Default system prompt used when no custom prompt is configured.
-const SYSTEM_PROMPT_FILE: &str = "chat/default_system.md";
-const DEFAULT_SYSTEM_PROMPT: &str = include_str!("../../../../prompts/chat/default_system.md");
 
 /// Orchestrates agent creation and execution by assembling system prompts,
 /// constructing tool registries, and managing conversation context.
@@ -35,6 +30,7 @@ pub struct AgentOrchestrator {
     skill_registry: rara_skills::registry::InMemoryRegistry,
     memory_manager: Option<Arc<MemoryManager>>,
     settings_rx:    watch::Receiver<Settings>,
+    prompt_repo:    Arc<dyn rara_prompt::PromptRepo>,
 }
 
 impl AgentOrchestrator {
@@ -46,6 +42,7 @@ impl AgentOrchestrator {
         skill_registry: rara_skills::registry::InMemoryRegistry,
         memory_manager: Option<Arc<MemoryManager>>,
         settings_rx: watch::Receiver<Settings>,
+        prompt_repo: Arc<dyn rara_prompt::PromptRepo>,
     ) -> Self {
         Self {
             llm_provider,
@@ -54,6 +51,7 @@ impl AgentOrchestrator {
             skill_registry,
             memory_manager,
             settings_rx,
+            prompt_repo,
         }
     }
 
@@ -65,11 +63,16 @@ impl AgentOrchestrator {
         user_text: &str,
         history_len: usize,
     ) -> String {
-        let soul_prompt = {
-            let settings = self.settings_rx.borrow();
-            resolve_soul_prompt(&settings)
-        };
-        let mut system_prompt = compose_system_prompt(base_prompt, soul_prompt.as_deref());
+        let settings_soul = self.settings_rx.borrow().agent.soul.clone();
+        let soul_prompt = rara_prompt::resolve_soul(
+            self.prompt_repo.as_ref(),
+            settings_soul.as_deref(),
+        ).await;
+        let mut system_prompt = rara_prompt::compose_with_soul(
+            base_prompt,
+            soul_prompt.as_deref(),
+            "Chat Instructions",
+        );
 
         // Inject core user profile.
         if let Some(ref mm) = self.memory_manager {
@@ -117,8 +120,15 @@ impl AgentOrchestrator {
     }
 
     pub async fn build_worker_policy(&self) -> String {
-        let settings = self.settings_rx.borrow().clone();
-        super::prompt::load_agent_policy(&settings).await
+        let policy = self.prompt_repo.get("workers/agent_policy.md").await
+            .map(|e| e.content)
+            .unwrap_or_default();
+        let settings_soul = self.settings_rx.borrow().agent.soul.clone();
+        let soul = rara_prompt::resolve_soul(
+            self.prompt_repo.as_ref(),
+            settings_soul.as_deref(),
+        ).await;
+        rara_prompt::compose_with_soul(&policy, soul.as_deref(), "Operational Policy")
     }
 
     // -- tool construction --------------------------------------------------
@@ -292,13 +302,25 @@ impl AgentOrchestrator {
         self.settings_rx.borrow().clone()
     }
 
-    #[must_use]
-    pub fn current_system_prompt(&self) -> String {
-        let settings = self.settings_rx.borrow();
-        let base_prompt =
-            rara_paths::load_prompt_markdown(SYSTEM_PROMPT_FILE, DEFAULT_SYSTEM_PROMPT);
-        let soul_prompt = resolve_soul_prompt(&settings);
-        compose_system_prompt(&base_prompt, soul_prompt.as_deref())
+    /// Resolve the current system prompt asynchronously.
+    ///
+    /// Loads the base prompt from the prompt repo, then composes with the
+    /// soul prompt (settings override > repo file).
+    pub async fn current_system_prompt(&self) -> String {
+        let base_prompt = self.prompt_repo.get("chat/default_system.md").await
+            .map(|e| e.content)
+            .unwrap_or_default();
+        let settings_soul = self.settings_rx.borrow().agent.soul.clone();
+        let soul_prompt = rara_prompt::resolve_soul(
+            self.prompt_repo.as_ref(),
+            settings_soul.as_deref(),
+        ).await;
+        rara_prompt::compose_with_soul(&base_prompt, soul_prompt.as_deref(), "Chat Instructions")
+    }
+
+    /// Return a reference to the prompt repository.
+    pub fn prompt_repo(&self) -> &Arc<dyn rara_prompt::PromptRepo> {
+        &self.prompt_repo
     }
 }
 

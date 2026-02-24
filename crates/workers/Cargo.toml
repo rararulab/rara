@@ -42,6 +42,8 @@ rara-mcp = { workspace = true }
 rara-mcp-admin = { workspace = true }
 rara-memory = { workspace = true }
 rara-paths = { workspace = true }
+rara-prompt = { workspace = true }
+rara-prompt-admin = { workspace = true }
 rara-server = { workspace = true }
 rara-sessions = { workspace = true }
 rara-skill-admin = { workspace = true }

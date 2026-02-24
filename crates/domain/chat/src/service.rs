@@ -99,8 +99,8 @@ impl ChatService {
 
     /// Read the current system prompt from runtime settings, falling back
     /// to a built-in default when no custom prompt is configured.
-    fn current_system_prompt(&self) -> String {
-        self.chat_agent.orchestrator().current_system_prompt()
+    async fn current_system_prompt(&self) -> String {
+        self.chat_agent.orchestrator().current_system_prompt().await
     }
 
     // -- model catalog ------------------------------------------------------
@@ -151,11 +151,15 @@ impl ChatService {
         system_prompt: Option<String>,
     ) -> Result<SessionEntry, ChatError> {
         let now = Utc::now();
+        let resolved_system_prompt = match system_prompt {
+            Some(sp) => Some(sp),
+            None => Some(self.current_system_prompt().await),
+        };
         let entry = SessionEntry {
             key,
             title,
             model: model.or_else(|| Some(self.current_default_model())),
-            system_prompt: system_prompt.or_else(|| Some(self.current_system_prompt())),
+            system_prompt: resolved_system_prompt,
             message_count: 0,
             preview: None,
             metadata: None,
@@ -396,10 +400,10 @@ impl ChatService {
             .unwrap_or(128_000) as usize;
 
         // 5. Resolve base system prompt
-        let base_system_prompt = session
-            .system_prompt
-            .clone()
-            .unwrap_or_else(|| self.current_system_prompt());
+        let base_system_prompt = match session.system_prompt.clone() {
+            Some(sp) => sp,
+            None => self.current_system_prompt().await,
+        };
 
         // 6. Build UserContent
         let user_content = if has_images {

@@ -25,7 +25,6 @@ pub mod interview_prep;
 pub mod jd_analyzer;
 pub mod jd_parser;
 pub mod job_fit;
-pub mod prompt;
 pub mod resume_analyzer;
 pub mod resume_optimizer;
 
@@ -50,14 +49,20 @@ use crate::builtin::tasks::{
 pub struct TaskAgentService {
     settings:     SettingsSvc,
     llm_provider: LlmProviderLoaderRef,
+    prompt_repo:  Arc<dyn rara_prompt::PromptRepo>,
 }
 
 impl TaskAgentService {
     /// Create a new `TaskAgentService`.
-    pub fn new(settings: SettingsSvc, llm_provider: LlmProviderLoaderRef) -> Self {
+    pub fn new(
+        settings: SettingsSvc,
+        llm_provider: LlmProviderLoaderRef,
+        prompt_repo: Arc<dyn rara_prompt::PromptRepo>,
+    ) -> Self {
         Self {
             settings,
             llm_provider,
+            prompt_repo,
         }
     }
 
@@ -78,25 +83,10 @@ impl TaskAgentService {
         Ok((provider, model))
     }
 
-    fn current_soul_prompt(&self) -> Option<String> {
-        let settings_soul = self.settings.current().agent.soul;
-        if settings_soul
-            .as_deref()
-            .is_some_and(|s| !s.trim().is_empty())
-        {
-            return settings_soul;
-        }
-        let markdown_soul = rara_paths::load_agent_soul_prompt();
-        if markdown_soul.trim().is_empty() {
-            return None;
-        }
-        Some(markdown_soul)
-    }
-
     /// Create a job-fit analysis agent.
     pub async fn job_fit(&self) -> Result<JobFitAgent, TaskAgentError> {
         let (provider, model) = self.provider_and_model(ModelScenario::Job).await?;
-        Ok(JobFitAgent::new(provider, model, self.current_soul_prompt()))
+        Ok(JobFitAgent::new(provider, model, self.prompt_repo.clone()))
     }
 
     /// Create a resume optimization agent.
@@ -105,7 +95,7 @@ impl TaskAgentService {
         Ok(ResumeOptimizerAgent::new(
             provider,
             model,
-            self.current_soul_prompt(),
+            self.prompt_repo.clone(),
         ))
     }
 
@@ -115,7 +105,7 @@ impl TaskAgentService {
         Ok(InterviewPrepAgent::new(
             provider,
             model,
-            self.current_soul_prompt(),
+            self.prompt_repo.clone(),
         ))
     }
 
@@ -125,7 +115,7 @@ impl TaskAgentService {
         Ok(FollowUpDraftAgent::new(
             provider,
             model,
-            self.current_soul_prompt(),
+            self.prompt_repo.clone(),
         ))
     }
 
@@ -135,7 +125,7 @@ impl TaskAgentService {
         Ok(CoverLetterAgent::new(
             provider,
             model,
-            self.current_soul_prompt(),
+            self.prompt_repo.clone(),
         ))
     }
 
@@ -145,7 +135,7 @@ impl TaskAgentService {
         Ok(JdParserAgent::new(
             provider,
             model,
-            self.current_soul_prompt(),
+            self.prompt_repo.clone(),
         ))
     }
 
@@ -155,7 +145,7 @@ impl TaskAgentService {
         Ok(JdAnalyzerAgent::new(
             provider,
             model,
-            self.current_soul_prompt(),
+            self.prompt_repo.clone(),
         ))
     }
 
@@ -165,7 +155,7 @@ impl TaskAgentService {
         Ok(ResumeAnalyzerAgent::new(
             provider,
             model,
-            self.current_soul_prompt(),
+            self.prompt_repo.clone(),
         ))
     }
 }

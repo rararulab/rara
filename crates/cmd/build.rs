@@ -16,4 +16,47 @@ fn main() {
     shadow_rs::ShadowBuilder::builder()
         .build()
         .expect("Failed to acquire build-time information");
+
+    // Sync bundled prompt files to config directory.
+    sync_prompts();
+}
+
+/// Copy all prompt files from the source `prompts/` directory into the
+/// user's config directory (`~/.config/job/prompts/` on macOS,
+/// `$XDG_CONFIG_HOME/job/prompts/` on Linux).
+///
+/// Files are always overwritten so that the source code remains the single
+/// source of truth for compiled-in defaults.
+fn sync_prompts() {
+    let prompts_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../prompts");
+
+    if !prompts_src.exists() {
+        return;
+    }
+
+    // Determine config dir (simplified -- matches rara_paths logic).
+    let config_dir = if cfg!(target_os = "macos") {
+        dirs::home_dir()
+            .expect("home dir")
+            .join(".config/job")
+    } else {
+        dirs::config_dir()
+            .expect("config dir")
+            .join("job")
+    };
+    let prompt_dir = config_dir.join("prompts");
+
+    for entry in walkdir::WalkDir::new(&prompts_src)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_file())
+    {
+        let rel = entry.path().strip_prefix(&prompts_src).unwrap();
+        let target = prompt_dir.join(rel);
+        // Always overwrite -- source code is single source of truth.
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        std::fs::copy(entry.path(), &target).ok();
+    }
 }
