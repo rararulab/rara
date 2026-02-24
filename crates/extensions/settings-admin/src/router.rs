@@ -116,12 +116,11 @@ pub struct SettingsAdminUpdateRequest {
 
 impl From<SettingsAdminUpdateRequest> for UpdateRequest {
     fn from(value: SettingsAdminUpdateRequest) -> Self {
-        Self {
-            ai: value.ai.map(Into::into),
-            agent: value.agent.map(Into::into),
-            job_pipeline: value.job_pipeline,
-            telegram: None,
-        }
+        let mut req = Self::default();
+        req.ai = value.ai.map(Into::into);
+        req.agent = value.agent.map(Into::into);
+        req.job_pipeline = value.job_pipeline;
+        req
     }
 }
 
