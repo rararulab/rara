@@ -6,8 +6,8 @@ use rara_sessions::types::ChatMessage;
 
 use super::AgentOutput;
 
-/// Maximum iterations for scheduled job execution.
-const MAX_ITERATIONS: usize = 15;
+/// Default maximum iterations for scheduled job execution.
+const DEFAULT_MAX_ITERATIONS: usize = 15;
 
 /// Agent that executes scheduled jobs with full tool access.
 #[derive(Clone)]
@@ -30,8 +30,12 @@ impl ScheduledAgent {
         history: Option<&[ChatMessage]>,
     ) -> Result<AgentOutput, OrchestratorError> {
         let policy = self.orchestrator.build_worker_policy().await;
-        let model = self.orchestrator.model_for_key("scheduled");
-        let provider_hint = self.orchestrator.settings().ai.provider;
+        let settings = self.orchestrator.settings();
+        let model = settings.ai.model_for_key("scheduled");
+        let provider_hint = settings.ai.provider.clone();
+        let max_iterations = settings.agent.max_iterations
+            .map(|n| n as usize)
+            .unwrap_or(DEFAULT_MAX_ITERATIONS);
         let tools = self.orchestrator.tools().clone();
 
         let chat_history = history
@@ -45,7 +49,7 @@ impl ScheduledAgent {
             .system_prompt(policy)
             .user_content(UserContent::Text(message.to_owned()))
             .history(chat_history)
-            .max_iterations(MAX_ITERATIONS)
+            .max_iterations(max_iterations)
             .build();
 
         let result = runner

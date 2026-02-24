@@ -49,6 +49,10 @@ pub struct AgentRunResponse {
     pub iterations:        usize,
     /// Total number of tool calls executed across all iterations.
     pub tool_calls_made:   usize,
+    /// `true` when the agent loop hit the max-iterations ceiling before the
+    /// model produced a terminal (non-tool-call) response. The response still
+    /// contains all work completed so far, but the task may be incomplete.
+    pub truncated:         bool,
 }
 
 impl AgentRunResponse {
@@ -291,6 +295,7 @@ impl AgentRunner {
 
         let request_tools = self.request_tools_for_model(model, tools)?;
         let mut tool_calls_made = 0_usize;
+        let mut last_response: Option<CreateChatCompletionResponse> = None;
 
         for iteration in 0..self.max_iterations {
             // ---- Phase 1: begin one loop tick ----
@@ -402,8 +407,13 @@ impl AgentRunner {
                     provider_response: response,
                     iterations: iteration + 1,
                     tool_calls_made,
+                    truncated: false,
                 });
             }
+
+            // Stash the latest response so we can return partial results if the
+            // iteration limit is reached before the model produces a terminal turn.
+            last_response = Some(response.clone());
 
             // ---- Phase 4: execute model-requested tools ----
             info!(
@@ -509,9 +519,37 @@ impl AgentRunner {
             }
         }
 
-        Err(Error::Other {
-            message: "agent loop exceeded max iterations".into(),
-        })?
+        // Max iterations exhausted — return partial results instead of an error.
+        // `last_response` is `None` only when `max_iterations == 0`, which is
+        // a mis-configuration; in that case we still return a hard error.
+        let Some(partial_response) = last_response else {
+            return Err(Error::Other {
+                message: "agent loop exceeded max iterations (0 configured)".into(),
+            });
+        };
+        warn!(
+            max_iterations = self.max_iterations,
+            tool_calls_made,
+            "agent loop hit max iterations limit, returning partial results"
+        );
+        if let Some(cb) = on_event {
+            cb(RunnerEvent::Done {
+                text:            partial_response
+                    .choices
+                    .first()
+                    .and_then(|c| c.message.content.as_deref())
+                    .unwrap_or_default()
+                    .to_owned(),
+                iterations:      self.max_iterations,
+                tool_calls_made,
+            });
+        }
+        Ok(AgentRunResponse {
+            provider_response: partial_response,
+            iterations:        self.max_iterations,
+            tool_calls_made,
+            truncated:         true,
+        })
     }
 
     /// Streaming variant of [`run`]. Spawns the agent loop in a background
@@ -586,6 +624,7 @@ impl AgentRunner {
 
         let request_tools = self.request_tools_for_model(model, tools)?;
         let mut tool_calls_made = 0_usize;
+        let mut last_accumulated_text = String::new();
 
         // ---- Main agent loop ----
         for iteration in 0..self.max_iterations {
@@ -715,6 +754,9 @@ impl AgentRunner {
                 return Ok(());
             }
 
+            // Stash the latest accumulated text for partial-result reporting.
+            last_accumulated_text = accumulated_text.clone();
+
             // ---- Phase 4: Assemble and execute tool calls ----
             let mut sorted_indices: Vec<u32> = pending_tool_calls.keys().copied().collect();
             sorted_indices.sort_unstable();
@@ -809,9 +851,20 @@ impl AgentRunner {
             }
         }
 
-        Err(Error::Other {
-            message: "agent loop exceeded max iterations".into(),
-        })
+        // Max iterations exhausted — emit Done with partial results.
+        warn!(
+            max_iterations = self.max_iterations,
+            tool_calls_made,
+            "streaming agent loop hit max iterations limit, returning partial results"
+        );
+        let _ = tx
+            .send(RunnerEvent::Done {
+                text:            last_accumulated_text,
+                iterations:      self.max_iterations,
+                tool_calls_made,
+            })
+            .await;
+        Ok(())
     }
 }
 
