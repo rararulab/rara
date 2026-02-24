@@ -572,3 +572,35 @@ export interface CreateCodingTaskRequest {
   repo_url?: string;
   session_key?: string;
 }
+
+// llmfit model recommendations
+export interface LlmfitSystemInfo {
+  total_ram_gb: number;
+  available_ram_gb: number;
+  cpu_cores: number;
+  cpu_name: string;
+  has_gpu: boolean;
+  gpu_vram_gb: number | null;
+  gpu_name: string | null;
+  backend: string;
+}
+
+export interface LlmfitModelEntry {
+  name: string;
+  provider: string | null;
+  fit_level: string;
+  run_mode: string;
+  score: number;
+  estimated_tps: number;
+  best_quant: string;
+  memory_required_gb: number;
+  use_case: string | null;
+  installed: boolean;
+}
+
+export interface LlmfitRecommendationsResponse {
+  available: boolean;
+  system: LlmfitSystemInfo | null;
+  models: LlmfitModelEntry[];
+  error: string | null;
+}

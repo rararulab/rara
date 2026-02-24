@@ -62,6 +62,7 @@ import {
   Plus,
   Search,
   Sparkles,
+  RefreshCw,
   Trash2,
   Users,
   X,
@@ -139,6 +140,13 @@ export default function Settings() {
   const contactsQuery = useQuery({
     queryKey: ["contacts"],
     queryFn: () => api.get<TelegramContact[]>("/api/v1/contacts"),
+  });
+
+  const { data: recommendations, isLoading: recsLoading, refetch: refetchRecs } = useQuery({
+    queryKey: ["ollama-recommendations"],
+    queryFn: () => api.getOllamaModelRecommendations(),
+    enabled: settingsQuery.data?.ai.provider === "ollama",
+    staleTime: 5 * 60 * 1000,
   });
 
   const createContactMutation = useMutation({
@@ -1187,6 +1195,103 @@ export default function Settings() {
                   </>
                 )}
               </div>
+
+              {/* llmfit model recommendations */}
+              {settingsQuery.data?.ai.provider === "ollama" && (
+                <Card>
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <CardTitle className="flex items-center gap-2">
+                          <Bot className="h-5 w-5" />
+                          硬件感知模型推荐
+                        </CardTitle>
+                        <CardDescription>
+                          由 llmfit 分析当前硬件，推荐适合运行的本地模型
+                        </CardDescription>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => refetchRecs()}
+                        disabled={recsLoading}
+                      >
+                        <RefreshCw className={`h-4 w-4 mr-1 ${recsLoading ? "animate-spin" : ""}`} />
+                        刷新
+                      </Button>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    {recsLoading ? (
+                      <div className="space-y-2">
+                        <Skeleton className="h-8 w-full" />
+                        <Skeleton className="h-8 w-full" />
+                        <Skeleton className="h-8 w-full" />
+                      </div>
+                    ) : !recommendations?.available ? (
+                      <div className="text-sm text-muted-foreground p-4 bg-muted rounded-lg">
+                        <p className="font-medium mb-1">未检测到 llmfit</p>
+                        <p>安装命令：<code className="bg-background px-1 rounded">cargo install llmfit</code></p>
+                        {recommendations?.error && <p className="mt-1 text-destructive text-xs">{recommendations.error}</p>}
+                      </div>
+                    ) : (
+                      <>
+                        {recommendations.system && (
+                          <div className="text-xs text-muted-foreground mb-3 flex gap-4 flex-wrap">
+                            <span>RAM: {recommendations.system.total_ram_gb.toFixed(0)}GB</span>
+                            {recommendations.system.has_gpu && (
+                              <span>GPU: {recommendations.system.gpu_name} ({recommendations.system.gpu_vram_gb?.toFixed(0)}GB)</span>
+                            )}
+                            <span>Backend: {recommendations.system.backend}</span>
+                            <span>CPU: {recommendations.system.cpu_cores} 核</span>
+                          </div>
+                        )}
+                        <div className="space-y-2">
+                          {recommendations.models.map((model, idx) => (
+                            <div key={idx} className="flex items-center gap-3 p-2 rounded-lg border hover:bg-muted/50 transition-colors">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-mono text-sm font-medium truncate">{model.name}</span>
+                                  {model.installed && <Badge variant="outline" className="text-xs shrink-0">已安装</Badge>}
+                                  <Badge
+                                    className="text-xs shrink-0"
+                                    variant={
+                                      model.fit_level === "Perfect" ? "default" :
+                                      model.fit_level === "Good" ? "secondary" :
+                                      "outline"
+                                    }
+                                  >
+                                    {model.fit_level}
+                                  </Badge>
+                                </div>
+                                <div className="text-xs text-muted-foreground mt-0.5 flex gap-3 flex-wrap">
+                                  <span>评分 {model.score.toFixed(0)}</span>
+                                  <span>{model.estimated_tps.toFixed(0)} tok/s</span>
+                                  <span>{model.best_quant}</span>
+                                  <span>{model.memory_required_gb.toFixed(1)}GB</span>
+                                  <span>{model.run_mode}</span>
+                                </div>
+                              </div>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => {
+                                  updateMutation.mutate({ ai: { chat_model: model.name } });
+                                }}
+                              >
+                                选用
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                        {recommendations.error && (
+                          <p className="mt-2 text-xs text-destructive">{recommendations.error}</p>
+                        )}
+                      </>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
             </div>
           )}
 

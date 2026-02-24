@@ -83,7 +83,7 @@ async function requestBlob(path: string, options?: RequestInit & { timeoutMs?: n
   }
 }
 
-import type { PipelineDiscoveredJob, PaginatedDiscoveredJobs, DiscoveredJobsStats } from './types';
+import type { PipelineDiscoveredJob, PaginatedDiscoveredJobs, DiscoveredJobsStats, LlmfitRecommendationsResponse } from './types';
 
 export const api = {
   get: <T>(path: string) => request<T>(path),
@@ -128,6 +128,9 @@ export const api = {
   fetchDiscoveredJobsStats(): Promise<DiscoveredJobsStats> {
     return request<DiscoveredJobsStats>('/api/v1/pipeline/discovered-jobs/stats');
   },
+
+  getOllamaModelRecommendations: (limit = 10) =>
+    request<LlmfitRecommendationsResponse>(`/api/v1/settings/ollama/model-recommendations?limit=${limit}`),
 
   updateDiscoveredJobAction(id: string, action: string): Promise<PipelineDiscoveredJob> {
     return request<PipelineDiscoveredJob>(`/api/v1/pipeline/discovered-jobs/${id}`, {
