@@ -1,36 +1,45 @@
-ARG BASE_IMAGE=job-base:latest
+# =============================================================================
+# Backend Dockerfile — multi-stage build with cargo-chef for dependency caching
+# =============================================================================
 
-FROM ${BASE_IMAGE} AS planner
-ENV RUSTC_WRAPPER=sccache SCCACHE_DIR=/sccache
+# ---------------------------------------------------------------------------
+# Stage 1: chef — install cargo-chef on the Rust base image
+# ---------------------------------------------------------------------------
+FROM rust:1.86-bookworm AS chef
+RUN cargo install cargo-chef
 WORKDIR /app
+
+# ---------------------------------------------------------------------------
+# Stage 2: planner — generate the dependency recipe
+# ---------------------------------------------------------------------------
+FROM chef AS planner
 COPY . .
-RUN --mount=type=cache,target=$SCCACHE_DIR,sharing=locked \
-    cargo chef prepare --recipe-path recipe.json
+RUN cargo chef prepare --recipe-path recipe.json
 
-FROM ${BASE_IMAGE} AS builder
-ENV RUSTC_WRAPPER=sccache SCCACHE_DIR=/sccache
-# Use /home/appuser as HOME so jobspy cache paths match the runtime user
-# Keep RUSTUP_HOME and CARGO_HOME at /root where toolchain was installed
-ENV HOME=/home/appuser RUSTUP_HOME=/root/.rustup CARGO_HOME=/root/.cargo
-WORKDIR /app
+# ---------------------------------------------------------------------------
+# Stage 3: builder — cook dependencies then build the application
+# ---------------------------------------------------------------------------
+FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
-RUN --mount=type=cache,target=$SCCACHE_DIR,sharing=locked \
-    cargo chef cook --release --recipe-path recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
-RUN --mount=type=cache,target=$SCCACHE_DIR,sharing=locked \
-    cargo build -p job-cli --release
+RUN cargo build -p rara-cli --release
 
-# Minimal runtime image (needs Python for PyO3/jobspy-sys)
-FROM ubuntu:25.04 AS runtime
+# ---------------------------------------------------------------------------
+# Stage 4: runtime — minimal Debian image with only runtime dependencies
+# ---------------------------------------------------------------------------
+FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    libssl3t64 \
-    libpython3.13 \
+    libssl3 \
     && rm -rf /var/lib/apt/lists/*
 RUN useradd -r -m -s /usr/sbin/nologin appuser
+
 COPY --from=builder /app/target/release/job /usr/local/bin/job
-COPY --from=builder /home/appuser/.cache/jobspy /home/appuser/.cache/jobspy
-RUN chown -R appuser:appuser /home/appuser
+RUN chown appuser:appuser /usr/local/bin/job
+
 USER appuser
 WORKDIR /app
+EXPOSE 25555 50051
+
 CMD ["job", "server"]
