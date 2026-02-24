@@ -448,7 +448,7 @@ impl AppState {
         merge_openapi_router(
             &mut router,
             &mut api,
-            rara_domain_shared::settings::router::routes(self.settings_svc.clone()),
+            rara_settings_admin::routes(self.settings_svc.clone()),
         );
         merge_openapi_router(
             &mut router,
@@ -512,6 +512,13 @@ impl AppState {
             rara_prompt_admin::routes(self.prompt_repo.clone()).split_for_parts();
         router = router.merge(prompt_router);
         api.merge(prompt_api);
+
+        // Telegram settings admin routes (OpenAPI).
+        merge_openapi_router(
+            &mut router,
+            &mut api,
+            rara_tg_admin::routes(self.settings_svc.clone()),
+        );
 
         (router, api)
     }

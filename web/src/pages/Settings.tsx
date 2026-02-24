@@ -85,6 +85,20 @@ type OpenRouterModel = {
   name: string;
   contextLength: number | null;
 };
+type TgAdminSettingsView = {
+  configured: boolean;
+  chat_id: number | null;
+  allowed_group_chat_id: number | null;
+  notification_channel_id: number | null;
+  token_hint: string | null;
+  updated_at: string | null;
+};
+type TgAdminUpdateRequest = {
+  bot_token?: string;
+  chat_id?: number;
+  allowed_group_chat_id?: number;
+  notification_channel_id?: number | null;
+};
 
 function formatUpdatedAt(value: string | null): string {
   if (!value) return "Never";
@@ -143,8 +157,13 @@ export default function Settings() {
 
 
   const promptsQuery = useQuery({
-    queryKey: ["settings-prompts"],
-    queryFn: () => api.get<PromptListView>("/api/v1/settings/prompts"),
+    queryKey: ["prompt-admin"],
+    queryFn: () => api.get<PromptListView>("/api/v1/prompts"),
+  });
+
+  const tgSettingsQuery = useQuery({
+    queryKey: ["tg-admin-settings"],
+    queryFn: () => api.get<TgAdminSettingsView>("/api/v1/tg/settings"),
   });
 
   const contactsQuery = useQuery({
@@ -359,29 +378,22 @@ export default function Settings() {
 
   useEffect(() => {
     if (!settingsQuery.data) return;
+    const tg = tgSettingsQuery.data ?? settingsQuery.data.telegram;
     setAiProvider(settingsQuery.data.ai.provider ?? "openrouter");
     setOllamaBaseUrl(settingsQuery.data.ai.ollama_base_url ?? "http://localhost:11434");
     setModelMap(settingsQuery.data.ai.models ?? {});
     setFallbackModels(settingsQuery.data.ai.fallback_models ?? []);
     setAiApiKey(settingsQuery.data.ai.openrouter_api_key ?? "");
-    setTelegramChatId(
-      settingsQuery.data.telegram.chat_id == null
-        ? ""
-        : String(settingsQuery.data.telegram.chat_id),
-    );
+    setTelegramChatId(tg.chat_id == null ? "" : String(tg.chat_id));
     setTelegramAllowedGroupChatId(
-      settingsQuery.data.telegram.allowed_group_chat_id == null
-        ? ""
-        : String(settingsQuery.data.telegram.allowed_group_chat_id),
+      tg.allowed_group_chat_id == null ? "" : String(tg.allowed_group_chat_id),
     );
     setTelegramNotificationChannelId(
-      settingsQuery.data.telegram.notification_channel_id == null
-        ? ""
-        : String(settingsQuery.data.telegram.notification_channel_id),
+      tg.notification_channel_id == null ? "" : String(tg.notification_channel_id),
     );
     setComposioApiKey(settingsQuery.data.agent.composio.api_key ?? "");
     setComposioEntityId(settingsQuery.data.agent.composio.entity_id ?? "");
-  }, [settingsQuery.data]);
+  }, [settingsQuery.data, tgSettingsQuery.data]);
 
   useEffect(() => {
     const prompts = promptsQuery.data?.prompts ?? [];
@@ -560,11 +572,42 @@ export default function Settings() {
     },
   });
 
+  const tgUpdateMutation = useMutation({
+    mutationFn: (payload: TgAdminUpdateRequest) =>
+      api.put<TgAdminSettingsView>("/api/v1/tg/settings", payload),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(["tg-admin-settings"], updated);
+      queryClient.setQueryData<RuntimeSettingsView>(["settings"], (prev) =>
+        prev
+          ? {
+              ...prev,
+              telegram: {
+                ...prev.telegram,
+                configured: updated.configured,
+                chat_id: updated.chat_id,
+                allowed_group_chat_id: updated.allowed_group_chat_id,
+                notification_channel_id: updated.notification_channel_id,
+                token_hint: updated.token_hint,
+              },
+              updated_at: updated.updated_at ?? prev.updated_at,
+            }
+          : prev,
+      );
+      setTelegramToken("");
+      setSelectedSetting(null);
+      setToast({ kind: "success", message: "Telegram admin settings updated." });
+    },
+    onError: (e: unknown) => {
+      const message = e instanceof Error ? e.message : "Failed to update Telegram settings";
+      setToast({ kind: "error", message });
+    },
+  });
+
   const promptUpdateMutation = useMutation({
     mutationFn: ({ name, content }: { name: string; content: string }) =>
-      api.put<PromptFileView>(`/api/v1/settings/prompts/${name}`, { content }),
+      api.put<PromptFileView>(`/api/v1/prompts/${name}`, { content }),
     onSuccess: (updated) => {
-      queryClient.setQueryData<PromptListView>(["settings-prompts"], (prev) => {
+      queryClient.setQueryData<PromptListView>(["prompt-admin"], (prev) => {
         if (!prev) {
           return { prompts: [updated] };
         }
@@ -589,6 +632,15 @@ export default function Settings() {
 
   const handleSave = () => {
     if (!settingsQuery.data) return;
+    if (selectedSetting === "telegram") {
+      const telegramPatch = patch?.telegram;
+      if (!telegramPatch || Object.keys(telegramPatch).length === 0) {
+        setToast({ kind: "error", message: "No valid Telegram settings changes to save." });
+        return;
+      }
+      tgUpdateMutation.mutate(telegramPatch);
+      return;
+    }
     if (!patch) {
       setToast({ kind: "error", message: "No valid settings changes to save." });
       return;
@@ -713,19 +765,23 @@ export default function Settings() {
   const availablePrompts = promptsQuery.data?.prompts ?? [];
   const selectedPromptMeta = availablePrompts.find((p) => p.name === selectedPromptName);
   const isDialogOpen = selectedSetting !== null;
+  const currentTelegram = tgSettingsQuery.data ?? current.telegram;
 
   const providerLabel = (current.ai.provider ?? "openrouter") === "ollama" ? "Ollama" : "OpenRouter";
 
   const dialogTitle =
     selectedSetting === "ai"
-      ? `AI Provider (${providerLabel})`
+      ? `Model Admin (${providerLabel})`
       : selectedSetting === "composio"
         ? "Composio"
       : selectedSetting === "agent"
-        ? "Agent Personality"
+        ? "Prompt Admin"
         : selectedSetting === "contacts"
           ? "Telegram Contacts"
-          : "Telegram Bot";
+          : "Telegram Admin";
+  const dialogSaving = selectedSetting === "telegram"
+    ? tgUpdateMutation.isPending
+    : updateMutation.isPending;
 
   /** Well-known model keys displayed in the settings UI */
   const MODEL_KEYS = ["default", "chat", "job", "pipeline", "proactive", "scheduled"] as const;
@@ -923,7 +979,7 @@ export default function Settings() {
           <div className="flex items-center gap-3">
             <Sparkles className="h-4 w-4 text-muted-foreground" />
             <div className="space-y-1">
-              <p className="font-medium">AI Provider ({providerLabel})</p>
+              <p className="font-medium">Model Admin ({providerLabel})</p>
               <p className="text-xs text-muted-foreground">
                 Default: {current.ai.models?.["default"] ?? "openai/gpt-4o"}
                 {providerLabel === "OpenRouter" && <> · Key: {current.ai.openrouter_api_key ? "Set" : "Not set"}</>}
@@ -970,14 +1026,14 @@ export default function Settings() {
           <div className="flex items-center gap-3">
             <Bot className="h-4 w-4 text-muted-foreground" />
             <div className="space-y-1">
-              <p className="font-medium">Agent Personality</p>
+              <p className="font-medium">Prompt Admin</p>
               <p className="text-xs text-muted-foreground">
-                Soul: agent/soul.md
+                {availablePrompts.length} prompt files · Runtime prompt editor
               </p>
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <Badge variant="default">Active</Badge>
+            <Badge variant="default">Enabled</Badge>
             <ChevronRight className="h-4 w-4 text-muted-foreground" />
           </div>
         </button>
@@ -990,18 +1046,18 @@ export default function Settings() {
           <div className="flex items-center gap-3">
             <MessageSquare className="h-4 w-4 text-muted-foreground" />
             <div className="space-y-1">
-              <p className="font-medium">Telegram Bot</p>
+              <p className="font-medium">Telegram Admin</p>
               <p className="text-xs text-muted-foreground">
-                Chat ID: {current.telegram.chat_id ?? "Not set"} · Token:{" "}
-                {current.telegram.token_hint ?? "Not set"} · Group:{" "}
-                {current.telegram.allowed_group_chat_id ?? "Not set"} · Notif Channel:{" "}
-                {current.telegram.notification_channel_id ?? "Not set"}
+                Chat ID: {currentTelegram.chat_id ?? "Not set"} · Token:{" "}
+                {currentTelegram.token_hint ?? "Not set"} · Group:{" "}
+                {currentTelegram.allowed_group_chat_id ?? "Not set"} · Notif Channel:{" "}
+                {currentTelegram.notification_channel_id ?? "Not set"}
               </p>
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <Badge variant={current.telegram.configured ? "default" : "secondary"}>
-              {current.telegram.configured ? "Configured" : "Not configured"}
+            <Badge variant={currentTelegram.configured ? "default" : "secondary"}>
+              {currentTelegram.configured ? "Configured" : "Not configured"}
             </Badge>
             <ChevronRight className="h-4 w-4 text-muted-foreground" />
           </div>
@@ -1705,11 +1761,11 @@ export default function Settings() {
                     type="password"
                     value={telegramToken}
                     onChange={(e) => setTelegramToken(e.target.value)}
-                    placeholder={current.telegram.token_hint ?? "123456:ABC..."}
+                    placeholder={currentTelegram.token_hint ?? "123456:ABC..."}
                     className="h-11"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Current token hint: {current.telegram.token_hint ?? "Not set"}
+                    Current token hint: {currentTelegram.token_hint ?? "Not set"}
                   </p>
                 </div>
               </div>
@@ -1874,12 +1930,12 @@ export default function Settings() {
               <Button
                 variant="outline"
                 onClick={() => setSelectedSetting(null)}
-                disabled={updateMutation.isPending}
+                disabled={dialogSaving}
               >
                 Cancel
               </Button>
-              <Button onClick={handleSave} disabled={updateMutation.isPending}>
-                {updateMutation.isPending ? "Saving..." : "Save Settings"}
+              <Button onClick={handleSave} disabled={dialogSaving}>
+                {dialogSaving ? "Saving..." : "Save Settings"}
               </Button>
             </DialogFooter>
           )}

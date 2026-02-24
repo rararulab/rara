@@ -44,10 +44,12 @@ rara-model-admin = { workspace = true }
 rara-memory = { workspace = true }
 rara-paths = { workspace = true }
 rara-prompt-admin = { workspace = true }
+rara-settings-admin = { workspace = true }
 rara-server = { workspace = true }
 rara-sessions = { workspace = true }
 rara-skill-admin = { workspace = true }
 rara-skills = { workspace = true }
+rara-tg-admin = { workspace = true }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

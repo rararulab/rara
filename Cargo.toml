@@ -72,6 +72,8 @@ members = [
     "crates/extensions/dispatcher-admin",
     "crates/extensions/model-admin",
     "crates/extensions/prompt-admin",
+    "crates/extensions/settings-admin",
+    "crates/extensions/tg-admin",
     "crates/extensions/rara-git",
     "crates/common/infisical",
 ]
@@ -176,10 +178,12 @@ rara-keyring-store = { path = "crates/integrations/keyring-store" }
 rara-mcp = { path = "crates/integrations/mcp" }
 rara-mcp-admin = { path = "crates/extensions/mcp-admin" }
 rara-model-admin = { path = "crates/extensions/model-admin" }
+rara-settings-admin = { path = "crates/extensions/settings-admin" }
 rara-memory = { path = "crates/memory" }
 rara-model = { path = "crates/rara-model" }
 rara-paths = { path = "crates/paths" }
 rara-prompt-admin = { path = "crates/extensions/prompt-admin" }
+rara-tg-admin = { path = "crates/extensions/tg-admin" }
 rara-server = { path = "crates/server" }
 rara-sessions = { path = "crates/sessions" }
 rara-skill-admin = { path = "crates/extensions/skill-admin" }

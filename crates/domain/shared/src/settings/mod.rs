@@ -14,7 +14,6 @@
 
 pub mod model;
 pub mod ollama;
-pub mod router;
 pub mod service;
 
 pub use service::SettingsSvc;
