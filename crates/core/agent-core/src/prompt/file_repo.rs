@@ -4,8 +4,8 @@ use std::{
     sync::Arc,
 };
 
-use agent_core::prompt::types::{NotFoundSnafu, PromptEntry, PromptError, PromptSpec, WatcherSnafu};
-use agent_core::prompt::PromptRepo;
+use super::types::{NotFoundSnafu, PromptEntry, PromptError, PromptSpec, WatcherSnafu};
+use super::PromptRepo;
 use notify::{EventKind, RecursiveMode, Watcher};
 use tokio::sync::RwLock;
 

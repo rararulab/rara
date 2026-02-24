@@ -14,7 +14,6 @@ axum = { workspace = true }
 chrono = { workspace = true }
 jiff = { workspace = true }
 llmfit-core = { workspace = true }
-notify = "8"
 rara-agents = { workspace = true }
 rara-domain-shared = { workspace = true }
 rara-git = { workspace = true }
@@ -29,6 +28,3 @@ tracing = { workspace = true }
 utoipa = { workspace = true }
 utoipa-axum = { workspace = true }
 
-[dev-dependencies]
-tempfile = { workspace = true }
-tokio = { workspace = true, features = ["full"] }

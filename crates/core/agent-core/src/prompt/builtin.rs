@@ -1,4 +1,4 @@
-use agent_core::prompt::PromptSpec;
+use super::PromptSpec;
 
 /// Returns all built-in prompt specifications with their compiled-in defaults.
 ///

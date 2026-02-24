@@ -22,6 +22,7 @@ serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
 snafu.workspace = true
+notify = "8"
 tokio.workspace = true
 tool-core.workspace = true
 opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"] }
@@ -30,6 +31,7 @@ tracing-opentelemetry = "0.32.0"
 
 [dev-dependencies]
 common-telemetry.workspace = true
+tempfile.workspace = true
 test-case = "^3"
 
 [lints]

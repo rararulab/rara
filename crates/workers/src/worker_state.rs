@@ -104,9 +104,9 @@ impl AppState {
         // -- prompt repo -------------------------------------------------------
 
         let prompt_repo: Arc<dyn agent_core::prompt::PromptRepo> = Arc::new(
-            rara_backend_admin::prompts::FilePromptRepo::new(
+            agent_core::prompt::FilePromptRepo::new(
                 rara_paths::prompts_dir().clone(),
-                rara_backend_admin::prompts::all_builtin_prompts(),
+                agent_core::prompt::all_builtin_prompts(),
             )
             .await
             .whatever_context("Failed to initialize prompt repository")?,

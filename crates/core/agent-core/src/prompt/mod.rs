@@ -1,5 +1,9 @@
+mod builtin;
+mod file_repo;
 pub mod types;
 
+pub use builtin::all_builtin_prompts;
+pub use file_repo::FilePromptRepo;
 pub use types::{PromptEntry, PromptError, PromptSpec};
 
 /// Async trait for prompt storage and retrieval.
