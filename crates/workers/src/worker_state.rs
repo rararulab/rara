@@ -312,7 +312,7 @@ impl AppState {
         // Default model for sub-agents: use the chat model from settings.
         let subagent_default_model = {
             let s = settings_svc.current();
-            s.ai.model_for(rara_domain_shared::settings::model::ModelScenario::Chat).to_owned()
+            s.ai.model_for_key("chat")
         };
 
         tool_registry.register_service(Arc::new(agent_core::subagent::SubagentTool::new(
@@ -471,6 +471,17 @@ impl AppState {
             rara_ext_job_pipeline::routes::routes(self.pipeline_service.clone()).split_for_parts();
         router = router.merge(pipeline_router);
         api.merge(pipeline_api);
+
+        // Model admin routes (OpenAPI).
+        let model_repo: std::sync::Arc<dyn agent_core::model_repo::ModelRepo> =
+            std::sync::Arc::new(rara_model_admin::SettingsModelRepo::new(
+                self.settings_svc.clone(),
+            ));
+        merge_openapi_router(
+            &mut router,
+            &mut api,
+            rara_model_admin::routes(model_repo),
+        );
 
         // Dispatcher routes (plain axum::Router, no OpenAPI metadata).
         router = router.merge(rara_dispatcher_admin::router(

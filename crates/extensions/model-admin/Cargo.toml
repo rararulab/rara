@@ -1,0 +1,18 @@
+[package]
+name = "rara-model-admin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+agent-core = { workspace = true }
+axum = { workspace = true }
+async-trait = { workspace = true }
+rara-domain-shared = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+utoipa = { workspace = true }
+utoipa-axum = { workspace = true }

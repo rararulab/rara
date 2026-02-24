@@ -32,7 +32,7 @@ pub mod resume_optimizer;
 use std::sync::Arc;
 
 use agent_core::provider::LlmProviderLoaderRef;
-use rara_domain_shared::settings::{SettingsSvc, model::ModelScenario};
+use rara_domain_shared::settings::SettingsSvc;
 
 use crate::builtin::tasks::{
     cover_letter::CoverLetterAgent, error::TaskAgentError, follow_up::FollowUpDraftAgent,
@@ -61,13 +61,13 @@ impl TaskAgentService {
         }
     }
 
-    /// Acquire the current LLM provider and model name for the given scenario.
+    /// Acquire the current LLM provider and model name for the given key.
     async fn provider_and_model(
         &self,
-        scenario: ModelScenario,
+        key: &str,
     ) -> Result<(Arc<dyn agent_core::provider::LlmProvider>, String), TaskAgentError> {
         let current = self.settings.current();
-        let model = current.ai.model_for(scenario).to_owned();
+        let model = current.ai.model_for_key(key);
 
         let provider = self
             .llm_provider
@@ -95,13 +95,13 @@ impl TaskAgentService {
 
     /// Create a job-fit analysis agent.
     pub async fn job_fit(&self) -> Result<JobFitAgent, TaskAgentError> {
-        let (provider, model) = self.provider_and_model(ModelScenario::Job).await?;
+        let (provider, model) = self.provider_and_model("job").await?;
         Ok(JobFitAgent::new(provider, model, self.current_soul_prompt()))
     }
 
     /// Create a resume optimization agent.
     pub async fn resume_optimizer(&self) -> Result<ResumeOptimizerAgent, TaskAgentError> {
-        let (provider, model) = self.provider_and_model(ModelScenario::Job).await?;
+        let (provider, model) = self.provider_and_model("job").await?;
         Ok(ResumeOptimizerAgent::new(
             provider,
             model,
@@ -111,7 +111,7 @@ impl TaskAgentService {
 
     /// Create an interview preparation agent.
     pub async fn interview_prep(&self) -> Result<InterviewPrepAgent, TaskAgentError> {
-        let (provider, model) = self.provider_and_model(ModelScenario::Job).await?;
+        let (provider, model) = self.provider_and_model("job").await?;
         Ok(InterviewPrepAgent::new(
             provider,
             model,
@@ -121,7 +121,7 @@ impl TaskAgentService {
 
     /// Create a follow-up email drafting agent.
     pub async fn follow_up(&self) -> Result<FollowUpDraftAgent, TaskAgentError> {
-        let (provider, model) = self.provider_and_model(ModelScenario::Job).await?;
+        let (provider, model) = self.provider_and_model("job").await?;
         Ok(FollowUpDraftAgent::new(
             provider,
             model,
@@ -131,7 +131,7 @@ impl TaskAgentService {
 
     /// Create a cover letter generation agent.
     pub async fn cover_letter(&self) -> Result<CoverLetterAgent, TaskAgentError> {
-        let (provider, model) = self.provider_and_model(ModelScenario::Job).await?;
+        let (provider, model) = self.provider_and_model("job").await?;
         Ok(CoverLetterAgent::new(
             provider,
             model,
@@ -141,7 +141,7 @@ impl TaskAgentService {
 
     /// Create a job description parser agent.
     pub async fn jd_parser(&self) -> Result<JdParserAgent, TaskAgentError> {
-        let (provider, model) = self.provider_and_model(ModelScenario::Job).await?;
+        let (provider, model) = self.provider_and_model("job").await?;
         Ok(JdParserAgent::new(
             provider,
             model,
@@ -151,7 +151,7 @@ impl TaskAgentService {
 
     /// Create a job description analyzer agent.
     pub async fn jd_analyzer(&self) -> Result<JdAnalyzerAgent, TaskAgentError> {
-        let (provider, model) = self.provider_and_model(ModelScenario::Job).await?;
+        let (provider, model) = self.provider_and_model("job").await?;
         Ok(JdAnalyzerAgent::new(
             provider,
             model,
@@ -161,7 +161,7 @@ impl TaskAgentService {
 
     /// Create a resume analyzer agent.
     pub async fn resume_analyzer(&self) -> Result<ResumeAnalyzerAgent, TaskAgentError> {
-        let (provider, model) = self.provider_and_model(ModelScenario::Job).await?;
+        let (provider, model) = self.provider_and_model("job").await?;
         Ok(ResumeAnalyzerAgent::new(
             provider,
             model,

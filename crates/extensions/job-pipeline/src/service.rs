@@ -34,7 +34,7 @@ use agent_core::{
 };
 use rara_domain_shared::{
     notify::types::{NotificationPriority, SendTelegramNotificationRequest},
-    settings::{SettingsSvc, model::ModelScenario},
+    settings::SettingsSvc,
 };
 use snafu::Snafu;
 use tokio::sync::Mutex;
@@ -259,7 +259,7 @@ impl PipelineService {
 
         let settings = self.settings_svc.current();
         let provider_hint = settings.ai.provider.clone();
-        let model = settings.ai.model_for(ModelScenario::Job).to_owned();
+        let model = settings.ai.model_for_key("pipeline");
 
         // Build pipeline-specific tool registry (includes report_pipeline_stats).
         let mut tools = self.build_pipeline_tools().await;

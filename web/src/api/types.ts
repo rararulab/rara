@@ -207,12 +207,10 @@ export interface RuntimeSettingsView {
     configured: boolean;
     provider: string | null;
     ollama_base_url: string | null;
-    default_model: string | null;
-    job_model: string | null;
-    chat_model: string | null;
-    chat_model_fallbacks: string[];
-    job_model_fallbacks: string[];
     openrouter_api_key: string | null;
+    models: Record<string, string>;
+    fallback_models: string[];
+    favorite_models: string[];
   };
   telegram: {
     configured: boolean;
@@ -244,11 +242,9 @@ export interface RuntimeSettingsPatch {
     provider?: string;
     ollama_base_url?: string;
     openrouter_api_key?: string;
-    default_model?: string;
-    job_model?: string | null;
-    chat_model?: string | null;
-    chat_model_fallbacks?: string[];
-    job_model_fallbacks?: string[];
+    models?: Record<string, string | null>;
+    fallback_models?: string[];
+    favorite_models?: string[];
   };
   telegram?: {
     bot_token?: string;
