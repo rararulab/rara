@@ -216,41 +216,56 @@ impl AppConfig {
         let mut worker_manager =
             common_worker::Manager::with_state_and_config(app_state.clone(), manager_config);
 
+        // Read worker interval settings (applied at startup; restart to change).
+        let worker_cfg = app_state.settings_svc.current().workers;
+        info!(
+            agent_scheduler_secs  = worker_cfg.agent_scheduler_interval_secs,
+            pipeline_scheduler_secs = worker_cfg.pipeline_scheduler_interval_secs,
+            memory_sync_secs      = worker_cfg.memory_sync_interval_secs,
+            proactive_hours       = worker_cfg.proactive_agent_interval_hours,
+            "Worker intervals from settings"
+        );
+
         let proactive_handle = worker_manager
             .fallible_worker(rara_workers::proactive::ProactiveAgentWorker)
             .name("proactive-agent")
             .eager()
-            .interval_or_notify(Duration::from_hours(12))
+            .interval_or_notify(Duration::from_secs(
+                worker_cfg.proactive_agent_interval_hours * 3600,
+            ))
             .spawn();
         if let Ok(mut guard) = app_state.proactive_notify.write() {
             *guard = Some(proactive_handle);
         }
 
-        // -- memory sync worker (every 5 minutes) -----------------------------
+        // -- memory sync worker -----------------------------------------------
 
         let _memory_sync_handle = worker_manager
             .fallible_worker(rara_workers::memory_sync::MemorySyncWorker)
             .name("memory-sync")
-            .cron("0 */5 * * * *")
-            .expect("hardcoded memory sync cron must be valid")
+            .interval(Duration::from_secs(worker_cfg.memory_sync_interval_secs))
             .spawn();
 
-        // -- agent scheduler worker (every 60s) --------------------------------
+        // -- agent scheduler worker -------------------------------------------
 
         let _scheduler_handle = worker_manager
             .fallible_worker(rara_workers::scheduled_agent::AgentSchedulerWorker::new(
                 app_state.agent_scheduler.clone(),
             ))
             .name("agent-scheduler")
-            .interval(Duration::from_secs(60))
+            .interval(Duration::from_secs(worker_cfg.agent_scheduler_interval_secs))
             .spawn();
 
-        // -- pipeline scheduler worker (every 60s, checks cron from settings) --
+        // -- pipeline scheduler worker (checks cron from settings) ------------
 
         let _pipeline_scheduler_handle = worker_manager
-            .fallible_worker(rara_workers::pipeline_scheduler::PipelineSchedulerWorker)
+            .fallible_worker(
+                rara_workers::pipeline_scheduler::PipelineSchedulerWorker::new(),
+            )
             .name("pipeline-scheduler")
-            .interval(Duration::from_secs(60))
+            .interval(Duration::from_secs(
+                worker_cfg.pipeline_scheduler_interval_secs,
+            ))
             .spawn();
 
         // -- telegram bot (optional) -----------------------------------------

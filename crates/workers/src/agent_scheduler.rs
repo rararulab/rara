@@ -265,7 +265,7 @@ impl AgentScheduler {
     /// Check whether a single job is due at the given instant.
     fn is_due(job: &AgentJob, now: jiff::Timestamp) -> bool {
         match &job.trigger {
-            AgentTrigger::Cron { expr } => Self::is_cron_due(expr, now),
+            AgentTrigger::Cron { expr } => Self::is_cron_due(expr, job.last_run_at, now),
             AgentTrigger::Delay { run_at } => *run_at <= now,
             AgentTrigger::Interval { seconds } => match job.last_run_at {
                 None => true,
@@ -279,22 +279,37 @@ impl AgentScheduler {
         }
     }
 
-    /// Check if the cron expression has a firing point within the current
-    /// 60-second window.
-    fn is_cron_due(expr: &str, now: jiff::Timestamp) -> bool {
+    /// Forward-looking cron check that uses `last_run_at` to prevent
+    /// duplicate execution.
+    ///
+    /// Finds the next cron occurrence after `last_run_at` (or epoch if never
+    /// run) and returns `true` when that occurrence falls at or before `now`.
+    /// This is safe regardless of how long the worker poll interval is — a
+    /// delayed poll simply fires the missed trigger on the next tick, and
+    /// once `mark_executed` updates `last_run_at` the same trigger will not
+    /// fire again.
+    fn is_cron_due(
+        expr: &str,
+        last_run_at: Option<jiff::Timestamp>,
+        now: jiff::Timestamp,
+    ) -> bool {
         let Ok(cron) = croner::Cron::from_str(expr) else {
             warn!(expr, "invalid cron expression in agent job");
             return false;
         };
 
-        // Convert jiff Timestamp to chrono DateTime for croner.
+        // Anchor: find the next occurrence after last_run_at (or epoch).
+        let anchor = last_run_at
+            .map(|ts| ts.as_second())
+            .unwrap_or(0);
+        let anchor_chrono =
+            chrono::DateTime::from_timestamp(anchor, 0).unwrap_or_else(chrono::Utc::now);
+
         let now_chrono =
             chrono::DateTime::from_timestamp(now.as_second(), 0).unwrap_or_else(chrono::Utc::now);
 
-        let window_start = now_chrono - chrono::Duration::seconds(60);
-
-        // Check if there is any firing point between (now - 60s) and now.
-        cron.find_next_occurrence(&window_start, false)
+        // Find the first occurrence strictly after the anchor.
+        cron.find_next_occurrence(&anchor_chrono, false)
             .is_ok_and(|next| next <= now_chrono)
     }
 }
@@ -474,8 +489,6 @@ mod tests {
             .await
             .unwrap();
 
-        // After atomic save, main file should exist and .tmp should NOT
-        // (it was renamed to the main file).
         assert!(path.exists());
         let tmp_path = path.with_extension("json.tmp");
         assert!(!tmp_path.exists());
@@ -486,22 +499,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("jobs.json");
 
-        // Write corrupted JSON to the main file.
         tokio::fs::write(&path, "NOT VALID JSON{{{").await.unwrap();
 
         let scheduler = AgentScheduler::new(path.clone());
-        // load() should not return an error — it degrades gracefully.
         scheduler.load().await.unwrap();
 
-        // The corrupted file should be renamed to .corrupted.
         let corrupted_path = path.with_extension("json.corrupted");
         assert!(corrupted_path.exists());
-
-        // After corruption recovery the scheduler starts empty, which triggers
-        // the seed logic (writes a default diary job), so the main path exists
-        // again with the seeded content.
         assert!(path.exists());
-        // The seeded default diary job should be present.
         assert_eq!(scheduler.list().await.len(), 1);
     }
 
@@ -511,7 +516,6 @@ mod tests {
         let path = dir.path().join("jobs.json");
         let tmp_path = path.with_extension("json.tmp");
 
-        // First, create a valid scheduler with a job and save it.
         {
             let scheduler = AgentScheduler::new(path.clone());
             scheduler
@@ -526,14 +530,11 @@ mod tests {
                 })
                 .await
                 .unwrap();
-            // Copy the valid main file as .tmp backup.
             tokio::fs::copy(&path, &tmp_path).await.unwrap();
         }
 
-        // Now corrupt the main file.
         tokio::fs::write(&path, "CORRUPTED!!!").await.unwrap();
 
-        // Load should recover from .tmp.
         let scheduler = AgentScheduler::new(path.clone());
         scheduler.load().await.unwrap();
         let jobs = scheduler.list().await;
@@ -547,7 +548,6 @@ mod tests {
         let path = dir.path().join("jobs.json");
         let tmp_path = path.with_extension("json.tmp");
 
-        // Create a valid .tmp file without a main file.
         {
             let scheduler = AgentScheduler::new(path.clone());
             scheduler
@@ -562,7 +562,6 @@ mod tests {
                 })
                 .await
                 .unwrap();
-            // Copy main to tmp, then delete main.
             tokio::fs::copy(&path, &tmp_path).await.unwrap();
             tokio::fs::remove_file(&path).await.unwrap();
         }
@@ -575,5 +574,33 @@ mod tests {
         let jobs = scheduler.list().await;
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].id, "tmp-only-1");
+    }
+
+    // -- is_cron_due unit tests ------------------------------------------------
+
+    #[test]
+    fn cron_due_never_run_fires_if_past() {
+        let now = jiff::Timestamp::now();
+        assert!(AgentScheduler::is_cron_due("* * * * *", None, now));
+    }
+
+    #[test]
+    fn cron_due_recently_run_does_not_fire_again() {
+        let now = jiff::Timestamp::now();
+        let ten_secs_ago = now - std::time::Duration::from_secs(10);
+        assert!(!AgentScheduler::is_cron_due("* * * * *", Some(ten_secs_ago), now));
+    }
+
+    #[test]
+    fn cron_due_fires_after_interval_elapsed() {
+        let now = jiff::Timestamp::now();
+        let seventy_secs_ago = now - std::time::Duration::from_secs(70);
+        assert!(AgentScheduler::is_cron_due("* * * * *", Some(seventy_secs_ago), now));
+    }
+
+    #[test]
+    fn cron_invalid_expression() {
+        let now = jiff::Timestamp::now();
+        assert!(!AgentScheduler::is_cron_due("not a cron", None, now));
     }
 }

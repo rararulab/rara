@@ -113,6 +113,7 @@ impl From<AgentSettingsAdminPatch> for AgentRuntimeSettingsPatch {
             memory: None,
             composio: value.composio.map(Into::into),
             gmail: None,
+            max_iterations: None,
         }
     }
 }

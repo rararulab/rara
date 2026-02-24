@@ -27,6 +27,8 @@ pub struct Settings {
     pub agent:        AgentSettings,
     #[serde(default)]
     pub job_pipeline: JobPipelineSettings,
+    #[serde(default)]
+    pub workers:      WorkerSettings,
     pub updated_at:   Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -186,6 +188,34 @@ pub struct GmailSettings {
     pub auto_send_enabled: bool,
 }
 
+/// Worker poll interval settings.
+///
+/// These control how often background workers wake up and check for work.
+/// Changes take effect after service restart.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct WorkerSettings {
+    /// Agent scheduler poll interval in seconds (default 60).
+    pub agent_scheduler_interval_secs:  u64,
+    /// Pipeline scheduler poll interval in seconds (default 60).
+    pub pipeline_scheduler_interval_secs: u64,
+    /// Memory sync interval in seconds (default 300 = 5 min).
+    pub memory_sync_interval_secs:      u64,
+    /// Proactive agent interval in hours (default 12).
+    pub proactive_agent_interval_hours: u64,
+}
+
+impl Default for WorkerSettings {
+    fn default() -> Self {
+        Self {
+            agent_scheduler_interval_secs:    60,
+            pipeline_scheduler_interval_secs: 60,
+            memory_sync_interval_secs:        300,
+            proactive_agent_interval_hours:   12,
+        }
+    }
+}
+
 /// Partial update payload for runtime settings writes.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct UpdateRequest {
@@ -193,6 +223,7 @@ pub struct UpdateRequest {
     pub telegram:     Option<TelegramRuntimeSettingsPatch>,
     pub agent:        Option<AgentRuntimeSettingsPatch>,
     pub job_pipeline: Option<JobPipelineRuntimeSettingsPatch>,
+    pub workers:      Option<WorkerRuntimeSettingsPatch>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
@@ -262,6 +293,14 @@ pub struct GmailRuntimeSettingsPatch {
     pub address:           Option<String>,
     pub app_password:      Option<String>,
     pub auto_send_enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
+pub struct WorkerRuntimeSettingsPatch {
+    pub agent_scheduler_interval_secs:    Option<u64>,
+    pub pipeline_scheduler_interval_secs: Option<u64>,
+    pub memory_sync_interval_secs:        Option<u64>,
+    pub proactive_agent_interval_hours:   Option<u64>,
 }
 
 impl Settings {
@@ -370,6 +409,21 @@ impl Settings {
             }
             if let Some(cron) = jp.pipeline_cron {
                 self.job_pipeline.pipeline_cron = normalize_text(Some(cron));
+            }
+        }
+
+        if let Some(w) = patch.workers {
+            if let Some(v) = w.agent_scheduler_interval_secs {
+                self.workers.agent_scheduler_interval_secs = v;
+            }
+            if let Some(v) = w.pipeline_scheduler_interval_secs {
+                self.workers.pipeline_scheduler_interval_secs = v;
+            }
+            if let Some(v) = w.memory_sync_interval_secs {
+                self.workers.memory_sync_interval_secs = v;
+            }
+            if let Some(v) = w.proactive_agent_interval_hours {
+                self.workers.proactive_agent_interval_hours = v;
             }
         }
     }
@@ -506,6 +560,7 @@ mod tests {
             telegram:     None,
             agent:        None,
             job_pipeline: None,
+            workers:      None,
         });
         assert_eq!(
             settings.ai.models.get("chat").map(String::as_str),
@@ -533,6 +588,7 @@ mod tests {
             telegram:     None,
             agent:        None,
             job_pipeline: None,
+            workers:      None,
         });
         assert_eq!(settings.ai.models.get("job"), None);
     }
@@ -573,6 +629,7 @@ mod tests {
             telegram:     None,
             agent:        None,
             job_pipeline: None,
+            workers:      None,
         });
         assert_eq!(
             settings.ai.fallback_models,
@@ -620,8 +677,10 @@ mod tests {
                 memory:             None,
                 composio:           None,
                 gmail:              None,
+                max_iterations:     None,
             }),
             job_pipeline: None,
+            workers:      None,
         });
         assert!(settings.agent.proactive_enabled);
         assert_eq!(settings.agent.proactive_cron, Some("0 9 * * *".to_owned()));
@@ -636,6 +695,7 @@ mod tests {
                 memory:             MemorySettings::default(),
                 composio:           ComposioSettings::default(),
                 gmail:              GmailSettings::default(),
+                max_iterations:     None,
             },
             ..Default::default()
         };
@@ -648,8 +708,10 @@ mod tests {
                 memory:             None,
                 composio:           None,
                 gmail:              None,
+                max_iterations:     None,
             }),
             job_pipeline: None,
+            workers:      None,
         });
         assert!(!settings.agent.proactive_enabled);
         assert_eq!(settings.agent.proactive_cron, Some("0 9 * * *".to_owned()));
@@ -664,6 +726,7 @@ mod tests {
                 memory:             MemorySettings::default(),
                 composio:           ComposioSettings::default(),
                 gmail:              GmailSettings::default(),
+                max_iterations:     None,
             },
             ..Default::default()
         };
@@ -694,8 +757,10 @@ mod tests {
                 }),
                 composio:           None,
                 gmail:              None,
+                max_iterations:     None,
             }),
             job_pipeline: None,
+            workers:      None,
         });
 
         assert_eq!(
@@ -737,6 +802,7 @@ mod tests {
                 resume_project_path:    Some("/home/user/resume".to_owned()),
                 pipeline_cron:          None,
             }),
+            workers:      None,
         });
         assert_eq!(
             settings.job_pipeline.job_preferences,
@@ -764,6 +830,7 @@ mod tests {
                 resume_project_path:    None,
                 pipeline_cron:          None,
             }),
+            workers:      None,
         });
         assert_eq!(settings.job_pipeline.score_threshold_auto, 95);
         assert_eq!(settings.job_pipeline.score_threshold_notify, 60);
@@ -815,8 +882,10 @@ mod tests {
                     app_password:      Some("abcd-efgh-ijkl-mnop".to_owned()),
                     auto_send_enabled: Some(true),
                 }),
+                max_iterations:     None,
             }),
             job_pipeline: None,
+            workers:      None,
         });
         assert_eq!(
             settings.agent.gmail.address,
@@ -848,5 +917,60 @@ mod tests {
         let settings: Settings = serde_json::from_str(json).unwrap();
         assert_eq!(settings.job_pipeline, JobPipelineSettings::default());
         assert_eq!(settings.agent.gmail, GmailSettings::default());
+        assert_eq!(settings.workers, WorkerSettings::default());
+    }
+
+    // -- worker settings tests ------------------------------------------------
+
+    #[test]
+    fn worker_settings_default_values() {
+        let settings = Settings::default();
+        assert_eq!(settings.workers.agent_scheduler_interval_secs, 60);
+        assert_eq!(settings.workers.pipeline_scheduler_interval_secs, 60);
+        assert_eq!(settings.workers.memory_sync_interval_secs, 300);
+        assert_eq!(settings.workers.proactive_agent_interval_hours, 12);
+    }
+
+    #[test]
+    fn apply_patch_worker_settings() {
+        let mut settings = Settings::default();
+        settings.apply_patch(UpdateRequest {
+            ai:           None,
+            telegram:     None,
+            agent:        None,
+            job_pipeline: None,
+            workers:      Some(WorkerRuntimeSettingsPatch {
+                agent_scheduler_interval_secs:    Some(120),
+                pipeline_scheduler_interval_secs: Some(90),
+                memory_sync_interval_secs:        Some(600),
+                proactive_agent_interval_hours:   Some(24),
+            }),
+        });
+        assert_eq!(settings.workers.agent_scheduler_interval_secs, 120);
+        assert_eq!(settings.workers.pipeline_scheduler_interval_secs, 90);
+        assert_eq!(settings.workers.memory_sync_interval_secs, 600);
+        assert_eq!(settings.workers.proactive_agent_interval_hours, 24);
+    }
+
+    #[test]
+    fn apply_patch_worker_settings_partial() {
+        let mut settings = Settings::default();
+        settings.apply_patch(UpdateRequest {
+            ai:           None,
+            telegram:     None,
+            agent:        None,
+            job_pipeline: None,
+            workers:      Some(WorkerRuntimeSettingsPatch {
+                agent_scheduler_interval_secs:    Some(120),
+                pipeline_scheduler_interval_secs: None,
+                memory_sync_interval_secs:        None,
+                proactive_agent_interval_hours:   None,
+            }),
+        });
+        assert_eq!(settings.workers.agent_scheduler_interval_secs, 120);
+        // Unchanged fields retain defaults.
+        assert_eq!(settings.workers.pipeline_scheduler_interval_secs, 60);
+        assert_eq!(settings.workers.memory_sync_interval_secs, 300);
+        assert_eq!(settings.workers.proactive_agent_interval_hours, 12);
     }
 }
