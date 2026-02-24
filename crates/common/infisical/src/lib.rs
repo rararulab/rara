@@ -1,65 +1,78 @@
-pub mod config;
+pub mod config_types;
 pub mod error;
 
+use config::{Map, Value, ValueKind};
 use snafu::ResultExt;
 
-/// Load secrets from Infisical and inject them as environment variables.
+/// Infisical as a `config` crate async source.
 ///
-/// Secrets from Infisical will **not** override already-set env vars.
-/// Returns the count of newly injected variables.
-///
-/// # Safety concern
-///
-/// Uses `std::env::set_var` which is unsafe in Rust 2024 edition.
-/// This function must be called early at startup, before spawning threads
-/// that may read environment variables concurrently.
-#[allow(unsafe_code)]
-pub async fn load_secrets_to_env(
-    config: &config::InfisicalConfig,
-) -> Result<usize, error::InfisicalError> {
+/// Fetches secrets from Infisical and provides them as nested config keys.
+/// Secret keys use `__` as a nesting separator (e.g. `DATABASE__DATABASE_URL`
+/// becomes `database.database_url` in the config map).
+#[derive(Debug)]
+pub struct InfisicalSource {
+    cfg: config_types::InfisicalConfig,
+}
+
+impl InfisicalSource {
+    pub fn new(cfg: config_types::InfisicalConfig) -> Self {
+        Self { cfg }
+    }
+}
+
+#[async_trait::async_trait]
+impl config::AsyncSource for InfisicalSource {
+    async fn collect(&self) -> Result<Map<String, Value>, config::ConfigError> {
+        let secrets = fetch_secrets(&self.cfg)
+            .await
+            .map_err(|e| config::ConfigError::Foreign(Box::new(e)))?;
+
+        let mut map = Map::new();
+        for secret in &secrets {
+            // Convert secret key to nested config format:
+            // "DATABASE__DATABASE_URL" → "database.database_url"
+            // The config crate uses "." for nesting in Map keys.
+            let key = secret.secret_key.to_lowercase();
+            let nested_key = key.replace("__", ".");
+            map.insert(
+                nested_key,
+                Value::new(
+                    Some(&"infisical".to_string()),
+                    ValueKind::String(secret.secret_value.clone()),
+                ),
+            );
+        }
+
+        tracing::info!("Loaded {} secrets from Infisical", map.len());
+        Ok(map)
+    }
+}
+
+/// Internal: fetch secrets from Infisical.
+async fn fetch_secrets(
+    cfg: &config_types::InfisicalConfig,
+) -> Result<Vec<infisical::secrets::Secret>, error::InfisicalError> {
     let mut client = infisical::Client::builder()
-        .base_url(&config.base_url)
+        .base_url(&cfg.base_url)
         .build()
         .await
         .context(error::ClientBuildSnafu)?;
 
-    let auth = infisical::AuthMethod::new_universal_auth(
-        &config.client_id,
-        &config.client_secret,
-    );
+    let auth =
+        infisical::AuthMethod::new_universal_auth(&cfg.client_id, &cfg.client_secret);
     client.login(auth).await.context(error::AuthSnafu)?;
 
     let request = infisical::secrets::ListSecretsRequest::builder(
-        &config.project_id,
-        &config.environment,
+        &cfg.project_id,
+        &cfg.environment,
     )
-    .path(&config.secret_path)
+    .path(&cfg.secret_path)
     .recursive(true)
     .build();
 
-    let secrets = client
+    client
         .secrets()
         .list(request)
         .await
-        .context(error::ListSecretsSnafu)?;
-
-    let mut count = 0usize;
-    for secret in &secrets {
-        if std::env::var(&secret.secret_key).is_err() {
-            // SAFETY: we are single-threaded at startup before any other
-            // threads read env vars.
-            unsafe {
-                std::env::set_var(&secret.secret_key, &secret.secret_value);
-            }
-            tracing::debug!(key = %secret.secret_key, "injected secret from Infisical");
-            count += 1;
-        } else {
-            tracing::trace!(
-                key = %secret.secret_key,
-                "skipped (already set in environment)",
-            );
-        }
-    }
-
-    Ok(count)
+        .context(error::ListSecretsSnafu)
 }

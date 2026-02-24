@@ -34,23 +34,6 @@ use tracing::{error, info, warn};
 use yunara_store::{config::DatabaseConfig, db::DBStore};
 
 // ---------------------------------------------------------------------------
-// Infisical secrets pre-fetch
-// ---------------------------------------------------------------------------
-
-/// Optionally load secrets from Infisical before building config.
-///
-/// This is a no-op if `INFISICAL_CLIENT_ID` is not set.
-/// Secrets fetched from Infisical will **not** override already-set env vars.
-pub async fn prefetch_infisical_secrets() {
-    if let Some(cfg) = rara_infisical::config::InfisicalConfig::from_env() {
-        match rara_infisical::load_secrets_to_env(&cfg).await {
-            Ok(count) => info!("Loaded {count} secrets from Infisical"),
-            Err(e) => warn!("Infisical secrets loading failed, continuing with env: {e}"),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Static config types (immutable after startup)
 // ---------------------------------------------------------------------------
 
@@ -90,22 +73,34 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
-    /// Load config from config file + environment variables.
+    /// Load config from config file + Infisical (optional) + environment variables.
     ///
     /// Source priority (highest first):
     /// 1. `RARA__`-prefixed environment variables
-    /// 2. `config.toml` file in the working directory
-    /// 3. Code defaults
-    pub fn new() -> Result<Self, config::ConfigError> {
-        let builder = config::Config::builder()
-            .add_source(config::File::with_name("config").required(false))
+    /// 2. Infisical secrets (if configured)
+    /// 3. `config.toml` file in the working directory
+    /// 4. Code defaults
+    pub async fn new() -> Result<Self, config::ConfigError> {
+        let mut builder = config::ConfigBuilder::<config::builder::AsyncState>::default()
+            .add_source(config::File::with_name("config").required(false));
+
+        // Optional: add Infisical as async source (middle priority)
+        if let Some(infisical_cfg) =
+            rara_infisical::config_types::InfisicalConfig::from_env()
+        {
+            builder = builder
+                .add_async_source(rara_infisical::InfisicalSource::new(infisical_cfg));
+        }
+
+        let cfg = builder
             .add_source(
                 config::Environment::with_prefix("RARA")
                     .separator("__")
                     .try_parsing(true),
-            );
+            )
+            .build()
+            .await?;
 
-        let cfg = builder.build()?;
         cfg.try_deserialize()
     }
 

@@ -12,11 +12,12 @@ categories.workspace = true
 description = "Infisical secrets manager integration for rara"
 
 [dependencies]
+async-trait = { workspace = true }
+config = { workspace = true }
 infisical = "0.0.3"
 snafu = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
-tokio = { workspace = true }
 
 [lints]
 workspace = true
