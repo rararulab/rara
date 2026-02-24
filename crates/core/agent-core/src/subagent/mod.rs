@@ -84,10 +84,12 @@
 //! - `build_subagent_tools()` explicitly filters out `"subagent"` from the
 //!   tool set given to each sub-agent
 
+pub mod builtin;
 pub mod definition;
 pub mod executor;
 pub mod tool;
 
+pub use builtin::all_bundled_agents;
 pub use definition::{AgentDefinition, AgentDefinitionRegistry};
 pub use executor::SubagentExecutor;
 pub use tool::SubagentTool;

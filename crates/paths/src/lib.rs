@@ -190,12 +190,6 @@ pub fn temp_dir() -> &'static PathBuf {
     })
 }
 
-/// Returns the path to the hang traces directory.
-pub fn hang_traces_dir() -> &'static PathBuf {
-    static LOGS_DIR: OnceLock<PathBuf> = OnceLock::new();
-    LOGS_DIR.get_or_init(|| data_dir().join("hang_traces"))
-}
-
 /// Returns the path to the logs directory.
 pub fn logs_dir() -> &'static PathBuf {
     static LOGS_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -220,22 +214,6 @@ pub fn database_dir() -> &'static PathBuf {
     DATABASE_DIR.get_or_init(|| data_dir().join("db"))
 }
 
-/// Returns the path to the crashes directory, if it exists for the current
-/// platform.
-pub fn crashes_dir() -> &'static Option<PathBuf> {
-    static CRASHES_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
-    CRASHES_DIR.get_or_init(|| {
-        cfg!(target_os = "macos").then_some(home_dir().join("Library/Logs/DiagnosticReports"))
-    })
-}
-
-/// Returns the path to the retired crashes directory, if it exists for the
-/// current platform.
-pub fn crashes_retired_dir() -> &'static Option<PathBuf> {
-    static CRASHES_RETIRED_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
-    CRASHES_RETIRED_DIR.get_or_init(|| crashes_dir().as_ref().map(|dir| dir.join("Retired")))
-}
-
 /// Returns the path to the `settings.json` file.
 pub fn settings_file() -> &'static PathBuf {
     static SETTINGS_FILE: OnceLock<PathBuf> = OnceLock::new();
@@ -254,24 +232,11 @@ pub fn sessions_dir() -> &'static PathBuf {
     SESSIONS_DIR.get_or_init(|| data_dir().join("sessions"))
 }
 
-/// Returns the path to the agent policy markdown file.
-pub fn agent_policy_file() -> &'static PathBuf {
-    static AGENT_POLICY: OnceLock<PathBuf> = OnceLock::new();
-    AGENT_POLICY.get_or_init(|| config_dir().join("agent-policy.md"))
-}
-
 /// Returns the directory containing editable markdown prompt files.
 pub fn prompts_dir() -> &'static PathBuf {
     static PROMPTS_DIR: OnceLock<PathBuf> = OnceLock::new();
     PROMPTS_DIR.get_or_init(|| config_dir().join("prompts"))
 }
-
-/// Returns the full path of a markdown prompt file under [`prompts_dir`].
-///
-/// The `name` can include subdirectories, for example:
-/// `ai/job_fit.system.md`.
-#[must_use]
-pub fn prompt_markdown_file(name: &str) -> PathBuf { prompts_dir().join(name) }
 
 /// Returns the path to the memory documents directory.
 pub fn memory_dir() -> &'static PathBuf {

@@ -301,12 +301,9 @@ impl AppState {
         // Load agent definitions: bundled first, then user-defined (override).
         let agent_defs = {
             let mut registry = agent_core::subagent::AgentDefinitionRegistry::new();
-            // Bundled agent definitions (shipped with the binary)
-            let bundled_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../agents");
-            if let Ok(bundled) = agent_core::subagent::AgentDefinitionRegistry::load_dir(&bundled_dir) {
-                for def in bundled.list() {
-                    registry.register(def.clone());
-                }
+            // Bundled agent definitions (embedded at compile time)
+            for def in agent_core::subagent::all_bundled_agents() {
+                registry.register(def);
             }
             // User-defined agent definitions (override bundled)
             let user_dir = rara_paths::data_dir().join("agents");

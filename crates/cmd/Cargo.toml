@@ -33,9 +33,7 @@ snafu.workspace = true
 tokio.workspace = true
 
 [build-dependencies]
-dirs = "6"
 shadow-rs = { workspace = true }
-walkdir = "2"
 
 [lints]
 workspace = true
