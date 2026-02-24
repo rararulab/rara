@@ -34,6 +34,23 @@ use tracing::{error, info, warn};
 use yunara_store::{config::DatabaseConfig, db::DBStore};
 
 // ---------------------------------------------------------------------------
+// Infisical secrets pre-fetch
+// ---------------------------------------------------------------------------
+
+/// Optionally load secrets from Infisical before building config.
+///
+/// This is a no-op if `INFISICAL_CLIENT_ID` is not set.
+/// Secrets fetched from Infisical will **not** override already-set env vars.
+pub async fn prefetch_infisical_secrets() {
+    if let Some(cfg) = rara_infisical::config::InfisicalConfig::from_env() {
+        match rara_infisical::load_secrets_to_env(&cfg).await {
+            Ok(count) => info!("Loaded {count} secrets from Infisical"),
+            Err(e) => warn!("Infisical secrets loading failed, continuing with env: {e}"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Static config types (immutable after startup)
 // ---------------------------------------------------------------------------
 

@@ -19,6 +19,7 @@ config = { workspace = true }
 object-store = { workspace = true }
 opendal = { workspace = true }
 rara-domain-shared = { workspace = true }
+rara-infisical = { workspace = true }
 rara-server = { workspace = true }
 rara-telegram-bot = { workspace = true }
 rara-workers = { workspace = true }

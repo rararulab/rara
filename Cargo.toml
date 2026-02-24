@@ -70,6 +70,7 @@ members = [
     "crates/extensions/workspace",
     "crates/extensions/coding-task",
     "crates/extensions/rara-git",
+    "crates/common/infisical",
 ]
 
 [workspace.dependencies]
@@ -164,6 +165,7 @@ rara-domain-resume = { path = "crates/domain/resume" }
 rara-domain-scheduler = { path = "crates/domain/scheduler" }
 rara-domain-shared = { path = "crates/domain/shared" }
 rara-error = { path = "crates/common/error" }
+rara-infisical = { path = "crates/common/infisical" }
 rara-git = { path = "crates/extensions/rara-git" }
 rara-ext-job-pipeline = { path = "crates/extensions/job-pipeline" }
 rara-keyring-store = { path = "crates/integrations/keyring-store" }
