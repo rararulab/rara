@@ -56,6 +56,8 @@ pub struct AppConfig {
     pub object_store:           object_store::ObjectStoreConfig,
     /// Main service HTTP base URL (for telegram bot → main service calls).
     pub main_service_http_base: String,
+    /// Memory backend configuration (static, not runtime settings).
+    pub memory:               MemoryConfig,
 }
 
 impl Default for AppConfig {
@@ -68,6 +70,25 @@ impl Default for AppConfig {
             grpc: GrpcServerConfig::default(),
             object_store,
             main_service_http_base: "http://127.0.0.1:25555".to_owned(),
+            memory: MemoryConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct MemoryConfig {
+    pub chroma_url:        String,
+    pub chroma_collection: Option<String>,
+    pub chroma_api_key:    Option<String>,
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            chroma_url: "http://localhost:8000".to_owned(),
+            chroma_collection: Some("job-memory".to_owned()),
+            chroma_api_key: None,
         }
     }
 }
@@ -126,6 +147,11 @@ impl AppConfig {
             &db_store,
             object_store,
             notify_client.clone(),
+            rara_workers::worker_state::MemoryConfig {
+                chroma_url: self.memory.chroma_url.clone(),
+                chroma_collection: self.memory.chroma_collection.clone(),
+                chroma_api_key: self.memory.chroma_api_key.clone(),
+            },
         )
         .await
         .whatever_context("Failed to initialize application state")?;

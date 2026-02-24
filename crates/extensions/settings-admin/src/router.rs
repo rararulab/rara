@@ -20,7 +20,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use rara_domain_shared::settings::{
     model::{
         AgentRuntimeSettingsPatch, AiRuntimeSettingsPatch, ComposioRuntimeSettingsPatch,
-        JobPipelineRuntimeSettingsPatch, MemoryRuntimeSettingsPatch, Settings, UpdateRequest,
+        JobPipelineRuntimeSettingsPatch, Settings, UpdateRequest,
     },
     service::SettingsSvc,
 };
@@ -90,15 +90,7 @@ pub struct RuntimeSettingsView {
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct AgentSettingsView {
-    pub memory: MemorySettingsView,
     pub composio: ComposioSettingsView,
-}
-
-#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
-pub struct MemorySettingsView {
-    pub chroma_url: Option<String>,
-    pub chroma_collection: Option<String>,
-    pub chroma_api_key_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
@@ -155,7 +147,6 @@ impl From<AiSettingsAdminPatch> for AiRuntimeSettingsPatch {
 
 #[derive(Debug, Clone, Default, serde::Deserialize, utoipa::ToSchema)]
 pub struct AgentSettingsAdminPatch {
-    pub memory:   Option<MemorySettingsAdminPatch>,
     pub composio: Option<ComposioSettingsAdminPatch>,
 }
 
@@ -166,26 +157,9 @@ impl From<AgentSettingsAdminPatch> for AgentRuntimeSettingsPatch {
             chat_system_prompt: None,
             proactive_enabled: None,
             proactive_cron: None,
-            memory: value.memory.map(Into::into),
+            memory: None,
             composio: value.composio.map(Into::into),
             gmail: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, serde::Deserialize, utoipa::ToSchema)]
-pub struct MemorySettingsAdminPatch {
-    pub chroma_url:        Option<String>,
-    pub chroma_collection: Option<String>,
-    pub chroma_api_key:    Option<String>,
-}
-
-impl From<MemorySettingsAdminPatch> for MemoryRuntimeSettingsPatch {
-    fn from(value: MemorySettingsAdminPatch) -> Self {
-        Self {
-            chroma_url: value.chroma_url,
-            chroma_collection: value.chroma_collection,
-            chroma_api_key: value.chroma_api_key,
         }
     }
 }
@@ -375,11 +349,6 @@ impl Into<RuntimeSettingsView> for Settings {
                 openrouter_api_key: self.ai.openrouter_api_key.clone(),
             },
             agent: AgentSettingsView {
-                memory: MemorySettingsView {
-                    chroma_url: self.agent.memory.chroma_url.clone(),
-                    chroma_collection: self.agent.memory.chroma_collection.clone(),
-                    chroma_api_key_hint: secret_hint(self.agent.memory.chroma_api_key.as_deref()),
-                },
                 composio: ComposioSettingsView {
                     api_key: self.agent.composio.api_key.clone(),
                     entity_id: self.agent.composio.entity_id.clone(),

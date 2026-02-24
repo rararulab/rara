@@ -210,11 +210,6 @@ export interface RuntimeSettingsView {
     openrouter_api_key: string | null;
   };
   agent: {
-    memory: {
-      chroma_url: string | null;
-      chroma_collection: string | null;
-      chroma_api_key_hint: string | null;
-    };
     composio: {
       api_key: string | null;
       entity_id: string | null;
@@ -232,11 +227,6 @@ export interface RuntimeSettingsPatch {
     openrouter_api_key?: string;
   };
   agent?: {
-    memory?: {
-      chroma_url?: string;
-      chroma_collection?: string;
-      chroma_api_key?: string;
-    };
     composio?: {
       api_key?: string;
       entity_id?: string;

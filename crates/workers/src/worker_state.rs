@@ -26,6 +26,13 @@ use snafu::{ResultExt, Whatever};
 use tracing::{info, warn};
 use yunara_store::db::DBStore;
 
+#[derive(Debug, Clone)]
+pub struct MemoryConfig {
+    pub chroma_url:        String,
+    pub chroma_collection: Option<String>,
+    pub chroma_api_key:    Option<String>,
+}
+
 /// Shared application state used by workers and HTTP routes.
 #[derive(Clone)]
 pub struct AppState {
@@ -88,6 +95,7 @@ impl AppState {
         db_store: &DBStore,
         object_store: Operator,
         notify_client: rara_domain_shared::notify::client::NotifyClient,
+        memory_config: MemoryConfig,
     ) -> Result<Self, Whatever> {
         let pool = db_store.pool().clone();
 
@@ -156,17 +164,10 @@ impl AppState {
         }) {
             tool_registry.register_primitive(tool);
         }
-        // TODO: its not correct, chroma's settings should not be changed at the
-        // runtime. so it should be called as memory configure, rather than settings
-        let memory_settings = settings_svc.current().agent.memory;
-        let chroma_url = memory_settings
-            .chroma_url
-            .clone()
-            .unwrap_or_else(|| "http://localhost:8000".to_owned());
         let chroma = rara_memory::ChromaClient::new(
-            chroma_url,
-            memory_settings.chroma_collection.clone(),
-            memory_settings.chroma_api_key.clone(),
+            memory_config.chroma_url,
+            memory_config.chroma_collection,
+            memory_config.chroma_api_key,
         )
         .expect("chroma URL should not be empty after defaulting");
         let memory_manager = Arc::new(
