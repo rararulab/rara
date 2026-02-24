@@ -1228,11 +1228,9 @@ export default function Settings() {
                         <Skeleton className="h-8 w-full" />
                         <Skeleton className="h-8 w-full" />
                       </div>
-                    ) : !recommendations?.available ? (
-                      <div className="text-sm text-muted-foreground p-4 bg-muted rounded-lg">
-                        <p className="font-medium mb-1">未检测到 llmfit</p>
-                        <p>安装命令：<code className="bg-background px-1 rounded">cargo install llmfit</code></p>
-                        {recommendations?.error && <p className="mt-1 text-destructive text-xs">{recommendations.error}</p>}
+                    ) : recommendations?.error && !recommendations.system ? (
+                      <div className="text-sm text-destructive p-4 bg-muted rounded-lg">
+                        <p>{recommendations.error}</p>
                       </div>
                     ) : (
                       <>
