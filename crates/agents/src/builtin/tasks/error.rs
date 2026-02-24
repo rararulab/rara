@@ -12,13 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # raraai
-//!
-//! AI provider abstraction with task-specific agents for rararelated
-//! operations such as fit analysis, resume optimization, interview
-//! preparation, follow-up drafting, and cover letter generation.
+//! Error types for task agents.
 
-pub mod agents;
-pub(crate) mod client;
-pub mod error;
-pub mod service;
+use snafu::Snafu;
+
+/// Errors that can occur during task agent operations.
+#[derive(Debug, Snafu)]
+#[snafu(visibility(pub))]
+pub enum TaskAgentError {
+    /// No AI provider is configured.
+    #[snafu(display("AI provider not configured"))]
+    NotConfigured,
+
+    /// An AI provider request failed.
+    #[snafu(display("AI request failed: {message}"))]
+    RequestFailed { message: String },
+
+    /// The AI response was empty or contained no usable content.
+    #[snafu(display("AI returned empty response"))]
+    EmptyResponse,
+}

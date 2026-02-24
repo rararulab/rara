@@ -12,42 +12,52 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Interview preparation agent.
+//! Cover letter generation agent.
 
-use crate::{agents::prompt::compose_system_prompt, client::LlmClient, error::AiError};
+use std::sync::Arc;
 
-const SYSTEM_PROMPT_FILE: &str = "ai/interview_prep.system.md";
-const DEFAULT_SYSTEM_PROMPT: &str = include_str!("../../../../prompts/ai/interview_prep.system.md");
+use agent_core::provider::LlmProvider;
 
-/// Generates interview preparation materials.
-pub struct InterviewPrepAgent {
-    client:      LlmClient,
+use crate::builtin::tasks::{
+    completion::run_completion, error::TaskAgentError, prompt::compose_system_prompt,
+};
+
+const SYSTEM_PROMPT_FILE: &str = "ai/cover_letter.system.md";
+const DEFAULT_SYSTEM_PROMPT: &str =
+    include_str!("../../../../../prompts/ai/cover_letter.system.md");
+
+/// Generates cover letters tailored to job postings.
+pub struct CoverLetterAgent {
+    provider:    Arc<dyn LlmProvider>,
     model:       String,
     soul_prompt: Option<String>,
 }
 
-impl InterviewPrepAgent {
+impl CoverLetterAgent {
     pub(crate) fn new(
-        client: LlmClient,
+        provider: Arc<dyn LlmProvider>,
         model: String,
         soul_prompt: Option<String>,
     ) -> Self {
         Self {
-            client,
+            provider,
             model,
             soul_prompt,
         }
     }
 
-    /// Generate interview preparation materials.
-    pub async fn prepare(&self, job_description: &str, resume: &str) -> Result<String, AiError> {
-        let user_input = format!("## Job Description\n{job_description}\n\n## My Resume\n{resume}");
+    /// Generate a cover letter for the given job description and resume.
+    pub async fn generate(
+        &self,
+        job_description: &str,
+        resume: &str,
+    ) -> Result<String, TaskAgentError> {
+        let user_input =
+            format!("## Job Description\n{job_description}\n\n## My Resume\n{resume}");
         let base_prompt =
             rara_paths::load_prompt_markdown(SYSTEM_PROMPT_FILE, DEFAULT_SYSTEM_PROMPT);
         let system_prompt = compose_system_prompt(&base_prompt, self.soul_prompt.as_deref());
 
-        self.client
-            .run_agent(&self.model, &system_prompt, &user_input)
-            .await
+        run_completion(&*self.provider, &self.model, &system_prompt, &user_input).await
     }
 }

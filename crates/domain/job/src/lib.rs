@@ -33,7 +33,7 @@ pub mod types;
 /// Wire the unified [`service::JobService`] with all dependencies.
 pub fn wire_job_service(
     pool: PgPool,
-    ai_service: rara_ai::service::AiService,
+    ai_service: rara_agents::builtin::tasks::TaskAgentService,
 ) -> Result<service::JobService, error::SourceError> {
     let driver = jobspy::JobSpyDriver::new()?;
     let japandev_driver =

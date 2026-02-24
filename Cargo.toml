@@ -44,7 +44,6 @@ members = [
     "crates/rara-model",
     "crates/domain/shared",
     "crates/domain/job",
-    "crates/ai",
     "crates/domain/resume",
     "crates/domain/application",
     "crates/domain/interview",
@@ -101,7 +100,6 @@ prometheus = "^0.14"
 prost = "^0.14"
 protobuf = "^3.7"
 reqwest = { version = "^0.13", features = ["json"] }
-rig-core = "0.30"
 rustix = "^1.1"
 schemars = "^1.2"
 serde = { version = "^1.0", features = ["derive"] }
@@ -152,7 +150,6 @@ crawl4ai = { path = "crates/common/crawl4ai" }
 jobspy-sys = { path = "crates/jobspy-sys" }
 object-store = { path = "crates/common/object-store" }
 rara-agents = { path = "crates/agents" }
-rara-ai = { path = "crates/ai" }
 rara-api = { path = "api" }
 rara-app = { path = "crates/app" }
 rara-cli = { path = "crates/cmd" }

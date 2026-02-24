@@ -76,13 +76,13 @@ impl AgentTool for GetJobPreferencesTool {
 
 /// Scores a job against the user's preferences using AI evaluation.
 pub struct ScoreJobTool {
-    ai_service:   rara_ai::service::AiService,
+    ai_service:   rara_agents::builtin::tasks::TaskAgentService,
     settings_svc: rara_domain_shared::settings::SettingsSvc,
 }
 
 impl ScoreJobTool {
     pub fn new(
-        ai_service: rara_ai::service::AiService,
+        ai_service: rara_agents::builtin::tasks::TaskAgentService,
         settings_svc: rara_domain_shared::settings::SettingsSvc,
     ) -> Self {
         Self {
@@ -157,7 +157,7 @@ impl AgentTool for ScoreJobTool {
              JSON object containing: score (0-100), summary, strengths[], gaps[].)"
         );
 
-        let agent = match self.ai_service.job_fit() {
+        let agent = match self.ai_service.job_fit().await {
             Ok(agent) => agent,
             Err(e) => return Ok(json!({ "error": format!("AI not configured: {e}") })),
         };

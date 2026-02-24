@@ -20,7 +20,7 @@ derive_more = { workspace = true }
 futures.workspace = true
 jiff.workspace = true
 jobspy-sys = { workspace = true }
-rara-ai = { workspace = true }
+rara-agents = { workspace = true }
 rara-domain-shared = { workspace = true }
 reqwest = { workspace = true }
 serde.workspace = true

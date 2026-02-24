@@ -30,7 +30,7 @@ use yunara_store::db::DBStore;
 #[derive(Clone)]
 pub struct AppState {
     // -- AI --
-    pub ai_service: rara_ai::service::AiService,
+    pub ai_service: rara_agents::builtin::tasks::TaskAgentService,
 
     // -- domain services --
     pub resume_service:      rara_domain_resume::ResumeAppService,
@@ -92,14 +92,17 @@ impl AppState {
             .whatever_context("Failed to initialize runtime settings")?;
         info!("Runtime settings service loaded");
 
-        // -- AI service ------------------------------------------------------
+        // -- LLM provider ----------------------------------------------------
 
-        let ai_service = rara_ai::service::AiService::new(settings_svc.clone());
-        if settings_svc.current().ai.is_configured() {
-            info!("AI service configured from runtime settings");
-        } else {
-            warn!("AI service not configured yet; set it via POST /api/v1/settings");
-        }
+        let llm_provider: agent_core::provider::LlmProviderLoaderRef =
+            Arc::new(SettingsLlmProviderLoader::new(settings_svc.clone()));
+
+        // -- AI task agents --------------------------------------------------
+
+        let ai_service = rara_agents::builtin::tasks::TaskAgentService::new(
+            settings_svc.clone(),
+            llm_provider.clone(),
+        );
 
         // -- domain services -------------------------------------------------
 
@@ -122,8 +125,6 @@ impl AppState {
             .await
             .whatever_context("Failed to initialize session repository")?,
         );
-        let llm_provider: agent_core::provider::LlmProviderLoaderRef =
-            Arc::new(SettingsLlmProviderLoader::new(settings_svc.clone()));
         let composio_auth_provider: Arc<dyn rara_composio::ComposioAuthProvider> =
             Arc::new(SettingsComposioAuthProvider::new(settings_svc.clone()));
         let mut tool_registry = agent_core::tool_registry::ToolRegistry::new();

@@ -19,7 +19,7 @@ jiff.workspace = true
 opendal.workspace = true
 agent-core = { workspace = true }
 reqwest = { workspace = true }
-rara-ai = { workspace = true }
+rara-agents = { workspace = true }
 rara-mcp = { workspace = true }
 rara-composio = { workspace = true }
 rara-domain-job = { workspace = true }

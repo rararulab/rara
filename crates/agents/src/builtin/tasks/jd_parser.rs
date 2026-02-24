@@ -12,42 +12,45 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Job posting analyzer agent.
+//! Job description parser agent.
 
-use crate::{agents::prompt::compose_system_prompt, client::LlmClient, error::AiError};
+use std::sync::Arc;
 
-const SYSTEM_PROMPT_FILE: &str = "ai/jd_analyzer.system.md";
-const DEFAULT_SYSTEM_PROMPT: &str = include_str!("../../../../prompts/ai/jd_analyzer.system.md");
+use agent_core::provider::LlmProvider;
 
-/// Analyzes a job posting in markdown format and extracts structured
-/// information using AI.
-pub struct JdAnalyzerAgent {
-    client:      LlmClient,
+use crate::builtin::tasks::{
+    completion::run_completion, error::TaskAgentError, prompt::compose_system_prompt,
+};
+
+const SYSTEM_PROMPT_FILE: &str = "ai/jd_parser.system.md";
+const DEFAULT_SYSTEM_PROMPT: &str = include_str!("../../../../../prompts/ai/jd_parser.system.md");
+
+/// Parses raw job description text into structured JSON using AI.
+pub struct JdParserAgent {
+    provider:    Arc<dyn LlmProvider>,
     model:       String,
     soul_prompt: Option<String>,
 }
 
-impl JdAnalyzerAgent {
+impl JdParserAgent {
     pub(crate) fn new(
-        client: LlmClient,
+        provider: Arc<dyn LlmProvider>,
         model: String,
         soul_prompt: Option<String>,
     ) -> Self {
         Self {
-            client,
+            provider,
             model,
             soul_prompt,
         }
     }
 
-    /// Analyze a job posting markdown and return structured JSON.
-    pub async fn analyze(&self, markdown: &str) -> Result<String, AiError> {
+    /// Parse a raw job description into a structured JSON string.
+    pub async fn parse(&self, jd_text: &str) -> Result<String, TaskAgentError> {
         let base_prompt =
             rara_paths::load_prompt_markdown(SYSTEM_PROMPT_FILE, DEFAULT_SYSTEM_PROMPT);
         let system_prompt = compose_system_prompt(&base_prompt, self.soul_prompt.as_deref());
 
-        self.client
-            .run_agent(&self.model, &system_prompt, markdown)
-            .await
+        run_completion(&*self.provider, &self.model, &system_prompt, jd_text).await
     }
 }
