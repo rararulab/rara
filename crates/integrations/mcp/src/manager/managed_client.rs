@@ -58,6 +58,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(feature = "k8s")]
+use std::collections::HashMap;
+
 use anyhow::Result;
 use futures::{
     FutureExt,
@@ -79,6 +82,12 @@ use crate::{
     },
     oauth::OAuthCredentialsStoreMode,
 };
+
+/// Registry tracking active K8s pods: server_name -> (pod_name, namespace).
+///
+/// Used by [`McpManager`] to clean up pods when servers are stopped.
+#[cfg(feature = "k8s")]
+pub(crate) type PodRegistry = Arc<tokio::sync::Mutex<HashMap<String, (String, String)>>>;
 
 /// Default timeout for the MCP initialize handshake (seconds).
 const DEFAULT_STARTUP_TIMEOUT_SECS: u64 = 30;
@@ -129,6 +138,7 @@ impl AsyncManagedClient {
         store_mode: OAuthCredentialsStoreMode,
         elicitation_requests: ElicitationRequestManager,
         log_buffer: McpLogBuffer,
+        #[cfg(feature = "k8s")] pod_registry: PodRegistry,
     ) -> Self {
         let server_name = server_name.into();
         let cancel_token = CancellationToken::new();
@@ -138,7 +148,16 @@ impl AsyncManagedClient {
         let fut = async move {
             validate_mcp_server_name(&server_name)?;
 
-            let client = Arc::new(make_rmcp_client(&server_name, &config, store_mode).await?);
+            let client = Arc::new(
+                make_rmcp_client(
+                    &server_name,
+                    &config,
+                    store_mode,
+                    #[cfg(feature = "k8s")]
+                    &pod_registry,
+                )
+                .await?,
+            );
 
             let startup_timeout = config
                 .startup_timeout_secs
@@ -352,6 +371,7 @@ fn validate_mcp_server_name(name: &str) -> Result<(), StartupOutcomeError> {
 /// - **Stdio**: spawns a child process, communicating over stdin/stdout.
 /// - **SSE (Streamable HTTP)**: opens an HTTP connection, optionally with a
 ///   bearer token resolved from an environment variable.
+/// - **Pod** (k8s feature): creates a K8s pod and connects via HTTP.
 ///
 /// The returned client is in the `Connecting` state — call
 /// [`RmcpClient::initialize`] to perform the MCP handshake.
@@ -359,6 +379,7 @@ async fn make_rmcp_client(
     server_name: &str,
     config: &McpServerConfig,
     store_mode: OAuthCredentialsStoreMode,
+    #[cfg(feature = "k8s")] pod_registry: &PodRegistry,
 ) -> Result<RmcpClient, StartupOutcomeError> {
     match config.transport {
         TransportType::Stdio => {
@@ -390,6 +411,64 @@ async fn make_rmcp_client(
                 server_name,
                 url,
                 bearer_token,
+                config.http_headers.clone(),
+                config.env_http_headers.clone(),
+                store_mode,
+            )
+            .await
+            .map_err(StartupOutcomeError::from)
+        }
+        #[cfg(feature = "k8s")]
+        TransportType::Pod => {
+            let image = config
+                .pod_image
+                .as_deref()
+                .ok_or_else(|| StartupOutcomeError::Failed {
+                    error: format!("Pod transport for '{server_name}' requires pod_image"),
+                })?;
+            let namespace = config
+                .pod_namespace
+                .as_deref()
+                .unwrap_or(crate::k8s::DEFAULT_NAMESPACE);
+            let port = config.pod_port.unwrap_or(crate::k8s::DEFAULT_PORT);
+
+            let pod_mgr =
+                crate::k8s::McpPodManager::new()
+                    .await
+                    .map_err(|e| StartupOutcomeError::Failed {
+                        error: format!("K8s client init failed: {e}"),
+                    })?;
+
+            let (pod_name, pod_ip, pod_port) = pod_mgr
+                .create_mcp_pod(
+                    server_name,
+                    image,
+                    namespace,
+                    port,
+                    &config.env,
+                    config.pod_labels.as_ref(),
+                )
+                .await
+                .map_err(|e| StartupOutcomeError::Failed {
+                    error: format!("Pod creation failed: {e}"),
+                })?;
+
+            // Register the pod so it can be cleaned up when the server stops.
+            {
+                let mut registry = pod_registry.lock().await;
+                registry.insert(
+                    server_name.to_string(),
+                    (pod_name, namespace.to_string()),
+                );
+            }
+
+            let url = format!("http://{pod_ip}:{pod_port}");
+
+            // Reuse existing HTTP client to connect to the pod.
+            RmcpClient::new_streamable_http_client(
+                server_name,
+                &url,
+                None,
                 config.http_headers.clone(),
                 config.env_http_headers.clone(),
                 store_mode,

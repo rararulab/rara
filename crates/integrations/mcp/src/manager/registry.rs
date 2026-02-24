@@ -225,6 +225,24 @@ pub struct McpServerConfig {
     #[serde(skip_serializing_if = "HashSet::is_empty")]
     #[builder(default)]
     pub tools_disabled: HashSet<String>,
+
+    // ── Pod transport (k8s feature) ─────────────────────────────────
+    /// Container image for the MCP server pod. Required when `transport` is `Pod`.
+    #[cfg(feature = "k8s")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pod_image:     Option<String>,
+    /// Kubernetes namespace for the pod. Defaults to `"default"`.
+    #[cfg(feature = "k8s")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pod_namespace: Option<String>,
+    /// Container port the MCP server listens on. Defaults to `3000`.
+    #[cfg(feature = "k8s")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pod_port:      Option<u16>,
+    /// Extra labels applied to the pod (merged with defaults).
+    #[cfg(feature = "k8s")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pod_labels:    Option<HashMap<String, String>>,
 }
 
 /// Transport type for MCP server connections.
@@ -234,6 +252,10 @@ pub enum TransportType {
     #[default]
     Stdio,
     Sse,
+    /// K8s Pod transport: creates an ephemeral pod running an MCP server and
+    /// connects via HTTP. Requires the `k8s` feature.
+    #[cfg(feature = "k8s")]
+    Pod,
 }
 
 /// Manual OAuth override for MCP servers that don't support standard discovery.
@@ -246,4 +268,79 @@ pub struct McpOAuthConfig {
     #[serde(default)]
     #[builder(default)]
     pub scopes:    Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_transport_type_serde_roundtrip() {
+        let json = serde_json::to_string(&TransportType::Stdio).unwrap();
+        assert_eq!(json, r#""stdio""#);
+
+        let json = serde_json::to_string(&TransportType::Sse).unwrap();
+        assert_eq!(json, r#""sse""#);
+
+        let parsed: TransportType = serde_json::from_str(r#""stdio""#).unwrap();
+        assert_eq!(parsed, TransportType::Stdio);
+
+        let parsed: TransportType = serde_json::from_str(r#""sse""#).unwrap();
+        assert_eq!(parsed, TransportType::Sse);
+    }
+
+    #[cfg(feature = "k8s")]
+    #[test]
+    fn test_transport_type_pod_serde() {
+        let json = serde_json::to_string(&TransportType::Pod).unwrap();
+        assert_eq!(json, r#""pod""#);
+
+        let parsed: TransportType = serde_json::from_str(r#""pod""#).unwrap();
+        assert_eq!(parsed, TransportType::Pod);
+    }
+
+    #[cfg(feature = "k8s")]
+    #[test]
+    fn test_config_with_pod_fields_serde() {
+        let json = r#"{
+            "command": "",
+            "transport": "pod",
+            "pod_image": "ghcr.io/example/mcp-server:latest",
+            "pod_namespace": "mcp-servers",
+            "pod_port": 8080,
+            "pod_labels": {"team": "platform"}
+        }"#;
+
+        let config: McpServerConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.transport, TransportType::Pod);
+        assert_eq!(
+            config.pod_image.as_deref(),
+            Some("ghcr.io/example/mcp-server:latest")
+        );
+        assert_eq!(config.pod_namespace.as_deref(), Some("mcp-servers"));
+        assert_eq!(config.pod_port, Some(8080));
+        assert_eq!(
+            config.pod_labels.as_ref().and_then(|l| l.get("team")).map(String::as_str),
+            Some("platform")
+        );
+
+        // Serialize back and verify pod fields are present.
+        let serialized = serde_json::to_string(&config).unwrap();
+        assert!(serialized.contains("pod_image"));
+        assert!(serialized.contains("pod_namespace"));
+        assert!(serialized.contains("pod_port"));
+        assert!(serialized.contains("pod_labels"));
+    }
+
+    #[cfg(feature = "k8s")]
+    #[test]
+    fn test_config_pod_fields_default_omission() {
+        let config = McpServerConfig::default();
+        let json = serde_json::to_string(&config).unwrap();
+        // Pod fields should not appear when None (skip_serializing_if).
+        assert!(!json.contains("pod_image"));
+        assert!(!json.contains("pod_namespace"));
+        assert!(!json.contains("pod_port"));
+        assert!(!json.contains("pod_labels"));
+    }
 }

@@ -10,6 +10,10 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+default = []
+k8s = ["kube", "k8s-openapi", "uuid"]
+
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
@@ -43,6 +47,11 @@ tokio.workspace = true
 tokio-util.workspace = true
 tool-core.workspace = true
 tracing.workspace = true
+
+# K8s Pod transport (optional, behind "k8s" feature)
+kube = { version = "3.0", features = ["runtime", "client"], optional = true }
+k8s-openapi = { version = "0.27", features = ["v1_31"], optional = true }
+uuid = { version = "1", features = ["v4"], optional = true }
 
 [dev-dependencies]
 axum.workspace = true
