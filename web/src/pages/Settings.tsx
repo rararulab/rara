@@ -127,7 +127,7 @@ export default function Settings() {
   const [pullError, setPullError] = useState<string | null>(null);
 
   // -- ollama capability filter --
-  const [capabilityFilter, setCapabilityFilter] = useState<Set<string>>(new Set(["tools"]));
+  const [capabilityFilter, setCapabilityFilter] = useState<Set<string>>(new Set());
 
   // -- contacts state --
   const [contactDialogOpen, setContactDialogOpen] = useState(false);
@@ -156,7 +156,7 @@ export default function Settings() {
   const { data: recommendations, isLoading: recsLoading, refetch: refetchRecs } = useQuery({
     queryKey: ["ollama-recommendations"],
     queryFn: () => api.getOllamaModelRecommendations(),
-    enabled: settingsQuery.data?.ai.provider === "ollama",
+    enabled: false,
     staleTime: 5 * 60 * 1000,
   });
 
@@ -1301,21 +1301,10 @@ export default function Settings() {
                       </Button>
                     </div>
 
-                    {/* Default Model input */}
-                    <div className="space-y-2">
-                      <Label htmlFor="ollama-default-model" className="text-sm font-semibold">
-                        Default Model
-                      </Label>
-                      <Input
-                        id="ollama-default-model"
-                        value={defaultModel}
-                        onChange={(e) => setDefaultModel(e.target.value)}
-                        placeholder="llama3.2"
-                        className="h-11"
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Enter the Ollama model name or select from local models below.
-                      </p>
+                    {/* Active model display */}
+                    <div className="flex items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2">
+                      <span className="text-sm text-muted-foreground">Active:</span>
+                      <span className="text-sm font-mono font-medium">{defaultModel || "Not set"}</span>
                     </div>
 
                     {/* Local models list */}
@@ -1493,6 +1482,7 @@ export default function Settings() {
                             <p className="text-sm text-destructive">{pullError}</p>
                           )}
                         </div>
+
                       </div>
                     )}
                   </div>
@@ -1532,7 +1522,7 @@ export default function Settings() {
                 )}
               </div>
 
-              {/* llmfit model recommendations */}
+              {/* llmfit model recommendations — on-demand */}
               {settingsQuery.data?.ai.provider === "ollama" && (
                 <Card>
                   <CardHeader>
@@ -1553,77 +1543,79 @@ export default function Settings() {
                         disabled={recsLoading}
                       >
                         <RefreshCw className={`h-4 w-4 mr-1 ${recsLoading ? "animate-spin" : ""}`} />
-                        刷新
+                        {recommendations ? "刷新" : "开始分析"}
                       </Button>
                     </div>
                   </CardHeader>
-                  <CardContent>
-                    {recsLoading ? (
-                      <div className="space-y-2">
-                        <Skeleton className="h-8 w-full" />
-                        <Skeleton className="h-8 w-full" />
-                        <Skeleton className="h-8 w-full" />
-                      </div>
-                    ) : recommendations?.error && !recommendations.system ? (
-                      <div className="text-sm text-destructive p-4 bg-muted rounded-lg">
-                        <p>{recommendations.error}</p>
-                      </div>
-                    ) : recommendations ? (
-                      <>
-                        {recommendations.system && (
-                          <div className="text-xs text-muted-foreground mb-3 flex gap-4 flex-wrap">
-                            <span>RAM: {recommendations.system.total_ram_gb.toFixed(0)}GB</span>
-                            {recommendations.system.has_gpu && (
-                              <span>GPU: {recommendations.system.gpu_name} ({recommendations.system.gpu_vram_gb?.toFixed(0)}GB)</span>
-                            )}
-                            <span>Backend: {recommendations.system.backend}</span>
-                            <span>CPU: {recommendations.system.cpu_cores} 核</span>
-                          </div>
-                        )}
+                  {(recsLoading || recommendations) && (
+                    <CardContent>
+                      {recsLoading ? (
                         <div className="space-y-2">
-                          {recommendations.models.map((model, idx) => (
-                            <div key={idx} className="flex items-center gap-3 p-2 rounded-lg border hover:bg-muted/50 transition-colors">
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="font-mono text-sm font-medium truncate">{model.name}</span>
-                                  {model.installed && <Badge variant="outline" className="text-xs shrink-0">已安装</Badge>}
-                                  <Badge
-                                    className="text-xs shrink-0"
-                                    variant={
-                                      model.fit_level === "Perfect" ? "default" :
-                                      model.fit_level === "Good" ? "secondary" :
-                                      "outline"
-                                    }
-                                  >
-                                    {model.fit_level}
-                                  </Badge>
-                                </div>
-                                <div className="text-xs text-muted-foreground mt-0.5 flex gap-3 flex-wrap">
-                                  <span>评分 {model.score.toFixed(0)}</span>
-                                  <span>{model.estimated_tps.toFixed(0)} tok/s</span>
-                                  <span>{model.best_quant}</span>
-                                  <span>{model.memory_required_gb.toFixed(1)}GB</span>
-                                  <span>{model.run_mode}</span>
-                                </div>
-                              </div>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => {
-                                  updateMutation.mutate({ ai: { chat_model: model.name } });
-                                }}
-                              >
-                                选用
-                              </Button>
-                            </div>
-                          ))}
+                          <Skeleton className="h-8 w-full" />
+                          <Skeleton className="h-8 w-full" />
+                          <Skeleton className="h-8 w-full" />
                         </div>
-                        {recommendations.error && (
-                          <p className="mt-2 text-xs text-destructive">{recommendations.error}</p>
-                        )}
-                      </>
-                    ) : null}
-                  </CardContent>
+                      ) : recommendations?.error && !recommendations.system ? (
+                        <div className="text-sm text-destructive p-4 bg-muted rounded-lg">
+                          <p>{recommendations.error}</p>
+                        </div>
+                      ) : recommendations ? (
+                        <>
+                          {recommendations.system && (
+                            <div className="text-xs text-muted-foreground mb-3 flex gap-4 flex-wrap">
+                              <span>RAM: {recommendations.system.total_ram_gb.toFixed(0)}GB</span>
+                              {recommendations.system.has_gpu && (
+                                <span>GPU: {recommendations.system.gpu_name} ({recommendations.system.gpu_vram_gb?.toFixed(0)}GB)</span>
+                              )}
+                              <span>Backend: {recommendations.system.backend}</span>
+                              <span>CPU: {recommendations.system.cpu_cores} 核</span>
+                            </div>
+                          )}
+                          <div className="space-y-2">
+                            {recommendations.models.map((model, idx) => (
+                              <div key={idx} className="flex items-center gap-3 p-2 rounded-lg border hover:bg-muted/50 transition-colors">
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="font-mono text-sm font-medium truncate">{model.name}</span>
+                                    {model.installed && <Badge variant="outline" className="text-xs shrink-0">已安装</Badge>}
+                                    <Badge
+                                      className="text-xs shrink-0"
+                                      variant={
+                                        model.fit_level === "Perfect" ? "default" :
+                                        model.fit_level === "Good" ? "secondary" :
+                                        "outline"
+                                      }
+                                    >
+                                      {model.fit_level}
+                                    </Badge>
+                                  </div>
+                                  <div className="text-xs text-muted-foreground mt-0.5 flex gap-3 flex-wrap">
+                                    <span>评分 {model.score.toFixed(0)}</span>
+                                    <span>{model.estimated_tps.toFixed(0)} tok/s</span>
+                                    <span>{model.best_quant}</span>
+                                    <span>{model.memory_required_gb.toFixed(1)}GB</span>
+                                    <span>{model.run_mode}</span>
+                                  </div>
+                                </div>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => {
+                                    updateMutation.mutate({ ai: { chat_model: model.name } });
+                                  }}
+                                >
+                                  选用
+                                </Button>
+                              </div>
+                            ))}
+                          </div>
+                          {recommendations.error && (
+                            <p className="mt-2 text-xs text-destructive">{recommendations.error}</p>
+                          )}
+                        </>
+                      ) : null}
+                    </CardContent>
+                  )}
                 </Card>
               )}
             </div>
