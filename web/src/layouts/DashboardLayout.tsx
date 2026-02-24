@@ -25,6 +25,7 @@ import {
   Database,
   ExternalLink,
   Terminal,
+  Activity,
   PanelLeftClose,
   PanelLeftOpen,
   Sun,
@@ -48,6 +49,7 @@ const navItems = [
   { to: '/agent', icon: Bot, label: 'Agent' },
   { to: '/jobs', icon: Briefcase, label: 'Jobs' },
   { to: '/tasks', icon: Terminal, label: 'Tasks' },
+  { to: '/dispatcher', icon: Activity, label: 'Dispatcher' },
   { to: '/settings', icon: SettingsIcon, label: 'Settings' },
 ];
 
