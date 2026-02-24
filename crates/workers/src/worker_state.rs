@@ -473,7 +473,7 @@ impl AppState {
         api.merge(pipeline_api);
 
         // Dispatcher routes (plain axum::Router, no OpenAPI metadata).
-        router = router.merge(rara_agents::dispatcher::router::routes(
+        router = router.merge(rara_dispatcher_admin::router(
             self.dispatcher.clone(),
         ));
 

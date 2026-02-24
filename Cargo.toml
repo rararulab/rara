@@ -69,6 +69,7 @@ members = [
     "crates/integrations/composio",
     "crates/extensions/workspace",
     "crates/extensions/coding-task",
+    "crates/extensions/dispatcher-admin",
     "crates/extensions/rara-git",
     "crates/common/infisical",
 ]
@@ -156,6 +157,7 @@ rara-api = { path = "api" }
 rara-app = { path = "crates/app" }
 rara-cli = { path = "crates/cmd" }
 rara-composio = { path = "crates/integrations/composio" }
+rara-dispatcher-admin = { path = "crates/extensions/dispatcher-admin" }
 rara-domain-analytics = { path = "crates/domain/analytics" }
 rara-domain-application = { path = "crates/domain/application" }
 rara-domain-chat = { path = "crates/domain/chat" }
