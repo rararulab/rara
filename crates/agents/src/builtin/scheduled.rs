@@ -30,7 +30,7 @@ impl ScheduledAgent {
         history: Option<&[ChatMessage]>,
     ) -> Result<AgentOutput, OrchestratorError> {
         let policy = self.orchestrator.build_worker_policy().await;
-        let model = self.orchestrator.current_default_model();
+        let model = self.orchestrator.model_for_key("scheduled");
         let provider_hint = self.orchestrator.settings().ai.provider;
         let tools = self.orchestrator.tools().clone();
 

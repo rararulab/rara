@@ -97,9 +97,8 @@ const BASE_URL = import.meta.env.VITE_API_URL || '';
 
 export default function Settings() {
   const queryClient = useQueryClient();
-  const [defaultModel, setDefaultModel] = useState("");
-  const [jobModels, setJobModels] = useState<string[]>([]);   // ordered: [primary, fallback1, fallback2, ...]
-  const [chatModels, setChatModels] = useState<string[]>([]); // ordered: [primary, fallback1, fallback2, ...]
+  const [modelMap, setModelMap] = useState<Record<string, string>>({});
+  const [fallbackModels, setFallbackModels] = useState<string[]>([]);
   const [aiProvider, setAiProvider] = useState("openrouter");
   const [ollamaBaseUrl, setOllamaBaseUrl] = useState("http://localhost:11434");
   const [aiApiKey, setAiApiKey] = useState("");
@@ -362,17 +361,8 @@ export default function Settings() {
     if (!settingsQuery.data) return;
     setAiProvider(settingsQuery.data.ai.provider ?? "openrouter");
     setOllamaBaseUrl(settingsQuery.data.ai.ollama_base_url ?? "http://localhost:11434");
-    setDefaultModel(settingsQuery.data.ai.default_model ?? "");
-
-    // Build ordered model lists: [primary, ...fallbacks]
-    const jobPrimary = settingsQuery.data.ai.job_model;
-    const jobFallbacks = settingsQuery.data.ai.job_model_fallbacks ?? [];
-    setJobModels(jobPrimary ? [jobPrimary, ...jobFallbacks] : []);
-
-    const chatPrimary = settingsQuery.data.ai.chat_model;
-    const chatFallbacks = settingsQuery.data.ai.chat_model_fallbacks ?? [];
-    setChatModels(chatPrimary ? [chatPrimary, ...chatFallbacks] : []);
-
+    setModelMap(settingsQuery.data.ai.models ?? {});
+    setFallbackModels(settingsQuery.data.ai.fallback_models ?? []);
     setAiApiKey(settingsQuery.data.ai.openrouter_api_key ?? "");
     setTelegramChatId(
       settingsQuery.data.telegram.chat_id == null
@@ -436,41 +426,30 @@ export default function Settings() {
     if (ollamaBaseUrl.trim() !== currentOllamaUrl) {
       aiPatch.ollama_base_url = ollamaBaseUrl.trim();
     }
-    const trimmedDefault = defaultModel.trim();
-    if (trimmedDefault !== "" && trimmedDefault !== (current.ai.default_model ?? "")) {
-      aiPatch.default_model = trimmedDefault;
-    }
 
-    // Job models: derive current ordered list from settings for comparison
-    const currentJobModels = (() => {
-      const primary = current.ai.job_model;
-      const fallbacks = current.ai.job_model_fallbacks ?? [];
-      return primary ? [primary, ...fallbacks] : [];
-    })();
-    if (JSON.stringify(jobModels) !== JSON.stringify(currentJobModels)) {
-      if (jobModels.length === 0) {
-        aiPatch.job_model = "";  // clear to use default
-        aiPatch.job_model_fallbacks = [];
-      } else {
-        aiPatch.job_model = jobModels[0];
-        aiPatch.job_model_fallbacks = jobModels.slice(1);
+    // Compute models patch: diff modelMap vs current.ai.models
+    const currentModels = current.ai.models ?? {};
+    const modelsPatch: Record<string, string | null> = {};
+    // Keys that changed or were added
+    for (const [key, value] of Object.entries(modelMap)) {
+      if (currentModels[key] !== value) {
+        modelsPatch[key] = value;
       }
     }
-
-    // Chat models: same logic
-    const currentChatModels = (() => {
-      const primary = current.ai.chat_model;
-      const fallbacks = current.ai.chat_model_fallbacks ?? [];
-      return primary ? [primary, ...fallbacks] : [];
-    })();
-    if (JSON.stringify(chatModels) !== JSON.stringify(currentChatModels)) {
-      if (chatModels.length === 0) {
-        aiPatch.chat_model = "";  // clear to use default
-        aiPatch.chat_model_fallbacks = [];
-      } else {
-        aiPatch.chat_model = chatModels[0];
-        aiPatch.chat_model_fallbacks = chatModels.slice(1);
+    // Keys that were removed
+    for (const key of Object.keys(currentModels)) {
+      if (!(key in modelMap)) {
+        modelsPatch[key] = null;
       }
+    }
+    if (Object.keys(modelsPatch).length > 0) {
+      aiPatch.models = modelsPatch;
+    }
+
+    // Fallback models diff
+    const currentFallbacks = current.ai.fallback_models ?? [];
+    if (JSON.stringify(fallbackModels) !== JSON.stringify(currentFallbacks)) {
+      aiPatch.fallback_models = fallbackModels;
     }
 
     if (aiProvider === "openrouter" && aiApiKey.trim() !== "") {
@@ -552,9 +531,8 @@ export default function Settings() {
     aiApiKey,
     composioApiKey,
     composioEntityId,
-    defaultModel,
-    jobModels,
-    chatModels,
+    modelMap,
+    fallbackModels,
     settingsQuery.data,
     telegramAllowedGroupChatId,
     telegramChatId,
@@ -711,24 +689,6 @@ export default function Settings() {
     settingsQuery.data?.ai.openrouter_api_key,
   ]);
 
-  /** Resolve model name from id */
-  const modelName = useCallback(
-    (id: string): string => {
-      const found = models.find((m) => m.id === id);
-      return found ? found.name : id;
-    },
-    [models],
-  );
-
-  /** Resolve model context length from id */
-  const modelContext = useCallback(
-    (id: string): number | null => {
-      const found = models.find((m) => m.id === id);
-      return found?.contextLength ?? null;
-    },
-    [models],
-  );
-
   if (settingsQuery.isLoading) {
     return (
       <div className="space-y-6">
@@ -767,82 +727,105 @@ export default function Settings() {
           ? "Telegram Contacts"
           : "Telegram Bot";
 
-  /** Render the global default model selector (single-select) */
-  const renderDefaultModelSelector = () => {
-    // Sort so the currently selected model appears first
-    const sorted = [...filteredModels].sort(
-      (a, b) => Number(b.id === defaultModel) - Number(a.id === defaultModel),
-    );
+  /** Well-known model keys displayed in the settings UI */
+  const MODEL_KEYS = ["default", "chat", "job", "pipeline", "proactive", "scheduled"] as const;
 
+  /** Update a single key in the modelMap */
+  const setModelKey = (key: string, value: string | undefined) => {
+    setModelMap((prev) => {
+      const next = { ...prev };
+      if (value && value.trim()) {
+        next[key] = value.trim();
+      } else {
+        delete next[key];
+      }
+      return next;
+    });
+  };
+
+  /** Render the unified key->model table */
+  const renderModelKeyTable = () => {
     return (
       <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
-        <div className="flex items-center justify-between">
-          <p className="text-sm font-semibold">Default Model</p>
-          <span className="text-xs text-muted-foreground">
-            Active: {defaultModel || "openai/gpt-4o"}
-          </span>
-        </div>
-        <div className="max-h-48 overflow-y-auto rounded border bg-background">
-          {sorted.length === 0 && (
-            <div className="p-3 text-sm text-muted-foreground">
-              No models loaded. Fetch models above.
-            </div>
-          )}
-          {sorted.map((model) => (
-            <div
-              key={model.id}
-              className="flex items-center justify-between gap-3 border-b px-3 py-2 last:border-b-0"
-            >
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium">{model.name}</p>
-                <p className="truncate text-xs text-muted-foreground">
-                  {model.id}
-                  {model.contextLength ? ` -- ${Math.round(model.contextLength / 1000)}K` : ""}
-                </p>
+        <p className="text-sm font-semibold">Model Assignments</p>
+        <p className="text-xs text-muted-foreground">
+          Assign models to keys. Unset keys fall back to &quot;default&quot;, then &quot;openai/gpt-4o&quot;.
+        </p>
+        <div className="space-y-2">
+          {MODEL_KEYS.map((key) => {
+            const currentValue = modelMap[key] ?? "";
+            return (
+              <div key={key} className="flex items-center gap-2 rounded border bg-background px-3 py-2">
+                <span className="w-24 shrink-0 text-sm font-medium">{key}</span>
+                {aiProvider === "ollama" ? (
+                  <Input
+                    value={currentValue}
+                    onChange={(e) => setModelKey(key, e.target.value || undefined)}
+                    placeholder={key === "default" ? "openai/gpt-4o" : `(falls back to default)`}
+                    className="h-8 text-sm font-mono"
+                  />
+                ) : (
+                  <div className="flex-1 min-w-0">
+                    <Select
+                      value={currentValue || "__unset__"}
+                      onValueChange={(val) => setModelKey(key, val === "__unset__" ? undefined : val)}
+                    >
+                      <SelectTrigger className="h-8 text-sm font-mono">
+                        <SelectValue placeholder={key === "default" ? "openai/gpt-4o" : "(use default)"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__unset__">
+                          {key === "default" ? "openai/gpt-4o (hardcoded)" : "(use default)"}
+                        </SelectItem>
+                        {filteredModels.map((m) => (
+                          <SelectItem key={m.id} value={m.id}>
+                            {m.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+                {currentValue && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
+                    onClick={() => setModelKey(key, undefined)}
+                    title="Clear"
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+                )}
               </div>
-              <Switch
-                checked={model.id === defaultModel}
-                onCheckedChange={(checked) => {
-                  if (checked) setDefaultModel(model.id);
-                }}
-              />
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     );
   };
 
-  /** Unified multi-select ordered model picker for scenario-specific models */
-  const renderModelPicker = (
-    label: string,
-    selectedModels: string[],
-    setSelectedModels: React.Dispatch<React.SetStateAction<string[]>>,
-  ) => {
-    const isUsingDefault = selectedModels.length === 0;
-    const activeDisplay = isUsingDefault
-      ? (defaultModel || "openai/gpt-4o")
-      : selectedModels[0];
-    const selectedSet = new Set(selectedModels);
-
-    // Available models: sort selected first, then the rest
-    const sorted = [...filteredModels].sort((a, b) => {
-      const aSelected = selectedSet.has(a.id) ? 0 : 1;
-      const bSelected = selectedSet.has(b.id) ? 0 : 1;
-      return aSelected - bSelected;
-    });
-
-    const moveUp = (index: number) => {
+  /** Render fallback models list editor */
+  const renderFallbackModelsEditor = () => {
+    const addFallback = (modelId: string) => {
+      if (!fallbackModels.includes(modelId)) {
+        setFallbackModels((prev) => [...prev, modelId]);
+      }
+    };
+    const removeFallback = (index: number) => {
+      setFallbackModels((prev) => prev.filter((_, i) => i !== index));
+    };
+    const moveFallbackUp = (index: number) => {
       if (index === 0) return;
-      setSelectedModels((prev) => {
+      setFallbackModels((prev) => {
         const next = [...prev];
         [next[index - 1], next[index]] = [next[index], next[index - 1]];
         return next;
       });
     };
-
-    const moveDown = (index: number) => {
-      setSelectedModels((prev) => {
+    const moveFallbackDown = (index: number) => {
+      setFallbackModels((prev) => {
         if (index >= prev.length - 1) return prev;
         const next = [...prev];
         [next[index], next[index + 1]] = [next[index + 1], next[index]];
@@ -850,135 +833,71 @@ export default function Settings() {
       });
     };
 
-    const remove = (index: number) => {
-      setSelectedModels((prev) => prev.filter((_, i) => i !== index));
-    };
-
-    const toggleModel = (modelId: string, checked: boolean) => {
-      if (checked) {
-        setSelectedModels((prev) => [...prev, modelId]);
-      } else {
-        setSelectedModels((prev) => prev.filter((id) => id !== modelId));
-      }
-    };
-
     return (
       <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
-        <div className="flex items-center justify-between">
-          <p className="text-sm font-semibold">{label}</p>
-          <span className="text-xs text-muted-foreground">
-            Active: {activeDisplay}
-          </span>
-        </div>
-
-        {/* Use default model toggle */}
-        <div className="flex items-center justify-between gap-3 rounded border bg-background px-3 py-2">
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium">Use default model</p>
-            <p className="text-xs text-muted-foreground">
-              Falls back to: {defaultModel || "openai/gpt-4o"}
-            </p>
-          </div>
-          <Switch
-            checked={isUsingDefault}
-            onCheckedChange={(checked) => {
-              if (checked) setSelectedModels([]);
-            }}
-          />
-        </div>
-
-        {/* Selected models (ordered list) */}
-        {selectedModels.length > 0 && (
-          <div className="space-y-1 rounded border bg-muted/20 p-2">
-            <p className="text-xs font-semibold text-muted-foreground">
-              Selected Models (ordered)
-            </p>
-            {selectedModels.map((id, index) => {
-              const ctx = modelContext(id);
-              return (
-                <div
-                  key={id}
-                  className="flex items-center gap-2 rounded border bg-background px-2 py-1.5"
-                >
-                  <span className="w-5 shrink-0 text-center text-xs font-medium text-muted-foreground">
-                    {index + 1}.
-                  </span>
-                  <Badge
-                    variant={index === 0 ? "default" : "secondary"}
-                    className="shrink-0 text-[10px] px-1.5 py-0"
-                  >
-                    {index === 0 ? "Primary" : "Fallback"}
-                  </Badge>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{modelName(id)}</p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {id}{ctx ? ` -- ${Math.round(ctx / 1000)}K` : ""}
-                    </p>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6 shrink-0"
-                    disabled={index === 0}
-                    onClick={() => moveUp(index)}
-                    title="Move up"
-                  >
-                    <ArrowUp className="h-3 w-3" />
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6 shrink-0"
-                    disabled={index === selectedModels.length - 1}
-                    onClick={() => moveDown(index)}
-                    title="Move down"
-                  >
-                    <ArrowDown className="h-3 w-3" />
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6 shrink-0 text-muted-foreground hover:text-destructive"
-                    onClick={() => remove(index)}
-                    title="Remove"
-                  >
-                    <X className="h-3 w-3" />
-                  </Button>
+        <p className="text-sm font-semibold">Global Fallback Models</p>
+        <p className="text-xs text-muted-foreground">
+          Tried in order when the primary model is unavailable.
+        </p>
+        {fallbackModels.length > 0 && (
+          <div className="space-y-1">
+            {fallbackModels.map((id, index) => (
+              <div
+                key={`${id}-${index}`}
+                className="flex items-center gap-2 rounded border bg-background px-2 py-1.5"
+              >
+                <span className="w-5 shrink-0 text-center text-xs font-medium text-muted-foreground">
+                  {index + 1}.
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-mono">{id}</p>
                 </div>
-              );
-            })}
+                <Button type="button" variant="ghost" size="icon" className="h-6 w-6 shrink-0" disabled={index === 0} onClick={() => moveFallbackUp(index)} title="Move up">
+                  <ArrowUp className="h-3 w-3" />
+                </Button>
+                <Button type="button" variant="ghost" size="icon" className="h-6 w-6 shrink-0" disabled={index === fallbackModels.length - 1} onClick={() => moveFallbackDown(index)} title="Move down">
+                  <ArrowDown className="h-3 w-3" />
+                </Button>
+                <Button type="button" variant="ghost" size="icon" className="h-6 w-6 shrink-0 text-muted-foreground hover:text-destructive" onClick={() => removeFallback(index)} title="Remove">
+                  <X className="h-3 w-3" />
+                </Button>
+              </div>
+            ))}
           </div>
         )}
-
-        {/* Available models list */}
-        <div className="max-h-48 overflow-y-auto rounded border bg-background">
-          {sorted.length === 0 && (
-            <div className="p-3 text-sm text-muted-foreground">
-              No models loaded. Fetch models above.
-            </div>
-          )}
-          {sorted.map((model) => (
-            <div
-              key={model.id}
-              className="flex items-center justify-between gap-3 border-b px-3 py-2 last:border-b-0"
-            >
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium">{model.name}</p>
-                <p className="truncate text-xs text-muted-foreground">
-                  {model.id}
-                  {model.contextLength ? ` -- ${Math.round(model.contextLength / 1000)}K` : ""}
-                </p>
-              </div>
-              <Switch
-                checked={selectedSet.has(model.id)}
-                onCheckedChange={(checked) => toggleModel(model.id, checked)}
-              />
-            </div>
-          ))}
-        </div>
+        {aiProvider === "ollama" ? (
+          <div className="flex items-center gap-2">
+            <Input
+              placeholder="Model name to add..."
+              className="h-8 text-sm font-mono"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  const value = (e.target as HTMLInputElement).value.trim();
+                  if (value) {
+                    addFallback(value);
+                    (e.target as HTMLInputElement).value = "";
+                  }
+                }
+              }}
+            />
+            <p className="text-xs text-muted-foreground shrink-0">Press Enter to add</p>
+          </div>
+        ) : (
+          <Select onValueChange={(val) => addFallback(val)}>
+            <SelectTrigger className="h-8 text-sm">
+              <SelectValue placeholder="Add fallback model..." />
+            </SelectTrigger>
+            <SelectContent>
+              {filteredModels
+                .filter((m) => !fallbackModels.includes(m.id))
+                .map((m) => (
+                  <SelectItem key={m.id} value={m.id}>
+                    {m.name}
+                  </SelectItem>
+                ))}
+            </SelectContent>
+          </Select>
+        )}
       </div>
     );
   };
@@ -1006,7 +925,7 @@ export default function Settings() {
             <div className="space-y-1">
               <p className="font-medium">AI Provider ({providerLabel})</p>
               <p className="text-xs text-muted-foreground">
-                Default: {current.ai.default_model ?? "Not set"}
+                Default: {current.ai.models?.["default"] ?? "openai/gpt-4o"}
                 {providerLabel === "OpenRouter" && <> · Key: {current.ai.openrouter_api_key ? "Set" : "Not set"}</>}
                 {providerLabel === "Ollama" && <> · URL: {current.ai.ollama_base_url ?? "localhost:11434"}</>}
               </p>
@@ -1301,12 +1220,6 @@ export default function Settings() {
                       </Button>
                     </div>
 
-                    {/* Active model display */}
-                    <div className="flex items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2">
-                      <span className="text-sm text-muted-foreground">Active:</span>
-                      <span className="text-sm font-mono font-medium">{defaultModel || "Not set"}</span>
-                    </div>
-
                     {/* Local models list */}
                     {ollamaHealthQuery.data?.healthy && (
                       <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
@@ -1386,7 +1299,7 @@ export default function Settings() {
                                 <div className="min-w-0 flex-1">
                                   <div className="flex items-center gap-2">
                                     <p className="truncate text-sm font-medium font-mono">{model.name}</p>
-                                    {model.name === defaultModel && (
+                                    {model.name === modelMap["default"] && (
                                       <Badge variant="default" className="text-[10px] px-1.5 py-0 shrink-0">Active</Badge>
                                     )}
                                   </div>
@@ -1416,7 +1329,7 @@ export default function Settings() {
                                     variant="outline"
                                     size="sm"
                                     className="h-7 text-xs"
-                                    onClick={() => setDefaultModel(model.name)}
+                                    onClick={() => setModelKey("default", model.name)}
                                   >
                                     Use
                                   </Button>
@@ -1485,6 +1398,10 @@ export default function Settings() {
 
                       </div>
                     )}
+
+                    {/* Key-model assignments (Ollama) */}
+                    {renderModelKeyTable()}
+                    {renderFallbackModelsEditor()}
                   </div>
                 ) : (
                   <>
@@ -1505,19 +1422,8 @@ export default function Settings() {
                       <p className="text-sm text-destructive">{modelsError}</p>
                     )}
 
-                    {renderDefaultModelSelector()}
-
-                    {renderModelPicker(
-                      "Job Analysis Models",
-                      jobModels,
-                      setJobModels,
-                    )}
-
-                    {renderModelPicker(
-                      "Chat Models",
-                      chatModels,
-                      setChatModels,
-                    )}
+                    {renderModelKeyTable()}
+                    {renderFallbackModelsEditor()}
                   </>
                 )}
               </div>
@@ -1601,7 +1507,7 @@ export default function Settings() {
                                   size="sm"
                                   variant="outline"
                                   onClick={() => {
-                                    updateMutation.mutate({ ai: { chat_model: model.name } });
+                                    updateMutation.mutate({ ai: { models: { default: model.name } } });
                                   }}
                                 >
                                   选用

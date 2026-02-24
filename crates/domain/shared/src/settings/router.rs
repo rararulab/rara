@@ -113,16 +113,14 @@ pub struct ComposioSettingsView {
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct AiSettingsView {
-    pub configured:           bool,
-    pub provider:             Option<String>,
-    pub ollama_base_url:      Option<String>,
-    pub default_model:        Option<String>,
-    pub job_model:            Option<String>,
-    pub chat_model:           Option<String>,
-    pub openrouter_api_key:   Option<String>,
-    pub favorite_models:      Vec<String>,
-    pub chat_model_fallbacks: Vec<String>,
-    pub job_model_fallbacks:  Vec<String>,
+    pub configured:        bool,
+    pub provider:          Option<String>,
+    pub ollama_base_url:   Option<String>,
+    pub openrouter_api_key: Option<String>,
+    #[schema(value_type = HashMap<String, String>)]
+    pub models:            std::collections::HashMap<String, String>,
+    pub fallback_models:   Vec<String>,
+    pub favorite_models:   Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
@@ -297,16 +295,13 @@ impl Into<RuntimeSettingsView> for Settings {
 
         RuntimeSettingsView {
             ai:         AiSettingsView {
-                configured:           self.ai.is_configured(),
-                provider:             self.ai.provider.clone(),
-                ollama_base_url:      self.ai.ollama_base_url.clone(),
-                default_model:        self.ai.default_model.clone(),
-                job_model:            self.ai.job_model.clone(),
-                chat_model:           self.ai.chat_model.clone(),
-                openrouter_api_key:   self.ai.openrouter_api_key.clone(),
-                favorite_models:      self.ai.favorite_models.clone(),
-                chat_model_fallbacks: self.ai.chat_model_fallbacks.clone(),
-                job_model_fallbacks:  self.ai.job_model_fallbacks.clone(),
+                configured:        self.ai.is_configured(),
+                provider:          self.ai.provider.clone(),
+                ollama_base_url:   self.ai.ollama_base_url.clone(),
+                openrouter_api_key: self.ai.openrouter_api_key.clone(),
+                models:            self.ai.models.clone(),
+                fallback_models:   self.ai.fallback_models.clone(),
+                favorite_models:   self.ai.favorite_models.clone(),
             },
             telegram:   TgSettingsResp {
                 configured:              self.telegram.bot_token.is_some()

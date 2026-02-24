@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_openai::types::chat::ChatCompletionRequestMessage;
-use rara_domain_shared::settings::model::{ModelScenario, Settings};
+use rara_domain_shared::settings::model::Settings;
 use rara_mcp::{manager::mgr::McpManager, tool_bridge::McpToolBridge};
 use rara_memory::MemoryManager;
 use rara_sessions::types::ChatMessage;
@@ -163,11 +163,11 @@ impl AgentOrchestrator {
         let (provider_hint, fallback_models) = {
             let settings = self.settings_rx.borrow();
             let provider_hint = settings.ai.provider.clone();
-            let chain = settings.ai.fallback_chain(ModelScenario::Chat);
-            let fallback_models = chain
-                .into_iter()
-                .skip(1)
-                .map(|s| s.to_owned().into())
+            let fallback_models = settings
+                .ai
+                .fallback_models
+                .iter()
+                .map(|s| s.clone().into())
                 .collect();
             (provider_hint, fallback_models)
         };
@@ -288,13 +288,17 @@ impl AgentOrchestrator {
         &self.llm_provider
     }
 
+    /// Resolve the model for a given key from settings.
+    ///
+    /// Falls back to the `"default"` key, then to `"openai/gpt-4o"`.
+    #[must_use]
+    pub fn model_for_key(&self, key: &str) -> String {
+        self.settings_rx.borrow().ai.model_for_key(key)
+    }
+
     #[must_use]
     pub fn current_default_model(&self) -> String {
-        self.settings_rx
-            .borrow()
-            .ai
-            .model_for(ModelScenario::Chat)
-            .to_owned()
+        self.model_for_key("chat")
     }
 
     #[must_use]

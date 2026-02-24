@@ -40,6 +40,7 @@ rara-domain-scheduler = { workspace = true }
 rara-domain-shared = { workspace = true }
 rara-mcp = { workspace = true }
 rara-mcp-admin = { workspace = true }
+rara-model-admin = { workspace = true }
 rara-memory = { workspace = true }
 rara-paths = { workspace = true }
 rara-prompt = { workspace = true }

@@ -12,10 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod err;
-pub mod model;
-pub mod model_repo;
-pub mod provider;
-pub mod runner;
-pub mod subagent;
-pub mod tool_registry;
+//! # rara-model-admin
+//!
+//! Model configuration management extension -- HTTP API for viewing and
+//! updating key-based model assignments.
+//!
+//! ## HTTP API
+//!
+//! The [`router`] module exposes endpoints under `/api/v1/models/`.
+//! See [`router::routes`] for the full route table.
+
+mod repo;
+mod router;
+
+pub use repo::SettingsModelRepo;
+pub use router::routes;

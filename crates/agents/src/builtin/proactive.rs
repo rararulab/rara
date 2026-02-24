@@ -44,7 +44,7 @@ impl ProactiveAgent {
         let user_prompt = Self::build_user_prompt(activity_summary);
 
         let policy = self.orchestrator.build_worker_policy().await;
-        let model = self.orchestrator.current_default_model();
+        let model = self.orchestrator.model_for_key("proactive");
         let provider_hint = self.orchestrator.settings().ai.provider;
         let tools = self.orchestrator.tools().clone();
         let chat_history = history.iter().map(to_chat_message).collect();
