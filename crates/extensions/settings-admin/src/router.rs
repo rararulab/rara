@@ -11,11 +11,18 @@ use rara_domain_shared::settings::{
 
 pub fn routes(svc: SettingsSvc) -> OpenApiRouter {
     OpenApiRouter::new()
-        .nest(
-            "/api/v1",
-            OpenApiRouter::new().routes(routes!(get_settings, update_settings)),
-        )
+        .merge(runtime_routes())
+        .merge(crate::ai::routes())
+        .merge(crate::gmail::routes())
+        .merge(crate::auth::routes())
         .with_state(svc)
+}
+
+fn runtime_routes() -> OpenApiRouter<SettingsSvc> {
+    OpenApiRouter::new().nest(
+        "/api/v1",
+        OpenApiRouter::new().routes(routes!(get_settings, update_settings)),
+    )
 }
 
 #[utoipa::path(

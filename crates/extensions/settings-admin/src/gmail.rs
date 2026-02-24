@@ -22,13 +22,11 @@ pub struct GmailAdminUpdateRequest {
     pub auto_send_enabled: Option<bool>,
 }
 
-pub fn routes(svc: SettingsSvc) -> OpenApiRouter {
-    OpenApiRouter::new()
-        .route(
-            "/api/v1/gmail/settings",
-            axum::routing::get(get_gmail_settings).put(update_gmail_settings),
-        )
-        .with_state(svc)
+pub(super) fn routes() -> OpenApiRouter<SettingsSvc> {
+    OpenApiRouter::new().route(
+        "/api/v1/gmail/settings",
+        axum::routing::get(get_gmail_settings).put(update_gmail_settings),
+    )
 }
 
 #[utoipa::path(get, path = "/api/v1/gmail/settings", tag = "gmail-admin", responses((status = 200, body = GmailAdminSettingsView)))]
@@ -54,7 +52,12 @@ async fn update_gmail_settings(
             ..UpdateRequest::default()
         })
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to update gmail settings: {e}")))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to update gmail settings: {e}"),
+            )
+        })?;
 
     Ok(Json(GmailAdminSettingsView::from(updated)))
 }

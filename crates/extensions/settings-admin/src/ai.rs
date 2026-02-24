@@ -6,7 +6,7 @@ use rara_domain_shared::settings::{
     service::SettingsSvc,
 };
 
-pub fn routes(svc: SettingsSvc) -> OpenApiRouter {
+pub(super) fn routes() -> OpenApiRouter<SettingsSvc> {
     OpenApiRouter::new()
         .nest(
             "/api/v1",
@@ -15,7 +15,6 @@ pub fn routes(svc: SettingsSvc) -> OpenApiRouter {
                 .routes(routes!(get_ollama_model_recommendations))
                 .merge(rara_domain_shared::settings::ollama::ollama_management_routes()),
         )
-        .with_state(svc)
 }
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
@@ -131,7 +130,9 @@ pub struct ModelRecommendationsQuery {
     pub limit: usize,
 }
 
-fn default_limit() -> usize { 10 }
+fn default_limit() -> usize {
+    10
+}
 
 #[utoipa::path(
     get,

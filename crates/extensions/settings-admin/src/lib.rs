@@ -5,6 +5,9 @@
 
 //! HTTP admin routes for runtime settings.
 
+mod ai;
+mod auth;
+mod gmail;
 mod router;
 
 pub use router::routes;

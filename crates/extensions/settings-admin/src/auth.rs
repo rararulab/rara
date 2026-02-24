@@ -1,4 +1,5 @@
 use axum::{Json, http::StatusCode};
+use rara_domain_shared::settings::service::SettingsSvc;
 use utoipa_axum::router::OpenApiRouter;
 
 #[derive(Debug, serde::Serialize, utoipa::ToSchema)]
@@ -6,7 +7,7 @@ pub struct SshKeyResponse {
     pub public_key: String,
 }
 
-pub fn routes() -> OpenApiRouter {
+pub(super) fn routes() -> OpenApiRouter<SettingsSvc> {
     OpenApiRouter::new().route("/api/v1/auth/ssh-key", axum::routing::get(get_ssh_key))
 }
 

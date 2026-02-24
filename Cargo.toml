@@ -70,9 +70,6 @@ members = [
     "crates/extensions/workspace",
     "crates/extensions/coding-task",
     "crates/extensions/dispatcher-admin",
-    "crates/extensions/ai-admin",
-    "crates/extensions/auth-admin",
-    "crates/extensions/gmail-admin",
     "crates/extensions/model-admin",
     "crates/extensions/prompt-admin",
     "crates/extensions/settings-admin",
@@ -164,8 +161,6 @@ rara-api = { path = "api" }
 rara-app = { path = "crates/app" }
 rara-cli = { path = "crates/cmd" }
 rara-composio = { path = "crates/integrations/composio" }
-rara-ai-admin = { path = "crates/extensions/ai-admin" }
-rara-auth-admin = { path = "crates/extensions/auth-admin" }
 rara-dispatcher-admin = { path = "crates/extensions/dispatcher-admin" }
 rara-domain-analytics = { path = "crates/domain/analytics" }
 rara-domain-application = { path = "crates/domain/application" }
@@ -176,7 +171,6 @@ rara-domain-resume = { path = "crates/domain/resume" }
 rara-domain-scheduler = { path = "crates/domain/scheduler" }
 rara-domain-shared = { path = "crates/domain/shared" }
 rara-error = { path = "crates/common/error" }
-rara-gmail-admin = { path = "crates/extensions/gmail-admin" }
 rara-infisical = { path = "crates/common/infisical" }
 rara-git = { path = "crates/extensions/rara-git" }
 rara-ext-job-pipeline = { path = "crates/extensions/job-pipeline" }

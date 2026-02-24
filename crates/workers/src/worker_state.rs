@@ -449,16 +449,6 @@ impl AppState {
         merge_openapi_router(
             &mut router,
             &mut api,
-            rara_ai_admin::routes(self.settings_svc.clone()),
-        );
-        merge_openapi_router(
-            &mut router,
-            &mut api,
-            rara_gmail_admin::routes(self.settings_svc.clone()),
-        );
-        merge_openapi_router(
-            &mut router,
-            &mut api,
             rara_domain_shared::notify::routes::routes(self.notify_client.clone()),
         );
         merge_openapi_router(
@@ -525,7 +515,6 @@ impl AppState {
             &mut api,
             rara_tg_admin::routes(self.settings_svc.clone()),
         );
-        merge_openapi_router(&mut router, &mut api, rara_auth_admin::routes());
 
         (router, api)
     }
