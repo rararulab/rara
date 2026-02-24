@@ -13,18 +13,28 @@
 // limitations under the License.
 
 //! Job fit analysis agent.
+//!
+//! Supports optional tool-calling mode: when a [`ToolRegistry`] is provided,
+//! the agent can invoke tools (e.g. query user profile, past applications)
+//! during its analysis loop.
 
 use std::sync::Arc;
 
 use agent_core::provider::LlmProvider;
+use agent_core::tool_registry::ToolRegistry;
 
-use crate::builtin::tasks::{completion::run_completion, error::TaskAgentError};
+use crate::builtin::tasks::completion::{
+    run_completion, run_with_tools, DEFAULT_TASK_TOOL_ITERATIONS,
+};
+use crate::builtin::tasks::error::TaskAgentError;
 
 /// Evaluates how well a candidate's resume matches a job posting.
 pub struct JobFitAgent {
-    provider:    Arc<dyn LlmProvider>,
-    model:       String,
-    prompt_repo: Arc<dyn agent_core::prompt::PromptRepo>,
+    provider:        Arc<dyn LlmProvider>,
+    model:           String,
+    prompt_repo:     Arc<dyn agent_core::prompt::PromptRepo>,
+    tools:           Option<Arc<ToolRegistry>>,
+    max_iterations:  usize,
 }
 
 impl JobFitAgent {
@@ -37,7 +47,23 @@ impl JobFitAgent {
             provider,
             model,
             prompt_repo,
+            tools: None,
+            max_iterations: DEFAULT_TASK_TOOL_ITERATIONS,
         }
+    }
+
+    /// Attach a tool registry for tool-calling mode.
+    #[must_use]
+    pub fn with_tools(mut self, tools: Arc<ToolRegistry>) -> Self {
+        self.tools = Some(tools);
+        self
+    }
+
+    /// Override the maximum number of tool-calling iterations.
+    #[must_use]
+    pub fn with_max_iterations(mut self, max: usize) -> Self {
+        self.max_iterations = max;
+        self
     }
 
     /// Analyze the fit between a job description and a resume.
@@ -47,18 +73,43 @@ impl JobFitAgent {
         resume: &str,
     ) -> Result<String, TaskAgentError> {
         let user_input = format!("## Job Description\n{job_description}\n\n## Resume\n{resume}");
-        let base = self.prompt_repo.get("ai/job_fit.system.md").await
+        let system_prompt = self.build_system_prompt().await;
+
+        match &self.tools {
+            Some(tools) if !tools.is_empty() => {
+                run_with_tools(
+                    &*self.provider,
+                    &self.model,
+                    &system_prompt,
+                    &user_input,
+                    tools,
+                    self.max_iterations,
+                )
+                .await
+            }
+            _ => {
+                run_completion(&*self.provider, &self.model, &system_prompt, &user_input).await
+            }
+        }
+    }
+
+    async fn build_system_prompt(&self) -> String {
+        let base = self
+            .prompt_repo
+            .get("ai/job_fit.system.md")
+            .await
             .map(|e| e.content)
             .unwrap_or_default();
-        let soul = self.prompt_repo.get("agent/soul.md").await
+        let soul = self
+            .prompt_repo
+            .get("agent/soul.md")
+            .await
             .map(|e| e.content)
             .unwrap_or_default();
-        let system_prompt = if soul.trim().is_empty() {
+        if soul.trim().is_empty() {
             base
         } else {
             format!("{soul}\n\n# Task Instructions\n{base}")
-        };
-
-        run_completion(&*self.provider, &self.model, &system_prompt, &user_input).await
+        }
     }
 }

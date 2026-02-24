@@ -31,4 +31,12 @@ pub enum TaskAgentError {
     /// The AI response was empty or contained no usable content.
     #[snafu(display("AI returned empty response"))]
     EmptyResponse,
+
+    /// A tool call failed during tool-calling mode.
+    #[snafu(display("tool call failed: {message}"))]
+    ToolCallFailed { message: String },
+
+    /// The tool-calling loop exceeded its maximum iteration count.
+    #[snafu(display("tool-calling loop exceeded {max} iterations"))]
+    MaxIterationsExceeded { max: usize },
 }
