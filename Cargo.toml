@@ -64,6 +64,7 @@ members = [
     "crates/extensions/job-pipeline",
     "crates/core/agent-core",
     "crates/core/tool-core",
+    "crates/integrations/k8s",
     "crates/integrations/composio",
     "crates/extensions/workspace",
     "crates/extensions/coding-task",
@@ -168,6 +169,7 @@ rara-error = { path = "crates/common/error" }
 rara-consul = { path = "crates/common/rara-consul" }
 rara-git = { path = "crates/extensions/rara-git" }
 rara-ext-job-pipeline = { path = "crates/extensions/job-pipeline" }
+rara-k8s = { path = "crates/integrations/k8s" }
 rara-keyring-store = { path = "crates/integrations/keyring-store" }
 rara-mcp = { path = "crates/integrations/mcp" }
 rara-memory = { path = "crates/memory" }

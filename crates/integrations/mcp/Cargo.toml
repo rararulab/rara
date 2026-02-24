@@ -12,7 +12,7 @@ categories.workspace = true
 
 [features]
 default = []
-k8s = ["kube", "k8s-openapi", "uuid"]
+k8s = ["rara-k8s"]
 
 [dependencies]
 anyhow.workspace = true
@@ -49,9 +49,7 @@ tool-core.workspace = true
 tracing.workspace = true
 
 # K8s Pod transport (optional, behind "k8s" feature)
-kube = { version = "3.0", features = ["runtime", "client"], optional = true }
-k8s-openapi = { version = "0.27", features = ["v1_31"], optional = true }
-uuid = { version = "1", features = ["v4"], optional = true }
+rara-k8s = { workspace = true, optional = true }
 
 [dev-dependencies]
 axum.workspace = true
