@@ -13,7 +13,7 @@ Umbrella chart that deploys all infrastructure dependencies for the rara platfor
 | Alloy | `grafana/alloy` | — | OpenTelemetry collector |
 | Quickwit | `quickwit/quickwit` | `quickwit.rara.local` | Log search |
 | Langfuse | `langfuse/langfuse` | `langfuse.rara.local` | LLM observability |
-| Infisical | `infisical/infisical` | `infisical.rara.local` | Secrets management |
+| Consul | `hashicorp/consul` | `consul.rara.local` | Configuration KV store |
 | MinIO | `minio/minio` | `minio.rara.local` | Object storage |
 | PostgreSQL | `bitnami/postgresql` | — | Database (pgmq image) |
 | ChromaDB | custom templates | — | Vector database |

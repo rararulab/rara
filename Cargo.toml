@@ -69,7 +69,7 @@ members = [
     "crates/extensions/coding-task",
     "crates/extensions/backend-admin",
     "crates/extensions/rara-git",
-    "crates/common/infisical",
+    "crates/common/rara-consul",
 ]
 
 [workspace.dependencies]
@@ -165,7 +165,7 @@ rara-domain-resume = { path = "crates/domain/resume" }
 rara-domain-scheduler = { path = "crates/domain/scheduler" }
 rara-domain-shared = { path = "crates/domain/shared" }
 rara-error = { path = "crates/common/error" }
-rara-infisical = { path = "crates/common/infisical" }
+rara-consul = { path = "crates/common/rara-consul" }
 rara-git = { path = "crates/extensions/rara-git" }
 rara-ext-job-pipeline = { path = "crates/extensions/job-pipeline" }
 rara-keyring-store = { path = "crates/integrations/keyring-store" }

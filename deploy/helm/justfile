@@ -254,6 +254,10 @@ doctor:
     check_pod_ready "Redis"          "app.kubernetes.io/name=redis"
     check_pod_ready "Consul Server"  "app=consul,component=server"
     check_pod_ready "Consul Client"  "app=consul,component=client"
+    check "Consul KV (rara/config/)" bash -c \
+      "count=\$(kubectl exec {{ RELEASE }}-consul-server-0 -n $NS -- \
+        curl -sf http://127.0.0.1:8500/v1/kv/rara/config/?keys 2>/dev/null | jq '. | length'); \
+       if [ \"\$count\" -gt 0 ] 2>/dev/null; then echo \"\${count} keys\"; else echo 'no keys found'; false; fi"
 
     # -- PVCs --
     echo ""

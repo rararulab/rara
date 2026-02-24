@@ -1,0 +1,60 @@
+{{- if .Values.consul.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "rara-infra.fullname" . }}-consul-kv-seed
+  labels:
+    {{- include "rara-infra.labels" . | nindent 4 }}
+    app.kubernetes.io/component: consul-kv-seed
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        {{- include "rara-infra.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: consul-kv-seed
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: consul-kv-seed
+          image: curlimages/curl:latest
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              CONSUL_ADDR="http://{{ .Release.Name }}-consul-server:8500"
+
+              put_kv() {
+                local key="$1"
+                local value="$2"
+                echo "Setting ${key}"
+                curl -sf -X PUT -d "${value}" "${CONSUL_ADDR}/v1/kv/${key}" > /dev/null
+              }
+
+              echo "Seeding Consul KV at ${CONSUL_ADDR} ..."
+
+              # Database
+              put_kv "rara/config/database/database_url" \
+                "postgres://postgres:{{ .Values.postgresql.auth.postgresPassword }}@{{ .Release.Name }}-postgresql:5432/{{ .Values.postgresql.auth.database }}"
+
+              # Object store (MinIO)
+              put_kv "rara/config/object_store/endpoint" \
+                "http://{{ .Release.Name }}-minio:9000"
+              put_kv "rara/config/object_store/access_key_id" \
+                "{{ .Values.minio.rootUser }}"
+              put_kv "rara/config/object_store/secret_access_key" \
+                "{{ .Values.minio.rootPassword }}"
+              put_kv "rara/config/object_store/bucket" \
+                "rara"
+
+              # Memory (ChromaDB)
+              put_kv "rara/config/memory/chroma_url" \
+                "http://{{ .Release.Name }}-chromadb:8000"
+
+              echo "Consul KV seed complete."
+{{- end }}

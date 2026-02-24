@@ -2,105 +2,97 @@
 
 Rara uses a two-tier configuration model:
 
-- **Static config** (`AppConfig`) — immutable after startup, loaded from Infisical + environment variables
+- **Static config** (`AppConfig`) — immutable after startup, loaded from Consul KV or environment variables
 - **Runtime settings** (`Settings`) — mutable at runtime via REST API, persisted in PostgreSQL KV store
 
 ## Static Configuration
 
 ### Source Priority
 
-Sources are evaluated in order (highest priority wins):
+When `CONSUL_HTTP_ADDR` is set, Consul KV is used as the sole config source (env vars are **not** read):
+
+| Priority | Source | Description |
+|----------|--------|-------------|
+| 1 (highest) | Consul KV | Entries under `rara/config/` prefix, path segments map to nested keys |
+| 2 (lowest) | Code defaults | Hardcoded default values |
+
+When Consul is **not** configured (local dev fallback):
 
 | Priority | Source | Description |
 |----------|--------|-------------|
 | 1 (highest) | `RARA__` environment variables | Direct env vars with `__` as nesting separator |
-| 2 | Infisical | Secrets fetched from Infisical at startup (opt-in) |
-| 3 (lowest) | Code defaults | Hardcoded default values |
+| 2 (lowest) | Code defaults | Hardcoded default values |
 
-### Infisical Integration
+### Consul KV Integration
 
-[Infisical](https://infisical.com) is the recommended way to manage static configuration and secrets. Rara integrates Infisical as a native config source via the official Rust SDK.
+[Consul](https://www.consul.io/) KV is the recommended way to manage static configuration. Rara fetches config entries from the Consul HTTP API at startup.
 
 #### How It Works
 
 ```mermaid
 sequenceDiagram
     participant App as Rara App
-    participant Inf as Infisical
+    participant Consul as Consul KV
     participant Env as Environment
 
-    App->>Env: Check INFISICAL_CLIENT_ID
-    alt Infisical configured
-        App->>Inf: Authenticate (Universal Auth)
-        Inf-->>App: Access token
-        App->>Inf: List secrets (project/env/path)
-        Inf-->>App: Key-value pairs
-        App->>App: Merge: env vars > Infisical > defaults
+    App->>Env: Check CONSUL_HTTP_ADDR
+    alt Consul configured
+        App->>Consul: GET /v1/kv/rara/config/?recurse
+        Consul-->>App: Base64-encoded KV entries
+        App->>App: Decode + map paths to config keys
+        App->>App: Merge: Consul KV > defaults
     else Not configured
-        App->>App: Use env vars + defaults only
+        App->>App: Use RARA__ env vars + defaults only
     end
     App->>App: Deserialize into AppConfig
 ```
 
-At startup, `AppConfig::new()` optionally connects to Infisical using Universal Auth. Secrets are fetched and merged as a config source — env vars always take precedence.
+At startup, `AppConfig::new()` checks for `CONSUL_HTTP_ADDR`. If set, all config is loaded from Consul KV. Otherwise, `RARA__`-prefixed environment variables are used.
 
-#### Secret Key Mapping
+#### Key Mapping
 
-Infisical secret names are converted to nested config keys using `__` as separator:
+Consul KV paths (after stripping the prefix) are converted to nested config keys using `/` as separator:
 
-| Infisical Secret Key | Config Field |
-|---------------------|-------------|
-| `DATABASE__DATABASE_URL` | `database.database_url` |
-| `HTTP__BIND_ADDRESS` | `http.bind_address` |
-| `OBJECT_STORE__ACCESS_KEY` | `object_store.access_key` |
-
-Keys are lowercased automatically. This follows the same convention as the `RARA__` environment variables (minus the prefix).
+| Consul KV Path | Config Field |
+|----------------|-------------|
+| `rara/config/database/database_url` | `database.database_url` |
+| `rara/config/http/bind_address` | `http.bind_address` |
+| `rara/config/object_store/endpoint` | `object_store.endpoint` |
 
 #### Setup
 
-1. **Create a Machine Identity** in your Infisical project (Settings → Machine Identities)
-2. **Add Universal Auth** credentials to the identity
-3. **Set bootstrap env vars** (in `.env` or actual environment):
+1. **Deploy Consul** via `rara-infra` Helm chart (included by default)
+2. **Set bootstrap env vars** for the rara app:
 
 ```bash
-# Required — presence of CLIENT_ID activates Infisical loading
-INFISICAL_CLIENT_ID=your-client-id
-INFISICAL_CLIENT_SECRET=your-client-secret
-INFISICAL_PROJECT_ID=your-project-id
+# Required — presence of CONSUL_HTTP_ADDR activates Consul loading
+CONSUL_HTTP_ADDR=http://rara-infra-consul-server:8500
 
-# Optional (with defaults)
-INFISICAL_BASE_URL=https://app.infisical.com   # or your self-hosted instance
-INFISICAL_ENVIRONMENT=dev                       # dev / staging / prod
-INFISICAL_SECRET_PATH=/                         # secret folder path
+# Optional
+CONSUL_TOKEN=your-acl-token        # only if Consul ACLs are enabled
+CONSUL_KV_PREFIX=rara/config/      # default prefix
 ```
 
-4. **Add secrets** in the Infisical dashboard. Use `__` to denote nesting:
+3. **Seed config** into Consul KV (the `consul-kv-seed` Helm hook does this automatically):
 
 ```
-DATABASE__DATABASE_URL = postgres://user:pass@db:5432/rara
-DATABASE__MAX_CONNECTIONS = 20
-HTTP__BIND_ADDRESS = 0.0.0.0:25555
-OBJECT_STORE__ENDPOINT = http://minio:9000
-OBJECT_STORE__ACCESS_KEY = admin
-OBJECT_STORE__SECRET_KEY = supersecret
+rara/config/database/database_url = postgres://postgres:pass@db:5432/rara
+rara/config/object_store/endpoint = http://minio:9000
+rara/config/object_store/access_key_id = admin
+rara/config/object_store/secret_access_key = supersecret
+rara/config/object_store/bucket = rara
+rara/config/memory/chroma_url = http://chromadb:8000
 ```
 
 #### Fail-Open Behavior
 
-- If `INFISICAL_CLIENT_ID` is **not set**, Infisical is silently skipped
-- If Infisical is **unreachable**, startup continues with a warning log — env vars and defaults still work
-- This ensures local development works with just `.env` or env vars, no Infisical required
+- If `CONSUL_HTTP_ADDR` is **not set**, Consul is silently skipped and env vars are used
+- If the Consul KV prefix has **no entries** (404), an empty config is returned and code defaults apply
+- This ensures local development works with just `.env` or env vars, no Consul required
 
 #### Kubernetes Deployment
 
-For K8s, two approaches work:
-
-| Approach | How | When to Use |
-|----------|-----|-------------|
-| **SDK (app-level)** | Set `INFISICAL_*` env vars in the Pod | Simple, works everywhere |
-| **K8s Operator** | Infisical Operator syncs secrets → K8s Secrets → Pod env vars | Zero app awareness, GitOps-friendly |
-
-The K8s operator is deployed via `rara-infra` Helm charts (`infisical-standalone` + `secrets-operator`). When using the operator, the app sees secrets as regular environment variables — no SDK involved.
+In Kubernetes, the `consul-kv-seed` Helm post-install/post-upgrade hook automatically writes infrastructure credentials (database URL, MinIO keys, etc.) to Consul KV. The rara app Pod only needs `CONSUL_HTTP_ADDR` set as an environment variable.
 
 ### All Config Keys
 
