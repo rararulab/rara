@@ -542,16 +542,31 @@ impl agent_core::provider::LlmProviderLoader for SettingsLlmProviderLoader {
     async fn acquire_provider(
         &self,
     ) -> agent_core::err::Result<Arc<dyn agent_core::provider::LlmProvider>> {
-        let api_key = self
-            .settings
-            .current()
-            .ai
-            .openrouter_api_key
-            .clone()
-            .ok_or(agent_core::err::ProviderNotConfiguredSnafu.build())?;
-
-        Ok(Arc::new(agent_core::provider::OpenAiProvider::new(
-            api_key,
-        )))
+        let settings = self.settings.current();
+        match settings.ai.provider.as_deref().unwrap_or("openrouter") {
+            "ollama" => {
+                let base_url = settings
+                    .ai
+                    .ollama_base_url
+                    .as_deref()
+                    .unwrap_or("http://localhost:11434");
+                let config = async_openai::config::OpenAIConfig::new()
+                    .with_api_base(format!("{}/v1", base_url))
+                    .with_api_key("ollama");
+                Ok(Arc::new(
+                    agent_core::provider::OpenAiProvider::with_config(config),
+                ))
+            }
+            _ => {
+                let api_key = settings
+                    .ai
+                    .openrouter_api_key
+                    .clone()
+                    .ok_or(agent_core::err::ProviderNotConfiguredSnafu.build())?;
+                Ok(Arc::new(agent_core::provider::OpenAiProvider::new(
+                    api_key,
+                )))
+            }
+        }
     }
 }
