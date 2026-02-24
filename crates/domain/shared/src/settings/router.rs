@@ -16,7 +16,7 @@
 
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::get,
 };
@@ -114,6 +114,7 @@ pub fn routes(svc: SettingsSvc) -> OpenApiRouter {
                 .routes(routes!(get_settings, update_settings))
                 .routes(routes!(list_prompts))
                 .routes(routes!(get_ssh_key))
+                .routes(routes!(get_ollama_model_recommendations))
                 .route(
                     "/settings/prompts/{*name}",
                     get(get_prompt_content).put(update_prompt_content),
@@ -359,6 +360,120 @@ async fn get_ssh_key() -> Result<Json<SshKeyResponse>, (StatusCode, String)> {
     let public_key = rara_git::get_public_key(&ssh_dir)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(SshKeyResponse { public_key }))
+}
+
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+pub struct LlmfitSystemInfo {
+    pub total_ram_gb:     f64,
+    pub available_ram_gb: f64,
+    pub cpu_cores:        u32,
+    pub cpu_name:         String,
+    pub has_gpu:          bool,
+    pub gpu_vram_gb:      Option<f64>,
+    pub gpu_name:         Option<String>,
+    pub backend:          String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+pub struct LlmfitModelEntry {
+    pub name:               String,
+    pub provider:           Option<serde_json::Value>,
+    pub fit_level:          String,
+    pub run_mode:           String,
+    pub score:              f64,
+    pub estimated_tps:      f64,
+    pub best_quant:         String,
+    pub memory_required_gb: f64,
+    pub use_case:           Option<serde_json::Value>,
+    pub installed:          bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+pub struct LlmfitRecommendationsResponse {
+    pub available: bool,
+    pub system:    Option<LlmfitSystemInfo>,
+    pub models:    Vec<LlmfitModelEntry>,
+    pub error:     Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+pub struct ModelRecommendationsQuery {
+    /// Maximum number of models to return (default: 10)
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+fn default_limit() -> usize { 10 }
+
+#[utoipa::path(
+    get,
+    path = "/settings/ollama/model-recommendations",
+    tag = "settings",
+    params(ModelRecommendationsQuery),
+    responses(
+        (status = 200, description = "llmfit model recommendations", body = LlmfitRecommendationsResponse),
+    )
+)]
+async fn get_ollama_model_recommendations(
+    Query(query): Query<ModelRecommendationsQuery>,
+) -> Json<LlmfitRecommendationsResponse> {
+    let output = tokio::process::Command::new("llmfit")
+        .args(["fit", "--json", "--limit", &query.limit.to_string()])
+        .output()
+        .await;
+
+    match output {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Json(LlmfitRecommendationsResponse {
+                available: false,
+                system:    None,
+                models:    vec![],
+                error:     Some("llmfit not found in PATH. Install with: cargo install llmfit".to_owned()),
+            })
+        }
+        Err(e) => {
+            Json(LlmfitRecommendationsResponse {
+                available: true,
+                system:    None,
+                models:    vec![],
+                error:     Some(format!("failed to run llmfit: {e}")),
+            })
+        }
+        Ok(output) if !output.status.success() => {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            Json(LlmfitRecommendationsResponse {
+                available: true,
+                system:    None,
+                models:    vec![],
+                error:     Some(format!("llmfit exited with error: {stderr}")),
+            })
+        }
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            match serde_json::from_str::<serde_json::Value>(&stdout) {
+                Ok(json) => {
+                    let system = json.get("system")
+                        .and_then(|s| serde_json::from_value(s.clone()).ok());
+                    let models = json.get("models")
+                        .and_then(|m| serde_json::from_value::<Vec<LlmfitModelEntry>>(m.clone()).ok())
+                        .unwrap_or_default();
+                    Json(LlmfitRecommendationsResponse {
+                        available: true,
+                        system,
+                        models,
+                        error: None,
+                    })
+                }
+                Err(e) => Json(LlmfitRecommendationsResponse {
+                    available: true,
+                    system:    None,
+                    models:    vec![],
+                    error:     Some(format!("failed to parse llmfit output: {e}")),
+                }),
+            }
+        }
+    }
 }
 
 impl Into<RuntimeSettingsView> for Settings {
