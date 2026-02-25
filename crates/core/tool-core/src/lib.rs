@@ -27,6 +27,7 @@ use async_trait::async_trait;
 /// Reference-counted handle to an agent tool.
 pub type AgentToolRef = Arc<dyn AgentTool>;
 
+pub mod contact_lookup;
 pub mod core_primitives;
 pub mod domain_primitives;
 
@@ -53,6 +54,7 @@ pub struct PrimitiveDeps {
     pub settings_svc:           rara_domain_shared::settings::SettingsSvc,
     pub object_store:           opendal::Operator,
     pub composio_auth_provider: Arc<dyn rara_composio::ComposioAuthProvider>,
+    pub contact_lookup:         Arc<dyn contact_lookup::ContactLookup>,
 }
 
 /// Returns all primitive tools (core + domain), ready for registration.
@@ -78,15 +80,13 @@ pub fn core_primitives_vec() -> Vec<AgentToolRef> {
 
 /// Returns domain primitives. Composio is included when configured.
 pub fn domain_primitives_vec(deps: PrimitiveDeps) -> Vec<AgentToolRef> {
-    let contacts =
-        rara_domain_shared::contacts::repository::ContactRepository::new(deps.pool.clone());
     let mut tools: Vec<AgentToolRef> = vec![
         Arc::new(domain_primitives::DbQueryTool::new(deps.pool.clone())),
         Arc::new(domain_primitives::DbMutateTool::new(deps.pool)),
         Arc::new(domain_primitives::NotifyTool::new(
             deps.notify_client,
             deps.settings_svc.clone(),
-            contacts,
+            deps.contact_lookup,
         )),
         Arc::new(domain_primitives::SendEmailTool::new(deps.settings_svc)),
         Arc::new(domain_primitives::StorageReadTool::new(deps.object_store)),

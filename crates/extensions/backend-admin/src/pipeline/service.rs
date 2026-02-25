@@ -97,15 +97,16 @@ impl axum::response::IntoResponse for PipelineError {
 /// automation workflow.
 #[derive(Clone)]
 pub struct PipelineService {
-    settings_svc:  SettingsSvc,
-    llm_provider:  LlmProviderLoaderRef,
-    ai_service:    rara_agents::builtin::tasks::TaskAgentService,
-    job_service:   crate::job::service::JobService,
-    pool:          sqlx::PgPool,
-    notify_client: rara_domain_shared::notify::client::NotifyClient,
-    composio_auth: Arc<dyn rara_composio::ComposioAuthProvider>,
-    mcp_manager:   rara_mcp::manager::mgr::McpManager,
-    prompt_repo:   Arc<dyn agent_core::prompt::PromptRepo>,
+    settings_svc:   SettingsSvc,
+    llm_provider:   LlmProviderLoaderRef,
+    ai_service:     rara_agents::builtin::tasks::TaskAgentService,
+    job_service:    crate::job::service::JobService,
+    pool:           sqlx::PgPool,
+    notify_client:  rara_domain_shared::notify::client::NotifyClient,
+    composio_auth:  Arc<dyn rara_composio::ComposioAuthProvider>,
+    mcp_manager:    rara_mcp::manager::mgr::McpManager,
+    prompt_repo:    Arc<dyn agent_core::prompt::PromptRepo>,
+    contact_lookup: Arc<dyn tool_core::contact_lookup::ContactLookup>,
 
     /// Whether a pipeline run is currently in progress.
     running:       Arc<AtomicBool>,
@@ -131,6 +132,7 @@ impl PipelineService {
         composio_auth: Arc<dyn rara_composio::ComposioAuthProvider>,
         mcp_manager: rara_mcp::manager::mgr::McpManager,
         prompt_repo: Arc<dyn agent_core::prompt::PromptRepo>,
+        contact_lookup: Arc<dyn tool_core::contact_lookup::ContactLookup>,
     ) -> Self {
         let (broadcast_tx, _) = tokio::sync::broadcast::channel(256);
         Self {
@@ -143,6 +145,7 @@ impl PipelineService {
             composio_auth,
             mcp_manager,
             prompt_repo,
+            contact_lookup,
             running: Arc::new(AtomicBool::new(false)),
             cancel_flag: Arc::new(AtomicBool::new(false)),
             run_lock: Arc::new(Mutex::new(())),
@@ -507,6 +510,7 @@ impl PipelineService {
                 .expect("memory operator")
                 .finish(),
             composio_auth_provider: self.composio_auth.clone(),
+            contact_lookup:         self.contact_lookup.clone(),
         };
         for tool in tool_core::default_primitives(deps) {
             registry.register_primitive(tool);

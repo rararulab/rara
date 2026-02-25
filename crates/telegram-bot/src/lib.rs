@@ -51,6 +51,7 @@ mod app;
 mod bot;
 mod command;
 mod config;
+pub mod contacts;
 mod handlers;
 mod http_client;
 mod markdown;

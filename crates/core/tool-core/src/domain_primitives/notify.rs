@@ -19,9 +19,10 @@
 //! specified, the contacts allowlist is checked first — unknown or disabled
 //! contacts are rejected.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use rara_domain_shared::{
-    contacts::repository::ContactRepository,
     notify::{
         client::NotifyClient,
         types::{NotificationPriority, SendTelegramNotificationRequest},
@@ -30,6 +31,7 @@ use rara_domain_shared::{
 };
 use serde_json::json;
 
+use crate::contact_lookup::ContactLookup;
 use crate::AgentTool;
 
 /// Layer 1 primitive: send a Telegram message.
@@ -45,14 +47,14 @@ use crate::AgentTool;
 pub struct NotifyTool {
     client:       NotifyClient,
     settings_svc: SettingsSvc,
-    contacts:     ContactRepository,
+    contacts:     Arc<dyn ContactLookup>,
 }
 
 impl NotifyTool {
     pub fn new(
         client: NotifyClient,
         settings_svc: SettingsSvc,
-        contacts: ContactRepository,
+        contacts: Arc<dyn ContactLookup>,
     ) -> Self {
         Self {
             client,
@@ -137,7 +139,7 @@ impl AgentTool for NotifyTool {
             match self.contacts.find_by_username(username).await {
                 Ok(Some(contact)) if contact.enabled => {
                     // Contact found and enabled — use their chat_id if known.
-                    (contact.chat_id, Some(contact.telegram_username))
+                    (contact.chat_id, Some(contact.username))
                 }
                 Ok(Some(_)) => {
                     // Contact exists but is disabled.

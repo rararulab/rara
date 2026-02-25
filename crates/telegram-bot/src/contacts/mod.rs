@@ -5,4 +5,7 @@
 
 pub mod error;
 pub mod repository;
+mod router;
 pub mod types;
+
+pub use router::routes;

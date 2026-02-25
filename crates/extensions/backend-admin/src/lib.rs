@@ -3,13 +3,12 @@
 //! Unified HTTP admin routes for all backend subsystems: settings, prompts,
 //! models, dispatcher, MCP servers, skills, pipeline, coding tasks, and
 //! all domain routes (resume, application, interview, scheduler, analytics,
-//! job, chat, contacts).
+//! job, chat).
 
 pub mod analytics;
 pub mod application;
 pub mod chat;
 pub mod coding_task;
-pub mod contacts;
 pub mod dispatcher;
 pub mod interview;
 pub mod job;
