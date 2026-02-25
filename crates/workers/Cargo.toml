@@ -29,10 +29,8 @@ rara-coding-task = { workspace = true }
 rara-backend-admin = { workspace = true }
 rara-workspace = { workspace = true }
 rara-composio = { workspace = true }
-rara-ext-job-pipeline = { workspace = true }
 rara-domain-chat = { workspace = true }
 rara-domain-job = { workspace = true }
-rara-domain-resume = { workspace = true }
 rara-domain-shared = { workspace = true }
 rara-mcp = { workspace = true }
 rara-memory = { workspace = true }

@@ -33,7 +33,7 @@ pub struct AppState {
     pub ai_service: rara_agents::builtin::tasks::TaskAgentService,
 
     // -- domain services --
-    pub resume_service:      rara_domain_resume::ResumeAppService,
+    pub resume_service:      rara_backend_admin::resume::ResumeAppService,
     pub application_service: rara_backend_admin::application::service::ApplicationService,
     pub interview_service:   rara_backend_admin::interview::service::InterviewService,
     pub scheduler_service:   rara_backend_admin::scheduler::service::SchedulerService,
@@ -67,7 +67,7 @@ pub struct AppState {
     pub orchestrator: rara_agents::orchestrator::AgentOrchestrator,
 
     // -- pipeline --
-    pub pipeline_service: rara_ext_job_pipeline::service::PipelineService,
+    pub pipeline_service: rara_backend_admin::pipeline::service::PipelineService,
 
     // -- coding tasks --
     pub coding_task_service: rara_coding_task::service::CodingTaskService,
@@ -128,7 +128,7 @@ impl AppState {
 
         // -- domain services -------------------------------------------------
 
-        let resume_service = rara_domain_resume::wire_resume_service(pool.clone());
+        let resume_service = rara_backend_admin::resume::wire_resume_service(pool.clone());
         let application_service = rara_backend_admin::application::wire(pool.clone());
         let interview_service = rara_backend_admin::interview::wire_interview_service(pool.clone());
         let scheduler_service = rara_backend_admin::scheduler::wire_scheduler_service(pool.clone());
@@ -277,7 +277,7 @@ impl AppState {
 
         // -- pipeline service ---------------------------------------------------
 
-        let pipeline_service = rara_ext_job_pipeline::service::PipelineService::new(
+        let pipeline_service = rara_backend_admin::pipeline::service::PipelineService::new(
             settings_svc.clone(),
             llm_provider.clone(),
             ai_service.clone(),
@@ -291,7 +291,7 @@ impl AppState {
         info!("Pipeline service initialized");
 
         // Register pipeline control tools on the main rara agent.
-        rara_ext_job_pipeline::register_rara_tools(&mut tool_registry, &pipeline_service, &settings_svc);
+        rara_backend_admin::pipeline::register_rara_tools(&mut tool_registry, &pipeline_service, &settings_svc);
 
         // -- subagent tool -------------------------------------------------------
 

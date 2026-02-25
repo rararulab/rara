@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 agent-core = { workspace = true }
+anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 chrono = { workspace = true }
@@ -18,14 +19,17 @@ llmfit-core = { workspace = true }
 rara-agents = { workspace = true }
 rara-coding-task = { workspace = true }
 rara-domain-chat = { workspace = true }
+rara-composio = { workspace = true }
 rara-domain-job = { workspace = true }
-rara-domain-resume = { workspace = true }
 rara-domain-shared = { workspace = true }
+git2 = { workspace = true }
+opendal = { workspace = true }
+reqwest = { workspace = true }
 sqlx = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
-rara-ext-job-pipeline = { workspace = true }
 rara-git = { workspace = true }
+tool-core = { workspace = true }
 rara-mcp = { workspace = true }
 rara-paths = { workspace = true }
 rara-sessions = { workspace = true }

@@ -1,8 +1,8 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::repository::ResumeRepository;
-use crate::types::{ResumeError, ResumeProject, ResumeProjectRow};
+use super::repository::ResumeRepository;
+use super::types::{ResumeError, ResumeProject, ResumeProjectRow};
 
 pub struct PgResumeRepository {
     pool: PgPool,

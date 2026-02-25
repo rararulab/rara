@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::repository::ResumeRepository;
-use crate::types::{ResumeError, ResumeProject, SetupResumeProjectRequest};
+use super::repository::ResumeRepository;
+use super::types::{ResumeError, ResumeProject, SetupResumeProjectRequest};
 
 pub struct ResumeService<R: ResumeRepository> {
     repo: Arc<R>,

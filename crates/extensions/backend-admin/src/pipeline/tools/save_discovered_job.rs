@@ -20,9 +20,9 @@ use sqlx::PgPool;
 use tool_core::AgentTool;
 use tracing::warn;
 
-use crate::pg_repository::PgPipelineRepository;
-use crate::repository::PipelineRepository;
-use crate::types::DiscoveredJobAction;
+use super::super::pg_repository::PgPipelineRepository;
+use super::super::repository::PipelineRepository;
+use super::super::types::DiscoveredJobAction;
 
 /// Pipeline agent tool that saves a discovered job to the
 /// `pipeline_discovered_jobs` table.

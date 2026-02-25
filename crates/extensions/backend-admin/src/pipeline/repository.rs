@@ -17,7 +17,7 @@
 use snafu::Snafu;
 use uuid::Uuid;
 
-use crate::types::{
+use super::types::{
     DiscoveredJob, DiscoveredJobAction, DiscoveredJobWithDetails, DiscoveredJobsStats,
     PipelineEvent, PipelineRun,
 };

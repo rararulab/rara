@@ -44,7 +44,6 @@ members = [
     "crates/rara-model",
     "crates/domain/shared",
     "crates/domain/job",
-    "crates/domain/resume",
     "crates/server",
     "crates/telegram-bot",
     "crates/paths",
@@ -57,7 +56,6 @@ members = [
     "crates/skills",
     "crates/integrations/mcp",
     "crates/integrations/keyring-store",
-    "crates/extensions/job-pipeline",
     "crates/core/agent-core",
     "crates/core/tool-core",
     "crates/integrations/k8s",
@@ -155,12 +153,10 @@ rara-composio = { path = "crates/integrations/composio" }
 rara-backend-admin = { path = "crates/extensions/backend-admin" }
 rara-domain-chat = { path = "crates/domain/chat" }
 rara-domain-job = { path = "crates/domain/job" }
-rara-domain-resume = { path = "crates/domain/resume" }
 rara-domain-shared = { path = "crates/domain/shared" }
 rara-error = { path = "crates/common/error" }
 rara-consul = { path = "crates/common/rara-consul" }
 rara-git = { path = "crates/extensions/rara-git" }
-rara-ext-job-pipeline = { path = "crates/extensions/job-pipeline" }
 rara-k8s = { path = "crates/integrations/k8s" }
 rara-keyring-store = { path = "crates/integrations/keyring-store" }
 rara-mcp = { path = "crates/integrations/mcp" }
