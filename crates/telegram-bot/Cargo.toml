@@ -32,7 +32,6 @@ tool-core = { workspace = true }
 tracing = { workspace = true }
 url = "2.5.8"
 utoipa = { workspace = true }
-utoipa-axum = { workspace = true }
 uuid = { workspace = true }
 yunara-store = { workspace = true }
 

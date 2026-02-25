@@ -24,6 +24,7 @@ rara-coding-task = { workspace = true }
 rara-domain-chat = { workspace = true }
 rara-composio = { workspace = true }
 rara-domain-shared = { workspace = true }
+rara-telegram-bot = { workspace = true }
 git2 = { workspace = true }
 opendal = { workspace = true }
 reqwest = { workspace = true }

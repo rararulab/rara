@@ -8,6 +8,7 @@
 pub mod analytics;
 pub mod application;
 pub mod chat;
+pub mod contacts;
 pub mod coding_task;
 pub mod dispatcher;
 pub mod interview;

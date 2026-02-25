@@ -446,7 +446,7 @@ impl AppState {
         merge_openapi_router(
             &mut router,
             &mut api,
-            rara_telegram_bot::contacts::routes(self.contact_repo.clone()),
+            rara_backend_admin::contacts::routes(self.contact_repo.clone()),
         );
         merge_openapi_router(
             &mut router,
