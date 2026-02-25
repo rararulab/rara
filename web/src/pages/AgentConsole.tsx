@@ -15,14 +15,13 @@
  */
 
 import { useSearchParams } from "react-router";
-import { Activity, Bell, Bot, Clock, Server, Wrench } from "lucide-react";
+import { Activity, Bot, Clock, Server, Wrench } from "lucide-react";
 import { TabBar } from "@/components/TabBar";
 import type { Tab } from "@/components/TabBar";
 import Chat from "@/pages/Chat";
 import AgentStatus from "@/pages/AgentStatus";
 import Skills from "@/pages/Skills";
 import { AgentJobsPanel } from "@/pages/Scheduler";
-import Notifications from "@/pages/Notifications";
 import McpServers from "@/pages/McpServers";
 
 const AGENT_TABS: Tab[] = [
@@ -33,11 +32,6 @@ const AGENT_TABS: Tab[] = [
     key: "scheduler",
     label: "Scheduler",
     icon: <Clock className="h-4 w-4" />,
-  },
-  {
-    key: "notifications",
-    label: "Notifications",
-    icon: <Bell className="h-4 w-4" />,
   },
   {
     key: "mcp",
@@ -74,11 +68,6 @@ export default function AgentConsole() {
         {activeTab === "scheduler" && (
           <div className="p-6">
             <AgentJobsPanel />
-          </div>
-        )}
-        {activeTab === "notifications" && (
-          <div className="p-6">
-            <Notifications />
           </div>
         )}
         {activeTab === "mcp" && (

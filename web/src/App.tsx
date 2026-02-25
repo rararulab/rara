@@ -45,7 +45,6 @@ export default function App() {
               <Route path="chat" element={<Navigate to="/agent?tab=chat" replace />} />
               <Route path="skills" element={<Navigate to="/agent?tab=skills" replace />} />
               <Route path="scheduler" element={<Navigate to="/agent?tab=scheduler" replace />} />
-              <Route path="notifications" element={<Navigate to="/agent?tab=notifications" replace />} />
               <Route path="discovery" element={<Navigate to="/jobs?tab=discovery" replace />} />
               <Route path="applications" element={<Navigate to="/jobs?tab=applications" replace />} />
               <Route path="resumes" element={<Navigate to="/jobs?tab=resumes" replace />} />

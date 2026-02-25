@@ -132,39 +132,6 @@ export interface InterviewPlan {
   updated_at: string;
 }
 
-// Notifications (queue observability)
-export type QueueMessageState = "ready" | "inflight" | "archived";
-
-export interface NotificationQueueOverview {
-  queue_name: string;
-  ready_count: number;
-  inflight_count: number;
-  archived_count: number;
-}
-
-export interface NotificationQueueMessage {
-  state: QueueMessageState;
-  msg_id: number;
-  read_ct: number;
-  enqueued_at: string;
-  vt: string;
-  archived_at: string | null;
-  payload: {
-    id?: string;
-    chat_id?: number | null;
-    subject?: string | null;
-    body?: string | null;
-    [key: string]: unknown;
-  };
-}
-
-export interface NotificationQueueMessagesResponse {
-  state: QueueMessageState;
-  limit: number;
-  offset: number;
-  items: NotificationQueueMessage[];
-}
-
 // Scheduler
 export interface ScheduledTask {
   id: string;
