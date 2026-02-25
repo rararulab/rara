@@ -201,7 +201,7 @@ function formatTime(iso: string): string {
 
 const chatUtilityItems = [
   { href: "/jobs", icon: Briefcase, label: "Jobs", newTab: true },
-  { href: "/settings", icon: SettingsIcon, label: "Settings" },
+  { href: "/settings", icon: SettingsIcon, label: "Settings", newTab: true },
 ];
 
 function SessionSidebarUtilityBar({
