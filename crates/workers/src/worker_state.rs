@@ -23,7 +23,7 @@ use async_trait::async_trait;
 use common_worker::IntervalOrNotifyHandle;
 use opendal::Operator;
 use snafu::{ResultExt, Whatever};
-use tracing::{info, warn};
+use tracing::info;
 use yunara_store::db::DBStore;
 
 /// Shared application state used by workers and HTTP routes.
@@ -88,9 +88,11 @@ impl AppState {
         db_store: &DBStore,
         object_store: Operator,
         notify_client: rara_domain_shared::notify::client::NotifyClient,
-        chroma_url: String,
-        chroma_collection: Option<String>,
-        chroma_api_key: Option<String>,
+        mem0_base_url: String,
+        memos_base_url: String,
+        memos_token: String,
+        hindsight_base_url: String,
+        hindsight_bank_id: String,
     ) -> Result<Self, Whatever> {
         let pool = db_store.pool().clone();
 
@@ -161,34 +163,27 @@ impl AppState {
         }) {
             tool_registry.register_primitive(tool);
         }
-        let chroma = rara_memory::ChromaClient::new(
-            chroma_url,
-            chroma_collection,
-            chroma_api_key,
-        )
-        .expect("chroma URL should not be empty after defaulting");
+        let mem0 = rara_memory::Mem0Client::new(mem0_base_url);
+        let memos = rara_memory::MemosClient::new(memos_base_url, memos_token);
+        let hindsight = rara_memory::HindsightClient::new(hindsight_base_url, hindsight_bank_id);
         let memory_manager = Arc::new(
-            rara_memory::MemoryManager::new(rara_paths::memory_dir().clone(), pool.clone(), chroma)
-                .whatever_context("Failed to initialize memory manager")?,
+            rara_memory::MemoryManager::new(mem0, memos, hindsight, "default".to_owned()),
         );
         info!("memory manager initialized");
-        if let Err(err) = memory_manager.sync().await {
-            warn!(error = %err, "Failed to sync memory index; continuing startup");
-        }
 
         // Layer 2: Services
         tool_registry.register_service(Arc::new(crate::tools::services::MemorySearchTool::new(
             Arc::clone(&memory_manager),
         )));
-        tool_registry.register_service(Arc::new(crate::tools::services::MemoryGetTool::new(
-            Arc::clone(&memory_manager),
-        )));
+        tool_registry.register_service(Arc::new(
+            crate::tools::services::MemoryDeepRecallTool::new(Arc::clone(&memory_manager)),
+        ));
         tool_registry.register_service(Arc::new(crate::tools::services::MemoryWriteTool::new(
             Arc::clone(&memory_manager),
         )));
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::MemoryUpdateProfileTool::new(Arc::clone(&memory_manager)),
-        ));
+        tool_registry.register_service(Arc::new(crate::tools::services::MemoryAddFactTool::new(
+            Arc::clone(&memory_manager),
+        )));
         // -- agent scheduler -------------------------------------------------
         let agent_scheduler = Arc::new(crate::agent_scheduler::AgentScheduler::new(
             rara_paths::agent_jobs_file().clone(),

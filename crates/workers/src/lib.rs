@@ -20,7 +20,6 @@
 pub mod agent_scheduler;
 pub mod agent_scheduler_routes;
 pub mod jd_parser;
-pub mod memory_sync;
 pub mod pipeline_scheduler;
 pub mod proactive;
 pub mod scheduled_agent;
