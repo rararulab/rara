@@ -20,7 +20,7 @@
 
 use std::sync::Arc;
 
-use rara_domain_shared::settings::SettingsSvc;
+use rara_domain_shared::settings::model::Settings;
 use smart_default::SmartDefault;
 use snafu::{ResultExt, Whatever, whatever};
 use tokio_util::sync::CancellationToken;
@@ -117,11 +117,15 @@ impl BotConfig {
             .whatever_context("Failed to initialize database for bot")?;
         let kv_store = db_store.kv_store();
 
-        let settings_svc = SettingsSvc::load(kv_store)
+        let mut stored: Settings = kv_store
+            .get::<Settings>("runtime_settings.v1")
             .await
-            .whatever_context("Failed to load runtime settings for bot")?;
-        let runtime_settings = settings_svc.current();
-        let settings_rx = settings_svc.subscribe();
+            .whatever_context("Failed to load runtime settings for bot")?
+            .unwrap_or_default();
+        stored.normalize();
+        let runtime_settings = stored.clone();
+        // Standalone bot only reads initial settings — no live updates.
+        let (_tx, settings_rx) = tokio::sync::watch::channel(stored);
 
         let env_telegram = self.telegram.clone();
         let bot_token = match runtime_settings

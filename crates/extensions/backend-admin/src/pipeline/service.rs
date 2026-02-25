@@ -32,10 +32,9 @@ use agent_core::{
     runner::{AgentRunner, RunnerEvent, UserContent},
     tool_registry::ToolRegistry,
 };
-use rara_domain_shared::{
-    notify::types::{NotificationPriority, SendTelegramNotificationRequest},
-    settings::SettingsSvc,
-};
+use rara_domain_shared::notify::types::{NotificationPriority, SendTelegramNotificationRequest};
+
+use crate::settings::SettingsSvc;
 use snafu::Snafu;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
@@ -505,7 +504,7 @@ impl PipelineService {
         let deps = tool_core::PrimitiveDeps {
             pool:                   self.pool.clone(),
             notify_client:          self.notify_client.clone(),
-            settings_svc:           self.settings_svc.clone(),
+            settings_rx:            self.settings_svc.subscribe(),
             object_store:           opendal::Operator::new(opendal::services::Memory::default())
                 .expect("memory operator")
                 .finish(),

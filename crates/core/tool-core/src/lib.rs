@@ -23,6 +23,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use rara_domain_shared::settings::model::Settings;
+use tokio::sync::watch;
 
 /// Reference-counted handle to an agent tool.
 pub type AgentToolRef = Arc<dyn AgentTool>;
@@ -51,7 +53,7 @@ pub trait AgentTool: Send + Sync {
 pub struct PrimitiveDeps {
     pub pool:                   sqlx::PgPool,
     pub notify_client:          rara_domain_shared::notify::client::NotifyClient,
-    pub settings_svc:           rara_domain_shared::settings::SettingsSvc,
+    pub settings_rx:            watch::Receiver<Settings>,
     pub object_store:           opendal::Operator,
     pub composio_auth_provider: Arc<dyn rara_composio::ComposioAuthProvider>,
     pub contact_lookup:         Arc<dyn contact_lookup::ContactLookup>,
@@ -85,10 +87,10 @@ pub fn domain_primitives_vec(deps: PrimitiveDeps) -> Vec<AgentToolRef> {
         Arc::new(domain_primitives::DbMutateTool::new(deps.pool)),
         Arc::new(domain_primitives::NotifyTool::new(
             deps.notify_client,
-            deps.settings_svc.clone(),
+            deps.settings_rx.clone(),
             deps.contact_lookup,
         )),
-        Arc::new(domain_primitives::SendEmailTool::new(deps.settings_svc)),
+        Arc::new(domain_primitives::SendEmailTool::new(deps.settings_rx)),
         Arc::new(domain_primitives::StorageReadTool::new(deps.object_store)),
     ];
     tools.push(Arc::new(

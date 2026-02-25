@@ -1,13 +1,12 @@
 use axum::{Json, extract::State, http::StatusCode};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
-use rara_domain_shared::settings::{
-    model::{
-        AgentRuntimeSettingsPatch, ComposioRuntimeSettingsPatch, JobPipelineRuntimeSettingsPatch,
-        Settings, UpdateRequest,
-    },
-    service::SettingsSvc,
+use rara_domain_shared::settings::model::{
+    AgentRuntimeSettingsPatch, ComposioRuntimeSettingsPatch, JobPipelineRuntimeSettingsPatch,
+    Settings, UpdateRequest,
 };
+
+use crate::settings::SettingsSvc;
 
 pub fn routes(svc: SettingsSvc) -> OpenApiRouter {
     OpenApiRouter::new()

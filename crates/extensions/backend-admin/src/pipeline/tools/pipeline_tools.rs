@@ -28,11 +28,11 @@ use tool_core::AgentTool;
 
 /// Reads job pipeline preferences from runtime settings.
 pub struct GetJobPreferencesTool {
-    settings_svc: rara_domain_shared::settings::SettingsSvc,
+    settings_svc: crate::settings::SettingsSvc,
 }
 
 impl GetJobPreferencesTool {
-    pub fn new(settings_svc: rara_domain_shared::settings::SettingsSvc) -> Self {
+    pub fn new(settings_svc: crate::settings::SettingsSvc) -> Self {
         Self { settings_svc }
     }
 }
@@ -77,13 +77,13 @@ impl AgentTool for GetJobPreferencesTool {
 /// Scores a job against the user's preferences using AI evaluation.
 pub struct ScoreJobTool {
     ai_service:   rara_agents::builtin::tasks::TaskAgentService,
-    settings_svc: rara_domain_shared::settings::SettingsSvc,
+    settings_svc: crate::settings::SettingsSvc,
 }
 
 impl ScoreJobTool {
     pub fn new(
         ai_service: rara_agents::builtin::tasks::TaskAgentService,
-        settings_svc: rara_domain_shared::settings::SettingsSvc,
+        settings_svc: crate::settings::SettingsSvc,
     ) -> Self {
         Self {
             ai_service,
@@ -188,11 +188,11 @@ impl AgentTool for ScoreJobTool {
 /// on branch `apply/{company}-{role}`. Returns the worktree path and a recursive
 /// file listing so the agent knows what files are available.
 pub struct PrepareResumeWorktreeTool {
-    settings_svc: rara_domain_shared::settings::SettingsSvc,
+    settings_svc: crate::settings::SettingsSvc,
 }
 
 impl PrepareResumeWorktreeTool {
-    pub fn new(settings_svc: rara_domain_shared::settings::SettingsSvc) -> Self {
+    pub fn new(settings_svc: crate::settings::SettingsSvc) -> Self {
         Self { settings_svc }
     }
 }

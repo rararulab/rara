@@ -1,8 +1,9 @@
 use axum::{Json, extract::State, http::StatusCode};
-use rara_domain_shared::settings::{
-    model::{AgentRuntimeSettingsPatch, GmailRuntimeSettingsPatch, Settings, UpdateRequest},
-    service::SettingsSvc,
+use rara_domain_shared::settings::model::{
+    AgentRuntimeSettingsPatch, GmailRuntimeSettingsPatch, Settings, UpdateRequest,
 };
+
+use crate::settings::SettingsSvc;
 use utoipa_axum::router::OpenApiRouter;
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]

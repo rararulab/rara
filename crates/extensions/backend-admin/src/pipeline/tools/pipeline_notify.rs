@@ -20,13 +20,12 @@
 //! PGMQ-based `NotifyClient` otherwise.
 
 use async_trait::async_trait;
-use rara_domain_shared::{
-    notify::{
-        client::NotifyClient,
-        types::{NotificationPriority, SendTelegramNotificationRequest},
-    },
-    settings::SettingsSvc,
+use rara_domain_shared::notify::{
+    client::NotifyClient,
+    types::{NotificationPriority, SendTelegramNotificationRequest},
 };
+
+use crate::settings::SettingsSvc;
 use serde_json::json;
 use tracing::warn;
 

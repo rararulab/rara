@@ -39,7 +39,8 @@ use std::sync::Arc;
 
 use agent_core::provider::LlmProviderLoaderRef;
 use agent_core::tool_registry::ToolRegistry;
-use rara_domain_shared::settings::SettingsSvc;
+use rara_domain_shared::settings::model::Settings;
+use tokio::sync::watch;
 
 use crate::builtin::tasks::{
     cover_letter::CoverLetterAgent, error::TaskAgentError, follow_up::FollowUpDraftAgent,
@@ -50,7 +51,7 @@ use crate::builtin::tasks::{
 
 /// The task agent service -- a factory for creating task-specific agents.
 ///
-/// Reads the model name from [`SettingsSvc`] and acquires an LLM provider
+/// Reads the model name from runtime settings and acquires an LLM provider
 /// on every call, so configuration changes take effect immediately without
 /// restart.
 ///
@@ -58,7 +59,7 @@ use crate::builtin::tasks::{
 /// to enable tool-calling mode for analysis agents.
 #[derive(Clone)]
 pub struct TaskAgentService {
-    settings:     SettingsSvc,
+    settings_rx:  watch::Receiver<Settings>,
     llm_provider: LlmProviderLoaderRef,
     prompt_repo:  Arc<dyn agent_core::prompt::PromptRepo>,
     /// Optional tool registry for analysis agents. When set, analysis agents
@@ -70,12 +71,12 @@ pub struct TaskAgentService {
 impl TaskAgentService {
     /// Create a new `TaskAgentService`.
     pub fn new(
-        settings: SettingsSvc,
+        settings_rx: watch::Receiver<Settings>,
         llm_provider: LlmProviderLoaderRef,
         prompt_repo: Arc<dyn agent_core::prompt::PromptRepo>,
     ) -> Self {
         Self {
-            settings,
+            settings_rx,
             llm_provider,
             prompt_repo,
             tools: None,
@@ -98,7 +99,7 @@ impl TaskAgentService {
         &self,
         key: &str,
     ) -> Result<(Arc<dyn agent_core::provider::LlmProvider>, String), TaskAgentError> {
-        let current = self.settings.current();
+        let current = self.settings_rx.borrow().clone();
         let model = current.ai.model_for_key(key);
 
         let provider = self

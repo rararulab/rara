@@ -41,7 +41,7 @@ pub struct AppState {
     pub job_service:         rara_backend_admin::job::service::JobService,
     pub chat_service:        rara_domain_chat::service::ChatService,
     // -- shared --
-    pub settings_svc:   rara_domain_shared::settings::SettingsSvc,
+    pub settings_svc:   rara_backend_admin::settings::SettingsSvc,
     pub notify_client:  rara_domain_shared::notify::client::NotifyClient,
     pub contact_repo:   rara_telegram_bot::contacts::repository::ContactRepository,
 
@@ -96,7 +96,7 @@ impl AppState {
 
         // -- runtime settings ------------------------------------------------
 
-        let settings_svc = rara_domain_shared::settings::SettingsSvc::load(db_store.kv_store())
+        let settings_svc = rara_backend_admin::settings::SettingsSvc::load(db_store.kv_store())
             .await
             .whatever_context("Failed to initialize runtime settings")?;
         info!("Runtime settings service loaded");
@@ -118,7 +118,7 @@ impl AppState {
         // -- AI task agents --------------------------------------------------
 
         let ai_service = rara_agents::builtin::tasks::TaskAgentService::new(
-            settings_svc.clone(),
+            settings_svc.subscribe(),
             llm_provider.clone(),
             prompt_repo.clone(),
         );
@@ -154,7 +154,7 @@ impl AppState {
         for tool in tool_core::default_primitives(tool_core::PrimitiveDeps {
             pool:                   pool.clone(),
             notify_client:          notify_client.clone(),
-            settings_svc:           settings_svc.clone(),
+            settings_rx:            settings_svc.subscribe(),
             object_store:           object_store.clone(),
             composio_auth_provider: composio_auth_provider.clone(),
             contact_lookup:         contact_lookup.clone(),
@@ -216,7 +216,7 @@ impl AppState {
             pool.clone(),
             workspace_manager,
             notify_client.clone(),
-            settings_svc.clone(),
+            settings_svc.subscribe(),
             default_repo_url,
         );
         let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -225,7 +225,7 @@ impl AppState {
         )));
         tool_registry.register_service(Arc::new(crate::tools::services::ScreenshotTool::new(
             notify_client.clone(),
-            settings_svc.clone(),
+            settings_svc.subscribe(),
             project_root,
         )));
         tool_registry.register_service(Arc::new(crate::tools::services::CodexStatusTool::new(
@@ -350,7 +350,7 @@ impl AppState {
         let chat_agent = rara_agents::builtin::chat::ChatAgent::new(orchestrator.clone());
         let chat_service = rara_domain_chat::service::ChatService::new(
             session_repo,
-            settings_svc.clone(),
+            Arc::new(settings_svc.clone()) as Arc<dyn rara_domain_shared::settings::SettingsUpdater>,
             chat_agent,
         );
         info!("Chat service initialized");
@@ -548,23 +548,23 @@ fn merge_openapi_router(
 
 /// [`LlmProviderLoader`](agent_core::provider::LlmProviderLoader)
 /// implementation that reads the API key from
-/// [`SettingsSvc`](rara_domain_shared::settings::SettingsSvc) runtime settings
+/// [`SettingsSvc`](rara_backend_admin::settings::SettingsSvc) runtime settings
 /// rather than from environment variables.
 ///
 /// A fresh [`OpenAiProvider`](agent_core::provider::OpenAiProvider) is created
 /// on every call so that runtime API-key changes take effect immediately.
 struct SettingsLlmProviderLoader {
-    settings: rara_domain_shared::settings::SettingsSvc,
+    settings: rara_backend_admin::settings::SettingsSvc,
 }
 
 /// Composio auth provider that reads credentials from runtime settings.
 #[derive(Clone)]
 struct SettingsComposioAuthProvider {
-    settings: rara_domain_shared::settings::SettingsSvc,
+    settings: rara_backend_admin::settings::SettingsSvc,
 }
 
 impl SettingsComposioAuthProvider {
-    fn new(settings: rara_domain_shared::settings::SettingsSvc) -> Self { Self { settings } }
+    fn new(settings: rara_backend_admin::settings::SettingsSvc) -> Self { Self { settings } }
 }
 
 #[async_trait]
@@ -583,7 +583,7 @@ impl rara_composio::ComposioAuthProvider for SettingsComposioAuthProvider {
 }
 
 impl SettingsLlmProviderLoader {
-    fn new(settings: rara_domain_shared::settings::SettingsSvc) -> Self { Self { settings } }
+    fn new(settings: rara_backend_admin::settings::SettingsSvc) -> Self { Self { settings } }
 }
 
 // ---------------------------------------------------------------------------

@@ -46,6 +46,7 @@ tracing = { workspace = true }
 utoipa = { workspace = true }
 utoipa-axum = { workspace = true }
 uuid = { workspace = true }
+yunara-store = { workspace = true }
 
 [dev-dependencies]
 base = { workspace = true }

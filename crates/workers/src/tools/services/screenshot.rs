@@ -22,24 +22,25 @@ use rara_domain_shared::{
         client::NotifyClient,
         types::{NotificationPriority, SendTelegramNotificationRequest},
     },
-    settings::SettingsSvc,
+    settings::model::Settings,
 };
+use tokio::sync::watch;
 use serde_json::json;
 use tool_core::AgentTool;
 use tracing::{info, warn};
 use uuid::Uuid;
 
 pub struct ScreenshotTool {
-    notify:       NotifyClient,
-    settings_svc: SettingsSvc,
+    notify:      NotifyClient,
+    settings_rx: watch::Receiver<Settings>,
     project_root: PathBuf,
 }
 
 impl ScreenshotTool {
-    pub fn new(notify: NotifyClient, settings_svc: SettingsSvc, project_root: PathBuf) -> Self {
+    pub fn new(notify: NotifyClient, settings_rx: watch::Receiver<Settings>, project_root: PathBuf) -> Self {
         Self {
             notify,
-            settings_svc,
+            settings_rx,
             project_root,
         }
     }
@@ -152,7 +153,7 @@ impl AgentTool for ScreenshotTool {
 
         // Send to Telegram if requested.
         if send {
-            let settings = self.settings_svc.current();
+            let settings = self.settings_rx.borrow().clone();
             let chat_id = settings.telegram.chat_id;
 
             let caption_text = caption.unwrap_or_else(|| format!("Screenshot: {url}"));

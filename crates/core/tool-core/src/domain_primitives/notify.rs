@@ -27,8 +27,9 @@ use rara_domain_shared::{
         client::NotifyClient,
         types::{NotificationPriority, SendTelegramNotificationRequest},
     },
-    settings::SettingsSvc,
+    settings::model::Settings,
 };
+use tokio::sync::watch;
 use serde_json::json;
 
 use crate::contact_lookup::ContactLookup;
@@ -45,20 +46,20 @@ use crate::AgentTool;
 /// - Found with chat_id → uses that chat_id directly
 /// - Found without chat_id → enqueues with recipient for bot to resolve
 pub struct NotifyTool {
-    client:       NotifyClient,
-    settings_svc: SettingsSvc,
-    contacts:     Arc<dyn ContactLookup>,
+    client:      NotifyClient,
+    settings_rx: watch::Receiver<Settings>,
+    contacts:    Arc<dyn ContactLookup>,
 }
 
 impl NotifyTool {
     pub fn new(
         client: NotifyClient,
-        settings_svc: SettingsSvc,
+        settings_rx: watch::Receiver<Settings>,
         contacts: Arc<dyn ContactLookup>,
     ) -> Self {
         Self {
             client,
-            settings_svc,
+            settings_rx,
             contacts,
         }
     }
@@ -161,7 +162,7 @@ impl AgentTool for NotifyTool {
             }
         } else {
             // No recipient — use settings chat_id as fallback.
-            (self.settings_svc.current().telegram.chat_id, None)
+            (self.settings_rx.borrow().telegram.chat_id, None)
         };
 
         let request = SendTelegramNotificationRequest {

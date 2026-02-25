@@ -1,8 +1,7 @@
 use axum::{Json, extract::State, http::StatusCode};
-use rara_domain_shared::settings::{
-    model::{TelegramRuntimeSettingsPatch, UpdateRequest},
-    service::SettingsSvc,
-};
+use rara_domain_shared::settings::model::{Settings, TelegramRuntimeSettingsPatch, UpdateRequest};
+
+use crate::settings::SettingsSvc;
 use utoipa_axum::router::OpenApiRouter;
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
@@ -80,7 +79,7 @@ async fn update_tg_settings(
 }
 
 impl TgAdminSettingsView {
-    fn from_settings(settings: &rara_domain_shared::settings::model::Settings) -> Self {
+    fn from_settings(settings: &Settings) -> Self {
         let telegram = &settings.telegram;
         Self {
             configured: telegram.bot_token.is_some() && telegram.chat_id.is_some(),

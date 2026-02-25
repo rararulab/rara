@@ -1,10 +1,9 @@
 use axum::{Json, extract::State, http::StatusCode};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
-use rara_domain_shared::settings::{
-    model::{AiRuntimeSettingsPatch, Settings, UpdateRequest},
-    service::SettingsSvc,
-};
+use rara_domain_shared::settings::model::{AiRuntimeSettingsPatch, Settings, UpdateRequest};
+
+use crate::settings::SettingsSvc;
 
 pub(super) fn routes() -> OpenApiRouter<SettingsSvc> {
     OpenApiRouter::new()
@@ -13,7 +12,7 @@ pub(super) fn routes() -> OpenApiRouter<SettingsSvc> {
             OpenApiRouter::new()
                 .routes(routes!(get_ai_settings, update_ai_settings))
                 .routes(routes!(get_ollama_model_recommendations))
-                .merge(rara_domain_shared::settings::ollama::ollama_management_routes()),
+                .merge(crate::settings::ollama::ollama_management_routes()),
         )
 }
 

@@ -17,10 +17,9 @@
 use std::collections::HashMap;
 
 use agent_core::model_repo::{HARDCODED_DEFAULT_MODEL, ModelEntry, ModelRepo, ModelRepoError};
-use rara_domain_shared::settings::{
-    SettingsSvc,
-    model::{AiRuntimeSettingsPatch, UpdateRequest},
-};
+use rara_domain_shared::settings::model::{AiRuntimeSettingsPatch, UpdateRequest};
+
+use crate::settings::SettingsSvc;
 
 /// [`ModelRepo`] implementation that reads/writes model configuration
 /// through the runtime settings service.

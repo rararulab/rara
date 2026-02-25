@@ -10,7 +10,7 @@ pub use router::routes;
 use std::sync::Arc;
 
 use agent_core::tool_registry::ToolRegistry;
-use rara_domain_shared::settings::SettingsSvc;
+use crate::settings::SettingsSvc;
 use service::PipelineService;
 
 /// Register rara-facing tools (run/cancel/status/preferences) on the main

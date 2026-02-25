@@ -24,18 +24,19 @@ use lettre::{
     message::{Attachment, MultiPart, SinglePart, header::ContentType},
     transport::smtp::authentication::Credentials,
 };
-use rara_domain_shared::settings::SettingsSvc;
+use rara_domain_shared::settings::model::Settings;
 use serde_json::json;
+use tokio::sync::watch;
 
 use crate::AgentTool;
 
 /// Layer 1 primitive: send an email via Gmail SMTP.
 pub struct SendEmailTool {
-    settings_svc: SettingsSvc,
+    settings_rx: watch::Receiver<Settings>,
 }
 
 impl SendEmailTool {
-    pub fn new(settings_svc: SettingsSvc) -> Self { Self { settings_svc } }
+    pub fn new(settings_rx: watch::Receiver<Settings>) -> Self { Self { settings_rx } }
 }
 
 #[async_trait]
@@ -92,7 +93,7 @@ impl AgentTool for SendEmailTool {
         let attachment_path = params.get("attachment_path").and_then(|v| v.as_str());
 
         // Read gmail settings at call time.
-        let settings = self.settings_svc.current();
+        let settings = self.settings_rx.borrow().clone();
         let gmail = &settings.agent.gmail;
 
         if !gmail.auto_send_enabled {

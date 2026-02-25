@@ -64,8 +64,8 @@ pub struct ChatService {
     session_repo:  Arc<dyn SessionRepository>,
     /// Cached catalog of models fetched from OpenRouter.
     model_catalog: ModelCatalog,
-    /// Settings service for persisting favorite models.
-    settings_svc:  rara_domain_shared::settings::SettingsSvc,
+    /// Settings updater for persisting favorite models.
+    settings_updater: Arc<dyn rara_domain_shared::settings::SettingsUpdater>,
     /// Built-in chat agent — encapsulates prompt assembly, tool construction,
     /// context compaction, and memory reflection.
     chat_agent:    ChatAgent,
@@ -76,18 +76,18 @@ impl ChatService {
     ///
     /// The `chat_agent` encapsulates the orchestrator and handles LLM
     /// provider access, tool management, prompt assembly, and memory
-    /// reflection. The `settings_svc` is used for persisting user
+    /// reflection. The `settings_updater` is used for persisting user
     /// preferences such as favorite models.
     #[must_use]
     pub fn new(
         session_repo: Arc<dyn SessionRepository>,
-        settings_svc: rara_domain_shared::settings::SettingsSvc,
+        settings_updater: Arc<dyn rara_domain_shared::settings::SettingsUpdater>,
         chat_agent: ChatAgent,
     ) -> Self {
         Self {
             session_repo,
             model_catalog: ModelCatalog::new(),
-            settings_svc,
+            settings_updater,
             chat_agent,
         }
     }
@@ -128,8 +128,8 @@ impl ChatService {
             job_pipeline: None,
             workers:      None,
         };
-        self.settings_svc
-            .update(patch)
+        self.settings_updater
+            .update_settings(patch)
             .await
             .map_err(|e| ChatError::SessionError {
                 message: format!("failed to update favorite models: {e}"),

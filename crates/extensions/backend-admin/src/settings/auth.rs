@@ -1,5 +1,5 @@
 use axum::{Json, http::StatusCode};
-use rara_domain_shared::settings::service::SettingsSvc;
+use crate::settings::SettingsSvc;
 use utoipa_axum::router::OpenApiRouter;
 
 #[derive(Debug, serde::Serialize, utoipa::ToSchema)]

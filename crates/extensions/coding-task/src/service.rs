@@ -21,9 +21,10 @@ use rara_domain_shared::{
         client::NotifyClient,
         types::{NotificationPriority, SendTelegramNotificationRequest},
     },
-    settings::SettingsSvc,
+    settings::model::Settings,
 };
 use rara_workspace::WorkspaceManager;
+use tokio::sync::watch;
 use tokio::process::Command;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -39,7 +40,7 @@ pub struct CodingTaskService {
     repo:              Arc<dyn CodingTaskRepository>,
     workspace_manager: WorkspaceManager,
     notify:            NotifyClient,
-    settings_svc:      SettingsSvc,
+    settings_rx:       watch::Receiver<Settings>,
     default_repo_url:  String,
 }
 
@@ -48,14 +49,14 @@ impl CodingTaskService {
         repo: Arc<dyn CodingTaskRepository>,
         workspace_manager: WorkspaceManager,
         notify: NotifyClient,
-        settings_svc: SettingsSvc,
+        settings_rx: watch::Receiver<Settings>,
         default_repo_url: String,
     ) -> Self {
         Self {
             repo,
             workspace_manager,
             notify,
-            settings_svc,
+            settings_rx,
             default_repo_url,
         }
     }
@@ -361,7 +362,7 @@ impl CodingTaskService {
             msg.push_str(&format!("\n\nError:\n{tail}"));
         }
 
-        let settings = self.settings_svc.current();
+        let settings = self.settings_rx.borrow().clone();
         let chat_id = settings.telegram.chat_id;
 
         let request = SendTelegramNotificationRequest {
@@ -412,9 +413,9 @@ pub fn wire(
     pool: sqlx::PgPool,
     workspace_manager: WorkspaceManager,
     notify: NotifyClient,
-    settings_svc: SettingsSvc,
+    settings_rx: watch::Receiver<Settings>,
     default_repo_url: String,
 ) -> CodingTaskService {
     let repo = Arc::new(crate::pg_repository::PgCodingTaskRepository::new(pool));
-    CodingTaskService::new(repo, workspace_manager, notify, settings_svc, default_repo_url)
+    CodingTaskService::new(repo, workspace_manager, notify, settings_rx, default_repo_url)
 }
