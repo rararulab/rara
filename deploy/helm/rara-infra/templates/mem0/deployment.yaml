@@ -1,0 +1,54 @@
+{{- if .Values.mem0.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rara-infra.fullname" . }}-mem0
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rara-infra.componentLabels" (dict "root" . "component" "mem0") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "rara-infra.componentSelectorLabels" (dict "root" . "component" "mem0") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "rara-infra.componentLabels" (dict "root" . "component" "mem0") | nindent 8 }}
+    spec:
+      containers:
+        - name: mem0
+          image: "{{ .Values.mem0.image.repository }}:{{ .Values.mem0.image.tag }}"
+          imagePullPolicy: {{ .Values.mem0.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          {{- with .Values.mem0.env }}
+          env:
+            {{- range $name, $value := . }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          {{- with .Values.mem0.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}
