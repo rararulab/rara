@@ -201,7 +201,13 @@ const chatUtilityItems = [
   { href: "/settings", icon: SettingsIcon, label: "Settings" },
 ];
 
-function SessionSidebarUtilityBar({ collapsed }: { collapsed: boolean }) {
+function SessionSidebarUtilityBar({
+  collapsed,
+  onToggleCollapse,
+}: {
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+}) {
   const { isOnline, isChecking } = useServerStatus();
   const [menuOpen, setMenuOpen] = useState(false);
   const statusText = isChecking
@@ -271,7 +277,29 @@ function SessionSidebarUtilityBar({ collapsed }: { collapsed: boolean }) {
         </div>
 
         {!collapsed ? (
-          <div className="inline-flex h-9 items-center gap-2 px-2 text-xs text-muted-foreground">
+          <div className="flex items-center gap-1">
+            <ConversationPanelToggleButton
+              collapsed={false}
+              onToggle={onToggleCollapse}
+            />
+            <div className="inline-flex h-9 items-center gap-2 px-2 text-xs text-muted-foreground">
+              <span
+                className={cn(
+                  "h-2.5 w-2.5 shrink-0 rounded-full",
+                  isChecking && "bg-yellow-400 animate-pulse",
+                  isOnline && "bg-green-500",
+                  !isOnline && !isChecking && "bg-red-500",
+                )}
+              />
+              <span className="truncate">{statusText}</span>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1">
+            <ConversationPanelToggleButton
+              collapsed={false}
+              onToggle={onToggleCollapse}
+            />
             <span
               className={cn(
                 "h-2.5 w-2.5 shrink-0 rounded-full",
@@ -279,19 +307,9 @@ function SessionSidebarUtilityBar({ collapsed }: { collapsed: boolean }) {
                 isOnline && "bg-green-500",
                 !isOnline && !isChecking && "bg-red-500",
               )}
+              aria-hidden="true"
             />
-            <span className="truncate">{statusText}</span>
           </div>
-        ) : (
-          <span
-            className={cn(
-              "h-2.5 w-2.5 rounded-full",
-              isChecking && "bg-yellow-400 animate-pulse",
-              isOnline && "bg-green-500",
-              !isOnline && !isChecking && "bg-red-500",
-            )}
-            aria-hidden="true"
-          />
         )}
       </div>
     </div>
@@ -326,7 +344,6 @@ function SessionList({
   sessions,
   activeKey,
   onSelect,
-  onCreate,
   onDelete,
   isLoading,
   collapsed,
@@ -336,7 +353,6 @@ function SessionList({
   sessions: ChatSession[];
   activeKey: string | null;
   onSelect: (key: string) => void;
-  onCreate: () => void;
   onDelete: (key: string) => void;
   isLoading: boolean;
   collapsed: boolean;
@@ -355,8 +371,8 @@ function SessionList({
       {!collapsed && (
         <>
           {/* Header */}
-          <div className="flex items-center justify-between border-b border-border/70 bg-background/40 px-3 py-2">
-            <div className="inline-flex items-center rounded-xl border border-border/70 bg-background/70 p-1">
+          <div className="border-b border-border/70 bg-background/40 px-3 py-2">
+            <div className="grid w-full grid-cols-2 rounded-xl border border-border/70 bg-background/70 p-1">
               <button
                 type="button"
                 className="rounded-lg bg-primary/10 px-2.5 py-1 text-xs font-semibold text-foreground ring-1 ring-primary/15"
@@ -372,24 +388,6 @@ function SessionList({
                 Operations
               </button>
             </div>
-            <ConversationPanelToggleButton
-              collapsed={false}
-              onToggle={onToggleCollapse}
-            />
-          </div>
-
-          {/* New chat button */}
-          <div className="border-b border-border/70 p-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full justify-start rounded-xl border-border/70 bg-background/70 shrink-0 hover:bg-background"
-              onClick={onCreate}
-              title="New conversation"
-            >
-              <MessageSquarePlus className="h-4 w-4" />
-              <span className="ml-1.5">New Chat</span>
-            </Button>
           </div>
 
           {/* Session list */}
@@ -453,7 +451,10 @@ function SessionList({
             )}
           </div>
 
-          <SessionSidebarUtilityBar collapsed={false} />
+          <SessionSidebarUtilityBar
+            collapsed={false}
+            onToggleCollapse={onToggleCollapse}
+          />
         </>
       )}
     </div>
@@ -1632,7 +1633,6 @@ export default function Chat({
         sessions={sessions}
         activeKey={activeKey}
         onSelect={setActiveKey}
-        onCreate={handleCreate}
         onDelete={handleDelete}
         isLoading={sessionsQuery.isLoading}
         collapsed={panelCollapsed}

@@ -158,10 +158,10 @@ export default function AgentConsole() {
       )}
 
       {topTab === "ops" && (
-        <div className="flex flex-1 min-h-0 gap-3 p-2 md:p-3">
-          <aside className="data-panel flex w-64 shrink-0 flex-col">
-            <div className="border-b border-border/70 p-3">
-              <div className="inline-flex items-center rounded-xl border border-border/70 bg-background/70 p-1">
+        <div className="relative flex flex-1 min-h-0 overflow-hidden rounded-2xl border border-border/70 bg-gradient-to-b from-background/20 to-background/5">
+          <aside className="absolute inset-y-3 left-3 z-20 flex w-64 shrink-0 flex-col overflow-hidden rounded-2xl border border-border/60 bg-background/92 shadow-xl shadow-black/5 backdrop-blur-md">
+            <div className="border-b border-border/70 bg-background/40 px-3 py-2">
+              <div className="grid w-full grid-cols-2 rounded-xl border border-border/70 bg-background/70 p-1">
                 {TOP_TABS.map((tab) => {
                   const active = topTab === tab.key;
                   return (
@@ -170,21 +170,20 @@ export default function AgentConsole() {
                       type="button"
                       onClick={() => setTopTab(tab.key)}
                       className={cn(
-                        "flex items-center justify-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition-all",
+                        "rounded-lg px-2.5 py-1 text-xs transition-all",
                         active
                           ? "bg-primary/10 text-foreground ring-1 ring-primary/15"
                           : "text-muted-foreground hover:bg-background/80 hover:text-foreground",
                       )}
                     >
-                      {tab.icon}
-                      <span className="truncate">{tab.label}</span>
+                      {tab.label}
                     </button>
                   );
                 })}
               </div>
             </div>
 
-            <nav className="min-h-0 flex-1 space-y-0.5 p-2">
+            <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
               {OPS_TABS.map((tab) => {
                 const active = activeOpsTab === tab.key;
                 return (
@@ -207,32 +206,28 @@ export default function AgentConsole() {
                 );
               })}
             </nav>
-
-            <div className="border-t border-border/70 px-3 py-2">
-              <p className="text-xs text-muted-foreground">
-                Runtime status, tasks, scheduler, and dispatcher.
-              </p>
-            </div>
             <OperationsSidebarFooter />
           </aside>
 
-          <div className="app-surface flex min-w-0 flex-1 overflow-auto rounded-2xl border border-border/60 shadow-sm">
-            {activeOpsTab === "status" && <AgentStatus />}
-            {activeOpsTab === "tasks" && (
-              <div className="w-full p-6">
-                <CodingTasks />
-              </div>
-            )}
-            {activeOpsTab === "scheduler" && (
-              <div className="w-full p-6">
-                <AgentJobsPanel />
-              </div>
-            )}
-            {activeOpsTab === "dispatcher" && (
-              <div className="w-full p-6">
-                <AgentDispatcher />
-              </div>
-            )}
+          <div className="flex h-full min-w-0 flex-1 p-2 transition-[padding] duration-200 md:p-3 md:pl-[17.75rem]">
+            <div className="app-surface flex min-w-0 flex-1 overflow-auto rounded-2xl border border-border/60 shadow-sm">
+              {activeOpsTab === "status" && <AgentStatus />}
+              {activeOpsTab === "tasks" && (
+                <div className="w-full p-6">
+                  <CodingTasks />
+                </div>
+              )}
+              {activeOpsTab === "scheduler" && (
+                <div className="w-full p-6">
+                  <AgentJobsPanel />
+                </div>
+              )}
+              {activeOpsTab === "dispatcher" && (
+                <div className="w-full p-6">
+                  <AgentDispatcher />
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
