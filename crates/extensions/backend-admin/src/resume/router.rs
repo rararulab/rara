@@ -6,9 +6,9 @@ use axum::{
 };
 use utoipa_axum::router::OpenApiRouter;
 
-use crate::repository::ResumeRepository;
-use crate::service::ResumeService;
-use crate::types::{
+use rara_domain_resume::repository::ResumeRepository;
+use rara_domain_resume::service::ResumeService;
+use rara_domain_resume::types::{
     ResumeError, ResumeProject, SetupResumeProjectRequest, UpdateResumeProjectRequest,
 };
 

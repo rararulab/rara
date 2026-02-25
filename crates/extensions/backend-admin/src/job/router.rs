@@ -21,14 +21,13 @@ use axum::{
     extract::State,
     http::StatusCode,
 };
-use utoipa_axum::{router::OpenApiRouter, routes};
-use uuid::Uuid;
-
-use crate::{
+use rara_domain_job::{
     error::SourceError,
     service::JobService,
     types::{DiscoveryCriteria, DiscoveryJobResponse, NormalizedJob},
 };
+use utoipa_axum::{router::OpenApiRouter, routes};
+use uuid::Uuid;
 
 // ===========================================================================
 // Discovery routes

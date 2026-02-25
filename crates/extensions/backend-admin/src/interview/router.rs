@@ -19,13 +19,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
-use rara_domain_shared::id::InterviewId;
-use serde::Deserialize;
-use tracing::instrument;
-use utoipa_axum::{router::OpenApiRouter, routes};
-use uuid::Uuid;
-
-use crate::{
+use rara_domain_interview::{
     error::InterviewError,
     service::InterviewService,
     types::{
@@ -33,6 +27,11 @@ use crate::{
         PrepGenerationRequest, UpdateInterviewPlanRequest,
     },
 };
+use rara_domain_shared::id::InterviewId;
+use serde::Deserialize;
+use tracing::instrument;
+use utoipa_axum::{router::OpenApiRouter, routes};
+use uuid::Uuid;
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct UpdateStatusRequest {

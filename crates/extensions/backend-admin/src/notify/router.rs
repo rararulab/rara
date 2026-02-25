@@ -19,14 +19,13 @@ use axum::{
     extract::{Query, State},
     http::StatusCode,
 };
-use serde::Deserialize;
-use utoipa_axum::{router::OpenApiRouter, routes};
-
-use crate::notify::{
+use rara_domain_shared::notify::{
     client::NotifyClient,
     error::NotifyError,
     types::{NotificationQueueMessage, NotificationQueueOverview, QueueMessageState},
 };
+use serde::Deserialize;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 const DEFAULT_LIMIT: i64 = 50;
 const MAX_LIMIT: i64 = 200;

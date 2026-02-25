@@ -19,14 +19,13 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use utoipa_axum::{router::OpenApiRouter, routes};
-use uuid::Uuid;
-
-use crate::contacts::{
+use rara_domain_shared::contacts::{
     error::ContactError,
     repository::ContactRepository,
     types::{CreateContactRequest, TelegramContact, UpdateContactRequest},
 };
+use utoipa_axum::{router::OpenApiRouter, routes};
+use uuid::Uuid;
 
 #[derive(Clone)]
 struct RouteState {

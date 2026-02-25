@@ -406,37 +406,37 @@ impl AppState {
         merge_openapi_router(
             &mut router,
             &mut api,
-            rara_domain_resume::routes::routes(self.resume_service.clone()),
+            rara_backend_admin::resume::routes(self.resume_service.clone()),
         );
         merge_openapi_router(
             &mut router,
             &mut api,
-            rara_domain_application::routes::routes(self.application_service.clone()),
+            rara_backend_admin::application::routes(self.application_service.clone()),
         );
         merge_openapi_router(
             &mut router,
             &mut api,
-            rara_domain_interview::routes::routes(self.interview_service.clone()),
+            rara_backend_admin::interview::routes(self.interview_service.clone()),
         );
         merge_openapi_router(
             &mut router,
             &mut api,
-            rara_domain_scheduler::routes::routes(self.scheduler_service.clone()),
+            rara_backend_admin::scheduler::routes(self.scheduler_service.clone()),
         );
         merge_openapi_router(
             &mut router,
             &mut api,
-            rara_domain_analytics::routes::routes(self.analytics_service.clone()),
+            rara_backend_admin::analytics::routes(self.analytics_service.clone()),
         );
         merge_openapi_router(
             &mut router,
             &mut api,
-            rara_domain_job::routes::discovery_routes(self.job_service.clone()),
+            rara_backend_admin::job::discovery_routes(self.job_service.clone()),
         );
         merge_openapi_router(
             &mut router,
             &mut api,
-            rara_domain_job::routes::bot_routes(self.job_service.clone()),
+            rara_backend_admin::job::bot_routes(self.job_service.clone()),
         );
         merge_openapi_router(
             &mut router,
@@ -446,17 +446,17 @@ impl AppState {
         merge_openapi_router(
             &mut router,
             &mut api,
-            rara_domain_shared::notify::routes::routes(self.notify_client.clone()),
+            rara_backend_admin::notify::routes(self.notify_client.clone()),
         );
         merge_openapi_router(
             &mut router,
             &mut api,
-            rara_domain_shared::contacts::router::routes(self.contact_repo.clone()),
+            rara_backend_admin::contacts::routes(self.contact_repo.clone()),
         );
         merge_openapi_router(
             &mut router,
             &mut api,
-            rara_domain_chat::router::routes(self.chat_service.clone()),
+            rara_backend_admin::chat::routes(self.chat_service.clone()),
         );
         merge_openapi_router(&mut router, &mut api, crate::system_routes::routes());
         merge_openapi_router(
