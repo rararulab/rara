@@ -19,6 +19,7 @@ import { NavLink, Outlet, useLocation } from 'react-router';
 import {
   Bot,
   Briefcase,
+  BookOpen,
   Settings as SettingsIcon,
   PanelLeftClose,
   PanelLeftOpen,
@@ -32,6 +33,7 @@ import { useServerStatus } from '@/hooks/use-server-status';
 const navItems = [
   { to: '/agent', icon: Bot, label: 'Agent' },
   { to: '/jobs', icon: Briefcase, label: 'Jobs' },
+  { to: '/docs', icon: BookOpen, label: 'Docs' },
   { to: '/settings', icon: SettingsIcon, label: 'Settings' },
 ];
 
@@ -79,7 +81,7 @@ function useIsWide(): boolean {
 }
 
 /** Routes that need zero padding in the main content area. */
-const FULL_BLEED_ROUTES = new Set(['/agent', '/jobs']);
+const FULL_BLEED_ROUTES = new Set(['/agent', '/jobs', '/docs']);
 
 /** Routes that need full bleed when they match as a prefix. */
 const FULL_BLEED_PREFIXES: string[] = [];

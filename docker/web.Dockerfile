@@ -17,6 +17,7 @@ RUN npm run build
 # ---------------------------------------------------------------------------
 FROM nginx:alpine AS runtime
 COPY --from=builder /app/dist /usr/share/nginx/html
+COPY docs/book /usr/share/nginx/html/book
 COPY docker/nginx.conf /etc/nginx/templates/default.conf.template
 EXPOSE 80
 

@@ -1159,9 +1159,9 @@ export default function Settings() {
           {sectionHeader(
             "appearance",
             "Appearance",
-            "Theme and developer UI preferences",
+            "Theme and display preferences",
             <Palette className="h-4 w-4" />,
-            "2 items",
+            "1 item",
           )}
           {expandedCategories.has("appearance") && (
             <div className="space-y-2 rounded-xl border border-dashed bg-muted/10 p-2">
@@ -1209,26 +1209,6 @@ export default function Settings() {
                 </div>
               </div>
 
-              <a
-                href="/swagger-ui"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
-              >
-                <div className="flex items-center gap-3">
-                  <ExternalLink className="h-4 w-4 text-muted-foreground" />
-                  <div className="space-y-1">
-                    <p className="font-medium">API Docs</p>
-                    <p className="text-xs text-muted-foreground">
-                      Open Swagger UI in a new tab.
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <Badge variant="outline">Swagger</Badge>
-                  <ExternalLink className="h-4 w-4 text-muted-foreground" />
-                </div>
-              </a>
             </div>
           )}
         </div>

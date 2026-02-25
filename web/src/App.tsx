@@ -20,6 +20,7 @@ import { ServerStatusProvider } from '@/components/ServerStatusProvider';
 import DashboardLayout from '@/layouts/DashboardLayout';
 import AgentConsole from '@/pages/AgentConsole';
 import JobsWorkspace from '@/pages/JobsWorkspace';
+import Docs from '@/pages/Docs';
 import Settings from '@/pages/Settings';
 
 const queryClient = new QueryClient();
@@ -35,6 +36,7 @@ export default function App() {
               <Route index element={<Navigate to="/agent" replace />} />
               <Route path="agent" element={<AgentConsole />} />
               <Route path="jobs" element={<JobsWorkspace />} />
+              <Route path="docs" element={<Docs />} />
               <Route path="settings" element={<Settings />} />
 
               {/* Redirects for old routes */}
