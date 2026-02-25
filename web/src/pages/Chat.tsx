@@ -25,7 +25,6 @@ import {
   Ellipsis,
   ImagePlus,
   Loader2,
-  MessageSquarePlus,
   PanelLeftClose,
   PanelLeftOpen,
   Search,
@@ -127,6 +126,10 @@ interface StreamState {
   activeTools: ActiveToolCall[];
   error: string | null;
 }
+
+type PendingDraft = {
+  text: string;
+};
 
 function deleteSession(key: string) {
   return api.del<void>(
@@ -507,10 +510,10 @@ function MessageBubble({ msg }: { msg: ChatMessageData }) {
       {/* Avatar */}
       <div
         className={cn(
-          "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-xs font-medium shadow-sm ring-1",
+          "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-xs font-medium",
           isUser
-            ? "bg-primary text-primary-foreground ring-primary/20"
-            : "bg-background text-muted-foreground ring-border/70",
+            ? "bg-primary/90 text-primary-foreground"
+            : "bg-background/60 text-muted-foreground",
         )}
       >
         {isUser ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
@@ -519,10 +522,10 @@ function MessageBubble({ msg }: { msg: ChatMessageData }) {
       {/* Content */}
       <div
         className={cn(
-          "max-w-[80%] rounded-2xl border px-4 py-2.5 shadow-sm",
+          isUser ? "max-w-[78%]" : "max-w-[min(78ch,calc(100%-4rem))] w-full",
           isUser
-            ? "border-primary/20 bg-primary text-primary-foreground"
-            : "border-border/70 bg-card/90 text-foreground",
+            ? "rounded-2xl bg-primary/90 px-4 py-2.5 text-primary-foreground"
+            : "px-1 py-1 text-foreground",
         )}
       >
         {isMultimodal ? (
@@ -537,7 +540,7 @@ function MessageBubble({ msg }: { msg: ChatMessageData }) {
                   ) : (
                     <div
                       key={i}
-                      className="prose prose-sm dark:prose-invert max-w-none [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-background/50 [&_pre]:p-3 [&_code]:rounded [&_code]:bg-background/50 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs"
+                      className="prose prose-sm max-w-none text-foreground dark:prose-invert prose-p:text-foreground prose-li:text-foreground prose-strong:text-foreground prose-headings:text-foreground prose-code:text-foreground [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-background/50 [&_pre]:p-3 [&_code]:rounded [&_code]:bg-background/50 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs"
                     >
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
                         {block.text}
@@ -555,7 +558,7 @@ function MessageBubble({ msg }: { msg: ChatMessageData }) {
         ) : isUser ? (
           <p className="whitespace-pre-wrap text-sm">{text}</p>
         ) : (
-          <div className="prose prose-sm dark:prose-invert max-w-none [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-background/50 [&_pre]:p-3 [&_code]:rounded [&_code]:bg-background/50 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs">
+          <div className="prose prose-sm max-w-none text-foreground dark:prose-invert prose-p:text-foreground prose-li:text-foreground prose-strong:text-foreground prose-headings:text-foreground prose-code:text-foreground [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-background/50 [&_pre]:p-3 [&_code]:rounded [&_code]:bg-background/50 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
           </div>
         )}
@@ -971,10 +974,10 @@ function ChangeModelDialog({
 function StreamingBubble({ stream }: { stream: StreamState }) {
   return (
     <div className="flex gap-3">
-      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-border/70 bg-background text-muted-foreground shadow-sm">
+      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-background/60 text-muted-foreground">
         <Bot className="h-4 w-4" />
       </div>
-      <div className="max-w-[80%] rounded-2xl border border-border/70 bg-card/90 px-4 py-2.5 text-foreground shadow-sm">
+      <div className="w-full max-w-[min(78ch,calc(100%-4rem))] px-1 py-1 text-foreground">
         {/* Tool call indicators */}
         {stream.activeTools.length > 0 && (
           <div className="mb-2 space-y-1">
@@ -1000,7 +1003,7 @@ function StreamingBubble({ stream }: { stream: StreamState }) {
 
         {/* Streaming text content */}
         {stream.text && (
-          <div className="prose prose-sm dark:prose-invert max-w-none [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-background/50 [&_pre]:p-3 [&_code]:rounded [&_code]:bg-background/50 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs">
+          <div className="prose prose-sm max-w-none text-foreground dark:prose-invert prose-p:text-foreground prose-li:text-foreground prose-strong:text-foreground prose-headings:text-foreground prose-code:text-foreground [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-background/50 [&_pre]:p-3 [&_code]:rounded [&_code]:bg-background/50 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>
               {stream.text}
             </ReactMarkdown>
@@ -1034,11 +1037,15 @@ function ChatThread({
   onClearMessages,
   panelCollapsed,
   onTogglePanel,
+  initialDraft,
+  onInitialDraftConsumed,
 }: {
   session: ChatSession;
   onClearMessages: () => void;
   panelCollapsed: boolean;
   onTogglePanel: () => void;
+  initialDraft?: PendingDraft | null;
+  onInitialDraftConsumed?: () => void;
 }) {
   const sessionKey = session.key;
   const queryClient = useQueryClient();
@@ -1083,11 +1090,10 @@ function ChatThread({
   });
 
   // SSE streaming send
-  const handleSend = useCallback(async () => {
-    const text = input.trim();
-    if (!text || stream.isStreaming || !isOnline) return;
+  const sendMessage = useCallback(async (text: string, urls?: string[]) => {
+    const trimmed = text.trim();
+    if (!trimmed || stream.isStreaming || !isOnline) return;
 
-    const urls = imageUrls.length > 0 ? [...imageUrls] : undefined;
     setInput("");
     setImageUrls([]);
     setImageInputVisible(false);
@@ -1100,10 +1106,10 @@ function ChatThread({
     ]);
     const content: ChatContentBlock[] | string = urls?.length
       ? [
-          { type: "text" as const, text },
+          { type: "text" as const, text: trimmed },
           ...urls.map((url) => ({ type: "image_url" as const, url })),
         ]
-      : text;
+      : trimmed;
     const optimisticMsg: ChatMessageData = {
       seq: (previous?.length ?? 0) + 1,
       role: "user",
@@ -1122,7 +1128,7 @@ function ChatThread({
     abortRef.current = controller;
 
     try {
-      const body: { text: string; image_urls?: string[] } = { text };
+      const body: { text: string; image_urls?: string[] } = { text: trimmed };
       if (urls) body.image_urls = urls;
 
       const BASE_URL = import.meta.env.VITE_API_URL || "";
@@ -1234,7 +1240,12 @@ function ChatThread({
     } finally {
       abortRef.current = null;
     }
-  }, [input, imageUrls, stream.isStreaming, isOnline, sessionKey, queryClient]);
+  }, [stream.isStreaming, isOnline, sessionKey, queryClient]);
+
+  const handleSend = useCallback(async () => {
+    const urls = imageUrls.length > 0 ? [...imageUrls] : undefined;
+    await sendMessage(input, urls);
+  }, [imageUrls, input, sendMessage]);
 
   // Cleanup abort on unmount
   useEffect(() => {
@@ -1273,6 +1284,12 @@ function ChatThread({
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }, [input]);
 
+  useEffect(() => {
+    if (!initialDraft?.text) return;
+    sendMessage(initialDraft.text);
+    onInitialDraftConsumed?.();
+  }, [initialDraft, onInitialDraftConsumed, sendMessage]);
+
   // Visible messages (exclude system)
   const visibleMessages = messages.filter((m) => m.role !== "system");
 
@@ -1284,20 +1301,26 @@ function ChatThread({
   const isBusy = stream.isStreaming;
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col">
+    <div className="relative flex min-w-0 flex-1 flex-col">
       {/* Thread header */}
-      <div className="flex items-center justify-between border-b border-border/70 bg-background/50 px-4 py-3 backdrop-blur">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+      <div className="absolute inset-x-4 top-3 z-10 md:inset-x-8">
+        <div className="grid grid-cols-[auto_1fr_auto] items-start gap-3">
+          <div className="flex min-w-0 items-center gap-2">
             {panelCollapsed && (
               <ConversationPanelToggleButton
                 collapsed
                 onToggle={onTogglePanel}
               />
             )}
-            <p className="truncate text-sm font-semibold">
-              {session.title ?? sessionKey}
+          </div>
+
+          <div className="min-w-0 text-center">
+            <p className="truncate text-xs font-medium text-muted-foreground/90">
+              {messages.length} message{messages.length !== 1 ? "s" : ""} · {session.title ?? sessionKey}
             </p>
+          </div>
+
+          <div className="flex items-center justify-end gap-2">
             <button
               type="button"
               onClick={() => setModelDialogOpen(true)}
@@ -1306,26 +1329,23 @@ function ChatThread({
             >
               <Badge
                 variant="secondary"
-                className="cursor-pointer gap-1 border border-border/60 bg-background/80 hover:bg-background"
+                className="cursor-pointer gap-1 border-0 bg-background/50 text-xs shadow-none backdrop-blur hover:bg-background/75"
               >
                 {modelDisplay}
                 <ChevronDown className="h-3 w-3" />
               </Badge>
             </button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="rounded-lg bg-background/35 text-muted-foreground backdrop-blur hover:bg-background/70 hover:text-destructive"
+              onClick={onClearMessages}
+              title="Clear messages"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
           </div>
-          <p className="text-xs text-muted-foreground">
-            {messages.length} message{messages.length !== 1 ? "s" : ""}
-          </p>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="rounded-lg text-muted-foreground hover:bg-background/70 hover:text-destructive"
-          onClick={onClearMessages}
-          title="Clear messages"
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-        </Button>
       </div>
 
       {/* Model change dialog */}
@@ -1337,7 +1357,7 @@ function ChatThread({
       />
 
       {/* Messages area */}
-      <div className="flex-1 overflow-y-auto bg-gradient-to-b from-background/15 to-transparent px-4 py-4">
+      <div className="flex-1 overflow-y-auto px-6 pb-40 pt-20 md:px-8 md:pb-44 md:pt-20">
         {messagesQuery.isLoading && (
           <div className="space-y-4">
             {Array.from({ length: 3 }).map((_, i) => (
@@ -1350,9 +1370,9 @@ function ChatThread({
         )}
 
         {!messagesQuery.isLoading && visibleMessages.length === 0 && !isBusy && (
-          <div className="flex h-full flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-border/70 bg-card/40 text-muted-foreground">
-            <Bot className="h-12 w-12 opacity-30" />
-            <p className="text-sm">
+          <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
+            <Bot className="h-12 w-12 opacity-20" />
+            <p className="text-sm opacity-80">
               Start a conversation by typing a message below.
             </p>
           </div>
@@ -1382,7 +1402,7 @@ function ChatThread({
       </div>
 
       {/* Input area */}
-      <div className="border-t border-border/70 bg-card/80 px-4 py-3 backdrop-blur">
+      <div className="pointer-events-none absolute inset-x-4 bottom-4 z-10 md:inset-x-8 md:bottom-6">
         {!isOnline && (
           <p className="mb-2 text-center text-xs text-destructive">
             Server is offline. Sending is disabled until the connection is restored.
@@ -1391,7 +1411,7 @@ function ChatThread({
 
         {/* Attached image previews */}
         {imageUrls.length > 0 && (
-          <div className="mb-2 flex flex-wrap gap-2">
+          <div className="pointer-events-auto mb-2 flex flex-wrap gap-2">
             {imageUrls.map((url, i) => (
               <div
                 key={i}
@@ -1420,7 +1440,7 @@ function ChatThread({
 
         {/* Image URL input */}
         {imageInputVisible && (
-          <div className="mb-2 flex items-center gap-2 rounded-xl border border-border/70 bg-background/45 p-2">
+          <div className="pointer-events-auto mb-2 flex items-center gap-2 rounded-2xl border border-border/40 bg-background/70 p-2 shadow-lg backdrop-blur">
             <input
               type="url"
               value={imageInputValue}
@@ -1453,7 +1473,7 @@ function ChatThread({
           </div>
         )}
 
-        <div className="flex items-end gap-2 rounded-2xl border border-border/70 bg-background/45 p-2 shadow-sm">
+        <div className="pointer-events-auto flex items-end gap-2 rounded-2xl border border-border/40 bg-background/70 p-2 shadow-[0_10px_40px_rgba(15,23,42,0.12)] backdrop-blur-xl">
           <Button
             variant="ghost"
             size="icon"
@@ -1472,7 +1492,7 @@ function ChatThread({
             placeholder={isOnline ? "Type a message... (Enter to send, Shift+Enter for newline)" : "Server offline -- sending disabled"}
             rows={1}
             disabled={isBusy || !isOnline}
-            className="flex-1 resize-none rounded-xl border border-input bg-background px-3 py-2.5 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex-1 resize-none appearance-none border-0 bg-transparent px-2 py-2.5 text-sm text-foreground shadow-none placeholder:text-muted-foreground focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
           />
           <Button
             size="icon"
@@ -1498,34 +1518,80 @@ function ChatThread({
 // ---------------------------------------------------------------------------
 
 function EmptyState({
-  onCreate,
+  onSendFirstMessage,
   panelCollapsed,
   onTogglePanel,
 }: {
-  onCreate: () => void;
+  onSendFirstMessage: (text: string) => void;
   panelCollapsed: boolean;
   onTogglePanel: () => void;
 }) {
+  const { isOnline } = useServerStatus();
+  const [input, setInput] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const handleSend = useCallback(() => {
+    const text = input.trim();
+    if (!text || !isOnline) return;
+    onSendFirstMessage(text);
+    setInput("");
+  }, [input, isOnline, onSendFirstMessage]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        handleSend();
+      }
+    },
+    [handleSend],
+  );
+
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [input]);
+
   return (
-    <div className="relative flex flex-1 flex-col items-center justify-center gap-4 rounded-2xl border border-dashed border-border/70 bg-card/40 text-muted-foreground">
+    <div className="relative flex flex-1 flex-col">
       {panelCollapsed && (
         <div className="absolute left-4 top-4">
           <ConversationPanelToggleButton collapsed onToggle={onTogglePanel} />
         </div>
       )}
-      <Bot className="h-16 w-16 opacity-20" />
-      <div className="text-center">
-        <p className="text-lg font-medium text-foreground">
-          Welcome to Chat
-        </p>
-        <p className="mt-1 text-sm">
-          Select a conversation from the sidebar or start a new one.
-        </p>
+
+      <div className="flex-1" />
+
+      <div className="pointer-events-none absolute inset-x-4 bottom-4 z-10 md:inset-x-8 md:bottom-6">
+        {!isOnline && (
+          <p className="mb-2 text-center text-xs text-destructive">
+            Server is offline. Sending is disabled until the connection is restored.
+          </p>
+        )}
+        <div className="pointer-events-auto flex items-end gap-2 rounded-2xl border border-border/40 bg-background/70 p-2 shadow-[0_10px_40px_rgba(15,23,42,0.12)] backdrop-blur-xl">
+          <textarea
+            ref={textareaRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={isOnline ? "Type a message... (Enter to send, Shift+Enter for newline)" : "Server offline -- sending disabled"}
+            rows={1}
+            disabled={!isOnline}
+            className="flex-1 resize-none appearance-none border-0 bg-transparent px-2 py-2.5 text-sm text-foreground shadow-none placeholder:text-muted-foreground focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
+          />
+          <Button
+            size="icon"
+            className="h-10 w-10 shrink-0 rounded-xl shadow-sm"
+            onClick={handleSend}
+            disabled={!input.trim() || !isOnline}
+            title={isOnline ? "Send message" : "Server offline"}
+          >
+            <Send className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
-      <Button className="shadow-sm" onClick={onCreate}>
-        <MessageSquarePlus className="h-4 w-4" />
-        New Conversation
-      </Button>
     </div>
   );
 }
@@ -1543,6 +1609,7 @@ export default function Chat({
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [newChatDialogOpen, setNewChatDialogOpen] = useState(false);
+  const [pendingDraft, setPendingDraft] = useState<PendingDraft | null>(null);
 
   const sessionsQuery = useQuery({
     queryKey: ["chat-sessions"],
@@ -1561,6 +1628,11 @@ export default function Chat({
   const createMutation = useMutation({
     mutationFn: createSession,
     onSuccess: (session) => {
+      queryClient.setQueryData<ChatSession[]>(["chat-sessions"], (old) => {
+        const next = old ?? [];
+        if (next.some((s) => s.key === session.key)) return next;
+        return [session, ...next];
+      });
       queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
       setActiveKey(session.key);
     },
@@ -1595,14 +1667,28 @@ export default function Chat({
     },
   });
 
-  const handleCreate = useCallback(() => {
-    setNewChatDialogOpen(true);
-  }, []);
-
   const handleCreateConfirm = useCallback(
     (title: string, model: string) => {
       const key = generateKey();
       createMutation.mutate({ key, title, model });
+    },
+    [createMutation],
+  );
+
+  const handleStartFromEmpty = useCallback(
+    async (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      const key = generateKey();
+      setPendingDraft({ text: trimmed });
+      try {
+        await createMutation.mutateAsync({
+          key,
+          title: trimmed.slice(0, 80),
+        });
+      } catch {
+        setPendingDraft(null);
+      }
     },
     [createMutation],
   );
@@ -1620,7 +1706,7 @@ export default function Chat({
   }, [activeKey, clearMutation]);
 
   return (
-    <div className="relative flex h-full overflow-hidden rounded-2xl border border-border/70 bg-gradient-to-b from-background/20 to-background/5">
+    <div className="relative flex h-full overflow-hidden">
       {/* New chat dialog */}
       <NewChatDialog
         open={newChatDialogOpen}
@@ -1646,7 +1732,7 @@ export default function Chat({
           panelCollapsed ? "" : "md:pl-[17.75rem]",
         )}
       >
-        <div className="app-surface flex min-w-0 flex-1 overflow-hidden rounded-2xl border border-border/60 shadow-sm">
+        <div className="flex min-w-0 flex-1 overflow-hidden rounded-2xl bg-transparent">
           {/* Right panel: chat thread or empty state */}
           {activeSession ? (
             <ChatThread
@@ -1655,10 +1741,12 @@ export default function Chat({
               onClearMessages={handleClearMessages}
               panelCollapsed={panelCollapsed}
               onTogglePanel={() => setPanelCollapsed((p) => !p)}
+              initialDraft={pendingDraft}
+              onInitialDraftConsumed={() => setPendingDraft(null)}
             />
           ) : (
             <EmptyState
-              onCreate={handleCreate}
+              onSendFirstMessage={handleStartFromEmpty}
               panelCollapsed={panelCollapsed}
               onTogglePanel={() => setPanelCollapsed((p) => !p)}
             />

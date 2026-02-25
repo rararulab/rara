@@ -158,7 +158,7 @@ export default function AgentConsole() {
       )}
 
       {topTab === "ops" && (
-        <div className="relative flex flex-1 min-h-0 overflow-hidden rounded-2xl border border-border/70 bg-gradient-to-b from-background/20 to-background/5">
+        <div className="relative flex flex-1 min-h-0 overflow-hidden">
           <aside className="absolute inset-y-3 left-3 z-20 flex w-64 shrink-0 flex-col overflow-hidden rounded-2xl border border-border/60 bg-background/92 shadow-xl shadow-black/5 backdrop-blur-md">
             <div className="border-b border-border/70 bg-background/40 px-3 py-2">
               <div className="grid w-full grid-cols-2 rounded-xl border border-border/70 bg-background/70 p-1">
