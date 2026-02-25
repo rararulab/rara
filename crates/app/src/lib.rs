@@ -85,19 +85,21 @@ impl Default for AppConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct MemoryConfig {
-    pub chroma_url:        String,
-    pub chroma_collection: Option<String>,
-    pub chroma_api_key:    Option<String>,
-    pub mem0_base_url:     Option<String>,
+    pub mem0_base_url:      String,
+    pub memos_base_url:     String,
+    pub memos_token:        String,
+    pub hindsight_base_url: String,
+    pub hindsight_bank_id:  String,
 }
 
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
-            chroma_url: "http://localhost:8000".to_owned(),
-            chroma_collection: Some("job-memory".to_owned()),
-            chroma_api_key: None,
-            mem0_base_url: None,
+            mem0_base_url:      "http://localhost:8080".to_owned(),
+            memos_base_url:     "http://localhost:5230".to_owned(),
+            memos_token:        String::new(),
+            hindsight_base_url: "http://localhost:8888".to_owned(),
+            hindsight_bank_id:  "default".to_owned(),
         }
     }
 }
@@ -201,9 +203,11 @@ impl AppConfig {
             &db_store,
             object_store,
             notify_client.clone(),
-            self.memory.chroma_url.clone(),
-            self.memory.chroma_collection.clone(),
-            self.memory.chroma_api_key.clone(),
+            self.memory.mem0_base_url.clone(),
+            self.memory.memos_base_url.clone(),
+            self.memory.memos_token.clone(),
+            self.memory.hindsight_base_url.clone(),
+            self.memory.hindsight_bank_id.clone(),
         )
         .await
         .whatever_context("Failed to initialize application state")?;
@@ -273,10 +277,9 @@ impl AppConfig {
         // Read worker interval settings (applied at startup; restart to change).
         let worker_cfg = app_state.settings_svc.current().workers;
         info!(
-            agent_scheduler_secs  = worker_cfg.agent_scheduler_interval_secs,
+            agent_scheduler_secs    = worker_cfg.agent_scheduler_interval_secs,
             pipeline_scheduler_secs = worker_cfg.pipeline_scheduler_interval_secs,
-            memory_sync_secs      = worker_cfg.memory_sync_interval_secs,
-            proactive_hours       = worker_cfg.proactive_agent_interval_hours,
+            proactive_hours         = worker_cfg.proactive_agent_interval_hours,
             "Worker intervals from settings"
         );
 
@@ -291,14 +294,6 @@ impl AppConfig {
         if let Ok(mut guard) = app_state.proactive_notify.write() {
             *guard = Some(proactive_handle);
         }
-
-        // -- memory sync worker -----------------------------------------------
-
-        let _memory_sync_handle = worker_manager
-            .fallible_worker(rara_workers::memory_sync::MemorySyncWorker)
-            .name("memory-sync")
-            .interval(Duration::from_secs(worker_cfg.memory_sync_interval_secs))
-            .spawn();
 
         // -- agent scheduler worker -------------------------------------------
 

@@ -17,7 +17,6 @@ use agent_core::{
 use super::{
     context::estimate_history_tokens,
     error::OrchestratorError,
-    reflection,
 };
 
 /// Orchestrates agent creation and execution by assembling system prompts,
@@ -73,11 +72,18 @@ impl AgentOrchestrator {
             format!("{soul}\n\n# Chat Instructions\n{base_prompt}")
         };
 
-        // Inject core user profile.
+        // Inject core user profile from mem0 facts.
         if let Some(ref mm) = self.memory_manager {
-            if let Ok(profile) = mm.read_core_profile().await {
-                if !profile.trim().is_empty() {
-                    system_prompt = format!("{profile}\n\n---\n\n{system_prompt}");
+            if let Ok(facts) = mm.get_user_profile().await {
+                if !facts.is_empty() {
+                    let profile_section: String = facts
+                        .iter()
+                        .map(|m| format!("- {}", m.memory))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    system_prompt = format!(
+                        "# User Profile\n{profile_section}\n\n---\n\n{system_prompt}"
+                    );
                 }
             }
         }
@@ -90,7 +96,7 @@ impl AgentOrchestrator {
                         system_prompt.push_str("\n\n## Relevant Memory Context\n");
                         for hit in &results {
                             system_prompt
-                                .push_str(&format!("- [{}] {}\n", hit.path, hit.snippet));
+                                .push_str(&format!("- [{:?}] {}\n", hit.source, hit.content));
                         }
                         info!(
                             hits = results.len(),
@@ -261,23 +267,11 @@ impl AgentOrchestrator {
         };
 
         let mm = Arc::clone(mm);
-        let llm = self.llm_provider.clone();
-        let tools = Arc::clone(&self.tools);
-        let model = self.current_default_model();
         let user_text = user_text.to_owned();
         let assistant_text = assistant_text.to_owned();
 
         tokio::spawn(async move {
-            if let Err(e) = reflection::memory_reflection(
-                &mm,
-                &llm,
-                &tools,
-                &model,
-                &user_text,
-                &assistant_text,
-            )
-            .await
-            {
+            if let Err(e) = mm.reflect_on_exchange(&user_text, &assistant_text).await {
                 tracing::warn!(error = %e, "memory reflection failed");
             }
         });

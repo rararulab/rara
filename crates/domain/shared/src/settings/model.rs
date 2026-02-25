@@ -115,27 +115,30 @@ pub struct AgentSettings {
     pub gmail:              GmailSettings,
 }
 
-/// Memory runtime settings.
+/// Memory runtime settings for mem0, Memos, and Hindsight backends.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct MemorySettings {
-    /// Chroma server base URL.
-    pub chroma_url:        Option<String>,
-    /// Chroma collection name.
-    pub chroma_collection: Option<String>,
-    /// Chroma API key/token.
-    pub chroma_api_key:    Option<String>,
-    /// Mem0 REST API base URL.
-    pub mem0_base_url:     Option<String>,
+    /// mem0 server base URL.
+    pub mem0_base_url:      Option<String>,
+    /// Memos server base URL.
+    pub memos_base_url:     Option<String>,
+    /// Memos API token.
+    pub memos_token:        Option<String>,
+    /// Hindsight server base URL.
+    pub hindsight_base_url: Option<String>,
+    /// Hindsight memory bank ID.
+    pub hindsight_bank_id:  Option<String>,
 }
 
 impl Default for MemorySettings {
     fn default() -> Self {
         Self {
-            chroma_url:        Some("http://localhost:8000".to_owned()),
-            chroma_collection: Some("job-memory".to_owned()),
-            chroma_api_key:    None,
-            mem0_base_url:     None,
+            mem0_base_url:      Some("http://localhost:8080".to_owned()),
+            memos_base_url:     Some("http://localhost:5230".to_owned()),
+            memos_token:        None,
+            hindsight_base_url: Some("http://localhost:8888".to_owned()),
+            hindsight_bank_id:  Some("default".to_owned()),
         }
     }
 }
@@ -199,13 +202,11 @@ pub struct GmailSettings {
 #[serde(default)]
 pub struct WorkerSettings {
     /// Agent scheduler poll interval in seconds (default 60).
-    pub agent_scheduler_interval_secs:  u64,
+    pub agent_scheduler_interval_secs:    u64,
     /// Pipeline scheduler poll interval in seconds (default 60).
     pub pipeline_scheduler_interval_secs: u64,
-    /// Memory sync interval in seconds (default 300 = 5 min).
-    pub memory_sync_interval_secs:      u64,
     /// Proactive agent interval in hours (default 12).
-    pub proactive_agent_interval_hours: u64,
+    pub proactive_agent_interval_hours:   u64,
 }
 
 impl Default for WorkerSettings {
@@ -213,7 +214,6 @@ impl Default for WorkerSettings {
         Self {
             agent_scheduler_interval_secs:    60,
             pipeline_scheduler_interval_secs: 60,
-            memory_sync_interval_secs:        300,
             proactive_agent_interval_hours:   12,
         }
     }
@@ -271,10 +271,11 @@ pub struct AgentRuntimeSettingsPatch {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct MemoryRuntimeSettingsPatch {
-    pub chroma_url:        Option<String>,
-    pub chroma_collection: Option<String>,
-    pub chroma_api_key:    Option<String>,
-    pub mem0_base_url:     Option<String>,
+    pub mem0_base_url:      Option<String>,
+    pub memos_base_url:     Option<String>,
+    pub memos_token:        Option<String>,
+    pub hindsight_base_url: Option<String>,
+    pub hindsight_bank_id:  Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
@@ -303,7 +304,6 @@ pub struct GmailRuntimeSettingsPatch {
 pub struct WorkerRuntimeSettingsPatch {
     pub agent_scheduler_interval_secs:    Option<u64>,
     pub pipeline_scheduler_interval_secs: Option<u64>,
-    pub memory_sync_interval_secs:        Option<u64>,
     pub proactive_agent_interval_hours:   Option<u64>,
 }
 
@@ -367,17 +367,20 @@ impl Settings {
                 self.agent.max_iterations = if max_iter == 0 { None } else { Some(max_iter) };
             }
             if let Some(memory) = agent.memory {
-                if let Some(chroma_url) = memory.chroma_url {
-                    self.agent.memory.chroma_url = normalize_text(Some(chroma_url));
+                if let Some(url) = memory.mem0_base_url {
+                    self.agent.memory.mem0_base_url = normalize_text(Some(url));
                 }
-                if let Some(chroma_collection) = memory.chroma_collection {
-                    self.agent.memory.chroma_collection = normalize_text(Some(chroma_collection));
+                if let Some(url) = memory.memos_base_url {
+                    self.agent.memory.memos_base_url = normalize_text(Some(url));
                 }
-                if let Some(chroma_api_key) = memory.chroma_api_key {
-                    self.agent.memory.chroma_api_key = normalize_secret(Some(chroma_api_key));
+                if let Some(token) = memory.memos_token {
+                    self.agent.memory.memos_token = normalize_secret(Some(token));
                 }
-                if let Some(mem0_base_url) = memory.mem0_base_url {
-                    self.agent.memory.mem0_base_url = normalize_text(Some(mem0_base_url));
+                if let Some(url) = memory.hindsight_base_url {
+                    self.agent.memory.hindsight_base_url = normalize_text(Some(url));
+                }
+                if let Some(bank_id) = memory.hindsight_bank_id {
+                    self.agent.memory.hindsight_bank_id = normalize_text(Some(bank_id));
                 }
             }
             if let Some(composio) = agent.composio {
@@ -426,9 +429,6 @@ impl Settings {
             if let Some(v) = w.pipeline_scheduler_interval_secs {
                 self.workers.pipeline_scheduler_interval_secs = v;
             }
-            if let Some(v) = w.memory_sync_interval_secs {
-                self.workers.memory_sync_interval_secs = v;
-            }
             if let Some(v) = w.proactive_agent_interval_hours {
                 self.workers.proactive_agent_interval_hours = v;
             }
@@ -457,13 +457,14 @@ impl Settings {
         self.ai.favorite_models.dedup();
         self.telegram.bot_token = normalize_secret(self.telegram.bot_token.take());
         self.agent.proactive_cron = normalize_text(self.agent.proactive_cron.take());
-        self.agent.memory.chroma_url = normalize_text(self.agent.memory.chroma_url.take());
-        self.agent.memory.chroma_collection =
-            normalize_text(self.agent.memory.chroma_collection.take());
-        self.agent.memory.chroma_api_key =
-            normalize_secret(self.agent.memory.chroma_api_key.take());
-        self.agent.memory.mem0_base_url =
-            normalize_text(self.agent.memory.mem0_base_url.take());
+        self.agent.memory.mem0_base_url = normalize_text(self.agent.memory.mem0_base_url.take());
+        self.agent.memory.memos_base_url =
+            normalize_text(self.agent.memory.memos_base_url.take());
+        self.agent.memory.memos_token = normalize_secret(self.agent.memory.memos_token.take());
+        self.agent.memory.hindsight_base_url =
+            normalize_text(self.agent.memory.hindsight_base_url.take());
+        self.agent.memory.hindsight_bank_id =
+            normalize_text(self.agent.memory.hindsight_bank_id.take());
         self.agent.composio.api_key = normalize_secret(self.agent.composio.api_key.take());
         self.agent.composio.entity_id = normalize_text(self.agent.composio.entity_id.take());
         self.agent.gmail.address = normalize_text(self.agent.gmail.address.take());
@@ -760,10 +761,11 @@ mod tests {
                 proactive_enabled:  None,
                 proactive_cron:     None,
                 memory:             Some(MemoryRuntimeSettingsPatch {
-                    chroma_url:        Some("http://localhost:8000".to_owned()),
-                    chroma_collection: Some("team-memory".to_owned()),
-                    chroma_api_key:    Some("secret-token".to_owned()),
-                    mem0_base_url:     Some("http://localhost:8888".to_owned()),
+                    mem0_base_url:      Some("http://mem0:8080".to_owned()),
+                    memos_base_url:     Some("http://memos:5230".to_owned()),
+                    memos_token:        Some("secret-token".to_owned()),
+                    hindsight_base_url: Some("http://hindsight:8888".to_owned()),
+                    hindsight_bank_id:  Some("my-bank".to_owned()),
                 }),
                 composio:           None,
                 gmail:              None,
@@ -774,20 +776,24 @@ mod tests {
         });
 
         assert_eq!(
-            settings.agent.memory.chroma_url,
-            Some("http://localhost:8000".to_owned())
+            settings.agent.memory.mem0_base_url,
+            Some("http://mem0:8080".to_owned())
         );
         assert_eq!(
-            settings.agent.memory.chroma_collection,
-            Some("team-memory".to_owned())
+            settings.agent.memory.memos_base_url,
+            Some("http://memos:5230".to_owned())
         );
         assert_eq!(
-            settings.agent.memory.chroma_api_key,
+            settings.agent.memory.memos_token,
             Some("secret-token".to_owned())
         );
         assert_eq!(
-            settings.agent.memory.mem0_base_url,
-            Some("http://localhost:8888".to_owned())
+            settings.agent.memory.hindsight_base_url,
+            Some("http://hindsight:8888".to_owned())
+        );
+        assert_eq!(
+            settings.agent.memory.hindsight_bank_id,
+            Some("my-bank".to_owned())
         );
     }
 
@@ -941,7 +947,6 @@ mod tests {
         let settings = Settings::default();
         assert_eq!(settings.workers.agent_scheduler_interval_secs, 60);
         assert_eq!(settings.workers.pipeline_scheduler_interval_secs, 60);
-        assert_eq!(settings.workers.memory_sync_interval_secs, 300);
         assert_eq!(settings.workers.proactive_agent_interval_hours, 12);
     }
 
@@ -956,13 +961,11 @@ mod tests {
             workers:      Some(WorkerRuntimeSettingsPatch {
                 agent_scheduler_interval_secs:    Some(120),
                 pipeline_scheduler_interval_secs: Some(90),
-                memory_sync_interval_secs:        Some(600),
                 proactive_agent_interval_hours:   Some(24),
             }),
         });
         assert_eq!(settings.workers.agent_scheduler_interval_secs, 120);
         assert_eq!(settings.workers.pipeline_scheduler_interval_secs, 90);
-        assert_eq!(settings.workers.memory_sync_interval_secs, 600);
         assert_eq!(settings.workers.proactive_agent_interval_hours, 24);
     }
 
@@ -977,14 +980,12 @@ mod tests {
             workers:      Some(WorkerRuntimeSettingsPatch {
                 agent_scheduler_interval_secs:    Some(120),
                 pipeline_scheduler_interval_secs: None,
-                memory_sync_interval_secs:        None,
                 proactive_agent_interval_hours:   None,
             }),
         });
         assert_eq!(settings.workers.agent_scheduler_interval_secs, 120);
         // Unchanged fields retain defaults.
         assert_eq!(settings.workers.pipeline_scheduler_interval_secs, 60);
-        assert_eq!(settings.workers.memory_sync_interval_secs, 300);
         assert_eq!(settings.workers.proactive_agent_interval_hours, 12);
     }
 }
