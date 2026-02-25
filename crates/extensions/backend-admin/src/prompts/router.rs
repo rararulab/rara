@@ -12,20 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! HTTP API routes for prompt management.
+//! HTTP API routes for prompt retrieval (read-only).
 //!
-//! All endpoints live under `/api/v1/prompts` and use JSON request/response
-//! bodies. The router is constructed via [`routes`] and expects a shared
+//! All endpoints live under `/api/v1/prompts` and use JSON response bodies.
+//! The router is constructed via [`routes`] and expects a shared
 //! `Arc<dyn PromptRepo>` as axum state.
 //!
 //! ## Route table
 //!
-//! | Method   | Path                       | Description              |
-//! |----------|----------------------------|--------------------------|
-//! | `GET`    | `/api/v1/prompts`          | List all prompts         |
-//! | `GET`    | `/api/v1/prompts/{*name}`  | Get a prompt by name     |
-//! | `PUT`    | `/api/v1/prompts/{*name}`  | Update a prompt          |
-//! | `DELETE` | `/api/v1/prompts/{*name}`  | Reset a prompt to default|
+//! | Method | Path                      | Description          |
+//! |--------|---------------------------|----------------------|
+//! | `GET`  | `/api/v1/prompts`         | List all prompts     |
+//! | `GET`  | `/api/v1/prompts/{*name}` | Get a prompt by name |
 
 use std::sync::Arc;
 
@@ -35,12 +33,12 @@ use axum::{
     http::StatusCode,
     routing::get,
 };
-use agent_core::prompt::{PromptError, PromptRepo};
-use serde::{Deserialize, Serialize};
+use agent_core::prompt::PromptRepo;
+use serde::Serialize;
 use utoipa_axum::router::OpenApiRouter;
 
 // ---------------------------------------------------------------------------
-// Request / Response types
+// Response types
 // ---------------------------------------------------------------------------
 
 /// A prompt entry with its current effective content.
@@ -57,19 +55,13 @@ pub struct PromptListView {
     pub prompts: Vec<PromptFileView>,
 }
 
-/// Request body for `PUT /api/v1/prompts/{*name}`.
-#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
-pub struct PromptUpdateRequest {
-    pub content: String,
-}
-
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
 type RepoState = Arc<dyn PromptRepo>;
 
-/// Build an [`OpenApiRouter`] with all prompt CRUD endpoints and the given
+/// Build an [`OpenApiRouter`] with read-only prompt endpoints and the given
 /// [`PromptRepo`] as shared state.
 pub fn routes(repo: Arc<dyn PromptRepo>) -> OpenApiRouter {
     OpenApiRouter::new()
@@ -79,22 +71,9 @@ pub fn routes(repo: Arc<dyn PromptRepo>) -> OpenApiRouter {
         )
         .route(
             "/api/v1/prompts/{*name}",
-            get(get_prompt).put(update_prompt).delete(reset_prompt),
+            get(get_prompt),
         )
         .with_state(repo)
-}
-
-// ---------------------------------------------------------------------------
-// Error mapping
-// ---------------------------------------------------------------------------
-
-fn map_prompt_error(err: PromptError) -> (StatusCode, String) {
-    match &err {
-        PromptError::NotFound { .. } => (StatusCode::NOT_FOUND, err.to_string()),
-        PromptError::Io { .. } | PromptError::Watcher { .. } => {
-            (StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -142,59 +121,6 @@ async fn get_prompt(
         .get(&name)
         .await
         .ok_or_else(|| (StatusCode::NOT_FOUND, format!("prompt not found: {name}")))?;
-
-    Ok(Json(PromptFileView {
-        name:        entry.name,
-        description: entry.description,
-        content:     entry.content,
-    }))
-}
-
-/// `PUT /api/v1/prompts/{*name}` -- update a prompt's content.
-#[utoipa::path(
-    put,
-    path = "/api/v1/prompts/{name}",
-    tag = "prompts",
-    params(("name" = String, Path, description = "Prompt name (e.g. ai/job_fit.system.md)")),
-    request_body = PromptUpdateRequest,
-    responses(
-        (status = 200, description = "Prompt updated", body = PromptFileView),
-        (status = 404, description = "Prompt not found"),
-        (status = 500, description = "Internal server error"),
-    )
-)]
-async fn update_prompt(
-    State(repo): State<RepoState>,
-    Path(name): Path<String>,
-    Json(req): Json<PromptUpdateRequest>,
-) -> Result<Json<PromptFileView>, (StatusCode, String)> {
-    let entry = repo.update(&name, &req.content).await.map_err(map_prompt_error)?;
-
-    Ok(Json(PromptFileView {
-        name:        entry.name,
-        description: entry.description,
-        content:     entry.content,
-    }))
-}
-
-/// `DELETE /api/v1/prompts/{*name}` -- reset a prompt to its compiled-in
-/// default content.
-#[utoipa::path(
-    delete,
-    path = "/api/v1/prompts/{name}",
-    tag = "prompts",
-    params(("name" = String, Path, description = "Prompt name (e.g. ai/job_fit.system.md)")),
-    responses(
-        (status = 200, description = "Prompt reset to default", body = PromptFileView),
-        (status = 404, description = "Prompt not found"),
-        (status = 500, description = "Internal server error"),
-    )
-)]
-async fn reset_prompt(
-    State(repo): State<RepoState>,
-    Path(name): Path<String>,
-) -> Result<Json<PromptFileView>, (StatusCode, String)> {
-    let entry = repo.reset(&name).await.map_err(map_prompt_error)?;
 
     Ok(Json(PromptFileView {
         name:        entry.name,

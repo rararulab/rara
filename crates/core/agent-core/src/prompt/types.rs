@@ -17,7 +17,7 @@ pub struct PromptEntry {
     pub name: String,
     /// Human-readable description.
     pub description: String,
-    /// Current effective content (user-edited or default).
+    /// Current effective content (compiled-in default).
     pub content: String,
 }
 
@@ -27,10 +27,4 @@ pub struct PromptEntry {
 pub enum PromptError {
     #[snafu(display("prompt not found: {name}"))]
     NotFound { name: String },
-
-    #[snafu(display("io error: {source}"))]
-    Io { source: std::io::Error },
-
-    #[snafu(display("watcher error: {message}"))]
-    Watcher { message: String },
 }

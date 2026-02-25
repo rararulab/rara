@@ -1,3 +1,3 @@
 mod router;
 
-pub use router::{PromptFileView, PromptListView, PromptUpdateRequest, routes};
+pub use router::{PromptFileView, PromptListView, routes};
