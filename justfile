@@ -281,6 +281,21 @@ up:
 web:
     cd web && bun run dev
 
+[doc("start Electrobun desktop shell (connects to existing frontend/backend)")]
+[group("🔧 Development")]
+desktop:
+    cd desktop && bun install && bun run start
+
+[doc("start Electrobun desktop shell and also spawn backend + frontend dev servers")]
+[group("🔧 Development")]
+desktop-managed:
+    cd desktop && RARA_DESKTOP_REPO_ROOT=$(cd .. && pwd) RARA_DESKTOP_START_BACKEND=1 RARA_DESKTOP_START_FRONTEND=1 bun install && bun run start
+
+[doc("build Electrobun desktop app for current platform")]
+[group("🔧 Development")]
+desktop-build:
+    cd desktop && bun install && bun run build
+
 [doc("start backend + frontend dev servers together")]
 [group("🔧 Development")]
 dev:

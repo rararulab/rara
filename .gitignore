@@ -64,6 +64,9 @@ public/
 # Node (Playwright screenshot script)
 node_modules/
 package-lock.json
+desktop/build/
+desktop/artifacts/
+desktop/.electrobun/
 
 # Helm chart dependencies (downloaded via helm dependency build)
 deploy/helm/*/charts/

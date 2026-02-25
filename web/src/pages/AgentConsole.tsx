@@ -56,7 +56,7 @@ const OPS_TABS = [
 
 const OPS_UTILITY_ITEMS = [
   { href: "/jobs", label: "Jobs", icon: <Briefcase className="h-4 w-4" />, newTab: true },
-  { href: "/settings", label: "Settings", icon: <SettingsIcon className="h-4 w-4" /> },
+  { href: "/settings", label: "Settings", icon: <SettingsIcon className="h-4 w-4" />, newTab: true },
 ];
 
 function OperationsSidebarFooter() {

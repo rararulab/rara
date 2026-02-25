@@ -1,0 +1,16 @@
+{
+  "name": "rara-desktop",
+  "private": true,
+  "version": "0.0.17",
+  "type": "module",
+  "scripts": {
+    "start": "electrobun dev",
+    "build": "electrobun build",
+    "build:stable": "electrobun build --env stable"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.8",
+    "electrobun": "^1.14.4",
+    "typescript": "^5.9.3"
+  }
+}
