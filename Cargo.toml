@@ -136,6 +136,7 @@ git2 = "0.20"
 tempfile = "3"
 testcontainers = "0.26"
 testcontainers-modules = { version = "0.14", features = ["postgres", "k3s"] }
+wiremock = "0.6"
 
 # Internal workspace crates (use =version to keep in sync with workspace version)
 base = { path = "crates/common/base" }
