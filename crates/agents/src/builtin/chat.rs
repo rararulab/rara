@@ -98,8 +98,9 @@ impl ChatAgent {
 
     /// Common preparation logic shared by [`run`] and [`prepare_streaming`].
     ///
-    /// Handles: compaction check, system prompt assembly, effective tool
-    /// building, history conversion, and runner construction.
+    /// Handles: compaction check, post-compaction memory recall, system prompt
+    /// assembly, effective tool building, history conversion, and runner
+    /// construction.
     async fn prepare(
         &self,
         base_system_prompt: &str,
@@ -120,10 +121,33 @@ impl ChatAgent {
 
         // 2. Build system prompt (soul + memory profile + memory prefetch + skills)
         let user_text = user_content.text();
-        let system_prompt = self
+        let mut system_prompt = self
             .orchestrator
             .build_chat_system_prompt(base_system_prompt, user_text, effective_history.len())
             .await;
+
+        // 2a. Post-compaction memory recall: use the summary text to search
+        // memory and inject relevant context that may have been lost during
+        // compaction.
+        if let Some(ref effect) = compaction {
+            let summary_text = effect.summary.content.as_text();
+            let recalled = self
+                .orchestrator
+                .recall_for_context(&summary_text, 5)
+                .await;
+            if !recalled.is_empty() {
+                system_prompt
+                    .push_str("\n\n## Recalled Memory (post-compaction)\n");
+                for hit in &recalled {
+                    system_prompt
+                        .push_str(&format!("- [{}] {}\n", hit.source, hit.content));
+                }
+                tracing::info!(
+                    hits = recalled.len(),
+                    "post-compaction memory recall injected into system prompt"
+                );
+            }
+        }
 
         // 3. Build effective tools (static + MCP)
         let effective_tools = self.orchestrator.build_effective_tools().await;

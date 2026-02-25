@@ -129,6 +129,9 @@ pub struct MemorySettings {
     pub hindsight_base_url: Option<String>,
     /// Hindsight memory bank ID.
     pub hindsight_bank_id:  Option<String>,
+    /// When true, run memory recall on **every** conversation turn instead of
+    /// only when `history_len < 3`. Defaults to `false`.
+    pub recall_every_turn:  bool,
 }
 
 impl Default for MemorySettings {
@@ -139,6 +142,7 @@ impl Default for MemorySettings {
             memos_token:        None,
             hindsight_base_url: Some("http://localhost:8888".to_owned()),
             hindsight_bank_id:  Some("default".to_owned()),
+            recall_every_turn:  false,
         }
     }
 }
@@ -276,6 +280,7 @@ pub struct MemoryRuntimeSettingsPatch {
     pub memos_token:        Option<String>,
     pub hindsight_base_url: Option<String>,
     pub hindsight_bank_id:  Option<String>,
+    pub recall_every_turn:  Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
@@ -381,6 +386,9 @@ impl Settings {
                 }
                 if let Some(bank_id) = memory.hindsight_bank_id {
                     self.agent.memory.hindsight_bank_id = normalize_text(Some(bank_id));
+                }
+                if let Some(recall) = memory.recall_every_turn {
+                    self.agent.memory.recall_every_turn = recall;
                 }
             }
             if let Some(composio) = agent.composio {

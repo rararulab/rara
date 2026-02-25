@@ -19,7 +19,9 @@ graph TD
     J --> K[Search results]
 
     L[mem0 user profile] -->|Auto-inject| M[System Prompt]
-    K -->|First-turn pre-fetch| M
+    K -->|Pre-fetch recall| M
+    N[Context Compaction] -->|summary as query| O[recall_for_context]
+    O -->|Post-compaction recall| M
 ```
 
 ## Three-Layer Memory
@@ -61,11 +63,24 @@ A session is considered "ended" when the inactivity gap exceeds 30 minutes (`SES
 
 On every `send_message()` call, `get_user_profile()` queries mem0 for up to 50 structured facts about the user and prepends them to the system prompt as a "User Profile" section.
 
-### 2. First-Turn Memory Pre-fetch
+### 2. Memory Pre-fetch (Configurable Per-Turn Recall)
 
 When a session has fewer than 3 messages (new or short session), `build_chat_system_prompt()` automatically runs `search(user_text, 5)` and injects matching snippets into the system prompt as "Relevant Memory Context".
 
-### 3. Session-End Consolidation
+This behavior can be extended to **every** conversation turn by setting `recall_every_turn: true` in the memory settings. When enabled, the memory pre-fetch runs regardless of session length, ensuring the agent always has relevant memory context.
+
+| Setting | Default | Effect |
+|---------|---------|--------|
+| `recall_every_turn` | `false` | Only pre-fetch when `history_len < 3` |
+| `recall_every_turn = true` | — | Pre-fetch on every turn |
+
+### 3. Post-Compaction Memory Recall
+
+When context compaction compresses conversation history into a summary, important details may be lost. To compensate, the system automatically searches memory using the compacted summary text as the query and injects up to 5 relevant results into the system prompt as "Recalled Memory (post-compaction)".
+
+This happens in `ChatAgent::prepare()` immediately after compaction, before the runner is constructed. The recalled memories provide persistent context that bridges the information gap created by compaction.
+
+### 4. Session-End Consolidation
 
 When a session resumes after ≥30 minutes of inactivity, all previous exchanges are batch-consolidated into long-term memory:
 
@@ -91,6 +106,7 @@ Memory settings via Consul KV or environment variables:
 | `memos_token` | — | Bearer token for Memos authentication |
 | `hindsight_base_url` | `http://localhost:8888` | Hindsight API server |
 | `hindsight_bank_id` | `default` | Hindsight memory bank identifier |
+| `recall_every_turn` | `false` | Run memory pre-fetch on every turn (not just first 3 messages) |
 
 ## Key Files
 
@@ -103,4 +119,5 @@ Memory settings via Consul KV or environment variables:
 | `crates/memory/src/fusion.rs` | Reciprocal Rank Fusion algorithm |
 | `crates/workers/src/tools/services/memory_tools.rs` | All 4 memory tools |
 | `crates/chat/src/service.rs` | Session-end detection + consolidation trigger |
-| `crates/agents/src/orchestrator/core.rs` | Profile injection + pre-fetch + spawn_session_consolidation |
+| `crates/agents/src/orchestrator/core.rs` | Profile injection + pre-fetch + recall_for_context + spawn_session_consolidation |
+| `crates/agents/src/builtin/chat.rs` | ChatAgent prepare — compaction check + post-compaction recall |

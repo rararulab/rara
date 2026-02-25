@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_openai::types::chat::ChatCompletionRequestMessage;
 use rara_domain_shared::settings::model::Settings;
 use rara_mcp::{manager::mgr::McpManager, tool_bridge::McpToolBridge};
-use rara_memory::MemoryManager;
+use rara_memory::{MemoryManager, SearchResult};
 use rara_sessions::types::ChatMessage;
 use tokio::sync::watch;
 use tracing::info;
@@ -88,8 +88,10 @@ impl AgentOrchestrator {
             }
         }
 
-        // Pre-fetch relevant memory context for new / short sessions.
-        if history_len < 3 {
+        // Pre-fetch relevant memory context for new / short sessions,
+        // or every turn when `recall_every_turn` is enabled.
+        let recall_every_turn = self.settings_rx.borrow().agent.memory.recall_every_turn;
+        if history_len < 3 || recall_every_turn {
             if let Some(ref mm) = self.memory_manager {
                 match mm.search(user_text, 5).await {
                     Ok(results) if !results.is_empty() => {
@@ -100,6 +102,7 @@ impl AgentOrchestrator {
                         }
                         info!(
                             hits = results.len(),
+                            recall_every_turn,
                             "memory pre-fetch injected into system prompt"
                         );
                     }
@@ -257,6 +260,30 @@ impl AgentOrchestrator {
         let tokens = estimate_history_tokens(history);
         let threshold = (context_length as f64 * 0.80) as usize;
         tokens > threshold
+    }
+
+    // -- memory recall -------------------------------------------------------
+
+    /// Search memory for context relevant to the given query.
+    ///
+    /// Returns up to `limit` [`SearchResult`]s. If no memory manager is
+    /// configured, or the search fails, an empty vec is returned silently
+    /// (with a warning log on failure).
+    ///
+    /// Primary use case: after compaction compresses history, the compacted
+    /// summary is used as the query to recall relevant memories that might
+    /// otherwise be lost.
+    pub async fn recall_for_context(&self, query: &str, limit: usize) -> Vec<SearchResult> {
+        let Some(ref mm) = self.memory_manager else {
+            return vec![];
+        };
+        match mm.search(query, limit).await {
+            Ok(results) => results,
+            Err(e) => {
+                tracing::warn!(error = %e, "memory recall for context failed");
+                vec![]
+            }
+        }
     }
 
     // -- memory consolidation ------------------------------------------------

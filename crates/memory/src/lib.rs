@@ -39,6 +39,19 @@
 //!               └────────┘  └────────┘   └────────────┘
 //! ```
 //!
+//! ## Recall Strategies
+//!
+//! The orchestrator uses [`MemoryManager::search`] in three recall contexts:
+//!
+//! 1. **First-turn / short-session pre-fetch** — when `history_len < 3`, the
+//!    user's message text is used as a search query to inject relevant context
+//!    into the system prompt.
+//! 2. **Per-turn recall** (opt-in via `recall_every_turn` setting) — same as
+//!    above but runs on every turn regardless of session length.
+//! 3. **Post-compaction recall** — after context compaction compresses history
+//!    into a summary, the summary text is used as a search query to recover
+//!    details that may have been lost during compaction.
+//!
 //! ## Search Pipeline
 //!
 //! [`MemoryManager::search`] queries mem0 and Hindsight **in parallel**, then
