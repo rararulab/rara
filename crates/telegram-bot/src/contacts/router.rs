@@ -19,7 +19,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use rara_domain_shared::contacts::{
+use super::{
     error::ContactError,
     repository::ContactRepository,
     types::{CreateContactRequest, TelegramContact, UpdateContactRequest},

@@ -43,7 +43,7 @@ pub struct AppState {
     // -- shared --
     pub settings_svc:   rara_domain_shared::settings::SettingsSvc,
     pub notify_client:  rara_domain_shared::notify::client::NotifyClient,
-    pub contact_repo:   rara_domain_shared::contacts::repository::ContactRepository,
+    pub contact_repo:   rara_telegram_bot::contacts::repository::ContactRepository,
 
     // -- LLM provider --
     pub llm_provider: agent_core::provider::LlmProviderLoaderRef,
@@ -146,6 +146,10 @@ impl AppState {
         );
         let composio_auth_provider: Arc<dyn rara_composio::ComposioAuthProvider> =
             Arc::new(SettingsComposioAuthProvider::new(settings_svc.clone()));
+        let contact_repo =
+            rara_telegram_bot::contacts::repository::ContactRepository::new(pool.clone());
+        let contact_lookup: Arc<dyn tool_core::contact_lookup::ContactLookup> =
+            Arc::new(contact_repo.clone());
         let mut tool_registry = agent_core::tool_registry::ToolRegistry::new();
         for tool in tool_core::default_primitives(tool_core::PrimitiveDeps {
             pool:                   pool.clone(),
@@ -153,6 +157,7 @@ impl AppState {
             settings_svc:           settings_svc.clone(),
             object_store:           object_store.clone(),
             composio_auth_provider: composio_auth_provider.clone(),
+            contact_lookup:         contact_lookup.clone(),
         }) {
             tool_registry.register_primitive(tool);
         }
@@ -284,6 +289,7 @@ impl AppState {
             composio_auth_provider,
             mcp_manager.clone(),
             prompt_repo.clone(),
+            contact_lookup,
         );
         info!("Pipeline service initialized");
 
@@ -348,9 +354,6 @@ impl AppState {
             chat_agent,
         );
         info!("Chat service initialized");
-
-        let contact_repo =
-            rara_domain_shared::contacts::repository::ContactRepository::new(pool.clone());
 
         // -- agent dispatcher ---------------------------------------------------
 
@@ -443,7 +446,7 @@ impl AppState {
         merge_openapi_router(
             &mut router,
             &mut api,
-            rara_backend_admin::contacts::routes(self.contact_repo.clone()),
+            rara_telegram_bot::contacts::routes(self.contact_repo.clone()),
         );
         merge_openapi_router(
             &mut router,

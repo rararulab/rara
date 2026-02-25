@@ -12,7 +12,11 @@ categories.workspace = true
 description = "Standalone Telegram bot runtime for the Job Automation Platform"
 
 [dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+axum = { workspace = true }
 base64 = { workspace = true }
+chrono = { workspace = true }
 futures = { workspace = true }
 rara-domain-shared = { workspace = true }
 reqwest = { workspace = true, features = ["stream"] }
@@ -24,8 +28,12 @@ snafu = { workspace = true }
 teloxide = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
+tool-core = { workspace = true }
 tracing = { workspace = true }
 url = "2.5.8"
+utoipa = { workspace = true }
+utoipa-axum = { workspace = true }
+uuid = { workspace = true }
 yunara-store = { workspace = true }
 
 [lints]

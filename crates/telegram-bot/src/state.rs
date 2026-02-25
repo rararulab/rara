@@ -23,7 +23,7 @@
 
 use std::sync::{Arc, RwLock};
 
-use rara_domain_shared::contacts::repository::ContactRepository;
+use crate::contacts::repository::ContactRepository;
 use teloxide::types::ChatId;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -115,7 +115,7 @@ impl BotState {
 
     /// Resolve a username to a chat ID from the contacts table.
     pub(crate) async fn resolve_contact(&self, username: &str) -> Option<i64> {
-        match self.contacts.find_by_username(username).await {
+        match self.contacts.get_by_username(username).await {
             Ok(Some(contact)) if contact.enabled => contact.chat_id,
             Ok(_) => None,
             Err(e) => {
