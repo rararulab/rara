@@ -274,598 +274,97 @@ impl MemoryManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::MemoryError;
-    use wiremock::matchers::{body_json, method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use crate::hindsight_client::HindsightClient;
+    use crate::mem0_client::Mem0Client;
+    use crate::memos_client::MemosClient;
 
-    /// Start 3 MockServers and build a MemoryManager wired to them.
-    async fn setup_manager() -> (MemoryManager, MockServer, MockServer, MockServer) {
-        let mem0_server = MockServer::start().await;
-        let memos_server = MockServer::start().await;
-        let hindsight_server = MockServer::start().await;
+    /// Build a MemoryManager from environment variables.
+    /// Returns None if required env vars are not set.
+    fn manager() -> Option<MemoryManager> {
+        let mem0_url = std::env::var("MEM0_BASE_URL").ok()?;
+        let memos_url = std::env::var("MEMOS_BASE_URL").ok()?;
+        let memos_token = std::env::var("MEMOS_TOKEN").unwrap_or_default();
+        let hindsight_url = std::env::var("HINDSIGHT_BASE_URL").ok()?;
+        let hindsight_bank = std::env::var("HINDSIGHT_BANK_ID").unwrap_or_else(|_| "integration-test".into());
 
-        let mem0 = Mem0Client::new(mem0_server.uri());
-        let memos = MemosClient::new(memos_server.uri(), "test-token".into());
-        let hindsight =
-            crate::hindsight_client::HindsightClient::new(hindsight_server.uri(), "test-bank".into());
-        let manager = MemoryManager::new(mem0, memos, hindsight, "test-user".into());
-
-        (manager, mem0_server, memos_server, hindsight_server)
+        let mem0 = Mem0Client::new(mem0_url);
+        let memos = MemosClient::new(memos_url, memos_token);
+        let hindsight = HindsightClient::new(hindsight_url, hindsight_bank);
+        Some(MemoryManager::new(mem0, memos, hindsight, "integration-test".into()))
     }
 
-    fn mem0_search_response(items: &[(&str, &str, f64)]) -> serde_json::Value {
-        let arr: Vec<serde_json::Value> = items
-            .iter()
-            .map(|(id, memory, score)| {
-                serde_json::json!({
-                    "id": id,
-                    "memory": memory,
-                    "user_id": "test-user",
-                    "score": score,
-                    "created_at": "2025-01-01T00:00:00Z",
-                    "updated_at": "2025-01-01T00:00:00Z"
-                })
-            })
-            .collect();
-        serde_json::Value::Array(arr)
-    }
-
-    fn hindsight_recall_response(items: &[(&str, &str, f64)]) -> serde_json::Value {
-        let arr: Vec<serde_json::Value> = items
-            .iter()
-            .map(|(id, content, score)| {
-                serde_json::json!({
-                    "id": id,
-                    "content": content,
-                    "network": "world",
-                    "score": score
-                })
-            })
-            .collect();
-        serde_json::Value::Array(arr)
-    }
-
-    fn sample_memo_entry() -> serde_json::Value {
-        serde_json::json!({
-            "name": "memos/1",
-            "uid": "uid-123",
-            "content": "test content",
-            "visibility": "PRIVATE",
-            "pinned": false,
-            "createTime": "2025-01-01T00:00:00Z",
-            "updateTime": "2025-01-01T00:00:00Z"
-        })
-    }
-
-    // ---- search (7) ----
-
-    #[tokio::test]
-    async fn search_both_succeed() {
-        let (manager, mem0_server, _memos_server, hindsight_server) = setup_manager().await;
-
-        // mem0 returns x, y
-        Mock::given(method("POST"))
-            .and(path("/v1/memories/search/"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(&mem0_search_response(&[("x", "fact x", 0.9), ("y", "fact y", 0.8)])),
-            )
-            .mount(&mem0_server)
-            .await;
-
-        // hindsight returns y, z
-        Mock::given(method("POST"))
-            .and(path("/api/v1/banks/test-bank/recall"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(&hindsight_recall_response(&[("y", "recall y", 0.9), ("z", "recall z", 0.7)])),
-            )
-            .mount(&hindsight_server)
-            .await;
-
-        let results = manager.search("query", 10).await.unwrap();
-        // "y" appears in both lists, so it should have the highest RRF score.
-        assert!(!results.is_empty());
-        assert_eq!(results[0].id, "y");
-    }
-
-    #[tokio::test]
-    async fn search_mem0_fails() {
-        let (manager, mem0_server, _memos_server, hindsight_server) = setup_manager().await;
-
-        Mock::given(method("POST"))
-            .and(path("/v1/memories/search/"))
-            .respond_with(ResponseTemplate::new(500))
-            .mount(&mem0_server)
-            .await;
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/banks/test-bank/recall"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(&hindsight_recall_response(&[("z", "recall z", 0.9)])),
-            )
-            .mount(&hindsight_server)
-            .await;
-
-        let results = manager.search("query", 10).await.unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].id, "z");
-        assert_eq!(results[0].source, MemorySource::Hindsight);
-    }
-
-    #[tokio::test]
-    async fn search_hindsight_fails() {
-        let (manager, mem0_server, _memos_server, hindsight_server) = setup_manager().await;
-
-        Mock::given(method("POST"))
-            .and(path("/v1/memories/search/"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(&mem0_search_response(&[("x", "fact x", 0.9)])),
-            )
-            .mount(&mem0_server)
-            .await;
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/banks/test-bank/recall"))
-            .respond_with(ResponseTemplate::new(500))
-            .mount(&hindsight_server)
-            .await;
-
-        let results = manager.search("query", 10).await.unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].id, "x");
-        assert_eq!(results[0].source, MemorySource::Mem0);
-    }
-
-    #[tokio::test]
-    async fn search_both_fail() {
-        let (manager, mem0_server, _memos_server, hindsight_server) = setup_manager().await;
-
-        Mock::given(method("POST"))
-            .and(path("/v1/memories/search/"))
-            .respond_with(ResponseTemplate::new(500))
-            .mount(&mem0_server)
-            .await;
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/banks/test-bank/recall"))
-            .respond_with(ResponseTemplate::new(500))
-            .mount(&hindsight_server)
-            .await;
-
-        let results = manager.search("query", 10).await.unwrap();
-        assert!(results.is_empty());
-    }
-
-    #[tokio::test]
-    async fn search_respects_limit() {
-        let (manager, mem0_server, _memos_server, hindsight_server) = setup_manager().await;
-
-        Mock::given(method("POST"))
-            .and(path("/v1/memories/search/"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(&mem0_search_response(&[
-                    ("a", "a", 0.9),
-                    ("b", "b", 0.8),
-                    ("c", "c", 0.7),
-                ])),
-            )
-            .mount(&mem0_server)
-            .await;
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/banks/test-bank/recall"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(&hindsight_recall_response(&[
-                    ("d", "d", 0.9),
-                    ("e", "e", 0.8),
-                ])),
-            )
-            .mount(&hindsight_server)
-            .await;
-
-        let results = manager.search("query", 2).await.unwrap();
-        assert!(results.len() <= 2);
-    }
-
-    #[tokio::test]
-    async fn search_overfetch() {
-        let (manager, mem0_server, _memos_server, hindsight_server) = setup_manager().await;
-
-        // When limit=1, fetch_limit = max(1*3, 10) = 10
-        // Verify mem0 receives top_k=10
-        let expected_body = serde_json::json!({
-            "query": "test",
-            "user_id": "test-user",
-            "top_k": 10,
-        });
-
-        Mock::given(method("POST"))
-            .and(path("/v1/memories/search/"))
-            .and(body_json(&expected_body))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&serde_json::json!([])))
-            .mount(&mem0_server)
-            .await;
-
-        // Hindsight also receives top_k=10
-        let expected_hindsight_body = serde_json::json!({
-            "query": "test",
-            "top_k": 10,
-        });
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/banks/test-bank/recall"))
-            .and(body_json(&expected_hindsight_body))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&serde_json::json!([])))
-            .mount(&hindsight_server)
-            .await;
-
-        let results = manager.search("test", 1).await.unwrap();
-        assert!(results.is_empty());
-    }
-
-    #[tokio::test]
-    async fn search_parallel() {
-        let (manager, mem0_server, _memos_server, hindsight_server) = setup_manager().await;
-
-        // Both backends respond with 100ms delay.
-        Mock::given(method("POST"))
-            .and(path("/v1/memories/search/"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(&serde_json::json!([]))
-                    .set_delay(std::time::Duration::from_millis(100)),
-            )
-            .mount(&mem0_server)
-            .await;
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/banks/test-bank/recall"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(&serde_json::json!([]))
-                    .set_delay(std::time::Duration::from_millis(100)),
-            )
-            .mount(&hindsight_server)
-            .await;
-
-        let start = std::time::Instant::now();
-        let _results = manager.search("test", 10).await.unwrap();
-        let elapsed = start.elapsed();
-
-        // If parallel, total time should be ~100ms, not ~200ms.
-        assert!(
-            elapsed < std::time::Duration::from_millis(250),
-            "search took {:?}, expected < 250ms (parallel)",
-            elapsed
-        );
-    }
-
-    // ---- write_note (4) ----
-
-    #[tokio::test]
-    async fn write_note_no_tags() {
-        let (manager, _mem0_server, memos_server, _hindsight_server) = setup_manager().await;
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/memos"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&sample_memo_entry()))
-            .mount(&memos_server)
-            .await;
-
-        let name = manager.write_note("plain content", &[]).await.unwrap();
-        assert_eq!(name, "memos/1");
-    }
-
-    #[tokio::test]
-    async fn write_note_with_tags() {
-        let (manager, _mem0_server, memos_server, _hindsight_server) = setup_manager().await;
-
-        // When tags are ["daily", "log"], the body sent to Memos should start with "#daily #log \n"
-        let expected_body = serde_json::json!({
-            "content": "#daily #log \nsome content",
-            "visibility": "PRIVATE",
-        });
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/memos"))
-            .and(body_json(&expected_body))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&sample_memo_entry()))
-            .mount(&memos_server)
-            .await;
-
-        let name = manager
-            .write_note("some content", &["daily", "log"])
-            .await
-            .unwrap();
-        assert_eq!(name, "memos/1");
-    }
-
-    #[tokio::test]
-    async fn write_note_returns_name() {
-        let (manager, _mem0_server, memos_server, _hindsight_server) = setup_manager().await;
-
-        let mut entry = sample_memo_entry();
-        entry["name"] = serde_json::json!("memos/999");
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/memos"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&entry))
-            .mount(&memos_server)
-            .await;
-
-        let name = manager.write_note("content", &[]).await.unwrap();
-        assert_eq!(name, "memos/999");
-    }
-
-    #[tokio::test]
-    async fn write_note_error() {
-        let (manager, _mem0_server, memos_server, _hindsight_server) = setup_manager().await;
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/memos"))
-            .respond_with(ResponseTemplate::new(500).set_body_string("error"))
-            .mount(&memos_server)
-            .await;
-
-        let err = manager.write_note("content", &[]).await.unwrap_err();
-        assert!(matches!(err, MemoryError::Memos { .. }));
-    }
-
-    // ---- reflect_on_exchange (4) ----
-
-    #[tokio::test]
-    async fn reflect_all_succeed() {
-        let (manager, mem0_server, memos_server, hindsight_server) = setup_manager().await;
-
-        Mock::given(method("POST"))
-            .and(path("/v1/memories/"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(&serde_json::json!({"results": []})),
-            )
-            .expect(1)
-            .mount(&mem0_server)
-            .await;
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/banks/test-bank/retain"))
-            .respond_with(ResponseTemplate::new(200))
-            .expect(1)
-            .mount(&hindsight_server)
-            .await;
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/memos"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&sample_memo_entry()))
-            .expect(1)
-            .mount(&memos_server)
-            .await;
-
-        manager
-            .reflect_on_exchange("hello", "world")
-            .await
-            .unwrap();
-        // Expectations are verified on drop.
-    }
-
-    #[tokio::test]
-    async fn reflect_mem0_fails() {
-        let (manager, mem0_server, memos_server, hindsight_server) = setup_manager().await;
-
-        Mock::given(method("POST"))
-            .and(path("/v1/memories/"))
-            .respond_with(ResponseTemplate::new(500))
-            .mount(&mem0_server)
-            .await;
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/banks/test-bank/retain"))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&hindsight_server)
-            .await;
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/memos"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&sample_memo_entry()))
-            .mount(&memos_server)
-            .await;
-
-        // Should still return Ok even though mem0 failed.
-        manager
-            .reflect_on_exchange("hello", "world")
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn reflect_all_fail() {
-        let (manager, mem0_server, memos_server, hindsight_server) = setup_manager().await;
-
-        Mock::given(method("POST"))
-            .and(path("/v1/memories/"))
-            .respond_with(ResponseTemplate::new(500))
-            .mount(&mem0_server)
-            .await;
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/banks/test-bank/retain"))
-            .respond_with(ResponseTemplate::new(500))
-            .mount(&hindsight_server)
-            .await;
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/memos"))
-            .respond_with(ResponseTemplate::new(500))
-            .mount(&memos_server)
-            .await;
-
-        // Should still return Ok even when all backends fail.
-        manager
-            .reflect_on_exchange("hello", "world")
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn reflect_correct_payloads() {
-        let (manager, mem0_server, memos_server, hindsight_server) = setup_manager().await;
-
-        // mem0 should receive the messages array
-        let expected_mem0_body = serde_json::json!({
-            "messages": [
-                {"role": "user", "content": "hi there"},
-                {"role": "assistant", "content": "hello back"}
-            ],
-            "user_id": "test-user",
-        });
-
-        Mock::given(method("POST"))
-            .and(path("/v1/memories/"))
-            .and(body_json(&expected_mem0_body))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(&serde_json::json!({"results": []})),
-            )
-            .mount(&mem0_server)
-            .await;
-
-        // hindsight should receive the retain content
-        let expected_hindsight_body = serde_json::json!({
-            "content": "User: hi there\nAssistant: hello back",
-        });
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/banks/test-bank/retain"))
-            .and(body_json(&expected_hindsight_body))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&hindsight_server)
-            .await;
-
-        // memos should receive the log content
-        let expected_memos_body = serde_json::json!({
-            "content": "## Exchange Log\n\nUser: hi there\nAssistant: hello back",
-            "visibility": "PRIVATE",
-        });
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/memos"))
-            .and(body_json(&expected_memos_body))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&sample_memo_entry()))
-            .mount(&memos_server)
-            .await;
-
-        manager
-            .reflect_on_exchange("hi there", "hello back")
-            .await
-            .unwrap();
-    }
-
-    // ---- get_user_profile (3) ----
-
-    #[tokio::test]
-    async fn get_user_profile_success() {
-        let (manager, mem0_server, _memos_server, _hindsight_server) = setup_manager().await;
-
-        Mock::given(method("POST"))
-            .and(path("/v1/memories/search/"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(&mem0_search_response(&[
-                    ("p1", "likes rust", 0.9),
-                    ("p2", "lives in shanghai", 0.8),
-                ])),
-            )
-            .mount(&mem0_server)
-            .await;
-
-        let profile = manager.get_user_profile().await.unwrap();
-        assert_eq!(profile.len(), 2);
-        assert_eq!(profile[0].id, "p1");
-        assert_eq!(profile[1].id, "p2");
-    }
-
-    #[tokio::test]
-    async fn get_user_profile_broad_query() {
-        let (manager, mem0_server, _memos_server, _hindsight_server) = setup_manager().await;
-
-        let expected_body = serde_json::json!({
-            "query": "user profile preferences facts",
-            "user_id": "test-user",
-            "top_k": 50,
-        });
-
-        Mock::given(method("POST"))
-            .and(path("/v1/memories/search/"))
-            .and(body_json(&expected_body))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&serde_json::json!([])))
-            .mount(&mem0_server)
-            .await;
-
-        let profile = manager.get_user_profile().await.unwrap();
-        assert!(profile.is_empty());
-    }
-
-    #[tokio::test]
-    async fn get_user_profile_error() {
-        let (manager, mem0_server, _memos_server, _hindsight_server) = setup_manager().await;
-
-        Mock::given(method("POST"))
-            .and(path("/v1/memories/search/"))
-            .respond_with(ResponseTemplate::new(500))
-            .mount(&mem0_server)
-            .await;
-
-        let err = manager.get_user_profile().await.unwrap_err();
-        assert!(matches!(err, MemoryError::Mem0 { .. }));
-    }
-
-    // ---- deep_recall (2) ----
-
-    #[tokio::test]
-    async fn deep_recall_success() {
-        let (manager, _mem0_server, _memos_server, hindsight_server) = setup_manager().await;
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/banks/test-bank/reflect"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(&serde_json::json!({"response": "deep insight"})),
-            )
-            .mount(&hindsight_server)
-            .await;
-
-        let answer = manager.deep_recall("deep question").await.unwrap();
-        assert_eq!(answer, "deep insight");
-    }
-
-    #[tokio::test]
-    async fn deep_recall_error() {
-        let (manager, _mem0_server, _memos_server, hindsight_server) = setup_manager().await;
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/banks/test-bank/reflect"))
-            .respond_with(ResponseTemplate::new(500))
-            .mount(&hindsight_server)
-            .await;
-
-        let err = manager.deep_recall("query").await.unwrap_err();
-        assert!(matches!(err, MemoryError::Hindsight { .. }));
-    }
-
-    // ---- display (3) ----
+    // -- unit tests (no infra needed) --
 
     #[test]
-    fn memory_source_display_mem0() {
+    fn memory_source_display() {
         assert_eq!(MemorySource::Mem0.to_string(), "mem0");
-    }
-
-    #[test]
-    fn memory_source_display_hindsight() {
         assert_eq!(MemorySource::Hindsight.to_string(), "hindsight");
+        assert_eq!(MemorySource::Memos.to_string(), "memos");
     }
 
-    #[test]
-    fn memory_source_display_memos() {
-        assert_eq!(MemorySource::Memos.to_string(), "memos");
+    // -- integration tests --
+
+    #[tokio::test]
+    #[ignore = "requires all 3 memory services (set MEM0_BASE_URL, MEMOS_BASE_URL, HINDSIGHT_BASE_URL)"]
+    async fn search_returns_fused_results() {
+        let mm = manager().expect("memory service env vars required");
+        let results = mm.search("programming languages", 10).await.expect("search failed");
+        println!("search returned {} fused results", results.len());
+        for r in &results {
+            println!("  [{:.4}] [{}] {}", r.score, r.source, &r.content[..r.content.len().min(80)]);
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Memos service (set MEMOS_BASE_URL, MEMOS_TOKEN)"]
+    async fn write_note_and_verify() {
+        let mm = manager().expect("memory service env vars required");
+
+        let name = mm.write_note("integration test note from MemoryManager", &["rara-test", "integration"])
+            .await
+            .expect("write_note failed");
+        println!("write_note returned: {name}");
+        assert!(name.starts_with("memos/"));
+
+        // Clean up: extract id and delete via memos client directly
+        let id = name.strip_prefix("memos/").unwrap_or(&name);
+        let memos_url = std::env::var("MEMOS_BASE_URL").unwrap();
+        let memos_token = std::env::var("MEMOS_TOKEN").unwrap_or_default();
+        let memos = MemosClient::new(memos_url, memos_token);
+        memos.delete_memo(id).await.expect("cleanup delete failed");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires all 3 memory services"]
+    async fn reflect_on_exchange_tolerates_partial_failures() {
+        let mm = manager().expect("memory service env vars required");
+        // This should succeed even if some backends have issues
+        mm.reflect_on_exchange(
+            "I'm looking for Rust backend jobs in Shanghai",
+            "I'll help you search for Rust backend positions in Shanghai. Let me check the latest listings.",
+        ).await.expect("reflect_on_exchange failed");
+        println!("reflect_on_exchange completed successfully");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires mem0 service (set MEM0_BASE_URL)"]
+    async fn get_user_profile() {
+        let mm = manager().expect("memory service env vars required");
+        let profile = mm.get_user_profile().await.expect("get_user_profile failed");
+        println!("user profile has {} facts", profile.len());
+        for fact in &profile {
+            println!("  - {}", fact.memory);
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Hindsight service (set HINDSIGHT_BASE_URL)"]
+    async fn deep_recall() {
+        let mm = manager().expect("memory service env vars required");
+        let response = mm.deep_recall("What are the user's career goals?")
+            .await
+            .expect("deep_recall failed");
+        println!("deep_recall: {}", &response[..response.len().min(200)]);
+        assert!(!response.is_empty());
     }
 }

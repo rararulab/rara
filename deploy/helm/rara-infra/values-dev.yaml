@@ -221,8 +221,7 @@ crawl4ai:
 # Mem0 REST API
 # ------------------------------------------------------------------------------
 mem0:
-  # Keep disabled by default in dev until API keys/backend env vars are set.
-  enabled: false
+  enabled: true
   resources:
     requests:
       cpu: 100m
@@ -235,7 +234,7 @@ mem0:
 # Memos
 # ------------------------------------------------------------------------------
 memos:
-  enabled: false
+  enabled: true
   resources:
     requests:
       cpu: 50m
@@ -258,7 +257,7 @@ memos:
 # Hindsight
 # ------------------------------------------------------------------------------
 hindsight:
-  enabled: false
+  enabled: true
   resources:
     requests:
       cpu: 100m

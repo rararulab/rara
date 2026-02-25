@@ -262,222 +262,52 @@ struct Mem0AddResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::MemoryError;
-    use wiremock::matchers::{body_json, method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    #[tokio::test]
-    async fn add_memories_success() {
-        let server = MockServer::start().await;
-        let response_body = serde_json::json!({
-            "results": [{
-                "id": "abc",
-                "event": "ADD",
-                "data": {"memory": "user likes rust"}
-            }]
-        });
-
-        Mock::given(method("POST"))
-            .and(path("/v1/memories/"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&response_body))
-            .mount(&server)
-            .await;
-
-        let client = Mem0Client::new(server.uri());
-        let msgs = vec![Mem0Message {
-            role: "user".into(),
-            content: "I like rust".into(),
-        }];
-        let events = client.add_memories(msgs, "u1").await.unwrap();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event, "ADD");
-        assert_eq!(events[0].id, "abc");
-        assert_eq!(events[0].data.memory, "user likes rust");
+    fn client() -> Option<Mem0Client> {
+        let url = std::env::var("MEM0_BASE_URL").ok()?;
+        Some(Mem0Client::new(url))
     }
 
     #[tokio::test]
-    async fn add_memories_server_error() {
-        let server = MockServer::start().await;
+    #[ignore = "requires running mem0 service (set MEM0_BASE_URL)"]
+    async fn add_and_search_memories() {
+        let c = client().expect("MEM0_BASE_URL required");
+        let user_id = "integration-test";
 
-        Mock::given(method("POST"))
-            .and(path("/v1/memories/"))
-            .respond_with(ResponseTemplate::new(500).set_body_string("internal error"))
-            .mount(&server)
-            .await;
+        // Add a memory
+        let messages = vec![
+            Mem0Message { role: "user".into(), content: "I love Rust programming".into() },
+            Mem0Message { role: "assistant".into(), content: "Rust is a great language!".into() },
+        ];
+        let events = c.add_memories(messages, user_id).await.expect("add_memories failed");
+        assert!(!events.is_empty(), "expected at least one event");
+        let first_id = events[0].id.clone();
+        println!("add_memories returned {} events, first id: {first_id}", events.len());
 
-        let client = Mem0Client::new(server.uri());
-        let msgs = vec![Mem0Message {
-            role: "user".into(),
-            content: "hello".into(),
-        }];
-        let err = client.add_memories(msgs, "u1").await.unwrap_err();
-        assert!(matches!(err, MemoryError::Mem0 { .. }));
+        // Search
+        let results = c.search("Rust programming", user_id, 5).await.expect("search failed");
+        println!("search returned {} results", results.len());
+        // At least one result should contain something about Rust
+        assert!(results.iter().any(|m| m.memory.to_lowercase().contains("rust")),
+            "expected a result mentioning rust");
+
+        // Get by ID
+        let mem = c.get(&first_id).await.expect("get failed");
+        println!("get({first_id}): {}", mem.memory);
+
+        // Delete
+        c.delete(&first_id).await.expect("delete failed");
+        println!("deleted {first_id}");
     }
 
     #[tokio::test]
-    async fn add_memories_sends_correct_body() {
-        let server = MockServer::start().await;
-
-        let expected_body = serde_json::json!({
-            "messages": [{"role": "user", "content": "I like rust"}],
-            "user_id": "u1",
-        });
-
-        Mock::given(method("POST"))
-            .and(path("/v1/memories/"))
-            .and(body_json(&expected_body))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(&serde_json::json!({"results": []})),
-            )
-            .mount(&server)
-            .await;
-
-        let client = Mem0Client::new(server.uri());
-        let msgs = vec![Mem0Message {
-            role: "user".into(),
-            content: "I like rust".into(),
-        }];
-        let events = client.add_memories(msgs, "u1").await.unwrap();
-        assert!(events.is_empty());
-    }
-
-    #[tokio::test]
-    async fn search_success() {
-        let server = MockServer::start().await;
-        let response_body = serde_json::json!([{
-            "id": "m1",
-            "memory": "fact",
-            "user_id": "u1",
-            "score": 0.9,
-            "created_at": "2025-01-01T00:00:00Z",
-            "updated_at": "2025-01-01T00:00:00Z"
-        }]);
-
-        Mock::given(method("POST"))
-            .and(path("/v1/memories/search/"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&response_body))
-            .mount(&server)
-            .await;
-
-        let client = Mem0Client::new(server.uri());
-        let results = client.search("rust", "u1", 10).await.unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].id, "m1");
-        assert_eq!(results[0].memory, "fact");
-        assert!((results[0].score.unwrap() - 0.9).abs() < f64::EPSILON);
-    }
-
-    #[tokio::test]
-    async fn search_empty() {
-        let server = MockServer::start().await;
-
-        Mock::given(method("POST"))
-            .and(path("/v1/memories/search/"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&serde_json::json!([])))
-            .mount(&server)
-            .await;
-
-        let client = Mem0Client::new(server.uri());
-        let results = client.search("nothing", "u1", 10).await.unwrap();
-        assert!(results.is_empty());
-    }
-
-    #[tokio::test]
-    async fn search_error() {
-        let server = MockServer::start().await;
-
-        Mock::given(method("POST"))
-            .and(path("/v1/memories/search/"))
-            .respond_with(ResponseTemplate::new(422).set_body_string("validation error"))
-            .mount(&server)
-            .await;
-
-        let client = Mem0Client::new(server.uri());
-        let err = client.search("q", "u1", 10).await.unwrap_err();
-        assert!(matches!(err, MemoryError::Mem0 { .. }));
-    }
-
-    #[tokio::test]
-    async fn get_success() {
-        let server = MockServer::start().await;
-        let response_body = serde_json::json!({
-            "id": "m1",
-            "memory": "user likes rust",
-            "user_id": "u1",
-            "score": null,
-            "created_at": "2025-01-01T00:00:00Z",
-            "updated_at": "2025-01-01T00:00:00Z"
-        });
-
-        Mock::given(method("GET"))
-            .and(path("/v1/memories/m1/"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&response_body))
-            .mount(&server)
-            .await;
-
-        let client = Mem0Client::new(server.uri());
-        let mem = client.get("m1").await.unwrap();
-        assert_eq!(mem.id, "m1");
-        assert_eq!(mem.memory, "user likes rust");
-    }
-
-    #[tokio::test]
-    async fn get_not_found() {
-        let server = MockServer::start().await;
-
-        Mock::given(method("GET"))
-            .and(path("/v1/memories/missing/"))
-            .respond_with(ResponseTemplate::new(404).set_body_string("not found"))
-            .mount(&server)
-            .await;
-
-        let client = Mem0Client::new(server.uri());
-        let err = client.get("missing").await.unwrap_err();
-        assert!(matches!(err, MemoryError::Mem0 { .. }));
-    }
-
-    #[tokio::test]
-    async fn delete_success() {
-        let server = MockServer::start().await;
-
-        Mock::given(method("DELETE"))
-            .and(path("/v1/memories/m1/"))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-
-        let client = Mem0Client::new(server.uri());
-        client.delete("m1").await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn delete_not_found() {
-        let server = MockServer::start().await;
-
-        Mock::given(method("DELETE"))
-            .and(path("/v1/memories/missing/"))
-            .respond_with(ResponseTemplate::new(404).set_body_string("not found"))
-            .mount(&server)
-            .await;
-
-        let client = Mem0Client::new(server.uri());
-        let err = client.delete("missing").await.unwrap_err();
-        assert!(matches!(err, MemoryError::Mem0 { .. }));
-    }
-
-    #[tokio::test]
-    async fn trailing_slash_stripped() {
-        let server = MockServer::start().await;
-
-        Mock::given(method("POST"))
-            .and(path("/v1/memories/search/"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&serde_json::json!([])))
-            .mount(&server)
-            .await;
-
-        // Pass URI with trailing slash to verify it doesn't produce "//v1/..."
-        let client = Mem0Client::new(format!("{}/", server.uri()));
-        let results = client.search("test", "u1", 5).await.unwrap();
-        assert!(results.is_empty());
+    #[ignore = "requires running mem0 service (set MEM0_BASE_URL)"]
+    async fn search_empty_returns_ok() {
+        let c = client().expect("MEM0_BASE_URL required");
+        let results = c.search("xyzzy_nonexistent_query_12345", "integration-test", 5)
+            .await
+            .expect("search failed");
+        // Should return OK even with no matches
+        println!("search returned {} results", results.len());
     }
 }

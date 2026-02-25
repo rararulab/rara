@@ -432,7 +432,7 @@ crawl4ai:
 # Mem0 REST API — self-hosted memory API (custom template)
 # ------------------------------------------------------------------------------
 mem0:
-  enabled: false
+  enabled: true
   image:
     repository: mem0/mem0-api-server
     tag: "latest"
@@ -455,7 +455,7 @@ mem0:
 # Memos — Markdown note service (custom template)
 # ------------------------------------------------------------------------------
 memos:
-  enabled: false
+  enabled: true
   image:
     repository: neosmemo/memos
     tag: "stable"
@@ -495,7 +495,7 @@ memos:
 # Hindsight — 4-network memory service (custom template)
 # ------------------------------------------------------------------------------
 hindsight:
-  enabled: false
+  enabled: true
   image:
     repository: ghcr.io/vectorize-io/hindsight
     tag: "latest"

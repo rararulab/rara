@@ -88,6 +88,24 @@ test:
 
 alias t := test
 
+[doc("run memory integration tests against deployed services")]
+[group("🧪 Testing")]
+test-memory MEM0_URL="" MEMOS_URL="" MEMOS_TOKEN="" HINDSIGHT_URL="" HINDSIGHT_BANK="default":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Use provided args or fall back to env vars or defaults
+    export MEM0_BASE_URL="${MEM0_URL:-${MEM0_BASE_URL:-http://localhost:8888}}"
+    export MEMOS_BASE_URL="${MEMOS_URL:-${MEMOS_BASE_URL:-http://localhost:5230}}"
+    export MEMOS_TOKEN="${MEMOS_TOKEN:-}"
+    export HINDSIGHT_BASE_URL="${HINDSIGHT_URL:-${HINDSIGHT_BASE_URL:-http://localhost:8100}}"
+    export HINDSIGHT_BANK_ID="${HINDSIGHT_BANK:-${HINDSIGHT_BANK_ID:-default}}"
+    echo "Running memory integration tests..."
+    echo "  MEM0_BASE_URL=$MEM0_BASE_URL"
+    echo "  MEMOS_BASE_URL=$MEMOS_BASE_URL"
+    echo "  HINDSIGHT_BASE_URL=$HINDSIGHT_BASE_URL"
+    echo "  HINDSIGHT_BANK_ID=$HINDSIGHT_BANK_ID"
+    cargo test -p rara-memory -- --ignored --nocapture
+
 [doc("run linting checks (clippy, docs, buf, zizmor, yamllint-rs, cargo-deny)")]
 [group("👆 Code Quality")]
 lint:

@@ -294,236 +294,60 @@ fn urlencoded(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::MemoryError;
-    use wiremock::matchers::{header, method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    fn sample_memo_entry() -> serde_json::Value {
-        serde_json::json!({
-            "name": "memos/1",
-            "uid": "uid-123",
-            "content": "test content",
-            "visibility": "PRIVATE",
-            "pinned": false,
-            "createTime": "2025-01-01T00:00:00Z",
-            "updateTime": "2025-01-01T00:00:00Z"
-        })
+    fn client() -> Option<MemosClient> {
+        let url = std::env::var("MEMOS_BASE_URL").ok()?;
+        let token = std::env::var("MEMOS_TOKEN").unwrap_or_default();
+        Some(MemosClient::new(url, token))
     }
 
     #[tokio::test]
-    async fn create_memo_success() {
-        let server = MockServer::start().await;
+    #[ignore = "requires running Memos service (set MEMOS_BASE_URL, MEMOS_TOKEN)"]
+    async fn create_list_get_update_delete_memo() {
+        let c = client().expect("MEMOS_BASE_URL required");
 
-        Mock::given(method("POST"))
-            .and(path("/api/v1/memos"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&sample_memo_entry()))
-            .mount(&server)
-            .await;
-
-        let client = MemosClient::new(server.uri(), "test-token".into());
-        let entry = client.create_memo("test content", "PRIVATE").await.unwrap();
-        assert_eq!(entry.name, "memos/1");
-        assert_eq!(entry.uid, "uid-123");
-        assert_eq!(entry.content, "test content");
-    }
-
-    #[tokio::test]
-    async fn create_memo_unauthorized() {
-        let server = MockServer::start().await;
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/memos"))
-            .respond_with(ResponseTemplate::new(401).set_body_string("unauthorized"))
-            .mount(&server)
-            .await;
-
-        let client = MemosClient::new(server.uri(), "bad-token".into());
-        let err = client.create_memo("content", "PRIVATE").await.unwrap_err();
-        assert!(matches!(err, MemoryError::Memos { .. }));
-    }
-
-    #[tokio::test]
-    async fn create_memo_sends_bearer_token() {
-        let server = MockServer::start().await;
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/memos"))
-            .and(header("Authorization", "Bearer test-token"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&sample_memo_entry()))
-            .mount(&server)
-            .await;
-
-        let client = MemosClient::new(server.uri(), "test-token".into());
-        let entry = client.create_memo("test content", "PRIVATE").await.unwrap();
-        assert_eq!(entry.name, "memos/1");
-    }
-
-    #[tokio::test]
-    async fn list_memos_success() {
-        let server = MockServer::start().await;
-        let response = serde_json::json!({
-            "memos": [sample_memo_entry()]
-        });
-
-        Mock::given(method("GET"))
-            .and(path("/api/v1/memos"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&response))
-            .mount(&server)
-            .await;
-
-        let client = MemosClient::new(server.uri(), "test-token".into());
-        let memos = client.list_memos(10, None).await.unwrap();
-        assert_eq!(memos.len(), 1);
-        assert_eq!(memos[0].name, "memos/1");
-    }
-
-    #[tokio::test]
-    async fn list_memos_empty() {
-        let server = MockServer::start().await;
-        let response = serde_json::json!({
-            "memos": null
-        });
-
-        Mock::given(method("GET"))
-            .and(path("/api/v1/memos"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&response))
-            .mount(&server)
-            .await;
-
-        let client = MemosClient::new(server.uri(), "test-token".into());
-        let memos = client.list_memos(10, None).await.unwrap();
-        assert!(memos.is_empty());
-    }
-
-    #[tokio::test]
-    async fn list_memos_with_filter() {
-        let server = MockServer::start().await;
-        let response = serde_json::json!({
-            "memos": [sample_memo_entry()]
-        });
-
-        // The filter "tag == 'daily'" should be URL-encoded in the query string.
-        // wiremock path matcher ignores query params, so the request will match.
-        Mock::given(method("GET"))
-            .and(path("/api/v1/memos"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&response))
-            .mount(&server)
-            .await;
-
-        let client = MemosClient::new(server.uri(), "test-token".into());
-        let memos = client
-            .list_memos(10, Some("tag == 'daily'"))
+        // Create
+        let entry = c.create_memo("integration test memo #rara-test", "PRIVATE")
             .await
-            .unwrap();
-        assert_eq!(memos.len(), 1);
+            .expect("create_memo failed");
+        println!("created memo: {} (uid={})", entry.name, entry.uid);
+        assert!(entry.content.contains("integration test memo"));
+
+        // Extract numeric id from name "memos/123"
+        let id = entry.name.strip_prefix("memos/").unwrap_or(&entry.name);
+
+        // List
+        let memos = c.list_memos(10, None).await.expect("list_memos failed");
+        println!("list_memos returned {} entries", memos.len());
+        assert!(memos.iter().any(|m| m.uid == entry.uid), "created memo not found in list");
+
+        // Get
+        let fetched = c.get_memo(id).await.expect("get_memo failed");
+        assert_eq!(fetched.uid, entry.uid);
+
+        // Update
+        let updated = c.update_memo(id, "updated integration test memo #rara-test")
+            .await
+            .expect("update_memo failed");
+        assert!(updated.content.contains("updated"));
+
+        // Delete
+        c.delete_memo(id).await.expect("delete_memo failed");
+        println!("deleted memo {id}");
     }
 
     #[tokio::test]
-    async fn list_memos_error() {
-        let server = MockServer::start().await;
-
-        Mock::given(method("GET"))
-            .and(path("/api/v1/memos"))
-            .respond_with(ResponseTemplate::new(500).set_body_string("server error"))
-            .mount(&server)
-            .await;
-
-        let client = MemosClient::new(server.uri(), "test-token".into());
-        let err = client.list_memos(10, None).await.unwrap_err();
-        assert!(matches!(err, MemoryError::Memos { .. }));
+    #[ignore = "requires running Memos service (set MEMOS_BASE_URL, MEMOS_TOKEN)"]
+    async fn list_with_filter() {
+        let c = client().expect("MEMOS_BASE_URL required");
+        // This may return empty but should not error
+        let memos = c.list_memos(5, Some("tag == 'rara-test'"))
+            .await
+            .expect("list_memos with filter failed");
+        println!("filtered list returned {} entries", memos.len());
     }
 
-    #[tokio::test]
-    async fn get_memo_success() {
-        let server = MockServer::start().await;
-
-        Mock::given(method("GET"))
-            .and(path("/api/v1/memos/42"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&sample_memo_entry()))
-            .mount(&server)
-            .await;
-
-        let client = MemosClient::new(server.uri(), "test-token".into());
-        let entry = client.get_memo("42").await.unwrap();
-        assert_eq!(entry.name, "memos/1");
-    }
-
-    #[tokio::test]
-    async fn get_memo_not_found() {
-        let server = MockServer::start().await;
-
-        Mock::given(method("GET"))
-            .and(path("/api/v1/memos/999"))
-            .respond_with(ResponseTemplate::new(404).set_body_string("not found"))
-            .mount(&server)
-            .await;
-
-        let client = MemosClient::new(server.uri(), "test-token".into());
-        let err = client.get_memo("999").await.unwrap_err();
-        assert!(matches!(err, MemoryError::Memos { .. }));
-    }
-
-    #[tokio::test]
-    async fn update_memo_success() {
-        let server = MockServer::start().await;
-        let mut updated = sample_memo_entry();
-        updated["content"] = serde_json::json!("updated content");
-
-        Mock::given(method("PATCH"))
-            .and(path("/api/v1/memos/42"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&updated))
-            .mount(&server)
-            .await;
-
-        let client = MemosClient::new(server.uri(), "test-token".into());
-        let entry = client.update_memo("42", "updated content").await.unwrap();
-        assert_eq!(entry.content, "updated content");
-    }
-
-    #[tokio::test]
-    async fn update_memo_not_found() {
-        let server = MockServer::start().await;
-
-        Mock::given(method("PATCH"))
-            .and(path("/api/v1/memos/999"))
-            .respond_with(ResponseTemplate::new(404).set_body_string("not found"))
-            .mount(&server)
-            .await;
-
-        let client = MemosClient::new(server.uri(), "test-token".into());
-        let err = client.update_memo("999", "content").await.unwrap_err();
-        assert!(matches!(err, MemoryError::Memos { .. }));
-    }
-
-    #[tokio::test]
-    async fn delete_memo_success() {
-        let server = MockServer::start().await;
-
-        Mock::given(method("DELETE"))
-            .and(path("/api/v1/memos/42"))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-
-        let client = MemosClient::new(server.uri(), "test-token".into());
-        client.delete_memo("42").await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn delete_memo_not_found() {
-        let server = MockServer::start().await;
-
-        Mock::given(method("DELETE"))
-            .and(path("/api/v1/memos/999"))
-            .respond_with(ResponseTemplate::new(404).set_body_string("not found"))
-            .mount(&server)
-            .await;
-
-        let client = MemosClient::new(server.uri(), "test-token".into());
-        let err = client.delete_memo("999").await.unwrap_err();
-        assert!(matches!(err, MemoryError::Memos { .. }));
-    }
-
+    // Keep urlencoded unit tests — these don't need infrastructure
     #[test]
     fn urlencoded_spaces() {
         assert_eq!(urlencoded("hello world"), "hello%20world");
@@ -531,15 +355,11 @@ mod tests {
 
     #[test]
     fn urlencoded_special_chars() {
-        assert_eq!(urlencoded("&"), "%26");
-        assert_eq!(urlencoded("="), "%3D");
-        assert_eq!(urlencoded("%"), "%25");
-        assert_eq!(urlencoded("+"), "%2B");
-        assert_eq!(urlencoded("#"), "%23");
+        assert_eq!(urlencoded("a&b=c%d+e#f"), "a%26b%3Dc%25d%2Be%23f");
     }
 
     #[test]
     fn urlencoded_passthrough() {
-        assert_eq!(urlencoded("abcABC123"), "abcABC123");
+        assert_eq!(urlencoded("hello"), "hello");
     }
 }

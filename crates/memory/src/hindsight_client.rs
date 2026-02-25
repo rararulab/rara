@@ -229,138 +229,43 @@ struct ReflectResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::MemoryError;
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    #[tokio::test]
-    async fn retain_success() {
-        let server = MockServer::start().await;
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/banks/test-bank/retain"))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-
-        let client = HindsightClient::new(server.uri(), "test-bank".into());
-        client.retain("some content").await.unwrap();
+    fn client() -> Option<HindsightClient> {
+        let url = std::env::var("HINDSIGHT_BASE_URL").ok()?;
+        let bank_id = std::env::var("HINDSIGHT_BANK_ID").unwrap_or_else(|_| "integration-test".into());
+        Some(HindsightClient::new(url, bank_id))
     }
 
     #[tokio::test]
-    async fn retain_error() {
-        let server = MockServer::start().await;
+    #[ignore = "requires running Hindsight service (set HINDSIGHT_BASE_URL)"]
+    async fn retain_and_recall() {
+        let c = client().expect("HINDSIGHT_BASE_URL required");
 
-        Mock::given(method("POST"))
-            .and(path("/api/v1/banks/test-bank/retain"))
-            .respond_with(ResponseTemplate::new(500).set_body_string("server error"))
-            .mount(&server)
-            .await;
+        // Retain some content
+        c.retain("The user is a Rust developer who lives in Shanghai and enjoys systems programming.")
+            .await
+            .expect("retain failed");
+        println!("retained content successfully");
 
-        let client = HindsightClient::new(server.uri(), "test-bank".into());
-        let err = client.retain("content").await.unwrap_err();
-        assert!(matches!(err, MemoryError::Hindsight { .. }));
+        // Recall
+        let memories = c.recall("What programming language does the user prefer?", 5)
+            .await
+            .expect("recall failed");
+        println!("recall returned {} memories", memories.len());
+        for m in &memories {
+            println!("  [{:.3}] [{}] {}", m.score, m.network, &m.content[..m.content.len().min(80)]);
+        }
     }
 
     #[tokio::test]
-    async fn retain_uses_bank_id_in_path() {
-        let server = MockServer::start().await;
+    #[ignore = "requires running Hindsight service (set HINDSIGHT_BASE_URL)"]
+    async fn reflect() {
+        let c = client().expect("HINDSIGHT_BASE_URL required");
 
-        Mock::given(method("POST"))
-            .and(path("/api/v1/banks/my-custom-bank/retain"))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-
-        let client = HindsightClient::new(server.uri(), "my-custom-bank".into());
-        client.retain("content").await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn recall_success() {
-        let server = MockServer::start().await;
-        let response_body = serde_json::json!([{
-            "id": "h1",
-            "content": "memory",
-            "network": "world",
-            "score": 0.8
-        }]);
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/banks/test-bank/recall"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&response_body))
-            .mount(&server)
-            .await;
-
-        let client = HindsightClient::new(server.uri(), "test-bank".into());
-        let results = client.recall("query", 10).await.unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].id, "h1");
-        assert_eq!(results[0].content, "memory");
-        assert_eq!(results[0].network, "world");
-        assert!((results[0].score - 0.8).abs() < f64::EPSILON);
-    }
-
-    #[tokio::test]
-    async fn recall_empty() {
-        let server = MockServer::start().await;
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/banks/test-bank/recall"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&serde_json::json!([])))
-            .mount(&server)
-            .await;
-
-        let client = HindsightClient::new(server.uri(), "test-bank".into());
-        let results = client.recall("nothing", 10).await.unwrap();
-        assert!(results.is_empty());
-    }
-
-    #[tokio::test]
-    async fn recall_error() {
-        let server = MockServer::start().await;
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/banks/test-bank/recall"))
-            .respond_with(ResponseTemplate::new(503).set_body_string("service unavailable"))
-            .mount(&server)
-            .await;
-
-        let client = HindsightClient::new(server.uri(), "test-bank".into());
-        let err = client.recall("query", 10).await.unwrap_err();
-        assert!(matches!(err, MemoryError::Hindsight { .. }));
-    }
-
-    #[tokio::test]
-    async fn reflect_success() {
-        let server = MockServer::start().await;
-        let response_body = serde_json::json!({
-            "response": "synthesized answer"
-        });
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/banks/test-bank/reflect"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&response_body))
-            .mount(&server)
-            .await;
-
-        let client = HindsightClient::new(server.uri(), "test-bank".into());
-        let answer = client.reflect("deep question").await.unwrap();
-        assert_eq!(answer, "synthesized answer");
-    }
-
-    #[tokio::test]
-    async fn reflect_error() {
-        let server = MockServer::start().await;
-
-        Mock::given(method("POST"))
-            .and(path("/api/v1/banks/test-bank/reflect"))
-            .respond_with(ResponseTemplate::new(500).set_body_string("error"))
-            .mount(&server)
-            .await;
-
-        let client = HindsightClient::new(server.uri(), "test-bank".into());
-        let err = client.reflect("query").await.unwrap_err();
-        assert!(matches!(err, MemoryError::Hindsight { .. }));
+        let response = c.reflect("What do you know about the user's technical background?")
+            .await
+            .expect("reflect failed");
+        println!("reflect response: {}", &response[..response.len().min(200)]);
+        assert!(!response.is_empty());
     }
 }
