@@ -91,8 +91,18 @@ pub mod manager;
 pub mod mem0_client;
 pub mod memos_client;
 
+#[cfg(feature = "k8s")]
+pub mod pod_manager;
+#[cfg(feature = "k8s")]
+pub mod lazy_client;
+
 pub use error::{MemoryError, MemoryResult};
 pub use hindsight_client::HindsightClient;
 pub use manager::{MemoryManager, MemorySource, SearchResult};
 pub use mem0_client::{Mem0Client, Mem0Memory};
 pub use memos_client::{MemosClient, MemoEntry};
+
+#[cfg(feature = "k8s")]
+pub use pod_manager::Mem0PodManager;
+#[cfg(feature = "k8s")]
+pub use lazy_client::LazyMem0Client;

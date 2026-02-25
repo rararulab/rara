@@ -32,7 +32,7 @@ rara-composio = { workspace = true }
 rara-domain-chat = { workspace = true }
 rara-domain-shared = { workspace = true }
 rara-mcp = { workspace = true }
-rara-memory = { workspace = true }
+rara-memory = { workspace = true, features = ["k8s"] }
 rara-paths = { workspace = true }
 rara-server = { workspace = true }
 rara-sessions = { workspace = true }

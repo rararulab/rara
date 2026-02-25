@@ -49,6 +49,7 @@ use snafu::ResultExt;
 /// Wraps a [`reqwest::Client`] and stores the base URL. All requests are
 /// unauthenticated (the self-hosted mem0 server does not require auth by
 /// default). If auth is needed in the future, add an API key field here.
+#[derive(Clone)]
 pub struct Mem0Client {
     /// Shared HTTP client (connection pooling, keep-alive).
     client: reqwest::Client,

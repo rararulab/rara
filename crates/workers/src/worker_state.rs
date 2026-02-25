@@ -53,6 +53,7 @@ pub struct AppState {
 
     // -- memory --
     pub memory_manager: Arc<rara_memory::MemoryManager>,
+    pub lazy_mem0: Option<Arc<rara_memory::LazyMem0Client>>,
 
     // -- agent scheduler --
     pub agent_scheduler: Arc<crate::agent_scheduler::AgentScheduler>,
@@ -89,6 +90,10 @@ impl AppState {
         object_store: Operator,
         notify_client: rara_domain_shared::notify::client::NotifyClient,
         mem0_base_url: String,
+        mem0_image: String,
+        chroma_host: String,
+        chroma_port: u16,
+        mem0_namespace: String,
         memos_base_url: String,
         memos_token: String,
         hindsight_base_url: String,
@@ -163,6 +168,23 @@ impl AppState {
         }) {
             tool_registry.register_primitive(tool);
         }
+        // Try to create LazyMem0Client for k8s mode; fall back to direct client.
+        let lazy_mem0 = match rara_memory::Mem0PodManager::new().await {
+            Ok(pod_manager) => {
+                info!("K8s available -- mem0 will use on-demand pod mode");
+                Some(Arc::new(rara_memory::LazyMem0Client::new(
+                    pod_manager,
+                    chroma_host,
+                    chroma_port,
+                    mem0_image,
+                    mem0_namespace,
+                )))
+            }
+            Err(e) => {
+                info!(error = %e, "K8s not available -- mem0 using direct connection to {}", mem0_base_url);
+                None
+            }
+        };
         let mem0 = rara_memory::Mem0Client::new(mem0_base_url);
         let memos = rara_memory::MemosClient::new(memos_base_url, memos_token);
         let hindsight = rara_memory::HindsightClient::new(hindsight_base_url, hindsight_bank_id);
@@ -381,6 +403,7 @@ impl AppState {
             llm_provider,
             object_store,
             memory_manager,
+            lazy_mem0,
             agent_scheduler,
             skill_registry,
             mcp_manager,
@@ -495,6 +518,17 @@ impl AppState {
             rara_backend_admin::prompts::routes(self.prompt_repo.clone()).split_for_parts();
         router = router.merge(prompt_router);
         api.merge(prompt_api);
+
+        // mem0 on-demand pod configuration endpoint.
+        if self.lazy_mem0.is_some() {
+            let mem0_configure = axum::Router::new()
+                .route(
+                    "/api/memory/configure",
+                    axum::routing::post(configure_mem0),
+                )
+                .with_state(self.clone());
+            router = router.merge(mem0_configure);
+        }
 
         (router, api)
     }
@@ -632,6 +666,45 @@ impl rara_agents::dispatcher::ScheduledJobCallback for AgentSchedulerCallback {
             .mark_executed(job_id)
             .await
             .map_err(|e| e.to_string())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// mem0 on-demand pod configuration endpoint
+// ---------------------------------------------------------------------------
+
+/// Request body for `POST /api/memory/configure`.
+#[derive(serde::Deserialize)]
+pub struct ConfigureMem0Request {
+    pub openai_api_key: String,
+}
+
+/// `POST /api/memory/configure` -- set mem0 API key at runtime and create
+/// the on-demand pod.
+async fn configure_mem0(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    axum::Json(body): axum::Json<ConfigureMem0Request>,
+) -> axum::response::Response {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    let Some(lazy) = &state.lazy_mem0 else {
+        return (
+            StatusCode::NOT_FOUND,
+            "mem0 on-demand pod not available (k8s not configured)",
+        )
+            .into_response();
+    };
+    lazy.set_api_key(body.openai_api_key).await;
+
+    // Trigger pod creation immediately so the caller gets feedback.
+    match lazy.ensure_ready().await {
+        Ok(_) => (StatusCode::OK, "mem0 configured and pod ready").into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("pod creation failed: {e}"),
+        )
+            .into_response(),
     }
 }
 

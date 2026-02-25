@@ -11,6 +11,10 @@ keywords.workspace = true
 categories.workspace = true
 description = "Unified memory layer: mem0 (facts) + Memos (notes) + Hindsight (4-network recall)"
 
+[features]
+default = []
+k8s = ["rara-k8s"]
+
 [dependencies]
 reqwest.workspace = true
 serde.workspace = true
@@ -18,6 +22,9 @@ serde_json.workspace = true
 snafu.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+
+# K8s Pod management (optional, behind "k8s" feature)
+rara-k8s = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }

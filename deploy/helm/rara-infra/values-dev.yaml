@@ -218,17 +218,11 @@ crawl4ai:
       memory: 1Gi
 
 # ------------------------------------------------------------------------------
-# Mem0 REST API
+# Mem0 REST API — managed at runtime via on-demand K8s pods.
+# Set enabled: true for a persistent Helm-managed deployment.
 # ------------------------------------------------------------------------------
 mem0:
-  enabled: true
-  resources:
-    requests:
-      cpu: 100m
-      memory: 256Mi
-    limits:
-      cpu: 500m
-      memory: 512Mi
+  enabled: false
 
 # ------------------------------------------------------------------------------
 # Memos

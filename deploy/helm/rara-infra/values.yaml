@@ -429,10 +429,13 @@ crawl4ai:
       memory: 2Gi
 
 # ------------------------------------------------------------------------------
-# Mem0 REST API — self-hosted memory API (custom template)
+# Mem0 REST API — managed at runtime via on-demand K8s pods.
+# The rara application creates ephemeral mem0 pods when an OpenAI API key
+# is configured at runtime (POST /api/memory/configure). Set enabled: true
+# only if you want a persistent Helm-managed mem0 deployment instead.
 # ------------------------------------------------------------------------------
 mem0:
-  enabled: true
+  enabled: false
   image:
     repository: mem0/mem0-api-server
     tag: "latest"
@@ -441,7 +444,6 @@ mem0:
     type: ClusterIP
     port: 8000
   env:
-    # Set when enabling mem0 (or provide equivalent provider-specific vars).
     OPENAI_API_KEY: ""
   resources:
     requests:

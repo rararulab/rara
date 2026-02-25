@@ -85,7 +85,16 @@ impl Default for AppConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct MemoryConfig {
+    /// mem0 base URL -- used in non-k8s mode (direct connection).
     pub mem0_base_url:      String,
+    /// Docker image for on-demand mem0 pod (k8s mode).
+    pub mem0_image:         String,
+    /// ChromaDB host for mem0 vector storage.
+    pub chroma_host:        String,
+    /// ChromaDB port for mem0 vector storage.
+    pub chroma_port:        u16,
+    /// K8s namespace for mem0 pod.
+    pub mem0_namespace:     String,
     pub memos_base_url:     String,
     pub memos_token:        String,
     pub hindsight_base_url: String,
@@ -96,6 +105,10 @@ impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
             mem0_base_url:      "http://localhost:8080".to_owned(),
+            mem0_image:         "mem0/mem0-api-server:latest".to_owned(),
+            chroma_host:        "rara-infra-chromadb".to_owned(),
+            chroma_port:        8000,
+            mem0_namespace:     "default".to_owned(),
             memos_base_url:     "http://localhost:5230".to_owned(),
             memos_token:        String::new(),
             hindsight_base_url: "http://localhost:8888".to_owned(),
@@ -204,6 +217,10 @@ impl AppConfig {
             object_store,
             notify_client.clone(),
             self.memory.mem0_base_url.clone(),
+            self.memory.mem0_image.clone(),
+            self.memory.chroma_host.clone(),
+            self.memory.chroma_port,
+            self.memory.mem0_namespace.clone(),
             self.memory.memos_base_url.clone(),
             self.memory.memos_token.clone(),
             self.memory.hindsight_base_url.clone(),
@@ -374,6 +391,12 @@ impl AppConfig {
             drop(worker_manager);
             if let Some(rt) = worker_rt {
                 tokio::task::spawn_blocking(move || drop(rt));
+            }
+
+            // Shut down on-demand mem0 pod (if running).
+            if let Some(lazy) = &app_state.lazy_mem0 {
+                info!("Shutting down mem0 pod");
+                lazy.shutdown().await;
             }
 
             if let Some(bot) = bot_handle {
