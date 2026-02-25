@@ -1,0 +1,18 @@
+{{- if and .Values.hindsight.enabled .Values.hindsight.postgresql.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "rara-infra.fullname" . }}-hindsight-pg
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rara-infra.componentLabels" (dict "root" . "component" "hindsight-pg") | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.hindsight.postgresql.persistence.storageClass }}
+  storageClassName: {{ .Values.hindsight.postgresql.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.hindsight.postgresql.persistence.size }}
+{{- end }}

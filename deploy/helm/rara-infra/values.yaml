@@ -304,10 +304,16 @@ consulSeed:
     chromaUrl: ""
     crawl4aiBaseUrl: ""
     langfuseHost: ""
+    memosBaseUrl: ""
+    hindsightBaseUrl: ""
   langfuse:
     # Create a project in Langfuse UI, then paste the API keys here.
     publicKey: ""
     secretKey: ""
+  memos:
+    token: ""
+  hindsight:
+    bankId: "rara-default"
 
 # ------------------------------------------------------------------------------
 # MinIO — Object storage
@@ -418,3 +424,89 @@ crawl4ai:
     limits:
       cpu: "2"
       memory: 2Gi
+
+# ------------------------------------------------------------------------------
+# Memos — Note-taking / knowledge base (custom template)
+# ------------------------------------------------------------------------------
+memos:
+  enabled: true
+  image:
+    repository: neosmemo/memos
+    tag: "stable"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 5230
+  # Memos uses its own PostgreSQL instance
+  postgresql:
+    image:
+      repository: postgres
+      tag: "16-alpine"
+      pullPolicy: IfNotPresent
+    auth:
+      user: postgres
+      password: postgres
+      database: memos
+    persistence:
+      enabled: true
+      size: 2Gi
+      storageClass: ""
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# ------------------------------------------------------------------------------
+# Hindsight — Memory / knowledge graph service (custom template)
+# ------------------------------------------------------------------------------
+hindsight:
+  enabled: true
+  image:
+    repository: ghcr.io/vectorize-io/hindsight
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8888
+    adminPort: 9999
+  env:
+    # Set your OpenAI API key when enabling Hindsight
+    HINDSIGHT_API_LLM_API_KEY: ""
+  # Hindsight uses its own PostgreSQL instance with pgvector
+  postgresql:
+    image:
+      repository: pgvector/pgvector
+      tag: "pg16"
+      pullPolicy: IfNotPresent
+    auth:
+      user: postgres
+      password: postgres
+      database: hindsight
+    persistence:
+      enabled: true
+      size: 2Gi
+      storageClass: ""
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi

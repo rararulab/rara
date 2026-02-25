@@ -1,0 +1,124 @@
+{{- if .Values.memos.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rara-infra.fullname" . }}-memos-pg
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rara-infra.componentLabels" (dict "root" . "component" "memos-pg") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "rara-infra.componentSelectorLabels" (dict "root" . "component" "memos-pg") | nindent 6 }}
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        {{- include "rara-infra.componentLabels" (dict "root" . "component" "memos-pg") | nindent 8 }}
+    spec:
+      containers:
+        - name: postgres
+          image: "{{ .Values.memos.postgresql.image.repository }}:{{ .Values.memos.postgresql.image.tag }}"
+          imagePullPolicy: {{ .Values.memos.postgresql.image.pullPolicy }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          env:
+            - name: POSTGRES_USER
+              value: {{ .Values.memos.postgresql.auth.user | quote }}
+            - name: POSTGRES_PASSWORD
+              value: {{ .Values.memos.postgresql.auth.password | quote }}
+            - name: POSTGRES_DB
+              value: {{ .Values.memos.postgresql.auth.database | quote }}
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - {{ .Values.memos.postgresql.auth.user | quote }}
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - {{ .Values.memos.postgresql.auth.user | quote }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          {{- with .Values.memos.postgresql.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          {{- if .Values.memos.postgresql.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "rara-infra.fullname" . }}-memos-pg
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rara-infra.fullname" . }}-memos
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rara-infra.componentLabels" (dict "root" . "component" "memos") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "rara-infra.componentSelectorLabels" (dict "root" . "component" "memos") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "rara-infra.componentLabels" (dict "root" . "component" "memos") | nindent 8 }}
+    spec:
+      containers:
+        - name: memos
+          image: "{{ .Values.memos.image.repository }}:{{ .Values.memos.image.tag }}"
+          imagePullPolicy: {{ .Values.memos.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 5230
+              protocol: TCP
+          env:
+            - name: MEMOS_DRIVER
+              value: "postgres"
+            - name: MEMOS_DSN
+              value: "postgresql://{{ .Values.memos.postgresql.auth.user }}:{{ .Values.memos.postgresql.auth.password }}@{{ include "rara-infra.fullname" . }}-memos-pg:5432/{{ .Values.memos.postgresql.auth.database }}?sslmode=disable"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          {{- with .Values.memos.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

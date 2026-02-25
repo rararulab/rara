@@ -216,3 +216,47 @@ crawl4ai:
     limits:
       cpu: "1"
       memory: 1Gi
+
+# ------------------------------------------------------------------------------
+# Memos
+# ------------------------------------------------------------------------------
+memos:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  postgresql:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+    persistence:
+      size: 1Gi
+
+# ------------------------------------------------------------------------------
+# Hindsight
+# ------------------------------------------------------------------------------
+hindsight:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  postgresql:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 250m
+        memory: 512Mi
+    persistence:
+      size: 1Gi

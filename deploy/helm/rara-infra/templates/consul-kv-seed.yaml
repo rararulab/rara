@@ -76,6 +76,23 @@ spec:
               put_kv "rara/config/crawl4ai/base_url" \
                 "{{ $ov.crawl4aiBaseUrl | default (printf "http://%s-crawl4ai:11235" .Release.Name) }}"
 
+              {{- if .Values.memos.enabled }}
+              # Memory (Memos)
+              put_kv "rara/config/memory/memos_base_url" \
+                "{{ $ov.memosBaseUrl | default (printf "http://%s-memos:5230" .Release.Name) }}"
+              {{- with .Values.consulSeed.memos.token }}
+              put_kv "rara/config/memory/memos_token" "{{ . }}"
+              {{- end }}
+              {{- end }}
+
+              {{- if .Values.hindsight.enabled }}
+              # Memory (Hindsight)
+              put_kv "rara/config/memory/hindsight_base_url" \
+                "{{ $ov.hindsightBaseUrl | default (printf "http://%s-hindsight:8888" .Release.Name) }}"
+              put_kv "rara/config/memory/hindsight_bank_id" \
+                "{{ .Values.consulSeed.hindsight.bankId | default "rara-default" }}"
+              {{- end }}
+
               # Langfuse (LLM observability)
               put_kv "rara/config/langfuse/host" \
                 "{{ $ov.langfuseHost | default (printf "http://%s-langfuse-web:3000" .Release.Name) }}"

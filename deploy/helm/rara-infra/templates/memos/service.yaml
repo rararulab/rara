@@ -1,0 +1,35 @@
+{{- if .Values.memos.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rara-infra.fullname" . }}-memos-pg
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rara-infra.componentLabels" (dict "root" . "component" "memos-pg") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+  selector:
+    {{- include "rara-infra.componentSelectorLabels" (dict "root" . "component" "memos-pg") | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rara-infra.fullname" . }}-memos
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rara-infra.componentLabels" (dict "root" . "component" "memos") | nindent 4 }}
+spec:
+  type: {{ .Values.memos.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.memos.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "rara-infra.componentSelectorLabels" (dict "root" . "component" "memos") | nindent 4 }}
+{{- end }}
