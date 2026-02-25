@@ -452,6 +452,8 @@ mem0:
     limits:
       cpu: "1"
       memory: 1Gi
+  # Vector store: uses the shared ChromaDB instance (chromadb.service.port)
+  # Graph store: Neo4j removed via config patch (optional, can be re-enabled later)
 
 # ------------------------------------------------------------------------------
 # Memos — Markdown note service (custom template)
@@ -506,7 +508,11 @@ hindsight:
     type: ClusterIP
     port: 8888
     adminPort: 9999
-  env: {}
+  env:
+    # Required: provide via --set hindsight.env.HINDSIGHT_API_LLM_API_KEY=sk-xxx
+    HINDSIGHT_API_LLM_API_KEY: ""
+    HINDSIGHT_API_LLM_PROVIDER: "openai"
+    HINDSIGHT_API_LLM_MODEL: "gpt-4o-mini"
   resources:
     requests:
       cpu: 250m

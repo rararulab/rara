@@ -249,9 +249,11 @@ memos:
 
 # ------------------------------------------------------------------------------
 # Hindsight
+# Requires: HINDSIGHT_API_LLM_API_KEY (OpenAI/Anthropic key)
+# Enable via: helm upgrade --set hindsight.enabled=true --set hindsight.env.HINDSIGHT_API_LLM_API_KEY=sk-xxx
 # ------------------------------------------------------------------------------
 hindsight:
-  enabled: true
+  enabled: false
   resources:
     requests:
       cpu: 100m

@@ -2,6 +2,7 @@ CHART := "rara-infra"
 RELEASE := env("HELM_RELEASE", "rara-infra")
 NAMESPACE := env("HELM_NAMESPACE", "rara")
 VALUES_DEV := "rara-infra/values-dev.yaml"
+HELM_TIMEOUT := env("HELM_TIMEOUT", "15m")
 
 [group("📒 Help")]
 [private]
@@ -63,27 +64,27 @@ diff *ARGS:
 [doc("install chart (production values, server-side apply)")]
 [group("🚀 Deploy")]
 install:
-    helm install {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} --create-namespace --server-side=true
+    helm install {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} --create-namespace --server-side=true --wait --timeout {{ HELM_TIMEOUT }}
 
 [doc("install chart (dev values, server-side apply)")]
 [group("🚀 Deploy")]
 install-dev:
-    helm install {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} --create-namespace --server-side=true -f {{ VALUES_DEV }}
+    helm install {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} --create-namespace --server-side=true --wait --timeout {{ HELM_TIMEOUT }} -f {{ VALUES_DEV }}
 
 [doc("upgrade existing release (server-side apply)")]
 [group("🚀 Deploy")]
 upgrade *ARGS:
-    helm upgrade {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} --server-side=true {{ ARGS }}
+    helm upgrade {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} --server-side=true --wait --timeout {{ HELM_TIMEOUT }} {{ ARGS }}
 
 [doc("upgrade with dev overlay (server-side apply)")]
 [group("🚀 Deploy")]
 upgrade-dev *ARGS:
-    helm upgrade {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} --server-side=true -f {{ VALUES_DEV }} {{ ARGS }}
+    helm upgrade {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} --server-side=true --wait --timeout {{ HELM_TIMEOUT }} -f {{ VALUES_DEV }} {{ ARGS }}
 
 [doc("upgrade with rollback on failure")]
 [group("🚀 Deploy")]
 upgrade-safe *ARGS:
-    helm upgrade {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} --server-side=true --rollback-on-failure {{ ARGS }}
+    helm upgrade {{ RELEASE }} {{ CHART }} -n {{ NAMESPACE }} --server-side=true --wait --timeout {{ HELM_TIMEOUT }} --rollback-on-failure {{ ARGS }}
 
 [doc("uninstall release")]
 [group("🚀 Deploy")]
@@ -241,6 +242,10 @@ doctor:
     WARN="\033[33m⚠\033[0m"
     SKIP="\033[90m–\033[0m"
     ok=0; fail=0; skip=0
+    VALUES=$(helm get values {{ RELEASE }} -n "$NS" --all -o json 2>/dev/null || echo '{}')
+    MEM0_ENABLED=$(echo "$VALUES" | jq -r '.mem0.enabled // true')
+    MEMOS_ENABLED=$(echo "$VALUES" | jq -r '.memos.enabled // true')
+    HINDSIGHT_ENABLED=$(echo "$VALUES" | jq -r '.hindsight.enabled // true')
 
     check() {
       local name="$1"; shift
@@ -251,6 +256,12 @@ doctor:
         printf " ${FAIL}  %-28s %s\n" "$name" "$result"
         fail=$((fail + 1))
       fi
+    }
+
+    skip_disabled() {
+      local name="$1"
+      printf " ${SKIP}  %-28s %s\n" "$name" "disabled in Helm values"
+      skip=$((skip + 1))
     }
 
     check_pod_ready() {
@@ -312,11 +323,25 @@ doctor:
     # -- Memory services --
     echo ""
     echo "🧠 Memory Services"
-    check_pod_ready "Mem0"           "app.kubernetes.io/component=mem0"
-    check_pod_ready "Memos"          "app.kubernetes.io/component=memos"
-    check_pod_ready "Memos PG"       "app.kubernetes.io/component=memos-pg"
-    check_pod_ready "Hindsight"      "app.kubernetes.io/component=hindsight"
-    check_pod_ready "Hindsight PG"   "app.kubernetes.io/component=hindsight-pg"
+    if [ "$MEM0_ENABLED" = "true" ]; then
+      check_pod_ready "Mem0"           "app.kubernetes.io/component=mem0"
+    else
+      skip_disabled "Mem0"
+    fi
+    if [ "$MEMOS_ENABLED" = "true" ]; then
+      check_pod_ready "Memos"          "app.kubernetes.io/component=memos"
+      check_pod_ready "Memos PG"       "app.kubernetes.io/component=memos-pg"
+    else
+      skip_disabled "Memos"
+      skip_disabled "Memos PG"
+    fi
+    if [ "$HINDSIGHT_ENABLED" = "true" ]; then
+      check_pod_ready "Hindsight"      "app.kubernetes.io/component=hindsight"
+      check_pod_ready "Hindsight PG"   "app.kubernetes.io/component=hindsight-pg"
+    else
+      skip_disabled "Hindsight"
+      skip_disabled "Hindsight PG"
+    fi
 
     # -- Ingress & TLS --
     echo ""
@@ -359,11 +384,14 @@ doctor:
        echo \"\${bound}/\${total} Bound\""
 
     # -- Endpoints --
-    DOMAIN=$(helm get values {{ RELEASE }} -n "$NS" -o json 2>/dev/null | jq -r '.global.domain // "rara.local"')
+    DOMAIN=$(echo "$VALUES" | jq -r '.global.domain // "rara.local"')
     LB_IP=$(kubectl get svc {{ RELEASE }}-traefik -n "$NS" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "pending")
     echo ""
     echo "🔗 Endpoints (https://*.${DOMAIN}  LB: ${LB_IP})"
-    for svc in grafana prometheus alertmanager langfuse quickwit consul minio traefik memos hindsight; do
+    ENDPOINT_SERVICES="grafana prometheus alertmanager langfuse quickwit consul minio traefik"
+    if [ "$MEMOS_ENABLED" = "true" ]; then ENDPOINT_SERVICES="$ENDPOINT_SERVICES memos"; fi
+    if [ "$HINDSIGHT_ENABLED" = "true" ]; then ENDPOINT_SERVICES="$ENDPOINT_SERVICES hindsight"; fi
+    for svc in $ENDPOINT_SERVICES; do
       url="https://${svc}.${DOMAIN}"
       code=$(curl -skL --noproxy "*" --max-time 5 --resolve "${svc}.${DOMAIN}:443:${LB_IP}" -o /dev/null -w '%{http_code}' "$url" 2>/dev/null || echo "000")
       if [[ "$code" =~ ^[23] ]]; then
