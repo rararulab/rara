@@ -20,7 +20,10 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   Bot,
+  BookOpen,
+  Briefcase,
   ChevronDown,
+  Ellipsis,
   ImagePlus,
   Loader2,
   MessageSquarePlus,
@@ -28,6 +31,7 @@ import {
   PanelLeftOpen,
   Search,
   Send,
+  Settings as SettingsIcon,
   Star,
   Trash2,
   User,
@@ -193,6 +197,122 @@ function formatTime(iso: string): string {
 // SessionList (left panel)
 // ---------------------------------------------------------------------------
 
+const chatUtilityItems = [
+  { href: "/jobs", icon: Briefcase, label: "Jobs", newTab: true },
+  { href: "/docs", icon: BookOpen, label: "Docs" },
+  { href: "/settings", icon: SettingsIcon, label: "Settings" },
+];
+
+function SessionSidebarUtilityBar({ collapsed }: { collapsed: boolean }) {
+  const { isOnline, isChecking } = useServerStatus();
+  const statusText = isChecking
+    ? "Connecting..."
+    : isOnline
+      ? "Server online"
+      : "Server offline";
+
+  return (
+    <div
+      className={cn(
+        "border-t border-border/70 bg-background/35",
+        collapsed ? "p-1" : "px-2 py-2",
+      )}
+    >
+      <div
+        className={cn(
+          "flex items-center",
+          collapsed ? "justify-center" : "justify-between gap-2",
+        )}
+      >
+        <div className="group/more relative">
+          <button
+            type="button"
+            title="More"
+            className={cn(
+              "flex h-9 items-center justify-center rounded-lg text-muted-foreground transition-all hover:bg-background/70 hover:text-foreground",
+              collapsed ? "w-9" : "w-10",
+            )}
+          >
+            <Ellipsis className="h-5 w-5" />
+          </button>
+
+          <div
+            className={cn(
+              "pointer-events-none absolute z-30 w-52 rounded-2xl border border-border/80 bg-background/95 p-2 opacity-0 shadow-xl backdrop-blur-md transition-all duration-200 group-hover/more:pointer-events-auto group-hover/more:opacity-100 group-hover/more:translate-y-0 group-focus-within/more:pointer-events-auto group-focus-within/more:opacity-100 group-focus-within/more:translate-y-0",
+              collapsed
+                ? "bottom-0 left-[calc(100%-0.125rem)] translate-y-0"
+                : "bottom-[calc(100%-0.125rem)] left-0 translate-y-1",
+            )}
+          >
+            <div className="space-y-1">
+              {chatUtilityItems.map((item) => (
+                <a
+                  key={item.href}
+                  href={item.href}
+                  target={item.newTab ? "_blank" : undefined}
+                  rel={item.newTab ? "noreferrer" : undefined}
+                  className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-muted-foreground transition-all hover:bg-background/70 hover:text-foreground hover:ring-1 hover:ring-border/70"
+                >
+                  <item.icon className="h-4 w-4 shrink-0" />
+                  <span className="truncate">{item.label}</span>
+                </a>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {!collapsed ? (
+          <div className="inline-flex h-9 items-center gap-2 rounded-xl bg-background/70 px-3 text-xs text-muted-foreground">
+            <span
+              className={cn(
+                "h-2.5 w-2.5 shrink-0 rounded-full",
+                isChecking && "bg-yellow-400 animate-pulse",
+                isOnline && "bg-green-500",
+                !isOnline && !isChecking && "bg-red-500",
+              )}
+            />
+            <span className="truncate">{statusText}</span>
+          </div>
+        ) : (
+          <span
+            className={cn(
+              "h-2.5 w-2.5 rounded-full",
+              isChecking && "bg-yellow-400 animate-pulse",
+              isOnline && "bg-green-500",
+              !isOnline && !isChecking && "bg-red-500",
+            )}
+            aria-hidden="true"
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ConversationPanelToggleButton({
+  collapsed,
+  onToggle,
+}: {
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="h-7 w-7 shrink-0 rounded-lg border border-transparent hover:border-border/70 hover:bg-background/70"
+      onClick={onToggle}
+      title={collapsed ? "Expand conversations" : "Collapse conversations"}
+    >
+      {collapsed ? (
+        <PanelLeftOpen className="h-4 w-4" />
+      ) : (
+        <PanelLeftClose className="h-4 w-4" />
+      )}
+    </Button>
+  );
+}
+
 function SessionList({
   sessions,
   activeKey,
@@ -215,92 +335,66 @@ function SessionList({
   return (
     <div
       className={cn(
-        "app-surface flex flex-col border-r border-border/70 transition-all duration-200",
-        collapsed ? "w-12" : "w-64",
+        "app-surface flex h-full shrink-0 flex-col overflow-hidden transition-all duration-200",
+        collapsed ? "w-0 border-r-0" : "w-64 border-r border-border/70",
       )}
     >
-      {/* Header */}
-      <div
-        className={cn(
-          "flex items-center border-b border-border/70 bg-background/40",
-          collapsed ? "justify-center p-2" : "justify-between px-3 py-2",
-        )}
-      >
-        {!collapsed && (
-          <h2 className="text-sm font-semibold truncate">Conversations</h2>
-        )}
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 shrink-0 rounded-lg border border-transparent hover:border-border/70 hover:bg-background/70"
-          onClick={onToggleCollapse}
-          title={collapsed ? "Expand panel" : "Collapse panel"}
-        >
-          {collapsed ? (
-            <PanelLeftOpen className="h-4 w-4" />
-          ) : (
-            <PanelLeftClose className="h-4 w-4" />
-          )}
-        </Button>
-      </div>
-
-      {/* New chat button */}
-      <div className={cn("border-b border-border/70", collapsed ? "p-1" : "p-2")}>
-        <Button
-          variant="outline"
-          size={collapsed ? "icon" : "sm"}
-          className={cn(
-            "shrink-0 border-border/70 bg-background/70 hover:bg-background",
-            collapsed ? "mx-auto h-8 w-8" : "w-full justify-start rounded-xl"
-          )}
-          onClick={onCreate}
-          title="New conversation"
-        >
-          <MessageSquarePlus className="h-4 w-4" />
-          {!collapsed && <span className="ml-1.5">New Chat</span>}
-        </Button>
-      </div>
-
-      {/* Session list */}
-      <div className="flex-1 overflow-y-auto">
-        {isLoading && (
-          <div className={cn("space-y-2", collapsed ? "p-1" : "p-2")}>
-            {Array.from({ length: 4 }).map((_, i) => (
-              <Skeleton
-                key={i}
-                className={cn(collapsed ? "h-8 w-8 mx-auto" : "h-14 w-full")}
-              />
-            ))}
+      {!collapsed && (
+        <>
+          {/* Header */}
+          <div className="flex items-center justify-between border-b border-border/70 bg-background/40 px-3 py-2">
+            <h2 className="text-sm font-semibold truncate">Conversations</h2>
+            <ConversationPanelToggleButton
+              collapsed={false}
+              onToggle={onToggleCollapse}
+            />
           </div>
-        )}
-        {!isLoading && sessions.length === 0 && !collapsed && (
-          <div className="p-4 text-center text-xs text-muted-foreground">
-            No conversations yet.
-            <br />
-            Click &quot;New Chat&quot; to start.
+
+          {/* New chat button */}
+          <div className="border-b border-border/70 p-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full justify-start rounded-xl border-border/70 bg-background/70 shrink-0 hover:bg-background"
+              onClick={onCreate}
+              title="New conversation"
+            >
+              <MessageSquarePlus className="h-4 w-4" />
+              <span className="ml-1.5">New Chat</span>
+            </Button>
           </div>
-        )}
-        {!isLoading && (
-          <div className={cn("space-y-0.5", collapsed ? "p-1" : "p-2")}>
-            {sessions.map((s) => (
-              <button
-                key={s.key}
-                type="button"
-                title={collapsed ? (s.title ?? s.key) : undefined}
-                className={cn(
-                  "group relative flex w-full items-center rounded-xl text-left text-sm transition-all",
-                  collapsed
-                    ? "justify-center p-2"
-                    : "gap-2 px-2.5 py-2",
-                  activeKey === s.key
-                    ? "bg-primary/10 text-foreground ring-1 ring-primary/15"
-                    : "text-muted-foreground hover:bg-background/70 hover:text-foreground hover:ring-1 hover:ring-border/60",
-                )}
-                onClick={() => onSelect(s.key)}
-              >
-                <Bot className="h-4 w-4 shrink-0" />
-                {!collapsed && (
-                  <>
+
+          {/* Session list */}
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {isLoading && (
+              <div className="space-y-2 p-2">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <Skeleton key={i} className="h-14 w-full" />
+                ))}
+              </div>
+            )}
+            {!isLoading && sessions.length === 0 && (
+              <div className="p-4 text-center text-xs text-muted-foreground">
+                No conversations yet.
+                <br />
+                Click &quot;New Chat&quot; to start.
+              </div>
+            )}
+            {!isLoading && (
+              <div className="space-y-0.5 p-2">
+                {sessions.map((s) => (
+                  <button
+                    key={s.key}
+                    type="button"
+                    className={cn(
+                      "group relative flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-sm transition-all",
+                      activeKey === s.key
+                        ? "bg-primary/10 text-foreground ring-1 ring-primary/15"
+                        : "text-muted-foreground hover:bg-background/70 hover:text-foreground hover:ring-1 hover:ring-border/60",
+                    )}
+                    onClick={() => onSelect(s.key)}
+                  >
+                    <Bot className="h-4 w-4 shrink-0" />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium">
                         {s.title ?? s.key}
@@ -325,13 +419,15 @@ function SessionList({
                     >
                       <Trash2 className="h-3 w-3" />
                     </button>
-                  </>
-                )}
-              </button>
-            ))}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
-        )}
-      </div>
+
+          <SessionSidebarUtilityBar collapsed={false} />
+        </>
+      )}
     </div>
   );
 }
@@ -907,9 +1003,13 @@ const INITIAL_STREAM_STATE: StreamState = {
 function ChatThread({
   session,
   onClearMessages,
+  panelCollapsed,
+  onTogglePanel,
 }: {
   session: ChatSession;
   onClearMessages: () => void;
+  panelCollapsed: boolean;
+  onTogglePanel: () => void;
 }) {
   const sessionKey = session.key;
   const queryClient = useQueryClient();
@@ -1160,6 +1260,12 @@ function ChatThread({
       <div className="flex items-center justify-between border-b border-border/70 bg-background/50 px-4 py-3 backdrop-blur">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
+            {panelCollapsed && (
+              <ConversationPanelToggleButton
+                collapsed
+                onToggle={onTogglePanel}
+              />
+            )}
             <p className="truncate text-sm font-semibold">
               {session.title ?? sessionKey}
             </p>
@@ -1362,9 +1468,22 @@ function ChatThread({
 // EmptyState (when no session is selected)
 // ---------------------------------------------------------------------------
 
-function EmptyState({ onCreate }: { onCreate: () => void }) {
+function EmptyState({
+  onCreate,
+  panelCollapsed,
+  onTogglePanel,
+}: {
+  onCreate: () => void;
+  panelCollapsed: boolean;
+  onTogglePanel: () => void;
+}) {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-4 rounded-2xl border border-dashed border-border/70 bg-card/40 text-muted-foreground">
+    <div className="relative flex flex-1 flex-col items-center justify-center gap-4 rounded-2xl border border-dashed border-border/70 bg-card/40 text-muted-foreground">
+      {panelCollapsed && (
+        <div className="absolute left-4 top-4">
+          <ConversationPanelToggleButton collapsed onToggle={onTogglePanel} />
+        </div>
+      )}
       <Bot className="h-16 w-16 opacity-20" />
       <div className="text-center">
         <p className="text-lg font-medium text-foreground">
@@ -1494,9 +1613,15 @@ export default function Chat() {
           key={activeKey}
           session={activeSession}
           onClearMessages={handleClearMessages}
+          panelCollapsed={panelCollapsed}
+          onTogglePanel={() => setPanelCollapsed((p) => !p)}
         />
       ) : (
-        <EmptyState onCreate={handleCreate} />
+        <EmptyState
+          onCreate={handleCreate}
+          panelCollapsed={panelCollapsed}
+          onTogglePanel={() => setPanelCollapsed((p) => !p)}
+        />
       )}
     </div>
   );

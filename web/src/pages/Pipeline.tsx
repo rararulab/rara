@@ -89,21 +89,6 @@ function formatDuration(startIso: string, endIso: string | null): string {
   return `${hr}h ${min % 60}m`;
 }
 
-function statusVariant(
-  status: PipelineRun["status"],
-): "default" | "secondary" | "destructive" | "outline" {
-  switch (status) {
-    case "Running":
-      return "default";
-    case "Completed":
-      return "secondary";
-    case "Failed":
-      return "destructive";
-    case "Cancelled":
-      return "outline";
-  }
-}
-
 function statusIcon(status: PipelineRun["status"]) {
   switch (status) {
     case "Running":
@@ -114,6 +99,19 @@ function statusIcon(status: PipelineRun["status"]) {
       return <XCircle className="h-3 w-3" />;
     case "Cancelled":
       return <Square className="h-3 w-3" />;
+  }
+}
+
+function runStatusPillClass(status: PipelineRun["status"]): string {
+  switch (status) {
+    case "Running":
+      return "border-primary/20 bg-primary/10 text-primary";
+    case "Completed":
+      return "border-emerald-200/70 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300";
+    case "Failed":
+      return "border-rose-200/80 bg-rose-50 text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/40 dark:text-rose-300";
+    case "Cancelled":
+      return "border-border bg-muted/40 text-foreground/80";
   }
 }
 
@@ -707,6 +705,34 @@ function RunDetail({
 
   return (
     <div className="space-y-3 rounded-lg border bg-muted/20 p-4">
+      <div className="grid gap-2 rounded-lg border bg-background/80 p-3 text-xs sm:grid-cols-3">
+        <div className="space-y-1">
+          <p className="font-medium uppercase tracking-[0.08em] text-muted-foreground">
+            Duration
+          </p>
+          <p className="flex items-center gap-1.5 tabular-nums text-foreground">
+            <Clock className="h-3 w-3 shrink-0 text-muted-foreground" />
+            {formatDuration(run.started_at, run.finished_at)}
+          </p>
+        </div>
+        <div className="space-y-1">
+          <p className="font-medium uppercase tracking-[0.08em] text-muted-foreground">
+            Started
+          </p>
+          <p className="tabular-nums text-foreground">
+            {new Date(run.started_at).toLocaleString()}
+          </p>
+        </div>
+        <div className="space-y-1">
+          <p className="font-medium uppercase tracking-[0.08em] text-muted-foreground">
+            Finished
+          </p>
+          <p className="tabular-nums text-foreground">
+            {run.finished_at ? new Date(run.finished_at).toLocaleString() : "Running"}
+          </p>
+        </div>
+      </div>
+
       {/* Summary */}
       {run.summary && (
         <div className="rounded border border-green-200 bg-green-50 p-3 dark:border-green-900 dark:bg-green-950">
@@ -788,51 +814,58 @@ function RunRow({
     <div className="border-b last:border-b-0">
       <button
         type="button"
-        className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-accent/50"
+        className="w-full px-4 py-3 text-left transition-colors hover:bg-accent/40"
         onClick={onToggle}
       >
-        {isExpanded ? (
-          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-        ) : (
-          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-        )}
+        <div className="grid items-center gap-3 sm:grid-cols-[16px_7ch_9.25rem_6ch_minmax(0,1fr)_7ch_7.5ch_8ch]">
+          {isExpanded ? (
+            <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+          )}
 
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-[10px] text-muted-foreground/70">
-              {run.id.slice(0, 8)}
-            </span>
-            <Badge
-              variant={statusVariant(run.status)}
-              className="gap-1 text-[10px]"
-            >
-              {statusIcon(run.status)}
-              {run.status}
-            </Badge>
-            <span className="text-xs text-muted-foreground">
-              {formatRelativeTime(run.started_at)}
-            </span>
+          <span className="hidden shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/75 sm:block">
+            {run.id.slice(0, 8)}
+          </span>
+
+          <Badge
+            variant="outline"
+            className={`h-8 w-fit min-w-[8.75rem] justify-center gap-1.5 rounded-full px-3 text-[11px] font-medium sm:w-[9.25rem] ${runStatusPillClass(run.status)}`}
+          >
+            {statusIcon(run.status)}
+            {run.status}
+          </Badge>
+
+          <span className="hidden shrink-0 text-right text-xs tabular-nums text-muted-foreground sm:block">
+            {formatRelativeTime(run.started_at)}
+          </span>
+
+          <div className="min-w-0 sm:hidden">
+            <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+              <span className="font-mono tabular-nums">{run.id.slice(0, 8)}</span>
+              <span>•</span>
+              <span className="tabular-nums">{formatRelativeTime(run.started_at)}</span>
+            </div>
           </div>
-        </div>
 
-        {/* Stats */}
-        <div className="hidden items-center gap-4 text-xs text-muted-foreground sm:flex">
-          <span title="Jobs found">{run.jobs_found} found</span>
-          <span title="Jobs scored">{run.jobs_scored} scored</span>
-          <span title="Jobs applied">{run.jobs_applied} applied</span>
-        </div>
+          <div className="hidden sm:block" />
 
-        {/* Duration */}
-        <div className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
-          <Clock className="h-3 w-3" />
-          <span>{formatDuration(run.started_at, run.finished_at)}</span>
+          <span className="hidden text-right text-xs tabular-nums text-muted-foreground sm:block" title="Jobs found">
+            {run.jobs_found} found
+          </span>
+          <span className="hidden text-right text-xs tabular-nums text-muted-foreground sm:block" title="Jobs scored">
+            {run.jobs_scored} scored
+          </span>
+          <span className="hidden text-right text-xs tabular-nums text-muted-foreground sm:block" title="Jobs applied">
+            {run.jobs_applied} applied
+          </span>
         </div>
       </button>
 
       {isExpanded && (
         <div className="px-4 pb-4">
           {/* Stats row for mobile */}
-          <div className="mb-3 flex flex-wrap gap-3 text-xs text-muted-foreground sm:hidden">
+          <div className="mb-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs tabular-nums text-muted-foreground sm:hidden">
             <span>{run.jobs_found} found</span>
             <span>{run.jobs_scored} scored</span>
             <span>{run.jobs_applied} applied</span>
@@ -1145,6 +1178,16 @@ export default function Pipeline() {
 
           {!runsQuery.isLoading && runs.length > 0 && (
             <div>
+              <div className="hidden grid-cols-[16px_7ch_9.25rem_6ch_minmax(0,1fr)_7ch_7.5ch_8ch] items-center gap-3 border-b bg-muted/20 px-4 py-2 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/85 sm:grid">
+                <span />
+                <span>Run</span>
+                <span>Status</span>
+                <span className="text-right">Age</span>
+                <span />
+                <span className="text-right">Found</span>
+                <span className="text-right">Scored</span>
+                <span className="text-right">Applied</span>
+              </div>
               {runs.map((run) => (
                 <RunRow
                   key={run.id}
