@@ -443,11 +443,6 @@ impl AppState {
         merge_openapi_router(
             &mut router,
             &mut api,
-            rara_backend_admin::notify::routes(self.notify_client.clone()),
-        );
-        merge_openapi_router(
-            &mut router,
-            &mut api,
             rara_backend_admin::contacts::routes(self.contact_repo.clone()),
         );
         merge_openapi_router(
