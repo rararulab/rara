@@ -11,6 +11,7 @@ use crate::orchestrator::{
     AgentOrchestrator,
     error::OrchestratorError,
 };
+use rara_memory::recall_engine::{EventKind, RecallContext};
 use rara_sessions::types::ChatMessage;
 
 use super::AgentOutput;
@@ -98,7 +99,7 @@ impl ChatAgent {
 
     /// Common preparation logic shared by [`run`] and [`prepare_streaming`].
     ///
-    /// Handles: compaction check, post-compaction memory recall, system prompt
+    /// Handles: compaction check, recall engine execution, system prompt
     /// assembly, effective tool building, history conversion, and runner
     /// construction.
     async fn prepare(
@@ -119,40 +120,45 @@ impl ChatAgent {
                 (history.to_vec(), None)
             };
 
-        // 2. Build system prompt (soul + memory profile + memory prefetch + skills)
+        // 2. Build RecallContext with appropriate events
         let user_text = user_content.text();
-        let mut system_prompt = self
-            .orchestrator
-            .build_chat_system_prompt(base_system_prompt, user_text, effective_history.len())
-            .await;
 
-        // 2a. Post-compaction memory recall: use the summary text to search
-        // memory and inject relevant context that may have been lost during
-        // compaction.
-        if let Some(ref effect) = compaction {
-            let summary_text = effect.summary.content.as_text();
-            let recalled = self
-                .orchestrator
-                .recall_for_context(&summary_text, 5)
-                .await;
-            if !recalled.is_empty() {
-                system_prompt
-                    .push_str("\n\n## Recalled Memory (post-compaction)\n");
-                for hit in &recalled {
-                    system_prompt
-                        .push_str(&format!("- [{}] {}\n", hit.source, hit.content));
-                }
-                tracing::info!(
-                    hits = recalled.len(),
-                    "post-compaction memory recall injected into system prompt"
-                );
-            }
+        let mut events = Vec::new();
+        if compaction.is_some() {
+            events.push(EventKind::Compaction);
+        }
+        if effective_history.len() < 3 {
+            events.push(EventKind::NewSession);
         }
 
-        // 3. Build effective tools (static + MCP)
+        let summary_text = compaction
+            .as_ref()
+            .map(|e| e.summary.content.as_text());
+
+        let recall_ctx = RecallContext {
+            user_text: user_text.to_owned(),
+            turn_count: effective_history.len(),
+            events,
+            elapsed_since_last_secs: 0,
+            summary: summary_text,
+            session_topic: None,
+        };
+
+        // 3. Build system prompt using the recall engine
+        let system_prompt = self
+            .orchestrator
+            .build_chat_system_prompt(
+                base_system_prompt,
+                user_text,
+                effective_history.len(),
+                Some(&recall_ctx),
+            )
+            .await;
+
+        // 4. Build effective tools (static + MCP)
         let effective_tools = self.orchestrator.build_effective_tools().await;
 
-        // 4. Convert history and build runner
+        // 5. Convert history and build runner
         let chat_history = effective_history.iter().map(to_chat_message).collect();
         let runner = self.orchestrator.build_runner(
             model.to_owned(),

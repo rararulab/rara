@@ -3,7 +3,8 @@ use std::sync::Arc;
 use async_openai::types::chat::ChatCompletionRequestMessage;
 use rara_domain_shared::settings::model::Settings;
 use rara_mcp::{manager::mgr::McpManager, tool_bridge::McpToolBridge};
-use rara_memory::{MemoryManager, SearchResult};
+use rara_memory::{MemoryManager, RecallStrategyEngine};
+use rara_memory::recall_engine::{InjectionPayload, InjectTarget, RecallContext};
 use rara_sessions::types::ChatMessage;
 use tokio::sync::watch;
 use tracing::info;
@@ -28,6 +29,7 @@ pub struct AgentOrchestrator {
     mcp_manager:    McpManager,
     skill_registry: rara_skills::registry::InMemoryRegistry,
     memory_manager: Option<Arc<MemoryManager>>,
+    recall_engine:  Option<Arc<RecallStrategyEngine>>,
     settings_rx:    watch::Receiver<Settings>,
     prompt_repo:    Arc<dyn agent_core::prompt::PromptRepo>,
 }
@@ -40,6 +42,7 @@ impl AgentOrchestrator {
         mcp_manager: McpManager,
         skill_registry: rara_skills::registry::InMemoryRegistry,
         memory_manager: Option<Arc<MemoryManager>>,
+        recall_engine: Option<Arc<RecallStrategyEngine>>,
         settings_rx: watch::Receiver<Settings>,
         prompt_repo: Arc<dyn agent_core::prompt::PromptRepo>,
     ) -> Self {
@@ -49,6 +52,7 @@ impl AgentOrchestrator {
             mcp_manager,
             skill_registry,
             memory_manager,
+            recall_engine,
             settings_rx,
             prompt_repo,
         }
@@ -61,6 +65,7 @@ impl AgentOrchestrator {
         base_prompt: &str,
         user_text: &str,
         history_len: usize,
+        recall_ctx: Option<&RecallContext>,
     ) -> String {
         let soul = self.prompt_repo.get("agent/soul.md").await
             .map(|e| e.content)
@@ -72,6 +77,52 @@ impl AgentOrchestrator {
             format!("{soul}\n\n# Chat Instructions\n{base_prompt}")
         };
 
+        // Run the recall engine if available, otherwise fall back to legacy
+        // hardcoded behavior.
+        if let Some(ctx) = recall_ctx {
+            let payloads = self.run_recall_engine(ctx).await;
+            for payload in &payloads {
+                if matches!(payload.target, InjectTarget::SystemPrompt) {
+                    // Use the rule name to create a titled section.
+                    system_prompt.push_str(&format!(
+                        "\n\n## Memory: {}\n{}",
+                        payload.rule_name, payload.content
+                    ));
+                }
+            }
+            if !payloads.is_empty() {
+                info!(
+                    rules = payloads.len(),
+                    "recall engine injected memory into system prompt"
+                );
+            }
+        } else {
+            // Legacy path: when no RecallContext is provided, fall back to the
+            // old hardcoded logic. This keeps backward-compat for callers that
+            // haven't been updated yet.
+            self.legacy_memory_injection(&mut system_prompt, user_text, history_len)
+                .await;
+        }
+
+        // Inject skills listing.
+        let all_skills = self.skill_registry.list_all();
+        let skills_xml = rara_skills::prompt_gen::generate_skills_prompt(&all_skills);
+        if !skills_xml.is_empty() {
+            system_prompt.push_str(&format!("\n\n{skills_xml}"));
+        }
+
+        system_prompt
+    }
+
+    /// Legacy memory injection -- kept for backward-compat with callers that
+    /// don't yet provide a RecallContext. Will be removed once all callers
+    /// are migrated to the recall engine.
+    async fn legacy_memory_injection(
+        &self,
+        system_prompt: &mut String,
+        user_text: &str,
+        history_len: usize,
+    ) {
         // Inject core user profile from mem0 facts.
         if let Some(ref mm) = self.memory_manager {
             if let Ok(facts) = mm.get_user_profile().await {
@@ -81,8 +132,9 @@ impl AgentOrchestrator {
                         .map(|m| format!("- {}", m.memory))
                         .collect::<Vec<_>>()
                         .join("\n");
-                    system_prompt = format!(
-                        "# User Profile\n{profile_section}\n\n---\n\n{system_prompt}"
+                    let old = std::mem::take(system_prompt);
+                    *system_prompt = format!(
+                        "# User Profile\n{profile_section}\n\n---\n\n{old}"
                     );
                 }
             }
@@ -116,15 +168,6 @@ impl AgentOrchestrator {
                 }
             }
         }
-
-        // Inject skills listing.
-        let all_skills = self.skill_registry.list_all();
-        let skills_xml = rara_skills::prompt_gen::generate_skills_prompt(&all_skills);
-        if !skills_xml.is_empty() {
-            system_prompt.push_str(&format!("\n\n{skills_xml}"));
-        }
-
-        system_prompt
     }
 
     pub async fn build_worker_policy(&self) -> String {
@@ -140,6 +183,27 @@ impl AgentOrchestrator {
         } else {
             format!("{soul}\n\n# Operational Policy\n{policy}")
         }
+    }
+
+    // -- recall engine -------------------------------------------------------
+
+    /// Run the recall engine against the given context.
+    ///
+    /// Returns injection payloads ready for prompt assembly. If no recall
+    /// engine or memory manager is configured, returns an empty vec.
+    pub async fn run_recall_engine(
+        &self,
+        ctx: &RecallContext,
+    ) -> Vec<InjectionPayload> {
+        let (Some(engine), Some(mm)) = (&self.recall_engine, &self.memory_manager) else {
+            return vec![];
+        };
+        engine.run(ctx, mm).await
+    }
+
+    /// Return a reference to the recall engine (if configured).
+    pub fn recall_engine(&self) -> Option<&Arc<RecallStrategyEngine>> {
+        self.recall_engine.as_ref()
     }
 
     // -- tool construction --------------------------------------------------
@@ -260,30 +324,6 @@ impl AgentOrchestrator {
         let tokens = estimate_history_tokens(history);
         let threshold = (context_length as f64 * 0.80) as usize;
         tokens > threshold
-    }
-
-    // -- memory recall -------------------------------------------------------
-
-    /// Search memory for context relevant to the given query.
-    ///
-    /// Returns up to `limit` [`SearchResult`]s. If no memory manager is
-    /// configured, or the search fails, an empty vec is returned silently
-    /// (with a warning log on failure).
-    ///
-    /// Primary use case: after compaction compresses history, the compacted
-    /// summary is used as the query to recall relevant memories that might
-    /// otherwise be lost.
-    pub async fn recall_for_context(&self, query: &str, limit: usize) -> Vec<SearchResult> {
-        let Some(ref mm) = self.memory_manager else {
-            return vec![];
-        };
-        match mm.search(query, limit).await {
-            Ok(results) => results,
-            Err(e) => {
-                tracing::warn!(error = %e, "memory recall for context failed");
-                vec![]
-            }
-        }
     }
 
     // -- memory consolidation ------------------------------------------------

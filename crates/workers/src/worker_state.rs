@@ -330,6 +330,27 @@ impl AppState {
             subagent_default_model,
         )));
 
+        // -- recall strategy engine -------------------------------------------
+
+        let recall_engine = Arc::new(rara_memory::RecallStrategyEngine::new(
+            rara_memory::recall_engine::default_rules(),
+        ));
+        info!("Recall strategy engine initialized with default rules");
+
+        // Register recall strategy tools.
+        tool_registry.register_service(Arc::new(
+            crate::tools::services::RecallStrategyAddTool::new(Arc::clone(&recall_engine)),
+        ));
+        tool_registry.register_service(Arc::new(
+            crate::tools::services::RecallStrategyListTool::new(Arc::clone(&recall_engine)),
+        ));
+        tool_registry.register_service(Arc::new(
+            crate::tools::services::RecallStrategyUpdateTool::new(Arc::clone(&recall_engine)),
+        ));
+        tool_registry.register_service(Arc::new(
+            crate::tools::services::RecallStrategyRemoveTool::new(Arc::clone(&recall_engine)),
+        ));
+
         let tools = Arc::new(tool_registry);
 
         let orchestrator = rara_agents::orchestrator::AgentOrchestrator::new(
@@ -338,6 +359,7 @@ impl AppState {
             mcp_manager.clone(),
             skill_registry.clone(),
             Some(Arc::clone(&memory_manager)),
+            Some(recall_engine),
             settings_svc.subscribe(),
             prompt_repo.clone(),
         );

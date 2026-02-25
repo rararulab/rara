@@ -23,7 +23,11 @@ mod skill_tools;
 
 pub use codex::{CodexListTool, CodexRunTool, CodexStatusTool};
 pub use mcp_tools::{InstallMcpServerTool, ListMcpServersTool, RemoveMcpServerTool};
-pub use memory_tools::{MemoryAddFactTool, MemoryDeepRecallTool, MemorySearchTool, MemoryWriteTool};
+pub use memory_tools::{
+    MemoryAddFactTool, MemoryDeepRecallTool, MemorySearchTool, MemoryWriteTool,
+    RecallStrategyAddTool, RecallStrategyListTool, RecallStrategyRemoveTool,
+    RecallStrategyUpdateTool,
+};
 pub use schedule_tools::{ScheduleAddTool, ScheduleListTool, ScheduleRemoveTool};
 pub use screenshot::ScreenshotTool;
 pub use skill_tools::{CreateSkillTool, DeleteSkillTool, ListSkillsTool};
