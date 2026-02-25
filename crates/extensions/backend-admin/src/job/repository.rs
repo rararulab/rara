@@ -16,7 +16,7 @@
 
 use async_trait::async_trait;
 
-use crate::{error::SourceError, types::NormalizedJob};
+use super::{error::SourceError, types::NormalizedJob};
 
 // ===========================================================================
 // Discovery repository

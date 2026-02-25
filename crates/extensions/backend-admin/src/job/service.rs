@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Unified job service — discovery and AI-powered JD parsing.
+//! Unified job service -- discovery and AI-powered JD parsing.
 
 use std::{
     collections::{BTreeMap, HashSet},
     sync::Arc,
 };
 
-use crate::{
+use super::{
     dedup::{self, FuzzyKey, SourceKey},
     error::SourceError,
     japandev::JapanDevDriver,
@@ -154,7 +154,7 @@ impl JobService {
             .collect();
         let run_jobspy = run_all || !jobspy_sites.is_empty();
 
-        // 1. JobSpy (sync / blocking — run in spawn_blocking).
+        // 1. JobSpy (sync / blocking -- run in spawn_blocking).
         if run_jobspy {
             let driver = self.driver.clone();
             let mut criteria_clone = criteria.clone();
@@ -235,7 +235,7 @@ impl JobService {
 
         DiscoveryResult {
             jobs:  deduped,
-            // Return only the first error if any (non-fatal — we still return
+            // Return only the first error if any (non-fatal -- we still return
             // whatever jobs were collected from successful drivers).
             error: errors.into_iter().next(),
         }

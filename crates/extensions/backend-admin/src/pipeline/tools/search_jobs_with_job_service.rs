@@ -26,7 +26,7 @@ use tool_core::AgentTool;
 use tracing::warn;
 use uuid::Uuid;
 
-use rara_domain_job::{
+use crate::job::{
     error::SourceError,
     types::{DiscoveryCriteria, NormalizedJob},
 };
@@ -42,12 +42,12 @@ use super::super::{
 /// AI picks the search parameters, but the service performs the actual search,
 /// normalization, dedup-within-result, and durable persistence.
 pub struct SearchJobsWithJobServiceTool {
-    job_service: rara_domain_job::service::JobService,
+    job_service: crate::job::service::JobService,
     pool:        PgPool,
 }
 
 impl SearchJobsWithJobServiceTool {
-    pub fn new(job_service: rara_domain_job::service::JobService, pool: PgPool) -> Self {
+    pub fn new(job_service: crate::job::service::JobService, pool: PgPool) -> Self {
         Self { job_service, pool }
     }
 }

@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! [`JobSpyDriver`] — job scraping driver powered by python-jobspy.
+//! [`JobSpyDriver`] -- job scraping driver powered by python-jobspy.
 //!
 //! This module provides the primary job discovery implementation using
 //! the `jobspy-sys` crate (a PyO3 wrapper around python-jobspy) to
 //! scrape 8+ job boards including LinkedIn, Indeed, Glassdoor, Google,
 //! ZipRecruiter, Bayt, Naukri, and BDJobs.
 
-use crate::{
+use super::{
     error::SourceError,
     types::{DiscoveryCriteria, RawJob},
 };
@@ -92,7 +92,7 @@ impl JobSpyDriver {
             .maybe_linkedin_fetch_description(linkedin_fetch_description)
             .build();
 
-        // Call Python — the GIL serializes execution so blocking is expected.
+        // Call Python -- the GIL serializes execution so blocking is expected.
         let scraped = self.jobspy.scrape_jobs(&params).map_err(|e| {
             // Check for rate-limiting indicators in the error message.
             if e.contains("429") || e.to_lowercase().contains("rate limit") {
