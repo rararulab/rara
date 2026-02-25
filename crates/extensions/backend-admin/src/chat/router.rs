@@ -44,13 +44,12 @@ use axum::{
     response::sse::{Event, KeepAlive, Sse},
 };
 use futures::stream::StreamExt;
+use rara_domain_chat::{error::ChatError, model_catalog::ChatModel, service::ChatService};
 use rara_sessions::types::{ChannelBinding, ChatMessage, SessionEntry, SessionKey};
 use serde::{Deserialize, Serialize};
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::instrument;
 use utoipa_axum::{router::OpenApiRouter, routes};
-
-use crate::{error::ChatError, model_catalog::ChatModel, service::ChatService};
 
 // ---------------------------------------------------------------------------
 // Request / Response types
@@ -366,7 +365,7 @@ async fn send_message(
 ///
 /// Each SSE event has an `event` field set to the event type name (e.g.
 /// `text_delta`, `done`) and a `data` field containing the JSON-serialized
-/// [`ChatStreamEvent`](crate::stream::ChatStreamEvent).
+/// [`ChatStreamEvent`](rara_domain_chat::stream::ChatStreamEvent).
 #[utoipa::path(
     post,
     path = "/api/v1/chat/sessions/{key}/stream",

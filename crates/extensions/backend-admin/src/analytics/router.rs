@@ -18,16 +18,15 @@ use axum::{
     Json,
     extract::{Path, Query, State},
 };
-use serde::{Deserialize, Serialize};
-use tracing::instrument;
-use utoipa_axum::{router::OpenApiRouter, routes};
-use uuid::Uuid;
-
-use crate::{
+use rara_domain_analytics::{
     error::AnalyticsError,
     service::AnalyticsService,
     types::{CreateSnapshotRequest, MetricsPeriod, MetricsSnapshot, SnapshotFilter},
 };
+use serde::{Deserialize, Serialize};
+use tracing::instrument;
+use utoipa_axum::{router::OpenApiRouter, routes};
+use uuid::Uuid;
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct SnapshotListQuery {

@@ -12,23 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # raradomain-application
-//!
-//! Application lifecycle management with state machine.
-use std::sync::Arc;
+mod router;
 
-use sqlx::PgPool;
-
-pub mod error;
-pub mod pg_repository;
-pub mod repository;
-pub mod service;
-pub mod state_machine;
-pub mod types;
-
-#[must_use]
-pub fn wire(pool: PgPool) -> service::ApplicationService {
-    let repo: Arc<dyn repository::ApplicationRepository> =
-        Arc::new(pg_repository::PgApplicationRepository::new(pool));
-    service::ApplicationService::new(repo)
-}
+pub use router::{routes, HistoryQuery, TaskListQuery};

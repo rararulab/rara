@@ -30,11 +30,10 @@
 //!
 //! ## HTTP API
 //!
-//! The [`router`] module exposes all endpoints under `/api/v1/chat/`.
-//! See [`router::routes`] for the full route table.
+//! HTTP routes are defined in `rara-backend-admin::chat` and expose all
+//! endpoints under `/api/v1/chat/`.
 
 pub mod error;
 pub mod model_catalog;
-pub mod router;
 pub mod service;
 pub mod stream;
