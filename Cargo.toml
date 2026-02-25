@@ -50,7 +50,7 @@ members = [
     "crates/workers",
     "crates/agents",
     "crates/sessions",
-    "crates/domain/chat",
+    "crates/chat",
     "crates/memory",
     "crates/skills",
     "crates/integrations/mcp",
@@ -151,7 +151,7 @@ rara-app = { path = "crates/app" }
 rara-cli = { path = "crates/cmd" }
 rara-composio = { path = "crates/integrations/composio" }
 rara-backend-admin = { path = "crates/extensions/backend-admin" }
-rara-domain-chat = { path = "crates/domain/chat" }
+rara-domain-chat = { path = "crates/chat" }
 rara-domain-shared = { path = "crates/domain/shared" }
 rara-error = { path = "crates/common/error" }
 rara-consul = { path = "crates/common/rara-consul" }

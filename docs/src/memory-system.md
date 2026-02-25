@@ -135,6 +135,6 @@ Chroma is a required dependency. The default URL is `http://localhost:8000`.
 | `crates/memory/src/reranking.rs` | Token-overlap reranker |
 | `crates/workers/src/tools/services/memory_tools.rs` | All 4 memory tools |
 | `crates/workers/src/memory_sync.rs` | Background sync worker |
-| `crates/domain/chat/src/service.rs` | Profile injection + pre-fetch + reflection |
+| `crates/chat/src/service.rs` | Profile injection + pre-fetch + reflection |
 | `crates/paths/src/lib.rs` | `memory_dir()`, `memory_sessions_dir()` |
 | `prompts/chat/default_system.md` | System prompt with memory instructions |

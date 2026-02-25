@@ -243,8 +243,8 @@ tracing = { workspace = true }
 
 **Files:**
 - Modify: `crates/agents/src/tool_registry.rs` — add `to_openrouter_tools_filtered()`
-- Modify: `crates/domain/chat/src/service.rs` — skill matching + prompt injection + filtered tools
-- Modify: `crates/domain/chat/Cargo.toml` — add `rara-skills` dependency
+- Modify: `crates/chat/src/service.rs` — skill matching + prompt injection + filtered tools
+- Modify: `crates/chat/Cargo.toml` — add `rara-skills` dependency
 - Modify: `crates/workers/src/worker_state.rs` — initialize `SkillRegistry`, pass to `ChatService`
 
 ### ToolRegistry changes
@@ -411,8 +411,8 @@ impl AgentTool for CreateSkillTool {
 ## Task 4: HTTP API for skills
 
 **Files:**
-- Create: `crates/domain/chat/src/skill_router.rs` (or add to existing `router.rs`)
-- Modify: `crates/domain/chat/src/lib.rs` — export skill routes
+- Create: `crates/chat/src/skill_router.rs` (or add to existing `router.rs`)
+- Modify: `crates/chat/src/lib.rs` — export skill routes
 - Modify: `crates/workers/src/worker_state.rs` — merge skill routes
 
 ### Endpoints

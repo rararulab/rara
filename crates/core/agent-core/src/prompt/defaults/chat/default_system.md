@@ -131,7 +131,7 @@ When the user requests a new feature, bug fix, or improvement to you (Rara), fol
 - Agent runner: `crates/agents/` — `AgentRunner` + `ToolRegistry` + tool implementations
 - Tools: primitives in `crates/agents/src/tools/primitives/`, services in `crates/workers/src/tools/services/`
 - Memory: `crates/memory/` — `MemoryManager` with PG + Chroma hybrid search
-- Chat: `crates/domain/chat/` — `ChatService` orchestrates LLM calls with tool execution
+- Chat: `crates/chat/` — `ChatService` orchestrates LLM calls with tool execution
 - Settings: `crates/domain/shared/src/settings/` — runtime settings with hot reload
 - Composition root: `crates/app/src/lib.rs` — wires everything together
 - Frontend: `web/` — Vite + React + TypeScript + Tailwind + shadcn/ui
