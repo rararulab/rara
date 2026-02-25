@@ -317,6 +317,16 @@ impl AppConfig {
                 error!("Worker manager shutdown timed out; continuing shutdown");
             }
 
+            // Extract the worker runtime so it is NOT dropped inside this async
+            // context.  Dropping a Tokio `Runtime` from within an async task
+            // panics with "Cannot drop a runtime in a context where blocking is
+            // not allowed".  Move it to a blocking thread for safe teardown.
+            let worker_rt = worker_manager.take_runtime();
+            drop(worker_manager);
+            if let Some(rt) = worker_rt {
+                tokio::task::spawn_blocking(move || drop(rt));
+            }
+
             if let Some(bot) = bot_handle {
                 info!("Shutting down telegram bot");
                 bot.shutdown().await;

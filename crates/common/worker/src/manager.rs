@@ -508,6 +508,14 @@ impl<S: Clone + Send + Sync + 'static> Manager<S> {
 
     pub fn worker_count(&self) -> usize { self.workers.len() }
 
+    /// Takes ownership of the runtime `Arc`, if any.
+    ///
+    /// Call this **after** `shutdown()` to extract the runtime so it can be
+    /// dropped outside an async context (e.g. in `spawn_blocking`). Dropping a
+    /// Tokio runtime inside an async task panics, so callers that own the last
+    /// `Arc` reference should use this to move the drop into a blocking thread.
+    pub fn take_runtime(&mut self) -> Option<Arc<Runtime>> { self.runtime.take() }
+
     /// Initiates graceful shutdown of all workers and waits for them to
     /// complete.
     ///

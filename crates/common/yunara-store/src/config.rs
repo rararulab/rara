@@ -36,13 +36,13 @@ pub struct DatabaseConfig {
     pub migration_dir: String,
 
     /// Maximum number of connections in the pool
-    #[default = 10]
-    #[builder(default = 10, getter)]
+    #[default = 20]
+    #[builder(default = 20, getter)]
     pub max_connections: u32,
 
     /// Minimum number of idle connections
-    #[default = 1]
-    #[builder(default = 1, getter)]
+    #[default = 2]
+    #[builder(default = 2, getter)]
     pub min_connections: u32,
 
     /// Connection timeout (default: 30 seconds)
