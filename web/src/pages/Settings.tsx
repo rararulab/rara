@@ -27,7 +27,6 @@ import type {
   GmailAdminSettingsView,
   ModelListView,
   PullProgressEvent,
-  PromptFileView,
   PromptListView,
   RuntimeSettingsPatch,
   RuntimeSettingsView,
@@ -143,7 +142,6 @@ export default function Settings() {
   const [gmailAutoSendEnabled, setGmailAutoSendEnabled] = useState(false);
   const [selectedPromptName, setSelectedPromptName] = useState("");
   const [selectedPromptContent, setSelectedPromptContent] = useState("");
-  const [promptDirty, setPromptDirty] = useState(false);
   const [selectedSetting, setSelectedSetting] = useState<SettingKey | null>(null);
   const [expandedCategories, setExpandedCategories] = useState<Set<SettingCategory>>(new Set());
   const [toast, setToast] = useState<ToastState>(null);
@@ -471,17 +469,14 @@ export default function Settings() {
       const initial = preferred ?? prompts[0];
       setSelectedPromptName(initial.name);
       setSelectedPromptContent(initial.content);
-      setPromptDirty(false);
       return;
     }
 
-    if (!promptDirty) {
-      const matched = prompts.find((p) => p.name === selectedPromptName);
-      if (matched) {
-        setSelectedPromptContent(matched.content);
-      }
+    const matched = prompts.find((p) => p.name === selectedPromptName);
+    if (matched) {
+      setSelectedPromptContent(matched.content);
     }
-  }, [promptsQuery.data, promptDirty, selectedPromptName]);
+  }, [promptsQuery.data, selectedPromptName]);
 
   const filteredModels = useMemo(() => {
     const q = modelSearch.trim().toLowerCase();
@@ -738,33 +733,6 @@ export default function Settings() {
     },
   });
 
-  const promptUpdateMutation = useMutation({
-    mutationFn: ({ name, content }: { name: string; content: string }) =>
-      api.put<PromptFileView>(`/api/v1/prompts/${name}`, { content }),
-    onSuccess: (updated) => {
-      queryClient.setQueryData<PromptListView>(["prompt-admin"], (prev) => {
-        if (!prev) {
-          return { prompts: [updated] };
-        }
-        const next = prev.prompts.map((prompt) =>
-          prompt.name === updated.name ? updated : prompt,
-        );
-        if (!next.some((prompt) => prompt.name === updated.name)) {
-          next.push(updated);
-        }
-        return { prompts: next };
-      });
-      setSelectedPromptName(updated.name);
-      setSelectedPromptContent(updated.content);
-      setPromptDirty(false);
-      setToast({ kind: "success", message: `Prompt saved: ${updated.name}` });
-    },
-    onError: (e: unknown) => {
-      const message = e instanceof Error ? e.message : "Failed to update prompt";
-      setToast({ kind: "error", message });
-    },
-  });
-
   const handleSave = () => {
     if (selectedSetting === "ai") {
       if (!aiPatch && !modelAdminDiff.hasChanges) {
@@ -796,17 +764,6 @@ export default function Settings() {
       return;
     }
     updateMutation.mutate(patch);
-  };
-
-  const handleSavePrompt = () => {
-    if (!selectedPromptName) {
-      setToast({ kind: "error", message: "Please select a prompt file." });
-      return;
-    }
-    promptUpdateMutation.mutate({
-      name: selectedPromptName,
-      content: selectedPromptContent,
-    });
   };
 
   const openSetting = (setting: SettingKey) => {
@@ -1230,7 +1187,7 @@ export default function Settings() {
                   <div className="space-y-1">
                     <p className="font-medium">Prompt Admin</p>
                     <p className="text-xs text-muted-foreground">
-                      {availablePrompts.length} prompt files · Runtime prompt editor
+                      {availablePrompts.length} prompt files · Built-in prompt viewer
                     </p>
                   </div>
                 </div>
@@ -1917,7 +1874,6 @@ export default function Settings() {
                     const prompt = availablePrompts.find((p) => p.name === value);
                     setSelectedPromptName(value);
                     setSelectedPromptContent(prompt?.content ?? "");
-                    setPromptDirty(false);
                   }}
                 >
                   <SelectTrigger>
@@ -1933,32 +1889,16 @@ export default function Settings() {
                 </Select>
                 <Textarea
                   value={selectedPromptContent}
-                  onChange={(e) => {
-                    setSelectedPromptContent(e.target.value);
-                    setPromptDirty(true);
-                  }}
+                  readOnly
                   rows={14}
                   className="font-mono text-xs"
-                  placeholder="Prompt markdown content..."
+                  placeholder="Select a prompt file to view..."
                   disabled={!selectedPromptName}
                 />
                 <p className="text-xs text-muted-foreground">
                   {selectedPromptMeta?.description ??
-                    "Select a prompt file to edit."}
+                    "Select a prompt file to view."}
                 </p>
-                <div className="flex justify-end">
-                  <Button
-                    type="button"
-                    onClick={handleSavePrompt}
-                    disabled={
-                      !selectedPromptName ||
-                      !promptDirty ||
-                      promptUpdateMutation.isPending
-                    }
-                  >
-                    {promptUpdateMutation.isPending ? "Saving..." : "Save Prompt Markdown"}
-                  </Button>
-                </div>
               </div>
 
             </div>
