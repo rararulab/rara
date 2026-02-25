@@ -12,26 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Memory index service for markdown-backed agent memory.
+//! Unified memory layer: mem0 (facts) + Memos (notes) + Hindsight (4-network recall).
 //!
-//! # Overview
-//! - Incremental indexing of Markdown files into PostgreSQL.
-//! - Hybrid retrieval (Chroma vector + PG keyword) with token-overlap
-//!   reranking.
-//! - Server-side embeddings via Chroma (all-MiniLM-L6-v2).
+//! # Architecture
 //!
-//! # Infrastructure
-//! - **PostgreSQL** — file metadata + chunk content + full-text index.
-//! - **Chroma** — vector embeddings + nearest-neighbor search.
-//! - Schema managed via migrations in `crates/rara-model/migrations/`.
+//! Three external services replace the previous homegrown PG + Chroma engine:
+//!
+//! | Service    | Role                        | API        |
+//! |------------|-----------------------------|------------|
+//! | **mem0**   | Structured fact management  | REST v1    |
+//! | **Memos**  | Markdown note storage       | REST v1    |
+//! | **Hindsight** | 4-network retain/recall/reflect | REST v1 |
+//!
+//! [`MemoryManager`] provides a unified facade that fans out to all three
+//! backends and merges search results via Reciprocal Rank Fusion.
 
-pub mod chroma;
+pub mod error;
+pub mod fusion;
+pub mod hindsight_client;
 pub mod manager;
-pub mod reranking;
-pub mod store;
-pub mod store_pg;
+pub mod mem0_client;
+pub mod memos_client;
 
-pub use chroma::ChromaClient;
-pub use manager::{ChunkDetail, MemoryManager, MemoryResult, SyncStats};
-pub use store::{ChunkInput, IndexedFileMeta};
-pub use store_pg::PgMemoryStore;
+pub use error::{MemoryError, MemoryResult};
+pub use hindsight_client::HindsightClient;
+pub use manager::{MemoryManager, MemorySource, SearchResult};
+pub use mem0_client::{Mem0Client, Mem0Memory};
+pub use memos_client::{MemosClient, MemoEntry};
