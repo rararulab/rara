@@ -23,7 +23,7 @@
 
 use std::{collections::HashSet, hash::BuildHasher};
 
-use crate::types::NormalizedJob;
+use super::types::NormalizedJob;
 
 /// An idempotent key that uniquely identifies a job within a single
 /// source.

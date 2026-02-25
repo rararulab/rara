@@ -19,7 +19,7 @@ use rara_domain_shared::convert;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{error::SourceError, jobspy::JOBSPY_SOURCE_NAME};
+use super::{error::SourceError, jobspy::JOBSPY_SOURCE_NAME};
 
 // ===========================================================================
 // Discovery types
@@ -333,7 +333,7 @@ fn build_location(
 // JobRow (DB model) -> NormalizedJob
 // ---------------------------------------------------------------------------
 
-use crate::pg_repository::{JobRow, JobStatusDb};
+use super::pg_repository::{JobRow, JobStatusDb};
 
 impl From<JobRow> for NormalizedJob {
     fn from(row: JobRow) -> Self {

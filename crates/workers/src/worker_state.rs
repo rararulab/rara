@@ -38,7 +38,7 @@ pub struct AppState {
     pub interview_service:   rara_backend_admin::interview::service::InterviewService,
     pub scheduler_service:   rara_backend_admin::scheduler::service::SchedulerService,
     pub analytics_service:   rara_backend_admin::analytics::service::AnalyticsService,
-    pub job_service:         rara_domain_job::service::JobService,
+    pub job_service:         rara_backend_admin::job::service::JobService,
     pub chat_service:        rara_domain_chat::service::ChatService,
     // -- shared --
     pub settings_svc:   rara_domain_shared::settings::SettingsSvc,
@@ -130,7 +130,7 @@ impl AppState {
         let interview_service = rara_backend_admin::interview::wire_interview_service(pool.clone());
         let scheduler_service = rara_backend_admin::scheduler::wire_scheduler_service(pool.clone());
         let analytics_service = rara_backend_admin::analytics::wire_analytics_service(pool.clone());
-        let job_service = rara_domain_job::wire_job_service(pool.clone(), ai_service.clone())
+        let job_service = rara_backend_admin::job::wire_job_service(pool.clone(), ai_service.clone())
             .whatever_context("Failed to initialize job service")?;
         info!("Job service initialized");
 

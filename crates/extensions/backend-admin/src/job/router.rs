@@ -21,7 +21,7 @@ use axum::{
     extract::State,
     http::StatusCode,
 };
-use rara_domain_job::{
+use super::{
     error::SourceError,
     service::JobService,
     types::{DiscoveryCriteria, DiscoveryJobResponse, NormalizedJob},
@@ -71,7 +71,7 @@ async fn discover_jobs(
     // If all drivers failed and no jobs were collected, propagate the error.
     if result.jobs.is_empty() {
         if let Some(err) = result.error {
-            tracing::warn!(%err, "discover returning error — no jobs collected");
+            tracing::warn!(%err, "discover returning error -- no jobs collected");
             return Err(err);
         }
     }

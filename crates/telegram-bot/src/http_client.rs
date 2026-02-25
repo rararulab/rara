@@ -14,9 +14,10 @@
 
 //! Typed HTTP client from the bot process to the main service.
 //!
-//! This client reuses domain request/response models
-//! ([`DiscoveryCriteria`], [`DiscoveryJobResponse`]) to avoid payload drift
-//! between the bot and the main service.
+//! This client uses locally duplicated request/response models
+//! ([`DiscoveryCriteria`], [`DiscoveryJobResponse`]) so the bot crate
+//! doesn't depend on the domain-job crate (same pattern as
+//! [`ChatStreamEvent`]).
 //!
 //! # Endpoints
 //!
@@ -26,12 +27,37 @@
 //! | POST   | `/api/v1/internal/bot/jd-parse`  | Submit raw JD text for parsing   |
 
 use futures::StreamExt;
-use rara_domain_job::types::DiscoveryCriteria;
-pub use rara_domain_job::types::DiscoveryJobResponse;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
 use tokio::sync::mpsc;
+
+// Local mirrors of domain-job types -- duplicated so the bot crate doesn't
+// depend on the domain-job crate.
+
+/// Request body for `POST /api/v1/jobs/discover`.
+#[derive(Debug, Serialize)]
+struct DiscoveryCriteria {
+    pub keywords:     Vec<String>,
+    pub location:     Option<String>,
+    pub job_type:     Option<String>,
+    pub max_results:  Option<u32>,
+    pub posted_after: Option<String>,
+    #[serde(default)]
+    pub sites:        Vec<String>,
+}
+
+/// Subset of discovery response fields used by the bot's formatting logic.
+#[derive(Debug, Deserialize)]
+pub struct DiscoveryJobResponse {
+    pub title:            String,
+    pub company:          String,
+    pub location:         Option<String>,
+    pub url:              Option<String>,
+    pub salary_min:       Option<i32>,
+    pub salary_max:       Option<i32>,
+    pub salary_currency:  Option<String>,
+}
 
 /// Error model for bot -> main-service HTTP calls.
 #[derive(Debug, Snafu)]

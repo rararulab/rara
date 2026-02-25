@@ -19,7 +19,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
-use crate::{
+use super::{
     error::SourceError,
     repository::JobRepository,
     types::NormalizedJob,

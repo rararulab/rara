@@ -43,7 +43,6 @@ members = [
     "crates/common/yunara-store",
     "crates/rara-model",
     "crates/domain/shared",
-    "crates/domain/job",
     "crates/server",
     "crates/telegram-bot",
     "crates/paths",
@@ -84,6 +83,7 @@ derive_more = { version = "2.0", features = ["full"] }
 dirs = "^6"
 futures = "^0.3"
 http = "^1"
+hyper = { version = "1", features = ["full"] }
 jiff = { version = "^0.2", features = ["serde"] }
 lazy_static = "^1.4"
 moka = { version = "0.12", features = ["future"] }
@@ -152,7 +152,6 @@ rara-cli = { path = "crates/cmd" }
 rara-composio = { path = "crates/integrations/composio" }
 rara-backend-admin = { path = "crates/extensions/backend-admin" }
 rara-domain-chat = { path = "crates/domain/chat" }
-rara-domain-job = { path = "crates/domain/job" }
 rara-domain-shared = { path = "crates/domain/shared" }
 rara-error = { path = "crates/common/error" }
 rara-consul = { path = "crates/common/rara-consul" }

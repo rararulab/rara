@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! [`JapanDevDriver`] — job source driver for japan-dev.com.
+//! [`JapanDevDriver`] -- job source driver for japan-dev.com.
 //!
 //! Fetches job listings from the JapanDev Meilisearch API, then
 //! concurrently scrapes each job's detail page to extract the full
@@ -21,7 +21,7 @@
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-use crate::{
+use super::{
     error::SourceError,
     types::{DiscoveryCriteria, RawJob},
 };
@@ -237,7 +237,7 @@ fn extract_description_from_nuxt_data(html: &str) -> Option<String> {
         .map(|s| strip_html_tags(s))
 }
 
-/// Minimal HTML tag stripper — converts HTML to plain text.
+/// Minimal HTML tag stripper -- converts HTML to plain text.
 fn strip_html_tags(html: &str) -> String {
     let mut result = String::with_capacity(html.len());
     let mut in_tag = false;
