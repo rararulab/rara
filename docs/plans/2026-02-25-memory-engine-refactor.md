@@ -1,7 +1,7 @@
 # Memory Engine Refactor — Three-Layer Integration
 
 **Date**: 2026-02-25
-**Status**: Approved
+**Status**: Implemented
 
 ## Problem
 
@@ -67,6 +67,13 @@ Upper layers only interact with `MemoryManager`. Internal routing dispatches to 
 User sends message
     │
     ▼
+[prepare_session_data]
+    ├── Check session inactivity (≥30 min idle?)
+    │   └── YES → [spawn_session_consolidation] (background async)
+    │              ├── mem0.add(all session exchanges) → batch fact extraction
+    │              └── hindsight.retain(full session text) → 4-network storage
+    │
+    ▼
 [build_chat_system_prompt]
     ├── mem0.search(user_text) → inject relevant facts
     ├── hindsight.recall(user_text) → inject deep memory context
@@ -74,13 +81,15 @@ User sends message
     │
     ▼
 [AgentRunner generates response]
-    │
+    │   (no per-turn memory writes)
     ▼
-[spawn_memory_reflection] (background async)
-    ├── mem0.add(messages=[user,assistant]) → auto-extract/dedup facts
-    ├── hindsight.retain(content=conversation) → 4-network storage
-    └── memos.create(daily log entry) → append today's log
+[Response returned to user]
 ```
+
+> **Note (2026-02-25)**: Per-turn `spawn_memory_reflection` was removed in
+> [#318](https://github.com/crrow/job/issues/318). Memory consolidation now
+> triggers only at session boundaries (inactivity ≥30 min) or via explicit
+> agent tools (`memory_add_fact`, `memory_write`).
 
 ### Search Routing (`memory_search` tool)
 
@@ -128,14 +137,17 @@ impl MemoryManager {
     pub async fn search(&self, query: &str, limit: usize)
         -> MemoryResult<Vec<SearchResult>>;
 
-    /// Write a Markdown note to Memos
+    /// Write a Markdown note to Memos (on-demand only)
     pub async fn write_note(&self, content: &str, tags: &[&str])
         -> MemoryResult<String>;
 
-    /// Post-conversation reflection: mem0.add + hindsight.retain + memos daily log
-    pub async fn reflect_on_exchange(
-        &self, user_text: &str, assistant_text: &str
+    /// Session-end consolidation: batch mem0.add + hindsight.retain
+    pub async fn consolidate_session(
+        &self, exchanges: &[(String, String)]
     ) -> MemoryResult<()>;
+
+    /// Store a single explicit fact in mem0 + Hindsight
+    pub async fn add_fact(&self, content: &str) -> MemoryResult<()>;
 
     /// Read user facts from mem0
     pub async fn get_user_profile(&self) -> MemoryResult<Vec<Mem0Fact>>;
@@ -202,9 +214,9 @@ rara/config/memory/hindsight_bank_id  = rara-default
 - Remove old files (store.rs, store_pg.rs, chroma.rs, reranking.rs)
 
 ### Issue 4: Tool Layer + Orchestrator Integration
-- Update `memory_tools.rs` to use new MemoryManager
-- Update `orchestrator/reflection.rs` to use `reflect_on_exchange`
-- Update `orchestrator/core.rs` system prompt builder
+- Update `memory_tools.rs` to use new MemoryManager (`add_fact` instead of `reflect_on_exchange`)
+- Update `orchestrator/core.rs` with `spawn_session_consolidation` (replaces per-turn `spawn_memory_reflection`)
+- Update `chat/service.rs` with session inactivity detection (30 min threshold)
 - Remove `MemorySyncWorker`
 
 ### Issue 5: Settings + App Composition

@@ -1,140 +1,106 @@
 # Memory System
 
-Rara's memory system gives the agent persistent, cross-session knowledge about the user. It follows a two-tier architecture inspired by [MemGPT/Letta](https://www.letta.com/blog/agent-memory) and [mem0](https://github.com/mem0ai/mem0).
+Rara's memory system gives the agent persistent, cross-session knowledge about the user. It uses three specialized external services, each addressing a different aspect of long-term agent memory.
 
 ## Architecture Overview
 
 ```mermaid
 graph TD
-    A[Agent Conversation] -->|memory_write| B[memory_dir/*.md]
-    A -->|memory_update_profile| C[user_profile.md]
-    A -->|Post-turn reflection| D{New facts?}
-    D -->|Yes| C
-    D -->|No| E[Skip]
+    A[Agent Conversation] -->|memory_write tool| B[Memos]
+    A -->|memory_add_fact tool| C[mem0 + Hindsight]
 
-    F[MemorySyncWorker<br/>every 5 min] --> G[scan filesystem]
-    G --> H[PG chunks + FTS]
-    G --> I[Chroma vectors]
+    D[Session Inactivity<br/>≥ 30 min] -->|consolidate_session| E[mem0: extract facts]
+    D -->|consolidate_session| F[Hindsight: retain experience]
 
-    J[memory_search] --> H
-    J --> I
-    J --> K[Hybrid fusion + reranking]
-    K --> L[Search results]
+    G[memory_search tool] --> H[mem0 search]
+    G --> I[Hindsight recall]
+    H --> J[RRF Fusion]
+    I --> J
+    J --> K[Search results]
 
-    C -->|Auto-inject| M[System Prompt]
-    L -->|First-turn pre-fetch| M
+    L[mem0 user profile] -->|Auto-inject| M[System Prompt]
+    K -->|First-turn pre-fetch| M
 ```
 
-## Two-Tier Memory
+## Three-Layer Memory
 
-### Tier 1: Core Memory (always in context)
+| Service | Layer | Role | Trigger |
+|---------|-------|------|---------|
+| **mem0** | State | Structured fact extraction, auto-dedup, conflict resolution | Session-end + `memory_add_fact` tool |
+| **Memos** | Storage | Human-readable Markdown notes with tags | `memory_write` tool only |
+| **Hindsight** | Learning | 4-network retain/recall/reflect | Session-end + `memory_add_fact` tool |
 
-The **user profile** (`memory_dir/user_profile.md`) is a structured markdown file that the agent maintains across conversations. It is automatically injected into every system prompt.
+### Trigger Timing Design
 
-```markdown
-# User Profile
+Each backend has a distinct trigger policy:
 
-## Basic Info
-- Name: Ryan
-- Role: Software engineer
+- **mem0** — fires at session-end (via `consolidate_session`) or explicit fact addition (via `add_fact`). **Never per-turn.**
+- **Memos** — only written via the explicit `memory_write` tool. **No automatic writes.**
+- **Hindsight** — fires at session-end (via `consolidate_session`) or explicit fact addition (via `add_fact`). **Never per-turn.**
 
-## Preferences
-- Language: Chinese for casual, English for technical
-- Communication style: concise, practical
+### Session-End Detection
 
-## Current Goals
-- Building rara — personal AI assistant platform
+A session is considered "ended" when the inactivity gap exceeds 30 minutes (`SESSION_INACTIVITY_THRESHOLD`). When a user sends a new message to a session that has been idle for ≥30 min:
 
-## Key Context
-- Uses Rust + React stack
-- Interested in AI agents and automation
-```
-
-The agent updates this profile via the `memory_update_profile` tool, which surgically replaces individual sections.
-
-### Tier 2: Archival Memory (searchable on demand)
-
-All markdown files in `memory_dir/` are incrementally indexed into:
-
-- **PostgreSQL** — full-text search via `tsvector` (keyword matching)
-- **Chroma** — vector embeddings via server-side all-MiniLM-L6-v2 (semantic matching)
-
-Search uses **hybrid fusion**: reciprocal rank fusion (0.65 keyword + 0.35 vector) followed by token-overlap reranking.
+1. All previous (user, assistant) exchange pairs are extracted from the session history
+2. `consolidate_session` batches them into one mem0 `add_memories` call + one Hindsight `retain` call
+3. The consolidation runs as a fire-and-forget background task (does not block the new message)
 
 ## Memory Tools
 
-| Tool | Purpose | When used |
-|------|---------|-----------|
-| `memory_search` | Hybrid search across all indexed markdown | Answering questions, recalling context |
-| `memory_get` | Fetch full chunk by ID | When a search snippet needs more detail |
-| `memory_write` | Write new markdown file to memory | Persisting notes, summaries, detailed context |
-| `memory_update_profile` | Update a section of `user_profile.md` | Learning new user facts (name, goals, prefs) |
+| Tool | Purpose | Backends | When used |
+|------|---------|----------|-----------|
+| `memory_search` | Hybrid search across mem0 + Hindsight (RRF fusion) | mem0, Hindsight | Answering questions, recalling context |
+| `memory_deep_recall` | Deep reasoning via Hindsight's 4-network reflect | Hindsight | Complex questions requiring synthesis |
+| `memory_write` | Write a Markdown note with tags | Memos | Persisting notes, summaries, detailed context |
+| `memory_add_fact` | Store a single explicit fact | mem0, Hindsight | Learning specific user facts on demand |
 
 ## Automatic Memory Behaviors
 
-### 1. Core Profile Injection
+### 1. User Profile Injection
 
-On every `send_message()` call, the user profile is read from disk and prepended to the system prompt. The agent always has core knowledge about the user without needing to search.
+On every `send_message()` call, `get_user_profile()` queries mem0 for up to 50 structured facts about the user and prepends them to the system prompt as a "User Profile" section.
 
 ### 2. First-Turn Memory Pre-fetch
 
-When a session has fewer than 3 messages (new or short session), `send_message()` automatically runs `memory_search(user_text, 5)` and injects matching snippets into the system prompt as context.
+When a session has fewer than 3 messages (new or short session), `build_chat_system_prompt()` automatically runs `search(user_text, 5)` and injects matching snippets into the system prompt as "Relevant Memory Context".
 
-### 3. Post-Turn Memory Reflection
+### 3. Session-End Consolidation
 
-After every assistant response, an async fire-and-forget task runs a lightweight "reflection agent":
+When a session resumes after ≥30 minutes of inactivity, all previous exchanges are batch-consolidated into long-term memory:
 
-1. Takes the user message + assistant response
-2. Asks the LLM: "Did you learn any new facts about the user?"
-3. If yes, calls `memory_update_profile` to update the relevant section
-4. Uses `max_iterations=1` to stay fast and cheap
-5. Errors are logged but never block the response
+1. Extracts all (user, assistant) exchange pairs from history
+2. Sends all messages to mem0 for fact extraction (auto-dedup)
+3. Retains the full session text in Hindsight's 4-network
+4. Runs as a background `tokio::spawn` task — errors are logged but never block the response
 
-### 4. Background Sync Worker
+## Search Pipeline
 
-`MemorySyncWorker` runs every 5 minutes, calling `MemoryManager::sync()` to index any new or changed markdown files into PG + Chroma.
+`MemoryManager::search()` queries mem0 and Hindsight **in parallel**, then merges results using Reciprocal Rank Fusion (RRF, k=60). Items appearing in both backends receive a boosted score.
 
-## Sync Pipeline
-
-`MemoryManager::sync()` operates in 4 phases:
-
-1. **Async**: Read current file index from PostgreSQL
-2. **Blocking** (`spawn_blocking`): Walk filesystem, diff by mtime/size/hash, chunk changed files (1200 chars, 200 overlap)
-3. **Async**: Upsert changed chunks to PG, delete stale entries
-4. **Async**: Upsert chunks to Chroma for vector indexing
-
-## Session Export
-
-`ChatService::export_session_to_memory()` exports a session's full conversation to `memory_dir/sessions/{key}.md` as formatted markdown, making it searchable in future sessions.
+Over-fetching: requests `max(limit * 3, 10)` candidates per backend to give RRF enough signal for re-ranking.
 
 ## Configuration
 
-Memory settings in `/api/v1/settings`:
+Memory settings via Consul KV or environment variables:
 
-```json
-{
-  "agent": {
-    "memory": {
-      "chroma_url": "http://localhost:8000",
-      "chroma_collection": "job-memory",
-      "chroma_api_key": null
-    }
-  }
-}
-```
-
-Chroma is a required dependency. The default URL is `http://localhost:8000`.
+| Key | Default | Purpose |
+|-----|---------|---------|
+| `mem0_base_url` | `http://localhost:8080` | mem0 API server |
+| `memos_base_url` | `http://localhost:5230` | Memos server |
+| `memos_token` | — | Bearer token for Memos authentication |
+| `hindsight_base_url` | `http://localhost:8888` | Hindsight API server |
+| `hindsight_bank_id` | `default` | Hindsight memory bank identifier |
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `crates/memory/src/manager.rs` | `MemoryManager` — sync, search, profile read/write |
-| `crates/memory/src/store_pg.rs` | PostgreSQL chunk storage (async) |
-| `crates/memory/src/chroma.rs` | Chroma vector client |
-| `crates/memory/src/reranking.rs` | Token-overlap reranker |
+| `crates/memory/src/manager.rs` | `MemoryManager` — search, consolidate_session, add_fact, write_note |
+| `crates/memory/src/mem0_client.rs` | mem0 REST client |
+| `crates/memory/src/memos_client.rs` | Memos REST client |
+| `crates/memory/src/hindsight_client.rs` | Hindsight REST client |
+| `crates/memory/src/fusion.rs` | Reciprocal Rank Fusion algorithm |
 | `crates/workers/src/tools/services/memory_tools.rs` | All 4 memory tools |
-| `crates/workers/src/memory_sync.rs` | Background sync worker |
-| `crates/chat/src/service.rs` | Profile injection + pre-fetch + reflection |
-| `crates/paths/src/lib.rs` | `memory_dir()`, `memory_sessions_dir()` |
-| `prompts/chat/default_system.md` | System prompt with memory instructions |
+| `crates/chat/src/service.rs` | Session-end detection + consolidation trigger |
+| `crates/agents/src/orchestrator/core.rs` | Profile injection + pre-fetch + spawn_session_consolidation |
