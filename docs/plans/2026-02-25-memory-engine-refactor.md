@@ -113,6 +113,12 @@ crates/memory/src/
   memos_client.rs     # MemosClient (reqwest)
   hindsight_client.rs # HindsightClient (reqwest)
   fusion.rs           # RRF fusion + result normalization
+  recall_engine/      # Agent-configurable recall strategy engine (#322)
+    mod.rs            # module declarations + re-exports
+    types.rs          # RecallRule, Trigger, RecallAction, EventKind, InjectTarget
+    engine.rs         # RecallStrategyEngine (evaluate + execute + CRUD)
+    interpolation.rs  # query_template variable substitution
+    defaults.rs       # default rules (user-profile, post-compaction, etc.)
 ```
 
 ### Files to Remove
