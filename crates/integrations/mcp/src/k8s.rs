@@ -18,7 +18,10 @@
 //! (labels, probes, and container naming). The public API is kept
 //! backward-compatible with callers in `managed_client.rs` and `mgr.rs`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::time::Duration;
+
+use rara_k8s::k8s_types::*;
 
 /// Default namespace for MCP pods.
 pub const DEFAULT_NAMESPACE: &str = "default";
@@ -61,40 +64,84 @@ impl McpPodManager {
         env: &HashMap<String, String>,
         labels: Option<&HashMap<String, String>>,
     ) -> Result<(String, String, u16), McpPodError> {
-        let mut all_labels = HashMap::new();
-        all_labels.insert(
-            "rara.dev/component".to_string(),
-            "mcp-server".to_string(),
+        let pod_name = rara_k8s::generate_pod_name(&format!("mcp-{server_name}"));
+
+        let mut pod_labels = BTreeMap::new();
+        pod_labels.insert(
+            "app.kubernetes.io/managed-by".into(),
+            "rara".into(),
         );
-        all_labels.insert(
-            "rara.dev/server-name".to_string(),
-            server_name.to_string(),
+        pod_labels.insert("rara.dev/component".into(), "mcp-server".into());
+        pod_labels.insert(
+            "rara.dev/server-name".into(),
+            server_name.into(),
         );
         if let Some(extra) = labels {
-            all_labels.extend(extra.clone());
+            for (k, v) in extra {
+                pod_labels.insert(k.clone(), v.clone());
+            }
         }
 
-        let spec = rara_k8s::PodSpec {
-            name_prefix: format!("mcp-{server_name}"),
-            image: image.to_string(),
-            namespace: namespace.to_string(),
-            port: Some(port),
-            command: None,
-            args: None,
-            env: env.clone(),
-            labels: all_labels,
-            resources: None,
-            probe: Some(rara_k8s::ProbeSpec {
-                http_path: Some("/".to_string()),
-                port,
-                initial_delay_secs: Some(5),
-                period_secs: Some(10),
+        let env_vars: Vec<EnvVar> = env
+            .iter()
+            .map(|(k, v)| EnvVar {
+                name: k.clone(),
+                value: Some(v.clone()),
+                value_from: None,
+            })
+            .collect();
+
+        let i32_port = i32::from(port);
+        let probe = Probe {
+            http_get: Some(HTTPGetAction {
+                path: Some("/".into()),
+                port: IntOrString::Int(i32_port),
+                scheme: Some("HTTP".into()),
+                host: None,
+                http_headers: None,
             }),
-            restart_policy: rara_k8s::RestartPolicy::Never,
-            timeout_secs: 120,
+            initial_delay_seconds: Some(5),
+            period_seconds: Some(10),
+            timeout_seconds: Some(5),
+            failure_threshold: Some(3),
+            success_threshold: Some(1),
+            ..Default::default()
         };
 
-        let handle = self.inner.create_pod(spec).await?;
+        let pod = Pod {
+            metadata: ObjectMeta {
+                name: Some(pod_name.clone()),
+                labels: Some(pod_labels),
+                ..Default::default()
+            },
+            spec: Some(PodSpec {
+                restart_policy: Some("Never".into()),
+                containers: vec![Container {
+                    name: "mcp-server".into(),
+                    image: Some(image.into()),
+                    ports: Some(vec![ContainerPort {
+                        container_port: i32_port,
+                        protocol: Some("TCP".into()),
+                        ..Default::default()
+                    }]),
+                    env: if env_vars.is_empty() {
+                        None
+                    } else {
+                        Some(env_vars)
+                    },
+                    liveness_probe: Some(probe.clone()),
+                    readiness_probe: Some(probe),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            status: None,
+        };
+
+        let handle = self
+            .inner
+            .create_pod(pod, namespace, Duration::from_secs(120))
+            .await?;
         let ip = handle
             .ip
             .ok_or_else(|| rara_k8s::K8sError::NoPodIp {

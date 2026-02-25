@@ -126,7 +126,7 @@ PodTool 的 `parameters_schema()` 返回以下 JSON Schema：
 | `env` | `object` | 否 | `{}` | 环境变量 |
 | `labels` | `object` | 否 | `{}` | 额外 Pod 标签 |
 
-注意：通过 PodTool 创建的 Pod，`restart_policy` 固定为 `Never`，`timeout_secs` 固定为 `120` 秒，不注入 probe，不设置 resource limits。所有 Pod 自动附加 `app.kubernetes.io/managed-by: rara` 标签。
+注意：通过 PodTool 创建的 Pod，`restart_policy` 固定为 `"Never"`，等待超时固定为 `120` 秒，不注入 probe，不设置 resource limits。所有 Pod 自动附加 `app.kubernetes.io/managed-by: rara` 标签。PodTool 直接构建 `k8s_openapi` 原生 `Pod` 对象传递给 `PodManager::create_pod()`。
 
 **调用示例：**
 

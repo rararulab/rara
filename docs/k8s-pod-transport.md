@@ -114,13 +114,13 @@ Pod transport 的完整生命周期如下：
      +---------+---------+
      |                   |
      v                   |
-  构建 PodSpec           |
+  构建 k8s_core::Pod     |
   (MCP 默认标签 +        |
    HTTP probe +          |
    restart: Never)       |
      |                   |
      v                   |
-  PodManager.create_pod()
+  PodManager.create_pod(pod, namespace, timeout)
      |
      v
   K8s API: POST /api/v1/namespaces/{ns}/pods

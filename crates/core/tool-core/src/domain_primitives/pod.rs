@@ -17,14 +17,16 @@
 //! Wraps [`rara_k8s::PodManager`] behind the [`AgentTool`] trait so agents
 //! can create, delete, inspect, and read logs from ephemeral pods.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::AgentTool;
+use rara_k8s::k8s_types::*;
 
 /// Agent-callable tool for managing Kubernetes pods.
 pub struct PodTool {
@@ -163,21 +165,60 @@ impl AgentTool for PodTool {
                 labels,
                 name_prefix,
             } => {
-                let spec = rara_k8s::PodSpec {
-                    name_prefix,
-                    image,
-                    namespace,
-                    port,
-                    command,
-                    args,
-                    env,
-                    labels,
-                    resources: None,
-                    probe: None,
-                    restart_policy: rara_k8s::RestartPolicy::Never,
-                    timeout_secs: 120,
+                let pod_name = rara_k8s::generate_pod_name(&name_prefix);
+
+                let mut pod_labels = BTreeMap::new();
+                pod_labels
+                    .insert("app.kubernetes.io/managed-by".into(), "rara".into());
+                for (k, v) in &labels {
+                    pod_labels.insert(k.clone(), v.clone());
+                }
+
+                let env_vars: Vec<EnvVar> = env
+                    .iter()
+                    .map(|(k, v)| EnvVar {
+                        name: k.clone(),
+                        value: Some(v.clone()),
+                        value_from: None,
+                    })
+                    .collect();
+
+                let pod = Pod {
+                    metadata: ObjectMeta {
+                        name: Some(pod_name),
+                        labels: Some(pod_labels),
+                        ..Default::default()
+                    },
+                    spec: Some(PodSpec {
+                        restart_policy: Some("Never".into()),
+                        containers: vec![Container {
+                            name: "main".into(),
+                            image: Some(image),
+                            command,
+                            args,
+                            ports: port.map(|p| {
+                                vec![ContainerPort {
+                                    container_port: i32::from(p),
+                                    protocol: Some("TCP".into()),
+                                    ..Default::default()
+                                }]
+                            }),
+                            env: if env_vars.is_empty() {
+                                None
+                            } else {
+                                Some(env_vars)
+                            },
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }),
+                    status: None,
                 };
-                let handle = self.manager.create_pod(spec).await?;
+
+                let handle = self
+                    .manager
+                    .create_pod(pod, &namespace, Duration::from_secs(120))
+                    .await?;
                 Ok(serde_json::to_value(&handle)?)
             }
             PodAction::Delete {

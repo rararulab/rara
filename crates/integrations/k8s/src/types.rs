@@ -12,53 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Pod configuration and result types.
-
-use std::collections::HashMap;
+//! Pod result and status types.
 
 use serde::{Deserialize, Serialize};
-
-/// Specification for creating a new pod.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PodSpec {
-    /// Prefix used to generate a unique pod name.
-    pub name_prefix: String,
-    /// Container image to run.
-    pub image: String,
-    /// Kubernetes namespace. Defaults to `"default"`.
-    #[serde(default = "default_namespace")]
-    pub namespace: String,
-    /// Optional container port to expose.
-    pub port: Option<u16>,
-    /// Override the container entrypoint.
-    pub command: Option<Vec<String>>,
-    /// Arguments passed to the container.
-    pub args: Option<Vec<String>>,
-    /// Environment variables for the container.
-    #[serde(default)]
-    pub env: HashMap<String, String>,
-    /// Extra labels applied to the pod metadata.
-    #[serde(default)]
-    pub labels: HashMap<String, String>,
-    /// Resource requests/limits.
-    pub resources: Option<ResourceSpec>,
-    /// HTTP probe configuration for liveness/readiness.
-    pub probe: Option<ProbeSpec>,
-    /// Pod restart policy.
-    #[serde(default)]
-    pub restart_policy: RestartPolicy,
-    /// Timeout (seconds) to wait for the pod to reach Running state.
-    #[serde(default = "default_timeout")]
-    pub timeout_secs: u64,
-}
-
-fn default_namespace() -> String {
-    "default".to_string()
-}
-
-fn default_timeout() -> u64 {
-    120
-}
 
 /// Handle returned after a pod is successfully created.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,36 +48,4 @@ pub struct ExecOutput {
     pub stdout: String,
     pub stderr: String,
     pub exit_code: Option<i32>,
-}
-
-/// Resource requests and limits for a container.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResourceSpec {
-    pub cpu_limit: Option<String>,
-    pub memory_limit: Option<String>,
-    pub cpu_request: Option<String>,
-    pub memory_request: Option<String>,
-}
-
-/// HTTP probe configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProbeSpec {
-    /// HTTP path to probe (e.g. `"/healthz"`).
-    pub http_path: Option<String>,
-    /// Port to probe.
-    pub port: u16,
-    /// Seconds before starting probes after container start.
-    pub initial_delay_secs: Option<i32>,
-    /// Seconds between probes.
-    pub period_secs: Option<i32>,
-}
-
-/// Restart policy for the pod.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum RestartPolicy {
-    #[default]
-    Never,
-    OnFailure,
-    Always,
 }

@@ -18,11 +18,27 @@
 //! pods. This crate is transport-agnostic — it knows nothing about MCP,
 //! agents, or any particular use case. Higher-level crates (e.g. `rara-mcp`,
 //! `tool-core`) wrap `PodManager` with domain-specific defaults.
+//!
+//! Callers construct a [`k8s_types::Pod`] directly using the re-exported
+//! `k8s-openapi` types and pass it to [`PodManager::create_pod`].
 
 pub mod error;
 pub mod manager;
 pub mod types;
 
 pub use error::K8sError;
-pub use manager::PodManager;
+pub use manager::{PodManager, generate_pod_name};
 pub use types::*;
+
+/// Re-export commonly used `k8s-openapi` types so callers don't need to
+/// depend on `k8s-openapi` directly.
+pub mod k8s_types {
+    pub use k8s_openapi::api::core::v1::{
+        Container, ContainerPort, EnvVar, HTTPGetAction, Pod, PodSpec, Probe,
+        ResourceRequirements,
+    };
+    pub use k8s_openapi::apimachinery::pkg::{
+        api::resource::Quantity, util::intstr::IntOrString,
+    };
+    pub use kube::api::ObjectMeta;
+}
