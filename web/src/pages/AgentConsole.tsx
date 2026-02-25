@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import {
   Activity,
@@ -62,54 +62,118 @@ const OPS_UTILITY_ITEMS = [
 function OperationsSidebarFooter() {
   const { isOnline, isChecking } = useServerStatus();
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const closeTimerRef = useRef<number | null>(null);
   const statusText = isChecking
     ? "Connecting..."
     : isOnline
       ? "Server online"
       : "Server offline";
 
+  const clearCloseTimer = () => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  };
+
+  const openMenu = () => {
+    clearCloseTimer();
+    setMenuOpen(true);
+  };
+
+  const scheduleCloseMenu = () => {
+    clearCloseTimer();
+    closeTimerRef.current = window.setTimeout(() => {
+      setMenuOpen(false);
+      closeTimerRef.current = null;
+    }, 180);
+  };
+
+  useEffect(() => {
+    if (!menuOpen) return;
+
+    const onPointerDown = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+      }
+    };
+
+    window.addEventListener("mousedown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("mousedown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [menuOpen]);
+
+  useEffect(
+    () => () => {
+      clearCloseTimer();
+    },
+    [],
+  );
+
   return (
     <div
       className="border-t border-border/70 bg-background/35 px-2 py-2"
-      onMouseEnter={() => setMenuOpen(true)}
-      onMouseLeave={() => setMenuOpen(false)}
-      onBlur={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
-          setMenuOpen(false);
-        }
-      }}
     >
-      {menuOpen && (
-        <div className="mb-2 border-b border-border/60 pb-2">
-          <div className="space-y-1">
-            {OPS_UTILITY_ITEMS.map((item) => (
-              <a
-                key={item.href}
-                href={item.href}
-                target={item.newTab ? "_blank" : undefined}
-                rel={item.newTab ? "noreferrer" : undefined}
-                onClick={() => setMenuOpen(false)}
-                className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-muted-foreground transition-all hover:bg-background/70 hover:text-foreground hover:ring-1 hover:ring-border/70"
-              >
-                {item.icon}
-                <span className="truncate">{item.label}</span>
-              </a>
-            ))}
-          </div>
+      <div className="flex items-end justify-between gap-2">
+        <div
+          className="relative"
+          ref={menuRef}
+          onMouseEnter={openMenu}
+          onMouseLeave={scheduleCloseMenu}
+          onBlur={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+              setMenuOpen(false);
+            }
+          }}
+        >
+          {menuOpen && (
+            <div className="absolute bottom-full left-0 z-20 w-56 pb-2">
+              <div className="rounded-xl border border-border/60 bg-background/95 p-1 shadow-lg shadow-black/5 backdrop-blur-md">
+                <div className="space-y-1">
+                  {OPS_UTILITY_ITEMS.map((item) => (
+                    <a
+                      key={item.href}
+                      href={item.href}
+                      target={item.newTab ? "_blank" : undefined}
+                      rel={item.newTab ? "noreferrer" : undefined}
+                      onClick={() => setMenuOpen(false)}
+                      className="group flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground transition-all hover:bg-background/70 hover:text-foreground hover:ring-1 hover:ring-border/70"
+                    >
+                      {item.icon}
+                      <span className="truncate">{item.label}</span>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+          <button
+            type="button"
+            title="More"
+            onClick={() => setMenuOpen((v) => !v)}
+            aria-expanded={menuOpen}
+            aria-haspopup="menu"
+            className="flex h-9 w-10 items-center justify-center rounded-lg text-muted-foreground transition-all hover:bg-background/70 hover:text-foreground"
+          >
+            <Ellipsis className="h-5 w-5" />
+          </button>
         </div>
-      )}
-
-      <div className="flex items-center justify-between gap-2">
         <button
           type="button"
-          title="More"
-          onClick={() => setMenuOpen((v) => !v)}
-          aria-expanded={menuOpen}
-          className="flex h-9 w-10 items-center justify-center rounded-lg text-muted-foreground transition-all hover:bg-background/70 hover:text-foreground"
+          title={statusText}
+          aria-label={statusText}
+          className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-all hover:bg-background/70"
         >
-          <Ellipsis className="h-5 w-5" />
-        </button>
-        <div className="inline-flex h-9 items-center gap-2 px-2 text-xs text-muted-foreground">
           <span
             className={cn(
               "h-2.5 w-2.5 shrink-0 rounded-full",
@@ -118,8 +182,7 @@ function OperationsSidebarFooter() {
               !isOnline && !isChecking && "bg-red-500",
             )}
           />
-          <span className="truncate">{statusText}</span>
-        </div>
+        </button>
       </div>
     </div>
   );

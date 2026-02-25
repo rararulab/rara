@@ -213,11 +213,63 @@ function SessionSidebarUtilityBar({
 }) {
   const { isOnline, isChecking } = useServerStatus();
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const closeTimerRef = useRef<number | null>(null);
   const statusText = isChecking
     ? "Connecting..."
     : isOnline
       ? "Server online"
       : "Server offline";
+
+  const clearCloseTimer = () => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  };
+
+  const openMenu = () => {
+    clearCloseTimer();
+    setMenuOpen(true);
+  };
+
+  const scheduleCloseMenu = () => {
+    clearCloseTimer();
+    closeTimerRef.current = window.setTimeout(() => {
+      setMenuOpen(false);
+      closeTimerRef.current = null;
+    }, 180);
+  };
+
+  useEffect(() => {
+    if (!menuOpen) return;
+
+    const onPointerDown = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+      }
+    };
+
+    window.addEventListener("mousedown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("mousedown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [menuOpen]);
+
+  useEffect(
+    () => () => {
+      clearCloseTimer();
+    },
+    [],
+  );
 
   return (
     <div
@@ -225,46 +277,45 @@ function SessionSidebarUtilityBar({
         "border-t border-border/70 bg-background/35",
         collapsed ? "p-1" : "px-2 py-2",
       )}
-      onMouseEnter={() => setMenuOpen(true)}
-      onMouseLeave={() => setMenuOpen(false)}
-      onBlur={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
-          setMenuOpen(false);
-        }
-      }}
     >
-      {menuOpen && (
-        <div
-          className={cn(
-            "mb-2 border-b border-border/60 pb-2",
-            collapsed ? "px-0" : "px-0",
-          )}
-        >
-          <div className="space-y-1">
-            {chatUtilityItems.map((item) => (
-              <a
-                key={item.href}
-                href={item.href}
-                target={item.newTab ? "_blank" : undefined}
-                rel={item.newTab ? "noreferrer" : undefined}
-                className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-muted-foreground transition-all hover:bg-background/70 hover:text-foreground hover:ring-1 hover:ring-border/70"
-                onClick={() => setMenuOpen(false)}
-              >
-                <item.icon className="h-4 w-4 shrink-0" />
-                <span className="truncate">{item.label}</span>
-              </a>
-            ))}
-          </div>
-        </div>
-      )}
-
       <div
         className={cn(
-          "flex items-center",
+          "flex items-end",
           collapsed ? "justify-center" : "justify-between gap-2",
         )}
       >
-        <div className="relative">
+        <div
+          className="relative"
+          ref={menuRef}
+          onMouseEnter={openMenu}
+          onMouseLeave={scheduleCloseMenu}
+          onBlur={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+              setMenuOpen(false);
+            }
+          }}
+        >
+          {menuOpen && (
+            <div className="absolute bottom-full left-0 z-20 w-56 pb-2">
+              <div className="rounded-xl border border-border/60 bg-background/95 p-1 shadow-lg shadow-black/5 backdrop-blur-md">
+                <div className="space-y-1">
+                  {chatUtilityItems.map((item) => (
+                    <a
+                      key={item.href}
+                      href={item.href}
+                      target={item.newTab ? "_blank" : undefined}
+                      rel={item.newTab ? "noreferrer" : undefined}
+                      className="group flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground transition-all hover:bg-background/70 hover:text-foreground hover:ring-1 hover:ring-border/70"
+                      onClick={() => setMenuOpen(false)}
+                    >
+                      <item.icon className="h-4 w-4 shrink-0" />
+                      <span className="truncate">{item.label}</span>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
           <button
             type="button"
             title="More"
@@ -274,6 +325,7 @@ function SessionSidebarUtilityBar({
               collapsed ? "w-9" : "w-10",
             )}
             aria-expanded={menuOpen}
+            aria-haspopup="menu"
           >
             <Ellipsis className="h-5 w-5" />
           </button>
@@ -285,7 +337,12 @@ function SessionSidebarUtilityBar({
               collapsed={false}
               onToggle={onToggleCollapse}
             />
-            <div className="inline-flex h-9 items-center gap-2 px-2 text-xs text-muted-foreground">
+            <button
+              type="button"
+              title={statusText}
+              aria-label={statusText}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-all hover:bg-background/70"
+            >
               <span
                 className={cn(
                   "h-2.5 w-2.5 shrink-0 rounded-full",
@@ -294,8 +351,7 @@ function SessionSidebarUtilityBar({
                   !isOnline && !isChecking && "bg-red-500",
                 )}
               />
-              <span className="truncate">{statusText}</span>
-            </div>
+            </button>
           </div>
         ) : (
           <div className="flex items-center gap-1">
@@ -303,15 +359,21 @@ function SessionSidebarUtilityBar({
               collapsed={false}
               onToggle={onToggleCollapse}
             />
-            <span
-              className={cn(
-                "h-2.5 w-2.5 shrink-0 rounded-full",
-                isChecking && "bg-yellow-400 animate-pulse",
-                isOnline && "bg-green-500",
-                !isOnline && !isChecking && "bg-red-500",
-              )}
-              aria-hidden="true"
-            />
+            <button
+              type="button"
+              title={statusText}
+              aria-label={statusText}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md transition-all hover:bg-background/70"
+            >
+              <span
+                className={cn(
+                  "h-2.5 w-2.5 shrink-0 rounded-full",
+                  isChecking && "bg-yellow-400 animate-pulse",
+                  isOnline && "bg-green-500",
+                  !isOnline && !isChecking && "bg-red-500",
+                )}
+              />
+            </button>
           </div>
         )}
       </div>
@@ -1403,12 +1465,6 @@ function ChatThread({
 
       {/* Input area */}
       <div className="pointer-events-none absolute inset-x-4 bottom-4 z-10 md:inset-x-8 md:bottom-6">
-        {!isOnline && (
-          <p className="mb-2 text-center text-xs text-destructive">
-            Server is offline. Sending is disabled until the connection is restored.
-          </p>
-        )}
-
         {/* Attached image previews */}
         {imageUrls.length > 0 && (
           <div className="pointer-events-auto mb-2 flex flex-wrap gap-2">
@@ -1565,11 +1621,6 @@ function EmptyState({
       <div className="flex-1" />
 
       <div className="pointer-events-none absolute inset-x-4 bottom-4 z-10 md:inset-x-8 md:bottom-6">
-        {!isOnline && (
-          <p className="mb-2 text-center text-xs text-destructive">
-            Server is offline. Sending is disabled until the connection is restored.
-          </p>
-        )}
         <div className="pointer-events-auto flex items-end gap-2 rounded-2xl border border-border/40 bg-background/70 p-2 shadow-[0_10px_40px_rgba(15,23,42,0.12)] backdrop-blur-xl">
           <textarea
             ref={textareaRef}
