@@ -109,6 +109,71 @@ services:
       retries: 5
 
   # --------------------------------------------------------------------------
+  # Memos — Markdown note service (with dedicated PostgreSQL)
+  # --------------------------------------------------------------------------
+  memos-pg:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${MEMOS_PG_USER:-memos}
+      POSTGRES_PASSWORD: ${MEMOS_PG_PASSWORD:-memos}
+      POSTGRES_DB: ${MEMOS_PG_DB:-memos}
+    volumes:
+      - memos-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U memos"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  memos:
+    image: neosmemo/memos:stable
+    ports:
+      - "${MEMOS_PORT:-5230}:5230"
+    environment:
+      MEMOS_DRIVER: postgres
+      MEMOS_DSN: "postgresql://${MEMOS_PG_USER:-memos}:${MEMOS_PG_PASSWORD:-memos}@memos-pg:5432/${MEMOS_PG_DB:-memos}?sslmode=disable"
+    depends_on:
+      memos-pg:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5230/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --------------------------------------------------------------------------
+  # Hindsight — 4-network memory service (with dedicated pgvector PostgreSQL)
+  # --------------------------------------------------------------------------
+  hindsight-pg:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${HINDSIGHT_PG_USER:-hindsight}
+      POSTGRES_PASSWORD: ${HINDSIGHT_PG_PASSWORD:-hindsight}
+      POSTGRES_DB: ${HINDSIGHT_PG_DB:-hindsight}
+    volumes:
+      - hindsight-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hindsight"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  hindsight:
+    image: ghcr.io/vectorize-io/hindsight:latest
+    ports:
+      - "${HINDSIGHT_PORT:-8100}:8888"
+    environment:
+      HINDSIGHT_DB_URL: "postgresql://${HINDSIGHT_PG_USER:-hindsight}:${HINDSIGHT_PG_PASSWORD:-hindsight}@hindsight-pg:5432/${HINDSIGHT_PG_DB:-hindsight}"
+    depends_on:
+      hindsight-pg:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8888/"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # --------------------------------------------------------------------------
   # Consul — configuration center (dev mode, KV only)
   # --------------------------------------------------------------------------
   consul:
@@ -156,6 +221,10 @@ services:
         # Memory (ChromaDB)
         put_kv "rara/config/memory/chroma_url" "http://chroma:8000"
         put_kv "rara/config/memory/mem0_base_url" "http://mem0:8000"
+        put_kv "rara/config/memory/memos_base_url" "http://memos:5230"
+        put_kv "rara/config/memory/memos_token" ""
+        put_kv "rara/config/memory/hindsight_base_url" "http://hindsight:8888"
+        put_kv "rara/config/memory/hindsight_bank_id" "default"
 
         echo "Consul KV seed complete."
 
@@ -199,3 +268,5 @@ volumes:
   pgdata:
   minio-data:
   chroma-data:
+  memos-pgdata:
+  hindsight-pgdata:

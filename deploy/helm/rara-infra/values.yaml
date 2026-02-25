@@ -294,6 +294,8 @@ consul:
 #   consulSeed.overrides.langfuseHost: "https://langfuse.rara.local"
 #   consulSeed.overrides.crawl4aiBaseUrl: "https://crawl4ai.rara.local"
 #   consulSeed.overrides.mem0BaseUrl: "https://mem0.rara.local"
+#   consulSeed.overrides.memosBaseUrl: "https://memos.rara.local"
+#   consulSeed.overrides.hindsightBaseUrl: "https://hindsight.rara.local"
 #   ... etc.
 # ------------------------------------------------------------------------------
 consulSeed:
@@ -304,6 +306,10 @@ consulSeed:
     objectStoreEndpoint: ""
     chromaUrl: ""
     mem0BaseUrl: ""
+    memosBaseUrl: ""
+    memosToken: ""
+    hindsightBaseUrl: ""
+    hindsightBankId: ""
     crawl4aiBaseUrl: ""
     telemetryOtlpEndpoint: ""
     langfuseHost: ""
@@ -444,3 +450,85 @@ mem0:
     limits:
       cpu: "1"
       memory: 1Gi
+
+# ------------------------------------------------------------------------------
+# Memos — Markdown note service (custom template)
+# ------------------------------------------------------------------------------
+memos:
+  enabled: false
+  image:
+    repository: neosmemo/memos
+    tag: "stable"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 5230
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  postgresql:
+    image:
+      repository: postgres
+      tag: "16-alpine"
+      pullPolicy: IfNotPresent
+    auth:
+      user: memos
+      password: memos
+      database: memos
+    persistence:
+      enabled: true
+      size: 2Gi
+      storageClass: ""
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+# ------------------------------------------------------------------------------
+# Hindsight — 4-network memory service (custom template)
+# ------------------------------------------------------------------------------
+hindsight:
+  enabled: false
+  image:
+    repository: ghcr.io/vectorize-io/hindsight
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8888
+    adminPort: 9999
+  env: {}
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  postgresql:
+    image:
+      repository: pgvector/pgvector
+      tag: "pg16"
+      pullPolicy: IfNotPresent
+    auth:
+      user: hindsight
+      password: hindsight
+      database: hindsight
+    persistence:
+      enabled: true
+      size: 5Gi
+      storageClass: ""
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi

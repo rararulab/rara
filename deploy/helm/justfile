@@ -156,6 +156,28 @@ seed-consul:
     # Memory (ChromaDB)
     put_kv "rara/config/memory/chroma_url" "http://{{ RELEASE }}-chromadb:8000"
 
+    # Memory (Mem0 REST API) — only if enabled
+    MEM0_ENABLED=$(echo "$VALUES" | jq -r '.mem0.enabled // false')
+    if [ "$MEM0_ENABLED" = "true" ]; then
+      put_kv "rara/config/memory/mem0_base_url" "http://{{ RELEASE }}-mem0:8000"
+    fi
+
+    # Memory (Memos note service) — only if enabled
+    MEMOS_ENABLED=$(echo "$VALUES" | jq -r '.memos.enabled // false')
+    if [ "$MEMOS_ENABLED" = "true" ]; then
+      put_kv "rara/config/memory/memos_base_url" "http://{{ RELEASE }}-memos:5230"
+      MEMOS_TOKEN=$(echo "$VALUES" | jq -r '.consulSeed.overrides.memosToken // empty')
+      if [ -n "$MEMOS_TOKEN" ]; then put_kv "rara/config/memory/memos_token" "$MEMOS_TOKEN"; fi
+    fi
+
+    # Memory (Hindsight 4-network) — only if enabled
+    HINDSIGHT_ENABLED=$(echo "$VALUES" | jq -r '.hindsight.enabled // false')
+    if [ "$HINDSIGHT_ENABLED" = "true" ]; then
+      put_kv "rara/config/memory/hindsight_base_url" "http://{{ RELEASE }}-hindsight:8888"
+      HINDSIGHT_BANK_ID=$(echo "$VALUES" | jq -r '.consulSeed.overrides.hindsightBankId // "default"')
+      put_kv "rara/config/memory/hindsight_bank_id" "$HINDSIGHT_BANK_ID"
+    fi
+
     # Crawl4AI
     put_kv "rara/config/crawl4ai/base_url" "http://{{ RELEASE }}-crawl4ai:11235"
 
@@ -197,7 +219,7 @@ hosts:
     LB_IP=$(kubectl get svc {{ RELEASE }}-traefik -n {{ NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
     if [ -z "$LB_IP" ]; then echo "ERROR: Traefik LoadBalancer IP not found"; exit 1; fi
     DOMAIN=$(helm get values {{ RELEASE }} -n {{ NAMESPACE }} -o json 2>/dev/null | jq -r '.global.domain // "rara.local"')
-    SERVICES="grafana prometheus alertmanager langfuse quickwit consul minio traefik tempo"
+    SERVICES="grafana prometheus alertmanager langfuse quickwit consul minio traefik tempo memos hindsight"
     HOSTS_LINE="${LB_IP}  $(for s in $SERVICES; do printf "%s.${DOMAIN} " "$s"; done)"
     MARKER="# rara-infra managed"
     # Remove old entries
@@ -287,6 +309,15 @@ doctor:
     check_pod_ready "ChromaDB"       "app.kubernetes.io/name=chromadb"
     check_pod_ready "Crawl4AI"       "app.kubernetes.io/name=crawl4ai"
 
+    # -- Memory services --
+    echo ""
+    echo "🧠 Memory Services"
+    check_pod_ready "Mem0"           "app.kubernetes.io/component=mem0"
+    check_pod_ready "Memos"          "app.kubernetes.io/component=memos"
+    check_pod_ready "Memos PG"       "app.kubernetes.io/component=memos-pg"
+    check_pod_ready "Hindsight"      "app.kubernetes.io/component=hindsight"
+    check_pod_ready "Hindsight PG"   "app.kubernetes.io/component=hindsight-pg"
+
     # -- Ingress & TLS --
     echo ""
     echo "🌐 Ingress & TLS"
@@ -332,7 +363,7 @@ doctor:
     LB_IP=$(kubectl get svc {{ RELEASE }}-traefik -n "$NS" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "pending")
     echo ""
     echo "🔗 Endpoints (https://*.${DOMAIN}  LB: ${LB_IP})"
-    for svc in grafana prometheus alertmanager langfuse quickwit consul minio traefik; do
+    for svc in grafana prometheus alertmanager langfuse quickwit consul minio traefik memos hindsight; do
       url="https://${svc}.${DOMAIN}"
       code=$(curl -skL --noproxy "*" --max-time 5 --resolve "${svc}.${DOMAIN}:443:${LB_IP}" -o /dev/null -w '%{http_code}' "$url" 2>/dev/null || echo "000")
       if [[ "$code" =~ ^[23] ]]; then
