@@ -45,6 +45,10 @@ use crate::{
     model_catalog::{ChatModel, ModelCatalog},
 };
 
+/// Inactivity threshold after which we consider a session "ended" and
+/// consolidate its exchanges into long-term memory before continuing.
+const SESSION_INACTIVITY_THRESHOLD: chrono::Duration = chrono::Duration::minutes(30);
+
 /// Central orchestrator for session-based AI chat.
 ///
 /// `ChatService` ties together three concerns:
@@ -367,6 +371,27 @@ impl ChatService {
         // 2. Read existing history
         let history = self.session_repo.read_messages(key, None, None).await?;
 
+        // 2a. Session-end detection: if the session has been inactive for
+        // longer than the threshold, consolidate the previous exchanges into
+        // long-term memory before starting a new conversational segment.
+        if !history.is_empty() {
+            let elapsed = Utc::now() - session.updated_at;
+            if elapsed > SESSION_INACTIVITY_THRESHOLD {
+                let exchanges: Vec<(String, String)> = extract_exchange_pairs(&history);
+                if !exchanges.is_empty() {
+                    info!(
+                        key = %key,
+                        pairs = exchanges.len(),
+                        idle_minutes = elapsed.num_minutes(),
+                        "session inactivity detected, consolidating previous exchanges"
+                    );
+                    self.chat_agent
+                        .orchestrator()
+                        .spawn_session_consolidation(exchanges);
+                }
+            }
+        }
+
         // 3. Persist user message -- multimodal if images are present
         let has_images = image_urls.as_ref().is_some_and(|urls| !urls.is_empty());
         let user_msg = if has_images {
@@ -535,7 +560,6 @@ impl ChatService {
         // handles persistence on completion.
         let session_repo = Arc::clone(&self.session_repo);
         let session_key = key.clone();
-        let orchestrator = stream_setup.orchestrator;
 
         tokio::spawn(async move {
             while let Some(runner_event) = runner_rx.recv().await {
@@ -560,9 +584,6 @@ impl ChatService {
                     let _ = session_repo.update_session(&session).await;
 
                     info!(key = %session_key, "streaming message exchange complete");
-
-                    // Fire-and-forget memory reflection.
-                    orchestrator.spawn_memory_reflection(&user_text, text);
                 }
 
                 // Forward the event to the SSE stream; if the receiver is
@@ -745,6 +766,36 @@ struct SessionData {
     context_length:    usize,
     base_system_prompt: String,
     user_content:      UserContent,
+}
+
+/// Extract (user_text, assistant_text) pairs from a message history.
+///
+/// Walks the messages looking for consecutive User -> Assistant pairs,
+/// skipping tool calls and system messages. Non-paired messages are ignored.
+fn extract_exchange_pairs(messages: &[ChatMessage]) -> Vec<(String, String)> {
+    let mut pairs = Vec::new();
+    let mut i = 0;
+    while i < messages.len() {
+        if messages[i].role == MessageRole::User {
+            // Look for the next assistant message (skipping tool calls).
+            let mut j = i + 1;
+            while j < messages.len()
+                && !matches!(messages[j].role, MessageRole::Assistant | MessageRole::User)
+            {
+                j += 1;
+            }
+            if j < messages.len() && messages[j].role == MessageRole::Assistant {
+                pairs.push((
+                    messages[i].content.as_text(),
+                    messages[j].content.as_text(),
+                ));
+                i = j + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    pairs
 }
 
 /// Truncate a string to at most `max_len` characters.

@@ -259,20 +259,23 @@ impl AgentOrchestrator {
         tokens > threshold
     }
 
-    // -- memory reflection --------------------------------------------------
+    // -- memory consolidation ------------------------------------------------
 
-    pub fn spawn_memory_reflection(&self, user_text: &str, assistant_text: &str) {
+    /// Fire-and-forget consolidation of a completed session's exchanges.
+    ///
+    /// Spawns a background task that calls
+    /// [`MemoryManager::consolidate_session`] with all user-assistant pairs
+    /// from the session. Called at session boundaries, **not** per-turn.
+    pub fn spawn_session_consolidation(&self, exchanges: Vec<(String, String)>) {
         let Some(ref mm) = self.memory_manager else {
             return;
         };
 
         let mm = Arc::clone(mm);
-        let user_text = user_text.to_owned();
-        let assistant_text = assistant_text.to_owned();
 
         tokio::spawn(async move {
-            if let Err(e) = mm.reflect_on_exchange(&user_text, &assistant_text).await {
-                tracing::warn!(error = %e, "memory reflection failed");
+            if let Err(e) = mm.consolidate_session(&exchanges).await {
+                tracing::warn!(error = %e, "session consolidation failed");
             }
         });
     }

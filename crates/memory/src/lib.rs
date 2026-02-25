@@ -46,14 +46,17 @@
 //! (RRF, k=60). This produces a single ranked list where items appearing in
 //! both backends are boosted.
 //!
-//! ## Post-Conversation Reflection
+//! ## Session Consolidation
 //!
-//! [`MemoryManager::reflect_on_exchange`] fans out to all three backends after
-//! each conversation turn:
+//! [`MemoryManager::consolidate_session`] batches all exchanges from a
+//! completed session into long-term memory at session boundaries (inactivity
+//! threshold exceeded). It touches **only** mem0 and Hindsight — Memos is
+//! reserved for explicit `memory_write` tool calls.
 //!
-//! 1. **mem0** — extracts and deduplicates structured facts from the exchange.
-//! 2. **Hindsight** — retains the exchange across the 4-network model.
-//! 3. **Memos** — appends an exchange log entry (human-readable Markdown).
+//! ## Explicit Fact Storage
+//!
+//! [`MemoryManager::add_fact`] stores a single fact into mem0 and Hindsight
+//! immediately, used by the `memory_add_fact` tool.
 //!
 //! Partial failures are logged as warnings but do not fail the operation.
 //!

@@ -18,29 +18,43 @@
 //! in the agent system. Upper layers (tools, orchestrator) never call the
 //! individual clients directly — they always go through this facade.
 //!
+//! # Trigger Timing
+//!
+//! Each backend has a distinct trigger policy:
+//!
+//! - **mem0** — fires at session-end (via [`consolidate_session`]) or
+//!   explicit fact addition (via [`add_fact`]). Never per-turn.
+//! - **Memos** — only written via the explicit `memory_write` tool
+//!   ([`write_note`]). No automatic writes.
+//! - **Hindsight** — fires at session-end (via [`consolidate_session`]) or
+//!   explicit fact addition (via [`add_fact`]). Never per-turn.
+//!
 //! # Operations
 //!
-//! | Method                  | Backends touched         | Purpose                                        |
-//! |-------------------------|--------------------------|-------------------------------------------------|
-//! | [`search`]              | mem0 + Hindsight (‖)     | Parallel semantic search, fused via RRF          |
-//! | [`write_note`]          | Memos                    | Persist a tagged Markdown note                   |
-//! | [`reflect_on_exchange`] | mem0 + Hindsight + Memos (‖) | Post-turn reflection across all three        |
-//! | [`get_user_profile`]    | mem0                     | Retrieve structured user facts                   |
-//! | [`deep_recall`]         | Hindsight                | Personality-conditioned deep reasoning            |
+//! | Method                   | Backends touched     | Purpose                                        |
+//! |--------------------------|----------------------|-------------------------------------------------|
+//! | [`search`]               | mem0 + Hindsight (‖) | Parallel semantic search, fused via RRF          |
+//! | [`write_note`]           | Memos                | Persist a tagged Markdown note                   |
+//! | [`consolidate_session`]  | mem0 + Hindsight (‖) | Batch session exchanges at session-end           |
+//! | [`add_fact`]             | mem0 + Hindsight (‖) | Store a single explicit fact                     |
+//! | [`get_user_profile`]     | mem0                 | Retrieve structured user facts                   |
+//! | [`deep_recall`]          | Hindsight            | Personality-conditioned deep reasoning            |
 //!
 //! **(‖)** = backends are queried in parallel via `tokio::join!`.
 //!
 //! # Error Handling
 //!
-//! - [`search`] and [`reflect_on_exchange`] are **best-effort**: individual
-//!   backend failures are logged as warnings but do not propagate as errors.
-//!   This ensures the agent remains functional even if one backend is down.
+//! - [`search`], [`consolidate_session`], and [`add_fact`] are **best-effort**:
+//!   individual backend failures are logged as warnings but do not propagate
+//!   as errors. This ensures the agent remains functional even if one backend
+//!   is down.
 //! - [`write_note`], [`get_user_profile`], and [`deep_recall`] propagate
 //!   errors directly since they target a single backend.
 //!
 //! [`search`]: MemoryManager::search
 //! [`write_note`]: MemoryManager::write_note
-//! [`reflect_on_exchange`]: MemoryManager::reflect_on_exchange
+//! [`consolidate_session`]: MemoryManager::consolidate_session
+//! [`add_fact`]: MemoryManager::add_fact
 //! [`get_user_profile`]: MemoryManager::get_user_profile
 //! [`deep_recall`]: MemoryManager::deep_recall
 
@@ -202,45 +216,90 @@ impl MemoryManager {
         Ok(entry.name)
     }
 
-    /// Post-conversation reflection: fan out to all three backends in parallel.
+    /// Consolidate a completed session's exchanges into long-term memory.
     ///
-    /// 1. **mem0** — extract facts from the exchange.
-    /// 2. **Hindsight** — retain the exchange for 4-network recall.
-    /// 3. **Memos** — append a timestamped daily log entry.
-    pub async fn reflect_on_exchange(
+    /// Called at session boundaries (when inactivity threshold is exceeded),
+    /// **not** on every conversation turn. Batches all exchanges into:
+    ///
+    /// 1. **mem0** — one `add_memories` call with all user/assistant messages.
+    /// 2. **Hindsight** — one `retain` call with the full session text.
+    ///
+    /// Memos is **not** touched — notes are only written via the explicit
+    /// `memory_write` tool.
+    ///
+    /// This method is best-effort: partial backend failures are logged as
+    /// warnings but do not propagate as errors.
+    pub async fn consolidate_session(
         &self,
-        user_text: &str,
-        assistant_text: &str,
+        exchanges: &[(String, String)],
     ) -> MemoryResult<()> {
-        let messages = vec![
-            Mem0Message {
-                role: "user".to_owned(),
-                content: user_text.to_owned(),
-            },
-            Mem0Message {
-                role: "assistant".to_owned(),
-                content: assistant_text.to_owned(),
-            },
-        ];
+        if exchanges.is_empty() {
+            return Ok(());
+        }
 
-        let exchange_text = format!("User: {user_text}\nAssistant: {assistant_text}");
-        let log_content = format!("## Exchange Log\n\n{exchange_text}");
+        // Build mem0 message list from all exchanges.
+        let messages: Vec<Mem0Message> = exchanges
+            .iter()
+            .flat_map(|(user, assistant)| {
+                vec![
+                    Mem0Message {
+                        role: "user".to_owned(),
+                        content: user.clone(),
+                    },
+                    Mem0Message {
+                        role: "assistant".to_owned(),
+                        content: assistant.clone(),
+                    },
+                ]
+            })
+            .collect();
 
-        let (mem0_res, hindsight_res, memos_res) = tokio::join!(
+        // Build full session text for Hindsight retain.
+        let full_text: String = exchanges
+            .iter()
+            .map(|(user, assistant)| format!("User: {user}\nAssistant: {assistant}"))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        let (mem0_res, hindsight_res) = tokio::join!(
             self.mem0.add_memories(messages, &self.user_id),
-            self.hindsight.retain(&exchange_text),
-            self.memos.create_memo(&log_content, "PRIVATE"),
+            self.hindsight.retain(&full_text),
         );
 
         // Log warnings for partial failures but don't fail the whole operation.
         if let Err(e) = mem0_res {
-            tracing::warn!(error = %e, "mem0 add_memories failed during reflect");
+            tracing::warn!(error = %e, "mem0 add_memories failed during session consolidation");
         }
         if let Err(e) = hindsight_res {
-            tracing::warn!(error = %e, "hindsight retain failed during reflect");
+            tracing::warn!(error = %e, "hindsight retain failed during session consolidation");
         }
-        if let Err(e) = memos_res {
-            tracing::warn!(error = %e, "memos daily log failed during reflect");
+
+        Ok(())
+    }
+
+    /// Store a single explicit fact in mem0 and Hindsight.
+    ///
+    /// Unlike [`consolidate_session`](Self::consolidate_session) which batches
+    /// an entire session, this stores one piece of information immediately.
+    /// Used by the `memory_add_fact` tool.
+    ///
+    /// Best-effort: partial backend failures are logged as warnings.
+    pub async fn add_fact(&self, content: &str) -> MemoryResult<()> {
+        let messages = vec![Mem0Message {
+            role: "user".to_owned(),
+            content: content.to_owned(),
+        }];
+
+        let (mem0_res, hindsight_res) = tokio::join!(
+            self.mem0.add_memories(messages, &self.user_id),
+            self.hindsight.retain(content),
+        );
+
+        if let Err(e) = mem0_res {
+            tracing::warn!(error = %e, "mem0 add_memories failed during add_fact");
+        }
+        if let Err(e) = hindsight_res {
+            tracing::warn!(error = %e, "hindsight retain failed during add_fact");
         }
 
         Ok(())
@@ -335,15 +394,34 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires all 3 memory services"]
-    async fn reflect_on_exchange_tolerates_partial_failures() {
+    #[ignore = "requires mem0 + Hindsight services"]
+    async fn consolidate_session_tolerates_partial_failures() {
         let mm = manager().expect("memory service env vars required");
+        let exchanges = vec![
+            (
+                "I'm looking for Rust backend jobs in Shanghai".to_owned(),
+                "I'll help you search for Rust backend positions in Shanghai.".to_owned(),
+            ),
+            (
+                "What about remote positions?".to_owned(),
+                "Let me also check remote Rust backend listings for you.".to_owned(),
+            ),
+        ];
         // This should succeed even if some backends have issues
-        mm.reflect_on_exchange(
-            "I'm looking for Rust backend jobs in Shanghai",
-            "I'll help you search for Rust backend positions in Shanghai. Let me check the latest listings.",
-        ).await.expect("reflect_on_exchange failed");
-        println!("reflect_on_exchange completed successfully");
+        mm.consolidate_session(&exchanges)
+            .await
+            .expect("consolidate_session failed");
+        println!("consolidate_session completed successfully");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires mem0 + Hindsight services"]
+    async fn add_fact_tolerates_partial_failures() {
+        let mm = manager().expect("memory service env vars required");
+        mm.add_fact("The user prefers Rust backend roles in Shanghai or remote.")
+            .await
+            .expect("add_fact failed");
+        println!("add_fact completed successfully");
     }
 
     #[tokio::test]

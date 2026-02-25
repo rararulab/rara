@@ -50,8 +50,6 @@ impl ChatAgent {
         model: &str,
         context_length: usize,
     ) -> Result<(AgentOutput, Option<CompactionEffect>), OrchestratorError> {
-        let user_text = user_content.text().to_owned();
-
         let PrepareResult { runner, effective_tools, compaction } = self
             .prepare(base_system_prompt, user_content, history, model, context_length)
             .await?;
@@ -64,10 +62,6 @@ impl ChatAgent {
             })?;
 
         let output = AgentOutput::from_run_response(&result);
-
-        // Post-process: memory reflection (fire-and-forget)
-        self.orchestrator
-            .spawn_memory_reflection(&user_text, &output.response_text);
 
         Ok((output, compaction))
     }

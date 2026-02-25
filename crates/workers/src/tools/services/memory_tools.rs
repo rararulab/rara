@@ -181,7 +181,7 @@ impl AgentTool for MemoryAddFactTool {
             .ok_or_else(|| anyhow::anyhow!("missing required parameter: content"))?;
 
         self.manager
-            .reflect_on_exchange(content, "Acknowledged and stored.")
+            .add_fact(content)
             .await
             .map_err(|e| anyhow::anyhow!("memory add fact failed: {e}"))?;
 
