@@ -774,6 +774,7 @@ mod tests {
                     memos_token:        Some("secret-token".to_owned()),
                     hindsight_base_url: Some("http://hindsight:8888".to_owned()),
                     hindsight_bank_id:  Some("my-bank".to_owned()),
+                    recall_every_turn:  None,
                 }),
                 composio:           None,
                 gmail:              None,

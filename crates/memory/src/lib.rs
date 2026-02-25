@@ -39,18 +39,19 @@
 //!               └────────┘  └────────┘   └────────────┘
 //! ```
 //!
-//! ## Recall Strategies
+//! ## Recall Strategy Engine
 //!
-//! The orchestrator uses [`MemoryManager::search`] in three recall contexts:
+//! The [`recall_engine`] module provides an agent-configurable rule-based
+//! engine that replaces previously-hardcoded recall logic. Agents can
+//! register, update, and remove recall rules at runtime via tool calls.
 //!
-//! 1. **First-turn / short-session pre-fetch** — when `history_len < 3`, the
-//!    user's message text is used as a search query to inject relevant context
-//!    into the system prompt.
-//! 2. **Per-turn recall** (opt-in via `recall_every_turn` setting) — same as
-//!    above but runs on every turn regardless of session length.
-//! 3. **Post-compaction recall** — after context compaction compresses history
-//!    into a summary, the summary text is used as a search query to recover
-//!    details that may have been lost during compaction.
+//! Default rules replicate the original hardcoded behavior:
+//!
+//! 1. **user-profile** — always inject user profile facts (priority 0).
+//! 2. **new-session-context** — on new/short sessions, search memory for
+//!    context relevant to the user's message.
+//! 3. **post-compaction** — after compaction, search using the summary.
+//! 4. **session-resume** — on session resume, search for relevant context.
 //!
 //! ## Search Pipeline
 //!
@@ -90,6 +91,7 @@ pub mod hindsight_client;
 pub mod manager;
 pub mod mem0_client;
 pub mod memos_client;
+pub mod recall_engine;
 
 #[cfg(feature = "k8s")]
 pub mod pod_manager;
@@ -101,6 +103,7 @@ pub use hindsight_client::HindsightClient;
 pub use manager::{MemoryManager, MemorySource, SearchResult};
 pub use mem0_client::{Mem0Client, Mem0Memory};
 pub use memos_client::{MemosClient, MemoEntry};
+pub use recall_engine::RecallStrategyEngine;
 
 #[cfg(feature = "k8s")]
 pub use pod_manager::Mem0PodManager;

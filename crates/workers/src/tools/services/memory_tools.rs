@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Layer 2 service tools for memory retrieval and writing.
+//! Layer 2 service tools for memory retrieval, writing, and recall strategy management.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use rara_memory::MemoryManager;
+use rara_memory::recall_engine::{
+    InjectTarget, RecallAction, RecallRule, RecallRuleUpdate, RecallStrategyEngine, Trigger,
+};
 use serde_json::json;
 use tool_core::AgentTool;
 
@@ -254,6 +257,310 @@ impl AgentTool for MemoryWriteTool {
         Ok(json!({
             "status": "ok",
             "name": name,
+        }))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Recall Strategy Tools
+// ---------------------------------------------------------------------------
+
+/// Register a new recall strategy rule.
+pub struct RecallStrategyAddTool {
+    engine: Arc<RecallStrategyEngine>,
+}
+
+impl RecallStrategyAddTool {
+    /// Create a `recall_strategy_add` tool.
+    pub fn new(engine: Arc<RecallStrategyEngine>) -> Self {
+        Self { engine }
+    }
+}
+
+#[async_trait]
+impl AgentTool for RecallStrategyAddTool {
+    fn name(&self) -> &str {
+        "recall_strategy_add"
+    }
+
+    fn description(&self) -> &str {
+        "Register a new recall strategy rule. Rules control when and how memory is queried \
+         and injected into the system prompt."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Human-readable name for the rule"
+                },
+                "trigger": {
+                    "type": "object",
+                    "description": "Trigger condition (JSON). Examples: {\"type\":\"Always\"}, {\"type\":\"KeywordMatch\",\"keywords\":[\"rust\"]}, {\"type\":\"Event\",\"kind\":\"Compaction\"}, {\"type\":\"EveryNTurns\",\"n\":3}"
+                },
+                "action": {
+                    "type": "object",
+                    "description": "Recall action (JSON). Examples: {\"type\":\"Search\",\"query_template\":\"{user_text}\",\"limit\":5}, {\"type\":\"GetProfile\"}, {\"type\":\"DeepRecall\",\"query_template\":\"{user_text}\"}"
+                },
+                "inject": {
+                    "type": "string",
+                    "description": "Where to inject results: 'SystemPrompt' or 'ContextMessage'",
+                    "enum": ["SystemPrompt", "ContextMessage"]
+                },
+                "priority": {
+                    "type": "number",
+                    "description": "Priority (lower = higher priority, default 100)"
+                }
+            },
+            "required": ["name", "trigger", "action"]
+        })
+    }
+
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        let name = params
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: name"))?;
+
+        let trigger: Trigger = serde_json::from_value(
+            params
+                .get("trigger")
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("missing required parameter: trigger"))?,
+        )
+        .map_err(|e| anyhow::anyhow!("invalid trigger: {e}"))?;
+
+        let action: RecallAction = serde_json::from_value(
+            params
+                .get("action")
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("missing required parameter: action"))?,
+        )
+        .map_err(|e| anyhow::anyhow!("invalid action: {e}"))?;
+
+        let inject = match params.get("inject").and_then(|v| v.as_str()) {
+            Some("ContextMessage") => InjectTarget::ContextMessage,
+            _ => InjectTarget::SystemPrompt,
+        };
+
+        let priority = params
+            .get("priority")
+            .and_then(|v| v.as_u64())
+            .map_or(100_u16, |v| v as u16);
+
+        let id = uuid::Uuid::new_v4().to_string();
+
+        let rule = RecallRule {
+            id: id.clone(),
+            name: name.to_owned(),
+            trigger,
+            action,
+            inject,
+            priority,
+            enabled: true,
+        };
+
+        self.engine.add_rule(rule).await;
+
+        Ok(json!({
+            "id": id,
+            "status": "ok",
+        }))
+    }
+}
+
+/// List all recall strategy rules.
+pub struct RecallStrategyListTool {
+    engine: Arc<RecallStrategyEngine>,
+}
+
+impl RecallStrategyListTool {
+    /// Create a `recall_strategy_list` tool.
+    pub fn new(engine: Arc<RecallStrategyEngine>) -> Self {
+        Self { engine }
+    }
+}
+
+#[async_trait]
+impl AgentTool for RecallStrategyListTool {
+    fn name(&self) -> &str {
+        "recall_strategy_list"
+    }
+
+    fn description(&self) -> &str {
+        "List all recall strategy rules with their triggers, actions, and status."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {}
+        })
+    }
+
+    async fn execute(&self, _params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        let rules = self.engine.list_rules().await;
+
+        let rules_json: Vec<serde_json::Value> = rules
+            .iter()
+            .map(|r| {
+                json!({
+                    "id": r.id,
+                    "name": r.name,
+                    "trigger": serde_json::to_value(&r.trigger).unwrap_or_default(),
+                    "action": serde_json::to_value(&r.action).unwrap_or_default(),
+                    "inject": serde_json::to_value(&r.inject).unwrap_or_default(),
+                    "priority": r.priority,
+                    "enabled": r.enabled,
+                })
+            })
+            .collect();
+
+        Ok(json!({
+            "count": rules_json.len(),
+            "rules": rules_json,
+        }))
+    }
+}
+
+/// Update an existing recall strategy rule.
+pub struct RecallStrategyUpdateTool {
+    engine: Arc<RecallStrategyEngine>,
+}
+
+impl RecallStrategyUpdateTool {
+    /// Create a `recall_strategy_update` tool.
+    pub fn new(engine: Arc<RecallStrategyEngine>) -> Self {
+        Self { engine }
+    }
+}
+
+#[async_trait]
+impl AgentTool for RecallStrategyUpdateTool {
+    fn name(&self) -> &str {
+        "recall_strategy_update"
+    }
+
+    fn description(&self) -> &str {
+        "Update an existing recall strategy rule. Only the provided fields are changed."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": "ID of the rule to update"
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Enable or disable the rule"
+                },
+                "priority": {
+                    "type": "number",
+                    "description": "New priority value"
+                },
+                "trigger": {
+                    "type": "object",
+                    "description": "New trigger condition (JSON)"
+                },
+                "action": {
+                    "type": "object",
+                    "description": "New recall action (JSON)"
+                }
+            },
+            "required": ["id"]
+        })
+    }
+
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        let id = params
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: id"))?;
+
+        let trigger: Option<Trigger> = params
+            .get("trigger")
+            .map(|v| serde_json::from_value(v.clone()))
+            .transpose()
+            .map_err(|e| anyhow::anyhow!("invalid trigger: {e}"))?;
+
+        let action: Option<RecallAction> = params
+            .get("action")
+            .map(|v| serde_json::from_value(v.clone()))
+            .transpose()
+            .map_err(|e| anyhow::anyhow!("invalid action: {e}"))?;
+
+        let enabled = params.get("enabled").and_then(|v| v.as_bool());
+        let priority = params
+            .get("priority")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u16);
+
+        let update = RecallRuleUpdate {
+            trigger,
+            action,
+            inject: None,
+            priority,
+            enabled,
+        };
+
+        let found = self.engine.update_rule(id, update).await;
+
+        Ok(json!({
+            "status": if found { "ok" } else { "not_found" },
+        }))
+    }
+}
+
+/// Remove a recall strategy rule.
+pub struct RecallStrategyRemoveTool {
+    engine: Arc<RecallStrategyEngine>,
+}
+
+impl RecallStrategyRemoveTool {
+    /// Create a `recall_strategy_remove` tool.
+    pub fn new(engine: Arc<RecallStrategyEngine>) -> Self {
+        Self { engine }
+    }
+}
+
+#[async_trait]
+impl AgentTool for RecallStrategyRemoveTool {
+    fn name(&self) -> &str {
+        "recall_strategy_remove"
+    }
+
+    fn description(&self) -> &str {
+        "Remove a recall strategy rule by ID."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": "ID of the rule to remove"
+                }
+            },
+            "required": ["id"]
+        })
+    }
+
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        let id = params
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing required parameter: id"))?;
+
+        let found = self.engine.remove_rule(id).await;
+
+        Ok(json!({
+            "status": if found { "ok" } else { "not_found" },
         }))
     }
 }
