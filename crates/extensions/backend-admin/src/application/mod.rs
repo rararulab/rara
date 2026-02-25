@@ -13,5 +13,19 @@
 // limitations under the License.
 
 mod router;
+pub mod error;
+pub mod pg_repository;
+pub mod repository;
+pub mod service;
+pub mod state_machine;
+pub mod types;
 
 pub use router::routes;
+
+/// Wire up the application service with a PostgreSQL repository.
+#[must_use]
+pub fn wire(pool: sqlx::PgPool) -> service::ApplicationService {
+    let repo: std::sync::Arc<dyn repository::ApplicationRepository> =
+        std::sync::Arc::new(pg_repository::PgApplicationRepository::new(pool));
+    service::ApplicationService::new(repo)
+}

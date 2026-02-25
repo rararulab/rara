@@ -13,5 +13,19 @@
 // limitations under the License.
 
 mod router;
+pub mod error;
+pub mod pg_repository;
+pub mod prep_generator;
+pub mod repository;
+pub mod service;
+pub mod types;
 
 pub use router::routes;
+
+/// Wire up the interview service with a PostgreSQL repository.
+#[must_use]
+pub fn wire_interview_service(pool: sqlx::PgPool) -> service::InterviewService {
+    let repo: std::sync::Arc<dyn repository::InterviewPlanRepository> =
+        std::sync::Arc::new(pg_repository::PgInterviewPlanRepository::new(pool));
+    service::InterviewService::new(repo, None)
+}

@@ -117,7 +117,7 @@ use rara_domain_shared::convert::{
     u8_from_i16,
 };
 
-use crate::pg_repository::{SchedulerTaskRow, TaskRunHistoryRow};
+use super::pg_repository::{SchedulerTaskRow, TaskRunHistoryRow};
 
 fn task_run_status_from_i16(value: i16) -> TaskRunStatus {
     let repr = u8_from_i16(value, "scheduler_task.last_status/task_run_history.status");

@@ -28,7 +28,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use tracing::{error, info, instrument};
 
-use crate::{
+use super::{
     error::SchedulerError,
     service::SchedulerService,
     types::{ScheduledTask, TaskFilter, TaskRunStatus},
@@ -181,7 +181,7 @@ mod tests {
     use rara_domain_shared::id::SchedulerTaskId;
 
     use super::*;
-    use crate::{
+    use super::super::{
         repository::SchedulerRepository,
         types::{CreateTaskRequest, TaskRunRecord},
     };

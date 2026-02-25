@@ -13,5 +13,18 @@
 // limitations under the License.
 
 mod router;
+pub mod error;
+pub mod pg_repository;
+pub mod repository;
+pub mod service;
+pub mod types;
 
 pub use router::{routes, DerivedRates, LatestQuery, SnapshotListQuery};
+
+/// Wire up the analytics service with a PostgreSQL repository.
+#[must_use]
+pub fn wire_analytics_service(pool: sqlx::PgPool) -> service::AnalyticsService {
+    let repo: std::sync::Arc<dyn repository::AnalyticsRepository> =
+        std::sync::Arc::new(pg_repository::PgAnalyticsRepository::new(pool));
+    service::AnalyticsService::new(repo)
+}

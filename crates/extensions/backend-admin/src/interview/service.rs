@@ -24,7 +24,7 @@ use jiff::Timestamp;
 use rara_domain_shared::id::{ApplicationId, InterviewId};
 use tracing::instrument;
 
-use crate::{
+use super::{
     error::{
         InterviewError, InvalidStatusTransitionSnafu, NotFoundSnafu, PrepGenerationFailedSnafu,
         ValidationSnafu,
@@ -335,7 +335,7 @@ mod tests {
     use testcontainers_modules::postgres::Postgres;
 
     use super::*;
-    use crate::{
+    use super::super::{
         pg_repository::PgInterviewPlanRepository, prep_generator::MockPrepGenerator,
         types::InterviewRound,
     };

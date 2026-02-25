@@ -20,7 +20,7 @@ use jiff::Timestamp;
 use tracing::{info, instrument};
 use uuid::Uuid;
 
-use crate::{
+use super::{
     error::AnalyticsError,
     repository::AnalyticsRepository,
     types::{CreateSnapshotRequest, MetricsPeriod, MetricsSnapshot, SnapshotFilter},

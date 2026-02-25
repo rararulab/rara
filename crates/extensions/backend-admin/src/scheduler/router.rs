@@ -18,7 +18,7 @@ use axum::{
     Json,
     extract::{Path, Query, State},
 };
-use rara_domain_scheduler::{
+use super::{
     error::SchedulerError,
     service::SchedulerService,
     types::{ScheduledTask, TaskFilter, TaskRunRecord},

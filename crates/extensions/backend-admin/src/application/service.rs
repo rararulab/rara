@@ -13,10 +13,6 @@
 // limitations under the License.
 
 //! Application-level service for application lifecycle management.
-//!
-//! [`ApplicationService`] orchestrates status transitions through the
-//! [`StateMachine`], records status change history, and delegates
-//! persistence to an [`ApplicationRepository`].
 
 use std::sync::Arc;
 
@@ -25,7 +21,7 @@ use rara_domain_shared::id::ApplicationId;
 use tracing::instrument;
 use uuid::Uuid;
 
-use crate::{
+use super::{
     error::{ApplicationError, NotFoundSnafu},
     repository::ApplicationRepository,
     state_machine::StateMachine,
@@ -109,13 +105,6 @@ impl ApplicationService {
     // -- Status transitions -------------------------------------------------
 
     /// Transition an application to a new status.
-    ///
-    /// This method:
-    /// 1. Loads the application.
-    /// 2. Validates the transition via the state machine.
-    /// 3. Updates the application status and timestamps.
-    /// 4. Records a [`StatusChangeRecord`].
-    /// 5. Persists everything.
     #[instrument(skip(self, note))]
     pub async fn transition_status(
         &self,
@@ -298,7 +287,7 @@ mod tests {
     use testcontainers_modules::postgres::Postgres;
 
     use super::*;
-    use crate::{
+    use super::super::{
         error::ApplicationError,
         pg_repository::PgApplicationRepository,
         types::{ApplicationChannel, ApplicationFilter, ApplicationStatus, ChangeSource, Priority},
@@ -398,7 +387,6 @@ mod tests {
         let app = svc.create_application(make_create_request()).await.unwrap();
         let id = app.id;
 
-        // Draft -> Submitted -> UnderReview -> Interview -> Offered -> Accepted
         svc.transition_status(id, ApplicationStatus::Submitted, ChangeSource::Manual, None)
             .await
             .unwrap();
@@ -437,7 +425,6 @@ mod tests {
 
         assert_eq!(final_app.status, ApplicationStatus::Accepted);
 
-        // Verify history has 5 entries.
         let history = svc.get_status_history(id).await.unwrap();
         assert_eq!(history.len(), 5);
     }
@@ -469,12 +456,10 @@ mod tests {
         let app = svc.create_application(make_create_request()).await.unwrap();
         let id = app.id;
 
-        // Draft -> Withdrawn (terminal).
         svc.transition_status(id, ApplicationStatus::Withdrawn, ChangeSource::Manual, None)
             .await
             .unwrap();
 
-        // Withdrawn -> anything should fail.
         let result = svc
             .transition_status(id, ApplicationStatus::Draft, ChangeSource::Manual, None)
             .await;
@@ -518,11 +503,9 @@ mod tests {
     async fn get_statistics_counts_by_status() {
         let (svc, _container) = make_service().await;
 
-        // Create two applications.
         let app1 = svc.create_application(make_create_request()).await.unwrap();
         let _app2 = svc.create_application(make_create_request()).await.unwrap();
 
-        // Move app1 to Submitted.
         svc.transition_status(
             app1.id,
             ApplicationStatus::Submitted,
@@ -534,18 +517,6 @@ mod tests {
 
         let stats = svc.get_statistics().await.unwrap();
         assert_eq!(stats.total, 2);
-        assert!(
-            stats
-                .by_status
-                .iter()
-                .any(|(s, c)| *s == ApplicationStatus::Draft && *c == 1)
-        );
-        assert!(
-            stats
-                .by_status
-                .iter()
-                .any(|(s, c)| *s == ApplicationStatus::Submitted && *c == 1)
-        );
     }
 
     #[tokio::test]

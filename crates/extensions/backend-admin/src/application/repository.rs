@@ -13,15 +13,10 @@
 // limitations under the License.
 
 //! Repository trait for application persistence.
-//!
-//! The trait lives in the domain crate so that the service layer can
-//! depend on it without pulling in any infrastructure code.
-//! Implementations are expected to live in the infrastructure/store
-//! layer.
 
 use rara_domain_shared::id::ApplicationId;
 
-use crate::{
+use super::{
     error::ApplicationError,
     types::{Application, ApplicationFilter, StatusChangeRecord},
 };
@@ -34,9 +29,6 @@ pub trait ApplicationRepository: Send + Sync {
     async fn save(&self, app: &Application) -> Result<Application, ApplicationError>;
 
     /// Retrieve a single application by its primary key.
-    ///
-    /// Returns `None` when the id does not exist or the row is
-    /// soft-deleted.
     async fn find_by_id(&self, id: ApplicationId) -> Result<Option<Application>, ApplicationError>;
 
     /// List applications matching the given filter criteria.
@@ -55,8 +47,7 @@ pub trait ApplicationRepository: Send + Sync {
     async fn save_status_change(&self, record: &StatusChangeRecord)
     -> Result<(), ApplicationError>;
 
-    /// Retrieve the full status history for an application, ordered by
-    /// creation time (oldest first).
+    /// Retrieve the full status history for an application.
     async fn get_status_history(
         &self,
         application_id: ApplicationId,

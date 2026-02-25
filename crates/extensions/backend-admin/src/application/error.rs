@@ -17,7 +17,7 @@
 use rara_domain_shared::id::ApplicationId;
 use snafu::Snafu;
 
-use crate::types::ApplicationStatus;
+use super::types::ApplicationStatus;
 
 /// Errors that can occur in the application domain.
 #[derive(Debug, Snafu)]

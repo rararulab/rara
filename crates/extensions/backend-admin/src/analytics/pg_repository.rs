@@ -13,7 +13,7 @@
 // limitations under the License.
 
 //! PostgreSQL-backed implementation of
-//! [`crate::repository::AnalyticsRepository`].
+//! [`super::repository::AnalyticsRepository`].
 
 use std::fmt::Write;
 
@@ -22,7 +22,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::{
+use super::{
     error::{AnalyticsError, DuplicateSnapshotSnafu, NotFoundSnafu, RepositorySnafu},
     types::{MetricsPeriod, MetricsSnapshot, SnapshotFilter},
 };
@@ -33,7 +33,7 @@ use crate::{
 
 /// A point-in-time statistics snapshot for a given period (DB row).
 #[derive(Debug, Clone, sqlx::FromRow)]
-pub(crate) struct MetricsSnapshotRow {
+pub(super) struct MetricsSnapshotRow {
     pub id:                   Uuid,
     pub period:               i16,
     pub snapshot_date:        NaiveDate,
@@ -78,7 +78,7 @@ fn map_err(e: sqlx::Error) -> AnalyticsError {
 }
 
 #[async_trait]
-impl crate::repository::AnalyticsRepository for PgAnalyticsRepository {
+impl super::repository::AnalyticsRepository for PgAnalyticsRepository {
     async fn save_snapshot(
         &self,
         snapshot: &MetricsSnapshot,

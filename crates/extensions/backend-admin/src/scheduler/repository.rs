@@ -21,7 +21,7 @@
 
 use rara_domain_shared::id::SchedulerTaskId;
 
-use crate::{
+use super::{
     error::SchedulerError,
     types::{ScheduledTask, TaskFilter, TaskRunRecord, TaskRunStatus},
 };

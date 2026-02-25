@@ -19,7 +19,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
-use rara_domain_interview::{
+use super::{
     error::InterviewError,
     service::InterviewService,
     types::{

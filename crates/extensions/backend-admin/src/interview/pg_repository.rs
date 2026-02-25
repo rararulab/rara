@@ -13,7 +13,7 @@
 // limitations under the License.
 
 //! PostgreSQL-backed implementation of
-//! [`crate::repository::InterviewPlanRepository`].
+//! [`super::repository::InterviewPlanRepository`].
 
 use std::fmt::Write;
 
@@ -23,7 +23,7 @@ use rara_domain_shared::id::{ApplicationId, InterviewId};
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
-use crate::{
+use super::{
     error::InterviewError,
     types::{self, InterviewFilter, InterviewPlan},
 };
@@ -34,7 +34,7 @@ use crate::{
 
 /// An interview preparation plan (DB row).
 #[derive(Debug, Clone, FromRow)]
-pub(crate) struct InterviewPlanRow {
+pub(super) struct InterviewPlanRow {
     pub id:              Uuid,
     pub application_id:  Uuid,
     pub title:           String,
@@ -77,7 +77,7 @@ fn map_err(e: sqlx::Error) -> InterviewError {
 }
 
 #[async_trait]
-impl crate::repository::InterviewPlanRepository for PgInterviewPlanRepository {
+impl super::repository::InterviewPlanRepository for PgInterviewPlanRepository {
     async fn save(&self, plan: &InterviewPlan) -> Result<InterviewPlan, InterviewError> {
         let store: InterviewPlanRow = plan.clone().into();
 
