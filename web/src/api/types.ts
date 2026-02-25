@@ -604,26 +604,30 @@ export type PullProgressEvent =
 // -- Agent Dispatcher --
 
 export type AgentTaskKind = 'proactive' | 'scheduled' | 'pipeline';
+export type AgentTaskKindValue =
+  | AgentTaskKind
+  | { type: AgentTaskKind; job_id?: string };
 export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';
 export type TaskStatus = 'queued' | 'running' | 'completed' | 'error' | 'cancelled' | 'deduped';
 
 export interface RunningTaskInfo {
   id: string;
-  kind: AgentTaskKind;
+  kind: AgentTaskKindValue;
   session_key: string;
   priority: TaskPriority;
   started_at: string;
-  elapsed_seconds: number;
-  message_preview: string;
+  elapsed_seconds?: number;
+  message_preview?: string;
 }
 
 export interface QueuedTaskInfo {
   id: string;
-  kind: AgentTaskKind;
+  kind: AgentTaskKindValue;
   session_key: string;
   priority: TaskPriority;
-  submitted_at: string;
-  message_preview: string;
+  submitted_at?: string;
+  created_at?: string;
+  message_preview?: string;
 }
 
 export interface DispatcherStats {
@@ -643,7 +647,7 @@ export interface DispatcherStatus {
 
 export interface TaskRecord {
   id: string;
-  kind: AgentTaskKind;
+  kind: AgentTaskKindValue;
   session_key: string;
   priority: TaskPriority;
   status: TaskStatus;

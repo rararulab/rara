@@ -21,8 +21,6 @@ import DashboardLayout from '@/layouts/DashboardLayout';
 import AgentConsole from '@/pages/AgentConsole';
 import JobsWorkspace from '@/pages/JobsWorkspace';
 import Settings from '@/pages/Settings';
-import CodingTasks from '@/pages/CodingTasks';
-import AgentDispatcher from '@/pages/AgentDispatcher';
 
 const queryClient = new QueryClient();
 
@@ -37,8 +35,6 @@ export default function App() {
               <Route index element={<Navigate to="/agent" replace />} />
               <Route path="agent" element={<AgentConsole />} />
               <Route path="jobs" element={<JobsWorkspace />} />
-              <Route path="tasks" element={<CodingTasks />} />
-              <Route path="dispatcher" element={<AgentDispatcher />} />
               <Route path="settings" element={<Settings />} />
 
               {/* Redirects for old routes */}

@@ -21,6 +21,7 @@ import type {
   DispatcherStatus,
   TaskRecord,
   AgentTaskKind,
+  AgentTaskKindValue,
   TaskPriority,
   TaskStatus,
 } from "@/api/types";
@@ -79,6 +80,11 @@ function formatElapsed(seconds: number): string {
   return `${hours}h ${remainMinutes}m`;
 }
 
+function normalizeTaskKind(kind: AgentTaskKindValue): AgentTaskKind {
+  if (typeof kind === "string") return kind;
+  return kind.type;
+}
+
 function formatUptime(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
@@ -91,8 +97,10 @@ function formatUptime(seconds: number): string {
 }
 
 function formatRelativeTime(dateStr: string): string {
+  if (!dateStr) return "-";
   const now = Date.now();
   const then = new Date(dateStr).getTime();
+  if (Number.isNaN(then)) return "-";
   const diffMs = now - then;
   const diffSec = Math.floor(diffMs / 1000);
   if (diffSec < 60) return "just now";
@@ -166,8 +174,9 @@ function TaskStatusBadge({ status }: { status: TaskStatus }) {
   }
 }
 
-function KindBadge({ kind }: { kind: AgentTaskKind }) {
-  switch (kind) {
+function KindBadge({ kind }: { kind: AgentTaskKindValue }) {
+  const label = normalizeTaskKind(kind);
+  switch (label) {
     case "proactive":
       return <Badge variant="secondary">proactive</Badge>;
     case "scheduled":
@@ -183,7 +192,7 @@ function KindBadge({ kind }: { kind: AgentTaskKind }) {
         </Badge>
       );
     default:
-      return <Badge variant="outline">{kind}</Badge>;
+      return <Badge variant="outline">{label}</Badge>;
   }
 }
 
@@ -297,10 +306,12 @@ function RunningTasksSection({
                     <PriorityBadge priority={task.priority} />
                   </td>
                   <td className="px-4 py-2 text-sm text-muted-foreground max-w-xs truncate">
-                    {task.message_preview}
+                    {task.message_preview ?? "-"}
                   </td>
                   <td className="px-4 py-2 text-sm text-muted-foreground whitespace-nowrap">
-                    {formatElapsed(task.elapsed_seconds)}
+                    {typeof task.elapsed_seconds === "number"
+                      ? formatElapsed(task.elapsed_seconds)
+                      : "-"}
                   </td>
                   <td className="px-4 py-2">
                     <Button
@@ -378,10 +389,10 @@ function QueueSection({ status }: { status: DispatcherStatus }) {
                     <PriorityBadge priority={task.priority} />
                   </td>
                   <td className="px-4 py-2 text-sm text-muted-foreground max-w-xs truncate">
-                    {task.message_preview}
+                    {task.message_preview ?? "-"}
                   </td>
                   <td className="px-4 py-2 text-sm text-muted-foreground whitespace-nowrap">
-                    {formatRelativeTime(task.submitted_at)}
+                    {formatRelativeTime(task.submitted_at ?? task.created_at ?? "")}
                   </td>
                 </tr>
               ))}

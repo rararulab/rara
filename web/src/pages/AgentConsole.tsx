@@ -15,7 +15,7 @@
  */
 
 import { useSearchParams } from "react-router";
-import { Activity, Bot, Clock, Server, Wrench } from "lucide-react";
+import { Activity, Bot, Clock, Server, Terminal, Wrench } from "lucide-react";
 import { TabBar } from "@/components/TabBar";
 import type { Tab } from "@/components/TabBar";
 import Chat from "@/pages/Chat";
@@ -23,15 +23,23 @@ import AgentStatus from "@/pages/AgentStatus";
 import Skills from "@/pages/Skills";
 import { AgentJobsPanel } from "@/pages/Scheduler";
 import McpServers from "@/pages/McpServers";
+import AgentDispatcher from "@/pages/AgentDispatcher";
+import CodingTasks from "@/pages/CodingTasks";
 
 const AGENT_TABS: Tab[] = [
   { key: "chat", label: "Chat", icon: <Bot className="h-4 w-4" /> },
   { key: "status", label: "Status", icon: <Activity className="h-4 w-4" /> },
   { key: "skills", label: "Skills", icon: <Wrench className="h-4 w-4" /> },
+  { key: "tasks", label: "Tasks", icon: <Terminal className="h-4 w-4" /> },
   {
     key: "scheduler",
     label: "Scheduler",
     icon: <Clock className="h-4 w-4" />,
+  },
+  {
+    key: "dispatcher",
+    label: "Dispatcher",
+    icon: <Activity className="h-4 w-4" />,
   },
   {
     key: "mcp",
@@ -65,9 +73,19 @@ export default function AgentConsole() {
             <Skills />
           </div>
         )}
+        {activeTab === "tasks" && (
+          <div className="p-6">
+            <CodingTasks />
+          </div>
+        )}
         {activeTab === "scheduler" && (
           <div className="p-6">
             <AgentJobsPanel />
+          </div>
+        )}
+        {activeTab === "dispatcher" && (
+          <div className="p-6">
+            <AgentDispatcher />
           </div>
         )}
         {activeTab === "mcp" && (

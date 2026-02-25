@@ -20,12 +20,8 @@ import {
   Bot,
   Briefcase,
   Settings as SettingsIcon,
-  Globe,
   Code,
-  Database,
   ExternalLink,
-  Terminal,
-  Activity,
   PanelLeftClose,
   PanelLeftOpen,
   Sun,
@@ -48,8 +44,6 @@ const THEME_META = {
 const navItems = [
   { to: '/agent', icon: Bot, label: 'Agent' },
   { to: '/jobs', icon: Briefcase, label: 'Jobs' },
-  { to: '/tasks', icon: Terminal, label: 'Tasks' },
-  { to: '/dispatcher', icon: Activity, label: 'Dispatcher' },
   { to: '/settings', icon: SettingsIcon, label: 'Settings' },
 ];
 
@@ -182,42 +176,6 @@ export default function DashboardLayout() {
             {!collapsed && (
               <>
                 <span>API Docs</span>
-                <ExternalLink className="h-3.5 w-3.5 ml-auto shrink-0 opacity-70" />
-              </>
-            )}
-          </a>
-          <a
-            href="http://localhost:9001"
-            target="_blank"
-            rel="noopener noreferrer"
-            title={collapsed ? 'Object Storage' : undefined}
-            className={cn(
-              'flex items-center rounded-md text-sm font-medium transition-colors text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-              collapsed ? 'justify-center px-2 py-2' : 'gap-3 px-3 py-2'
-            )}
-          >
-            <Database className="h-4 w-4 shrink-0" />
-            {!collapsed && (
-              <>
-                <span>Object Storage</span>
-                <ExternalLink className="h-3.5 w-3.5 ml-auto shrink-0 opacity-70" />
-              </>
-            )}
-          </a>
-          <a
-            href="http://localhost:11235/dashboard"
-            target="_blank"
-            rel="noopener noreferrer"
-            title={collapsed ? 'Crawl4AI UI' : undefined}
-            className={cn(
-              'flex items-center rounded-md text-sm font-medium transition-colors text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-              collapsed ? 'justify-center px-2 py-2' : 'gap-3 px-3 py-2'
-            )}
-          >
-            <Globe className="h-4 w-4 shrink-0" />
-            {!collapsed && (
-              <>
-                <span>Crawl4AI UI</span>
                 <ExternalLink className="h-3.5 w-3.5 ml-auto shrink-0 opacity-70" />
               </>
             )}
