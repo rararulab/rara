@@ -163,6 +163,15 @@ just consul-keys   # list current keys
 |-----|---------|---------|-------------|
 | `base_url` | `RARA__CRAWL4AI__BASE_URL` | `http://localhost:11235` | Crawl4AI service URL |
 
+#### Telemetry / OTLP (`telemetry.*`)
+
+| Key | Env Var | Default | Description |
+|-----|---------|---------|-------------|
+| `otlp_endpoint` | `RARA__TELEMETRY__OTLP_ENDPOINT` | — | Generic OTLP endpoint (e.g. `http://alloy:4318/v1/traces`) |
+| `otlp_protocol` | `RARA__TELEMETRY__OTLP_PROTOCOL` | `http` | Export protocol: `http` or `grpc` |
+
+> **Priority**: If Langfuse keys are set, traces go to Langfuse; otherwise the generic OTLP endpoint is used.
+
 #### Langfuse (`langfuse.*`)
 
 | Key | Env Var | Default | Description |

@@ -72,26 +72,19 @@ spec:
               put_kv "rara/config/memory/chroma_url" \
                 "{{ $ov.chromaUrl | default (printf "http://%s-chromadb:8000" .Release.Name) }}"
 
+              {{- if or .Values.mem0.enabled $ov.mem0BaseUrl }}
+              # Memory (Mem0 REST API)
+              put_kv "rara/config/memory/mem0_base_url" \
+                "{{ $ov.mem0BaseUrl | default (printf "http://%s-mem0:8000" .Release.Name) }}"
+              {{- end }}
+
               # Crawl4AI
               put_kv "rara/config/crawl4ai/base_url" \
                 "{{ $ov.crawl4aiBaseUrl | default (printf "http://%s-crawl4ai:11235" .Release.Name) }}"
 
-              {{- if .Values.memos.enabled }}
-              # Memory (Memos)
-              put_kv "rara/config/memory/memos_base_url" \
-                "{{ $ov.memosBaseUrl | default (printf "http://%s-memos:5230" .Release.Name) }}"
-              {{- with .Values.consulSeed.memos.token }}
-              put_kv "rara/config/memory/memos_token" "{{ . }}"
-              {{- end }}
-              {{- end }}
-
-              {{- if .Values.hindsight.enabled }}
-              # Memory (Hindsight)
-              put_kv "rara/config/memory/hindsight_base_url" \
-                "{{ $ov.hindsightBaseUrl | default (printf "http://%s-hindsight:8888" .Release.Name) }}"
-              put_kv "rara/config/memory/hindsight_bank_id" \
-                "{{ .Values.consulSeed.hindsight.bankId | default "rara-default" }}"
-              {{- end }}
+              # Telemetry / OTLP (Alloy collector → Tempo)
+              put_kv "rara/config/telemetry/otlp_endpoint" \
+                "{{ $ov.telemetryOtlpEndpoint | default (printf "http://%s-alloy:4318/v1/traces" .Release.Name) }}"
 
               # Langfuse (LLM observability)
               put_kv "rara/config/langfuse/host" \

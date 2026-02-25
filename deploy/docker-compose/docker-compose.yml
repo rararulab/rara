@@ -94,81 +94,19 @@ services:
       retries: 5
 
   # --------------------------------------------------------------------------
-  # PostgreSQL (Hindsight) — dedicated PG with pgvector
+  # Mem0 REST API — self-hosted memory API
   # --------------------------------------------------------------------------
-  postgres-hs:
-    image: pgvector/pgvector:pg16
-    environment:
-      POSTGRES_USER: ${HS_POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${HS_POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${HS_POSTGRES_DB:-hindsight}
+  mem0:
+    image: mem0/mem0-api-server
     ports:
-      - "${HS_POSTGRES_PORT:-5433}:5432"
-    volumes:
-      - pgdata-hs:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  # --------------------------------------------------------------------------
-  # PostgreSQL (Memos) — dedicated PG
-  # --------------------------------------------------------------------------
-  postgres-memos:
-    image: postgres:16-alpine
+      - "${MEM0_PORT:-8888}:8000"
     environment:
-      POSTGRES_USER: ${MEMOS_POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${MEMOS_POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${MEMOS_POSTGRES_DB:-memos}
-    ports:
-      - "${MEMOS_POSTGRES_PORT:-5434}:5432"
-    volumes:
-      - pgdata-memos:/var/lib/postgresql/data
+      OPENAI_API_KEY: ${MEM0_OPENAI_API_KEY:-}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  # --------------------------------------------------------------------------
-  # Memos — note-taking / knowledge base
-  # --------------------------------------------------------------------------
-  memos:
-    image: neosmemo/memos:stable
-    depends_on:
-      postgres-memos:
-        condition: service_healthy
-    ports:
-      - "${MEMOS_PORT:-5230}:5230"
-    environment:
-      MEMOS_DRIVER: postgres
-      MEMOS_DSN: "postgresql://${MEMOS_POSTGRES_USER:-postgres}:${MEMOS_POSTGRES_PASSWORD:-postgres}@postgres-memos:5432/${MEMOS_POSTGRES_DB:-memos}?sslmode=disable"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5230/"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
       interval: 10s
       timeout: 5s
       retries: 5
-
-  # --------------------------------------------------------------------------
-  # Hindsight — memory / knowledge graph service
-  # --------------------------------------------------------------------------
-  hindsight:
-    image: ghcr.io/vectorize-io/hindsight:latest
-    depends_on:
-      postgres-hs:
-        condition: service_healthy
-    ports:
-      - "${HINDSIGHT_PORT:-8888}:8888"
-      - "${HINDSIGHT_ADMIN_PORT:-9999}:9999"
-    environment:
-      HINDSIGHT_API_LLM_API_KEY: ${HINDSIGHT_OPENAI_API_KEY:-}
-      HINDSIGHT_DB_URL: "postgresql://${HS_POSTGRES_USER:-postgres}:${HS_POSTGRES_PASSWORD:-postgres}@postgres-hs:5432/${HS_POSTGRES_DB:-hindsight}"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8888/"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
 
   # --------------------------------------------------------------------------
   # Consul — configuration center (dev mode, KV only)
@@ -217,14 +155,7 @@ services:
 
         # Memory (ChromaDB)
         put_kv "rara/config/memory/chroma_url" "http://chroma:8000"
-
-        # Memory (Memos)
-        put_kv "rara/config/memory/memos_base_url" "http://memos:5230"
-        put_kv "rara/config/memory/memos_token" ""
-
-        # Memory (Hindsight)
-        put_kv "rara/config/memory/hindsight_base_url" "http://hindsight:8888"
-        put_kv "rara/config/memory/hindsight_bank_id" "rara-default"
+        put_kv "rara/config/memory/mem0_base_url" "http://mem0:8000"
 
         echo "Consul KV seed complete."
 
@@ -244,6 +175,8 @@ services:
       postgres:
         condition: service_healthy
       minio:
+        condition: service_healthy
+      chroma:
         condition: service_healthy
       consul-init:
         condition: service_completed_successfully
@@ -266,5 +199,3 @@ volumes:
   pgdata:
   minio-data:
   chroma-data:
-  pgdata-hs:
-  pgdata-memos:

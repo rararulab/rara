@@ -61,6 +61,8 @@ pub struct AppConfig {
     pub memory:                 MemoryConfig,
     /// Langfuse observability (host, API keys).
     pub langfuse:               LangfuseConfig,
+    /// General OTLP telemetry (Alloy/Tempo).
+    pub telemetry:              TelemetryConfig,
 }
 
 impl Default for AppConfig {
@@ -75,6 +77,7 @@ impl Default for AppConfig {
             main_service_http_base: "http://127.0.0.1:25555".to_owned(),
             memory: MemoryConfig::default(),
             langfuse: LangfuseConfig::default(),
+            telemetry: TelemetryConfig::default(),
         }
     }
 }
@@ -85,6 +88,7 @@ pub struct MemoryConfig {
     pub chroma_url:        String,
     pub chroma_collection: Option<String>,
     pub chroma_api_key:    Option<String>,
+    pub mem0_base_url:     Option<String>,
 }
 
 impl Default for MemoryConfig {
@@ -93,6 +97,7 @@ impl Default for MemoryConfig {
             chroma_url: "http://localhost:8000".to_owned(),
             chroma_collection: Some("job-memory".to_owned()),
             chroma_api_key: None,
+            mem0_base_url: None,
         }
     }
 }
@@ -111,6 +116,28 @@ impl Default for LangfuseConfig {
             host: "http://localhost:3000".to_owned(),
             public_key: None,
             secret_key: None,
+        }
+    }
+}
+
+/// General OTLP telemetry configuration (non-Langfuse).
+///
+/// Used when traces should be sent to a generic OTLP collector such as
+/// Alloy -> Tempo rather than to Langfuse.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct TelemetryConfig {
+    /// OTLP endpoint URL (e.g. `http://alloy:4318/v1/traces`).
+    pub otlp_endpoint: Option<String>,
+    /// Export protocol: `"http"` (default) or `"grpc"`.
+    pub otlp_protocol: Option<String>,
+}
+
+impl Default for TelemetryConfig {
+    fn default() -> Self {
+        Self {
+            otlp_endpoint: None,
+            otlp_protocol: None,
         }
     }
 }

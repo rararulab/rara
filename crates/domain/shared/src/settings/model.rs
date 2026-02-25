@@ -125,6 +125,8 @@ pub struct MemorySettings {
     pub chroma_collection: Option<String>,
     /// Chroma API key/token.
     pub chroma_api_key:    Option<String>,
+    /// Mem0 REST API base URL.
+    pub mem0_base_url:     Option<String>,
 }
 
 impl Default for MemorySettings {
@@ -133,6 +135,7 @@ impl Default for MemorySettings {
             chroma_url:        Some("http://localhost:8000".to_owned()),
             chroma_collection: Some("job-memory".to_owned()),
             chroma_api_key:    None,
+            mem0_base_url:     None,
         }
     }
 }
@@ -271,6 +274,7 @@ pub struct MemoryRuntimeSettingsPatch {
     pub chroma_url:        Option<String>,
     pub chroma_collection: Option<String>,
     pub chroma_api_key:    Option<String>,
+    pub mem0_base_url:     Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
@@ -372,6 +376,9 @@ impl Settings {
                 if let Some(chroma_api_key) = memory.chroma_api_key {
                     self.agent.memory.chroma_api_key = normalize_secret(Some(chroma_api_key));
                 }
+                if let Some(mem0_base_url) = memory.mem0_base_url {
+                    self.agent.memory.mem0_base_url = normalize_text(Some(mem0_base_url));
+                }
             }
             if let Some(composio) = agent.composio {
                 if let Some(api_key) = composio.api_key {
@@ -455,6 +462,8 @@ impl Settings {
             normalize_text(self.agent.memory.chroma_collection.take());
         self.agent.memory.chroma_api_key =
             normalize_secret(self.agent.memory.chroma_api_key.take());
+        self.agent.memory.mem0_base_url =
+            normalize_text(self.agent.memory.mem0_base_url.take());
         self.agent.composio.api_key = normalize_secret(self.agent.composio.api_key.take());
         self.agent.composio.entity_id = normalize_text(self.agent.composio.entity_id.take());
         self.agent.gmail.address = normalize_text(self.agent.gmail.address.take());
@@ -754,6 +763,7 @@ mod tests {
                     chroma_url:        Some("http://localhost:8000".to_owned()),
                     chroma_collection: Some("team-memory".to_owned()),
                     chroma_api_key:    Some("secret-token".to_owned()),
+                    mem0_base_url:     Some("http://localhost:8888".to_owned()),
                 }),
                 composio:           None,
                 gmail:              None,
@@ -774,6 +784,10 @@ mod tests {
         assert_eq!(
             settings.agent.memory.chroma_api_key,
             Some("secret-token".to_owned())
+        );
+        assert_eq!(
+            settings.agent.memory.mem0_base_url,
+            Some("http://localhost:8888".to_owned())
         );
     }
 

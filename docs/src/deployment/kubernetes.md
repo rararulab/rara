@@ -120,6 +120,7 @@ All keys are stored under the `rara/config/` prefix:
 | `object_store/bucket` | `rara` |
 | `memory/chroma_url` | ChromaDB URL |
 | `crawl4ai/base_url` | Crawl4AI service URL |
+| `telemetry/otlp_endpoint` | Generic OTLP endpoint (Alloy collector) |
 | `langfuse/host` | Langfuse OTLP endpoint URL |
 | `langfuse/public_key` | Langfuse project API key (optional, from `consulSeed.langfuse.publicKey`) |
 | `langfuse/secret_key` | Langfuse project secret (optional, from `consulSeed.langfuse.secretKey`) |

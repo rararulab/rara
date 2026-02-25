@@ -44,17 +44,42 @@ struct ServerArgs {}
 
 impl ServerArgs {
     async fn run() -> Result<(), Whatever> {
-        // Load config first (Consul KV or env vars) so Langfuse settings are
-        // available before initialising the tracing subscriber.
+        // Load config first (Consul KV or env vars) so observability
+        // settings are available before initialising the tracing subscriber.
         let config = AppConfig::new()
             .await
             .whatever_context("Failed to load config")?;
 
-        let _guards = common_telemetry::logging::init_tracing_with_langfuse(
+        // Priority: Langfuse (OTLP + auth) > general OTLP endpoint > no OTLP.
+        let logging_opts = if config.langfuse.public_key.is_some()
+            && config.langfuse.secret_key.is_some()
+        {
+            common_telemetry::logging::build_langfuse_logging_options(
+                Some(&config.langfuse.host),
+                config.langfuse.public_key.as_deref(),
+                config.langfuse.secret_key.as_deref(),
+            )
+        } else if let Some(ref endpoint) = config.telemetry.otlp_endpoint {
+            use common_telemetry::logging::{LoggingOptions, OtlpExportProtocol};
+            let protocol = config.telemetry.otlp_protocol.as_deref().and_then(|p| match p {
+                "grpc" => Some(OtlpExportProtocol::Grpc),
+                _ => Some(OtlpExportProtocol::Http),
+            });
+            LoggingOptions {
+                enable_otlp_tracing:  true,
+                otlp_endpoint:        Some(endpoint.clone()),
+                otlp_export_protocol: protocol,
+                ..Default::default()
+            }
+        } else {
+            common_telemetry::logging::LoggingOptions::default()
+        };
+
+        let _guards = common_telemetry::logging::init_global_logging(
             "rara",
-            Some(&config.langfuse.host),
-            config.langfuse.public_key.as_deref(),
-            config.langfuse.secret_key.as_deref(),
+            &logging_opts,
+            &common_telemetry::logging::TracingOptions::default(),
+            None,
         );
 
         config.run().await

@@ -218,45 +218,15 @@ crawl4ai:
       memory: 1Gi
 
 # ------------------------------------------------------------------------------
-# Memos
+# Mem0 REST API
 # ------------------------------------------------------------------------------
-memos:
-  resources:
-    requests:
-      cpu: 50m
-      memory: 64Mi
-    limits:
-      cpu: 250m
-      memory: 256Mi
-  postgresql:
-    resources:
-      requests:
-        cpu: 50m
-        memory: 64Mi
-      limits:
-        cpu: 250m
-        memory: 256Mi
-    persistence:
-      size: 1Gi
-
-# ------------------------------------------------------------------------------
-# Hindsight
-# ------------------------------------------------------------------------------
-hindsight:
+mem0:
+  # Keep disabled by default in dev until API keys/backend env vars are set.
+  enabled: false
   resources:
     requests:
       cpu: 100m
-      memory: 128Mi
+      memory: 256Mi
     limits:
       cpu: 500m
       memory: 512Mi
-  postgresql:
-    resources:
-      requests:
-        cpu: 50m
-        memory: 128Mi
-      limits:
-        cpu: 250m
-        memory: 512Mi
-    persistence:
-      size: 1Gi

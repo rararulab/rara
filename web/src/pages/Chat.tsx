@@ -20,7 +20,6 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   Bot,
-  BookOpen,
   Briefcase,
   ChevronDown,
   Ellipsis,
@@ -199,12 +198,12 @@ function formatTime(iso: string): string {
 
 const chatUtilityItems = [
   { href: "/jobs", icon: Briefcase, label: "Jobs", newTab: true },
-  { href: "/docs", icon: BookOpen, label: "Docs" },
   { href: "/settings", icon: SettingsIcon, label: "Settings" },
 ];
 
 function SessionSidebarUtilityBar({ collapsed }: { collapsed: boolean }) {
   const { isOnline, isChecking } = useServerStatus();
+  const [menuOpen, setMenuOpen] = useState(false);
   const statusText = isChecking
     ? "Connecting..."
     : isOnline
@@ -217,52 +216,62 @@ function SessionSidebarUtilityBar({ collapsed }: { collapsed: boolean }) {
         "border-t border-border/70 bg-background/35",
         collapsed ? "p-1" : "px-2 py-2",
       )}
+      onMouseEnter={() => setMenuOpen(true)}
+      onMouseLeave={() => setMenuOpen(false)}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+          setMenuOpen(false);
+        }
+      }}
     >
+      {menuOpen && (
+        <div
+          className={cn(
+            "mb-2 border-b border-border/60 pb-2",
+            collapsed ? "px-0" : "px-0",
+          )}
+        >
+          <div className="space-y-1">
+            {chatUtilityItems.map((item) => (
+              <a
+                key={item.href}
+                href={item.href}
+                target={item.newTab ? "_blank" : undefined}
+                rel={item.newTab ? "noreferrer" : undefined}
+                className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-muted-foreground transition-all hover:bg-background/70 hover:text-foreground hover:ring-1 hover:ring-border/70"
+                onClick={() => setMenuOpen(false)}
+              >
+                <item.icon className="h-4 w-4 shrink-0" />
+                <span className="truncate">{item.label}</span>
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div
         className={cn(
           "flex items-center",
           collapsed ? "justify-center" : "justify-between gap-2",
         )}
       >
-        <div className="group/more relative">
+        <div className="relative">
           <button
             type="button"
             title="More"
+            onClick={() => setMenuOpen((v) => !v)}
             className={cn(
               "flex h-9 items-center justify-center rounded-lg text-muted-foreground transition-all hover:bg-background/70 hover:text-foreground",
               collapsed ? "w-9" : "w-10",
             )}
+            aria-expanded={menuOpen}
           >
             <Ellipsis className="h-5 w-5" />
           </button>
-
-          <div
-            className={cn(
-              "pointer-events-none absolute z-30 w-52 rounded-2xl border border-border/80 bg-background/95 p-2 opacity-0 shadow-xl backdrop-blur-md transition-all duration-200 group-hover/more:pointer-events-auto group-hover/more:opacity-100 group-hover/more:translate-y-0 group-focus-within/more:pointer-events-auto group-focus-within/more:opacity-100 group-focus-within/more:translate-y-0",
-              collapsed
-                ? "bottom-0 left-[calc(100%-0.125rem)] translate-y-0"
-                : "bottom-[calc(100%-0.125rem)] left-0 translate-y-1",
-            )}
-          >
-            <div className="space-y-1">
-              {chatUtilityItems.map((item) => (
-                <a
-                  key={item.href}
-                  href={item.href}
-                  target={item.newTab ? "_blank" : undefined}
-                  rel={item.newTab ? "noreferrer" : undefined}
-                  className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-muted-foreground transition-all hover:bg-background/70 hover:text-foreground hover:ring-1 hover:ring-border/70"
-                >
-                  <item.icon className="h-4 w-4 shrink-0" />
-                  <span className="truncate">{item.label}</span>
-                </a>
-              ))}
-            </div>
-          </div>
         </div>
 
         {!collapsed ? (
-          <div className="inline-flex h-9 items-center gap-2 rounded-xl bg-background/70 px-3 text-xs text-muted-foreground">
+          <div className="inline-flex h-9 items-center gap-2 px-2 text-xs text-muted-foreground">
             <span
               className={cn(
                 "h-2.5 w-2.5 shrink-0 rounded-full",
@@ -322,6 +331,7 @@ function SessionList({
   isLoading,
   collapsed,
   onToggleCollapse,
+  onOpenOperations,
 }: {
   sessions: ChatSession[];
   activeKey: string | null;
@@ -331,19 +341,37 @@ function SessionList({
   isLoading: boolean;
   collapsed: boolean;
   onToggleCollapse: () => void;
+  onOpenOperations: () => void;
 }) {
   return (
     <div
       className={cn(
-        "app-surface flex h-full shrink-0 flex-col overflow-hidden transition-all duration-200",
-        collapsed ? "w-0 border-r-0" : "w-64 border-r border-border/70",
+        "absolute inset-y-3 left-3 z-20 flex h-auto shrink-0 flex-col overflow-hidden rounded-2xl border border-border/60 bg-background/92 shadow-xl shadow-black/5 backdrop-blur-md transition-all duration-200",
+        collapsed
+          ? "pointer-events-none w-0 -translate-x-2 border-transparent opacity-0"
+          : "w-64 opacity-100",
       )}
     >
       {!collapsed && (
         <>
           {/* Header */}
           <div className="flex items-center justify-between border-b border-border/70 bg-background/40 px-3 py-2">
-            <h2 className="text-sm font-semibold truncate">Conversations</h2>
+            <div className="inline-flex items-center rounded-xl border border-border/70 bg-background/70 p-1">
+              <button
+                type="button"
+                className="rounded-lg bg-primary/10 px-2.5 py-1 text-xs font-semibold text-foreground ring-1 ring-primary/15"
+                aria-current="page"
+              >
+                Chat
+              </button>
+              <button
+                type="button"
+                onClick={onOpenOperations}
+                className="rounded-lg px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
+              >
+                Operations
+              </button>
+            </div>
             <ConversationPanelToggleButton
               collapsed={false}
               onToggle={onToggleCollapse}
@@ -1505,7 +1533,11 @@ function EmptyState({
 // Chat (main page component)
 // ---------------------------------------------------------------------------
 
-export default function Chat() {
+export default function Chat({
+  onOpenOperations,
+}: {
+  onOpenOperations?: () => void;
+} = {}) {
   const queryClient = useQueryClient();
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [panelCollapsed, setPanelCollapsed] = useState(false);
@@ -1587,7 +1619,7 @@ export default function Chat() {
   }, [activeKey, clearMutation]);
 
   return (
-    <div className="app-surface flex h-full overflow-hidden rounded-2xl border border-border/70">
+    <div className="relative flex h-full overflow-hidden rounded-2xl border border-border/70 bg-gradient-to-b from-background/20 to-background/5">
       {/* New chat dialog */}
       <NewChatDialog
         open={newChatDialogOpen}
@@ -1605,24 +1637,34 @@ export default function Chat() {
         isLoading={sessionsQuery.isLoading}
         collapsed={panelCollapsed}
         onToggleCollapse={() => setPanelCollapsed((p) => !p)}
+        onOpenOperations={() => onOpenOperations?.()}
       />
 
-      {/* Right panel: chat thread or empty state */}
-      {activeSession ? (
-        <ChatThread
-          key={activeKey}
-          session={activeSession}
-          onClearMessages={handleClearMessages}
-          panelCollapsed={panelCollapsed}
-          onTogglePanel={() => setPanelCollapsed((p) => !p)}
-        />
-      ) : (
-        <EmptyState
-          onCreate={handleCreate}
-          panelCollapsed={panelCollapsed}
-          onTogglePanel={() => setPanelCollapsed((p) => !p)}
-        />
-      )}
+      <div
+        className={cn(
+          "flex h-full min-w-0 flex-1 p-2 md:p-3 transition-[padding] duration-200",
+          panelCollapsed ? "" : "md:pl-[17.75rem]",
+        )}
+      >
+        <div className="app-surface flex min-w-0 flex-1 overflow-hidden rounded-2xl border border-border/60 shadow-sm">
+          {/* Right panel: chat thread or empty state */}
+          {activeSession ? (
+            <ChatThread
+              key={activeKey}
+              session={activeSession}
+              onClearMessages={handleClearMessages}
+              panelCollapsed={panelCollapsed}
+              onTogglePanel={() => setPanelCollapsed((p) => !p)}
+            />
+          ) : (
+            <EmptyState
+              onCreate={handleCreate}
+              panelCollapsed={panelCollapsed}
+              onTogglePanel={() => setPanelCollapsed((p) => !p)}
+            />
+          )}
+        </div>
+      </div>
     </div>
   );
 }

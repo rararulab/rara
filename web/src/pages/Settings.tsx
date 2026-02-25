@@ -16,6 +16,7 @@
 
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import type {
@@ -59,6 +60,7 @@ import {
   ArrowDown,
   ArrowUp,
   Bot,
+  BookOpen,
   ChevronRight,
   Download,
   ExternalLink,
@@ -88,10 +90,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
 import { useTheme, type Theme } from "@/hooks/use-theme";
+import Skills from "@/pages/Skills";
+import McpServers from "@/pages/McpServers";
 
 type SettingKey = "ai" | "agent" | "telegram" | "gmail" | "composio" | "contacts" | "auth";
-type SettingCategory = "appearance" | "ai" | "channels" | "auth" | "runtime";
+type SettingCategory = "appearance" | "documentation" | "ai" | "channels" | "auth" | "runtime";
+type SettingsPage = "general" | "providers" | "prompts" | "skills" | "mcp" | "channels" | "auth" | "runtime";
 type ToastState = { kind: "success" | "error"; message: string } | null;
 type OpenRouterModel = {
   id: string;
@@ -129,6 +135,7 @@ const THEME_OPTIONS: Array<{ key: Theme; label: string; icon: ReactNode; descrip
 ];
 
 export default function Settings() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const { theme, setTheme } = useTheme();
   const queryClient = useQueryClient();
   const [modelMap, setModelMap] = useState<Record<string, string>>({});
@@ -155,7 +162,11 @@ export default function Settings() {
   const [selectedPromptName, setSelectedPromptName] = useState("");
   const [selectedPromptContent, setSelectedPromptContent] = useState("");
   const [selectedSetting, setSelectedSetting] = useState<SettingKey | null>(null);
-  const [expandedCategories, setExpandedCategories] = useState<Set<SettingCategory>>(new Set());
+  const [activeCategory, setActiveCategory] = useState<SettingsPage>(() => {
+    const section = searchParams.get("section");
+    const allowed: SettingsPage[] = ["general", "providers", "prompts", "skills", "mcp", "channels", "auth", "runtime"];
+    return allowed.includes(section as SettingsPage) ? (section as SettingsPage) : "general";
+  });
   const [toast, setToast] = useState<ToastState>(null);
 
   // -- ollama pull state --
@@ -1091,32 +1102,24 @@ export default function Settings() {
     );
   };
 
-  const toggleCategory = (category: SettingCategory) => {
-    setExpandedCategories((prev) => {
-      const next = new Set(prev);
-      if (next.has(category)) {
-        next.delete(category);
-      } else {
-        next.add(category);
-      }
-      return next;
-    });
-  };
+  const expandedCategories = new Set<SettingCategory>([
+    "appearance",
+    "documentation",
+    "ai",
+    "channels",
+    "auth",
+    "runtime",
+  ]);
 
   const sectionHeader = (
-    category: SettingCategory,
+    _category: SettingCategory,
     label: string,
     summary: string,
     icon: ReactNode,
     count?: string,
   ) => {
-    const expanded = expandedCategories.has(category);
     return (
-      <button
-        type="button"
-        className="flex w-full items-center justify-between rounded-xl border bg-card px-4 py-3 text-left shadow-sm transition-colors hover:bg-accent/40"
-        onClick={() => toggleCategory(category)}
-      >
+      <div className="flex w-full items-center justify-between rounded-xl border bg-card px-4 py-3 text-left shadow-sm">
         <div className="flex min-w-0 items-center gap-3">
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
             {icon}
@@ -1132,30 +1135,130 @@ export default function Settings() {
               {count}
             </Badge>
           )}
-          <div className="flex h-7 w-7 items-center justify-center rounded-md border bg-background">
-            <ChevronRight
-              className={`h-4 w-4 text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`}
-            />
-          </div>
         </div>
-      </button>
+      </div>
     );
   };
 
+  const settingsNavItems: Array<{
+    id: SettingsPage;
+    label: string;
+    icon: ReactNode;
+    summary: string;
+  }> = [
+    {
+      id: "general",
+      label: "General",
+      icon: <Palette className="h-4 w-4" />,
+      summary: "Appearance and documentation",
+    },
+    {
+      id: "providers",
+      label: "Providers",
+      icon: <Sparkles className="h-4 w-4" />,
+      summary: "Provider and model admin",
+    },
+    {
+      id: "prompts",
+      label: "Prompts",
+      icon: <Sparkles className="h-4 w-4" />,
+      summary: "Prompt admin and templates",
+    },
+    {
+      id: "skills",
+      label: "Skills",
+      icon: <Bot className="h-4 w-4" />,
+      summary: "Installed skills and management",
+    },
+    {
+      id: "mcp",
+      label: "MCP Servers",
+      icon: <ExternalLink className="h-4 w-4" />,
+      summary: "Tool server connections",
+    },
+    {
+      id: "channels",
+      label: "Channels",
+      icon: <MessageSquare className="h-4 w-4" />,
+      summary: "Telegram, contacts, Gmail",
+    },
+    {
+      id: "auth",
+      label: "Auth",
+      icon: <ExternalLink className="h-4 w-4" />,
+      summary: "SSH key management",
+    },
+    {
+      id: "runtime",
+      label: "Runtime",
+      icon: <Bot className="h-4 w-4" />,
+      summary: "Composio and runtime tools",
+    },
+  ];
+
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Settings</h1>
-        <p className="text-muted-foreground mt-2">
-          Configure runtime credentials without restarting services.
-        </p>
-        <p className="text-xs text-muted-foreground mt-1">
+    <div className="grid gap-4 xl:grid-cols-[16rem_minmax(0,1fr)]">
+      <aside className="data-panel h-fit xl:sticky xl:top-4">
+        <div className="border-b border-border/70 px-4 py-4">
+          <h1 className="text-lg font-semibold tracking-tight">Settings</h1>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Configure runtime credentials and workspace behavior.
+          </p>
+        </div>
+        <div className="p-2">
+          <nav className="space-y-1">
+            {settingsNavItems.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => {
+                  setActiveCategory(item.id);
+                  setSearchParams({ section: item.id });
+                }}
+                className={cn(
+                  "group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-all",
+                  activeCategory === item.id
+                    ? "bg-primary/10 text-foreground shadow-sm ring-1 ring-primary/15"
+                    : "text-muted-foreground hover:bg-background/70 hover:text-foreground hover:ring-1 hover:ring-border/70"
+                )}
+              >
+                <span
+                  className={cn(
+                    "inline-flex h-7 w-7 items-center justify-center rounded-lg border border-border/70 bg-background/70",
+                    activeCategory === item.id
+                      ? "text-primary"
+                      : "text-muted-foreground group-hover:text-foreground"
+                  )}
+                >
+                  {item.icon}
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate font-medium">{item.label}</span>
+                  <span className="block truncate text-xs text-muted-foreground/80">
+                    {item.summary}
+                  </span>
+                </span>
+              </button>
+            ))}
+          </nav>
+        </div>
+        <div className="border-t border-border/70 px-4 py-3 text-xs text-muted-foreground">
           Last updated: {formatUpdatedAt(current.updated_at)}
-        </p>
-      </div>
+        </div>
+      </aside>
 
       <div className="space-y-6">
-        <div className="space-y-2">
+        <div className="data-panel p-5 md:p-6">
+          <h2 className="text-2xl font-bold tracking-tight">General Settings</h2>
+          <p className="mt-2 text-muted-foreground">
+            Workspace configuration grouped by category. Open a card to edit details.
+          </p>
+        </div>
+
+        <div className="space-y-6">
+        {activeCategory === "general" && (
+        <>
+        <div id="settings-appearance" className="scroll-mt-6 space-y-2">
           {sectionHeader(
             "appearance",
             "Appearance",
@@ -1213,7 +1316,71 @@ export default function Settings() {
           )}
         </div>
 
-        <div className="space-y-2">
+        <div id="settings-documentation" className="scroll-mt-6 space-y-2">
+          {sectionHeader(
+            "documentation",
+            "Documentation",
+            "Project guides and backend API reference",
+            <BookOpen className="h-4 w-4" />,
+            "2 links",
+          )}
+          {expandedCategories.has("documentation") && (
+            <div className="space-y-2 rounded-xl border border-dashed bg-muted/10 p-2">
+              <div className="grid gap-2 lg:grid-cols-2">
+                <a
+                  href="/book/"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="group rounded-xl border bg-card p-4 transition-colors hover:bg-accent/30"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg border bg-background/70 text-muted-foreground">
+                        <BookOpen className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <p className="font-medium">Guides</p>
+                        <p className="text-xs text-muted-foreground">mdBook</p>
+                      </div>
+                    </div>
+                    <ExternalLink className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                  </div>
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    Open project guides, setup notes, and operational documentation in a new tab.
+                  </p>
+                </a>
+
+                <a
+                  href="/swagger-ui/"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="group rounded-xl border bg-card p-4 transition-colors hover:bg-accent/30"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg border bg-background/70 text-muted-foreground">
+                        <ExternalLink className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <p className="font-medium">API Reference</p>
+                        <p className="text-xs text-muted-foreground">Swagger UI</p>
+                      </div>
+                    </div>
+                    <ExternalLink className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                  </div>
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    Browse endpoints, request schemas, and test APIs against the backend.
+                  </p>
+                </a>
+              </div>
+            </div>
+          )}
+        </div>
+        </>
+        )}
+
+        {activeCategory === "providers" && (
+        <div id="settings-ai" className="scroll-mt-6 space-y-2">
           {sectionHeader(
             "ai",
             "AI",
@@ -1269,8 +1436,71 @@ export default function Settings() {
             </div>
           )}
         </div>
+        )}
 
-        <div className="space-y-2">
+        {activeCategory === "prompts" && (
+        <div className="scroll-mt-6 space-y-2">
+          {sectionHeader(
+            "ai",
+            "Prompts",
+            "Prompt admin and built-in prompt viewer",
+            <Sparkles className="h-4 w-4" />,
+            "1 tool",
+          )}
+          <div className="space-y-2 rounded-xl border border-dashed bg-muted/10 p-2">
+            <button
+              type="button"
+              className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
+              onClick={() => openSetting("agent")}
+            >
+              <div className="flex items-center gap-3">
+                <Sparkles className="h-4 w-4 text-muted-foreground" />
+                <div className="space-y-1">
+                  <p className="font-medium">Prompt Admin</p>
+                  <p className="text-xs text-muted-foreground">
+                    {availablePrompts.length} prompt files · Built-in prompt viewer
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <Badge variant="default">Enabled</Badge>
+                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+              </div>
+            </button>
+          </div>
+        </div>
+        )}
+
+        {activeCategory === "skills" && (
+        <div className="scroll-mt-6 space-y-2">
+          {sectionHeader(
+            "runtime",
+            "Skills",
+            "Installed skills and skill management",
+            <Bot className="h-4 w-4" />,
+          )}
+          <div className="data-panel p-4">
+            <Skills />
+          </div>
+        </div>
+        )}
+
+        {activeCategory === "mcp" && (
+        <div className="scroll-mt-6 space-y-2">
+          {sectionHeader(
+            "runtime",
+            "MCP Servers",
+            "Model Context Protocol server connections",
+            <ExternalLink className="h-4 w-4" />,
+          )}
+          <div className="data-panel p-4">
+            <McpServers />
+          </div>
+        </div>
+        )}
+
+        {activeCategory === "channels" && (
+        <div id="settings-channels" className="scroll-mt-6 space-y-2">
           {sectionHeader(
             "channels",
             "Channels",
@@ -1352,8 +1582,10 @@ export default function Settings() {
             </div>
           )}
         </div>
+        )}
 
-        <div className="space-y-2">
+        {activeCategory === "auth" && (
+        <div id="settings-auth" className="scroll-mt-6 space-y-2">
           {sectionHeader(
             "auth",
             "Auth",
@@ -1387,8 +1619,10 @@ export default function Settings() {
             </div>
           )}
         </div>
+        )}
 
-        <div className="space-y-2">
+        {activeCategory === "runtime" && (
+        <div id="settings-runtime" className="scroll-mt-6 space-y-2">
           {sectionHeader(
             "runtime",
             "Runtime",
@@ -1423,6 +1657,8 @@ export default function Settings() {
             </div>
           )}
         </div>
+        )}
+      </div>
       </div>
 
       <Dialog open={isDialogOpen} onOpenChange={(open) => !open && setSelectedSetting(null)}>
