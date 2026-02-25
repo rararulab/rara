@@ -12,7 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Reciprocal Rank Fusion (RRF) for merging multi-source search results.
+//! [Reciprocal Rank Fusion][rrf] (RRF) for merging multi-source search results.
+//!
+//! When the memory layer searches mem0 and Hindsight in parallel, each backend
+//! returns its own ranked list. RRF merges these lists into a single ranking
+//! without requiring score normalisation — it only uses *rank positions*.
+//!
+//! ## Algorithm
+//!
+//! For each item appearing at rank *r* in list *i*, it receives a score of
+//! `1 / (k + r)`. Scores are summed across all lists. Items appearing in
+//! multiple lists are naturally boosted because they accumulate scores from
+//! each list.
+//!
+//! The constant *k* (default 60.0) dampens the influence of top positions,
+//! preventing a single high-ranked item in one list from dominating the
+//! fused ranking.
+//!
+//! ## References
+//!
+//! [rrf]: https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf
+//!   "Reciprocal Rank Fusion outperforms Condorcet and individual Rank Learning Methods (Cormack et al., 2009)"
 
 use std::collections::HashMap;
 

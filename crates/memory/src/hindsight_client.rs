@@ -12,17 +12,44 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! REST client for the Hindsight 4-network memory service.
+//! REST client for the [Hindsight](https://github.com/vectorize-io/hindsight)
+//! 4-network memory service.
 //!
-//! Hindsight organises memories into four networks:
-//! - **world** — factual knowledge about the external world
-//! - **experience** — episodic memories of past interactions
-//! - **opinion** — beliefs and preferences
-//! - **observation** — raw sensory / perceptual records
+//! Hindsight is the **learning layer** of the memory system. It organises
+//! memories into four semantic networks:
 //!
-//! NOTE: The exact REST endpoints below are based on the Hindsight design
-//! docs and may need adjustment once the service is deployed. Each method
-//! includes a comment indicating the assumed path so that verification is
+//! | Network         | Content                                            |
+//! |-----------------|----------------------------------------------------|
+//! | **world**       | Factual knowledge about the external world          |
+//! | **experience**  | Episodic memories of past interactions (biography)  |
+//! | **opinion**     | Beliefs, preferences, and confidence scores         |
+//! | **observation** | Entity summaries and raw perceptual records         |
+//!
+//! ## Three Operations
+//!
+//! 1. **retain** — store content into the four-network model. Hindsight
+//!    automatically distributes the information across the appropriate networks.
+//! 2. **recall** — hybrid retrieval combining semantic search, BM25 keyword
+//!    matching, graph traversal, and temporal decay.
+//! 3. **reflect** — personality-conditioned deep reasoning that synthesizes
+//!    an answer from information across all four networks.
+//!
+//! ## Scoping
+//!
+//! All operations are scoped to a **bank** (identified by `bank_id`). Each
+//! bank is an isolated memory store — different agents or users can have
+//! separate banks.
+//!
+//! ## Deployment
+//!
+//! Hindsight is deployed as `ghcr.io/vectorize-io/hindsight:latest` with a
+//! dedicated pgvector-enabled PostgreSQL instance.
+//!
+//! ## Endpoint Stability
+//!
+//! **NOTE**: The REST endpoints below are based on the Hindsight design docs
+//! and may need adjustment once the service is deployed. Each method includes
+//! a comment indicating the assumed path so that verification is
 //! straightforward.
 
 use serde::Deserialize;
@@ -31,9 +58,16 @@ use crate::error::{HindsightSnafu, HttpSnafu, MemoryResult};
 use snafu::ResultExt;
 
 /// Client for the Hindsight memory service.
+///
+/// Each client is bound to a specific memory bank. All retain/recall/reflect
+/// operations are scoped to that bank.
 pub struct HindsightClient {
+    /// Shared HTTP client (connection pooling, keep-alive).
     client: reqwest::Client,
+    /// Base URL without trailing slash, e.g. `http://localhost:8888`.
     base_url: String,
+    /// Memory bank identifier. Isolates memory stores for different
+    /// agents or users.
     bank_id: String,
 }
 
@@ -51,6 +85,10 @@ impl HindsightClient {
     }
 
     /// Store content into the four-network memory.
+    ///
+    /// Hindsight automatically analyses the content and distributes it
+    /// across the appropriate networks (world, experience, opinion,
+    /// observation).
     ///
     /// Assumed endpoint: `POST /api/v1/banks/{bank_id}/retain`
     pub async fn retain(&self, content: &str) -> MemoryResult<()> {
@@ -82,7 +120,11 @@ impl HindsightClient {
         Ok(())
     }
 
-    /// Hybrid recall across all four networks (semantic + keyword + graph + temporal).
+    /// Hybrid recall across all four networks.
+    ///
+    /// Combines multiple retrieval strategies: semantic similarity, BM25
+    /// keyword matching, knowledge graph traversal, and temporal decay.
+    /// Returns up to `top_k` results sorted by relevance.
     ///
     /// Assumed endpoint: `POST /api/v1/banks/{bank_id}/recall`
     pub async fn recall(
@@ -121,6 +163,11 @@ impl HindsightClient {
     }
 
     /// Deep reasoning / reflection over the memory bank.
+    ///
+    /// Unlike [`recall`](Self::recall) which returns raw memory fragments,
+    /// reflect asks Hindsight to synthesize an answer by reasoning across
+    /// all four networks with personality conditioning. Returns a free-form
+    /// text response.
     ///
     /// Assumed endpoint: `POST /api/v1/banks/{bank_id}/reflect`
     pub async fn reflect(&self, query: &str) -> MemoryResult<String> {
@@ -161,16 +208,20 @@ impl HindsightClient {
 /// A memory record returned from Hindsight recall.
 #[derive(Debug, Clone, Deserialize)]
 pub struct HindsightMemory {
+    /// Unique record identifier within the bank.
     pub id: String,
+    /// The memory content text.
     pub content: String,
-    /// Network the memory belongs to: `"world"`, `"experience"`, `"opinion"`,
-    /// or `"observation"`.
+    /// Which of the four networks this memory belongs to:
+    /// `"world"`, `"experience"`, `"opinion"`, or `"observation"`.
     pub network: String,
+    /// Relevance score from the hybrid retrieval pipeline (higher is better).
     pub score: f64,
 }
 
 /// Internal response wrapper for the reflect endpoint.
 #[derive(Debug, Deserialize)]
 struct ReflectResponse {
+    /// The synthesized reasoning output.
     response: String,
 }

@@ -16,16 +16,57 @@
 //!
 //! # Architecture
 //!
-//! Three external services replace the previous homegrown PG + Chroma engine:
+//! Three external services provide a layered memory system, each addressing a
+//! different aspect of long-term agent memory:
 //!
-//! | Service    | Role                        | API        |
-//! |------------|-----------------------------|------------|
-//! | **mem0**   | Structured fact management  | REST v1    |
-//! | **Memos**  | Markdown note storage       | REST v1    |
-//! | **Hindsight** | 4-network retain/recall/reflect | REST v1 |
+//! | Service       | Layer     | Role                                       | API     |
+//! |---------------|-----------|--------------------------------------------|---------|
+//! | **mem0**      | State     | Structured fact extraction & auto-dedup     | REST v1 |
+//! | **Memos**     | Storage   | Human-readable Markdown notes & daily logs  | REST v1 |
+//! | **Hindsight** | Learning  | 4-network retain / recall / reflect         | REST v1 |
 //!
-//! [`MemoryManager`] provides a unified facade that fans out to all three
-//! backends and merges search results via Reciprocal Rank Fusion.
+//! ## Data Flow
+//!
+//! ```text
+//!                        ┌──────────────────┐
+//!                        │  MemoryManager    │   ← unified facade
+//!                        └──┬─────┬──────┬──┘
+//!              search/facts │     │notes │ retain/recall/reflect
+//!                    ┌──────┘     │      └──────┐
+//!                    ▼            ▼              ▼
+//!               ┌────────┐  ┌────────┐   ┌────────────┐
+//!               │  mem0   │  │ Memos  │   │ Hindsight  │
+//!               └────────┘  └────────┘   └────────────┘
+//! ```
+//!
+//! ## Search Pipeline
+//!
+//! [`MemoryManager::search`] queries mem0 and Hindsight **in parallel**, then
+//! merges the two ranked result lists using [Reciprocal Rank Fusion][crate::fusion]
+//! (RRF, k=60). This produces a single ranked list where items appearing in
+//! both backends are boosted.
+//!
+//! ## Post-Conversation Reflection
+//!
+//! [`MemoryManager::reflect_on_exchange`] fans out to all three backends after
+//! each conversation turn:
+//!
+//! 1. **mem0** — extracts and deduplicates structured facts from the exchange.
+//! 2. **Hindsight** — retains the exchange across the 4-network model.
+//! 3. **Memos** — appends an exchange log entry (human-readable Markdown).
+//!
+//! Partial failures are logged as warnings but do not fail the operation.
+//!
+//! ## Configuration
+//!
+//! The three backend URLs and credentials are loaded from `AppConfig::memory`
+//! in the `rara-app` crate (Consul KV / env vars):
+//!
+//! - `mem0_base_url` — e.g. `http://mem0:8080`
+//! - `memos_base_url` — e.g. `http://memos:5230`
+//! - `memos_token` — Bearer token for Memos authentication
+//! - `hindsight_base_url` — e.g. `http://hindsight:8888`
+//! - `hindsight_bank_id` — Hindsight memory bank identifier
 
 pub mod error;
 pub mod fusion;

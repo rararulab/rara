@@ -15,7 +15,34 @@
 //! REST client for [Memos](https://www.usememos.com/) — a lightweight,
 //! self-hosted Markdown note service.
 //!
-//! Used as the persistent storage layer for long-form notes and daily logs.
+//! Memos is the **storage layer** of the memory system. It provides:
+//!
+//! - **Human-readable Markdown notes** — agents can write meeting notes,
+//!   summaries, and daily exchange logs that are easily browsable in the
+//!   Memos web UI.
+//! - **Tag-based organisation** — notes can be tagged with `#hashtag` syntax.
+//! - **Filter queries** — the API supports Google AIP-160 filter syntax for
+//!   listing memos (e.g. `filter=tag == 'daily-log'`).
+//!
+//! ## Authentication
+//!
+//! All requests use Bearer token authentication. Create an API token in the
+//! Memos web UI under Settings → Tokens.
+//!
+//! ## API Reference
+//!
+//! | Method        | HTTP                          | Purpose                       |
+//! |---------------|-------------------------------|-------------------------------|
+//! | `create_memo` | `POST /api/v1/memos`          | Create a new Markdown memo    |
+//! | `list_memos`  | `GET /api/v1/memos`           | List memos with filter/paging |
+//! | `get_memo`    | `GET /api/v1/memos/{id}`      | Retrieve a memo by ID         |
+//! | `update_memo` | `PATCH /api/v1/memos/{id}`    | Update a memo's content       |
+//! | `delete_memo` | `DELETE /api/v1/memos/{id}`   | Delete a memo                 |
+//!
+//! ## Deployment
+//!
+//! Memos is deployed as `neosmemo/memos:stable` with a dedicated PostgreSQL
+//! instance (not shared with the main rara database).
 
 use serde::{Deserialize, Serialize};
 
@@ -23,9 +50,15 @@ use crate::error::{HttpSnafu, MemosSnafu, MemoryResult};
 use snafu::ResultExt;
 
 /// Client for the Memos v1 REST API.
+///
+/// Uses the gRPC-gateway REST interface exposed by the Memos server.
+/// All requests include a `Bearer {token}` authorization header.
 pub struct MemosClient {
+    /// Shared HTTP client (connection pooling, keep-alive).
     client: reqwest::Client,
+    /// Base URL without trailing slash, e.g. `http://localhost:5230`.
     base_url: String,
+    /// Bearer token for authentication (created in Memos Settings → Tokens).
     token: String,
 }
 
@@ -79,6 +112,10 @@ impl MemosClient {
     }
 
     /// List memos with optional filter.
+    ///
+    /// The `filter` parameter uses Google AIP-160 syntax, for example:
+    /// - `tag == 'daily-log'` — memos with a specific tag
+    /// - `visibilities == ['PRIVATE']` — only private memos
     ///
     /// `GET /api/v1/memos?pageSize=N&filter=...`
     pub async fn list_memos(
@@ -234,6 +271,10 @@ struct MemosListResponse {
 }
 
 /// Minimal percent-encoding for query parameter values.
+///
+/// Only encodes characters that are unsafe in URL query strings. This is
+/// sufficient for AIP-160 filter expressions; for general-purpose encoding
+/// consider using the `percent-encoding` crate instead.
 fn urlencoded(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for ch in input.chars() {
