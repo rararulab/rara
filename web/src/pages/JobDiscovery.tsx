@@ -448,11 +448,11 @@ export default function JobDiscovery() {
 
       {/* Empty results after search */}
       {jobs && jobs.length === 0 && (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-            <Briefcase className="h-12 w-12 mb-4 opacity-50" />
+        <Card className="data-panel">
+          <CardContent className="flex flex-col items-center justify-center py-8 md:py-10 text-muted-foreground">
+            <Briefcase className="mb-3 h-10 w-10 opacity-45" />
             <p className="text-lg font-medium">No jobs found</p>
-            <p className="text-sm">
+            <p className="mt-1 text-sm">
               Try adjusting your search criteria or keywords.
             </p>
           </CardContent>
@@ -461,13 +461,13 @@ export default function JobDiscovery() {
 
       {/* Initial state - no search performed yet */}
       {!jobs && !discoverMutation.isPending && !discoverMutation.isError && (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-            <Briefcase className="h-12 w-12 mb-4 opacity-50" />
+        <Card className="data-panel">
+          <CardContent className="flex flex-col items-center justify-center py-8 md:py-10 text-muted-foreground">
+            <Briefcase className="mb-3 h-10 w-10 opacity-45" />
             <p className="text-lg font-medium">
               Search results will appear here
             </p>
-            <p className="text-sm">
+            <p className="mt-1 text-sm">
               Fill in the search form above to discover job opportunities.
             </p>
           </CardContent>

@@ -20,26 +20,14 @@ import {
   Bot,
   Briefcase,
   Settings as SettingsIcon,
-  Code,
-  ExternalLink,
   PanelLeftClose,
   PanelLeftOpen,
-  Sun,
-  Moon,
-  Monitor,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Separator } from '@/components/ui/separator';
 import { Button } from '@/components/ui/button';
 import { useLocalStorage } from '@/hooks/use-local-storage';
-import { useTheme } from '@/hooks/use-theme';
 import { useServerStatus } from '@/hooks/use-server-status';
-
-const THEME_META = {
-  system: { icon: Monitor, label: 'System' },
-  light:  { icon: Sun,     label: 'Light' },
-  dark:   { icon: Moon,    label: 'Dark' },
-} as const;
 
 const navItems = [
   { to: '/agent', icon: Bot, label: 'Agent' },
@@ -51,7 +39,7 @@ function ServerStatus({ collapsed }: { collapsed: boolean }) {
   const { isOnline, isChecking } = useServerStatus();
 
   return (
-    <div className={cn('flex items-center gap-2 py-3 text-xs text-muted-foreground', collapsed ? 'justify-center px-2' : 'px-4')}>
+    <div className={cn('flex items-center gap-2 rounded-xl py-3 text-xs text-muted-foreground', collapsed ? 'justify-center px-2' : 'mx-2 px-3')}>
       <span
         className={cn(
           'h-2 w-2 shrink-0 rounded-full',
@@ -74,25 +62,6 @@ function OfflineBanner() {
     <div className="bg-destructive/10 border-b border-destructive/20 px-4 py-2 text-center text-sm text-destructive">
       Server is currently offline. Requests are paused and will resume automatically when the server is back.
     </div>
-  );
-}
-
-function ThemeToggle({ collapsed }: { collapsed: boolean }) {
-  const { theme, cycleTheme } = useTheme();
-  const meta = THEME_META[theme];
-  const Icon = meta.icon;
-
-  return (
-    <Button
-      variant="ghost"
-      size={collapsed ? 'icon' : 'sm'}
-      className={cn('shrink-0', collapsed ? 'mx-auto h-8 w-8' : 'mx-4 justify-start gap-2')}
-      onClick={cycleTheme}
-      title={`Theme: ${meta.label}`}
-    >
-      <Icon className="h-4 w-4 shrink-0" />
-      {!collapsed && <span className="text-xs text-muted-foreground">{meta.label}</span>}
-    </Button>
   );
 }
 
@@ -126,22 +95,40 @@ export default function DashboardLayout() {
   }, [isWide, setCollapsed]);
 
   return (
-    <div className="flex h-screen">
+    <div className="flex h-screen bg-transparent">
       {/* Sidebar */}
-      <aside className={cn('border-r bg-card flex flex-col transition-all duration-200', collapsed ? 'w-16' : 'w-64')}>
-        <div className={cn('flex items-center', collapsed ? 'justify-center p-4' : 'justify-between p-6')}>
-          {!collapsed && <h1 className="text-xl font-bold">Rara</h1>}
+      <aside
+        className={cn(
+          'app-surface relative m-2 flex flex-col overflow-hidden rounded-2xl border transition-all duration-200',
+          collapsed ? 'w-16' : 'w-[17rem]'
+        )}
+      >
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-20 bg-gradient-to-b from-primary/12 to-transparent" />
+        <div className={cn('relative flex items-center', collapsed ? 'justify-center p-3' : 'justify-between p-5')}>
+          {!collapsed && (
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-primary/12 text-primary shadow-sm ring-1 ring-primary/15">
+                  <Bot className="h-4 w-4" />
+                </span>
+                <div>
+                  <h1 className="text-base font-semibold tracking-tight">Rara</h1>
+                  <p className="text-[11px] text-muted-foreground">Job Copilot Workspace</p>
+                </div>
+              </div>
+            </div>
+          )}
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8 shrink-0"
+            className="h-8 w-8 shrink-0 rounded-lg border border-transparent hover:border-border/80 hover:bg-background/80"
             onClick={() => setCollapsed((prev) => !prev)}
           >
             {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
           </Button>
         </div>
         <Separator />
-        <nav className={cn('flex-1 space-y-1', collapsed ? 'p-2' : 'p-4')}>
+        <nav className={cn('flex-1 space-y-1.5', collapsed ? 'p-2' : 'p-3')}>
           {navItems.map((item) => (
             <NavLink
               key={item.to}
@@ -150,49 +137,29 @@ export default function DashboardLayout() {
               className={({ isActive }) => {
                 const active = isActive || location.pathname.startsWith(item.to + '/');
                 return cn(
-                  'flex items-center rounded-md text-sm font-medium transition-colors',
-                  collapsed ? 'justify-center px-2 py-2' : 'gap-3 px-3 py-2',
+                  'group flex items-center rounded-xl text-sm font-medium transition-all',
+                  collapsed ? 'justify-center px-2 py-2.5' : 'gap-3 px-3 py-2.5',
                   active
-                    ? 'bg-accent text-accent-foreground'
-                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+                    ? 'bg-primary/10 text-foreground shadow-sm ring-1 ring-primary/15'
+                    : 'text-muted-foreground hover:bg-background/70 hover:text-foreground hover:ring-1 hover:ring-border/70'
                 );
               }}
             >
-              <item.icon className="h-4 w-4 shrink-0" />
-              {!collapsed && item.label}
+              <item.icon className={cn('h-4 w-4 shrink-0', location.pathname.startsWith(item.to) && 'text-primary')} />
+              {!collapsed && <span className="truncate">{item.label}</span>}
             </NavLink>
           ))}
-          <a
-            href="/swagger-ui"
-            target="_blank"
-            rel="noopener noreferrer"
-            title={collapsed ? 'API Docs' : undefined}
-            className={cn(
-              'flex items-center rounded-md text-sm font-medium transition-colors text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-              collapsed ? 'justify-center px-2 py-2' : 'gap-3 px-3 py-2'
-            )}
-          >
-            <Code className="h-4 w-4 shrink-0" />
-            {!collapsed && (
-              <>
-                <span>API Docs</span>
-                <ExternalLink className="h-3.5 w-3.5 ml-auto shrink-0 opacity-70" />
-              </>
-            )}
-          </a>
         </nav>
         <Separator />
-        <div className="py-2">
-          <ThemeToggle collapsed={collapsed} />
+        <div className="px-1 pb-1">
+          <ServerStatus collapsed={collapsed} />
         </div>
-        <Separator />
-        <ServerStatus collapsed={collapsed} />
       </aside>
 
       {/* Main content */}
-      <main className={cn('flex-1 flex flex-col', isFullBleed ? 'overflow-hidden' : 'overflow-auto')}>
+      <main className={cn('flex min-w-0 flex-1 flex-col', isFullBleed ? 'overflow-hidden' : 'overflow-auto')}>
         <OfflineBanner />
-        <div className={isFullBleed ? 'flex-1 min-h-0' : 'p-8'}>
+        <div className={isFullBleed ? 'flex-1 min-h-0 p-2 md:p-3' : 'p-4 md:p-6'}>
           <Outlet />
         </div>
       </main>

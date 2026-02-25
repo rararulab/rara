@@ -28,6 +28,10 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import {
+  Card,
+  CardContent,
+} from "@/components/ui/card";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -76,17 +80,17 @@ function statusBadgeClass(status: string): string {
     case "applied":
       return "border-transparent bg-primary text-primary-foreground";
     case "screening":
-      return "text-foreground border";
+      return "border-border/70 bg-background/70 text-foreground";
     case "interviewing":
-      return "border-transparent bg-blue-500 text-white";
+      return "border-transparent bg-blue-500/90 text-white";
     case "offer":
-      return "border-transparent bg-green-600 text-white";
+      return "border-transparent bg-emerald-600 text-white";
     case "accepted":
-      return "border-transparent bg-green-700 text-white";
+      return "border-transparent bg-emerald-700 text-white";
     case "rejected":
-      return "border-transparent bg-red-500 text-white";
+      return "border-transparent bg-rose-500 text-white";
     case "withdrawn":
-      return "border-transparent bg-gray-400 text-white";
+      return "border-transparent bg-zinc-400 text-white";
     default:
       return "";
   }
@@ -537,7 +541,8 @@ function HistoryPanel({ applicationId }: { applicationId: string }) {
 
 function TableSkeleton() {
   return (
-    <div className="space-y-3">
+    <div className="app-surface overflow-hidden rounded-2xl border border-border/60 p-4">
+      <div className="space-y-3">
       {Array.from({ length: 5 }).map((_, i) => (
         <div key={i} className="flex gap-4">
           <Skeleton className="h-8 flex-1" />
@@ -547,6 +552,7 @@ function TableSkeleton() {
           <Skeleton className="h-8 w-32" />
         </div>
       ))}
+      </div>
     </div>
   );
 }
@@ -575,37 +581,42 @@ export default function Applications() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Applications</h1>
-          <p className="text-muted-foreground mt-1">
+      <Card className="app-surface border-border/60">
+        <CardContent className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <div className="mb-2 inline-flex items-center rounded-full border border-primary/15 bg-primary/8 px-3 py-1 text-xs font-medium text-primary">
+              Pipeline Tracking
+            </div>
+            <h1 className="text-2xl font-bold tracking-tight">Applications</h1>
+            <p className="mt-1 text-muted-foreground">
             Track and manage your job applications.
-          </p>
-        </div>
-        <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="h-4 w-4" />
-          New Application
-        </Button>
-      </div>
+            </p>
+          </div>
+          <Button className="shadow-sm" onClick={() => setCreateOpen(true)}>
+            <Plus className="h-4 w-4" />
+            New Application
+          </Button>
+        </CardContent>
+      </Card>
 
-      <Separator />
+      <Separator className="opacity-60" />
 
       {/* Content */}
       {isLoading && <TableSkeleton />}
 
       {isError && (
-        <div className="rounded-lg border border-destructive/50 p-4 text-sm text-destructive">
+        <div className="rounded-2xl border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
           Failed to load applications: {(error as Error).message}
         </div>
       )}
 
       {applications && applications.length === 0 && (
-        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed p-12 text-center">
+        <div className="empty-state-card border-dashed">
           <p className="text-lg font-medium">No applications yet</p>
-          <p className="text-sm text-muted-foreground mt-1">
+          <p className="mt-1 text-sm text-muted-foreground">
             Get started by creating your first job application.
           </p>
-          <Button className="mt-4" onClick={() => setCreateOpen(true)}>
+          <Button className="mt-4 shadow-sm" onClick={() => setCreateOpen(true)}>
             <Plus className="h-4 w-4" />
             New Application
           </Button>
@@ -613,15 +624,24 @@ export default function Applications() {
       )}
 
       {applications && applications.length > 0 && (
-        <div className="rounded-lg border">
-          <table className="w-full text-sm">
+        <div className="data-table-card">
+          <div className="flex items-center justify-between border-b border-border/60 bg-background/45 px-4 py-3">
+            <div>
+              <p className="text-sm font-semibold">Applications List</p>
+              <p className="text-xs text-muted-foreground">
+                {applications.length} item{applications.length !== 1 ? "s" : ""}
+              </p>
+            </div>
+          </div>
+          <div className="data-table-wrap">
+          <table className="data-table">
             <thead>
-              <tr className="border-b bg-muted/50">
-                <th className="text-left font-medium p-3">Company</th>
-                <th className="text-left font-medium p-3">Position</th>
-                <th className="text-left font-medium p-3">Status</th>
-                <th className="text-left font-medium p-3">Applied</th>
-                <th className="text-right font-medium p-3">Actions</th>
+              <tr>
+                <th className="!px-3">Company</th>
+                <th className="!px-3">Position</th>
+                <th className="!px-3">Status</th>
+                <th className="!px-3">Applied</th>
+                <th className="!px-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -640,6 +660,7 @@ export default function Applications() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
@@ -713,10 +734,10 @@ function ApplicationRow({
   return (
     <>
       <tr
-        className="border-b last:border-b-0 hover:bg-muted/30 cursor-pointer transition-colors"
+        className="cursor-pointer"
         onClick={onToggleExpand}
       >
-        <td className="p-3 font-medium">
+        <td className="!px-3 font-medium">
           <div className="flex items-center gap-1.5">
             {application.company_name}
             {application.job_url && (
@@ -725,21 +746,21 @@ function ApplicationRow({
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={(e) => e.stopPropagation()}
-                className="text-muted-foreground hover:text-foreground"
+                className="rounded-md p-0.5 text-muted-foreground hover:bg-background/80 hover:text-foreground"
               >
                 <ExternalLink className="h-3.5 w-3.5" />
               </a>
             )}
           </div>
         </td>
-        <td className="p-3">{application.position_title}</td>
-        <td className="p-3">
+        <td className="!px-3">{application.position_title}</td>
+        <td className="!px-3">
           <StatusBadge status={application.status} />
         </td>
-        <td className="p-3 text-muted-foreground">
+        <td className="!px-3 text-muted-foreground">
           {formatDate(application.applied_at ?? application.created_at)}
         </td>
-        <td className="p-3 text-right">
+        <td className="!px-3 text-right">
           <div
             className="flex items-center justify-end gap-1"
             onClick={(e) => e.stopPropagation()}
@@ -747,6 +768,7 @@ function ApplicationRow({
             <Button
               variant="ghost"
               size="sm"
+              className="rounded-lg hover:bg-background/80"
               onClick={onTransition}
               title="Transition status"
             >
@@ -755,6 +777,7 @@ function ApplicationRow({
             <Button
               variant="ghost"
               size="sm"
+              className="rounded-lg hover:bg-background/80"
               onClick={onEdit}
               title="Edit"
             >
@@ -763,6 +786,7 @@ function ApplicationRow({
             <Button
               variant="ghost"
               size="sm"
+              className="rounded-lg hover:bg-destructive/8 hover:text-destructive"
               onClick={onDelete}
               title="Delete"
             >
@@ -773,8 +797,8 @@ function ApplicationRow({
       </tr>
       {expanded && (
         <tr>
-          <td colSpan={5} className="bg-muted/20">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-0 divide-y md:divide-y-0 md:divide-x divide-border">
+          <td colSpan={5} className="bg-background/30">
+            <div className="grid grid-cols-1 gap-0 divide-y divide-border/60 md:grid-cols-2 md:divide-x md:divide-y-0">
               {/* Details */}
               <div className="p-4 space-y-2">
                 <h4 className="text-sm font-semibold">Details</h4>
@@ -788,7 +812,7 @@ function ApplicationRow({
                     No notes.
                   </p>
                 )}
-                <div className="text-xs text-muted-foreground space-y-0.5 pt-2">
+                <div className="space-y-0.5 pt-2 text-xs text-muted-foreground">
                   <p>Created: {formatDate(application.created_at)}</p>
                   <p>Updated: {formatDate(application.updated_at)}</p>
                 </div>

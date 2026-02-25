@@ -74,6 +74,10 @@ import {
   Trash2,
   Users,
   X,
+  Sun,
+  Moon,
+  Monitor,
+  Palette,
 } from "lucide-react";
 
 import { Textarea } from "@/components/ui/textarea";
@@ -84,9 +88,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useTheme, type Theme } from "@/hooks/use-theme";
 
 type SettingKey = "ai" | "agent" | "telegram" | "gmail" | "composio" | "contacts" | "auth";
-type SettingCategory = "ai" | "channels" | "auth" | "runtime";
+type SettingCategory = "appearance" | "ai" | "channels" | "auth" | "runtime";
 type ToastState = { kind: "success" | "error"; message: string } | null;
 type OpenRouterModel = {
   id: string;
@@ -117,7 +122,14 @@ function formatUpdatedAt(value: string | null): string {
 
 const BASE_URL = import.meta.env.VITE_API_URL || '';
 
+const THEME_OPTIONS: Array<{ key: Theme; label: string; icon: ReactNode; description: string }> = [
+  { key: "system", label: "System", icon: <Monitor className="h-4 w-4" />, description: "Follow OS appearance" },
+  { key: "light", label: "Light", icon: <Sun className="h-4 w-4" />, description: "Bright workspace" },
+  { key: "dark", label: "Dark", icon: <Moon className="h-4 w-4" />, description: "Low-light friendly" },
+];
+
 export default function Settings() {
+  const { theme, setTheme } = useTheme();
   const queryClient = useQueryClient();
   const [modelMap, setModelMap] = useState<Record<string, string>>({});
   const [fallbackModels, setFallbackModels] = useState<string[]>([]);
@@ -1143,6 +1155,84 @@ export default function Settings() {
       </div>
 
       <div className="space-y-6">
+        <div className="space-y-2">
+          {sectionHeader(
+            "appearance",
+            "Appearance",
+            "Theme and developer UI preferences",
+            <Palette className="h-4 w-4" />,
+            "2 items",
+          )}
+          {expandedCategories.has("appearance") && (
+            <div className="space-y-2 rounded-xl border border-dashed bg-muted/10 p-2">
+              <div className="rounded-lg border p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <p className="font-medium">Theme</p>
+                    <p className="text-xs text-muted-foreground">
+                      Choose how the UI looks across all pages.
+                    </p>
+                  </div>
+                  <Badge variant="secondary" className="capitalize">
+                    {theme}
+                  </Badge>
+                </div>
+                <div className="grid gap-2 md:grid-cols-3">
+                  {THEME_OPTIONS.map((option) => (
+                    <button
+                      key={option.key}
+                      type="button"
+                      onClick={() => setTheme(option.key)}
+                      className={`group rounded-xl border p-3 text-left transition-all ${
+                        theme === option.key
+                          ? "border-primary/30 bg-primary/8 shadow-sm ring-1 ring-primary/10"
+                          : "hover:bg-accent/40"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border ${
+                          theme === option.key
+                            ? "border-primary/20 bg-primary/10 text-primary"
+                            : "border-border/70 bg-background/70 text-muted-foreground"
+                        }`}>
+                          {option.icon}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium">{option.label}</p>
+                          <p className="truncate text-xs text-muted-foreground">
+                            {option.description}
+                          </p>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <a
+                href="/swagger-ui"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
+              >
+                <div className="flex items-center gap-3">
+                  <ExternalLink className="h-4 w-4 text-muted-foreground" />
+                  <div className="space-y-1">
+                    <p className="font-medium">API Docs</p>
+                    <p className="text-xs text-muted-foreground">
+                      Open Swagger UI in a new tab.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Badge variant="outline">Swagger</Badge>
+                  <ExternalLink className="h-4 w-4 text-muted-foreground" />
+                </div>
+              </a>
+            </div>
+          )}
+        </div>
+
         <div className="space-y-2">
           {sectionHeader(
             "ai",

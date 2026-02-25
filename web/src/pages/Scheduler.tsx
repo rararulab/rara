@@ -240,23 +240,47 @@ function AgentJobCard({ job }: { job: AgentJob }) {
   const trigger = formatTrigger(job.trigger);
 
   return (
-    <Card>
-      <CardContent className="p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0 flex-1 space-y-2">
-            <p className="text-sm leading-relaxed">{job.message}</p>
-            <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-              <div className="flex items-center gap-1">
-                {trigger.icon}
-                <code className="bg-muted px-1.5 py-0.5 rounded">{trigger.label}</code>
-              </div>
-              <span>Created {formatDate(job.created_at)}</span>
-              {job.last_run_at && <span>Last run {formatDate(job.last_run_at)}</span>}
+    <Card className="app-surface border-border/60">
+      <CardContent className="p-5 md:p-6">
+        <div className="space-y-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <p className="min-w-0 flex-1 text-base leading-7 text-foreground">
+              {job.message}
+            </p>
+            <Badge
+              variant={job.enabled ? "default" : "outline"}
+              className="shrink-0 self-start px-3 py-1 text-sm"
+            >
+              {job.enabled ? "Active" : "Disabled"}
+            </Badge>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="inline-flex items-center gap-1.5 rounded-lg border border-border/70 bg-background/60 px-2.5 py-1 text-muted-foreground">
+              {trigger.icon}
+              <span className="text-xs uppercase tracking-wide">Schedule</span>
+            </span>
+            <code className="rounded-lg border border-border/70 bg-muted/50 px-2.5 py-1.5 text-xs leading-5 text-foreground">
+              {trigger.label}
+            </code>
+          </div>
+
+          <div className="grid grid-cols-1 gap-2 text-sm text-muted-foreground md:grid-cols-2">
+            <div className="rounded-lg bg-background/40 px-3 py-2">
+              <span className="mr-1 text-xs uppercase tracking-wide text-muted-foreground/80">
+                Created
+              </span>
+              <span className="font-medium text-foreground/90">{formatDate(job.created_at)}</span>
+            </div>
+            <div className="rounded-lg bg-background/40 px-3 py-2">
+              <span className="mr-1 text-xs uppercase tracking-wide text-muted-foreground/80">
+                Last Run
+              </span>
+              <span className="font-medium text-foreground/90">
+                {job.last_run_at ? formatDate(job.last_run_at) : "-"}
+              </span>
             </div>
           </div>
-          <Badge variant={job.enabled ? "default" : "outline"} className="shrink-0">
-            {job.enabled ? "Active" : "Disabled"}
-          </Badge>
         </div>
       </CardContent>
     </Card>
@@ -279,7 +303,7 @@ export function DomainSchedulerPanel() {
       {tasksQuery.isLoading ? (
         <div className="space-y-4">
           {Array.from({ length: 3 }).map((_, i) => (
-            <Card key={i}>
+            <Card key={i} className="data-panel">
               <CardContent className="p-6 space-y-4">
                 <div className="flex justify-between">
                   <Skeleton className="h-6 w-48" />
@@ -296,10 +320,10 @@ export function DomainSchedulerPanel() {
           ))}
         </div>
       ) : !tasksQuery.data?.length ? (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-10 text-muted-foreground">
+        <Card className="empty-state-card">
+          <CardContent className="flex flex-col items-center justify-center py-0 text-muted-foreground">
             <CalendarClock className="h-10 w-10 mb-3 opacity-30" />
-            <p className="text-sm">No scheduled tasks configured.</p>
+            <p className="text-base">No scheduled tasks configured.</p>
           </CardContent>
         </Card>
       ) : (
@@ -324,25 +348,32 @@ export function AgentJobsPanel() {
   return (
     <div className="space-y-4">
       {agentJobsQuery.isLoading ? (
-        <div className="space-y-3">
+        <div className="space-y-4">
           {Array.from({ length: 2 }).map((_, i) => (
-            <Card key={i}>
-              <CardContent className="p-5 space-y-3">
-                <Skeleton className="h-4 w-3/4" />
-                <Skeleton className="h-3 w-48" />
+            <Card key={i} className="data-panel">
+              <CardContent className="space-y-4 p-5 md:p-6">
+                <div className="flex items-start justify-between gap-4">
+                  <Skeleton className="h-6 w-3/4" />
+                  <Skeleton className="h-8 w-20 rounded-full" />
+                </div>
+                <Skeleton className="h-8 w-64 rounded-lg" />
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                  <Skeleton className="h-10 w-full rounded-lg" />
+                  <Skeleton className="h-10 w-full rounded-lg" />
+                </div>
               </CardContent>
             </Card>
           ))}
         </div>
       ) : !agentJobsQuery.data?.length ? (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-10 text-muted-foreground">
+        <Card className="empty-state-card">
+          <CardContent className="flex flex-col items-center justify-center py-0 text-muted-foreground">
             <Bot className="h-10 w-10 mb-3 opacity-30" />
-            <p className="text-sm">No agent jobs yet. The agent can create scheduled tasks via tools.</p>
+            <p className="text-base">No agent jobs yet. The agent can create scheduled tasks via tools.</p>
           </CardContent>
         </Card>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-4">
           {agentJobsQuery.data.map((job) => (
             <AgentJobCard key={job.id} job={job} />
           ))}

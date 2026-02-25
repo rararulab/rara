@@ -64,7 +64,7 @@ function statusVariant(
 
 function StatCardSkeleton() {
   return (
-    <Card>
+    <Card className="app-surface border-border/60">
       <CardHeader className="pb-2">
         <Skeleton className="h-4 w-24" />
       </CardHeader>
@@ -87,15 +87,17 @@ interface StatCardProps {
 
 function StatCard({ title, value, description, icon }: StatCardProps) {
   return (
-    <Card>
+    <Card className="app-surface border-border/60">
       <CardHeader className="flex flex-row items-center justify-between pb-2">
         <CardTitle className="text-sm font-medium text-muted-foreground">
           {title}
         </CardTitle>
-        <span className="text-muted-foreground">{icon}</span>
+        <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-primary/8 text-primary ring-1 ring-primary/10">
+          {icon}
+        </span>
       </CardHeader>
       <CardContent>
-        <div className="text-2xl font-bold">{value}</div>
+        <div className="text-2xl font-bold tracking-tight">{value}</div>
         <CardDescription className="mt-1">{description}</CardDescription>
       </CardContent>
     </Card>
@@ -106,7 +108,7 @@ function StatCard({ title, value, description, icon }: StatCardProps) {
 
 function ErrorBanner({ message }: { message: string }) {
   return (
-    <Card className="border-destructive/50 bg-destructive/5">
+    <Card className="border-destructive/40 bg-destructive/5 shadow-none">
       <CardContent className="p-4">
         <p className="text-sm text-destructive">{message}</p>
       </CardContent>
@@ -118,9 +120,9 @@ function ErrorBanner({ message }: { message: string }) {
 
 function EmptyState({ message }: { message: string }) {
   return (
-    <div className="flex flex-col items-center justify-center py-12 text-center">
-      <Briefcase className="h-12 w-12 text-muted-foreground/40 mb-4" />
-      <p className="text-muted-foreground text-sm">{message}</p>
+    <div className="app-surface flex flex-col items-center justify-center rounded-2xl border border-dashed border-border/70 py-12 text-center">
+      <Briefcase className="mb-4 h-12 w-12 text-muted-foreground/40" />
+      <p className="text-sm text-muted-foreground">{message}</p>
     </div>
   );
 }
@@ -131,7 +133,7 @@ function RecentApplicationsSkeleton() {
   return (
     <div className="space-y-4">
       {Array.from({ length: 5 }).map((_, i) => (
-        <div key={i} className="flex items-center justify-between">
+        <div key={i} className="flex items-center justify-between rounded-xl border border-border/50 px-4 py-3">
           <div className="space-y-1">
             <Skeleton className="h-4 w-40" />
             <Skeleton className="h-3 w-28" />
@@ -179,9 +181,12 @@ export default function Dashboard() {
   return (
     <div className="space-y-8">
       {/* Page Header */}
-      <div>
-        <h1 className="text-2xl font-bold">Dashboard</h1>
-        <p className="text-muted-foreground mt-2">
+      <div className="app-surface rounded-2xl border border-border/60 p-5 md:p-6">
+        <div className="mb-3 inline-flex items-center rounded-full border border-primary/15 bg-primary/8 px-3 py-1 text-xs font-medium text-primary">
+          Analytics Snapshot
+        </div>
+        <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Dashboard</h1>
+        <p className="mt-2 text-muted-foreground">
           Overview of your job search pipeline.
         </p>
       </div>
@@ -191,7 +196,7 @@ export default function Dashboard() {
         <ErrorBanner message="Unable to load analytics data. Make sure the API server is running." />
       ) : null}
 
-      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {snapshotQuery.isLoading ? (
           <>
             <StatCardSkeleton />
@@ -268,15 +273,15 @@ export default function Dashboard() {
         )}
       </div>
 
-      <Separator />
+      <Separator className="opacity-60" />
 
       {/* Recent Applications */}
-      <div>
-        <div className="flex items-center justify-between mb-4">
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">Recent Applications</h2>
           <Link
             to="/jobs?tab=applications"
-            className="text-sm text-muted-foreground hover:text-foreground inline-flex items-center gap-1 transition-colors"
+            className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-card/70 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
           >
             View all
             <ArrowRight className="h-3 w-3" />
@@ -288,24 +293,24 @@ export default function Dashboard() {
         ) : applicationsQuery.isError ? (
           <ErrorBanner message="Unable to load recent applications." />
         ) : applicationsQuery.data && applicationsQuery.data.length > 0 ? (
-          <Card>
+          <Card className="app-surface border-border/60 overflow-hidden">
             <CardContent className="p-0">
-              <div className="divide-y">
+              <div className="divide-y divide-border/60">
                 {applicationsQuery.data.map((app) => (
                   <div
                     key={app.id}
-                    className="flex items-center justify-between px-6 py-4"
+                    className="flex items-center justify-between px-5 py-4 transition-colors hover:bg-background/45 md:px-6"
                   >
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium truncate">
+                      <p className="truncate text-sm font-medium">
                         {app.company_name}
                       </p>
-                      <p className="text-sm text-muted-foreground truncate">
+                      <p className="truncate text-sm text-muted-foreground">
                         {app.position_title}
                       </p>
                     </div>
-                    <div className="flex items-center gap-4 ml-4 shrink-0">
-                      <span className="text-xs text-muted-foreground hidden sm:inline">
+                    <div className="ml-4 flex shrink-0 items-center gap-4">
+                      <span className="hidden text-xs text-muted-foreground sm:inline">
                         {formatDate(app.created_at)}
                       </span>
                       <Badge variant={statusVariant(app.status)}>

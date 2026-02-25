@@ -209,15 +209,17 @@ interface StatCardProps {
 
 function StatCard({ title, value, icon, description }: StatCardProps) {
   return (
-    <Card>
+    <Card className="app-surface border-border/60">
       <CardHeader className="flex flex-row items-center justify-between pb-2">
         <CardTitle className="text-sm font-medium text-muted-foreground">
           {title}
         </CardTitle>
-        <span className="text-muted-foreground">{icon}</span>
+        <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-primary/8 text-primary ring-1 ring-primary/10">
+          {icon}
+        </span>
       </CardHeader>
       <CardContent>
-        <div className="text-2xl font-bold">{value}</div>
+        <div className="text-2xl font-bold tracking-tight">{value}</div>
         {description && (
           <CardDescription className="mt-1">{description}</CardDescription>
         )}
@@ -228,7 +230,7 @@ function StatCard({ title, value, icon, description }: StatCardProps) {
 
 function StatCardSkeleton() {
   return (
-    <Card>
+    <Card className="app-surface border-border/60">
       <CardHeader className="pb-2">
         <Skeleton className="h-4 w-24" />
       </CardHeader>
@@ -255,68 +257,57 @@ function RunningTasksSection({
 }) {
   if (!status.running.length) {
     return (
-      <Card>
-        <CardContent className="flex flex-col items-center justify-center py-10 text-muted-foreground">
+      <Card className="empty-state-card">
+        <CardContent className="flex flex-col items-center justify-center py-0 text-muted-foreground">
           <Activity className="h-10 w-10 mb-3 opacity-30" />
-          <p className="text-sm">No tasks running</p>
+          <p className="text-base">No tasks running</p>
         </CardContent>
       </Card>
     );
   }
 
   return (
-    <Card>
+    <Card className="data-table-card">
       <CardContent className="p-0">
-        <div className="overflow-x-auto">
-          <table className="w-full">
+        <div className="data-table-wrap">
+          <table className="data-table">
             <thead>
-              <tr className="border-b bg-muted/50">
-                <th className="px-4 py-2 text-left text-sm font-medium text-muted-foreground">
-                  Kind
-                </th>
-                <th className="px-4 py-2 text-left text-sm font-medium text-muted-foreground">
-                  Session
-                </th>
-                <th className="px-4 py-2 text-left text-sm font-medium text-muted-foreground">
-                  Priority
-                </th>
-                <th className="px-4 py-2 text-left text-sm font-medium text-muted-foreground">
-                  Message
-                </th>
-                <th className="px-4 py-2 text-left text-sm font-medium text-muted-foreground">
-                  Elapsed
-                </th>
-                <th className="px-4 py-2 text-left text-sm font-medium text-muted-foreground">
-                  Actions
-                </th>
+              <tr>
+                <th>Kind</th>
+                <th>Session</th>
+                <th>Priority</th>
+                <th>Message</th>
+                <th>Elapsed</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
               {status.running.map((task) => (
-                <tr key={task.id} className="border-b last:border-0">
-                  <td className="px-4 py-2">
+                <tr key={task.id}>
+                  <td>
                     <KindBadge kind={task.kind} />
                   </td>
-                  <td className="px-4 py-2 text-sm">
-                    <code className="bg-muted px-1.5 py-0.5 rounded text-xs">
+                  <td className="text-sm">
+                    <code className="code-chip">
                       {task.session_key}
                     </code>
                   </td>
-                  <td className="px-4 py-2">
+                  <td>
                     <PriorityBadge priority={task.priority} />
                   </td>
-                  <td className="px-4 py-2 text-sm text-muted-foreground max-w-xs truncate">
+                  <td className="max-w-xs truncate text-sm leading-6 text-muted-foreground">
                     {task.message_preview ?? "-"}
                   </td>
-                  <td className="px-4 py-2 text-sm text-muted-foreground whitespace-nowrap">
+                  <td className="whitespace-nowrap text-sm text-muted-foreground">
                     {typeof task.elapsed_seconds === "number"
                       ? formatElapsed(task.elapsed_seconds)
                       : "-"}
                   </td>
-                  <td className="px-4 py-2">
+                  <td>
                     <Button
                       variant="outline"
                       size="sm"
+                      className="rounded-xl"
                       onClick={() => onCancel(task.id)}
                       disabled={isCancelling}
                     >
@@ -341,57 +332,47 @@ function RunningTasksSection({
 function QueueSection({ status }: { status: DispatcherStatus }) {
   if (!status.queued.length) {
     return (
-      <Card>
-        <CardContent className="flex flex-col items-center justify-center py-10 text-muted-foreground">
+      <Card className="empty-state-card">
+        <CardContent className="flex flex-col items-center justify-center py-0 text-muted-foreground">
           <ListOrdered className="h-10 w-10 mb-3 opacity-30" />
-          <p className="text-sm">Queue empty</p>
+          <p className="text-base">Queue empty</p>
         </CardContent>
       </Card>
     );
   }
 
   return (
-    <Card>
+    <Card className="data-table-card">
       <CardContent className="p-0">
-        <div className="overflow-x-auto">
-          <table className="w-full">
+        <div className="data-table-wrap">
+          <table className="data-table">
             <thead>
-              <tr className="border-b bg-muted/50">
-                <th className="px-4 py-2 text-left text-sm font-medium text-muted-foreground">
-                  Kind
-                </th>
-                <th className="px-4 py-2 text-left text-sm font-medium text-muted-foreground">
-                  Session
-                </th>
-                <th className="px-4 py-2 text-left text-sm font-medium text-muted-foreground">
-                  Priority
-                </th>
-                <th className="px-4 py-2 text-left text-sm font-medium text-muted-foreground">
-                  Message
-                </th>
-                <th className="px-4 py-2 text-left text-sm font-medium text-muted-foreground">
-                  Waiting
-                </th>
+              <tr>
+                <th>Kind</th>
+                <th>Session</th>
+                <th>Priority</th>
+                <th>Message</th>
+                <th>Waiting</th>
               </tr>
             </thead>
             <tbody>
               {status.queued.map((task) => (
-                <tr key={task.id} className="border-b last:border-0">
-                  <td className="px-4 py-2">
+                <tr key={task.id}>
+                  <td>
                     <KindBadge kind={task.kind} />
                   </td>
-                  <td className="px-4 py-2 text-sm">
-                    <code className="bg-muted px-1.5 py-0.5 rounded text-xs">
+                  <td className="text-sm">
+                    <code className="code-chip">
                       {task.session_key}
                     </code>
                   </td>
-                  <td className="px-4 py-2">
+                  <td>
                     <PriorityBadge priority={task.priority} />
                   </td>
-                  <td className="px-4 py-2 text-sm text-muted-foreground max-w-xs truncate">
+                  <td className="max-w-xs truncate text-sm leading-6 text-muted-foreground">
                     {task.message_preview ?? "-"}
                   </td>
-                  <td className="px-4 py-2 text-sm text-muted-foreground whitespace-nowrap">
+                  <td className="whitespace-nowrap text-sm text-muted-foreground">
                     {formatRelativeTime(task.submitted_at ?? task.created_at ?? "")}
                   </td>
                 </tr>
@@ -428,9 +409,9 @@ function HistorySection() {
   return (
     <div className="space-y-4">
       {/* Filter bar */}
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="filter-panel flex flex-wrap items-center gap-3">
         <Select value={kindFilter} onValueChange={setKindFilter}>
-          <SelectTrigger className="w-[160px]">
+          <SelectTrigger className="w-[170px] bg-background/80">
             <SelectValue placeholder="Kind" />
           </SelectTrigger>
           <SelectContent>
@@ -442,7 +423,7 @@ function HistorySection() {
         </Select>
 
         <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-[160px]">
+          <SelectTrigger className="w-[180px] bg-background/80">
             <SelectValue placeholder="Status" />
           </SelectTrigger>
           <SelectContent>
@@ -457,7 +438,7 @@ function HistorySection() {
 
       {/* Table */}
       {historyQuery.isLoading ? (
-        <Card>
+        <Card className="data-panel">
           <CardContent className="p-6 space-y-3">
             {Array.from({ length: 5 }).map((_, i) => (
               <Skeleton key={i} className="h-8 w-full" />
@@ -465,74 +446,58 @@ function HistorySection() {
           </CardContent>
         </Card>
       ) : !historyQuery.data?.length ? (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-10 text-muted-foreground">
+        <Card className="empty-state-card">
+          <CardContent className="flex flex-col items-center justify-center py-0 text-muted-foreground">
             <History className="h-10 w-10 mb-3 opacity-30" />
-            <p className="text-sm">No history records found.</p>
+            <p className="text-base">No history records found.</p>
           </CardContent>
         </Card>
       ) : (
-        <Card>
+        <Card className="data-table-card">
           <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              <table className="w-full">
+            <div className="data-table-wrap">
+              <table className="data-table">
                 <thead>
-                  <tr className="border-b bg-muted/50">
-                    <th className="px-4 py-2 text-left text-sm font-medium text-muted-foreground">
-                      Kind
-                    </th>
-                    <th className="px-4 py-2 text-left text-sm font-medium text-muted-foreground">
-                      Session
-                    </th>
-                    <th className="px-4 py-2 text-left text-sm font-medium text-muted-foreground">
-                      Priority
-                    </th>
-                    <th className="px-4 py-2 text-left text-sm font-medium text-muted-foreground">
-                      Status
-                    </th>
-                    <th className="px-4 py-2 text-left text-sm font-medium text-muted-foreground">
-                      Duration
-                    </th>
-                    <th className="px-4 py-2 text-left text-sm font-medium text-muted-foreground">
-                      Iterations
-                    </th>
-                    <th className="px-4 py-2 text-left text-sm font-medium text-muted-foreground">
-                      Tool Calls
-                    </th>
-                    <th className="px-4 py-2 text-left text-sm font-medium text-muted-foreground">
-                      Time
-                    </th>
+                  <tr>
+                    <th>Kind</th>
+                    <th>Session</th>
+                    <th>Priority</th>
+                    <th>Status</th>
+                    <th>Duration</th>
+                    <th>Iterations</th>
+                    <th>Tool Calls</th>
+                    <th>Time</th>
                   </tr>
                 </thead>
                 <tbody>
                   {historyQuery.data.map((record: TaskRecord) => (
-                    <tr key={record.id} className="border-b last:border-0">
-                      <td className="px-4 py-2">
+                    <tr key={record.id}>
+                      <td>
                         <KindBadge kind={record.kind} />
                       </td>
-                      <td className="px-4 py-2 text-sm">
-                        <code className="bg-muted px-1.5 py-0.5 rounded text-xs">
+                      <td className="text-sm">
+                        <code className="code-chip">
                           {record.session_key}
                         </code>
                       </td>
-                      <td className="px-4 py-2">
+                      <td>
                         <PriorityBadge priority={record.priority} />
                       </td>
-                      <td className="px-4 py-2">
+                      <td>
                         <TaskStatusBadge status={record.status} />
                       </td>
-                      <td className="px-4 py-2 text-sm text-muted-foreground whitespace-nowrap">
+                      <td className="whitespace-nowrap text-sm text-muted-foreground">
                         {record.duration_ms != null
                           ? formatDuration(record.duration_ms)
                           : "-"}
                       </td>
-                      <td className="px-4 py-2 text-sm text-muted-foreground">
+                      <td className="text-sm text-muted-foreground">
                         {record.iterations ?? "-"}
                       </td>
-                      <td className="px-4 py-2 text-sm text-muted-foreground">
+                      <td className="text-sm text-muted-foreground">
                         {record.tool_calls ?? "-"}
                       </td>
-                      <td className="px-4 py-2 text-sm text-muted-foreground whitespace-nowrap">
+                      <td className="whitespace-nowrap text-sm text-muted-foreground">
                         {formatRelativeTime(record.submitted_at)}
                       </td>
                     </tr>
@@ -550,6 +515,7 @@ function HistorySection() {
           <Button
             variant="outline"
             size="sm"
+            className="rounded-xl"
             onClick={() => setLimit((prev) => prev + 50)}
           >
             Load more
@@ -586,12 +552,12 @@ export default function AgentDispatcher() {
   return (
     <div className="space-y-8">
       {/* Header */}
-      <div>
-        <div className="flex items-center gap-2">
+      <div className="app-surface rounded-2xl border border-border/60 p-5 md:p-6">
+        <div className="flex flex-wrap items-center gap-2">
           <Activity className="h-5 w-5 text-muted-foreground" />
           <h1 className="text-2xl font-bold">Agent Dispatcher</h1>
           {stats && (
-            <span className="text-sm text-muted-foreground ml-2">
+            <span className="ml-2 rounded-full border border-border/60 bg-background/60 px-2.5 py-1 text-sm text-muted-foreground">
               Uptime: {formatUptime(stats.uptime_seconds)}
             </span>
           )}
@@ -599,7 +565,7 @@ export default function AgentDispatcher() {
             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground ml-2" />
           )}
         </div>
-        <p className="text-muted-foreground mt-1">
+        <p className="mt-2 text-muted-foreground">
           Centralized agent task queue with priority scheduling and session-parallel execution.
         </p>
       </div>
@@ -668,7 +634,7 @@ export default function AgentDispatcher() {
         )}
       </div>
 
-      <Separator />
+      <Separator className="opacity-60" />
 
       {/* Running Tasks */}
       <div className="space-y-4">
@@ -682,7 +648,7 @@ export default function AgentDispatcher() {
           )}
         </div>
         {statusQuery.isLoading ? (
-          <Card>
+          <Card className="app-surface border-border/60">
             <CardContent className="p-6 space-y-3">
               {Array.from({ length: 2 }).map((_, i) => (
                 <Skeleton key={i} className="h-10 w-full" />
@@ -698,7 +664,7 @@ export default function AgentDispatcher() {
         ) : null}
       </div>
 
-      <Separator />
+      <Separator className="opacity-60" />
 
       {/* Queue */}
       <div className="space-y-4">
@@ -712,7 +678,7 @@ export default function AgentDispatcher() {
           )}
         </div>
         {statusQuery.isLoading ? (
-          <Card>
+          <Card className="app-surface border-border/60">
             <CardContent className="p-6 space-y-3">
               {Array.from({ length: 2 }).map((_, i) => (
                 <Skeleton key={i} className="h-10 w-full" />
@@ -724,7 +690,7 @@ export default function AgentDispatcher() {
         ) : null}
       </div>
 
-      <Separator />
+      <Separator className="opacity-60" />
 
       {/* History */}
       <div className="space-y-4">

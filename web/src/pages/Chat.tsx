@@ -215,14 +215,14 @@ function SessionList({
   return (
     <div
       className={cn(
-        "flex flex-col border-r bg-card transition-all duration-200",
+        "app-surface flex flex-col border-r border-border/70 transition-all duration-200",
         collapsed ? "w-12" : "w-64",
       )}
     >
       {/* Header */}
       <div
         className={cn(
-          "flex items-center border-b",
+          "flex items-center border-b border-border/70 bg-background/40",
           collapsed ? "justify-center p-2" : "justify-between px-3 py-2",
         )}
       >
@@ -232,7 +232,7 @@ function SessionList({
         <Button
           variant="ghost"
           size="icon"
-          className="h-7 w-7 shrink-0"
+          className="h-7 w-7 shrink-0 rounded-lg border border-transparent hover:border-border/70 hover:bg-background/70"
           onClick={onToggleCollapse}
           title={collapsed ? "Expand panel" : "Collapse panel"}
         >
@@ -245,11 +245,14 @@ function SessionList({
       </div>
 
       {/* New chat button */}
-      <div className={cn("border-b", collapsed ? "p-1" : "p-2")}>
+      <div className={cn("border-b border-border/70", collapsed ? "p-1" : "p-2")}>
         <Button
           variant="outline"
           size={collapsed ? "icon" : "sm"}
-          className={cn("shrink-0", collapsed ? "mx-auto h-8 w-8" : "w-full")}
+          className={cn(
+            "shrink-0 border-border/70 bg-background/70 hover:bg-background",
+            collapsed ? "mx-auto h-8 w-8" : "w-full justify-start rounded-xl"
+          )}
           onClick={onCreate}
           title="New conversation"
         >
@@ -285,13 +288,13 @@ function SessionList({
                 type="button"
                 title={collapsed ? (s.title ?? s.key) : undefined}
                 className={cn(
-                  "group relative flex w-full items-center rounded-md text-left text-sm transition-colors",
+                  "group relative flex w-full items-center rounded-xl text-left text-sm transition-all",
                   collapsed
                     ? "justify-center p-2"
                     : "gap-2 px-2.5 py-2",
                   activeKey === s.key
-                    ? "bg-accent text-accent-foreground"
-                    : "text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground",
+                    ? "bg-primary/10 text-foreground ring-1 ring-primary/15"
+                    : "text-muted-foreground hover:bg-background/70 hover:text-foreground hover:ring-1 hover:ring-border/60",
                 )}
                 onClick={() => onSelect(s.key)}
               >
@@ -313,7 +316,7 @@ function SessionList({
                     </span>
                     <button
                       type="button"
-                      className="absolute right-1 top-1 hidden rounded p-0.5 text-muted-foreground hover:text-destructive group-hover:block"
+                      className="absolute right-1 top-1 hidden rounded-md p-1 text-muted-foreground hover:bg-background/80 hover:text-destructive group-hover:block"
                       onClick={(e) => {
                         e.stopPropagation();
                         onDelete(s.key);
@@ -366,7 +369,7 @@ function MessageBubble({ msg }: { msg: ChatMessageData }) {
 
   if (isSystem) {
     return (
-      <div className="mx-auto max-w-md rounded-md bg-muted/50 px-4 py-2 text-center text-xs text-muted-foreground italic">
+      <div className="mx-auto max-w-md rounded-full border border-border/70 bg-background/80 px-4 py-2 text-center text-xs text-muted-foreground italic shadow-sm">
         {text}
       </div>
     );
@@ -379,10 +382,10 @@ function MessageBubble({ msg }: { msg: ChatMessageData }) {
       {/* Avatar */}
       <div
         className={cn(
-          "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-medium",
+          "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-xs font-medium shadow-sm ring-1",
           isUser
-            ? "bg-primary text-primary-foreground"
-            : "bg-muted text-muted-foreground",
+            ? "bg-primary text-primary-foreground ring-primary/20"
+            : "bg-background text-muted-foreground ring-border/70",
         )}
       >
         {isUser ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
@@ -391,10 +394,10 @@ function MessageBubble({ msg }: { msg: ChatMessageData }) {
       {/* Content */}
       <div
         className={cn(
-          "max-w-[75%] rounded-xl px-4 py-2.5",
+          "max-w-[80%] rounded-2xl border px-4 py-2.5 shadow-sm",
           isUser
-            ? "bg-primary text-primary-foreground"
-            : "bg-muted text-foreground",
+            ? "border-primary/20 bg-primary text-primary-foreground"
+            : "border-border/70 bg-card/90 text-foreground",
         )}
       >
         {isMultimodal ? (
@@ -434,7 +437,7 @@ function MessageBubble({ msg }: { msg: ChatMessageData }) {
         <p
           className={cn(
             "mt-1 text-[10px]",
-            isUser ? "text-primary-foreground/60" : "text-muted-foreground",
+            isUser ? "text-primary-foreground/70" : "text-muted-foreground",
           )}
         >
           {formatTime(msg.created_at)}
@@ -478,9 +481,9 @@ function ModelListPicker({
   const others = filtered.filter((m) => !m.is_favorite);
 
   return (
-    <div className="flex flex-col rounded-md border border-input">
+    <div className="overflow-hidden rounded-xl border border-input bg-card/70 shadow-sm">
       {/* Search */}
-      <div className="flex items-center gap-2 border-b px-3 py-2">
+      <div className="flex items-center gap-2 border-b border-border/70 bg-background/40 px-3 py-2">
         <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
         <input
           type="text"
@@ -569,8 +572,8 @@ function ModelRow({
   return (
     <div
       className={cn(
-        "group flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm transition-colors hover:bg-accent/50",
-        isSelected && "bg-accent text-accent-foreground",
+        "group flex cursor-pointer items-center gap-2 px-3 py-2 text-sm transition-colors hover:bg-background/60",
+        isSelected && "bg-primary/8 text-foreground",
       )}
     >
       <button
@@ -843,10 +846,10 @@ function ChangeModelDialog({
 function StreamingBubble({ stream }: { stream: StreamState }) {
   return (
     <div className="flex gap-3">
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-border/70 bg-background text-muted-foreground shadow-sm">
         <Bot className="h-4 w-4" />
       </div>
-      <div className="max-w-[75%] rounded-xl bg-muted px-4 py-2.5 text-foreground">
+      <div className="max-w-[80%] rounded-2xl border border-border/70 bg-card/90 px-4 py-2.5 text-foreground shadow-sm">
         {/* Tool call indicators */}
         {stream.activeTools.length > 0 && (
           <div className="mb-2 space-y-1">
@@ -1152,9 +1155,9 @@ function ChatThread({
   const isBusy = stream.isStreaming;
 
   return (
-    <div className="flex flex-1 flex-col">
+    <div className="flex min-w-0 flex-1 flex-col">
       {/* Thread header */}
-      <div className="flex items-center justify-between border-b px-4 py-2.5">
+      <div className="flex items-center justify-between border-b border-border/70 bg-background/50 px-4 py-3 backdrop-blur">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <p className="truncate text-sm font-semibold">
@@ -1168,7 +1171,7 @@ function ChatThread({
             >
               <Badge
                 variant="secondary"
-                className="cursor-pointer gap-1 hover:bg-secondary/60"
+                className="cursor-pointer gap-1 border border-border/60 bg-background/80 hover:bg-background"
               >
                 {modelDisplay}
                 <ChevronDown className="h-3 w-3" />
@@ -1182,7 +1185,7 @@ function ChatThread({
         <Button
           variant="ghost"
           size="sm"
-          className="text-muted-foreground hover:text-destructive"
+          className="rounded-lg text-muted-foreground hover:bg-background/70 hover:text-destructive"
           onClick={onClearMessages}
           title="Clear messages"
         >
@@ -1199,7 +1202,7 @@ function ChatThread({
       />
 
       {/* Messages area */}
-      <div className="flex-1 overflow-y-auto px-4 py-4">
+      <div className="flex-1 overflow-y-auto bg-gradient-to-b from-background/15 to-transparent px-4 py-4">
         {messagesQuery.isLoading && (
           <div className="space-y-4">
             {Array.from({ length: 3 }).map((_, i) => (
@@ -1212,7 +1215,7 @@ function ChatThread({
         )}
 
         {!messagesQuery.isLoading && visibleMessages.length === 0 && !isBusy && (
-          <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
+          <div className="flex h-full flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-border/70 bg-card/40 text-muted-foreground">
             <Bot className="h-12 w-12 opacity-30" />
             <p className="text-sm">
               Start a conversation by typing a message below.
@@ -1244,7 +1247,7 @@ function ChatThread({
       </div>
 
       {/* Input area */}
-      <div className="border-t bg-card px-4 py-3">
+      <div className="border-t border-border/70 bg-card/80 px-4 py-3 backdrop-blur">
         {!isOnline && (
           <p className="mb-2 text-center text-xs text-destructive">
             Server is offline. Sending is disabled until the connection is restored.
@@ -1257,7 +1260,7 @@ function ChatThread({
             {imageUrls.map((url, i) => (
               <div
                 key={i}
-                className="group relative h-16 w-16 overflow-hidden rounded-lg border border-input bg-muted"
+                className="group relative h-16 w-16 overflow-hidden rounded-xl border border-input bg-muted shadow-sm"
               >
                 <img
                   src={url}
@@ -1269,7 +1272,7 @@ function ChatThread({
                 />
                 <button
                   type="button"
-                  className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground opacity-0 transition-opacity group-hover:opacity-100"
+                  className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground opacity-0 shadow-sm transition-opacity group-hover:opacity-100"
                   onClick={() => handleRemoveImageUrl(i)}
                   title="Remove image"
                 >
@@ -1282,7 +1285,7 @@ function ChatThread({
 
         {/* Image URL input */}
         {imageInputVisible && (
-          <div className="mb-2 flex items-center gap-2">
+          <div className="mb-2 flex items-center gap-2 rounded-xl border border-border/70 bg-background/45 p-2">
             <input
               type="url"
               value={imageInputValue}
@@ -1298,12 +1301,13 @@ function ChatThread({
                 }
               }}
               placeholder="Paste image URL and press Enter..."
-              className="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               autoFocus
             />
             <Button
               variant="ghost"
               size="sm"
+              className="rounded-lg"
               onClick={() => {
                 setImageInputVisible(false);
                 setImageInputValue("");
@@ -1314,11 +1318,11 @@ function ChatThread({
           </div>
         )}
 
-        <div className="flex items-end gap-2">
+        <div className="flex items-end gap-2 rounded-2xl border border-border/70 bg-background/45 p-2 shadow-sm">
           <Button
             variant="ghost"
             size="icon"
-            className="h-10 w-10 shrink-0 text-muted-foreground hover:text-foreground"
+            className="h-10 w-10 shrink-0 rounded-xl text-muted-foreground hover:bg-background/70 hover:text-foreground"
             onClick={() => setImageInputVisible((v) => !v)}
             disabled={isBusy || !isOnline}
             title="Attach image URL"
@@ -1333,11 +1337,11 @@ function ChatThread({
             placeholder={isOnline ? "Type a message... (Enter to send, Shift+Enter for newline)" : "Server offline -- sending disabled"}
             rows={1}
             disabled={isBusy || !isOnline}
-            className="flex-1 resize-none rounded-lg border border-input bg-background px-3 py-2.5 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex-1 resize-none rounded-xl border border-input bg-background px-3 py-2.5 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
           />
           <Button
             size="icon"
-            className="h-10 w-10 shrink-0"
+            className="h-10 w-10 shrink-0 rounded-xl shadow-sm"
             onClick={handleSend}
             disabled={!input.trim() || isBusy || !isOnline}
             title={isOnline ? "Send message" : "Server offline"}
@@ -1360,7 +1364,7 @@ function ChatThread({
 
 function EmptyState({ onCreate }: { onCreate: () => void }) {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-4 text-muted-foreground">
+    <div className="flex flex-1 flex-col items-center justify-center gap-4 rounded-2xl border border-dashed border-border/70 bg-card/40 text-muted-foreground">
       <Bot className="h-16 w-16 opacity-20" />
       <div className="text-center">
         <p className="text-lg font-medium text-foreground">
@@ -1370,7 +1374,7 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
           Select a conversation from the sidebar or start a new one.
         </p>
       </div>
-      <Button onClick={onCreate}>
+      <Button className="shadow-sm" onClick={onCreate}>
         <MessageSquarePlus className="h-4 w-4" />
         New Conversation
       </Button>
@@ -1464,7 +1468,7 @@ export default function Chat() {
   }, [activeKey, clearMutation]);
 
   return (
-    <div className="flex h-full">
+    <div className="app-surface flex h-full overflow-hidden rounded-2xl border border-border/70">
       {/* New chat dialog */}
       <NewChatDialog
         open={newChatDialogOpen}

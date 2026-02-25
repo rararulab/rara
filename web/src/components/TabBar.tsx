@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { useLayoutEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 
 export interface Tab {
@@ -28,26 +29,106 @@ interface TabBarProps {
   onTabChange: (key: string) => void;
 }
 
+interface IndicatorStyle {
+  left: number;
+  width: number;
+  visible: boolean;
+}
+
 export function TabBar({ tabs, activeTab, onTabChange }: TabBarProps) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const buttonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const [indicator, setIndicator] = useState<IndicatorStyle>({
+    left: 0,
+    width: 0,
+    visible: false,
+  });
+
+  useLayoutEffect(() => {
+    const updateIndicator = () => {
+      const activeEl = buttonRefs.current[activeTab];
+      const panelEl = panelRef.current;
+      if (!activeEl || !panelEl) {
+        setIndicator((prev) => ({ ...prev, visible: false }));
+        return;
+      }
+
+      setIndicator({
+        left: activeEl.offsetLeft,
+        width: activeEl.offsetWidth,
+        visible: true,
+      });
+    };
+
+    updateIndicator();
+
+    const panelEl = panelRef.current;
+    const resizeObserver =
+      typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(() => updateIndicator())
+        : null;
+
+    if (panelEl && resizeObserver) resizeObserver.observe(panelEl);
+    Object.values(buttonRefs.current).forEach((el) => {
+      if (el && resizeObserver) resizeObserver.observe(el);
+    });
+
+    window.addEventListener("resize", updateIndicator);
+    return () => {
+      window.removeEventListener("resize", updateIndicator);
+      resizeObserver?.disconnect();
+    };
+  }, [activeTab, tabs]);
+
   return (
-    <div className="flex items-center gap-1 border-b bg-card px-4">
-      {tabs.map((tab) => (
-        <button
-          key={tab.key}
-          type="button"
-          onClick={() => onTabChange(tab.key)}
+    <div className="sticky top-0 z-10 overflow-x-auto px-2 py-2 md:px-3">
+      <div
+        ref={panelRef}
+        className="data-panel relative inline-flex min-w-max items-center gap-1.5 p-1"
+      >
+        <div
+          aria-hidden="true"
           className={cn(
-            "flex items-center gap-2 px-3 py-2.5 text-sm font-medium transition-colors",
-            "border-b-2 -mb-px",
-            activeTab === tab.key
-              ? "border-primary text-foreground"
-              : "border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground/50",
+            "pointer-events-none absolute top-1 bottom-1 rounded-xl bg-background shadow-sm ring-1 ring-border/70 transition-[left,width,opacity,transform] duration-250 ease-out",
+            indicator.visible ? "opacity-100" : "opacity-0"
           )}
-        >
-          {tab.icon}
-          {tab.label}
-        </button>
-      ))}
+          style={{
+            left: indicator.left,
+            width: indicator.width,
+            transform: `translateZ(0) scale(${indicator.visible ? 1 : 0.98})`,
+          }}
+        />
+        {tabs.map((tab) => (
+          <button
+            key={tab.key}
+            ref={(el) => {
+              buttonRefs.current[tab.key] = el;
+            }}
+            type="button"
+            aria-pressed={activeTab === tab.key}
+            onClick={() => onTabChange(tab.key)}
+            className={cn(
+              "group relative z-10 flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-all",
+              "focus-visible:ring-2 focus-visible:ring-ring/50",
+              activeTab === tab.key
+                ? "text-foreground"
+                : "text-muted-foreground hover:-translate-y-0.5 hover:bg-background/70 hover:text-foreground hover:shadow-sm",
+            )}
+          >
+            <span
+              className={cn(
+                "opacity-80 transition-transform",
+                activeTab === tab.key
+                  ? "opacity-100 text-primary"
+                  : "group-hover:scale-105",
+              )}
+            >
+              {tab.icon}
+            </span>
+            {tab.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

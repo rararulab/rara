@@ -18,54 +18,168 @@
 @plugin "@tailwindcss/typography";
 
 @theme {
-  --color-background: oklch(1 0 0);
-  --color-foreground: oklch(0.145 0 0);
-  --color-card: oklch(1 0 0);
-  --color-card-foreground: oklch(0.145 0 0);
-  --color-primary: oklch(0.205 0 0);
-  --color-primary-foreground: oklch(0.985 0 0);
-  --color-secondary: oklch(0.965 0 0);
-  --color-secondary-foreground: oklch(0.205 0 0);
-  --color-muted: oklch(0.965 0 0);
-  --color-muted-foreground: oklch(0.556 0 0);
-  --color-accent: oklch(0.965 0 0);
-  --color-accent-foreground: oklch(0.205 0 0);
+  --color-background: oklch(0.987 0.008 8);
+  --color-foreground: oklch(0.23 0.025 345);
+  --color-card: oklch(0.995 0.006 10);
+  --color-card-foreground: oklch(0.23 0.025 345);
+  --color-primary: oklch(0.69 0.16 355);
+  --color-primary-foreground: oklch(0.99 0.003 20);
+  --color-secondary: oklch(0.968 0.014 6);
+  --color-secondary-foreground: oklch(0.31 0.03 345);
+  --color-muted: oklch(0.962 0.012 6);
+  --color-muted-foreground: oklch(0.53 0.03 345);
+  --color-accent: oklch(0.952 0.03 352);
+  --color-accent-foreground: oklch(0.34 0.07 352);
   --color-destructive: oklch(0.577 0.245 27.325);
   --color-destructive-foreground: oklch(0.985 0 0);
-  --color-border: oklch(0.922 0 0);
-  --color-input: oklch(0.922 0 0);
-  --color-ring: oklch(0.708 0 0);
-  --radius-sm: 0.25rem;
-  --radius-md: 0.375rem;
-  --radius-lg: 0.5rem;
-  --radius-xl: 0.75rem;
+  --color-border: oklch(0.9 0.015 355);
+  --color-input: oklch(0.9 0.015 355);
+  --color-ring: oklch(0.69 0.14 355);
+  --radius-sm: 0.35rem;
+  --radius-md: 0.55rem;
+  --radius-lg: 0.9rem;
+  --radius-xl: 1.1rem;
 }
 
 .dark {
-  --color-background: oklch(0.145 0 0);
-  --color-foreground: oklch(0.985 0 0);
-  --color-card: oklch(0.205 0 0);
-  --color-card-foreground: oklch(0.985 0 0);
-  --color-primary: oklch(0.985 0 0);
-  --color-primary-foreground: oklch(0.205 0 0);
-  --color-secondary: oklch(0.269 0 0);
-  --color-secondary-foreground: oklch(0.985 0 0);
-  --color-muted: oklch(0.269 0 0);
-  --color-muted-foreground: oklch(0.708 0 0);
-  --color-accent: oklch(0.269 0 0);
-  --color-accent-foreground: oklch(0.985 0 0);
-  --color-destructive: oklch(0.396 0.141 25.723);
-  --color-destructive-foreground: oklch(0.985 0 0);
-  --color-border: oklch(0.269 0 0);
-  --color-input: oklch(0.269 0 0);
-  --color-ring: oklch(0.439 0 0);
+  --color-background: oklch(0.19 0.016 338);
+  --color-foreground: oklch(0.968 0.004 20);
+  --color-card: oklch(0.23 0.02 338);
+  --color-card-foreground: oklch(0.968 0.004 20);
+  --color-primary: oklch(0.78 0.12 352);
+  --color-primary-foreground: oklch(0.22 0.03 338);
+  --color-secondary: oklch(0.27 0.02 338);
+  --color-secondary-foreground: oklch(0.95 0.005 20);
+  --color-muted: oklch(0.26 0.018 338);
+  --color-muted-foreground: oklch(0.78 0.016 340);
+  --color-accent: oklch(0.31 0.04 345);
+  --color-accent-foreground: oklch(0.96 0.005 20);
+  --color-destructive: oklch(0.58 0.19 25);
+  --color-destructive-foreground: oklch(0.985 0.004 95);
+  --color-border: oklch(0.35 0.02 340);
+  --color-input: oklch(0.35 0.02 340);
+  --color-ring: oklch(0.78 0.1 352);
 }
 
 @layer base {
   * {
     @apply border-border;
   }
+  html {
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
+    background-image:
+      radial-gradient(circle at 0% 0%, color-mix(in oklab, var(--color-primary) 14%, transparent) 0%, transparent 45%),
+      radial-gradient(circle at 100% 0%, color-mix(in oklab, var(--color-accent) 22%, transparent) 0%, transparent 48%),
+      linear-gradient(to bottom, color-mix(in oklab, var(--color-background) 92%, white), var(--color-background));
+    min-height: 100vh;
+  }
+  button,
+  a,
+  input,
+  textarea,
+  select {
+    @apply outline-none;
+  }
+  :focus-visible {
+    @apply ring-2 ring-ring/55 ring-offset-2 ring-offset-background;
+  }
+}
+
+@layer components {
+  .app-surface {
+    background: color-mix(in oklab, var(--color-card) 92%, transparent);
+    backdrop-filter: blur(14px);
+    box-shadow:
+      0 1px 0 color-mix(in oklab, var(--color-border) 65%, transparent) inset,
+      0 10px 30px rgba(15, 23, 42, 0.05);
+  }
+
+  .data-panel {
+    @apply rounded-2xl border border-border/60;
+    background: color-mix(in oklab, var(--color-card) 92%, transparent);
+    backdrop-filter: blur(14px);
+    box-shadow:
+      0 1px 0 color-mix(in oklab, var(--color-border) 65%, transparent) inset,
+      0 10px 30px rgba(15, 23, 42, 0.05);
+  }
+
+  .filter-panel {
+    @apply rounded-2xl border border-border/60 p-4;
+    background: color-mix(in oklab, var(--color-card) 92%, transparent);
+    backdrop-filter: blur(14px);
+    box-shadow:
+      0 1px 0 color-mix(in oklab, var(--color-border) 65%, transparent) inset,
+      0 10px 30px rgba(15, 23, 42, 0.05);
+  }
+
+  .empty-state-card {
+    @apply flex min-h-[132px] flex-col items-center justify-center rounded-2xl border border-border/60 px-6 py-12 text-center text-muted-foreground;
+    background: color-mix(in oklab, var(--color-card) 92%, transparent);
+    backdrop-filter: blur(14px);
+    box-shadow:
+      0 1px 0 color-mix(in oklab, var(--color-border) 65%, transparent) inset,
+      0 10px 30px rgba(15, 23, 42, 0.05);
+  }
+
+  .data-table-card {
+    @apply overflow-hidden rounded-2xl border border-border/60;
+    background: color-mix(in oklab, var(--color-card) 92%, transparent);
+    backdrop-filter: blur(14px);
+    box-shadow:
+      0 1px 0 color-mix(in oklab, var(--color-border) 65%, transparent) inset,
+      0 10px 30px rgba(15, 23, 42, 0.05);
+  }
+
+  .data-table-wrap {
+    @apply overflow-x-auto;
+  }
+
+  .data-table {
+    @apply w-full text-sm;
+  }
+
+  .data-table thead tr {
+    @apply border-b border-border/60 bg-background/35;
+  }
+
+  .data-table th {
+    @apply px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground;
+  }
+
+  .data-table td {
+    @apply px-4 py-3;
+  }
+
+  .data-table tbody tr {
+    @apply border-b border-border/50 transition-colors last:border-b-0;
+  }
+
+  .data-table tbody tr:hover {
+    @apply bg-background/45;
+  }
+
+  .code-chip {
+    @apply rounded-md border border-border/60 bg-muted/50 px-2 py-1 text-xs;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .theme-animating,
+  .theme-animating * {
+    transition-property: color, background-color, border-color, box-shadow;
+    transition-duration: 220ms;
+    transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-duration: 220ms;
+    animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
   }
 }

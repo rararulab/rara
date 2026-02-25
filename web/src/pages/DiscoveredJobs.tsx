@@ -42,6 +42,8 @@ import {
   ChevronLeft,
   ChevronRight,
   ExternalLink,
+  Filter,
+  Sparkles,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -88,11 +90,11 @@ function ScoreBadge({ score }: { score: number | null }) {
 
   let className: string;
   if (score >= 70) {
-    className = "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
+    className = "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200";
   } else if (score >= 40) {
     className = "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200";
   } else {
-    className = "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
+    className = "bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200";
   }
 
   return (
@@ -110,7 +112,7 @@ function ActionBadge({ action }: { action: PipelineDiscoveredJob["action"] }) {
   switch (action) {
     case "Applied":
       return (
-        <Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 border-transparent text-xs">
+        <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200 border-transparent text-xs">
           Applied
         </Badge>
       );
@@ -118,7 +120,7 @@ function ActionBadge({ action }: { action: PipelineDiscoveredJob["action"] }) {
       return <Badge variant="secondary" className="text-xs">Notified</Badge>;
     case "Skipped":
       return (
-        <Badge className="bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300 border-transparent text-xs">
+        <Badge className="bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 border-transparent text-xs">
           Skipped
         </Badge>
       );
@@ -145,9 +147,9 @@ function StatCards({ stats }: { stats: DiscoveredJobsStats }) {
   ];
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-6">
       {cards.map((c) => (
-        <Card key={c.label} className="py-0">
+        <Card key={c.label} className="app-surface border-border/60 py-0">
           <CardHeader className="px-4 pt-3 pb-1">
             <CardTitle className="text-xs font-medium text-muted-foreground">
               {c.label}
@@ -205,7 +207,8 @@ function ActionDropdown({
 
 function TableSkeleton() {
   return (
-    <div className="space-y-2">
+    <div className="app-surface rounded-2xl border border-border/60 p-4">
+      <div className="space-y-2">
       {Array.from({ length: 6 }).map((_, i) => (
         <div key={i} className="flex gap-4 items-center">
           <Skeleton className="h-5 flex-1" />
@@ -214,6 +217,7 @@ function TableSkeleton() {
           <Skeleton className="h-5 w-20" />
         </div>
       ))}
+      </div>
     </div>
   );
 }
@@ -262,20 +266,37 @@ export default function DiscoveredJobs() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold">Discovered Jobs</h1>
-        <p className="text-muted-foreground mt-1">
-          Jobs found across all pipeline runs
-        </p>
-      </div>
+      <Card className="app-surface border-border/60">
+        <CardContent className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+          <div>
+            <div className="mb-2 inline-flex items-center gap-1 rounded-full border border-primary/15 bg-primary/8 px-3 py-1 text-xs font-medium text-primary">
+              <Sparkles className="h-3.5 w-3.5" />
+              Pipeline Discovery
+            </div>
+            <h1 className="text-2xl font-bold tracking-tight">Discovered Jobs</h1>
+            <p className="mt-1 text-muted-foreground">
+              Jobs found across all pipeline runs
+            </p>
+          </div>
+          <div className="rounded-xl border border-border/60 bg-background/60 px-3 py-2 text-sm">
+            <span className="text-muted-foreground">Total results:</span>{" "}
+            <span className="font-semibold">{total}</span>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Stats */}
       {stats && <StatCards stats={stats} />}
 
-      <Separator />
+      <Separator className="opacity-60" />
 
       {/* Filters */}
-      <div className="flex items-center gap-3">
+      <div className="filter-panel flex flex-col gap-3 md:flex-row md:items-center">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Filter className="h-4 w-4" />
+          <span>Filters</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-3 md:ml-2">
         <div className="flex items-center gap-2">
           <span className="text-sm text-muted-foreground">Action:</span>
           <Select
@@ -285,7 +306,7 @@ export default function DiscoveredJobs() {
               setPage(0);
             }}
           >
-            <SelectTrigger className="w-[140px]">
+            <SelectTrigger className="w-[160px] bg-background/80">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -306,7 +327,7 @@ export default function DiscoveredJobs() {
               setPage(0);
             }}
           >
-            <SelectTrigger className="w-[110px]">
+            <SelectTrigger className="w-[120px] bg-background/80">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -318,7 +339,8 @@ export default function DiscoveredJobs() {
             </SelectContent>
           </Select>
         </div>
-        <span className="text-sm text-muted-foreground ml-auto">
+        </div>
+        <span className="text-sm text-muted-foreground md:ml-auto">
           {total} result{total !== 1 ? "s" : ""}
         </span>
       </div>
@@ -327,51 +349,49 @@ export default function DiscoveredJobs() {
       {isLoading && <TableSkeleton />}
 
       {isError && (
-        <div className="rounded-lg border border-destructive/50 p-4 text-sm text-destructive">
+        <div className="rounded-2xl border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
           Failed to load discovered jobs: {(error as Error).message}
         </div>
       )}
 
       {!isLoading && !isError && items.length === 0 && (
-        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed p-12 text-center">
+        <div className="empty-state-card border-dashed">
           <p className="text-lg font-medium">No discovered jobs yet</p>
-          <p className="text-sm text-muted-foreground mt-1">
+          <p className="mt-1 text-sm text-muted-foreground">
             Run the pipeline to discover jobs.
           </p>
         </div>
       )}
 
       {items.length > 0 && (
-        <div className="overflow-x-auto rounded border">
-          <table className="w-full text-sm">
+        <div className="data-table-card">
+          <div className="data-table-wrap">
+          <table className="data-table">
             <thead>
-              <tr className="border-b bg-muted/50">
-                <th className="px-3 py-2 text-left font-medium">Title / Company</th>
-                <th className="px-3 py-2 text-left font-medium hidden md:table-cell">
+              <tr>
+                <th className="!px-3">Title / Company</th>
+                <th className="hidden !px-3 md:table-cell">
                   Location
                 </th>
-                <th className="px-3 py-2 text-center font-medium">Score</th>
-                <th className="px-3 py-2 text-center font-medium">Action</th>
-                <th className="px-3 py-2 text-left font-medium hidden sm:table-cell">
+                <th className="!px-3 text-center">Score</th>
+                <th className="!px-3 text-center">Action</th>
+                <th className="hidden !px-3 sm:table-cell">
                   Date
                 </th>
-                <th className="px-3 py-2 text-center font-medium">Update</th>
+                <th className="!px-3 text-center">Update</th>
               </tr>
             </thead>
             <tbody>
               {items.map((job) => (
-                <tr
-                  key={job.id}
-                  className="border-b last:border-b-0 hover:bg-muted/30"
-                >
-                  <td className="px-3 py-2 max-w-[280px]">
+                <tr key={job.id}>
+                  <td className="!px-3 max-w-[280px]">
                     <div className="truncate font-medium">
                       {job.url ? (
                         <a
                           href={job.url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="hover:underline inline-flex items-center gap-1"
+                          className="inline-flex items-center gap-1 rounded-md px-0.5 hover:underline"
                         >
                           {job.title}
                           <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
@@ -386,19 +406,19 @@ export default function DiscoveredJobs() {
                       </div>
                     )}
                   </td>
-                  <td className="px-3 py-2 text-muted-foreground hidden md:table-cell">
+                  <td className="hidden !px-3 text-muted-foreground md:table-cell">
                     {job.location ?? "--"}
                   </td>
-                  <td className="px-3 py-2 text-center">
+                  <td className="!px-3 text-center">
                     <ScoreBadge score={job.score} />
                   </td>
-                  <td className="px-3 py-2 text-center">
+                  <td className="!px-3 text-center">
                     <ActionBadge action={job.action} />
                   </td>
-                  <td className="px-3 py-2 text-xs text-muted-foreground hidden sm:table-cell">
+                  <td className="hidden !px-3 text-xs text-muted-foreground sm:table-cell">
                     {formatDate(job.created_at)}
                   </td>
-                  <td className="px-3 py-2 text-center">
+                  <td className="!px-3 text-center">
                     <ActionDropdown
                       job={job}
                       onUpdate={(id, action) =>
@@ -411,15 +431,17 @@ export default function DiscoveredJobs() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
       {/* Pagination */}
       {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-2">
+        <div className="data-panel flex items-center justify-center gap-2 px-4 py-3">
           <Button
             variant="outline"
             size="sm"
+            className="rounded-xl"
             disabled={page === 0}
             onClick={() => setPage((p) => p - 1)}
           >
@@ -432,6 +454,7 @@ export default function DiscoveredJobs() {
           <Button
             variant="outline"
             size="sm"
+            className="rounded-xl"
             disabled={page >= totalPages - 1}
             onClick={() => setPage((p) => p + 1)}
           >

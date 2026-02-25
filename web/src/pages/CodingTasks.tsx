@@ -91,23 +91,24 @@ export default function CodingTasks() {
   });
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
+    <div className="space-y-6">
+      <div className="data-panel flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between md:p-6">
         <div>
-          <h1 className="text-2xl font-bold">Coding Tasks</h1>
-          <p className="text-muted-foreground text-sm mt-1">
+          <h1 className="text-2xl font-bold tracking-tight">Coding Tasks</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
             Dispatch and manage CLI agent tasks
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button
             variant="outline"
             size="sm"
+            className="rounded-xl"
             onClick={() => queryClient.invalidateQueries({ queryKey: ['coding-tasks'] })}
           >
             <RefreshCw className="h-4 w-4 mr-1" /> Refresh
           </Button>
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
+          <Button size="sm" className="rounded-xl" onClick={() => setCreateOpen(true)}>
             <Plus className="h-4 w-4 mr-1" /> New Task
           </Button>
         </div>
@@ -115,13 +116,13 @@ export default function CodingTasks() {
 
       {isLoading && <TaskListSkeleton />}
       {isError && (
-        <div className="border border-red-300 rounded-lg p-4 text-red-600 text-sm">
+        <div className="rounded-2xl border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
           Failed to load tasks: {(error as Error)?.message ?? 'Unknown error'}
         </div>
       )}
 
       {tasks && tasks.length === 0 && (
-        <div className="border rounded-lg p-12 text-center text-muted-foreground">
+        <div className="empty-state-card">
           <Terminal className="h-12 w-12 mx-auto mb-4 opacity-40" />
           <p className="text-lg font-medium">No coding tasks yet</p>
           <p className="text-sm mt-1">Click "New Task" to dispatch your first coding agent.</p>
@@ -129,7 +130,7 @@ export default function CodingTasks() {
       )}
 
       {tasks && tasks.length > 0 && (
-        <div className="space-y-2">
+        <div className="space-y-3">
           {tasks.map((task) => (
             <TaskRow
               key={task.id}
@@ -156,37 +157,46 @@ function TaskRow({
   onToggle: () => void;
 }) {
   return (
-    <Card>
+    <Card className="data-panel overflow-hidden">
       <div
-        className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-accent/50 transition-colors"
+        className="cursor-pointer px-4 py-4 transition-colors hover:bg-background/45"
         onClick={onToggle}
       >
-        {expanded ? (
-          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-        ) : (
-          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-        )}
-        <StatusBadge status={task.status} />
-        <Badge variant="secondary" className="font-mono text-xs">
-          {task.agent_type}
-        </Badge>
-        <span className="text-sm flex-1 truncate">{task.prompt}</span>
-        <span className="text-xs text-muted-foreground font-mono">{task.id.slice(0, 8)}</span>
-        <div className="flex items-center gap-1 text-xs text-muted-foreground">
-          <GitBranch className="h-3 w-3" />
-          <span className="font-mono">{task.branch}</span>
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4">
+          <div className="flex min-w-0 items-start gap-3">
+            {expanded ? (
+              <ChevronDown className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" />
+            ) : (
+              <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" />
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm leading-6 md:text-base">{task.prompt}</p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <StatusBadge status={task.status} />
+                <Badge variant="secondary" className="font-mono text-xs">
+                  {task.agent_type}
+                </Badge>
+                <span className="code-chip font-mono">{task.id.slice(0, 8)}</span>
+                <span className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-background/50 px-2 py-1 text-xs text-muted-foreground">
+                  <GitBranch className="h-3 w-3" />
+                  <span className="font-mono">{task.branch}</span>
+                </span>
+              </div>
+            </div>
+          </div>
+          {task.pr_url && (
+            <a
+              href={task.pr_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="self-start rounded-lg border border-border/60 bg-background/70 p-2 text-blue-500 hover:bg-background hover:text-blue-600 md:self-center"
+              title="Open PR"
+            >
+              <ExternalLink className="h-4 w-4" />
+            </a>
+          )}
         </div>
-        {task.pr_url && (
-          <a
-            href={task.pr_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            className="text-blue-500 hover:text-blue-600"
-          >
-            <ExternalLink className="h-4 w-4" />
-          </a>
-        )}
       </div>
       {expanded && <TaskDetailPanel taskId={task.id} />}
     </Card>
@@ -226,27 +236,27 @@ function TaskDetailPanel({ taskId }: { taskId: string }) {
   }
 
   return (
-    <div className="border-t px-4 py-4 space-y-4">
-      <div className="grid grid-cols-2 gap-4 text-sm">
-        <div>
+    <div className="space-y-4 border-t border-border/60 bg-background/20 px-4 py-4">
+      <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
+        <div className="rounded-lg bg-background/50 px-3 py-2">
           <span className="text-muted-foreground">Repo:</span>{' '}
           <span className="font-mono text-xs">{task.repo_url}</span>
         </div>
-        <div>
+        <div className="rounded-lg bg-background/50 px-3 py-2">
           <span className="text-muted-foreground">Tmux:</span>{' '}
-          <code className="bg-muted px-1 rounded text-xs">{task.tmux_session}</code>
+          <code className="code-chip">{task.tmux_session}</code>
         </div>
-        <div>
+        <div className="rounded-lg bg-background/50 px-3 py-2">
           <span className="text-muted-foreground">Created:</span> {formatDate(task.created_at)}
         </div>
-        <div>
+        <div className="rounded-lg bg-background/50 px-3 py-2">
           <span className="text-muted-foreground">Started:</span> {formatDate(task.started_at)}
         </div>
-        <div>
+        <div className="rounded-lg bg-background/50 px-3 py-2">
           <span className="text-muted-foreground">Completed:</span> {formatDate(task.completed_at)}
         </div>
         {task.exit_code !== null && (
-          <div>
+          <div className="rounded-lg bg-background/50 px-3 py-2">
             <span className="text-muted-foreground">Exit code:</span> {task.exit_code}
           </div>
         )}
@@ -254,13 +264,13 @@ function TaskDetailPanel({ taskId }: { taskId: string }) {
 
       <div>
         <span className="text-sm text-muted-foreground">Prompt:</span>
-        <p className="text-sm mt-1 bg-muted rounded p-2 whitespace-pre-wrap">{task.prompt}</p>
+        <p className="mt-1 whitespace-pre-wrap rounded-xl border border-border/60 bg-background/60 p-3 text-sm">{task.prompt}</p>
       </div>
 
       {task.error && (
         <div>
           <span className="text-sm text-red-500 font-medium">Error:</span>
-          <pre className="text-xs mt-1 bg-red-50 dark:bg-red-950 rounded p-2 overflow-auto max-h-40">
+          <pre className="mt-1 max-h-40 overflow-auto rounded-xl border border-destructive/20 bg-red-50 p-3 text-xs dark:bg-red-950">
             {task.error}
           </pre>
         </div>
@@ -269,27 +279,27 @@ function TaskDetailPanel({ taskId }: { taskId: string }) {
       {task.output && (
         <div>
           <span className="text-sm text-muted-foreground">Output (tail):</span>
-          <pre className="text-xs mt-1 bg-muted rounded p-2 overflow-auto max-h-60 font-mono">
+          <pre className="mt-1 max-h-60 overflow-auto rounded-xl border border-border/60 bg-background/60 p-3 font-mono text-xs">
             {task.output}
           </pre>
         </div>
       )}
 
       {task.pr_url && (
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 rounded-lg bg-background/40 px-3 py-2">
           <span className="text-sm text-muted-foreground">PR:</span>
           <a
             href={task.pr_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-sm text-blue-500 hover:underline flex items-center gap-1"
+            className="flex items-center gap-1 text-sm text-blue-500 hover:underline"
           >
             {task.pr_url} <ExternalLink className="h-3 w-3" />
           </a>
         </div>
       )}
 
-      <div className="flex gap-2 pt-2">
+      <div className="flex flex-wrap gap-2 pt-2">
         {task.status === 'Completed' && task.pr_url && (
           <Button
             size="sm"
@@ -417,9 +427,9 @@ function CreateTaskDialog({
 
 function TaskListSkeleton() {
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       {[...Array(3)].map((_, i) => (
-        <Skeleton key={i} className="h-14 w-full rounded-lg" />
+        <Skeleton key={i} className="h-[4.5rem] w-full rounded-xl" />
       ))}
     </div>
   );
