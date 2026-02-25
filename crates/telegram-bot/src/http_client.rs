@@ -14,10 +14,8 @@
 
 //! Typed HTTP client from the bot process to the main service.
 //!
-//! This client uses locally duplicated request/response models
-//! ([`DiscoveryCriteria`], [`DiscoveryJobResponse`]) so the bot crate
-//! doesn't depend on the domain-job crate (same pattern as
-//! [`ChatStreamEvent`]).
+//! Request/response structs for job discovery are duplicated locally so
+//! the bot crate doesn't depend on the domain-job crate.
 //!
 //! # Endpoints
 //!
@@ -32,33 +30,6 @@ use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
 use tokio::sync::mpsc;
 
-// Local mirrors of domain-job types -- duplicated so the bot crate doesn't
-// depend on the domain-job crate.
-
-/// Request body for `POST /api/v1/jobs/discover`.
-#[derive(Debug, Serialize)]
-struct DiscoveryCriteria {
-    pub keywords:     Vec<String>,
-    pub location:     Option<String>,
-    pub job_type:     Option<String>,
-    pub max_results:  Option<u32>,
-    pub posted_after: Option<String>,
-    #[serde(default)]
-    pub sites:        Vec<String>,
-}
-
-/// Subset of discovery response fields used by the bot's formatting logic.
-#[derive(Debug, Deserialize)]
-pub struct DiscoveryJobResponse {
-    pub title:            String,
-    pub company:          String,
-    pub location:         Option<String>,
-    pub url:              Option<String>,
-    pub salary_min:       Option<i32>,
-    pub salary_max:       Option<i32>,
-    pub salary_currency:  Option<String>,
-}
-
 /// Error model for bot -> main-service HTTP calls.
 #[derive(Debug, Snafu)]
 pub enum MainServiceHttpError {
@@ -68,11 +39,40 @@ pub enum MainServiceHttpError {
     HttpStatus { status: StatusCode, body: String },
 }
 
+// ---------------------------------------------------------------------------
+// Local mirrors of domain-job types — duplicated so the bot crate doesn't
+// depend on the domain-job crate (same pattern as ChatStreamEvent below).
+// ---------------------------------------------------------------------------
+
+/// Request body for `POST /api/v1/jobs/discover`.
+#[derive(Debug, Serialize)]
+struct DiscoveryCriteria {
+    pub keywords: Vec<String>,
+    pub location: Option<String>,
+    pub job_type: Option<String>,
+    pub max_results: Option<u32>,
+    pub posted_after: Option<String>,
+    #[serde(default)]
+    pub sites: Vec<String>,
+}
+
+/// Subset of discovery response fields used by the bot's formatting logic.
+#[derive(Debug, Deserialize)]
+pub struct DiscoveryJobResponse {
+    pub title: String,
+    pub company: String,
+    pub location: Option<String>,
+    pub url: Option<String>,
+    pub salary_min: Option<i32>,
+    pub salary_max: Option<i32>,
+    pub salary_currency: Option<String>,
+}
+
 /// Main service HTTP client used by bot runtime.
 #[derive(Clone)]
 pub struct MainServiceHttpClient {
     base_url: String,
-    client:   reqwest::Client,
+    client: reqwest::Client,
 }
 
 impl MainServiceHttpClient {
@@ -80,7 +80,7 @@ impl MainServiceHttpClient {
     pub fn new(base_url: String) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_owned(),
-            client:   reqwest::Client::new(),
+            client: reqwest::Client::new(),
         }
     }
 
@@ -377,8 +377,7 @@ impl MainServiceHttpClient {
                         Ok(event) => {
                             let is_terminal = matches!(
                                 &event,
-                                ChatStreamEvent::Done { .. }
-                                    | ChatStreamEvent::Error { .. }
+                                ChatStreamEvent::Done { .. } | ChatStreamEvent::Error { .. }
                             );
                             if tx.send(event).await.is_err() {
                                 return; // receiver dropped (caller disconnected)
@@ -528,10 +527,7 @@ impl MainServiceHttpClient {
     /// Start an existing MCP server.
     ///
     /// Maps to `POST /api/v1/mcp/servers/{name}/start`.
-    pub async fn start_mcp_server(
-        &self,
-        name: &str,
-    ) -> Result<(), MainServiceHttpError> {
+    pub async fn start_mcp_server(&self, name: &str) -> Result<(), MainServiceHttpError> {
         let url = format!("{}/api/v1/mcp/servers/{}/start", self.base_url, name);
         let resp = self.client.post(url).send().await.context(RequestSnafu)?;
 
@@ -547,10 +543,7 @@ impl MainServiceHttpClient {
     /// Remove an MCP server.
     ///
     /// Maps to `DELETE /api/v1/mcp/servers/{name}`.
-    pub async fn remove_mcp_server(
-        &self,
-        name: &str,
-    ) -> Result<(), MainServiceHttpError> {
+    pub async fn remove_mcp_server(&self, name: &str) -> Result<(), MainServiceHttpError> {
         let url = format!("{}/api/v1/mcp/servers/{}", self.base_url, name);
         let resp = self.client.delete(url).send().await.context(RequestSnafu)?;
 
@@ -566,10 +559,7 @@ impl MainServiceHttpClient {
     /// Get a single MCP server's info.
     ///
     /// Maps to `GET /api/v1/mcp/servers/{name}`.
-    pub async fn get_mcp_server(
-        &self,
-        name: &str,
-    ) -> Result<McpServerInfo, MainServiceHttpError> {
+    pub async fn get_mcp_server(&self, name: &str) -> Result<McpServerInfo, MainServiceHttpError> {
         let url = format!("{}/api/v1/mcp/servers/{}", self.base_url, name);
         let resp = self.client.get(url).send().await.context(RequestSnafu)?;
 
@@ -713,7 +703,7 @@ pub(crate) struct ChatMessageResponse {
 #[derive(Debug, Deserialize)]
 pub(crate) struct ChatMessageData {
     #[allow(dead_code)]
-    pub role:    String,
+    pub role: String,
     pub content: serde_json::Value,
 }
 
@@ -721,28 +711,28 @@ pub(crate) struct ChatMessageData {
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 pub(crate) struct SessionListItem {
-    pub key:           String,
-    pub title:         Option<String>,
+    pub key: String,
+    pub title: Option<String>,
     pub message_count: i64,
-    pub updated_at:    String,
+    pub updated_at: String,
 }
 
 /// Session detail returned by `GET /api/v1/chat/sessions/{key}`.
 #[derive(Debug, Deserialize)]
 pub(crate) struct SessionDetailResponse {
-    pub key:           String,
-    pub title:         Option<String>,
-    pub model:         Option<String>,
+    pub key: String,
+    pub title: Option<String>,
+    pub model: Option<String>,
     pub message_count: i64,
-    pub preview:       Option<String>,
-    pub created_at:    String,
-    pub updated_at:    String,
+    pub preview: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 /// MCP server info returned by `GET /api/v1/mcp/servers`.
 #[derive(Debug, Deserialize)]
 pub(crate) struct McpServerInfo {
-    pub name:   String,
+    pub name: String,
     pub status: McpServerStatus,
 }
 
@@ -802,22 +792,22 @@ pub(crate) enum ChatStreamEvent {
 /// Response from dispatching a coding task.
 #[derive(Debug, Deserialize)]
 pub(crate) struct CodingTaskResponse {
-    pub id:           String,
-    pub branch:       String,
+    pub id: String,
+    pub branch: String,
     pub tmux_session: String,
-    pub status:       String,
+    pub status: String,
 }
 
 /// Summary of a coding task from the list endpoint.
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 pub(crate) struct CodingTaskSummaryResponse {
-    pub id:         String,
-    pub status:     String,
+    pub id: String,
+    pub status: String,
     pub agent_type: String,
-    pub branch:     String,
-    pub prompt:     String,
-    pub pr_url:     Option<String>,
+    pub branch: String,
+    pub prompt: String,
+    pub pr_url: Option<String>,
 }
 
 impl ChatMessageData {

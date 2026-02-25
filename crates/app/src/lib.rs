@@ -58,7 +58,9 @@ pub struct AppConfig {
     /// Main service HTTP base URL (for telegram bot → main service calls).
     pub main_service_http_base: String,
     /// Memory backend configuration (static, not runtime settings).
-    pub memory:               MemoryConfig,
+    pub memory:                 MemoryConfig,
+    /// Langfuse observability (host, API keys).
+    pub langfuse:               LangfuseConfig,
 }
 
 impl Default for AppConfig {
@@ -72,6 +74,7 @@ impl Default for AppConfig {
             object_store,
             main_service_http_base: "http://127.0.0.1:25555".to_owned(),
             memory: MemoryConfig::default(),
+            langfuse: LangfuseConfig::default(),
         }
     }
 }
@@ -94,6 +97,24 @@ impl Default for MemoryConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct LangfuseConfig {
+    pub host: String,
+    pub public_key: Option<String>,
+    pub secret_key: Option<String>,
+}
+
+impl Default for LangfuseConfig {
+    fn default() -> Self {
+        Self {
+            host: "http://localhost:3000".to_owned(),
+            public_key: None,
+            secret_key: None,
+        }
+    }
+}
+
 impl AppConfig {
     /// Load config from Consul KV or environment variables.
     ///
@@ -105,18 +126,24 @@ impl AppConfig {
     ///   1. `RARA__`-prefixed environment variables (highest priority)
     ///   2. Code defaults
     pub async fn new() -> Result<Self, config::ConfigError> {
-        let builder = if let Some(consul_cfg) = rara_consul::ConsulConfig::from_env() {
-            tracing::info!(addr = %consul_cfg.addr, "Loading configuration from Consul KV");
+        let consul_http_addr = base::env::var("CONSUL_HTTP_ADDR")
+            .map_err(|e| config::ConfigError::Message(e.to_string()))?;
+
+        let builder = if let Some(addr) = consul_http_addr {
+            tracing::info!(%addr, "Loading configuration from Consul KV");
+            let consul_config = rara_consul::Config {
+                address: addr,
+                ..Default::default()
+            };
             config::ConfigBuilder::<config::builder::AsyncState>::default()
-                .add_async_source(rara_consul::ConsulSource::new(consul_cfg))
+                .add_async_source(rara_consul::ConsulSource::new(consul_config))
         } else {
             tracing::info!("Consul not configured, loading from environment variables");
-            config::ConfigBuilder::<config::builder::AsyncState>::default()
-                .add_source(
-                    config::Environment::with_prefix("RARA")
-                        .separator("__")
-                        .try_parsing(true),
-                )
+            config::ConfigBuilder::<config::builder::AsyncState>::default().add_source(
+                config::Environment::with_prefix("RARA")
+                    .separator("__")
+                    .try_parsing(true),
+            )
         };
 
         let cfg = builder.build().await?;

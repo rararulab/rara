@@ -66,23 +66,29 @@ Consul KV paths (after stripping the prefix) are converted to nested config keys
 
 ```bash
 # Required — presence of CONSUL_HTTP_ADDR activates Consul loading
-CONSUL_HTTP_ADDR=http://rara-infra-consul-server:8500
+# In-cluster (Consul chart uses global.name, not release name):
+CONSUL_HTTP_ADDR=http://consul-server:8500
+# From host machine (via port-forward or Traefik):
+# CONSUL_HTTP_ADDR=https://consul.rara.local
 
-# Optional
-CONSUL_TOKEN=your-acl-token        # only if Consul ACLs are enabled
-CONSUL_KV_PREFIX=rara/config/      # default prefix
 ```
 
 3. **Seed config** into Consul KV (the `consul-kv-seed` Helm hook does this automatically):
 
 ```
-rara/config/database/database_url = postgres://postgres:pass@db:5432/rara
-rara/config/object_store/endpoint = http://minio:9000
-rara/config/object_store/access_key_id = admin
-rara/config/object_store/secret_access_key = supersecret
-rara/config/object_store/bucket = rara
-rara/config/memory/chroma_url = http://chromadb:8000
+rara/config/database/database_url          = postgres://postgres:postgres@rara-infra-postgresql:5432/rara
+rara/config/object_store/endpoint          = http://rara-infra-minio:9000
+rara/config/object_store/access_key_id     = minioadmin
+rara/config/object_store/secret_access_key = minioadmin
+rara/config/object_store/bucket            = rara
+rara/config/memory/chroma_url              = http://rara-infra-chromadb:8000
+rara/config/crawl4ai/base_url              = http://rara-infra-crawl4ai:11235
+rara/config/langfuse/host                  = http://rara-infra-langfuse-web:3000
+rara/config/langfuse/public_key            = (from consulSeed.langfuse.publicKey)
+rara/config/langfuse/secret_key            = (from consulSeed.langfuse.secretKey)
 ```
+
+All service URLs default to cluster-internal DNS. When the rara app runs outside the cluster, override them in `values.yaml` via `consulSeed.overrides.*`. See [Kubernetes deployment](deployment/kubernetes.md#url-override-out-of-cluster-app) for details.
 
 #### Fail-Open Behavior
 
@@ -92,7 +98,15 @@ rara/config/memory/chroma_url = http://chromadb:8000
 
 #### Kubernetes Deployment
 
-In Kubernetes, the `consul-kv-seed` Helm post-install/post-upgrade hook automatically writes infrastructure credentials (database URL, MinIO keys, etc.) to Consul KV. The rara app Pod only needs `CONSUL_HTTP_ADDR` set as an environment variable.
+In Kubernetes, the `consul-kv-seed` Helm post-install/post-upgrade hook automatically writes all infrastructure connection info to Consul KV. The rara app only needs `CONSUL_HTTP_ADDR` set as an environment variable to discover every dependency.
+
+Manual seed/verify:
+
+```bash
+cd deploy/helm
+just seed-consul   # seed all keys from Helm values
+just consul-keys   # list current keys
+```
 
 ### All Config Keys
 
@@ -134,6 +148,28 @@ In Kubernetes, the `consul-kv-seed` Helm post-install/post-upgrade hook automati
 | `bucket` | `RARA__OBJECT_STORE__BUCKET` | `rara` | Bucket name |
 | `access_key` | `RARA__OBJECT_STORE__ACCESS_KEY` | `minioadmin` | Access key ID |
 | `secret_key` | `RARA__OBJECT_STORE__SECRET_KEY` | `minioadmin` | Secret access key |
+
+#### Memory / ChromaDB (`memory.*`)
+
+| Key | Env Var | Default | Description |
+|-----|---------|---------|-------------|
+| `chroma_url` | `RARA__MEMORY__CHROMA_URL` | `http://localhost:8000` | ChromaDB base URL |
+| `chroma_collection` | `RARA__MEMORY__CHROMA_COLLECTION` | `job-memory` | ChromaDB collection name |
+| `chroma_api_key` | `RARA__MEMORY__CHROMA_API_KEY` | — | ChromaDB API key (optional) |
+
+#### Crawl4AI (`crawl4ai.*`)
+
+| Key | Env Var | Default | Description |
+|-----|---------|---------|-------------|
+| `base_url` | `RARA__CRAWL4AI__BASE_URL` | `http://localhost:11235` | Crawl4AI service URL |
+
+#### Langfuse (`langfuse.*`)
+
+| Key | Env Var | Default | Description |
+|-----|---------|---------|-------------|
+| `host` | `RARA__LANGFUSE__HOST` | `http://localhost:3000` | Langfuse web service URL (OTLP endpoint base) |
+| `public_key` | `RARA__LANGFUSE__PUBLIC_KEY` | — | Langfuse project public key |
+| `secret_key` | `RARA__LANGFUSE__SECRET_KEY` | — | Langfuse project secret key |
 
 #### Other
 

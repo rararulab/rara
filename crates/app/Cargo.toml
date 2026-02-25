@@ -13,6 +13,7 @@ description = "Application orchestration and lifecycle management for job"
 
 [dependencies]
 axum = { workspace = true }
+base = { workspace = true }
 common-runtime = { workspace = true }
 common-worker = { workspace = true }
 config = { workspace = true }

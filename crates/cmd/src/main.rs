@@ -44,8 +44,19 @@ struct ServerArgs {}
 
 impl ServerArgs {
     async fn run() -> Result<(), Whatever> {
-        let _guards = common_telemetry::logging::init_tracing_with_langfuse("rara");
-        let config = AppConfig::new().await.whatever_context("Failed to load config")?;
+        // Load config first (Consul KV or env vars) so Langfuse settings are
+        // available before initialising the tracing subscriber.
+        let config = AppConfig::new()
+            .await
+            .whatever_context("Failed to load config")?;
+
+        let _guards = common_telemetry::logging::init_tracing_with_langfuse(
+            "rara",
+            Some(&config.langfuse.host),
+            config.langfuse.public_key.as_deref(),
+            config.langfuse.secret_key.as_deref(),
+        );
+
         config.run().await
     }
 }

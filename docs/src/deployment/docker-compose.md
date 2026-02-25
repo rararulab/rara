@@ -43,6 +43,15 @@ In local dev mode (without Consul), the backend reads `RARA__`-prefixed environm
 | `RARA__OBJECT_STORE__ENDPOINT` | `http://localhost:9000` | Matches minio service |
 | `RARA__OBJECT_STORE__ACCESS_KEY` | `minioadmin` | MinIO root user |
 | `RARA__OBJECT_STORE__SECRET_KEY` | `minioadmin` | MinIO root password |
+| `RARA__MEMORY__CHROMA_URL` | `http://localhost:8000` | Matches chroma service |
+| `RARA__CRAWL4AI__BASE_URL` | `http://localhost:11235` | Matches crawl4ai service |
+
+**Default credentials:**
+
+| Service | User | Password |
+|---------|------|----------|
+| PostgreSQL | `postgres` | `postgres` |
+| MinIO | `minioadmin` | `minioadmin` |
 
 See [Configuration](../configuration.md) for the full list of config keys.
 

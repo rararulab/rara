@@ -115,6 +115,66 @@ history:
     helm history {{ RELEASE }} -n {{ NAMESPACE }}
 
 # --------------------------------------------------------------------------
+# Consul KV
+# --------------------------------------------------------------------------
+
+[doc("seed Consul KV with infrastructure config (database, minio, chroma)")]
+[group("🔧 Consul")]
+seed-consul:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    NS="{{ NAMESPACE }}"
+    CONSUL_POD="consul-server-0"
+    CONSUL_ADDR="http://127.0.0.1:8500"
+
+    put_kv() {
+      local key="$1" value="$2"
+      echo "  Setting ${key}"
+      kubectl exec "$CONSUL_POD" -n "$NS" -- \
+        curl -sf -X PUT -d "$value" "${CONSUL_ADDR}/v1/kv/${key}" > /dev/null
+    }
+
+    # Read values from Helm release
+    VALUES=$(helm get values {{ RELEASE }} -n "$NS" -o json 2>/dev/null)
+    PG_PASS=$(echo "$VALUES" | jq -r '.postgresql.auth.postgresPassword // "postgres"')
+    PG_DB=$(echo "$VALUES"   | jq -r '.postgresql.auth.database // "rara"')
+    MINIO_USER=$(echo "$VALUES" | jq -r '.minio.rootUser // "minioadmin"')
+    MINIO_PASS=$(echo "$VALUES" | jq -r '.minio.rootPassword // "minioadmin"')
+
+    echo "Seeding Consul KV via ${CONSUL_POD} ..."
+
+    # Database
+    put_kv "rara/config/database/database_url" \
+      "postgres://postgres:${PG_PASS}@{{ RELEASE }}-postgresql:5432/${PG_DB}"
+
+    # Object store (MinIO)
+    put_kv "rara/config/object_store/endpoint"          "http://{{ RELEASE }}-minio:9000"
+    put_kv "rara/config/object_store/access_key_id"     "${MINIO_USER}"
+    put_kv "rara/config/object_store/secret_access_key" "${MINIO_PASS}"
+    put_kv "rara/config/object_store/bucket"            "rara"
+
+    # Memory (ChromaDB)
+    put_kv "rara/config/memory/chroma_url" "http://{{ RELEASE }}-chromadb:8000"
+
+    # Crawl4AI
+    put_kv "rara/config/crawl4ai/base_url" "http://{{ RELEASE }}-crawl4ai:11235"
+
+    # Langfuse (LLM observability)
+    put_kv "rara/config/langfuse/host" "http://{{ RELEASE }}-langfuse-web:3000"
+    LF_PK=$(echo "$VALUES" | jq -r '.consulSeed.langfuse.publicKey // empty')
+    LF_SK=$(echo "$VALUES" | jq -r '.consulSeed.langfuse.secretKey // empty')
+    if [ -n "$LF_PK" ]; then put_kv "rara/config/langfuse/public_key" "$LF_PK"; fi
+    if [ -n "$LF_SK" ]; then put_kv "rara/config/langfuse/secret_key" "$LF_SK"; fi
+
+    echo "✔ Consul KV seed complete"
+
+[doc("list all Consul KV keys under rara/config/")]
+[group("🔧 Consul")]
+consul-keys:
+    kubectl exec consul-server-0 -n {{ NAMESPACE }} -- \
+      curl -sf http://127.0.0.1:8500/v1/kv/rara/config/?keys 2>/dev/null | jq .
+
+# --------------------------------------------------------------------------
 # Doctor — Infrastructure health check
 # --------------------------------------------------------------------------
 

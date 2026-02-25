@@ -577,22 +577,21 @@ pub fn init_global_logging(
 
         #[cfg(feature = "tokio-console")]
         let subscriber = {
-            let tokio_console_layer = if let Some(tokio_console_addr) =
-                &tracing_opts.tokio_console_addr
-            {
-                let addr: std::net::SocketAddr = tokio_console_addr.parse().unwrap_or_else(|e| {
+            let tokio_console_layer =
+                if let Some(tokio_console_addr) = &tracing_opts.tokio_console_addr {
+                    let addr: std::net::SocketAddr = tokio_console_addr.parse().unwrap_or_else(|e| {
                     panic!("Invalid binding address '{tokio_console_addr}' for tokio-console: {e}");
                 });
-                println!("tokio-console listening on {{addr}}");
+                    println!("tokio-console listening on {{addr}}");
 
-                Some(
-                    console_subscriber::ConsoleLayer::builder()
-                        .server_addr(addr)
-                        .spawn(),
-                )
-            } else {
-                None
-            };
+                    Some(
+                        console_subscriber::ConsoleLayer::builder()
+                            .server_addr(addr)
+                            .spawn(),
+                    )
+                } else {
+                    None
+                };
 
             Registry::default()
                 .with(dyn_filter)
@@ -655,19 +654,20 @@ pub fn init_global_logging(
     guards
 }
 
-/// Build [`LoggingOptions`] with Langfuse OTLP configuration when
-/// `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` environment variables are set.
+/// Build [`LoggingOptions`] with Langfuse OTLP configuration.
 ///
-/// Falls back to default options (OTLP disabled) when Langfuse is not configured.
-pub fn build_langfuse_logging_options() -> LoggingOptions {
-    let public_key = env::var("LANGFUSE_PUBLIC_KEY").ok();
-    let secret_key = env::var("LANGFUSE_SECRET_KEY").ok();
-
+/// When both `public_key` and `secret_key` are provided, OTLP tracing is
+/// configured to export to the Langfuse OTLP endpoint.  Falls back to default
+/// options (OTLP disabled) when either key is missing.
+pub fn build_langfuse_logging_options(
+    host: Option<&str>,
+    public_key: Option<&str>,
+    secret_key: Option<&str>,
+) -> LoggingOptions {
     match (public_key, secret_key) {
         (Some(pk), Some(sk)) => {
             use base64::Engine;
-            let host =
-                env::var("LANGFUSE_HOST").unwrap_or_else(|_| "http://localhost:3000".to_owned());
+            let host = host.unwrap_or("http://localhost:3000");
             let endpoint = format!("{host}/api/public/otel/v1/traces");
             let auth = base64::engine::general_purpose::STANDARD.encode(format!("{pk}:{sk}"));
             let mut headers = HashMap::new();
@@ -687,14 +687,19 @@ pub fn build_langfuse_logging_options() -> LoggingOptions {
     }
 }
 
-/// Initialize tracing with automatic Langfuse detection.
+/// Initialize tracing with Langfuse OTLP export.
 ///
-/// When `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are set, OTLP tracing
-/// is automatically enabled pointing to the Langfuse OTLP endpoint. Otherwise
-/// falls back to default stdout-only logging.
+/// When both `public_key` and `secret_key` are provided, OTLP tracing is
+/// enabled pointing to the Langfuse endpoint. Otherwise falls back to default
+/// stdout-only logging.
 #[must_use]
-pub fn init_tracing_with_langfuse(app_name: &str) -> Vec<WorkerGuard> {
-    let logging_opts = build_langfuse_logging_options();
+pub fn init_tracing_with_langfuse(
+    app_name: &str,
+    host: Option<&str>,
+    public_key: Option<&str>,
+    secret_key: Option<&str>,
+) -> Vec<WorkerGuard> {
+    let logging_opts = build_langfuse_logging_options(host, public_key, secret_key);
     let tracing_opts = TracingOptions::default();
     init_global_logging(app_name, &logging_opts, &tracing_opts, None)
 }

@@ -287,6 +287,29 @@ consul:
     enabled: false  # We don't need service mesh, just KV config
 
 # ------------------------------------------------------------------------------
+# Consul KV seed — injected by the consul-kv-seed Job (post-install/upgrade).
+#
+# By default URLs use cluster-internal service DNS. If the rara app runs
+# OUTSIDE the cluster, override these to use the Traefik-exposed URLs:
+#   consulSeed.overrides.langfuseHost: "https://langfuse.rara.local"
+#   consulSeed.overrides.crawl4aiBaseUrl: "https://crawl4ai.rara.local"
+#   ... etc.
+# ------------------------------------------------------------------------------
+consulSeed:
+  # Override any auto-derived service URL.
+  # Empty string = use internal K8s service DNS (default).
+  overrides:
+    databaseUrl: ""
+    objectStoreEndpoint: ""
+    chromaUrl: ""
+    crawl4aiBaseUrl: ""
+    langfuseHost: ""
+  langfuse:
+    # Create a project in Langfuse UI, then paste the API keys here.
+    publicKey: ""
+    secretKey: ""
+
+# ------------------------------------------------------------------------------
 # MinIO — Object storage
 # ------------------------------------------------------------------------------
 minio:

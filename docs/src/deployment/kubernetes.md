@@ -105,18 +105,65 @@ After trusting the CA, restart your browser.
 
 ## Consul KV Configuration
 
-The `consul-kv-seed` Helm hook (post-install/post-upgrade) automatically writes infrastructure credentials to Consul KV. Keys are stored under the `rara/config/` prefix:
+The `consul-kv-seed` Helm hook (post-install/post-upgrade) automatically writes all infrastructure connection info to Consul KV. The rara app only needs a single `CONSUL_HTTP_ADDR` environment variable to discover every dependency at startup.
+
+### Seeded Keys
+
+All keys are stored under the `rara/config/` prefix:
 
 | Key | Value Source |
 |-----|-------------|
-| `rara/config/database/database_url` | PostgreSQL service + credentials from values |
-| `rara/config/object_store/endpoint` | MinIO service URL |
-| `rara/config/object_store/access_key_id` | MinIO root user |
-| `rara/config/object_store/secret_access_key` | MinIO root password |
-| `rara/config/object_store/bucket` | `rara` |
-| `rara/config/memory/chroma_url` | ChromaDB service URL |
+| `database/database_url` | PostgreSQL connection string |
+| `object_store/endpoint` | MinIO API URL |
+| `object_store/access_key_id` | MinIO root user |
+| `object_store/secret_access_key` | MinIO root password |
+| `object_store/bucket` | `rara` |
+| `memory/chroma_url` | ChromaDB URL |
+| `crawl4ai/base_url` | Crawl4AI service URL |
+| `langfuse/host` | Langfuse OTLP endpoint URL |
+| `langfuse/public_key` | Langfuse project API key (optional, from `consulSeed.langfuse.publicKey`) |
+| `langfuse/secret_key` | Langfuse project secret (optional, from `consulSeed.langfuse.secretKey`) |
 
-The rara app only needs `CONSUL_HTTP_ADDR` set as an environment variable to read all config from Consul at startup. See [Configuration](../configuration.md) for details.
+### URL Override (Out-of-Cluster App)
+
+By default, all service URLs use cluster-internal DNS (e.g. `http://rara-infra-minio:9000`). If the rara app runs **outside** the Kubernetes cluster (e.g. on the developer's host machine), these internal addresses are unreachable.
+
+Override them in `values.yaml` to use Traefik-exposed URLs:
+
+```yaml
+consulSeed:
+  overrides:
+    langfuseHost: "https://langfuse.rara.local"
+    crawl4aiBaseUrl: "https://crawl4ai.rara.local"
+    chromaUrl: "http://localhost:8000"            # or port-forward
+    objectStoreEndpoint: "http://localhost:9000"  # or port-forward
+    databaseUrl: "postgres://postgres:postgres@localhost:5432/rara"
+```
+
+Any override set to a non-empty string replaces the auto-derived internal URL. Empty string (default) uses the internal service DNS.
+
+After changing overrides, run `helm upgrade` or manually re-seed:
+
+```bash
+cd deploy/helm
+just seed-consul   # seed/re-seed all keys from Helm values
+just consul-keys   # list current keys in Consul
+```
+
+### Langfuse API Keys
+
+Langfuse `public_key` and `secret_key` must be obtained from the Langfuse UI after creating a project. Add them to `values.yaml`:
+
+```yaml
+consulSeed:
+  langfuse:
+    publicKey: "pk-lf-..."
+    secretKey: "sk-lf-..."
+```
+
+Then `helm upgrade` or `just seed-consul` to inject them.
+
+See [Configuration](../configuration.md) for details on how the app loads config from Consul.
 
 ## Observability Pipeline
 
@@ -140,6 +187,8 @@ All commands run from `deploy/helm/`:
 | `just upgrade-dev` | Upgrade with dev overlay |
 | `just diff` | Diff pending changes against live release |
 | `just deps-update` | Update subchart dependencies to latest versions |
+| `just seed-consul` | Seed/re-seed Consul KV from Helm values |
+| `just consul-keys` | List all Consul KV keys under `rara/config/` |
 | `just uninstall` | Tear down the release |
 
 Run `just` with no arguments to see all available commands.

@@ -14,10 +14,10 @@ Reference for all infrastructure services deployed by `rara-infra`.
 
 **Default credentials:**
 
-| Service | User | Password |
-|---------|------|----------|
-| PostgreSQL | `postgres` | `postgres` |
-| MinIO | `minioadmin` | `minioadmin` |
+| Service | User | Password | Console URL |
+|---------|------|----------|-------------|
+| PostgreSQL | `postgres` | `postgres` | — |
+| MinIO | `minioadmin` | `minioadmin` | `https://minio.rara.local` (port 9001) |
 
 ## Ingress & TLS
 
@@ -75,6 +75,12 @@ App (OTLP) --> Alloy --> Tempo      (traces)
 |-----------|--------------|---------|
 | Langfuse | v1.5.20 | LLM observability -- trace, evaluate, and monitor LLM calls. Deploys its own PostgreSQL, ClickHouse, and Redis instances. Uses shared MinIO for S3 storage |
 
+**Default credentials:**
+
+| Service | Access |
+|---------|--------|
+| Langfuse | Create account on first visit at `https://langfuse.rara.local`. After creating a project, copy the API keys to `consulSeed.langfuse.publicKey/secretKey` in `values.yaml` |
+
 **Endpoints:**
 
 | URL | Service |
@@ -82,3 +88,27 @@ App (OTLP) --> Alloy --> Tempo      (traces)
 | `https://langfuse.rara.local` | Langfuse web UI |
 | `https://consul.rara.local` | Consul KV UI |
 | `https://minio.rara.local` | MinIO console |
+
+## Consul KV — Service Discovery
+
+Consul KV stores all infrastructure connection info under `rara/config/`. The rara app reads this at startup when `CONSUL_HTTP_ADDR` is set, eliminating the need for individual environment variables.
+
+**Seeded keys:**
+
+| Key prefix | Component | Example value |
+|------------|-----------|---------------|
+| `database/` | PostgreSQL | `postgres://postgres:postgres@rara-infra-postgresql:5432/rara` |
+| `object_store/` | MinIO | endpoint, access_key_id, secret_access_key, bucket |
+| `memory/` | ChromaDB | `http://rara-infra-chromadb:8000` |
+| `crawl4ai/` | Crawl4AI | `http://rara-infra-crawl4ai:11235` |
+| `langfuse/` | Langfuse | host, public_key, secret_key |
+
+Service URLs default to cluster-internal DNS. Override via `consulSeed.overrides.*` in `values.yaml` when the app runs outside K8s. See [Kubernetes deployment](kubernetes.md#url-override-out-of-cluster-app) for details.
+
+**Useful commands:**
+
+```bash
+cd deploy/helm
+just seed-consul   # seed/re-seed all keys
+just consul-keys   # list current keys
+```
