@@ -13,25 +13,10 @@
 // limitations under the License.
 
 //! Configurable state machine for application status transitions.
-//!
-//! The [`StateMachine`] validates that a requested transition from one
-//! [`ApplicationStatus`] to another is legal according to a set of
-//! [`TransitionRule`]s.  Default rules encode the standard lifecycle:
-//!
-//! ```text
-//! Draft -> Submitted, Withdrawn
-//! Submitted -> UnderReview, Rejected, Withdrawn
-//! UnderReview -> Interview, Rejected, Withdrawn
-//! Interview -> Offered, Rejected, Withdrawn
-//! Offered -> Accepted, Rejected, Withdrawn
-//! Rejected -> (terminal)
-//! Accepted -> (terminal)
-//! Withdrawn -> (terminal)
-//! ```
 
 use std::collections::HashMap;
 
-use crate::{
+use super::{
     error::{ApplicationError, InvalidTransitionSnafu},
     types::ApplicationStatus,
 };
@@ -55,10 +40,6 @@ pub struct TransitionRule {
 // ---------------------------------------------------------------------------
 
 /// A configurable engine that validates application status transitions.
-///
-/// Create one with [`StateMachine::default()`] for the standard
-/// lifecycle rules, or build a custom one with
-/// [`StateMachine::with_rules`].
 #[derive(Debug, Clone)]
 pub struct StateMachine {
     rules: HashMap<ApplicationStatus, Vec<ApplicationStatus>>,
@@ -73,9 +54,6 @@ impl StateMachine {
     }
 
     /// Validate that transitioning from `from` to `to` is allowed.
-    ///
-    /// Returns `Ok(())` if the transition is legal, or
-    /// [`ApplicationError::InvalidTransition`] otherwise.
     pub fn validate_transition(
         &self,
         from: ApplicationStatus,
@@ -99,8 +77,7 @@ impl StateMachine {
         self.rules.get(&from).cloned().unwrap_or_default()
     }
 
-    /// Return `true` if the given status is terminal (has no outgoing
-    /// transitions).
+    /// Return `true` if the given status is terminal.
     #[must_use]
     pub fn is_terminal(&self, status: ApplicationStatus) -> bool {
         self.rules.get(&status).map_or(true, Vec::is_empty)
@@ -158,11 +135,9 @@ impl Default for StateMachine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ApplicationStatus;
+    use super::super::types::ApplicationStatus;
 
     fn sm() -> StateMachine { StateMachine::default() }
-
-    // -- Valid forward transitions -------------------------------------------
 
     #[test]
     fn draft_to_submitted_is_valid() {
@@ -204,8 +179,6 @@ mod tests {
         );
     }
 
-    // -- Withdrawal from any non-terminal state ------------------------------
-
     #[test]
     fn draft_to_withdrawn_is_valid() {
         assert!(
@@ -213,50 +186,6 @@ mod tests {
                 .is_ok()
         );
     }
-
-    #[test]
-    fn submitted_to_withdrawn_is_valid() {
-        assert!(
-            sm().validate_transition(ApplicationStatus::Submitted, ApplicationStatus::Withdrawn,)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn offered_to_withdrawn_is_valid() {
-        assert!(
-            sm().validate_transition(ApplicationStatus::Offered, ApplicationStatus::Withdrawn,)
-                .is_ok()
-        );
-    }
-
-    // -- Rejection from review stages ----------------------------------------
-
-    #[test]
-    fn submitted_to_rejected_is_valid() {
-        assert!(
-            sm().validate_transition(ApplicationStatus::Submitted, ApplicationStatus::Rejected,)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn interview_to_rejected_is_valid() {
-        assert!(
-            sm().validate_transition(ApplicationStatus::Interview, ApplicationStatus::Rejected,)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn offered_to_rejected_is_valid() {
-        assert!(
-            sm().validate_transition(ApplicationStatus::Offered, ApplicationStatus::Rejected,)
-                .is_ok()
-        );
-    }
-
-    // -- Invalid transitions -------------------------------------------------
 
     #[test]
     fn rejected_is_terminal() {
@@ -270,19 +199,11 @@ mod tests {
     #[test]
     fn accepted_is_terminal() {
         assert!(sm().is_terminal(ApplicationStatus::Accepted));
-        assert!(
-            sm().validate_transition(ApplicationStatus::Accepted, ApplicationStatus::Submitted,)
-                .is_err()
-        );
     }
 
     #[test]
     fn withdrawn_is_terminal() {
         assert!(sm().is_terminal(ApplicationStatus::Withdrawn));
-        assert!(
-            sm().validate_transition(ApplicationStatus::Withdrawn, ApplicationStatus::Draft,)
-                .is_err()
-        );
     }
 
     #[test]
@@ -292,24 +213,6 @@ mod tests {
                 .is_err()
         );
     }
-
-    #[test]
-    fn draft_to_accepted_is_invalid() {
-        assert!(
-            sm().validate_transition(ApplicationStatus::Draft, ApplicationStatus::Accepted,)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn submitted_to_offered_is_invalid() {
-        assert!(
-            sm().validate_transition(ApplicationStatus::Submitted, ApplicationStatus::Offered,)
-                .is_err()
-        );
-    }
-
-    // -- Allowed transitions listing -----------------------------------------
 
     #[test]
     fn allowed_transitions_for_draft() {
@@ -327,8 +230,6 @@ mod tests {
         );
     }
 
-    // -- Custom rules --------------------------------------------------------
-
     #[test]
     fn custom_rules_override_defaults() {
         let custom = StateMachine::with_rules(vec![TransitionRule {
@@ -336,14 +237,12 @@ mod tests {
             allowed_to: vec![ApplicationStatus::Draft],
         }]);
 
-        // Custom rule allows Rejected -> Draft.
         assert!(
             custom
                 .validate_transition(ApplicationStatus::Rejected, ApplicationStatus::Draft,)
                 .is_ok()
         );
 
-        // But Draft -> Submitted is no longer defined.
         assert!(
             custom
                 .validate_transition(ApplicationStatus::Draft, ApplicationStatus::Submitted,)

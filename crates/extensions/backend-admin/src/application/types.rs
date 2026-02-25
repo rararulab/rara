@@ -169,40 +169,23 @@ pub enum ChangeSource {
 // ---------------------------------------------------------------------------
 
 /// A job application aggregate.
-///
-/// Represents the full lifecycle of a single application, from draft
-/// through submission, review, interview rounds, and final outcome.
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Application {
-    /// Unique identifier.
     pub id:           ApplicationId,
-    /// The job source this application targets.
     pub job_id:       JobSourceId,
-    /// The resume version used for this application.
     pub resume_id:    ResumeId,
-    /// Channel through which the application was submitted.
     pub channel:      ApplicationChannel,
-    /// Current lifecycle status.
     pub status:       ApplicationStatus,
-    /// Optional cover letter text.
     pub cover_letter: Option<String>,
-    /// Free-form notes about the application.
     pub notes:        Option<String>,
-    /// User-defined tags for categorization.
     pub tags:         Vec<String>,
-    /// Priority level.
     pub priority:     Priority,
-    /// External trace identifier for observability.
     pub trace_id:     Option<String>,
-    /// Whether this application has been soft-deleted.
     pub is_deleted:   bool,
-    /// When the application was submitted (if it has been).
     #[schema(value_type = Option<String>)]
     pub submitted_at: Option<Timestamp>,
-    /// When the application was created.
     #[schema(value_type = String)]
     pub created_at:   Timestamp,
-    /// When the application was last updated.
     #[schema(value_type = String)]
     pub updated_at:   Timestamp,
 }
@@ -214,19 +197,12 @@ pub struct Application {
 /// A record of a single status transition in an application's history.
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct StatusChangeRecord {
-    /// Unique identifier for this history entry.
     pub id:             Uuid,
-    /// The application that changed.
     pub application_id: ApplicationId,
-    /// Status before the transition.
     pub from_status:    ApplicationStatus,
-    /// Status after the transition.
     pub to_status:      ApplicationStatus,
-    /// What triggered the change.
     pub changed_by:     ChangeSource,
-    /// Optional note describing why the transition occurred.
     pub note:           Option<String>,
-    /// When the transition happened.
     #[schema(value_type = String)]
     pub created_at:     Timestamp,
 }
@@ -238,36 +214,22 @@ pub struct StatusChangeRecord {
 /// Parameters for creating a new application.
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateApplicationRequest {
-    /// The job source to apply for.
     pub job_id:       JobSourceId,
-    /// The resume version to use.
     pub resume_id:    ResumeId,
-    /// Channel of application.
     pub channel:      ApplicationChannel,
-    /// Optional cover letter.
     pub cover_letter: Option<String>,
-    /// Optional notes.
     pub notes:        Option<String>,
-    /// Tags for categorization.
     pub tags:         Vec<String>,
-    /// Priority level.
     pub priority:     Priority,
 }
 
 /// Parameters for a partial update of an existing application.
-///
-/// Only the fields set to `Some` will be applied.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct UpdateApplicationRequest {
-    /// Update the cover letter.
     pub cover_letter: Option<Option<String>>,
-    /// Update the notes.
     pub notes:        Option<Option<String>>,
-    /// Replace the tag list.
     pub tags:         Option<Vec<String>>,
-    /// Update the priority.
     pub priority:     Option<Priority>,
-    /// Update the channel.
     pub channel:      Option<ApplicationChannel>,
 }
 
@@ -278,22 +240,14 @@ pub struct UpdateApplicationRequest {
 /// Criteria for listing/searching applications.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ApplicationFilter {
-    /// Filter by status.
     pub status:         Option<ApplicationStatus>,
-    /// Filter by job source.
     pub job_id:         Option<JobSourceId>,
-    /// Filter by resume.
     pub resume_id:      Option<ResumeId>,
-    /// Filter by channel.
     pub channel:        Option<ApplicationChannel>,
-    /// Filter by priority.
     pub priority:       Option<Priority>,
-    /// Applications must contain *all* of these tags.
     pub tags:           Option<Vec<String>>,
-    /// Created at or after this timestamp.
     #[schema(value_type = Option<String>)]
     pub created_after:  Option<Timestamp>,
-    /// Created at or before this timestamp.
     #[schema(value_type = Option<String>)]
     pub created_before: Option<Timestamp>,
 }
@@ -305,9 +259,7 @@ pub struct ApplicationFilter {
 /// Aggregate statistics across all applications, broken down by status.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ApplicationStatistics {
-    /// Total number of applications.
     pub total:     usize,
-    /// Number of applications in each status.
     pub by_status: Vec<(ApplicationStatus, usize)>,
 }
 
@@ -320,7 +272,7 @@ use rara_domain_shared::convert::{
     u8_from_i16,
 };
 
-use crate::pg_repository::{ApplicationRow, ApplicationStatusHistoryRow};
+use super::pg_repository::{ApplicationRow, ApplicationStatusHistoryRow};
 
 fn application_status_from_i16(value: i16) -> ApplicationStatus {
     let repr = u8_from_i16(value, "application.status");
@@ -339,11 +291,6 @@ fn application_priority_from_i16(value: i16) -> Priority {
     Priority::from_repr(repr).unwrap_or_else(|| panic!("invalid application.priority: {value}"))
 }
 
-/// `ApplicationRow` (DB) -> Domain `Application`.
-///
-/// `resume_id` in the store is `Option<Uuid>`, but in the domain it is
-/// a `ResumeId` (mandatory). We fall back to `Uuid::nil()` when the
-/// store row has no resume linked.
 impl From<ApplicationRow> for Application {
     fn from(a: ApplicationRow) -> Self {
         Self {
@@ -365,10 +312,6 @@ impl From<ApplicationRow> for Application {
     }
 }
 
-/// Domain `Application` -> `ApplicationRow` (DB).
-///
-/// `resume_id` is stored as `Option<Uuid>`; if the domain id is nil we
-/// store `None`.
 impl From<Application> for ApplicationRow {
     fn from(a: Application) -> Self {
         let resume_uuid = a.resume_id.into_inner();
@@ -400,10 +343,6 @@ impl From<Application> for ApplicationRow {
 // ApplicationStatusHistoryRow / StatusChangeRecord conversions
 // ---------------------------------------------------------------------------
 
-/// Parse a `changed_by` string into a domain `ChangeSource`.
-///
-/// Known values: `"manual"`, `"system"`, `"email_parse"`.
-/// Anything else (or `None`) defaults to `System`.
 fn parse_change_source(s: Option<&str>) -> ChangeSource {
     match s {
         Some("manual") => ChangeSource::Manual,
@@ -413,9 +352,6 @@ fn parse_change_source(s: Option<&str>) -> ChangeSource {
     }
 }
 
-/// `ApplicationStatusHistoryRow` (DB) -> Domain `StatusChangeRecord`.
-///
-/// `from_status` in the store is `Option`; if absent we default to `Draft`.
 impl From<ApplicationStatusHistoryRow> for StatusChangeRecord {
     fn from(h: ApplicationStatusHistoryRow) -> Self {
         Self {
@@ -433,7 +369,6 @@ impl From<ApplicationStatusHistoryRow> for StatusChangeRecord {
     }
 }
 
-/// Domain `StatusChangeRecord` -> `ApplicationStatusHistoryRow` (DB).
 impl From<StatusChangeRecord> for ApplicationStatusHistoryRow {
     fn from(r: StatusChangeRecord) -> Self {
         Self {

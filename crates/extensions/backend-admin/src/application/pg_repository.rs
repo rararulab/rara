@@ -13,7 +13,7 @@
 // limitations under the License.
 
 //! PostgreSQL-backed implementation of
-//! [`crate::repository::ApplicationRepository`].
+//! [`super::repository::ApplicationRepository`].
 
 use std::fmt::Write;
 
@@ -23,7 +23,7 @@ use rara_domain_shared::id::ApplicationId;
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
-use crate::{
+use super::{
     error::ApplicationError,
     types::{Application, ApplicationFilter, StatusChangeRecord},
 };
@@ -34,7 +34,7 @@ use crate::{
 
 /// A job application record (DB row).
 #[derive(Debug, Clone, FromRow)]
-pub(crate) struct ApplicationRow {
+pub(super) struct ApplicationRow {
     pub id:           Uuid,
     pub job_id:       Uuid,
     pub resume_id:    Option<Uuid>,
@@ -54,7 +54,7 @@ pub(crate) struct ApplicationRow {
 
 /// An immutable record of an application status transition (DB row).
 #[derive(Debug, Clone, FromRow)]
-pub(crate) struct ApplicationStatusHistoryRow {
+pub(super) struct ApplicationStatusHistoryRow {
     pub id:             Uuid,
     pub application_id: Uuid,
     pub from_status:    Option<i16>,
@@ -88,7 +88,7 @@ fn map_err(e: sqlx::Error) -> ApplicationError {
 }
 
 #[async_trait]
-impl crate::repository::ApplicationRepository for PgApplicationRepository {
+impl super::repository::ApplicationRepository for PgApplicationRepository {
     async fn save(&self, app: &Application) -> Result<Application, ApplicationError> {
         let store: ApplicationRow = app.clone().into();
 

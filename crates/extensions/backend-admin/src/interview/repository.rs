@@ -22,7 +22,7 @@
 use async_trait::async_trait;
 use rara_domain_shared::id::{ApplicationId, InterviewId};
 
-use crate::{
+use super::{
     error::InterviewError,
     types::{InterviewFilter, InterviewPlan},
 };

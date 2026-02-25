@@ -276,7 +276,7 @@ use rara_domain_shared::convert::{
     u8_from_i16,
 };
 
-use crate::pg_repository::InterviewPlanRow;
+use super::pg_repository::InterviewPlanRow;
 
 /// Parse a round string from the DB into a domain `InterviewRound`.
 pub fn parse_interview_round(s: &str) -> InterviewRound {

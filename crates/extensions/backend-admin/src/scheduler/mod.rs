@@ -13,5 +13,20 @@
 // limitations under the License.
 
 mod router;
+pub mod engine;
+pub mod error;
+pub mod pg_repository;
+pub mod repository;
+pub mod service;
+pub mod types;
 
+pub use engine::{CronEngine, TaskExecutor};
 pub use router::{routes, HistoryQuery, TaskListQuery};
+
+/// Wire up the scheduler service with a PostgreSQL repository.
+#[must_use]
+pub fn wire_scheduler_service(pool: sqlx::PgPool) -> service::SchedulerService {
+    let repo: std::sync::Arc<dyn repository::SchedulerRepository> =
+        std::sync::Arc::new(pg_repository::PgSchedulerRepository::new(pool));
+    service::SchedulerService::new(repo)
+}

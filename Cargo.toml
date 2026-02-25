@@ -45,10 +45,6 @@ members = [
     "crates/domain/shared",
     "crates/domain/job",
     "crates/domain/resume",
-    "crates/domain/application",
-    "crates/domain/interview",
-    "crates/domain/scheduler",
-    "crates/domain/analytics",
     "crates/server",
     "crates/telegram-bot",
     "crates/paths",
@@ -157,13 +153,9 @@ rara-app = { path = "crates/app" }
 rara-cli = { path = "crates/cmd" }
 rara-composio = { path = "crates/integrations/composio" }
 rara-backend-admin = { path = "crates/extensions/backend-admin" }
-rara-domain-analytics = { path = "crates/domain/analytics" }
-rara-domain-application = { path = "crates/domain/application" }
 rara-domain-chat = { path = "crates/domain/chat" }
-rara-domain-interview = { path = "crates/domain/interview" }
 rara-domain-job = { path = "crates/domain/job" }
 rara-domain-resume = { path = "crates/domain/resume" }
-rara-domain-scheduler = { path = "crates/domain/scheduler" }
 rara-domain-shared = { path = "crates/domain/shared" }
 rara-error = { path = "crates/common/error" }
 rara-consul = { path = "crates/common/rara-consul" }

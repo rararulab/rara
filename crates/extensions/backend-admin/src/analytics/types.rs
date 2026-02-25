@@ -106,7 +106,7 @@ use rara_domain_shared::convert::{
     chrono_to_timestamp, civil_to_naive_date, naive_date_to_civil, timestamp_to_chrono, u8_from_i16,
 };
 
-use crate::pg_repository::MetricsSnapshotRow;
+use super::pg_repository::MetricsSnapshotRow;
 
 fn period_from_i16(value: i16) -> MetricsPeriod {
     let repr = u8_from_i16(value, "metrics.period");

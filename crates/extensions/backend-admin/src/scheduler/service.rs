@@ -21,7 +21,7 @@ use rara_domain_shared::id::SchedulerTaskId;
 use tracing::{info, instrument};
 use uuid::Uuid;
 
-use crate::{
+use super::{
     error::SchedulerError,
     repository::SchedulerRepository,
     types::{CreateTaskRequest, ScheduledTask, TaskFilter, TaskRunRecord, TaskRunStatus},
@@ -177,7 +177,7 @@ mod tests {
     use testcontainers_modules::postgres::Postgres;
 
     use super::*;
-    use crate::pg_repository::PgSchedulerRepository;
+    use super::super::pg_repository::PgSchedulerRepository;
 
     async fn setup_pool() -> (sqlx::PgPool, testcontainers::ContainerAsync<Postgres>) {
         let container = Postgres::default().start().await.unwrap();

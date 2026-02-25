@@ -34,10 +34,10 @@ pub struct AppState {
 
     // -- domain services --
     pub resume_service:      rara_domain_resume::ResumeAppService,
-    pub application_service: rara_domain_application::service::ApplicationService,
-    pub interview_service:   rara_domain_interview::service::InterviewService,
-    pub scheduler_service:   rara_domain_scheduler::service::SchedulerService,
-    pub analytics_service:   rara_domain_analytics::service::AnalyticsService,
+    pub application_service: rara_backend_admin::application::service::ApplicationService,
+    pub interview_service:   rara_backend_admin::interview::service::InterviewService,
+    pub scheduler_service:   rara_backend_admin::scheduler::service::SchedulerService,
+    pub analytics_service:   rara_backend_admin::analytics::service::AnalyticsService,
     pub job_service:         rara_domain_job::service::JobService,
     pub chat_service:        rara_domain_chat::service::ChatService,
     // -- shared --
@@ -129,10 +129,10 @@ impl AppState {
         // -- domain services -------------------------------------------------
 
         let resume_service = rara_domain_resume::wire_resume_service(pool.clone());
-        let application_service = rara_domain_application::wire(pool.clone());
-        let interview_service = rara_domain_interview::wire_interview_service(pool.clone());
-        let scheduler_service = rara_domain_scheduler::wire_scheduler_service(pool.clone());
-        let analytics_service = rara_domain_analytics::wire_analytics_service(pool.clone());
+        let application_service = rara_backend_admin::application::wire(pool.clone());
+        let interview_service = rara_backend_admin::interview::wire_interview_service(pool.clone());
+        let scheduler_service = rara_backend_admin::scheduler::wire_scheduler_service(pool.clone());
+        let analytics_service = rara_backend_admin::analytics::wire_analytics_service(pool.clone());
         let job_service = rara_domain_job::wire_job_service(pool.clone(), ai_service.clone())
             .whatever_context("Failed to initialize job service")?;
         info!("Job service initialized");

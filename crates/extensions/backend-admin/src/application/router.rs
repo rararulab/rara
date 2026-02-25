@@ -19,7 +19,13 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
-use rara_domain_application::{
+use rara_domain_shared::id::ApplicationId;
+use serde::Deserialize;
+use tracing::instrument;
+use utoipa_axum::{router::OpenApiRouter, routes};
+use uuid::Uuid;
+
+use super::{
     error::ApplicationError,
     service::ApplicationService,
     types::{
@@ -27,11 +33,6 @@ use rara_domain_application::{
         CreateApplicationRequest, Priority, StatusChangeRecord, UpdateApplicationRequest,
     },
 };
-use rara_domain_shared::id::ApplicationId;
-use serde::Deserialize;
-use tracing::instrument;
-use utoipa_axum::{router::OpenApiRouter, routes};
-use uuid::Uuid;
 
 /// JSON body for the status transition endpoint.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]

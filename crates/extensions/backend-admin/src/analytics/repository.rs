@@ -17,7 +17,7 @@
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::{
+use super::{
     error::AnalyticsError,
     types::{MetricsPeriod, MetricsSnapshot, SnapshotFilter},
 };

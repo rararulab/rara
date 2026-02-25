@@ -13,7 +13,7 @@
 // limitations under the License.
 
 //! PostgreSQL-backed implementation of
-//! [`crate::repository::SchedulerRepository`].
+//! [`super::repository::SchedulerRepository`].
 
 use std::fmt::Write;
 
@@ -22,7 +22,7 @@ use chrono::{DateTime, Utc};
 use rara_domain_shared::id::SchedulerTaskId;
 use sqlx::PgPool;
 
-use crate::{
+use super::{
     error::SchedulerError,
     types::{ScheduledTask, TaskFilter, TaskRunRecord, TaskRunStatus},
 };
@@ -33,7 +33,7 @@ use crate::{
 
 /// A scheduled task row from `scheduler_task` table.
 #[derive(Debug, Clone, sqlx::FromRow)]
-pub(crate) struct SchedulerTaskRow {
+pub(super) struct SchedulerTaskRow {
     pub id:            uuid::Uuid,
     pub name:          String,
     pub cron_expr:     String,
@@ -51,7 +51,7 @@ pub(crate) struct SchedulerTaskRow {
 
 /// A task run history row from `task_run_history` table.
 #[derive(Debug, Clone, sqlx::FromRow)]
-pub(crate) struct TaskRunHistoryRow {
+pub(super) struct TaskRunHistoryRow {
     pub id:          uuid::Uuid,
     pub task_id:     uuid::Uuid,
     pub status:      i16,
@@ -82,7 +82,7 @@ fn map_err(e: sqlx::Error) -> SchedulerError {
 }
 
 #[async_trait]
-impl crate::repository::SchedulerRepository for PgSchedulerRepository {
+impl super::repository::SchedulerRepository for PgSchedulerRepository {
     async fn save_task(&self, task: &ScheduledTask) -> Result<ScheduledTask, SchedulerError> {
         let store: SchedulerTaskRow = task.clone().into();
 
