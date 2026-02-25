@@ -1,6 +1,6 @@
 use uuid::Uuid;
 
-use crate::types::{ResumeError, ResumeProject};
+use super::types::{ResumeError, ResumeProject};
 
 #[async_trait::async_trait]
 pub trait ResumeRepository: Send + Sync {

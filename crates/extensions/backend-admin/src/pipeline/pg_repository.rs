@@ -20,8 +20,8 @@ use snafu::ResultExt as _;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::repository::{DatabaseSnafu, PipelineRepoError, PipelineRepository};
-use crate::types::{
+use super::repository::{DatabaseSnafu, PipelineRepoError, PipelineRepository};
+use super::types::{
     DiscoveredJob, DiscoveredJobAction, DiscoveredJobRow, DiscoveredJobWithDetails,
     DiscoveredJobWithDetailsRow, DiscoveredJobsActionCounts, DiscoveredJobsStats, PipelineEvent,
     PipelineEventRow, PipelineRun, PipelineRunRow,
@@ -401,8 +401,8 @@ impl PipelineRepository for PgPipelineRepository {
                    error = COALESCE(error, 'Pipeline service restarted while run was in progress')
                WHERE status = $2"#,
         )
-        .bind(crate::types::PipelineRunStatus::Cancelled as u8 as i16)
-        .bind(crate::types::PipelineRunStatus::Running as u8 as i16)
+        .bind(super::types::PipelineRunStatus::Cancelled as u8 as i16)
+        .bind(super::types::PipelineRunStatus::Running as u8 as i16)
         .execute(&self.pool)
         .await
         .context(DatabaseSnafu)?;

@@ -20,7 +20,7 @@ use sqlx::PgPool;
 use tool_core::AgentTool;
 use uuid::Uuid;
 
-use crate::{pg_repository::PgPipelineRepository, repository::PipelineRepository};
+use super::super::{pg_repository::PgPipelineRepository, repository::PipelineRepository};
 
 pub struct ListDiscoveredJobsForScoringTool {
     pool: PgPool,

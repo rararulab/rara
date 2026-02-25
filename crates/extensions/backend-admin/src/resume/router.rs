@@ -6,9 +6,9 @@ use axum::{
 };
 use utoipa_axum::router::OpenApiRouter;
 
-use rara_domain_resume::repository::ResumeRepository;
-use rara_domain_resume::service::ResumeService;
-use rara_domain_resume::types::{
+use super::repository::ResumeRepository;
+use super::service::ResumeService;
+use super::types::{
     ResumeError, ResumeProject, SetupResumeProjectRequest, UpdateResumeProjectRequest,
 };
 

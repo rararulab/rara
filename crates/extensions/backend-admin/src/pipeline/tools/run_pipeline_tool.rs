@@ -26,7 +26,7 @@ use rara_domain_shared::settings::{
     model::{JobPipelineRuntimeSettingsPatch, UpdateRequest},
 };
 
-use crate::service::PipelineService;
+use super::super::service::PipelineService;
 
 // ---------------------------------------------------------------------------
 // RunJobPipelineTool

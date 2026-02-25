@@ -31,7 +31,7 @@ use rara_domain_job::{
     types::{DiscoveryCriteria, NormalizedJob},
 };
 
-use crate::{
+use super::super::{
     pg_repository::PgPipelineRepository,
     repository::PipelineRepository,
     types::DiscoveredJobAction,

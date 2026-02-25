@@ -40,10 +40,10 @@ use snafu::Snafu;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
-use crate::pg_repository::PgPipelineRepository;
-use crate::repository::PipelineRepository;
-use crate::tools::pipeline_tools;
-use crate::types::{PipelineRunStatus, PipelineStreamEvent};
+use super::pg_repository::PgPipelineRepository;
+use super::repository::PipelineRepository;
+use super::tools::pipeline_tools;
+use super::types::{PipelineRunStatus, PipelineStreamEvent};
 
 /// Maximum agent loop iterations per pipeline run.
 const PIPELINE_MAX_ITERATIONS: usize = 25;
@@ -264,10 +264,10 @@ impl PipelineService {
         // Build pipeline-specific tool registry (includes report_pipeline_stats).
         let mut tools = self.build_pipeline_tools().await;
         tools.register_service(Arc::new(
-            crate::tools::ReportPipelineStatsTool::new(self.pool.clone()),
+            super::tools::ReportPipelineStatsTool::new(self.pool.clone()),
         ));
         tools.register_service(Arc::new(
-            crate::tools::SaveDiscoveredJobTool::new(self.pool.clone()),
+            super::tools::SaveDiscoveredJobTool::new(self.pool.clone()),
         ));
         let tools = Arc::new(tools);
 
@@ -409,7 +409,7 @@ impl PipelineService {
     /// When `notification_channel_id` is configured, sends directly via the
     /// Telegram Bot API (fire-and-forget, no PGMQ persistence). Otherwise
     /// falls back to the PGMQ-based `notify_client`.
-    async fn send_completion_notification(&self, run: &crate::types::PipelineRun) {
+    async fn send_completion_notification(&self, run: &super::types::PipelineRun) {
         let settings = self.settings_svc.current();
 
         let (emoji, status_label) = match run.status {
@@ -515,7 +515,7 @@ impl PipelineService {
         // Override the default `send_telegram` with pipeline-specific version
         // that routes to the dedicated notification channel when configured.
         registry.register_service(Arc::new(
-            crate::tools::pipeline_notify::PipelineNotifyTool::new(
+            super::tools::pipeline_notify::PipelineNotifyTool::new(
                 self.settings_svc.clone(),
                 self.notify_client.clone(),
             ),
@@ -530,16 +530,16 @@ impl PipelineService {
             self.settings_svc.clone(),
         )));
         registry.register_service(Arc::new(
-            crate::tools::SearchJobsWithJobServiceTool::new(
+            super::tools::SearchJobsWithJobServiceTool::new(
                 self.job_service.clone(),
                 self.pool.clone(),
             ),
         ));
         registry.register_service(Arc::new(
-            crate::tools::ListDiscoveredJobsForScoringTool::new(self.pool.clone()),
+            super::tools::ListDiscoveredJobsForScoringTool::new(self.pool.clone()),
         ));
         registry.register_service(Arc::new(
-            crate::tools::UpdateDiscoveredJobScoreActionTool::new(self.pool.clone()),
+            super::tools::UpdateDiscoveredJobScoreActionTool::new(self.pool.clone()),
         ));
         // Resume optimization sub-tools (worktree-based workflow)
         registry.register_service(Arc::new(pipeline_tools::PrepareResumeWorktreeTool::new(
