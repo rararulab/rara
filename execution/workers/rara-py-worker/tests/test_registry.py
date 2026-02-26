@@ -3,8 +3,8 @@ from python_worker.core.registry import CapabilityRegistry
 
 def test_registry_tracks_registered_capabilities() -> None:
     registry = CapabilityRegistry()
-    registry.register("job.discovery.jobspy.scrape", object())
+    registry.register("jobspy.scrape_jobs", object())
 
-    assert registry.has("job.discovery.jobspy.scrape") is True
+    assert registry.has("jobspy.scrape_jobs") is True
     assert registry.has("missing.capability") is False
-    assert registry.names() == ["job.discovery.jobspy.scrape"]
+    assert registry.names() == ["jobspy.scrape_jobs"]

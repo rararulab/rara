@@ -12,6 +12,8 @@ option go_package = "github.com/crrow/job/bindings/go/pb/execution/v1;executionv
 service ExecutionWorkerService {
   // Returns the current worker identity (name + runtime kind).
   rpc Status(StatusRequest) returns (StatusResponse);
+  // Lists capability names currently registered on this worker instance.
+  rpc ListCapabilities(ListCapabilitiesRequest) returns (ListCapabilitiesResponse);
   // Executes a capability synchronously and returns the result inline.
   rpc Invoke(InvokeRequest) returns (InvokeResponse);
   // Submits a capability execution request as an asynchronous task.
@@ -34,6 +36,29 @@ message StatusResponse {
 // Successful status payload.
 message StatusSuccess {
   WorkerIdentity worker = 1;
+}
+
+// Empty request for capability discovery.
+message ListCapabilitiesRequest {}
+
+// Capability discovery response using the common success/error envelope pattern.
+message ListCapabilitiesResponse {
+  oneof outcome {
+    ListCapabilitiesSuccess success = 1;
+    WorkerError error = 2;
+  }
+}
+
+// Successful capability discovery payload.
+message ListCapabilitiesSuccess {
+  repeated CapabilityInfo capabilities = 1;
+}
+
+// Capability metadata exposed for discovery.
+message CapabilityInfo {
+  string name = 1;
+  bool supports_sync = 2;
+  bool supports_async = 3;
 }
 
 // Runtime worker identity exposed to callers.

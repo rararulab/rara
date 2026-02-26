@@ -17,3 +17,9 @@ def test_container_defaults_worker_name(monkeypatch) -> None:
 
     assert container.identity.name == "rara-py-worker"
     assert container.identity.kind == "python"
+
+
+def test_container_registers_jobspy_capability() -> None:
+    container = build_container()
+
+    assert container.state.registry.has("jobspy.scrape_jobs") is True

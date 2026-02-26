@@ -62,6 +62,34 @@ def test_grpc_status_reports_worker_identity() -> None:
     assert response.success.worker.kind == modules.worker_pb2.WORKER_KIND_PYTHON
 
 
+def test_grpc_list_capabilities_reports_registered_capabilities() -> None:
+    try:
+        modules = load_generated_modules()
+    except GrpcServerBootstrapError as exc:
+        pytest.skip(str(exc))
+
+    registry = CapabilityRegistry()
+    registry.register("system.echo", lambda payload: {"echo": payload})
+    registry.register("jobspy.scrape_jobs", lambda payload: payload)
+    service = ExecutionWorkerGrpcService(
+        modules=modules,
+        executor=CapabilityExecutor(registry=registry),
+        identity=WorkerIdentity(name="test-worker", kind="python"),
+    )
+
+    response = asyncio.run(
+        service.ListCapabilities(modules.worker_pb2.ListCapabilitiesRequest(), None)
+    )
+
+    assert response.HasField("success")
+    assert [item.name for item in response.success.capabilities] == [
+        "jobspy.scrape_jobs",
+        "system.echo",
+    ]
+    assert all(item.supports_sync for item in response.success.capabilities)
+    assert all(item.supports_async for item in response.success.capabilities)
+
+
 def test_grpc_submit_and_get_task_round_trip() -> None:
     try:
         modules = load_generated_modules()

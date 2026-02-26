@@ -14,7 +14,7 @@ def test_worker_not_ready_before_mark_initialized() -> None:
 
 def test_worker_ready_after_initialization_and_capability_registration() -> None:
     registry = CapabilityRegistry()
-    registry.register("job.discovery.jobspy.scrape", object())
+    registry.register("jobspy.scrape_jobs", object())
     state = WorkerState(registry=registry)
     state.mark_initialized()
 

@@ -16,6 +16,14 @@ sync:
 
 [doc("run python-worker tests")]
 test:
+    uv run --dev python -m pytest tests -m "not integration" -q
+
+[doc("run live jobspy integration test (network required)")]
+test-jobspy-live:
+    uv run --dev python -m pytest tests/test_jobspy_capability_integration.py -q
+
+[doc("run all tests, including integration")]
+test-all:
     uv run --dev python -m pytest tests -q
 
 [doc("format python code with ruff")]

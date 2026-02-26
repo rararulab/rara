@@ -94,6 +94,10 @@ class CapabilityExecutor:
         """Fetch a task record by ID from the in-memory task store."""
         return self._task_store.get(task_id)
 
+    def list_capabilities(self) -> list[str]:
+        """Return registered capability names in sorted order."""
+        return self._registry.names()
+
     async def _run_task(self, task_id: str, payload: dict[str, Any]) -> None:
         """Background task runner that updates lifecycle timestamps/state."""
         task = self._task_store.get(task_id)

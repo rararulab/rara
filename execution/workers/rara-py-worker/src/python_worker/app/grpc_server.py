@@ -114,6 +114,26 @@ class ExecutionWorkerGrpcService:
                 )
             )
 
+    async def ListCapabilities(self, request, context):  # noqa: N802
+        """Return the set of capability names available on this worker instance."""
+        with self._tracer.start_as_current_span("grpc.ListCapabilities") as span:
+            span.set_attribute("rpc.system", "grpc")
+            span.set_attribute("rpc.method", "ListCapabilities")
+            names = self._executor.list_capabilities()
+            span.set_attribute("capability.count", len(names))
+            return self._pb2.ListCapabilitiesResponse(
+                success=self._pb2.ListCapabilitiesSuccess(
+                    capabilities=[
+                        self._pb2.CapabilityInfo(
+                            name=name,
+                            supports_sync=True,
+                            supports_async=True,
+                        )
+                        for name in names
+                    ]
+                )
+            )
+
     async def Invoke(self, request, context):  # noqa: N802 (grpc generated naming)
         """Handle synchronous capability invocation requests."""
         with self._tracer.start_as_current_span("grpc.Invoke") as span:

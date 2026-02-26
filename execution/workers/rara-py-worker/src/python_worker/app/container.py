@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass
 
 from python_worker.app.state import WorkerState
+from python_worker.capabilities.jobspy import jobspy_scrape
 from python_worker.capabilities.system import health_ping, system_echo
 from python_worker.core.executor import CapabilityExecutor
 from python_worker.core.registry import CapabilityRegistry
@@ -27,6 +28,7 @@ def build_container() -> WorkerContainer:
     registry = CapabilityRegistry()
     registry.register("system.health.ping", health_ping)
     registry.register("system.echo", system_echo)
+    registry.register("jobspy.scrape_jobs", jobspy_scrape)
 
     task_store = InMemoryTaskStore()
     state = WorkerState(

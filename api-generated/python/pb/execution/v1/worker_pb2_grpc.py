@@ -20,6 +20,11 @@ class ExecutionWorkerServiceStub(object):
                 request_serializer=execution_dot_v1_dot_worker__pb2.StatusRequest.SerializeToString,
                 response_deserializer=execution_dot_v1_dot_worker__pb2.StatusResponse.FromString,
                 _registered_method=True)
+        self.ListCapabilities = channel.unary_unary(
+                '/execution.v1.ExecutionWorkerService/ListCapabilities',
+                request_serializer=execution_dot_v1_dot_worker__pb2.ListCapabilitiesRequest.SerializeToString,
+                response_deserializer=execution_dot_v1_dot_worker__pb2.ListCapabilitiesResponse.FromString,
+                _registered_method=True)
         self.Invoke = channel.unary_unary(
                 '/execution.v1.ExecutionWorkerService/Invoke',
                 request_serializer=execution_dot_v1_dot_worker__pb2.InvokeRequest.SerializeToString,
@@ -43,6 +48,13 @@ class ExecutionWorkerServiceServicer(object):
 
     def Status(self, request, context):
         """Returns the current worker identity (name + runtime kind).
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListCapabilities(self, request, context):
+        """Lists capability names currently registered on this worker instance.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -76,6 +88,11 @@ def add_ExecutionWorkerServiceServicer_to_server(servicer, server):
                     servicer.Status,
                     request_deserializer=execution_dot_v1_dot_worker__pb2.StatusRequest.FromString,
                     response_serializer=execution_dot_v1_dot_worker__pb2.StatusResponse.SerializeToString,
+            ),
+            'ListCapabilities': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListCapabilities,
+                    request_deserializer=execution_dot_v1_dot_worker__pb2.ListCapabilitiesRequest.FromString,
+                    response_serializer=execution_dot_v1_dot_worker__pb2.ListCapabilitiesResponse.SerializeToString,
             ),
             'Invoke': grpc.unary_unary_rpc_method_handler(
                     servicer.Invoke,
@@ -121,6 +138,33 @@ class ExecutionWorkerService(object):
             '/execution.v1.ExecutionWorkerService/Status',
             execution_dot_v1_dot_worker__pb2.StatusRequest.SerializeToString,
             execution_dot_v1_dot_worker__pb2.StatusResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListCapabilities(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/execution.v1.ExecutionWorkerService/ListCapabilities',
+            execution_dot_v1_dot_worker__pb2.ListCapabilitiesRequest.SerializeToString,
+            execution_dot_v1_dot_worker__pb2.ListCapabilitiesResponse.FromString,
             options,
             channel_credentials,
             insecure,

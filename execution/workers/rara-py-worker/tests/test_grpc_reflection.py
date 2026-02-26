@@ -33,7 +33,7 @@ async def _assert_reflection_methods() -> None:
         service_names, method_names = await _fetch_reflection_data(port)
         assert "execution.v1.ExecutionWorkerService" in service_names
         assert "grpc.reflection.v1alpha.ServerReflection" in service_names
-        assert method_names == ["Status", "Invoke", "SubmitTask", "GetTask"]
+        assert method_names == ["Status", "ListCapabilities", "Invoke", "SubmitTask", "GetTask"]
     finally:
         await server.stop(grace=None)
 
