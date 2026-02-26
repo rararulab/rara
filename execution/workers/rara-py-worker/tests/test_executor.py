@@ -63,4 +63,3 @@ def test_submit_task_runs_in_background_and_stores_result() -> None:
         assert status.error is None
 
     asyncio.run(scenario())
-

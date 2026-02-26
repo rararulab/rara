@@ -1,3 +1,5 @@
+"""OpenTelemetry tracing setup with stdout exporter for local/K8s logs."""
+
 from __future__ import annotations
 
 import os
@@ -14,6 +16,7 @@ _INIT_DONE = False
 
 
 def init_tracing() -> None:
+    """Initialize a global tracer provider once using ConsoleSpanExporter."""
     global _INIT_DONE
     if _INIT_DONE:
         return
@@ -26,4 +29,5 @@ def init_tracing() -> None:
 
 
 def get_tracer(name: str):
+    """Return a tracer from the global provider."""
     return trace.get_tracer(name)

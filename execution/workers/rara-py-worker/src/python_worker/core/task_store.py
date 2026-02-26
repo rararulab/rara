@@ -1,3 +1,5 @@
+"""In-memory task records and lifecycle state for async execution."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -26,6 +28,8 @@ class TaskRecord:
 
 
 class InMemoryTaskStore:
+    """Volatile task store used by the v1 worker implementation."""
+
     def __init__(self) -> None:
         self._tasks: dict[str, TaskRecord] = {}
 

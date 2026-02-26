@@ -1,3 +1,5 @@
+"""HTTP probe endpoints used by Kubernetes health checks."""
+
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
@@ -11,6 +13,7 @@ from python_worker.observability.tracing import get_tracer
 
 
 def build_default_state() -> WorkerState:
+    """Create a standalone state instance for probe-only/local HTTP runs."""
     registry = CapabilityRegistry()
     # Placeholder registration to make readiness behavior explicit in local runs.
     registry.register("system.health.ping", object())
@@ -21,6 +24,7 @@ def build_default_state() -> WorkerState:
 
 
 def create_app(state: WorkerState | None = None) -> FastAPI:
+    """Create the FastAPI app exposing `/healthz` and `/readyz`."""
     worker_state = state or build_default_state()
     tracer = get_tracer("python_worker.http")
 
@@ -33,9 +37,7 @@ def create_app(state: WorkerState | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def trace_requests(request: Request, call_next):
-        with tracer.start_as_current_span(
-            f"http {request.method} {request.url.path}"
-        ) as span:
+        with tracer.start_as_current_span(f"http {request.method} {request.url.path}") as span:
             span.set_attribute("http.method", request.method)
             span.set_attribute("http.route", request.url.path)
             response = await call_next(request)
@@ -58,6 +60,7 @@ def create_app(state: WorkerState | None = None) -> FastAPI:
 
 
 def main() -> None:
+    """Run the probe HTTP server as a local entrypoint."""
     import uvicorn
 
     uvicorn.run(create_app(), host="0.0.0.0", port=8080)

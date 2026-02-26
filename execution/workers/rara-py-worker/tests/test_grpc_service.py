@@ -1,6 +1,6 @@
 import asyncio
-import pytest
 
+import pytest
 from google.protobuf.struct_pb2 import Struct
 
 from python_worker.app.grpc_server import (
@@ -96,7 +96,9 @@ def test_grpc_submit_and_get_task_round_trip() -> None:
                 modules.worker_pb2.GetTaskRequest(task_id=task_id),
                 None,
             )
-            if status.HasField("task") and status.task.status == modules.worker_pb2.TASK_STATE_SUCCEEDED:
+            if status.HasField("task") and (
+                status.task.status == modules.worker_pb2.TASK_STATE_SUCCEEDED
+            ):
                 assert dict(status.task.result) == {"echo": "hi"}
                 return
             await asyncio.sleep(0.01)

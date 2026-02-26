@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Build and smoke-test the rara-py-worker container over HTTP, gRPC, and grpcurl reflection.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

@@ -18,6 +18,19 @@ sync:
 test:
     uv run --dev python -m pytest tests -q
 
+[doc("format python code with ruff")]
+fmt:
+    uv run --dev ruff format src tests scripts
+
+[doc("lint python code with ruff")]
+lint:
+    uv run --dev ruff check src tests scripts
+
+[doc("run lint and tests")]
+check:
+    just lint
+    just test
+
 [doc("build rara-py-worker image (tag defaults to rara-py-worker:<.python-version>)")]
 build-image tag=DEFAULT_TAG:
     @echo "🐳 Building rara-py-worker with Python {{PYTHON_VERSION}} (tag={{tag}})..."

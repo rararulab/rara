@@ -1,3 +1,5 @@
+"""Application container assembly for the Python worker process."""
+
 from __future__ import annotations
 
 import os
@@ -13,12 +15,15 @@ from python_worker.core.worker_identity import WorkerIdentity
 
 @dataclass(slots=True)
 class WorkerContainer:
+    """Wires together long-lived app components for process startup."""
+
     state: WorkerState
     executor: CapabilityExecutor
     identity: WorkerIdentity
 
 
 def build_container() -> WorkerContainer:
+    """Build the default runtime container used by HTTP/gRPC entrypoints."""
     registry = CapabilityRegistry()
     registry.register("system.health.ping", health_ping)
     registry.register("system.echo", system_echo)

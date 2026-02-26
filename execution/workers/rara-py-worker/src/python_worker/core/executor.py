@@ -1,3 +1,5 @@
+"""Capability execution engine with sync invoke and async task orchestration."""
+
 from __future__ import annotations
 
 import asyncio
@@ -21,6 +23,8 @@ from python_worker.observability.tracing import get_tracer
 
 
 class CapabilityExecutor:
+    """Executes registered capabilities and tracks async tasks in memory."""
+
     def __init__(
         self,
         registry: CapabilityRegistry,
@@ -31,6 +35,7 @@ class CapabilityExecutor:
         self._tracer = get_tracer("python_worker.executor")
 
     async def invoke(self, capability: str, payload: dict[str, Any]) -> InvokeOutcome:
+        """Invoke a capability immediately and return a unified outcome envelope."""
         with self._tracer.start_as_current_span("capability.invoke") as span:
             span.set_attribute("capability", capability)
             handler = self._registry.get(capability)
@@ -72,9 +77,8 @@ class CapabilityExecutor:
                     )
                 )
 
-    async def submit_task(
-        self, capability: str, payload: dict[str, Any]
-    ) -> SubmitTaskOutcome:
+    async def submit_task(self, capability: str, payload: dict[str, Any]) -> SubmitTaskOutcome:
+        """Queue async execution as an in-process background task."""
         with self._tracer.start_as_current_span("capability.submit_task") as span:
             span.set_attribute("capability", capability)
             task_id = f"task_{uuid.uuid4().hex[:12]}"
@@ -87,9 +91,11 @@ class CapabilityExecutor:
             return SubmitTaskOutcome(task=TaskRef(id=task_id, status=task.status.value))
 
     def get_task(self, task_id: str) -> TaskRecord | None:
+        """Fetch a task record by ID from the in-memory task store."""
         return self._task_store.get(task_id)
 
     async def _run_task(self, task_id: str, payload: dict[str, Any]) -> None:
+        """Background task runner that updates lifecycle timestamps/state."""
         task = self._task_store.get(task_id)
         if task is None:
             return

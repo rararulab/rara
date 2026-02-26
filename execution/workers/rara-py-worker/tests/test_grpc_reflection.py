@@ -50,9 +50,7 @@ async def _fetch_reflection_data(port: int) -> tuple[list[str], list[str]]:
         list_req = reflection_pb2.ServerReflectionRequest(list_services="")
         list_stream = stub.ServerReflectionInfo(_single_request_stream(list_req))
         list_resp = await list_stream.read()
-        service_names = sorted(
-            item.name for item in list_resp.list_services_response.service
-        )
+        service_names = sorted(item.name for item in list_resp.list_services_response.service)
 
         file_req = reflection_pb2.ServerReflectionRequest(
             file_containing_symbol="execution.v1.ExecutionWorkerService"

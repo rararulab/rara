@@ -1,3 +1,5 @@
+"""Small transport-agnostic models used by the execution core."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -38,5 +40,5 @@ class SubmitTaskOutcome:
 
 
 def elapsed_ms(start: float) -> int:
+    """Convert monotonic start time to integer elapsed milliseconds."""
     return int((monotonic() - start) * 1000)
-

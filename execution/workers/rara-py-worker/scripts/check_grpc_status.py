@@ -1,3 +1,5 @@
+"""CLI used by smoke tests to verify gRPC Status over localhost."""
+
 from __future__ import annotations
 
 import sys
@@ -9,6 +11,7 @@ from python_worker.app.grpc_server import load_generated_modules
 
 
 def main() -> int:
+    """Call Status until success or timeout, validating worker identity fields."""
     if len(sys.argv) != 3:
         raise SystemExit("usage: check_grpc_status.py <grpc_port> <expected_name>")
 

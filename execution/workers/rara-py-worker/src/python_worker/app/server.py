@@ -1,3 +1,5 @@
+"""Combined process entrypoint that starts HTTP probes and gRPC server."""
+
 from __future__ import annotations
 
 import asyncio
@@ -12,6 +14,7 @@ from python_worker.observability.tracing import init_tracing
 
 
 async def serve() -> None:
+    """Run both HTTP and gRPC servers with shared state/executor."""
     init_tracing()
     container = build_container()
     http_app = create_app(state=container.state)
@@ -37,6 +40,7 @@ async def serve() -> None:
 
 
 def main() -> None:
+    """CLI entrypoint for the combined worker server."""
     asyncio.run(serve())
 
 

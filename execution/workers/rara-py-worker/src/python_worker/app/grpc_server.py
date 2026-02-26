@@ -1,3 +1,5 @@
+"""gRPC server bootstrap and service implementation for execution worker RPCs."""
+
 from __future__ import annotations
 
 import asyncio
@@ -26,11 +28,14 @@ class GrpcServerBootstrapError(RuntimeError):
 
 @dataclass(slots=True)
 class GeneratedGrpcModules:
+    """Holds generated protobuf/grpc modules loaded from api-generated stubs."""
+
     worker_pb2: Any
     worker_pb2_grpc: Any
 
 
 def build_default_executor() -> CapabilityExecutor:
+    """Create a minimal executor for standalone gRPC-only local runs."""
     registry = CapabilityRegistry()
 
     async def _health_ping(payload: dict[str, Any]) -> dict[str, Any]:
@@ -67,6 +72,7 @@ def _ensure_generated_python_bindings_on_path() -> Path:
 
 
 def load_generated_modules() -> GeneratedGrpcModules:
+    """Import generated execution worker protobuf modules from `api-generated`."""
     _ensure_generated_python_bindings_on_path()
     try:
         from execution.v1 import worker_pb2, worker_pb2_grpc  # type: ignore
@@ -79,6 +85,8 @@ def load_generated_modules() -> GeneratedGrpcModules:
 
 
 class ExecutionWorkerGrpcService:
+    """Implements the generated gRPC servicer methods for worker RPCs."""
+
     def __init__(
         self,
         modules: GeneratedGrpcModules,
@@ -91,6 +99,7 @@ class ExecutionWorkerGrpcService:
         self._tracer = get_tracer("python_worker.grpc")
 
     async def Status(self, request, context):  # noqa: N802
+        """Return worker identity metadata for discovery/diagnostics."""
         with self._tracer.start_as_current_span("grpc.Status") as span:
             span.set_attribute("rpc.system", "grpc")
             span.set_attribute("rpc.method", "Status")
@@ -106,13 +115,12 @@ class ExecutionWorkerGrpcService:
             )
 
     async def Invoke(self, request, context):  # noqa: N802 (grpc generated naming)
+        """Handle synchronous capability invocation requests."""
         with self._tracer.start_as_current_span("grpc.Invoke") as span:
             span.set_attribute("rpc.system", "grpc")
             span.set_attribute("rpc.method", "Invoke")
             span.set_attribute("capability", request.capability)
-            payload = json_format.MessageToDict(
-                request.payload, preserving_proto_field_name=True
-            )
+            payload = json_format.MessageToDict(request.payload, preserving_proto_field_name=True)
             outcome = await self._executor.invoke(request.capability, payload)
             if outcome.success is not None:
                 span.set_attribute("result.status", "success")
@@ -135,13 +143,12 @@ class ExecutionWorkerGrpcService:
             )
 
     async def SubmitTask(self, request, context):  # noqa: N802
+        """Handle asynchronous capability submission requests."""
         with self._tracer.start_as_current_span("grpc.SubmitTask") as span:
             span.set_attribute("rpc.system", "grpc")
             span.set_attribute("rpc.method", "SubmitTask")
             span.set_attribute("capability", request.capability)
-            payload = json_format.MessageToDict(
-                request.payload, preserving_proto_field_name=True
-            )
+            payload = json_format.MessageToDict(request.payload, preserving_proto_field_name=True)
             outcome = await self._executor.submit_task(request.capability, payload)
             if outcome.task is not None:
                 span.set_attribute("task.id", outcome.task.id)
@@ -163,6 +170,7 @@ class ExecutionWorkerGrpcService:
             )
 
     async def GetTask(self, request, context):  # noqa: N802
+        """Return current task status/result for a submitted task."""
         with self._tracer.start_as_current_span("grpc.GetTask") as span:
             span.set_attribute("rpc.system", "grpc")
             span.set_attribute("rpc.method", "GetTask")
@@ -242,6 +250,7 @@ async def create_grpc_server(
     identity: WorkerIdentity | None = None,
     state: WorkerState | None = None,
 ):
+    """Create and configure the gRPC aio server with reflection enabled."""
     modules = load_generated_modules()
     exec_impl = executor or build_default_executor()
     service_impl = ExecutionWorkerGrpcService(
@@ -251,9 +260,7 @@ async def create_grpc_server(
     )
 
     server = grpc.aio.server()
-    modules.worker_pb2_grpc.add_ExecutionWorkerServiceServicer_to_server(
-        service_impl, server
-    )
+    modules.worker_pb2_grpc.add_ExecutionWorkerServiceServicer_to_server(service_impl, server)
     service_names = (
         modules.worker_pb2.DESCRIPTOR.services_by_name["ExecutionWorkerService"].full_name,
         reflection.SERVICE_NAME,
@@ -273,6 +280,7 @@ async def serve(
     host: str = "0.0.0.0",
     port: int = 50051,
 ) -> None:
+    """Run the gRPC server and keep readiness state in sync."""
     server = await create_grpc_server(executor=executor, identity=identity, state=state)
     server.add_insecure_port(f"{host}:{port}")
     await server.start()
@@ -286,6 +294,7 @@ async def serve(
 
 
 def main() -> None:
+    """CLI entrypoint for gRPC-only worker mode."""
     asyncio.run(serve())
 
 

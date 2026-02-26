@@ -1,3 +1,5 @@
+"""Worker identity model returned by the Status RPC."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -7,4 +9,3 @@ from dataclasses import dataclass
 class WorkerIdentity:
     name: str
     kind: str
-
