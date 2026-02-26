@@ -7,6 +7,7 @@ dependencies = [
   "fastapi>=0.115",
   "grpcio>=1.68",
   "grpcio-reflection>=1.68",
+  "mem0ai",
   "opentelemetry-api>=1.28",
   "opentelemetry-sdk>=1.28",
   "protobuf>=5.0",

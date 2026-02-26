@@ -22,11 +22,10 @@ _runtime_version.ValidateProtobufRuntimeVersion(
 _sym_db = _symbol_database.Default()
 
 
-from google.protobuf import struct_pb2 as google_dot_protobuf_dot_struct__pb2
 from google.protobuf import timestamp_pb2 as google_dot_protobuf_dot_timestamp__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x19\x65xecution/v1/worker.proto\x12\x0c\x65xecution.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x0f\n\rStatusRequest\"\x87\x01\n\x0eStatusResponse\x12\x37\n\x07success\x18\x01 \x01(\x0b\x32\x1b.execution.v1.StatusSuccessH\x00R\x07success\x12\x31\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x19.execution.v1.WorkerErrorH\x00R\x05\x65rrorB\t\n\x07outcome\"E\n\rStatusSuccess\x12\x34\n\x06worker\x18\x01 \x01(\x0b\x32\x1c.execution.v1.WorkerIdentityR\x06worker\"\x19\n\x17ListCapabilitiesRequest\"\x9b\x01\n\x18ListCapabilitiesResponse\x12\x41\n\x07success\x18\x01 \x01(\x0b\x32%.execution.v1.ListCapabilitiesSuccessH\x00R\x07success\x12\x31\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x19.execution.v1.WorkerErrorH\x00R\x05\x65rrorB\t\n\x07outcome\"[\n\x17ListCapabilitiesSuccess\x12@\n\x0c\x63\x61pabilities\x18\x01 \x03(\x0b\x32\x1c.execution.v1.CapabilityInfoR\x0c\x63\x61pabilities\"p\n\x0e\x43\x61pabilityInfo\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12#\n\rsupports_sync\x18\x02 \x01(\x08R\x0csupportsSync\x12%\n\x0esupports_async\x18\x03 \x01(\x08R\rsupportsAsync\"R\n\x0eWorkerIdentity\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12,\n\x04kind\x18\x02 \x01(\x0e\x32\x18.execution.v1.WorkerKindR\x04kind\"\x85\x02\n\rInvokeRequest\x12\x1e\n\ncapability\x18\x01 \x01(\tR\ncapability\x12\x31\n\x07payload\x18\x02 \x01(\x0b\x32\x17.google.protobuf.StructR\x07payload\x12\x1d\n\ntimeout_ms\x18\x03 \x01(\rR\ttimeoutMs\x12\x45\n\x08metadata\x18\x04 \x03(\x0b\x32).execution.v1.InvokeRequest.MetadataEntryR\x08metadata\x1a;\n\rMetadataEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\"\x8c\x01\n\x0bWorkerError\x12\x12\n\x04\x63ode\x18\x01 \x01(\tR\x04\x63ode\x12\x18\n\x07message\x18\x02 \x01(\tR\x07message\x12\x1c\n\tretryable\x18\x03 \x01(\x08R\tretryable\x12\x31\n\x07\x64\x65tails\x18\x04 \x01(\x0b\x32\x17.google.protobuf.StructR\x07\x64\x65tails\"\x87\x01\n\x0eInvokeResponse\x12\x37\n\x07success\x18\x01 \x01(\x0b\x32\x1b.execution.v1.InvokeSuccessH\x00R\x07success\x12\x31\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x19.execution.v1.WorkerErrorH\x00R\x05\x65rrorB\t\n\x07outcome\"\x81\x01\n\rInvokeSuccess\x12\x1e\n\ncapability\x18\x01 \x01(\tR\ncapability\x12/\n\x06result\x18\x02 \x01(\x0b\x32\x17.google.protobuf.StructR\x06result\x12\x1f\n\x0b\x64uration_ms\x18\x03 \x01(\rR\ndurationMs\"\x8d\x02\n\x11SubmitTaskRequest\x12\x1e\n\ncapability\x18\x01 \x01(\tR\ncapability\x12\x31\n\x07payload\x18\x02 \x01(\x0b\x32\x17.google.protobuf.StructR\x07payload\x12\x1d\n\ntimeout_ms\x18\x03 \x01(\rR\ttimeoutMs\x12I\n\x08metadata\x18\x04 \x03(\x0b\x32-.execution.v1.SubmitTaskRequest.MetadataEntryR\x08metadata\x1a;\n\rMetadataEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\"\x7f\n\x12SubmitTaskResponse\x12+\n\x04task\x18\x01 \x01(\x0b\x32\x15.execution.v1.TaskRefH\x00R\x04task\x12\x31\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x19.execution.v1.WorkerErrorH\x00R\x05\x65rrorB\t\n\x07outcome\")\n\x0eGetTaskRequest\x12\x17\n\x07task_id\x18\x01 \x01(\tR\x06taskId\"\x7f\n\x0fGetTaskResponse\x12.\n\x04task\x18\x01 \x01(\x0b\x32\x18.execution.v1.TaskStatusH\x00R\x04task\x12\x31\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x19.execution.v1.WorkerErrorH\x00R\x05\x65rrorB\t\n\x07outcome\"J\n\x07TaskRef\x12\x0e\n\x02id\x18\x01 \x01(\tR\x02id\x12/\n\x06status\x18\x02 \x01(\x0e\x32\x17.execution.v1.TaskStateR\x06status\"\x82\x03\n\nTaskStatus\x12\x0e\n\x02id\x18\x01 \x01(\tR\x02id\x12\x1e\n\ncapability\x18\x02 \x01(\tR\ncapability\x12/\n\x06status\x18\x03 \x01(\x0e\x32\x17.execution.v1.TaskStateR\x06status\x12/\n\x06result\x18\x04 \x01(\x0b\x32\x17.google.protobuf.StructR\x06result\x12/\n\x05\x65rror\x18\x05 \x01(\x0b\x32\x19.execution.v1.WorkerErrorR\x05\x65rror\x12\x39\n\ncreated_at\x18\x06 \x01(\x0b\x32\x1a.google.protobuf.TimestampR\tcreatedAt\x12\x39\n\nstarted_at\x18\x07 \x01(\x0b\x32\x1a.google.protobuf.TimestampR\tstartedAt\x12;\n\x0b\x66inished_at\x18\x08 \x01(\x0b\x32\x1a.google.protobuf.TimestampR\nfinishedAt*U\n\nWorkerKind\x12\x1b\n\x17WORKER_KIND_UNSPECIFIED\x10\x00\x12\x16\n\x12WORKER_KIND_PYTHON\x10\x01\x12\x12\n\x0eWORKER_KIND_GO\x10\x02*\xa0\x01\n\tTaskState\x12\x1a\n\x16TASK_STATE_UNSPECIFIED\x10\x00\x12\x15\n\x11TASK_STATE_QUEUED\x10\x01\x12\x16\n\x12TASK_STATE_RUNNING\x10\x02\x12\x18\n\x14TASK_STATE_SUCCEEDED\x10\x03\x12\x15\n\x11TASK_STATE_FAILED\x10\x04\x12\x17\n\x13TASK_STATE_CANCELED\x10\x05\x32\x9e\x03\n\x16\x45xecutionWorkerService\x12\x43\n\x06Status\x12\x1b.execution.v1.StatusRequest\x1a\x1c.execution.v1.StatusResponse\x12\x61\n\x10ListCapabilities\x12%.execution.v1.ListCapabilitiesRequest\x1a&.execution.v1.ListCapabilitiesResponse\x12\x43\n\x06Invoke\x12\x1b.execution.v1.InvokeRequest\x1a\x1c.execution.v1.InvokeResponse\x12O\n\nSubmitTask\x12\x1f.execution.v1.SubmitTaskRequest\x1a .execution.v1.SubmitTaskResponse\x12\x46\n\x07GetTask\x12\x1c.execution.v1.GetTaskRequest\x1a\x1d.execution.v1.GetTaskResponseB~Z<github.com/crrow/job/bindings/go/pb/execution/v1;executionv1\xa2\x02\x03\x45XX\xca\x02\x0c\x45xecution\\V1\xe2\x02\x18\x45xecution\\V1\\GPBMetadata\xea\x02\rExecution::V1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x19\x65xecution/v1/worker.proto\x12\x0c\x65xecution.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x0f\n\rStatusRequest\"\x87\x01\n\x0eStatusResponse\x12\x37\n\x07success\x18\x01 \x01(\x0b\x32\x1b.execution.v1.StatusSuccessH\x00R\x07success\x12\x31\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x19.execution.v1.WorkerErrorH\x00R\x05\x65rrorB\t\n\x07outcome\"E\n\rStatusSuccess\x12\x34\n\x06worker\x18\x01 \x01(\x0b\x32\x1c.execution.v1.WorkerIdentityR\x06worker\"\x19\n\x17ListCapabilitiesRequest\"\x9b\x01\n\x18ListCapabilitiesResponse\x12\x41\n\x07success\x18\x01 \x01(\x0b\x32%.execution.v1.ListCapabilitiesSuccessH\x00R\x07success\x12\x31\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x19.execution.v1.WorkerErrorH\x00R\x05\x65rrorB\t\n\x07outcome\"[\n\x17ListCapabilitiesSuccess\x12@\n\x0c\x63\x61pabilities\x18\x01 \x03(\x0b\x32\x1c.execution.v1.CapabilityInfoR\x0c\x63\x61pabilities\"p\n\x0e\x43\x61pabilityInfo\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12#\n\rsupports_sync\x18\x02 \x01(\x08R\x0csupportsSync\x12%\n\x0esupports_async\x18\x03 \x01(\x08R\rsupportsAsync\"R\n\x0eWorkerIdentity\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12,\n\x04kind\x18\x02 \x01(\x0e\x32\x18.execution.v1.WorkerKindR\x04kind\"\xec\x01\n\rInvokeRequest\x12\x1e\n\ncapability\x18\x01 \x01(\tR\ncapability\x12\x18\n\x07payload\x18\x02 \x01(\x0cR\x07payload\x12\x1d\n\ntimeout_ms\x18\x03 \x01(\rR\ttimeoutMs\x12\x45\n\x08metadata\x18\x04 \x03(\x0b\x32).execution.v1.InvokeRequest.MetadataEntryR\x08metadata\x1a;\n\rMetadataEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\"s\n\x0bWorkerError\x12\x12\n\x04\x63ode\x18\x01 \x01(\tR\x04\x63ode\x12\x18\n\x07message\x18\x02 \x01(\tR\x07message\x12\x1c\n\tretryable\x18\x03 \x01(\x08R\tretryable\x12\x18\n\x07\x64\x65tails\x18\x04 \x01(\x0cR\x07\x64\x65tails\"\x87\x01\n\x0eInvokeResponse\x12\x37\n\x07success\x18\x01 \x01(\x0b\x32\x1b.execution.v1.InvokeSuccessH\x00R\x07success\x12\x31\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x19.execution.v1.WorkerErrorH\x00R\x05\x65rrorB\t\n\x07outcome\"h\n\rInvokeSuccess\x12\x1e\n\ncapability\x18\x01 \x01(\tR\ncapability\x12\x16\n\x06result\x18\x02 \x01(\x0cR\x06result\x12\x1f\n\x0b\x64uration_ms\x18\x03 \x01(\rR\ndurationMs\"\xf4\x01\n\x11SubmitTaskRequest\x12\x1e\n\ncapability\x18\x01 \x01(\tR\ncapability\x12\x18\n\x07payload\x18\x02 \x01(\x0cR\x07payload\x12\x1d\n\ntimeout_ms\x18\x03 \x01(\rR\ttimeoutMs\x12I\n\x08metadata\x18\x04 \x03(\x0b\x32-.execution.v1.SubmitTaskRequest.MetadataEntryR\x08metadata\x1a;\n\rMetadataEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\"\x7f\n\x12SubmitTaskResponse\x12+\n\x04task\x18\x01 \x01(\x0b\x32\x15.execution.v1.TaskRefH\x00R\x04task\x12\x31\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x19.execution.v1.WorkerErrorH\x00R\x05\x65rrorB\t\n\x07outcome\")\n\x0eGetTaskRequest\x12\x17\n\x07task_id\x18\x01 \x01(\tR\x06taskId\"\x7f\n\x0fGetTaskResponse\x12.\n\x04task\x18\x01 \x01(\x0b\x32\x18.execution.v1.TaskStatusH\x00R\x04task\x12\x31\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x19.execution.v1.WorkerErrorH\x00R\x05\x65rrorB\t\n\x07outcome\"J\n\x07TaskRef\x12\x0e\n\x02id\x18\x01 \x01(\tR\x02id\x12/\n\x06status\x18\x02 \x01(\x0e\x32\x17.execution.v1.TaskStateR\x06status\"\xe9\x02\n\nTaskStatus\x12\x0e\n\x02id\x18\x01 \x01(\tR\x02id\x12\x1e\n\ncapability\x18\x02 \x01(\tR\ncapability\x12/\n\x06status\x18\x03 \x01(\x0e\x32\x17.execution.v1.TaskStateR\x06status\x12\x16\n\x06result\x18\x04 \x01(\x0cR\x06result\x12/\n\x05\x65rror\x18\x05 \x01(\x0b\x32\x19.execution.v1.WorkerErrorR\x05\x65rror\x12\x39\n\ncreated_at\x18\x06 \x01(\x0b\x32\x1a.google.protobuf.TimestampR\tcreatedAt\x12\x39\n\nstarted_at\x18\x07 \x01(\x0b\x32\x1a.google.protobuf.TimestampR\tstartedAt\x12;\n\x0b\x66inished_at\x18\x08 \x01(\x0b\x32\x1a.google.protobuf.TimestampR\nfinishedAt*U\n\nWorkerKind\x12\x1b\n\x17WORKER_KIND_UNSPECIFIED\x10\x00\x12\x16\n\x12WORKER_KIND_PYTHON\x10\x01\x12\x12\n\x0eWORKER_KIND_GO\x10\x02*\xa0\x01\n\tTaskState\x12\x1a\n\x16TASK_STATE_UNSPECIFIED\x10\x00\x12\x15\n\x11TASK_STATE_QUEUED\x10\x01\x12\x16\n\x12TASK_STATE_RUNNING\x10\x02\x12\x18\n\x14TASK_STATE_SUCCEEDED\x10\x03\x12\x15\n\x11TASK_STATE_FAILED\x10\x04\x12\x17\n\x13TASK_STATE_CANCELED\x10\x05\x32\x9e\x03\n\x16\x45xecutionWorkerService\x12\x43\n\x06Status\x12\x1b.execution.v1.StatusRequest\x1a\x1c.execution.v1.StatusResponse\x12\x61\n\x10ListCapabilities\x12%.execution.v1.ListCapabilitiesRequest\x1a&.execution.v1.ListCapabilitiesResponse\x12\x43\n\x06Invoke\x12\x1b.execution.v1.InvokeRequest\x1a\x1c.execution.v1.InvokeResponse\x12O\n\nSubmitTask\x12\x1f.execution.v1.SubmitTaskRequest\x1a .execution.v1.SubmitTaskResponse\x12\x46\n\x07GetTask\x12\x1c.execution.v1.GetTaskRequest\x1a\x1d.execution.v1.GetTaskResponseB~Z<github.com/crrow/job/bindings/go/pb/execution/v1;executionv1\xa2\x02\x03\x45XX\xca\x02\x0c\x45xecution\\V1\xe2\x02\x18\x45xecution\\V1\\GPBMetadata\xea\x02\rExecution::V1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -38,50 +37,50 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_INVOKEREQUEST_METADATAENTRY']._serialized_options = b'8\001'
   _globals['_SUBMITTASKREQUEST_METADATAENTRY']._loaded_options = None
   _globals['_SUBMITTASKREQUEST_METADATAENTRY']._serialized_options = b'8\001'
-  _globals['_WORKERKIND']._serialized_start=2523
-  _globals['_WORKERKIND']._serialized_end=2608
-  _globals['_TASKSTATE']._serialized_start=2611
-  _globals['_TASKSTATE']._serialized_end=2771
-  _globals['_STATUSREQUEST']._serialized_start=106
-  _globals['_STATUSREQUEST']._serialized_end=121
-  _globals['_STATUSRESPONSE']._serialized_start=124
-  _globals['_STATUSRESPONSE']._serialized_end=259
-  _globals['_STATUSSUCCESS']._serialized_start=261
-  _globals['_STATUSSUCCESS']._serialized_end=330
-  _globals['_LISTCAPABILITIESREQUEST']._serialized_start=332
-  _globals['_LISTCAPABILITIESREQUEST']._serialized_end=357
-  _globals['_LISTCAPABILITIESRESPONSE']._serialized_start=360
-  _globals['_LISTCAPABILITIESRESPONSE']._serialized_end=515
-  _globals['_LISTCAPABILITIESSUCCESS']._serialized_start=517
-  _globals['_LISTCAPABILITIESSUCCESS']._serialized_end=608
-  _globals['_CAPABILITYINFO']._serialized_start=610
-  _globals['_CAPABILITYINFO']._serialized_end=722
-  _globals['_WORKERIDENTITY']._serialized_start=724
-  _globals['_WORKERIDENTITY']._serialized_end=806
-  _globals['_INVOKEREQUEST']._serialized_start=809
-  _globals['_INVOKEREQUEST']._serialized_end=1070
-  _globals['_INVOKEREQUEST_METADATAENTRY']._serialized_start=1011
-  _globals['_INVOKEREQUEST_METADATAENTRY']._serialized_end=1070
-  _globals['_WORKERERROR']._serialized_start=1073
-  _globals['_WORKERERROR']._serialized_end=1213
-  _globals['_INVOKERESPONSE']._serialized_start=1216
-  _globals['_INVOKERESPONSE']._serialized_end=1351
-  _globals['_INVOKESUCCESS']._serialized_start=1354
-  _globals['_INVOKESUCCESS']._serialized_end=1483
-  _globals['_SUBMITTASKREQUEST']._serialized_start=1486
-  _globals['_SUBMITTASKREQUEST']._serialized_end=1755
-  _globals['_SUBMITTASKREQUEST_METADATAENTRY']._serialized_start=1011
-  _globals['_SUBMITTASKREQUEST_METADATAENTRY']._serialized_end=1070
-  _globals['_SUBMITTASKRESPONSE']._serialized_start=1757
-  _globals['_SUBMITTASKRESPONSE']._serialized_end=1884
-  _globals['_GETTASKREQUEST']._serialized_start=1886
-  _globals['_GETTASKREQUEST']._serialized_end=1927
-  _globals['_GETTASKRESPONSE']._serialized_start=1929
-  _globals['_GETTASKRESPONSE']._serialized_end=2056
-  _globals['_TASKREF']._serialized_start=2058
-  _globals['_TASKREF']._serialized_end=2132
-  _globals['_TASKSTATUS']._serialized_start=2135
-  _globals['_TASKSTATUS']._serialized_end=2521
-  _globals['_EXECUTIONWORKERSERVICE']._serialized_start=2774
-  _globals['_EXECUTIONWORKERSERVICE']._serialized_end=3188
+  _globals['_WORKERKIND']._serialized_start=2366
+  _globals['_WORKERKIND']._serialized_end=2451
+  _globals['_TASKSTATE']._serialized_start=2454
+  _globals['_TASKSTATE']._serialized_end=2614
+  _globals['_STATUSREQUEST']._serialized_start=76
+  _globals['_STATUSREQUEST']._serialized_end=91
+  _globals['_STATUSRESPONSE']._serialized_start=94
+  _globals['_STATUSRESPONSE']._serialized_end=229
+  _globals['_STATUSSUCCESS']._serialized_start=231
+  _globals['_STATUSSUCCESS']._serialized_end=300
+  _globals['_LISTCAPABILITIESREQUEST']._serialized_start=302
+  _globals['_LISTCAPABILITIESREQUEST']._serialized_end=327
+  _globals['_LISTCAPABILITIESRESPONSE']._serialized_start=330
+  _globals['_LISTCAPABILITIESRESPONSE']._serialized_end=485
+  _globals['_LISTCAPABILITIESSUCCESS']._serialized_start=487
+  _globals['_LISTCAPABILITIESSUCCESS']._serialized_end=578
+  _globals['_CAPABILITYINFO']._serialized_start=580
+  _globals['_CAPABILITYINFO']._serialized_end=692
+  _globals['_WORKERIDENTITY']._serialized_start=694
+  _globals['_WORKERIDENTITY']._serialized_end=776
+  _globals['_INVOKEREQUEST']._serialized_start=779
+  _globals['_INVOKEREQUEST']._serialized_end=1015
+  _globals['_INVOKEREQUEST_METADATAENTRY']._serialized_start=956
+  _globals['_INVOKEREQUEST_METADATAENTRY']._serialized_end=1015
+  _globals['_WORKERERROR']._serialized_start=1017
+  _globals['_WORKERERROR']._serialized_end=1132
+  _globals['_INVOKERESPONSE']._serialized_start=1135
+  _globals['_INVOKERESPONSE']._serialized_end=1270
+  _globals['_INVOKESUCCESS']._serialized_start=1272
+  _globals['_INVOKESUCCESS']._serialized_end=1376
+  _globals['_SUBMITTASKREQUEST']._serialized_start=1379
+  _globals['_SUBMITTASKREQUEST']._serialized_end=1623
+  _globals['_SUBMITTASKREQUEST_METADATAENTRY']._serialized_start=956
+  _globals['_SUBMITTASKREQUEST_METADATAENTRY']._serialized_end=1015
+  _globals['_SUBMITTASKRESPONSE']._serialized_start=1625
+  _globals['_SUBMITTASKRESPONSE']._serialized_end=1752
+  _globals['_GETTASKREQUEST']._serialized_start=1754
+  _globals['_GETTASKREQUEST']._serialized_end=1795
+  _globals['_GETTASKRESPONSE']._serialized_start=1797
+  _globals['_GETTASKRESPONSE']._serialized_end=1924
+  _globals['_TASKREF']._serialized_start=1926
+  _globals['_TASKREF']._serialized_end=2000
+  _globals['_TASKSTATUS']._serialized_start=2003
+  _globals['_TASKSTATUS']._serialized_end=2364
+  _globals['_EXECUTIONWORKERSERVICE']._serialized_start=2617
+  _globals['_EXECUTIONWORKERSERVICE']._serialized_end=3031
 # @@protoc_insertion_point(module_scope)

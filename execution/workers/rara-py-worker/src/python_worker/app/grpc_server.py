@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 from dataclasses import dataclass
@@ -10,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 import grpc
-from google.protobuf import json_format
 from google.protobuf.timestamp_pb2 import Timestamp
 from grpc_reflection.v1alpha import reflection
 
@@ -140,15 +140,14 @@ class ExecutionWorkerGrpcService:
             span.set_attribute("rpc.system", "grpc")
             span.set_attribute("rpc.method", "Invoke")
             span.set_attribute("capability", request.capability)
-            payload = json_format.MessageToDict(request.payload, preserving_proto_field_name=True)
+            payload = self._dict_from_json_bytes(request.payload)
             outcome = await self._executor.invoke(request.capability, payload)
             if outcome.success is not None:
                 span.set_attribute("result.status", "success")
-                result_struct = self._struct_from_dict(outcome.success.result)
                 return self._pb2.InvokeResponse(
                     success=self._pb2.InvokeSuccess(
                         capability=outcome.success.capability,
-                        result=result_struct,
+                        result=self._json_bytes_from_dict(outcome.success.result),
                         duration_ms=outcome.success.duration_ms,
                     )
                 )
@@ -168,7 +167,7 @@ class ExecutionWorkerGrpcService:
             span.set_attribute("rpc.system", "grpc")
             span.set_attribute("rpc.method", "SubmitTask")
             span.set_attribute("capability", request.capability)
-            payload = json_format.MessageToDict(request.payload, preserving_proto_field_name=True)
+            payload = self._dict_from_json_bytes(request.payload)
             outcome = await self._executor.submit_task(request.capability, payload)
             if outcome.task is not None:
                 span.set_attribute("task.id", outcome.task.id)
@@ -222,7 +221,7 @@ class ExecutionWorkerGrpcService:
         if task.finished_at is not None:
             msg.finished_at.CopyFrom(self._timestamp(task.finished_at))
         if task.result is not None:
-            msg.result.CopyFrom(self._struct_from_dict(task.result))
+            msg.result = self._json_bytes_from_dict(task.result)
         if task.error is not None:
             msg.error.CopyFrom(
                 self._pb2.WorkerError(
@@ -240,12 +239,17 @@ class ExecutionWorkerGrpcService:
         return pb
 
     @staticmethod
-    def _struct_from_dict(data: dict[str, Any]):
-        from google.protobuf.struct_pb2 import Struct
+    def _json_bytes_from_dict(data: dict[str, Any]) -> bytes:
+        return json.dumps(data, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
-        msg = Struct()
-        json_format.ParseDict(data, msg)
-        return msg
+    @staticmethod
+    def _dict_from_json_bytes(data: bytes) -> dict[str, Any]:
+        if not data:
+            return {}
+        parsed = json.loads(data.decode("utf-8"))
+        if not isinstance(parsed, dict):
+            raise ValueError("execution payload must decode to a JSON object")
+        return parsed
 
     def _to_proto_task_state(self, value: str) -> int:
         mapping = {

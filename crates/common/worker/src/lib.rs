@@ -77,6 +77,7 @@ mod builder;
 mod context;
 mod driver;
 mod err;
+mod execution_client;
 mod handle;
 mod id;
 mod manager;
@@ -88,6 +89,9 @@ mod worker;
 pub use blocking::BlockingWorker;
 pub use context::WorkerContext;
 pub use err::{CronParseError, ErrorSeverity, WorkError, WorkResult};
+pub use execution_client::{
+    CapabilityInfo, ExecutionWorkerClient, ExecutionWorkerClientError, RemoteWorkerError,
+};
 pub use handle::{
     CronHandle, CronOrNotifyHandle, Handle, IntervalHandle, IntervalOrNotifyHandle, Notifiable,
     NotifyHandle, OnceHandle, Pausable,

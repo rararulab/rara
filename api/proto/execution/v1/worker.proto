@@ -3,7 +3,6 @@ syntax = "proto3";
 // Execution worker RPC contract for invoking capabilities and querying tasks.
 package execution.v1;
 
-import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/crrow/job/bindings/go/pb/execution/v1;executionv1";
@@ -80,7 +79,7 @@ enum WorkerKind {
 // Synchronous capability invocation request.
 message InvokeRequest {
   string capability = 1;
-  google.protobuf.Struct payload = 2;
+  bytes payload = 2;
   uint32 timeout_ms = 3;
   map<string, string> metadata = 4;
 }
@@ -90,7 +89,7 @@ message WorkerError {
   string code = 1;
   string message = 2;
   bool retryable = 3;
-  google.protobuf.Struct details = 4;
+  bytes details = 4;
 }
 
 // Synchronous invoke response using the common success/error envelope pattern.
@@ -104,14 +103,14 @@ message InvokeResponse {
 // Successful synchronous invocation payload.
 message InvokeSuccess {
   string capability = 1;
-  google.protobuf.Struct result = 2;
+  bytes result = 2;
   uint32 duration_ms = 3;
 }
 
 // Asynchronous capability submission request.
 message SubmitTaskRequest {
   string capability = 1;
-  google.protobuf.Struct payload = 2;
+  bytes payload = 2;
   uint32 timeout_ms = 3;
   map<string, string> metadata = 4;
 }
@@ -164,7 +163,7 @@ message TaskStatus {
   string id = 1;
   string capability = 2;
   TaskState status = 3;
-  google.protobuf.Struct result = 4;
+  bytes result = 4;
   WorkerError error = 5;
   google.protobuf.Timestamp created_at = 6;
   google.protobuf.Timestamp started_at = 7;

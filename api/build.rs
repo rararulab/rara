@@ -28,6 +28,7 @@ fn main() {
         .compile_protos(&[
             "proto/hello/v1/hello.proto",
             "proto/telegrambot/v1/command.proto",
+            "proto/execution/v1/worker.proto",
         ], &["proto"])
         .expect("compile proto");
 }

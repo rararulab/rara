@@ -16,6 +16,7 @@ default = []
 k8s = ["rara-k8s"]
 
 [dependencies]
+common-worker.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -27,7 +28,9 @@ tracing.workspace = true
 rara-k8s = { workspace = true, optional = true }
 
 [dev-dependencies]
+testcontainers = { workspace = true, features = ["http_wait_plain"] }
 tokio = { workspace = true, features = ["test-util", "macros"] }
+uuid = { workspace = true, features = ["v4"] }
 
 [lints]
 workspace = true

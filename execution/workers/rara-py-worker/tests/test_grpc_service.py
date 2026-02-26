@@ -1,7 +1,7 @@
 import asyncio
+import json
 
 import pytest
-from google.protobuf.struct_pb2 import Struct
 
 from python_worker.app.grpc_server import (
     ExecutionWorkerGrpcService,
@@ -13,10 +13,8 @@ from python_worker.core.registry import CapabilityRegistry
 from python_worker.core.worker_identity import WorkerIdentity
 
 
-def _make_struct(data: dict) -> Struct:
-    msg = Struct()
-    msg.update(data)
-    return msg
+def _make_payload(data: dict) -> bytes:
+    return json.dumps(data).encode("utf-8")
 
 
 def test_grpc_invoke_maps_success_response() -> None:
@@ -33,14 +31,14 @@ def test_grpc_invoke_maps_success_response() -> None:
     )
     request = modules.worker_pb2.InvokeRequest(
         capability="system.echo",
-        payload=_make_struct({"message": "hello"}),
+        payload=_make_payload({"message": "hello"}),
     )
 
     response = asyncio.run(service.Invoke(request, None))
 
     assert response.HasField("success")
     assert response.success.capability == "system.echo"
-    assert dict(response.success.result) == {"echo": "hello"}
+    assert json.loads(response.success.result.decode("utf-8")) == {"echo": "hello"}
 
 
 def test_grpc_status_reports_worker_identity() -> None:
@@ -112,7 +110,7 @@ def test_grpc_submit_and_get_task_round_trip() -> None:
         submit = await service.SubmitTask(
             modules.worker_pb2.SubmitTaskRequest(
                 capability="system.echo",
-                payload=_make_struct({"message": "hi"}),
+                payload=_make_payload({"message": "hi"}),
             ),
             None,
         )
@@ -127,7 +125,7 @@ def test_grpc_submit_and_get_task_round_trip() -> None:
             if status.HasField("task") and (
                 status.task.status == modules.worker_pb2.TASK_STATE_SUCCEEDED
             ):
-                assert dict(status.task.result) == {"echo": "hi"}
+                assert json.loads(status.task.result.decode("utf-8")) == {"echo": "hi"}
                 return
             await asyncio.sleep(0.01)
         raise AssertionError("task did not reach succeeded state")

@@ -7,6 +7,18 @@ from dataclasses import dataclass
 
 from python_worker.app.state import WorkerState
 from python_worker.capabilities.jobspy import jobspy_scrape
+from python_worker.capabilities.mem0 import (
+    mem0_add,
+    mem0_delete,
+    mem0_delete_all,
+    mem0_from_config,
+    mem0_get,
+    mem0_get_all,
+    mem0_history,
+    mem0_reset,
+    mem0_search,
+    mem0_update,
+)
 from python_worker.capabilities.system import health_ping, system_echo
 from python_worker.core.executor import CapabilityExecutor
 from python_worker.core.registry import CapabilityRegistry
@@ -29,6 +41,16 @@ def build_container() -> WorkerContainer:
     registry.register("system.health.ping", health_ping)
     registry.register("system.echo", system_echo)
     registry.register("jobspy.scrape_jobs", jobspy_scrape)
+    registry.register("mem0.from_config", mem0_from_config)
+    registry.register("mem0.add", mem0_add)
+    registry.register("mem0.get_all", mem0_get_all)
+    registry.register("mem0.get", mem0_get)
+    registry.register("mem0.search", mem0_search)
+    registry.register("mem0.update", mem0_update)
+    registry.register("mem0.history", mem0_history)
+    registry.register("mem0.delete", mem0_delete)
+    registry.register("mem0.delete_all", mem0_delete_all)
+    registry.register("mem0.reset", mem0_reset)
 
     task_store = InMemoryTaskStore()
     state = WorkerState(
