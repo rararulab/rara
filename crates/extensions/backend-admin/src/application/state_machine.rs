@@ -134,8 +134,7 @@ impl Default for StateMachine {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use super::super::types::ApplicationStatus;
+    use super::{super::types::ApplicationStatus, *};
 
     fn sm() -> StateMachine { StateMachine::default() }
 

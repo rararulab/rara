@@ -19,15 +19,15 @@
 //! pod is kept alive for the application's lifetime and cleaned up on
 //! shutdown.
 
+use snafu::ResultExt;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
-use crate::error::{K8sSnafu, NotConfiguredSnafu};
-use crate::mem0_client::Mem0Client;
-use crate::pod_manager::Mem0PodManager;
-use crate::error::MemoryResult;
-
-use snafu::ResultExt;
+use crate::{
+    error::{K8sSnafu, MemoryResult, NotConfiguredSnafu},
+    mem0_client::Mem0Client,
+    pod_manager::Mem0PodManager,
+};
 
 /// Internal state machine for the lazy client.
 enum LazyState {
@@ -35,9 +35,9 @@ enum LazyState {
     NotStarted,
     /// Pod is running and client is connected.
     Running {
-        pod_name: String,
+        pod_name:  String,
         namespace: String,
-        client: Mem0Client,
+        client:    Mem0Client,
     },
 }
 
@@ -47,17 +47,17 @@ enum LazyState {
 ///
 /// 1. Created with [`new`](Self::new) — no pod exists yet.
 /// 2. [`set_api_key`](Self::set_api_key) configures the OpenAI key.
-/// 3. [`ensure_ready`](Self::ensure_ready) creates the pod on first call
-///    and returns a cloned [`Mem0Client`].
+/// 3. [`ensure_ready`](Self::ensure_ready) creates the pod on first call and
+///    returns a cloned [`Mem0Client`].
 /// 4. [`shutdown`](Self::shutdown) deletes the pod on application exit.
 pub struct LazyMem0Client {
-    pod_manager: Mem0PodManager,
-    state: RwLock<LazyState>,
+    pod_manager:    Mem0PodManager,
+    state:          RwLock<LazyState>,
     openai_api_key: RwLock<Option<String>>,
-    chroma_host: String,
-    chroma_port: u16,
-    image: String,
-    namespace: String,
+    chroma_host:    String,
+    chroma_port:    u16,
+    image:          String,
+    namespace:      String,
 }
 
 impl LazyMem0Client {
@@ -92,9 +92,7 @@ impl LazyMem0Client {
     }
 
     /// Returns `true` if an API key has been configured.
-    pub async fn is_configured(&self) -> bool {
-        self.openai_api_key.read().await.is_some()
-    }
+    pub async fn is_configured(&self) -> bool { self.openai_api_key.read().await.is_some() }
 
     /// Ensure the mem0 pod is running and return a cloned client.
     ///
@@ -117,12 +115,12 @@ impl LazyMem0Client {
             return Ok(client.clone());
         }
 
-        let api_key = self
-            .openai_api_key
-            .read()
-            .await
-            .clone()
-            .ok_or_else(|| NotConfiguredSnafu { message: "mem0 API key not set" }.build())?;
+        let api_key = self.openai_api_key.read().await.clone().ok_or_else(|| {
+            NotConfiguredSnafu {
+                message: "mem0 API key not set",
+            }
+            .build()
+        })?;
 
         info!("Creating mem0 pod on demand...");
         let (pod_name, pod_ip, port) = self
@@ -160,11 +158,7 @@ impl LazyMem0Client {
         } = &*state
         {
             info!(pod = %pod_name, "shutting down mem0 pod");
-            if let Err(e) = self
-                .pod_manager
-                .delete_mem0_pod(pod_name, namespace)
-                .await
-            {
+            if let Err(e) = self.pod_manager.delete_mem0_pod(pod_name, namespace).await {
                 warn!(error = %e, "failed to delete mem0 pod during shutdown");
             }
         }

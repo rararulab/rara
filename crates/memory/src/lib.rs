@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Unified memory layer: mem0 (facts) + Memos (notes) + Hindsight (4-network recall).
+//! Unified memory layer: mem0 (facts) + Memos (notes) + Hindsight (4-network
+//! recall).
 //!
 //! # Architecture
 //!
@@ -56,9 +57,9 @@
 //! ## Search Pipeline
 //!
 //! [`MemoryManager::search`] queries mem0 and Hindsight **in parallel**, then
-//! merges the two ranked result lists using [Reciprocal Rank Fusion][crate::fusion]
-//! (RRF, k=60). This produces a single ranked list where items appearing in
-//! both backends are boosted.
+//! merges the two ranked result lists using [Reciprocal Rank
+//! Fusion][crate::fusion] (RRF, k=60). This produces a single ranked list where
+//! items appearing in both backends are boosted.
 //!
 //! ## Session Consolidation
 //!
@@ -94,18 +95,17 @@ pub mod memos_client;
 pub mod recall_engine;
 
 #[cfg(feature = "k8s")]
-pub mod pod_manager;
-#[cfg(feature = "k8s")]
 pub mod lazy_client;
+#[cfg(feature = "k8s")]
+pub mod pod_manager;
 
 pub use error::{MemoryError, MemoryResult};
 pub use hindsight_client::HindsightClient;
-pub use manager::{MemoryManager, MemorySource, SearchResult};
-pub use mem0_client::{Mem0Client, Mem0Memory};
-pub use memos_client::{MemosClient, MemoEntry};
-pub use recall_engine::RecallStrategyEngine;
-
-#[cfg(feature = "k8s")]
-pub use pod_manager::Mem0PodManager;
 #[cfg(feature = "k8s")]
 pub use lazy_client::LazyMem0Client;
+pub use manager::{MemoryManager, MemorySource, SearchResult};
+pub use mem0_client::{Mem0Client, Mem0Memory};
+pub use memos_client::{MemoEntry, MemosClient};
+#[cfg(feature = "k8s")]
+pub use pod_manager::Mem0PodManager;
+pub use recall_engine::RecallStrategyEngine;

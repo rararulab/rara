@@ -35,8 +35,8 @@ impl AgentTool for ListDiscoveredJobsForScoringTool {
     fn name(&self) -> &str { "list_discovered_jobs_for_scoring" }
 
     fn description(&self) -> &str {
-        "List a batch of discovered jobs for a pipeline run that still need scoring (score is null). \
-         Use this in a loop until it returns an empty list."
+        "List a batch of discovered jobs for a pipeline run that still need scoring (score is \
+         null). Use this in a loop until it returns an empty list."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {

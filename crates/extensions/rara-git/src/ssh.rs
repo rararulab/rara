@@ -6,7 +6,7 @@ use crate::error::GitError;
 #[derive(Debug, Clone)]
 pub struct SshKeyPair {
     /// OpenSSH-formatted public key string (e.g. "ssh-ed25519 AAAA...")
-    pub public_key: String,
+    pub public_key:       String,
     /// Path to private key file
     pub private_key_path: PathBuf,
 }
@@ -21,13 +21,11 @@ pub fn get_or_create_keypair(ssh_dir: &Path) -> Result<SshKeyPair, GitError> {
     let public_path = ssh_dir.join("id_ed25519.pub");
 
     if private_path.exists() && public_path.exists() {
-        let public_key = std::fs::read_to_string(&public_path).map_err(|e| {
-            GitError::SshKey {
-                message: format!("failed to read public key: {e}"),
-            }
+        let public_key = std::fs::read_to_string(&public_path).map_err(|e| GitError::SshKey {
+            message: format!("failed to read public key: {e}"),
         })?;
         return Ok(SshKeyPair {
-            public_key: public_key.trim().to_owned(),
+            public_key:       public_key.trim().to_owned(),
             private_key_path: private_path,
         });
     }
@@ -58,10 +56,11 @@ pub fn get_or_create_keypair(ssh_dir: &Path) -> Result<SshKeyPair, GitError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&private_path, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| GitError::SshKey {
+        std::fs::set_permissions(&private_path, std::fs::Permissions::from_mode(0o600)).map_err(
+            |e| GitError::SshKey {
                 message: format!("failed to set key permissions: {e}"),
-            })?;
+            },
+        )?;
     }
 
     // Write public key
@@ -76,7 +75,7 @@ pub fn get_or_create_keypair(ssh_dir: &Path) -> Result<SshKeyPair, GitError> {
     })?;
 
     Ok(SshKeyPair {
-        public_key: public_key.trim().to_owned(),
+        public_key:       public_key.trim().to_owned(),
         private_key_path: private_path,
     })
 }
@@ -89,8 +88,9 @@ pub fn get_public_key(ssh_dir: &Path) -> Result<String, GitError> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::TempDir;
+
+    use super::*;
 
     #[test]
     fn generates_keypair_when_none_exists() {

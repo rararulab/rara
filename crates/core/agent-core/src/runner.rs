@@ -12,17 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use async_openai::types::chat::{
     ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
-    ChatCompletionRequestAssistantMessageArgs,
-    ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
-    ChatCompletionRequestToolMessageArgs, ChatCompletionRequestUserMessageArgs,
-    ChatCompletionToolChoiceOption, ChatCompletionTools,
-    CreateChatCompletionRequestArgs,
-    CreateChatCompletionResponse, FunctionCall, FinishReason, ToolChoiceOptions,
+    ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
+    ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestToolMessageArgs,
+    ChatCompletionRequestUserMessageArgs, ChatCompletionToolChoiceOption, ChatCompletionTools,
+    CreateChatCompletionRequestArgs, CreateChatCompletionResponse, FinishReason, FunctionCall,
+    ToolChoiceOptions,
 };
 use backon::{ExponentialBuilder, Retryable};
 use base::shared_string::SharedString;
@@ -94,9 +92,9 @@ pub enum RunnerEvent {
     ReasoningDelta(String),
     /// The agent loop completed successfully.
     Done {
-        text:             String,
-        iterations:       usize,
-        tool_calls_made:  usize,
+        text:            String,
+        iterations:      usize,
+        tool_calls_made: usize,
     },
     /// The agent loop failed with an error.
     Error(String),
@@ -250,10 +248,7 @@ impl AgentRunner {
         let run_span = tracing::info_span!("agent_run");
         run_span.set_attribute("gen_ai.system", "openai");
         run_span.set_attribute("gen_ai.request.model", model.to_owned());
-        run_span.set_attribute(
-            "agent.max_iterations",
-            self.max_iterations as i64,
-        );
+        run_span.set_attribute("agent.max_iterations", self.max_iterations as i64);
         if let Some(ref sid) = self.session_id {
             run_span.set_attribute("langfuse.session.id", sid.clone());
         }
@@ -326,7 +321,9 @@ impl AgentRunner {
 
                     if let Some(tool_defs) = &request_tools {
                         request_builder.tools(tool_defs.clone());
-                        request_builder.tool_choice(ChatCompletionToolChoiceOption::Mode(ToolChoiceOptions::Auto));
+                        request_builder.tool_choice(ChatCompletionToolChoiceOption::Mode(
+                            ToolChoiceOptions::Auto,
+                        ));
                         request_builder.parallel_tool_calls(true);
                     }
 
@@ -358,10 +355,7 @@ impl AgentRunner {
             // Record token usage on the llm_span after getting the response.
             if let Ok(ref resp) = response {
                 if let Some(ref usage) = resp.usage {
-                    llm_span.set_attribute(
-                        "gen_ai.usage.input_tokens",
-                        usage.prompt_tokens as i64,
-                    );
+                    llm_span.set_attribute("gen_ai.usage.input_tokens", usage.prompt_tokens as i64);
                     llm_span.set_attribute(
                         "gen_ai.usage.output_tokens",
                         usage.completion_tokens as i64,
@@ -438,27 +432,28 @@ impl AgentRunner {
                 let tool_id = &tool_call.id;
 
                 // Parse function args as JSON.
-                let tool_arguments =
-                    match serde_json::from_str::<serde_json::Value>(&tool_call.function.arguments) {
-                        Ok(value) => value,
-                        Err(err) => {
-                            let error_message = format!("invalid tool arguments: {err}");
-                            if let Some(cb) = on_event {
-                                cb(RunnerEvent::ToolCallEnd {
-                                    id:      tool_id.clone(),
-                                    name:    tool_name.clone(),
-                                    success: false,
-                                    error:   Some(error_message.clone()),
-                                    result:  None,
-                                });
-                            }
-                            messages.push(build_tool_response_message(
-                                tool_id,
-                                &serde_json::json!({ "error": error_message }).to_string(),
-                            )?);
-                            continue;
+                let tool_arguments = match serde_json::from_str::<serde_json::Value>(
+                    &tool_call.function.arguments,
+                ) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        let error_message = format!("invalid tool arguments: {err}");
+                        if let Some(cb) = on_event {
+                            cb(RunnerEvent::ToolCallEnd {
+                                id:      tool_id.clone(),
+                                name:    tool_name.clone(),
+                                success: false,
+                                error:   Some(error_message.clone()),
+                                result:  None,
+                            });
                         }
-                    };
+                        messages.push(build_tool_response_message(
+                            tool_id,
+                            &serde_json::json!({ "error": error_message }).to_string(),
+                        )?);
+                        continue;
+                    }
+                };
 
                 // Emit start event.
                 if let Some(cb) = on_event {
@@ -529,26 +524,25 @@ impl AgentRunner {
         };
         warn!(
             max_iterations = self.max_iterations,
-            tool_calls_made,
-            "agent loop hit max iterations limit, returning partial results"
+            tool_calls_made, "agent loop hit max iterations limit, returning partial results"
         );
         if let Some(cb) = on_event {
             cb(RunnerEvent::Done {
-                text:            partial_response
+                text: partial_response
                     .choices
                     .first()
                     .and_then(|c| c.message.content.as_deref())
                     .unwrap_or_default()
                     .to_owned(),
-                iterations:      self.max_iterations,
+                iterations: self.max_iterations,
                 tool_calls_made,
             });
         }
         Ok(AgentRunResponse {
             provider_response: partial_response,
-            iterations:        self.max_iterations,
+            iterations: self.max_iterations,
             tool_calls_made,
-            truncated:         true,
+            truncated: true,
         })
     }
 
@@ -581,10 +575,7 @@ impl AgentRunner {
         let run_span = tracing::info_span!("agent_run_streaming");
         run_span.set_attribute("gen_ai.system", "openai");
         run_span.set_attribute("gen_ai.request.model", model.to_owned());
-        run_span.set_attribute(
-            "agent.max_iterations",
-            self.max_iterations as i64,
-        );
+        run_span.set_attribute("agent.max_iterations", self.max_iterations as i64);
         if let Some(ref sid) = self.session_id {
             run_span.set_attribute("langfuse.session.id", sid.clone());
         }
@@ -630,7 +621,11 @@ impl AgentRunner {
         for iteration in 0..self.max_iterations {
             let _ = tx.send(RunnerEvent::Iteration(iteration)).await;
             let _ = tx.send(RunnerEvent::Thinking).await;
-            info!(iteration, messages_count = messages.len(), "calling LLM (streaming)");
+            info!(
+                iteration,
+                messages_count = messages.len(),
+                "calling LLM (streaming)"
+            );
 
             let provider = self.llm_provider.acquire_provider().await?;
 
@@ -648,7 +643,9 @@ impl AgentRunner {
 
             if let Some(tool_defs) = &request_tools {
                 request_builder.tools(tool_defs.clone());
-                request_builder.tool_choice(ChatCompletionToolChoiceOption::Mode(ToolChoiceOptions::Auto));
+                request_builder.tool_choice(ChatCompletionToolChoiceOption::Mode(
+                    ToolChoiceOptions::Auto,
+                ));
                 request_builder.parallel_tool_calls(true);
             }
 
@@ -656,7 +653,8 @@ impl AgentRunner {
                 message: format!("failed to build streaming request: {e}").into(),
             })?;
 
-            let mut stream = provider.chat_completion_stream(request)
+            let mut stream = provider
+                .chat_completion_stream(request)
                 .instrument(llm_span)
                 .await?;
 
@@ -678,7 +676,8 @@ impl AgentRunner {
                         return Err(Error::Provider {
                             message: format!(
                                 "Model \"{model}\" returned an error during streaming: {e}"
-                            ).into(),
+                            )
+                            .into(),
                         });
                     }
                 };
@@ -700,13 +699,13 @@ impl AgentRunner {
                     for tc in tool_calls_delta {
                         let idx = tc.index;
                         let entry =
-                            pending_tool_calls.entry(idx).or_insert_with(|| {
-                                PendingToolCall {
-                                    id:              String::new(),
-                                    name:            String::new(),
-                                    arguments_buf:   String::new(),
-                                }
-                            });
+                            pending_tool_calls
+                                .entry(idx)
+                                .or_insert_with(|| PendingToolCall {
+                                    id:            String::new(),
+                                    name:          String::new(),
+                                    arguments_buf: String::new(),
+                                });
                         if let Some(ref id) = tc.id {
                             if !id.is_empty() {
                                 entry.id = id.clone();
@@ -746,8 +745,8 @@ impl AgentRunner {
             if !has_tool_calls {
                 let _ = tx
                     .send(RunnerEvent::Done {
-                        text:            accumulated_text,
-                        iterations:      iteration + 1,
+                        text: accumulated_text,
+                        iterations: iteration + 1,
                         tool_calls_made,
                     })
                     .await;
@@ -834,16 +833,14 @@ impl AgentRunner {
             let results = futures::future::join_all(tool_futures).await;
 
             // Emit ToolCallEnd events and append tool response messages.
-            for ((id, name, _args), (success, result, err)) in
-                tool_call_list.iter().zip(results)
-            {
+            for ((id, name, _args), (success, result, err)) in tool_call_list.iter().zip(results) {
                 let _ = tx
                     .send(RunnerEvent::ToolCallEnd {
-                        id:      id.clone(),
-                        name:    name.clone(),
+                        id: id.clone(),
+                        name: name.clone(),
                         success,
-                        error:   err,
-                        result:  if success { Some(result.clone()) } else { None },
+                        error: err,
+                        result: if success { Some(result.clone()) } else { None },
                     })
                     .await;
 
@@ -859,8 +856,8 @@ impl AgentRunner {
         );
         let _ = tx
             .send(RunnerEvent::Done {
-                text:            last_accumulated_text,
-                iterations:      self.max_iterations,
+                text: last_accumulated_text,
+                iterations: self.max_iterations,
                 tool_calls_made,
             })
             .await;
@@ -892,16 +889,14 @@ fn build_user_message(content: &UserContent) -> Result<ChatCompletionRequestMess
         }
         UserContent::Multimodal { text, image_urls } => {
             use async_openai::types::chat::{
-                ChatCompletionRequestUserMessageContentPart,
                 ChatCompletionRequestMessageContentPartImage,
-                ChatCompletionRequestMessageContentPartText, ImageUrlArgs,
+                ChatCompletionRequestMessageContentPartText,
+                ChatCompletionRequestUserMessageContentPart, ImageUrlArgs,
             };
 
             let mut parts: Vec<ChatCompletionRequestUserMessageContentPart> = Vec::new();
             parts.push(ChatCompletionRequestUserMessageContentPart::Text(
-                ChatCompletionRequestMessageContentPartText {
-                    text: text.clone(),
-                },
+                ChatCompletionRequestMessageContentPartText { text: text.clone() },
             ));
             for url in image_urls {
                 let image_url = ImageUrlArgs::default()
@@ -911,9 +906,7 @@ fn build_user_message(content: &UserContent) -> Result<ChatCompletionRequestMess
                         message: format!("failed to build image URL: {e}").into(),
                     })?;
                 parts.push(ChatCompletionRequestUserMessageContentPart::ImageUrl(
-                    ChatCompletionRequestMessageContentPartImage {
-                        image_url,
-                    },
+                    ChatCompletionRequestMessageContentPartImage { image_url },
                 ));
             }
 

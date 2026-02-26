@@ -12,7 +12,6 @@ k8s = ["rara-k8s"]
 workspace = true
 
 [dependencies]
-rara-k8s = { workspace = true, optional = true }
 anyhow.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
@@ -20,6 +19,7 @@ lettre.workspace = true
 opendal.workspace = true
 rara-composio.workspace = true
 rara-domain-shared.workspace = true
+rara-k8s = { workspace = true, optional = true }
 reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

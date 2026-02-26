@@ -24,20 +24,24 @@ use rara_domain_shared::{
     },
     settings::model::Settings,
 };
-use tokio::sync::watch;
 use serde_json::json;
+use tokio::sync::watch;
 use tool_core::AgentTool;
 use tracing::{info, warn};
 use uuid::Uuid;
 
 pub struct ScreenshotTool {
-    notify:      NotifyClient,
-    settings_rx: watch::Receiver<Settings>,
+    notify:       NotifyClient,
+    settings_rx:  watch::Receiver<Settings>,
     project_root: PathBuf,
 }
 
 impl ScreenshotTool {
-    pub fn new(notify: NotifyClient, settings_rx: watch::Receiver<Settings>, project_root: PathBuf) -> Self {
+    pub fn new(
+        notify: NotifyClient,
+        settings_rx: watch::Receiver<Settings>,
+        project_root: PathBuf,
+    ) -> Self {
         Self {
             notify,
             settings_rx,

@@ -127,13 +127,12 @@ impl super::repository::AnalyticsRepository for PgAnalyticsRepository {
     }
 
     async fn find_by_id(&self, id: Uuid) -> Result<Option<MetricsSnapshot>, AnalyticsError> {
-        let row = sqlx::query_as::<_, MetricsSnapshotRow>(
-            "SELECT * FROM metrics_snapshot WHERE id = $1",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(map_err)?;
+        let row =
+            sqlx::query_as::<_, MetricsSnapshotRow>("SELECT * FROM metrics_snapshot WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_err)?;
 
         Ok(row.map(Into::into))
     }

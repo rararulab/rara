@@ -18,8 +18,10 @@
 //! (labels, probes, and container naming). The public API is kept
 //! backward-compatible with callers in `managed_client.rs` and `mgr.rs`.
 
-use std::collections::{BTreeMap, HashMap};
-use std::time::Duration;
+use std::{
+    collections::{BTreeMap, HashMap},
+    time::Duration,
+};
 
 use rara_k8s::k8s_types::*;
 
@@ -67,15 +69,9 @@ impl McpPodManager {
         let pod_name = rara_k8s::generate_pod_name(&format!("mcp-{server_name}"));
 
         let mut pod_labels = BTreeMap::new();
-        pod_labels.insert(
-            "app.kubernetes.io/managed-by".into(),
-            "rara".into(),
-        );
+        pod_labels.insert("app.kubernetes.io/managed-by".into(), "rara".into());
         pod_labels.insert("rara.dev/component".into(), "mcp-server".into());
-        pod_labels.insert(
-            "rara.dev/server-name".into(),
-            server_name.into(),
-        );
+        pod_labels.insert("rara.dev/server-name".into(), server_name.into());
         if let Some(extra) = labels {
             for (k, v) in extra {
                 pod_labels.insert(k.clone(), v.clone());
@@ -85,8 +81,8 @@ impl McpPodManager {
         let env_vars: Vec<EnvVar> = env
             .iter()
             .map(|(k, v)| EnvVar {
-                name: k.clone(),
-                value: Some(v.clone()),
+                name:       k.clone(),
+                value:      Some(v.clone()),
                 value_from: None,
             })
             .collect();
@@ -94,10 +90,10 @@ impl McpPodManager {
         let i32_port = i32::from(port);
         let probe = Probe {
             http_get: Some(HTTPGetAction {
-                path: Some("/".into()),
-                port: IntOrString::Int(i32_port),
-                scheme: Some("HTTP".into()),
-                host: None,
+                path:         Some("/".into()),
+                port:         IntOrString::Int(i32_port),
+                scheme:       Some("HTTP".into()),
+                host:         None,
                 http_headers: None,
             }),
             initial_delay_seconds: Some(5),
@@ -114,7 +110,7 @@ impl McpPodManager {
                 labels: Some(pod_labels),
                 ..Default::default()
             },
-            spec: Some(PodSpec {
+            spec:     Some(PodSpec {
                 restart_policy: Some("Never".into()),
                 containers: vec![Container {
                     name: "mcp-server".into(),
@@ -135,29 +131,23 @@ impl McpPodManager {
                 }],
                 ..Default::default()
             }),
-            status: None,
+            status:   None,
         };
 
         let handle = self
             .inner
             .create_pod(pod, namespace, Duration::from_secs(120))
             .await?;
-        let ip = handle
-            .ip
-            .ok_or_else(|| rara_k8s::K8sError::NoPodIp {
-                name: handle.name.clone(),
-            })?;
+        let ip = handle.ip.ok_or_else(|| rara_k8s::K8sError::NoPodIp {
+            name: handle.name.clone(),
+        })?;
         Ok((handle.name, ip, handle.port.unwrap_or(port)))
     }
 
     /// Delete an MCP server pod.
     ///
     /// Silently ignores `NotFound` errors (pod already deleted).
-    pub async fn delete_mcp_pod(
-        &self,
-        pod_name: &str,
-        namespace: &str,
-    ) -> Result<(), McpPodError> {
+    pub async fn delete_mcp_pod(&self, pod_name: &str, namespace: &str) -> Result<(), McpPodError> {
         self.inner.delete_pod(pod_name, namespace).await
     }
 

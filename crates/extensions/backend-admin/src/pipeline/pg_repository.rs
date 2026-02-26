@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! PostgreSQL-backed implementation of [`crate::repository::PipelineRepository`].
+//! PostgreSQL-backed implementation of
+//! [`crate::repository::PipelineRepository`].
 
 use async_trait::async_trait;
 use rara_domain_shared::convert::timestamp_opt_to_chrono;
@@ -20,11 +21,13 @@ use snafu::ResultExt as _;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::repository::{DatabaseSnafu, PipelineRepoError, PipelineRepository};
-use super::types::{
-    DiscoveredJob, DiscoveredJobAction, DiscoveredJobRow, DiscoveredJobWithDetails,
-    DiscoveredJobWithDetailsRow, DiscoveredJobsActionCounts, DiscoveredJobsStats, PipelineEvent,
-    PipelineEventRow, PipelineRun, PipelineRunRow,
+use super::{
+    repository::{DatabaseSnafu, PipelineRepoError, PipelineRepository},
+    types::{
+        DiscoveredJob, DiscoveredJobAction, DiscoveredJobRow, DiscoveredJobWithDetails,
+        DiscoveredJobWithDetailsRow, DiscoveredJobsActionCounts, DiscoveredJobsStats,
+        PipelineEvent, PipelineEventRow, PipelineRun, PipelineRunRow,
+    },
 };
 
 // ---------------------------------------------------------------------------
@@ -39,9 +42,7 @@ pub struct PgPipelineRepository {
 impl PgPipelineRepository {
     /// Create a new repository backed by the given connection pool.
     #[must_use]
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
+    pub fn new(pool: PgPool) -> Self { Self { pool } }
 }
 
 #[async_trait]
@@ -90,13 +91,11 @@ impl PipelineRepository for PgPipelineRepository {
     }
 
     async fn get_run(&self, id: Uuid) -> Result<Option<PipelineRun>, PipelineRepoError> {
-        let row = sqlx::query_as::<_, PipelineRunRow>(
-            "SELECT * FROM pipeline_runs WHERE id = $1",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await
-        .context(DatabaseSnafu)?;
+        let row = sqlx::query_as::<_, PipelineRunRow>("SELECT * FROM pipeline_runs WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .context(DatabaseSnafu)?;
 
         Ok(row.map(Into::into))
     }
@@ -260,11 +259,9 @@ impl PipelineRepository for PgPipelineRepository {
         offset: i64,
     ) -> Result<Vec<DiscoveredJobWithDetails>, PipelineRepoError> {
         let mut sql = String::from(
-            "SELECT dj.id, dj.run_id, dj.job_id, dj.score, dj.action, dj.created_at, \
-                    j.title, j.company, j.location, j.url, j.description, j.posted_at \
-             FROM pipeline_discovered_jobs dj \
-             JOIN job j ON dj.job_id = j.id \
-             WHERE 1=1",
+            "SELECT dj.id, dj.run_id, dj.job_id, dj.score, dj.action, dj.created_at, j.title, \
+             j.company, j.location, j.url, j.description, j.posted_at FROM \
+             pipeline_discovered_jobs dj JOIN job j ON dj.job_id = j.id WHERE 1=1",
         );
         let mut param_idx: usize = 0;
 
@@ -324,9 +321,8 @@ impl PipelineRepository for PgPipelineRepository {
         max_score: Option<i32>,
         run_id: Option<Uuid>,
     ) -> Result<i64, PipelineRepoError> {
-        let mut sql = String::from(
-            "SELECT COUNT(*) as count FROM pipeline_discovered_jobs dj WHERE 1=1",
-        );
+        let mut sql =
+            String::from("SELECT COUNT(*) as count FROM pipeline_discovered_jobs dj WHERE 1=1");
         let mut param_idx: usize = 0;
 
         if action.is_some() {
@@ -381,15 +377,15 @@ impl PipelineRepository for PgPipelineRepository {
         .context(DatabaseSnafu)?;
 
         Ok(DiscoveredJobsStats {
-            total: row.total,
-            by_action: DiscoveredJobsActionCounts {
+            total:        row.total,
+            by_action:    DiscoveredJobsActionCounts {
                 discovered: row.discovered,
-                notified: row.notified,
-                applied: row.applied,
-                skipped: row.skipped,
+                notified:   row.notified,
+                applied:    row.applied,
+                skipped:    row.skipped,
             },
             scored_count: row.scored_count,
-            avg_score: row.avg_score,
+            avg_score:    row.avg_score,
         })
     }
 
@@ -413,11 +409,11 @@ impl PipelineRepository for PgPipelineRepository {
 
 #[derive(Debug, sqlx::FromRow)]
 struct StatsRow {
-    total: i64,
-    discovered: i64,
-    notified: i64,
-    applied: i64,
-    skipped: i64,
+    total:        i64,
+    discovered:   i64,
+    notified:     i64,
+    applied:      i64,
+    skipped:      i64,
     scored_count: i64,
-    avg_score: Option<f64>,
+    avg_score:    Option<f64>,
 }

@@ -21,15 +21,13 @@ use async_openai::{
     Client,
     config::OpenAIConfig,
     types::chat::{
-        ChatCompletionResponseStream, CreateChatCompletionRequest,
-        CreateChatCompletionResponse,
+        ChatCompletionResponseStream, CreateChatCompletionRequest, CreateChatCompletionResponse,
     },
 };
 use async_trait::async_trait;
 
-use crate::err::{Error, Result};
-
 use super::LlmProvider;
+use crate::err::{Error, Result};
 
 pub const OPENROUTER_API_KEY_ENV: &str = "OPENROUTER_KEY";
 

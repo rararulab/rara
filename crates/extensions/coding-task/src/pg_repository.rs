@@ -19,9 +19,11 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::error::{CodingTaskError, NotFoundSnafu, RepositorySnafu};
-use crate::repository::CodingTaskRepository;
-use crate::types::{CodingTask, CodingTaskStatus};
+use crate::{
+    error::{CodingTaskError, NotFoundSnafu, RepositorySnafu},
+    repository::CodingTaskRepository,
+    types::{CodingTask, CodingTaskStatus},
+};
 
 // ---------------------------------------------------------------------------
 // DB row type (sqlx::FromRow)
@@ -56,9 +58,7 @@ pub struct PgCodingTaskRepository {
 }
 
 impl PgCodingTaskRepository {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
+    pub fn new(pool: PgPool) -> Self { Self { pool } }
 }
 
 #[async_trait]
@@ -87,14 +87,17 @@ impl CodingTaskRepository for PgCodingTaskRepository {
     }
 
     async fn get(&self, id: Uuid) -> Result<CodingTask, CodingTaskError> {
-        let row = sqlx::query_as::<_, CodingTaskRow>(
-            "SELECT * FROM coding_task WHERE id = $1",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| RepositorySnafu { message: e.to_string() }.build())?
-        .ok_or_else(|| NotFoundSnafu { id }.build())?;
+        let row = sqlx::query_as::<_, CodingTaskRow>("SELECT * FROM coding_task WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| {
+                RepositorySnafu {
+                    message: e.to_string(),
+                }
+                .build()
+            })?
+            .ok_or_else(|| NotFoundSnafu { id }.build())?;
         Ok(CodingTask::from(row))
     }
 
@@ -104,7 +107,12 @@ impl CodingTaskRepository for PgCodingTaskRepository {
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| RepositorySnafu { message: e.to_string() }.build())?;
+        .map_err(|e| {
+            RepositorySnafu {
+                message: e.to_string(),
+            }
+            .build()
+        })?;
         Ok(rows.into_iter().map(CodingTask::from).collect())
     }
 
@@ -118,7 +126,12 @@ impl CodingTaskRepository for PgCodingTaskRepository {
         .bind(status as u8 as i16)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| RepositorySnafu { message: e.to_string() }.build())?;
+        .map_err(|e| {
+            RepositorySnafu {
+                message: e.to_string(),
+            }
+            .build()
+        })?;
         Ok(rows.into_iter().map(CodingTask::from).collect())
     }
 
@@ -127,14 +140,17 @@ impl CodingTaskRepository for PgCodingTaskRepository {
         id: Uuid,
         status: CodingTaskStatus,
     ) -> Result<(), CodingTaskError> {
-        let result = sqlx::query(
-            "UPDATE coding_task SET status = $1 WHERE id = $2",
-        )
-        .bind(status as u8 as i16)
-        .bind(id)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| RepositorySnafu { message: e.to_string() }.build())?;
+        let result = sqlx::query("UPDATE coding_task SET status = $1 WHERE id = $2")
+            .bind(status as u8 as i16)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| {
+                RepositorySnafu {
+                    message: e.to_string(),
+                }
+                .build()
+            })?;
         if result.rows_affected() == 0 {
             return Err(NotFoundSnafu { id }.build());
         }
@@ -147,15 +163,18 @@ impl CodingTaskRepository for PgCodingTaskRepository {
         workspace_path: &str,
         tmux_session: &str,
     ) -> Result<(), CodingTaskError> {
-        sqlx::query(
-            "UPDATE coding_task SET workspace_path = $1, tmux_session = $2 WHERE id = $3",
-        )
-        .bind(workspace_path)
-        .bind(tmux_session)
-        .bind(id)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| RepositorySnafu { message: e.to_string() }.build())?;
+        sqlx::query("UPDATE coding_task SET workspace_path = $1, tmux_session = $2 WHERE id = $3")
+            .bind(workspace_path)
+            .bind(tmux_session)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| {
+                RepositorySnafu {
+                    message: e.to_string(),
+                }
+                .build()
+            })?;
         Ok(())
     }
 
@@ -165,15 +184,18 @@ impl CodingTaskRepository for PgCodingTaskRepository {
         pr_url: &str,
         pr_number: i32,
     ) -> Result<(), CodingTaskError> {
-        sqlx::query(
-            "UPDATE coding_task SET pr_url = $1, pr_number = $2 WHERE id = $3",
-        )
-        .bind(pr_url)
-        .bind(pr_number)
-        .bind(id)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| RepositorySnafu { message: e.to_string() }.build())?;
+        sqlx::query("UPDATE coding_task SET pr_url = $1, pr_number = $2 WHERE id = $3")
+            .bind(pr_url)
+            .bind(pr_number)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| {
+                RepositorySnafu {
+                    message: e.to_string(),
+                }
+                .build()
+            })?;
         Ok(())
     }
 
@@ -183,49 +205,61 @@ impl CodingTaskRepository for PgCodingTaskRepository {
         output: &str,
         exit_code: Option<i32>,
     ) -> Result<(), CodingTaskError> {
-        sqlx::query(
-            "UPDATE coding_task SET output = $1, exit_code = $2 WHERE id = $3",
-        )
-        .bind(output)
-        .bind(exit_code)
-        .bind(id)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| RepositorySnafu { message: e.to_string() }.build())?;
+        sqlx::query("UPDATE coding_task SET output = $1, exit_code = $2 WHERE id = $3")
+            .bind(output)
+            .bind(exit_code)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| {
+                RepositorySnafu {
+                    message: e.to_string(),
+                }
+                .build()
+            })?;
         Ok(())
     }
 
     async fn update_error(&self, id: Uuid, error: &str) -> Result<(), CodingTaskError> {
-        sqlx::query(
-            "UPDATE coding_task SET error = $1 WHERE id = $2",
-        )
-        .bind(error)
-        .bind(id)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| RepositorySnafu { message: e.to_string() }.build())?;
+        sqlx::query("UPDATE coding_task SET error = $1 WHERE id = $2")
+            .bind(error)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| {
+                RepositorySnafu {
+                    message: e.to_string(),
+                }
+                .build()
+            })?;
         Ok(())
     }
 
     async fn set_started(&self, id: Uuid) -> Result<(), CodingTaskError> {
-        sqlx::query(
-            "UPDATE coding_task SET started_at = NOW() WHERE id = $1",
-        )
-        .bind(id)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| RepositorySnafu { message: e.to_string() }.build())?;
+        sqlx::query("UPDATE coding_task SET started_at = NOW() WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| {
+                RepositorySnafu {
+                    message: e.to_string(),
+                }
+                .build()
+            })?;
         Ok(())
     }
 
     async fn set_completed(&self, id: Uuid) -> Result<(), CodingTaskError> {
-        sqlx::query(
-            "UPDATE coding_task SET completed_at = NOW() WHERE id = $1",
-        )
-        .bind(id)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| RepositorySnafu { message: e.to_string() }.build())?;
+        sqlx::query("UPDATE coding_task SET completed_at = NOW() WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| {
+                RepositorySnafu {
+                    message: e.to_string(),
+                }
+                .build()
+            })?;
         Ok(())
     }
 }

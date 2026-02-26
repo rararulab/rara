@@ -27,8 +27,10 @@ use kube::{
 };
 use tracing::{debug, info};
 
-use crate::error::K8sError;
-use crate::types::{PodHandle, PodStatus};
+use crate::{
+    error::K8sError,
+    types::{PodHandle, PodStatus},
+};
 
 /// Manages the lifecycle of ephemeral K8s pods.
 pub struct PodManager {
@@ -49,9 +51,7 @@ impl PodManager {
 
     /// Create a manager from an existing [`kube::Client`] (for connection
     /// reuse).
-    pub fn with_client(client: Client) -> Self {
-        Self { client }
-    }
+    pub fn with_client(client: Client) -> Self { Self { client } }
 
     /// Create a pod and wait until it reaches the `Running` phase.
     ///
@@ -84,10 +84,7 @@ impl PodManager {
 
         match result {
             Ok(Ok(Some(pod_obj))) => {
-                let ip = pod_obj
-                    .status
-                    .as_ref()
-                    .and_then(|s| s.pod_ip.clone());
+                let ip = pod_obj.status.as_ref().and_then(|s| s.pod_ip.clone());
 
                 let port = pod_obj
                     .spec
@@ -107,7 +104,7 @@ impl PodManager {
                 })
             }
             Ok(Ok(None)) => Err(K8sError::PodTimeout {
-                name: pod_name,
+                name:         pod_name,
                 timeout_secs: timeout.as_secs(),
             }),
             Ok(Err(source)) => Err(K8sError::WaitCondition { source }),
@@ -115,7 +112,7 @@ impl PodManager {
                 // Timeout — attempt cleanup.
                 let _ = self.delete_pod(&pod_name, namespace).await;
                 Err(K8sError::PodTimeout {
-                    name: pod_name,
+                    name:         pod_name,
                     timeout_secs: timeout.as_secs(),
                 })
             }
@@ -140,11 +137,7 @@ impl PodManager {
     }
 
     /// Get the current status of a pod.
-    pub async fn get_pod_status(
-        &self,
-        name: &str,
-        namespace: &str,
-    ) -> Result<PodStatus, K8sError> {
+    pub async fn get_pod_status(&self, name: &str, namespace: &str) -> Result<PodStatus, K8sError> {
         let pods: Api<k8s_core::Pod> = Api::namespaced(self.client.clone(), namespace);
         match pods.get(name).await {
             Ok(pod) => {

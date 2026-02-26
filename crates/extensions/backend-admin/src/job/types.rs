@@ -457,7 +457,6 @@ fn json_opt_non_empty_str(raw: &serde_json::Value, key: &str) -> Option<String> 
 
 fn json_opt_bool(raw: &serde_json::Value, key: &str) -> Option<bool> { raw.get(key)?.as_bool() }
 
-
 // ===========================================================================
 // Tests
 // ===========================================================================
@@ -534,5 +533,4 @@ mod tests {
         assert!(parse_date_to_timestamp("not-a-date").is_none());
         assert!(parse_date_to_timestamp("").is_none());
     }
-
 }

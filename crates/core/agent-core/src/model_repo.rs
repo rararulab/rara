@@ -65,7 +65,8 @@ pub trait ModelRepo: Send + Sync + 'static {
     /// List all key-model mappings.
     async fn list(&self) -> Vec<ModelEntry>;
 
-    /// Return the global fallback model list (tried in order when primary fails).
+    /// Return the global fallback model list (tried in order when primary
+    /// fails).
     async fn fallback_models(&self) -> Vec<String>;
 
     /// Replace the global fallback model list.

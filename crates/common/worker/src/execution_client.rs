@@ -3,8 +3,7 @@ use std::collections::BTreeMap;
 use rara_api::pb::execution::v1::{
     self as pb, execution_worker_service_client::ExecutionWorkerServiceClient,
 };
-use serde::Serialize;
-use serde::de::DeserializeOwned;
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value as JsonValue;
 use snafu::prelude::*;
 use tonic::transport::{Channel, Endpoint};
@@ -16,17 +15,17 @@ pub struct ExecutionWorkerClient {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilityInfo {
-    pub name: String,
-    pub supports_sync: bool,
+    pub name:           String,
+    pub supports_sync:  bool,
     pub supports_async: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RemoteWorkerError {
-    pub code: String,
-    pub message: String,
+    pub code:      String,
+    pub message:   String,
     pub retryable: bool,
-    pub details: Option<JsonValue>,
+    pub details:   Option<JsonValue>,
 }
 
 #[derive(Debug, Snafu)]
@@ -39,10 +38,10 @@ pub enum ExecutionWorkerClientError {
 
     #[snafu(display("execution worker returned error {code}: {message}"))]
     Worker {
-        code: String,
-        message: String,
+        code:      String,
+        message:   String,
         retryable: bool,
-        details: Option<JsonValue>,
+        details:   Option<JsonValue>,
     },
 
     #[snafu(display("execution worker codec error: {message}"))]
@@ -75,16 +74,16 @@ impl ExecutionWorkerClient {
                 .capabilities
                 .into_iter()
                 .map(|c| CapabilityInfo {
-                    name: c.name,
-                    supports_sync: c.supports_sync,
+                    name:           c.name,
+                    supports_sync:  c.supports_sync,
                     supports_async: c.supports_async,
                 })
                 .collect()),
             Some(pb::list_capabilities_response::Outcome::Error(err)) => WorkerSnafu {
-                code: err.code,
-                message: err.message,
+                code:      err.code,
+                message:   err.message,
                 retryable: err.retryable,
-                details: decode_error_details(&err.details)?,
+                details:   decode_error_details(&err.details)?,
             }
             .fail(),
             None => ProtocolSnafu {
@@ -132,16 +131,19 @@ impl ExecutionWorkerClient {
             .into_inner();
 
         let result_json = match resp.outcome {
-            Some(pb::invoke_response::Outcome::Success(success)) => serde_json::from_slice(&success.result)
-                .map_err(|e| ExecutionWorkerClientError::Codec {
-                    message: format!("decode invoke result bytes for {capability} failed: {e}"),
-                })?,
+            Some(pb::invoke_response::Outcome::Success(success)) => {
+                serde_json::from_slice(&success.result).map_err(|e| {
+                    ExecutionWorkerClientError::Codec {
+                        message: format!("decode invoke result bytes for {capability} failed: {e}"),
+                    }
+                })?
+            }
             Some(pb::invoke_response::Outcome::Error(err)) => {
                 return WorkerSnafu {
-                    code: err.code,
-                    message: err.message,
+                    code:      err.code,
+                    message:   err.message,
                     retryable: err.retryable,
-                    details: decode_error_details(&err.details)?,
+                    details:   decode_error_details(&err.details)?,
                 }
                 .fail();
             }

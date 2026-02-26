@@ -22,22 +22,21 @@
 
 use std::sync::Arc;
 
-use agent_core::provider::LlmProvider;
-use agent_core::tool_registry::ToolRegistry;
+use agent_core::{provider::LlmProvider, tool_registry::ToolRegistry};
 
-use crate::builtin::tasks::completion::{
-    run_completion, run_with_tools, DEFAULT_TASK_TOOL_ITERATIONS,
+use crate::builtin::tasks::{
+    completion::{DEFAULT_TASK_TOOL_ITERATIONS, run_completion, run_with_tools},
+    error::TaskAgentError,
 };
-use crate::builtin::tasks::error::TaskAgentError;
 
 /// Analyzes a resume and provides a structured report with scores and
 /// improvement suggestions.
 pub struct ResumeAnalyzerAgent {
-    provider:        Arc<dyn LlmProvider>,
-    model:           String,
-    prompt_repo:     Arc<dyn agent_core::prompt::PromptRepo>,
-    tools:           Option<Arc<ToolRegistry>>,
-    max_iterations:  usize,
+    provider:       Arc<dyn LlmProvider>,
+    model:          String,
+    prompt_repo:    Arc<dyn agent_core::prompt::PromptRepo>,
+    tools:          Option<Arc<ToolRegistry>>,
+    max_iterations: usize,
 }
 
 impl ResumeAnalyzerAgent {

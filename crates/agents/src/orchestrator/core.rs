@@ -1,24 +1,22 @@
 use std::sync::Arc;
 
-use async_openai::types::chat::ChatCompletionRequestMessage;
-use rara_domain_shared::settings::model::Settings;
-use rara_mcp::{manager::mgr::McpManager, tool_bridge::McpToolBridge};
-use rara_memory::{MemoryManager, RecallStrategyEngine};
-use rara_memory::recall_engine::{InjectionPayload, InjectTarget, RecallContext};
-use rara_sessions::types::ChatMessage;
-use tokio::sync::watch;
-use tracing::info;
-
 use agent_core::{
     model::LlmProviderLoaderRef,
     runner::{AgentRunner, MAX_ITERATIONS, UserContent},
     tool_registry::ToolRegistry,
 };
-
-use super::{
-    context::estimate_history_tokens,
-    error::OrchestratorError,
+use async_openai::types::chat::ChatCompletionRequestMessage;
+use rara_domain_shared::settings::model::Settings;
+use rara_mcp::{manager::mgr::McpManager, tool_bridge::McpToolBridge};
+use rara_memory::{
+    MemoryManager, RecallStrategyEngine,
+    recall_engine::{InjectTarget, InjectionPayload, RecallContext},
 };
+use rara_sessions::types::ChatMessage;
+use tokio::sync::watch;
+use tracing::info;
+
+use super::{context::estimate_history_tokens, error::OrchestratorError};
 
 /// Orchestrates agent creation and execution by assembling system prompts,
 /// constructing tool registries, and managing conversation context.
@@ -67,7 +65,10 @@ impl AgentOrchestrator {
         history_len: usize,
         recall_ctx: Option<&RecallContext>,
     ) -> String {
-        let soul = self.prompt_repo.get("agent/soul.md").await
+        let soul = self
+            .prompt_repo
+            .get("agent/soul.md")
+            .await
             .map(|e| e.content)
             .unwrap_or_default();
 
@@ -133,9 +134,7 @@ impl AgentOrchestrator {
                         .collect::<Vec<_>>()
                         .join("\n");
                     let old = std::mem::take(system_prompt);
-                    *system_prompt = format!(
-                        "# User Profile\n{profile_section}\n\n---\n\n{old}"
-                    );
+                    *system_prompt = format!("# User Profile\n{profile_section}\n\n---\n\n{old}");
                 }
             }
         }
@@ -154,8 +153,7 @@ impl AgentOrchestrator {
                         }
                         info!(
                             hits = results.len(),
-                            recall_every_turn,
-                            "memory pre-fetch injected into system prompt"
+                            recall_every_turn, "memory pre-fetch injected into system prompt"
                         );
                     }
                     Ok(_) => {}
@@ -171,10 +169,16 @@ impl AgentOrchestrator {
     }
 
     pub async fn build_worker_policy(&self) -> String {
-        let policy = self.prompt_repo.get("workers/agent_policy.md").await
+        let policy = self
+            .prompt_repo
+            .get("workers/agent_policy.md")
+            .await
             .map(|e| e.content)
             .unwrap_or_default();
-        let soul = self.prompt_repo.get("agent/soul.md").await
+        let soul = self
+            .prompt_repo
+            .get("agent/soul.md")
+            .await
             .map(|e| e.content)
             .unwrap_or_default();
 
@@ -191,10 +195,7 @@ impl AgentOrchestrator {
     ///
     /// Returns injection payloads ready for prompt assembly. If no recall
     /// engine or memory manager is configured, returns an empty vec.
-    pub async fn run_recall_engine(
-        &self,
-        ctx: &RecallContext,
-    ) -> Vec<InjectionPayload> {
+    pub async fn run_recall_engine(&self, ctx: &RecallContext) -> Vec<InjectionPayload> {
         let (Some(engine), Some(mm)) = (&self.recall_engine, &self.memory_manager) else {
             return vec![];
         };
@@ -244,8 +245,7 @@ impl AgentOrchestrator {
                 .iter()
                 .map(|s| s.clone().into())
                 .collect();
-            let max_iterations = settings.agent.max_iterations
-                .map(|n| n as usize);
+            let max_iterations = settings.agent.max_iterations.map(|n| n as usize);
             (provider_hint, fallback_models, max_iterations)
         };
 
@@ -299,12 +299,13 @@ impl AgentOrchestrator {
             .build();
 
         let empty_tools = ToolRegistry::default();
-        let result = runner
-            .run(&empty_tools, None)
-            .await
-            .map_err(|e| OrchestratorError::AgentError {
-                message: format!("summarization failed: {e}"),
-            })?;
+        let result =
+            runner
+                .run(&empty_tools, None)
+                .await
+                .map_err(|e| OrchestratorError::AgentError {
+                    message: format!("summarization failed: {e}"),
+                })?;
 
         let summary = result
             .provider_response
@@ -349,13 +350,9 @@ impl AgentOrchestrator {
 
     // -- accessors ----------------------------------------------------------
 
-    pub fn tools(&self) -> &Arc<ToolRegistry> {
-        &self.tools
-    }
+    pub fn tools(&self) -> &Arc<ToolRegistry> { &self.tools }
 
-    pub fn llm_provider(&self) -> &LlmProviderLoaderRef {
-        &self.llm_provider
-    }
+    pub fn llm_provider(&self) -> &LlmProviderLoaderRef { &self.llm_provider }
 
     /// Resolve the model for a given key from settings.
     ///
@@ -366,23 +363,25 @@ impl AgentOrchestrator {
     }
 
     #[must_use]
-    pub fn current_default_model(&self) -> String {
-        self.model_for_key("chat")
-    }
+    pub fn current_default_model(&self) -> String { self.model_for_key("chat") }
 
     #[must_use]
-    pub fn settings(&self) -> Settings {
-        self.settings_rx.borrow().clone()
-    }
+    pub fn settings(&self) -> Settings { self.settings_rx.borrow().clone() }
 
     /// Resolve the current system prompt asynchronously.
     ///
     /// Loads the base prompt and soul from the prompt repo and composes them.
     pub async fn current_system_prompt(&self) -> String {
-        let base_prompt = self.prompt_repo.get("chat/default_system.md").await
+        let base_prompt = self
+            .prompt_repo
+            .get("chat/default_system.md")
+            .await
             .map(|e| e.content)
             .unwrap_or_default();
-        let soul = self.prompt_repo.get("agent/soul.md").await
+        let soul = self
+            .prompt_repo
+            .get("agent/soul.md")
+            .await
             .map(|e| e.content)
             .unwrap_or_default();
 
@@ -394,9 +393,7 @@ impl AgentOrchestrator {
     }
 
     /// Return a reference to the prompt repository.
-    pub fn prompt_repo(&self) -> &Arc<dyn agent_core::prompt::PromptRepo> {
-        &self.prompt_repo
-    }
+    pub fn prompt_repo(&self) -> &Arc<dyn agent_core::prompt::PromptRepo> { &self.prompt_repo }
 }
 
 impl std::fmt::Debug for AgentOrchestrator {

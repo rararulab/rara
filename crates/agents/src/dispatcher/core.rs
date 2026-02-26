@@ -6,28 +6,27 @@ use std::{
 use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use tracing::{info, warn};
 
-use crate::{
-    builtin::{proactive::ProactiveAgent, scheduled::ScheduledAgent},
-    orchestrator::AgentOrchestrator,
-};
-
 use super::{
     error::{ChannelClosedSnafu, DispatcherError},
     log_store::{DispatcherLogStore, LogFilter},
     metrics,
     types::{
         AgentTask, AgentTaskKind, DispatcherCommand, DispatcherStatus, PrioritizedTask,
-        QueuedTaskInfo, RunningTaskInfo, RunningTaskInner, ScheduledJobCallback,
-        SessionPersister, TaskRecord, TaskResult, TaskStatus,
+        QueuedTaskInfo, RunningTaskInfo, RunningTaskInner, ScheduledJobCallback, SessionPersister,
+        TaskRecord, TaskResult, TaskStatus,
     },
+};
+use crate::{
+    builtin::{proactive::ProactiveAgent, scheduled::ScheduledAgent},
+    orchestrator::AgentOrchestrator,
 };
 
 /// Central dispatcher that serializes same-session tasks and parallelizes
 /// across different sessions.
 pub struct AgentDispatcher {
-    tx: mpsc::Sender<DispatcherCommand>,
-    running: Arc<RwLock<HashMap<String, RunningTaskInner>>>,
-    queue: Arc<Mutex<BinaryHeap<PrioritizedTask>>>,
+    tx:        mpsc::Sender<DispatcherCommand>,
+    running:   Arc<RwLock<HashMap<String, RunningTaskInner>>>,
+    queue:     Arc<Mutex<BinaryHeap<PrioritizedTask>>>,
     log_store: Arc<dyn DispatcherLogStore>,
 }
 
@@ -99,11 +98,11 @@ impl AgentDispatcher {
             let heap = self.queue.lock().await;
             heap.iter()
                 .map(|pt| QueuedTaskInfo {
-                    id: pt.task.id.clone(),
-                    kind: pt.task.kind.clone(),
+                    id:          pt.task.id.clone(),
+                    kind:        pt.task.kind.clone(),
                     session_key: pt.task.session_key.clone(),
-                    priority: pt.task.priority,
-                    created_at: pt.task.created_at,
+                    priority:    pt.task.priority,
+                    created_at:  pt.task.created_at,
                 })
                 .collect()
         };
@@ -236,26 +235,26 @@ async fn handle_submit(
                 .inc();
 
             let record = TaskRecord {
-                id: task.id.clone(),
-                kind: task.kind.clone(),
-                session_key: task.session_key.clone(),
-                priority: task.priority,
-                status: TaskStatus::Deduped,
+                id:           task.id.clone(),
+                kind:         task.kind.clone(),
+                session_key:  task.session_key.clone(),
+                priority:     task.priority,
+                status:       TaskStatus::Deduped,
                 submitted_at: task.created_at,
-                started_at: None,
-                finished_at: Some(jiff::Timestamp::now()),
-                duration_ms: None,
-                error: None,
-                iterations: None,
-                tool_calls: None,
+                started_at:   None,
+                finished_at:  Some(jiff::Timestamp::now()),
+                duration_ms:  None,
+                error:        None,
+                iterations:   None,
+                tool_calls:   None,
             };
             log_store.append(record).await;
 
             let _ = result_tx.send(TaskResult {
                 task_id: task.id,
-                status: TaskStatus::Deduped,
-                output: None,
-                error: None,
+                status:  TaskStatus::Deduped,
+                output:  None,
+                error:   None,
             });
             return;
         }
@@ -267,18 +266,18 @@ async fn handle_submit(
         .inc();
 
     let record = TaskRecord {
-        id: task.id.clone(),
-        kind: task.kind.clone(),
-        session_key: task.session_key.clone(),
-        priority: task.priority,
-        status: TaskStatus::Queued,
+        id:           task.id.clone(),
+        kind:         task.kind.clone(),
+        session_key:  task.session_key.clone(),
+        priority:     task.priority,
+        status:       TaskStatus::Queued,
         submitted_at: task.created_at,
-        started_at: None,
-        finished_at: None,
-        duration_ms: None,
-        error: None,
-        iterations: None,
-        tool_calls: None,
+        started_at:   None,
+        finished_at:  None,
+        duration_ms:  None,
+        error:        None,
+        iterations:   None,
+        tool_calls:   None,
     };
     log_store.append(record).await;
 
@@ -321,26 +320,26 @@ async fn handle_cancel(
                 .dec();
 
             let record = TaskRecord {
-                id: pt.task.id.clone(),
-                kind: pt.task.kind.clone(),
-                session_key: pt.task.session_key.clone(),
-                priority: pt.task.priority,
-                status: TaskStatus::Cancelled,
+                id:           pt.task.id.clone(),
+                kind:         pt.task.kind.clone(),
+                session_key:  pt.task.session_key.clone(),
+                priority:     pt.task.priority,
+                status:       TaskStatus::Cancelled,
                 submitted_at: pt.task.created_at,
-                started_at: None,
-                finished_at: Some(jiff::Timestamp::now()),
-                duration_ms: None,
-                error: None,
-                iterations: None,
-                tool_calls: None,
+                started_at:   None,
+                finished_at:  Some(jiff::Timestamp::now()),
+                duration_ms:  None,
+                error:        None,
+                iterations:   None,
+                tool_calls:   None,
             };
             log_store.append(record).await;
 
             let _ = pt.result_tx.send(TaskResult {
                 task_id: task_id.to_owned(),
-                status: TaskStatus::Cancelled,
-                output: None,
-                error: None,
+                status:  TaskStatus::Cancelled,
+                output:  None,
+                error:   None,
             });
             cancelled = true;
             info!(task_id, "task cancelled from queue");
@@ -354,7 +353,10 @@ async fn handle_cancel(
     }
 
     if !cancelled {
-        warn!(task_id, "cancel requested but task not found in queue (may be running)");
+        warn!(
+            task_id,
+            "cancel requested but task not found in queue (may be running)"
+        );
     }
 }
 
@@ -409,8 +411,7 @@ async fn try_dispatch(
         let started_at = jiff::Timestamp::now();
 
         // Record queue wait time.
-        let wait_secs =
-            (started_at.as_second() - created_at.as_second()).unsigned_abs() as f64;
+        let wait_secs = (started_at.as_second() - created_at.as_second()).unsigned_abs() as f64;
         metrics::DISPATCHER_QUEUE_WAIT
             .with_label_values(&[&kind_label])
             .observe(wait_secs);
@@ -447,13 +448,8 @@ async fn try_dispatch(
         let finish_tx = finish_tx.clone();
 
         tokio::spawn(async move {
-            let result = execute_task(
-                &pt.task,
-                &orchestrator,
-                &*session_persister,
-                &*job_callback,
-            )
-            .await;
+            let result =
+                execute_task(&pt.task, &orchestrator, &*session_persister, &*job_callback).await;
 
             let finished_at = jiff::Timestamp::now();
             let duration_ms =
@@ -607,10 +603,10 @@ async fn execute_task(
         AgentTaskKind::Pipeline => {
             info!("pipeline task kind is not yet implemented");
             Ok(crate::builtin::AgentOutput {
-                response_text: "pipeline not implemented".to_owned(),
-                iterations: 0,
+                response_text:   "pipeline not implemented".to_owned(),
+                iterations:      0,
                 tool_calls_made: 0,
-                truncated: false,
+                truncated:       false,
             })
         }
     }

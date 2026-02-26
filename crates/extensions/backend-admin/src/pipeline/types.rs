@@ -45,16 +45,16 @@ pub enum PipelineRunStatus {
 /// A single pipeline execution record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineRun {
-    pub id: Uuid,
-    pub status: PipelineRunStatus,
-    pub started_at: Timestamp,
-    pub finished_at: Option<Timestamp>,
-    pub jobs_found: i32,
-    pub jobs_scored: i32,
-    pub jobs_applied: i32,
+    pub id:            Uuid,
+    pub status:        PipelineRunStatus,
+    pub started_at:    Timestamp,
+    pub finished_at:   Option<Timestamp>,
+    pub jobs_found:    i32,
+    pub jobs_scored:   i32,
+    pub jobs_applied:  i32,
     pub jobs_notified: i32,
-    pub summary: Option<String>,
-    pub error: Option<String>,
+    pub summary:       Option<String>,
+    pub error:         Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -64,11 +64,11 @@ pub struct PipelineRun {
 /// A single event emitted during a pipeline run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineEvent {
-    pub id: i64,
-    pub run_id: Uuid,
-    pub seq: i32,
+    pub id:         i64,
+    pub run_id:     Uuid,
+    pub seq:        i32,
     pub event_type: String,
-    pub payload: serde_json::Value,
+    pub payload:    serde_json::Value,
     pub created_at: Timestamp,
 }
 
@@ -79,26 +79,26 @@ pub struct PipelineEvent {
 /// Database row representation of a pipeline run.
 #[derive(Debug, sqlx::FromRow)]
 pub(crate) struct PipelineRunRow {
-    pub id: Uuid,
-    pub status: i16,
-    pub started_at: chrono::DateTime<chrono::Utc>,
-    pub finished_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub jobs_found: i32,
-    pub jobs_scored: i32,
-    pub jobs_applied: i32,
+    pub id:            Uuid,
+    pub status:        i16,
+    pub started_at:    chrono::DateTime<chrono::Utc>,
+    pub finished_at:   Option<chrono::DateTime<chrono::Utc>>,
+    pub jobs_found:    i32,
+    pub jobs_scored:   i32,
+    pub jobs_applied:  i32,
     pub jobs_notified: i32,
-    pub summary: Option<String>,
-    pub error: Option<String>,
+    pub summary:       Option<String>,
+    pub error:         Option<String>,
 }
 
 /// Database row representation of a pipeline event.
 #[derive(Debug, sqlx::FromRow)]
 pub(crate) struct PipelineEventRow {
-    pub id: i64,
-    pub run_id: Uuid,
-    pub seq: i32,
+    pub id:         i64,
+    pub run_id:     Uuid,
+    pub seq:        i32,
     pub event_type: String,
-    pub payload: serde_json::Value,
+    pub payload:    serde_json::Value,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -109,17 +109,17 @@ pub(crate) struct PipelineEventRow {
 impl From<PipelineRunRow> for PipelineRun {
     fn from(row: PipelineRunRow) -> Self {
         Self {
-            id: row.id,
-            status: PipelineRunStatus::from_repr(row.status as u8)
+            id:            row.id,
+            status:        PipelineRunStatus::from_repr(row.status as u8)
                 .unwrap_or(PipelineRunStatus::Failed),
-            started_at: chrono_to_timestamp(row.started_at),
-            finished_at: chrono_opt_to_timestamp(row.finished_at),
-            jobs_found: row.jobs_found,
-            jobs_scored: row.jobs_scored,
-            jobs_applied: row.jobs_applied,
+            started_at:    chrono_to_timestamp(row.started_at),
+            finished_at:   chrono_opt_to_timestamp(row.finished_at),
+            jobs_found:    row.jobs_found,
+            jobs_scored:   row.jobs_scored,
+            jobs_applied:  row.jobs_applied,
             jobs_notified: row.jobs_notified,
-            summary: row.summary,
-            error: row.error,
+            summary:       row.summary,
+            error:         row.error,
         }
     }
 }
@@ -127,11 +127,11 @@ impl From<PipelineRunRow> for PipelineRun {
 impl From<PipelineEventRow> for PipelineEvent {
     fn from(row: PipelineEventRow) -> Self {
         Self {
-            id: row.id,
-            run_id: row.run_id,
-            seq: row.seq,
+            id:         row.id,
+            run_id:     row.run_id,
+            seq:        row.seq,
             event_type: row.event_type,
-            payload: row.payload,
+            payload:    row.payload,
             created_at: chrono_to_timestamp(row.created_at),
         }
     }
@@ -158,33 +158,33 @@ pub enum DiscoveredJobAction {
 /// A job discovered during a pipeline run (slim, FK-only).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoveredJob {
-    pub id: Uuid,
-    pub run_id: Uuid,
-    pub job_id: Uuid,
-    pub score: Option<i32>,
-    pub action: DiscoveredJobAction,
+    pub id:         Uuid,
+    pub run_id:     Uuid,
+    pub job_id:     Uuid,
+    pub score:      Option<i32>,
+    pub action:     DiscoveredJobAction,
     pub created_at: Timestamp,
 }
 
 /// Database row representation of a discovered job.
 #[derive(Debug, sqlx::FromRow)]
 pub(crate) struct DiscoveredJobRow {
-    pub id: Uuid,
-    pub run_id: Uuid,
-    pub job_id: Uuid,
-    pub score: Option<i32>,
-    pub action: i16,
+    pub id:         Uuid,
+    pub run_id:     Uuid,
+    pub job_id:     Uuid,
+    pub score:      Option<i32>,
+    pub action:     i16,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl From<DiscoveredJobRow> for DiscoveredJob {
     fn from(row: DiscoveredJobRow) -> Self {
         Self {
-            id: row.id,
-            run_id: row.run_id,
-            job_id: row.job_id,
-            score: row.score,
-            action: DiscoveredJobAction::from_repr(row.action as u8)
+            id:         row.id,
+            run_id:     row.run_id,
+            job_id:     row.job_id,
+            score:      row.score,
+            action:     DiscoveredJobAction::from_repr(row.action as u8)
                 .unwrap_or(DiscoveredJobAction::Discovered),
             created_at: chrono_to_timestamp(row.created_at),
         }
@@ -198,55 +198,56 @@ impl From<DiscoveredJobRow> for DiscoveredJob {
 /// A discovered job enriched with details from the `job` table (via JOIN).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoveredJobWithDetails {
-    pub id: Uuid,
-    pub run_id: Uuid,
-    pub job_id: Uuid,
-    pub score: Option<i32>,
-    pub action: DiscoveredJobAction,
-    pub created_at: Timestamp,
+    pub id:          Uuid,
+    pub run_id:      Uuid,
+    pub job_id:      Uuid,
+    pub score:       Option<i32>,
+    pub action:      DiscoveredJobAction,
+    pub created_at:  Timestamp,
     // Job details from JOIN
-    pub title: String,
-    pub company: String,
-    pub location: Option<String>,
-    pub url: Option<String>,
+    pub title:       String,
+    pub company:     String,
+    pub location:    Option<String>,
+    pub url:         Option<String>,
     pub description: Option<String>,
-    pub posted_at: Option<Timestamp>,
+    pub posted_at:   Option<Timestamp>,
 }
 
-/// Database row for the JOIN query between `pipeline_discovered_jobs` and `job`.
+/// Database row for the JOIN query between `pipeline_discovered_jobs` and
+/// `job`.
 #[derive(Debug, sqlx::FromRow)]
 pub(crate) struct DiscoveredJobWithDetailsRow {
-    pub id: Uuid,
-    pub run_id: Uuid,
-    pub job_id: Uuid,
-    pub score: Option<i32>,
-    pub action: i16,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub id:          Uuid,
+    pub run_id:      Uuid,
+    pub job_id:      Uuid,
+    pub score:       Option<i32>,
+    pub action:      i16,
+    pub created_at:  chrono::DateTime<chrono::Utc>,
     // from job table
-    pub title: String,
-    pub company: String,
-    pub location: Option<String>,
-    pub url: Option<String>,
+    pub title:       String,
+    pub company:     String,
+    pub location:    Option<String>,
+    pub url:         Option<String>,
     pub description: Option<String>,
-    pub posted_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub posted_at:   Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl From<DiscoveredJobWithDetailsRow> for DiscoveredJobWithDetails {
     fn from(row: DiscoveredJobWithDetailsRow) -> Self {
         Self {
-            id: row.id,
-            run_id: row.run_id,
-            job_id: row.job_id,
-            score: row.score,
-            action: DiscoveredJobAction::from_repr(row.action as u8)
+            id:          row.id,
+            run_id:      row.run_id,
+            job_id:      row.job_id,
+            score:       row.score,
+            action:      DiscoveredJobAction::from_repr(row.action as u8)
                 .unwrap_or(DiscoveredJobAction::Discovered),
-            created_at: chrono_to_timestamp(row.created_at),
-            title: row.title,
-            company: row.company,
-            location: row.location,
-            url: row.url,
+            created_at:  chrono_to_timestamp(row.created_at),
+            title:       row.title,
+            company:     row.company,
+            location:    row.location,
+            url:         row.url,
             description: row.description,
-            posted_at: chrono_opt_to_timestamp(row.posted_at),
+            posted_at:   chrono_opt_to_timestamp(row.posted_at),
         }
     }
 }
@@ -258,19 +259,19 @@ impl From<DiscoveredJobWithDetailsRow> for DiscoveredJobWithDetails {
 /// Aggregated statistics for discovered jobs across all pipeline runs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoveredJobsStats {
-    pub total: i64,
-    pub by_action: DiscoveredJobsActionCounts,
+    pub total:        i64,
+    pub by_action:    DiscoveredJobsActionCounts,
     pub scored_count: i64,
-    pub avg_score: Option<f64>,
+    pub avg_score:    Option<f64>,
 }
 
 /// Breakdown of discovered jobs by action.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoveredJobsActionCounts {
     pub discovered: i64,
-    pub notified: i64,
-    pub applied: i64,
-    pub skipped: i64,
+    pub notified:   i64,
+    pub applied:    i64,
+    pub skipped:    i64,
 }
 
 // ---------------------------------------------------------------------------
@@ -291,23 +292,23 @@ pub enum PipelineStreamEvent {
     ThinkingDone,
     /// A tool call has started.
     ToolCallStart {
-        id: String,
-        name: String,
+        id:        String,
+        name:      String,
         arguments: Option<serde_json::Value>,
     },
     /// A tool call has finished.
     ToolCallEnd {
-        id: String,
-        name: String,
+        id:      String,
+        name:    String,
         success: bool,
-        error: Option<String>,
-        result: Option<serde_json::Value>,
+        error:   Option<String>,
+        result:  Option<serde_json::Value>,
     },
     /// Incremental text content from the LLM.
     TextDelta { text: String },
     /// Pipeline run completed successfully.
     Done {
-        summary: String,
+        summary:    String,
         iterations: usize,
         tool_calls: usize,
     },

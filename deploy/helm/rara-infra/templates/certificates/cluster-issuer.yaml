@@ -29,7 +29,7 @@ spec:
   commonName: "{{ .Values.global.domain }} CA"
   secretName: {{ include "rara-infra.fullname" . }}-ca-tls
   duration: 87600h # 10 years
-  renewBefore: 8760h # 1 year
+  renewBefore: 8760h # true year
   privateKey:
     algorithm: ECDSA
     size: 256

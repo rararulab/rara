@@ -97,22 +97,22 @@ pub struct TelegramSettings {
 #[serde(default)]
 pub struct AgentSettings {
     /// Whether proactive messaging is enabled.
-    pub proactive_enabled:  bool,
+    pub proactive_enabled: bool,
     /// Cron expression for proactive check schedule (5-field format).
     /// Changes take effect after service restart.
-    pub proactive_cron:     Option<String>,
+    pub proactive_cron:    Option<String>,
     /// Maximum number of tool-call loop iterations for agent runs.
     /// `None` uses the compile-time default (25).
-    pub max_iterations:     Option<u32>,
+    pub max_iterations:    Option<u32>,
     /// Memory retrieval runtime configuration.
     #[serde(default)]
-    pub memory:             MemorySettings,
+    pub memory:            MemorySettings,
     /// Composio tool runtime authentication settings.
     #[serde(default)]
-    pub composio:           ComposioSettings,
+    pub composio:          ComposioSettings,
     /// Gmail SMTP settings for email sending.
     #[serde(default)]
-    pub gmail:              GmailSettings,
+    pub gmail:             GmailSettings,
 }
 
 /// Memory runtime settings for mem0, Memos, and Hindsight backends.
@@ -263,14 +263,14 @@ pub struct TelegramRuntimeSettingsPatch {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct AgentRuntimeSettingsPatch {
-    pub proactive_enabled:  Option<bool>,
-    pub proactive_cron:     Option<String>,
+    pub proactive_enabled: Option<bool>,
+    pub proactive_cron:    Option<String>,
     /// Set the max iterations limit. `Some(0)` or `None` leaves it unchanged.
     /// Use `Some(n)` where `n > 0` to override.
-    pub max_iterations:     Option<u32>,
-    pub memory:             Option<MemoryRuntimeSettingsPatch>,
-    pub composio:           Option<ComposioRuntimeSettingsPatch>,
-    pub gmail:              Option<GmailRuntimeSettingsPatch>,
+    pub max_iterations:    Option<u32>,
+    pub memory:            Option<MemoryRuntimeSettingsPatch>,
+    pub composio:          Option<ComposioRuntimeSettingsPatch>,
+    pub gmail:             Option<GmailRuntimeSettingsPatch>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
@@ -466,8 +466,7 @@ impl Settings {
         self.telegram.bot_token = normalize_secret(self.telegram.bot_token.take());
         self.agent.proactive_cron = normalize_text(self.agent.proactive_cron.take());
         self.agent.memory.mem0_base_url = normalize_text(self.agent.memory.mem0_base_url.take());
-        self.agent.memory.memos_base_url =
-            normalize_text(self.agent.memory.memos_base_url.take());
+        self.agent.memory.memos_base_url = normalize_text(self.agent.memory.memos_base_url.take());
         self.agent.memory.memos_token = normalize_secret(self.agent.memory.memos_token.take());
         self.agent.memory.hindsight_base_url =
             normalize_text(self.agent.memory.hindsight_base_url.take());
@@ -570,7 +569,10 @@ mod tests {
         settings.apply_patch(UpdateRequest {
             ai:           Some(AiRuntimeSettingsPatch {
                 models: Some(HashMap::from([
-                    ("chat".to_owned(), Some("anthropic/claude-sonnet-4".to_owned())),
+                    (
+                        "chat".to_owned(),
+                        Some("anthropic/claude-sonnet-4".to_owned()),
+                    ),
                     ("job".to_owned(), None), // remove
                 ])),
                 ..Default::default()
@@ -690,12 +692,12 @@ mod tests {
             ai:           None,
             telegram:     None,
             agent:        Some(AgentRuntimeSettingsPatch {
-                proactive_enabled:  Some(true),
-                proactive_cron:     Some("0 9 * * *".to_owned()),
-                memory:             None,
-                composio:           None,
-                gmail:              None,
-                max_iterations:     None,
+                proactive_enabled: Some(true),
+                proactive_cron:    Some("0 9 * * *".to_owned()),
+                memory:            None,
+                composio:          None,
+                gmail:             None,
+                max_iterations:    None,
             }),
             job_pipeline: None,
             workers:      None,
@@ -708,12 +710,12 @@ mod tests {
     fn apply_patch_agent_partial() {
         let mut settings = Settings {
             agent: AgentSettings {
-                proactive_enabled:  true,
-                proactive_cron:     Some("0 9 * * *".to_owned()),
-                memory:             MemorySettings::default(),
-                composio:           ComposioSettings::default(),
-                gmail:              GmailSettings::default(),
-                max_iterations:     None,
+                proactive_enabled: true,
+                proactive_cron:    Some("0 9 * * *".to_owned()),
+                memory:            MemorySettings::default(),
+                composio:          ComposioSettings::default(),
+                gmail:             GmailSettings::default(),
+                max_iterations:    None,
             },
             ..Default::default()
         };
@@ -721,12 +723,12 @@ mod tests {
             ai:           None,
             telegram:     None,
             agent:        Some(AgentRuntimeSettingsPatch {
-                proactive_enabled:  Some(false),
-                proactive_cron:     None,
-                memory:             None,
-                composio:           None,
-                gmail:              None,
-                max_iterations:     None,
+                proactive_enabled: Some(false),
+                proactive_cron:    None,
+                memory:            None,
+                composio:          None,
+                gmail:             None,
+                max_iterations:    None,
             }),
             job_pipeline: None,
             workers:      None,
@@ -739,12 +741,12 @@ mod tests {
     fn normalize_agent_settings() {
         let mut settings = Settings {
             agent: AgentSettings {
-                proactive_enabled:  true,
-                proactive_cron:     Some("  0 9 * * *  ".to_owned()),
-                memory:             MemorySettings::default(),
-                composio:           ComposioSettings::default(),
-                gmail:              GmailSettings::default(),
-                max_iterations:     None,
+                proactive_enabled: true,
+                proactive_cron:    Some("  0 9 * * *  ".to_owned()),
+                memory:            MemorySettings::default(),
+                composio:          ComposioSettings::default(),
+                gmail:             GmailSettings::default(),
+                max_iterations:    None,
             },
             ..Default::default()
         };
@@ -766,9 +768,9 @@ mod tests {
             ai:           None,
             telegram:     None,
             agent:        Some(AgentRuntimeSettingsPatch {
-                proactive_enabled:  None,
-                proactive_cron:     None,
-                memory:             Some(MemoryRuntimeSettingsPatch {
+                proactive_enabled: None,
+                proactive_cron:    None,
+                memory:            Some(MemoryRuntimeSettingsPatch {
                     mem0_base_url:      Some("http://mem0:8080".to_owned()),
                     memos_base_url:     Some("http://memos:5230".to_owned()),
                     memos_token:        Some("secret-token".to_owned()),
@@ -776,9 +778,9 @@ mod tests {
                     hindsight_bank_id:  Some("my-bank".to_owned()),
                     recall_every_turn:  None,
                 }),
-                composio:           None,
-                gmail:              None,
-                max_iterations:     None,
+                composio:          None,
+                gmail:             None,
+                max_iterations:    None,
             }),
             job_pipeline: None,
             workers:      None,
@@ -902,16 +904,16 @@ mod tests {
             ai:           None,
             telegram:     None,
             agent:        Some(AgentRuntimeSettingsPatch {
-                proactive_enabled:  None,
-                proactive_cron:     None,
-                memory:             None,
-                composio:           None,
-                gmail:              Some(GmailRuntimeSettingsPatch {
+                proactive_enabled: None,
+                proactive_cron:    None,
+                memory:            None,
+                composio:          None,
+                gmail:             Some(GmailRuntimeSettingsPatch {
                     address:           Some("user@gmail.com".to_owned()),
                     app_password:      Some("abcd-efgh-ijkl-mnop".to_owned()),
                     auto_send_enabled: Some(true),
                 }),
-                max_iterations:     None,
+                max_iterations:    None,
             }),
             job_pipeline: None,
             workers:      None,

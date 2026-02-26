@@ -46,12 +46,17 @@ impl CoverLetterAgent {
         job_description: &str,
         resume: &str,
     ) -> Result<String, TaskAgentError> {
-        let user_input =
-            format!("## Job Description\n{job_description}\n\n## My Resume\n{resume}");
-        let base = self.prompt_repo.get("ai/cover_letter.system.md").await
+        let user_input = format!("## Job Description\n{job_description}\n\n## My Resume\n{resume}");
+        let base = self
+            .prompt_repo
+            .get("ai/cover_letter.system.md")
+            .await
             .map(|e| e.content)
             .unwrap_or_default();
-        let soul = self.prompt_repo.get("agent/soul.md").await
+        let soul = self
+            .prompt_repo
+            .get("agent/soul.md")
+            .await
             .map(|e| e.content)
             .unwrap_or_default();
         let system_prompt = if soul.trim().is_empty() {

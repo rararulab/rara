@@ -111,14 +111,14 @@ impl AgentTool for SendEmailTool {
         };
 
         // Parse addresses.
-        let from_mailbox: lettre::Address = from_address
-            .parse()
-            .map_err(|e: lettre::address::AddressError| {
-                anyhow::anyhow!("invalid from address: {e}")
-            })?;
-        let to_mailbox: lettre::Address = to
-            .parse()
-            .map_err(|e: lettre::address::AddressError| {
+        let from_mailbox: lettre::Address =
+            from_address
+                .parse()
+                .map_err(|e: lettre::address::AddressError| {
+                    anyhow::anyhow!("invalid from address: {e}")
+                })?;
+        let to_mailbox: lettre::Address =
+            to.parse().map_err(|e: lettre::address::AddressError| {
                 anyhow::anyhow!("invalid to address: {e}")
             })?;
 
@@ -128,18 +128,18 @@ impl AgentTool for SendEmailTool {
 
         let message = if let Some(path) = attachment_path {
             // Read attachment file.
-            let file_bytes = tokio::fs::read(path).await.map_err(|e| {
-                anyhow::anyhow!("failed to read attachment '{}': {}", path, e)
-            })?;
+            let file_bytes = tokio::fs::read(path)
+                .await
+                .map_err(|e| anyhow::anyhow!("failed to read attachment '{}': {}", path, e))?;
 
-            let filename = std::path::Path::new(path)
-                .file_name()
-                .map_or_else(|| "attachment.pdf".to_owned(), |n| n.to_string_lossy().into_owned());
+            let filename = std::path::Path::new(path).file_name().map_or_else(
+                || "attachment.pdf".to_owned(),
+                |n| n.to_string_lossy().into_owned(),
+            );
 
             let attachment = Attachment::new(filename).body(
                 file_bytes,
-                ContentType::parse("application/pdf")
-                    .unwrap_or(ContentType::TEXT_PLAIN),
+                ContentType::parse("application/pdf").unwrap_or(ContentType::TEXT_PLAIN),
             );
 
             let multipart = MultiPart::mixed()

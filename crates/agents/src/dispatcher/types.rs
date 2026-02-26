@@ -11,16 +11,16 @@ use crate::builtin::AgentOutput;
 #[derive(Builder)]
 pub struct AgentTask {
     #[builder(default = ulid::Ulid::new().to_string())]
-    pub id: String,
-    pub kind: AgentTaskKind,
-    pub priority: Priority,
+    pub id:          String,
+    pub kind:        AgentTaskKind,
+    pub priority:    Priority,
     pub session_key: String,
-    pub message: String,
+    pub message:     String,
     #[builder(default)]
-    pub history: Vec<rara_sessions::types::ChatMessage>,
-    pub dedup_key: Option<String>,
+    pub history:     Vec<rara_sessions::types::ChatMessage>,
+    pub dedup_key:   Option<String>,
     #[builder(default = jiff::Timestamp::now())]
-    pub created_at: jiff::Timestamp,
+    pub created_at:  jiff::Timestamp,
 }
 
 /// Callback for persisting session messages after task execution.
@@ -71,9 +71,7 @@ impl AgentTaskKind {
 }
 
 impl std::fmt::Display for AgentTaskKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.label())
-    }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(self.label()) }
 }
 
 /// Task priority (higher value = dispatched sooner).
@@ -120,31 +118,31 @@ pub enum TaskStatus {
 /// Historical record of a task execution.
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskRecord {
-    pub id: String,
-    pub kind: AgentTaskKind,
-    pub session_key: String,
-    pub priority: Priority,
-    pub status: TaskStatus,
+    pub id:           String,
+    pub kind:         AgentTaskKind,
+    pub session_key:  String,
+    pub priority:     Priority,
+    pub status:       TaskStatus,
     pub submitted_at: jiff::Timestamp,
-    pub started_at: Option<jiff::Timestamp>,
-    pub finished_at: Option<jiff::Timestamp>,
-    pub duration_ms: Option<u64>,
-    pub error: Option<String>,
-    pub iterations: Option<usize>,
-    pub tool_calls: Option<usize>,
+    pub started_at:   Option<jiff::Timestamp>,
+    pub finished_at:  Option<jiff::Timestamp>,
+    pub duration_ms:  Option<u64>,
+    pub error:        Option<String>,
+    pub iterations:   Option<usize>,
+    pub tool_calls:   Option<usize>,
 }
 
 /// Result of a completed task execution.
 pub struct TaskResult {
     pub task_id: String,
-    pub status: TaskStatus,
-    pub output: Option<AgentOutput>,
-    pub error: Option<String>,
+    pub status:  TaskStatus,
+    pub output:  Option<AgentOutput>,
+    pub error:   Option<String>,
 }
 
 /// A task wrapped with its priority for the binary heap.
 pub(crate) struct PrioritizedTask {
-    pub task: AgentTask,
+    pub task:      AgentTask,
     pub result_tx: oneshot::Sender<TaskResult>,
 }
 
@@ -171,21 +169,21 @@ impl Ord for PrioritizedTask {
 /// Serializable summary of a queued task (for REST API).
 #[derive(Debug, Clone, Serialize)]
 pub struct QueuedTaskInfo {
-    pub id: String,
-    pub kind: AgentTaskKind,
+    pub id:          String,
+    pub kind:        AgentTaskKind,
     pub session_key: String,
-    pub priority: Priority,
-    pub created_at: jiff::Timestamp,
+    pub priority:    Priority,
+    pub created_at:  jiff::Timestamp,
 }
 
 /// Serializable summary of a running task (for REST API).
 #[derive(Debug, Clone, Serialize)]
 pub struct RunningTaskInfo {
-    pub id: String,
-    pub kind: AgentTaskKind,
+    pub id:          String,
+    pub kind:        AgentTaskKind,
     pub session_key: String,
-    pub priority: Priority,
-    pub started_at: jiff::Timestamp,
+    pub priority:    Priority,
+    pub started_at:  jiff::Timestamp,
 }
 
 /// Internal bookkeeping for a running task.
@@ -196,7 +194,7 @@ pub(crate) struct RunningTaskInner {
 /// Command sent to the dispatcher run loop.
 pub(crate) enum DispatcherCommand {
     Submit {
-        task: AgentTask,
+        task:      AgentTask,
         result_tx: oneshot::Sender<TaskResult>,
     },
     Cancel {
@@ -208,6 +206,6 @@ pub(crate) enum DispatcherCommand {
 #[derive(Debug, Clone, Serialize)]
 pub struct DispatcherStatus {
     pub running: Vec<RunningTaskInfo>,
-    pub queued: Vec<QueuedTaskInfo>,
-    pub stats: super::log_store::DispatcherStats,
+    pub queued:  Vec<QueuedTaskInfo>,
+    pub stats:   super::log_store::DispatcherStats,
 }

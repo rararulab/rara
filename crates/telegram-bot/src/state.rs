@@ -23,12 +23,11 @@
 
 use std::sync::{Arc, RwLock};
 
-use crate::contacts::repository::ContactRepository;
 use teloxide::types::ChatId;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use crate::http_client::MainServiceHttpClient;
+use crate::{contacts::repository::ContactRepository, http_client::MainServiceHttpClient};
 
 /// Centralized runtime state shared across all bot components.
 #[derive(Clone)]

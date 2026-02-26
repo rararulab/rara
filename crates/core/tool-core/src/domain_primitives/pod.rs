@@ -17,16 +17,18 @@
 //! Wraps [`rara_k8s::PodManager`] behind the [`AgentTool`] trait so agents
 //! can create, delete, inspect, and read logs from ephemeral pods.
 
-use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+    time::Duration,
+};
 
 use async_trait::async_trait;
+use rara_k8s::k8s_types::*;
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::AgentTool;
-use rara_k8s::k8s_types::*;
 
 /// Agent-callable tool for managing Kubernetes pods.
 pub struct PodTool {
@@ -38,60 +40,52 @@ pub struct PodTool {
 #[serde(tag = "action", rename_all = "snake_case")]
 enum PodAction {
     Create {
-        image: String,
+        image:       String,
         #[serde(default = "default_namespace")]
-        namespace: String,
-        port: Option<u16>,
-        command: Option<Vec<String>>,
-        args: Option<Vec<String>>,
+        namespace:   String,
+        port:        Option<u16>,
+        command:     Option<Vec<String>>,
+        args:        Option<Vec<String>>,
         #[serde(default)]
-        env: HashMap<String, String>,
+        env:         HashMap<String, String>,
         #[serde(default)]
-        labels: HashMap<String, String>,
+        labels:      HashMap<String, String>,
         #[serde(default = "default_name_prefix")]
         name_prefix: String,
     },
     Delete {
-        pod_name: String,
+        pod_name:  String,
         #[serde(default = "default_namespace")]
         namespace: String,
     },
     Status {
-        pod_name: String,
+        pod_name:  String,
         #[serde(default = "default_namespace")]
         namespace: String,
     },
     Logs {
-        pod_name: String,
+        pod_name:   String,
         #[serde(default = "default_namespace")]
-        namespace: String,
+        namespace:  String,
         tail_lines: Option<i64>,
     },
 }
 
-fn default_namespace() -> String {
-    "default".to_string()
-}
+fn default_namespace() -> String { "default".to_string() }
 
-fn default_name_prefix() -> String {
-    "rara-pod".to_string()
-}
+fn default_name_prefix() -> String { "rara-pod".to_string() }
 
 impl PodTool {
-    pub fn new(manager: Arc<rara_k8s::PodManager>) -> Self {
-        Self { manager }
-    }
+    pub fn new(manager: Arc<rara_k8s::PodManager>) -> Self { Self { manager } }
 }
 
 #[async_trait]
 impl AgentTool for PodTool {
-    fn name(&self) -> &str {
-        "pod"
-    }
+    fn name(&self) -> &str { "pod" }
 
     fn description(&self) -> &str {
-        "Manage Kubernetes pods. Actions: create, delete, status, logs. \
-         Use for running isolated workloads in the cluster."
+        "Manage Kubernetes pods. Actions: create, delete, status, logs. Use for running isolated \
+         workloads in the cluster."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -168,8 +162,7 @@ impl AgentTool for PodTool {
                 let pod_name = rara_k8s::generate_pod_name(&name_prefix);
 
                 let mut pod_labels = BTreeMap::new();
-                pod_labels
-                    .insert("app.kubernetes.io/managed-by".into(), "rara".into());
+                pod_labels.insert("app.kubernetes.io/managed-by".into(), "rara".into());
                 for (k, v) in &labels {
                     pod_labels.insert(k.clone(), v.clone());
                 }
@@ -177,8 +170,8 @@ impl AgentTool for PodTool {
                 let env_vars: Vec<EnvVar> = env
                     .iter()
                     .map(|(k, v)| EnvVar {
-                        name: k.clone(),
-                        value: Some(v.clone()),
+                        name:       k.clone(),
+                        value:      Some(v.clone()),
                         value_from: None,
                     })
                     .collect();
@@ -189,7 +182,7 @@ impl AgentTool for PodTool {
                         labels: Some(pod_labels),
                         ..Default::default()
                     },
-                    spec: Some(PodSpec {
+                    spec:     Some(PodSpec {
                         restart_policy: Some("Never".into()),
                         containers: vec![Container {
                             name: "main".into(),
@@ -212,7 +205,7 @@ impl AgentTool for PodTool {
                         }],
                         ..Default::default()
                     }),
-                    status: None,
+                    status:   None,
                 };
 
                 let handle = self
@@ -232,10 +225,7 @@ impl AgentTool for PodTool {
                 pod_name,
                 namespace,
             } => {
-                let status = self
-                    .manager
-                    .get_pod_status(&pod_name, &namespace)
-                    .await?;
+                let status = self.manager.get_pod_status(&pod_name, &namespace).await?;
                 Ok(serde_json::to_value(&status)?)
             }
             PodAction::Logs {

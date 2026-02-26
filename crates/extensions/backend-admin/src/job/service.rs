@@ -145,8 +145,7 @@ impl JobService {
         // any other site name is forwarded to JobSpy.
         let sites = &criteria.sites;
         let run_all = sites.is_empty();
-        let run_japandev =
-            run_all || sites.iter().any(|s| s.eq_ignore_ascii_case("japandev"));
+        let run_japandev = run_all || sites.iter().any(|s| s.eq_ignore_ascii_case("japandev"));
         let jobspy_sites: Vec<String> = sites
             .iter()
             .filter(|s| !s.eq_ignore_ascii_case("japandev"))
@@ -159,10 +158,8 @@ impl JobService {
             let driver = self.driver.clone();
             let mut criteria_clone = criteria.clone();
             criteria_clone.sites = jobspy_sites;
-            let jobspy_result = tokio::task::spawn_blocking(move || {
-                driver.fetch_jobs(&criteria_clone)
-            })
-            .await;
+            let jobspy_result =
+                tokio::task::spawn_blocking(move || driver.fetch_jobs(&criteria_clone)).await;
 
             match jobspy_result {
                 Ok(Ok(jobs)) => {

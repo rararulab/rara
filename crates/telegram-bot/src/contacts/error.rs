@@ -14,8 +14,7 @@
 
 //! Error types for contacts.
 
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::{http::StatusCode, response::IntoResponse};
 use snafu::Snafu;
 use uuid::Uuid;
 

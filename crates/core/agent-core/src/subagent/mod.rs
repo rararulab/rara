@@ -33,29 +33,19 @@
 //!
 //! # Three Execution Modes
 //!
-//! 1. **Single** — Run one sub-agent with a task:
-//!    ```json
-//!    {"agent": "scout", "task": "Find all authentication code"}
-//!    ```
+//! 1. **Single** — Run one sub-agent with a task: ```json {"agent": "scout",
+//!    "task": "Find all authentication code"} ```
 //!
 //! 2. **Chain** — Run sub-agents sequentially. Each step can reference
 //!    `{previous}` to receive the prior step's output. Stops on first error.
-//!    ```json
-//!    {"chain": [
-//!      {"agent": "scout",   "task": "Find relevant code"},
-//!      {"agent": "planner", "task": "Create plan based on: {previous}"},
-//!      {"agent": "worker",  "task": "Implement: {previous}"}
-//!    ]}
-//!    ```
+//!    ```json {"chain": [ {"agent": "scout",   "task": "Find relevant code"},
+//!    {"agent": "planner", "task": "Create plan based on: {previous}"},
+//!    {"agent": "worker",  "task": "Implement: {previous}"} ]} ```
 //!
 //! 3. **Parallel** — Run sub-agents concurrently with a semaphore-based
-//!    concurrency limit (default 4, max 8).
-//!    ```json
-//!    {"parallel": [
-//!      {"agent": "scout", "task": "Find models"},
-//!      {"agent": "scout", "task": "Find providers"}
-//!    ]}
-//!    ```
+//!    concurrency limit (default 4, max 8). ```json {"parallel": [ {"agent":
+//!    "scout", "task": "Find models"}, {"agent": "scout", "task": "Find
+//!    providers"} ]} ```
 //!
 //! # Agent Definitions
 //!
@@ -81,8 +71,8 @@
 //! Sub-agents never have access to the `"subagent"` tool itself. This is
 //! enforced in two ways:
 //! - The `parent_tools` snapshot is taken BEFORE `SubagentTool` is registered
-//! - `build_subagent_tools()` explicitly filters out `"subagent"` from the
-//!   tool set given to each sub-agent
+//! - `build_subagent_tools()` explicitly filters out `"subagent"` from the tool
+//!   set given to each sub-agent
 
 pub mod builtin;
 pub mod definition;

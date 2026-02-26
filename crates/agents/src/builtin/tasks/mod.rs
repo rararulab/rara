@@ -37,8 +37,7 @@ pub mod resume_optimizer;
 
 use std::sync::Arc;
 
-use agent_core::provider::LlmProviderLoaderRef;
-use agent_core::tool_registry::ToolRegistry;
+use agent_core::{provider::LlmProviderLoaderRef, tool_registry::ToolRegistry};
 use rara_domain_shared::settings::model::Settings;
 use tokio::sync::watch;
 
@@ -55,8 +54,9 @@ use crate::builtin::tasks::{
 /// on every call, so configuration changes take effect immediately without
 /// restart.
 ///
-/// An optional [`ToolRegistry`] can be attached via [`with_tools`](Self::with_tools)
-/// to enable tool-calling mode for analysis agents.
+/// An optional [`ToolRegistry`] can be attached via
+/// [`with_tools`](Self::with_tools) to enable tool-calling mode for analysis
+/// agents.
 #[derive(Clone)]
 pub struct TaskAgentService {
     settings_rx:  watch::Receiver<Settings>,

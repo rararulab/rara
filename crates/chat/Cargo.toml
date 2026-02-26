@@ -12,12 +12,13 @@ categories.workspace = true
 description = "Chat domain service — session-based conversations backed by LLM agents"
 
 [dependencies]
+agent-core.workspace = true
 async-openai.workspace = true
 async-trait.workspace = true
 axum.workspace = true
 chrono.workspace = true
 futures.workspace = true
-agent-core.workspace = true
+opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"] }
 rara-agents.workspace = true
 rara-domain-shared.workspace = true
 rara-paths.workspace = true
@@ -25,7 +26,6 @@ rara-sessions.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"] }
 snafu.workspace = true
 tokio.workspace = true
 tokio-stream = "0.1"

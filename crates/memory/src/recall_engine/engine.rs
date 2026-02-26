@@ -17,13 +17,14 @@
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
-use crate::MemoryManager;
-
-use super::interpolation::interpolate;
-use super::types::{
-    InjectionPayload, MatchedAction, RecallAction, RecallContext, RecallRule, RecallRuleUpdate,
-    Trigger,
+use super::{
+    interpolation::interpolate,
+    types::{
+        InjectionPayload, MatchedAction, RecallAction, RecallContext, RecallRule, RecallRuleUpdate,
+        Trigger,
+    },
 };
+use crate::MemoryManager;
 
 /// Agent-configurable recall strategy engine.
 ///
@@ -54,9 +55,9 @@ impl RecallStrategyEngine {
             .filter(|r| evaluate_trigger(&r.trigger, ctx))
             .map(|r| MatchedAction {
                 rule_name: r.name.clone(),
-                action: r.action.clone(),
-                inject: r.inject,
-                priority: r.priority,
+                action:    r.action.clone(),
+                inject:    r.inject,
+                priority:  r.priority,
             })
             .collect();
 
@@ -119,8 +120,8 @@ impl RecallStrategyEngine {
                         Ok(text) if !text.is_empty() => {
                             payloads.push(InjectionPayload {
                                 rule_name: action.rule_name.clone(),
-                                target: action.inject,
-                                content: text,
+                                target:    action.inject,
+                                content:   text,
                             });
                         }
                         Ok(_) => {}
@@ -162,11 +163,7 @@ impl RecallStrategyEngine {
     }
 
     /// Convenience: evaluate + execute in one call.
-    pub async fn run(
-        &self,
-        ctx: &RecallContext,
-        mm: &MemoryManager,
-    ) -> Vec<InjectionPayload> {
+    pub async fn run(&self, ctx: &RecallContext, mm: &MemoryManager) -> Vec<InjectionPayload> {
         let matched = self.evaluate(ctx).await;
         if matched.is_empty() {
             return vec![];
@@ -177,14 +174,10 @@ impl RecallStrategyEngine {
     // -- CRUD for rules (used by agent tools) ---------------------------------
 
     /// Add a new rule.
-    pub async fn add_rule(&self, rule: RecallRule) {
-        self.rules.write().await.push(rule);
-    }
+    pub async fn add_rule(&self, rule: RecallRule) { self.rules.write().await.push(rule); }
 
     /// List all rules.
-    pub async fn list_rules(&self) -> Vec<RecallRule> {
-        self.rules.read().await.clone()
-    }
+    pub async fn list_rules(&self) -> Vec<RecallRule> { self.rules.read().await.clone() }
 
     /// Update an existing rule. Returns true if found and updated.
     pub async fn update_rule(&self, id: &str, update: RecallRuleUpdate) -> bool {
@@ -244,17 +237,19 @@ fn evaluate_trigger(trigger: &Trigger, ctx: &RecallContext) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use super::super::types::{EventKind, InjectTarget};
+    use super::{
+        super::types::{EventKind, InjectTarget},
+        *,
+    };
 
     fn make_ctx() -> RecallContext {
         RecallContext {
-            user_text: "hello world".to_owned(),
-            turn_count: 6,
-            events: vec![],
+            user_text:               "hello world".to_owned(),
+            turn_count:              6,
+            events:                  vec![],
             elapsed_since_last_secs: 0,
-            summary: None,
-            session_topic: None,
+            summary:                 None,
+            session_topic:           None,
         }
     }
 
@@ -265,7 +260,7 @@ mod tests {
             trigger,
             action: RecallAction::Search {
                 query_template: "{user_text}".to_owned(),
-                limit: 5,
+                limit:          5,
             },
             inject: InjectTarget::SystemPrompt,
             priority,

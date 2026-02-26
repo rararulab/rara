@@ -1,36 +1,34 @@
 use axum::{Json, extract::State, http::StatusCode};
-use utoipa_axum::{router::OpenApiRouter, routes};
-
 use rara_domain_shared::settings::model::{AiRuntimeSettingsPatch, Settings, UpdateRequest};
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::settings::SettingsSvc;
 
 pub(super) fn routes() -> OpenApiRouter<SettingsSvc> {
-    OpenApiRouter::new()
-        .nest(
-            "/api/v1",
-            OpenApiRouter::new()
-                .routes(routes!(get_ai_settings, update_ai_settings))
-                .routes(routes!(get_ollama_model_recommendations))
-                .merge(crate::settings::ollama::ollama_management_routes()),
-        )
+    OpenApiRouter::new().nest(
+        "/api/v1",
+        OpenApiRouter::new()
+            .routes(routes!(get_ai_settings, update_ai_settings))
+            .routes(routes!(get_ollama_model_recommendations))
+            .merge(crate::settings::ollama::ollama_management_routes()),
+    )
 }
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct AiAdminSettingsView {
-    pub configured: bool,
-    pub provider: Option<String>,
-    pub ollama_base_url: Option<String>,
+    pub configured:         bool,
+    pub provider:           Option<String>,
+    pub ollama_base_url:    Option<String>,
     pub openrouter_api_key: Option<String>,
     #[schema(value_type = Option<String>)]
-    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub updated_at:         Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize, utoipa::ToSchema)]
 pub struct AiAdminUpdateRequest {
     pub openrouter_api_key: Option<String>,
-    pub provider: Option<String>,
-    pub ollama_base_url: Option<String>,
+    pub provider:           Option<String>,
+    pub ollama_base_url:    Option<String>,
 }
 
 #[utoipa::path(
@@ -58,11 +56,11 @@ async fn update_ai_settings(
         .update(UpdateRequest {
             ai: Some(AiRuntimeSettingsPatch {
                 openrouter_api_key: req.openrouter_api_key,
-                provider: req.provider,
-                ollama_base_url: req.ollama_base_url,
-                models: None,
-                fallback_models: None,
-                favorite_models: None,
+                provider:           req.provider,
+                ollama_base_url:    req.ollama_base_url,
+                models:             None,
+                fallback_models:    None,
+                favorite_models:    None,
             }),
             ..UpdateRequest::default()
         })
@@ -80,47 +78,47 @@ async fn update_ai_settings(
 impl From<Settings> for AiAdminSettingsView {
     fn from(value: Settings) -> Self {
         Self {
-            configured: value.ai.is_configured(),
-            provider: value.ai.provider,
-            ollama_base_url: value.ai.ollama_base_url,
+            configured:         value.ai.is_configured(),
+            provider:           value.ai.provider,
+            ollama_base_url:    value.ai.ollama_base_url,
             openrouter_api_key: value.ai.openrouter_api_key,
-            updated_at: value.updated_at,
+            updated_at:         value.updated_at,
         }
     }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct LlmfitSystemInfo {
-    pub total_ram_gb: f64,
+    pub total_ram_gb:     f64,
     pub available_ram_gb: f64,
-    pub cpu_cores: u32,
-    pub cpu_name: String,
-    pub has_gpu: bool,
-    pub gpu_vram_gb: Option<f64>,
-    pub gpu_name: Option<String>,
-    pub backend: String,
+    pub cpu_cores:        u32,
+    pub cpu_name:         String,
+    pub has_gpu:          bool,
+    pub gpu_vram_gb:      Option<f64>,
+    pub gpu_name:         Option<String>,
+    pub backend:          String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct LlmfitModelEntry {
-    pub name: String,
-    pub provider: Option<serde_json::Value>,
-    pub fit_level: String,
-    pub run_mode: String,
-    pub score: f64,
-    pub estimated_tps: f64,
-    pub best_quant: String,
+    pub name:               String,
+    pub provider:           Option<serde_json::Value>,
+    pub fit_level:          String,
+    pub run_mode:           String,
+    pub score:              f64,
+    pub estimated_tps:      f64,
+    pub best_quant:         String,
     pub memory_required_gb: f64,
-    pub use_case: Option<serde_json::Value>,
-    pub installed: bool,
+    pub use_case:           Option<serde_json::Value>,
+    pub installed:          bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct LlmfitRecommendationsResponse {
     pub available: bool,
-    pub system: Option<LlmfitSystemInfo>,
-    pub models: Vec<LlmfitModelEntry>,
-    pub error: Option<String>,
+    pub system:    Option<LlmfitSystemInfo>,
+    pub models:    Vec<LlmfitModelEntry>,
+    pub error:     Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
@@ -129,9 +127,7 @@ pub struct ModelRecommendationsQuery {
     pub limit: usize,
 }
 
-fn default_limit() -> usize {
-    10
-}
+fn default_limit() -> usize { 10 }
 
 #[utoipa::path(
     get,
@@ -161,38 +157,41 @@ async fn get_ollama_model_recommendations(
     match result {
         Ok((specs, fits)) => Json(LlmfitRecommendationsResponse {
             available: true,
-            system: Some(LlmfitSystemInfo {
-                total_ram_gb: specs.total_ram_gb,
+            system:    Some(LlmfitSystemInfo {
+                total_ram_gb:     specs.total_ram_gb,
                 available_ram_gb: specs.available_ram_gb,
-                cpu_cores: specs.total_cpu_cores as u32,
-                cpu_name: specs.cpu_name.clone(),
-                has_gpu: specs.has_gpu,
-                gpu_vram_gb: specs.gpu_vram_gb,
-                gpu_name: specs.gpu_name.clone(),
-                backend: format!("{:?}", specs.backend),
+                cpu_cores:        specs.total_cpu_cores as u32,
+                cpu_name:         specs.cpu_name.clone(),
+                has_gpu:          specs.has_gpu,
+                gpu_vram_gb:      specs.gpu_vram_gb,
+                gpu_name:         specs.gpu_name.clone(),
+                backend:          format!("{:?}", specs.backend),
             }),
-            models: fits
+            models:    fits
                 .iter()
                 .map(|f| LlmfitModelEntry {
-                    name: f.model.name.clone(),
-                    provider: Some(serde_json::Value::String(f.model.provider.clone())),
-                    fit_level: format!("{:?}", f.fit_level),
-                    run_mode: format!("{:?}", f.run_mode),
-                    score: f.score,
-                    estimated_tps: f.estimated_tps,
-                    best_quant: f.best_quant.clone(),
+                    name:               f.model.name.clone(),
+                    provider:           Some(serde_json::Value::String(f.model.provider.clone())),
+                    fit_level:          format!("{:?}", f.fit_level),
+                    run_mode:           format!("{:?}", f.run_mode),
+                    score:              f.score,
+                    estimated_tps:      f.estimated_tps,
+                    best_quant:         f.best_quant.clone(),
                     memory_required_gb: f.memory_required_gb,
-                    use_case: Some(serde_json::Value::String(format!("{:?}", f.use_case))),
-                    installed: f.installed,
+                    use_case:           Some(serde_json::Value::String(format!(
+                        "{:?}",
+                        f.use_case
+                    ))),
+                    installed:          f.installed,
                 })
                 .collect(),
-            error: None,
+            error:     None,
         }),
         Err(e) => Json(LlmfitRecommendationsResponse {
             available: false,
-            system: None,
-            models: vec![],
-            error: Some(format!("hardware detection failed: {e}")),
+            system:    None,
+            models:    vec![],
+            error:     Some(format!("hardware detection failed: {e}")),
         }),
     }
 }

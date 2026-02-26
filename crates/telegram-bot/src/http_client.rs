@@ -47,24 +47,24 @@ pub enum MainServiceHttpError {
 /// Request body for `POST /api/v1/jobs/discover`.
 #[derive(Debug, Serialize)]
 struct DiscoveryCriteria {
-    pub keywords: Vec<String>,
-    pub location: Option<String>,
-    pub job_type: Option<String>,
-    pub max_results: Option<u32>,
+    pub keywords:     Vec<String>,
+    pub location:     Option<String>,
+    pub job_type:     Option<String>,
+    pub max_results:  Option<u32>,
     pub posted_after: Option<String>,
     #[serde(default)]
-    pub sites: Vec<String>,
+    pub sites:        Vec<String>,
 }
 
 /// Subset of discovery response fields used by the bot's formatting logic.
 #[derive(Debug, Deserialize)]
 pub struct DiscoveryJobResponse {
-    pub title: String,
-    pub company: String,
-    pub location: Option<String>,
-    pub url: Option<String>,
-    pub salary_min: Option<i32>,
-    pub salary_max: Option<i32>,
+    pub title:           String,
+    pub company:         String,
+    pub location:        Option<String>,
+    pub url:             Option<String>,
+    pub salary_min:      Option<i32>,
+    pub salary_max:      Option<i32>,
     pub salary_currency: Option<String>,
 }
 
@@ -72,7 +72,7 @@ pub struct DiscoveryJobResponse {
 #[derive(Clone)]
 pub struct MainServiceHttpClient {
     base_url: String,
-    client: reqwest::Client,
+    client:   reqwest::Client,
 }
 
 impl MainServiceHttpClient {
@@ -80,7 +80,7 @@ impl MainServiceHttpClient {
     pub fn new(base_url: String) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_owned(),
-            client: reqwest::Client::new(),
+            client:   reqwest::Client::new(),
         }
     }
 
@@ -703,7 +703,7 @@ pub(crate) struct ChatMessageResponse {
 #[derive(Debug, Deserialize)]
 pub(crate) struct ChatMessageData {
     #[allow(dead_code)]
-    pub role: String,
+    pub role:    String,
     pub content: serde_json::Value,
 }
 
@@ -711,28 +711,28 @@ pub(crate) struct ChatMessageData {
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 pub(crate) struct SessionListItem {
-    pub key: String,
-    pub title: Option<String>,
+    pub key:           String,
+    pub title:         Option<String>,
     pub message_count: i64,
-    pub updated_at: String,
+    pub updated_at:    String,
 }
 
 /// Session detail returned by `GET /api/v1/chat/sessions/{key}`.
 #[derive(Debug, Deserialize)]
 pub(crate) struct SessionDetailResponse {
-    pub key: String,
-    pub title: Option<String>,
-    pub model: Option<String>,
+    pub key:           String,
+    pub title:         Option<String>,
+    pub model:         Option<String>,
     pub message_count: i64,
-    pub preview: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
+    pub preview:       Option<String>,
+    pub created_at:    String,
+    pub updated_at:    String,
 }
 
 /// MCP server info returned by `GET /api/v1/mcp/servers`.
 #[derive(Debug, Deserialize)]
 pub(crate) struct McpServerInfo {
-    pub name: String,
+    pub name:   String,
     pub status: McpServerStatus,
 }
 
@@ -768,18 +768,18 @@ pub(crate) enum ChatStreamEvent {
     },
     ToolCallStart {
         #[allow(dead_code)]
-        id: String,
+        id:   String,
         #[allow(dead_code)]
         name: String,
     },
     ToolCallEnd {
         #[allow(dead_code)]
-        id: String,
+        id:      String,
         #[allow(dead_code)]
-        name: String,
+        name:    String,
         success: bool,
         #[allow(dead_code)]
-        error: Option<String>,
+        error:   Option<String>,
     },
     Done {
         text: String,
@@ -792,22 +792,22 @@ pub(crate) enum ChatStreamEvent {
 /// Response from dispatching a coding task.
 #[derive(Debug, Deserialize)]
 pub(crate) struct CodingTaskResponse {
-    pub id: String,
-    pub branch: String,
+    pub id:           String,
+    pub branch:       String,
     pub tmux_session: String,
-    pub status: String,
+    pub status:       String,
 }
 
 /// Summary of a coding task from the list endpoint.
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 pub(crate) struct CodingTaskSummaryResponse {
-    pub id: String,
-    pub status: String,
+    pub id:         String,
+    pub status:     String,
     pub agent_type: String,
-    pub branch: String,
-    pub prompt: String,
-    pub pr_url: Option<String>,
+    pub branch:     String,
+    pub prompt:     String,
+    pub pr_url:     Option<String>,
 }
 
 impl ChatMessageData {

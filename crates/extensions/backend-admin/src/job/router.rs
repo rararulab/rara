@@ -16,18 +16,15 @@
 
 use std::collections::HashSet;
 
-use axum::{
-    Json,
-    extract::State,
-    http::StatusCode,
-};
+use axum::{Json, extract::State, http::StatusCode};
+use utoipa_axum::{router::OpenApiRouter, routes};
+use uuid::Uuid;
+
 use super::{
     error::SourceError,
     service::JobService,
     types::{DiscoveryCriteria, DiscoveryJobResponse, NormalizedJob},
 };
-use utoipa_axum::{router::OpenApiRouter, routes};
-use uuid::Uuid;
 
 // ===========================================================================
 // Discovery routes

@@ -191,7 +191,8 @@ async fn update_server(
     drop(registry);
 
     // If server was running (connected or connecting), spawn background restart
-    let was_running = manager.server_connection_status(&name).await != ConnectionStatus::Disconnected;
+    let was_running =
+        manager.server_connection_status(&name).await != ConnectionStatus::Disconnected;
     if was_running {
         let mgr = manager.clone();
         let restart_name = name.clone();

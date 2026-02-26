@@ -4,15 +4,15 @@
 //! sequentially inside one `#[tokio::test]` function to keep the tokio
 //! runtime alive for the lifetime of the kube client.
 
-use std::collections::BTreeMap;
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use k8s_openapi::api::core::v1 as k8s_core;
-use kube::api::ObjectMeta;
-use kube::config::{KubeConfigOptions, Kubeconfig};
+use kube::{
+    api::ObjectMeta,
+    config::{KubeConfigOptions, Kubeconfig},
+};
 use rara_k8s::{K8sError, PodManager};
-use testcontainers::runners::AsyncRunner;
-use testcontainers::ImageExt;
+use testcontainers::{ImageExt, runners::AsyncRunner};
 use testcontainers_modules::k3s::{K3s, KUBE_SECURE_PORT};
 
 // ---------------------------------------------------------------------------
@@ -57,11 +57,7 @@ async fn setup_cluster() -> (PodManager, testcontainers::ContainerAsync<K3s>) {
         Kubeconfig::from_yaml(&conf_yaml).expect("failed to parse kubeconfig yaml");
 
     kubeconfig.clusters.iter_mut().for_each(|cluster| {
-        if let Some(server) = cluster
-            .cluster
-            .as_mut()
-            .and_then(|c| c.server.as_mut())
-        {
+        if let Some(server) = cluster.cluster.as_mut().and_then(|c| c.server.as_mut()) {
             *server = format!("https://127.0.0.1:{port}");
         }
     });
@@ -76,8 +72,7 @@ async fn setup_cluster() -> (PodManager, testcontainers::ContainerAsync<K3s>) {
     // fails with ProxyProtocolDisabled when the http-proxy feature is off.
     client_config.proxy_url = None;
 
-    let client =
-        kube::Client::try_from(client_config).expect("failed to create kube client");
+    let client = kube::Client::try_from(client_config).expect("failed to create kube client");
 
     let manager = PodManager::with_client(client);
 
@@ -96,13 +91,10 @@ fn nginx_pod(name: &str) -> k8s_core::Pod {
     k8s_core::Pod {
         metadata: ObjectMeta {
             name: Some(name.to_string()),
-            labels: Some(BTreeMap::from([(
-                "app".to_string(),
-                "test".to_string(),
-            )])),
+            labels: Some(BTreeMap::from([("app".to_string(), "test".to_string())])),
             ..Default::default()
         },
-        spec: Some(k8s_core::PodSpec {
+        spec:     Some(k8s_core::PodSpec {
             restart_policy: Some("Never".to_string()),
             containers: vec![k8s_core::Container {
                 name: "nginx".to_string(),
@@ -115,7 +107,7 @@ fn nginx_pod(name: &str) -> k8s_core::Pod {
             }],
             ..Default::default()
         }),
-        status: None,
+        status:   None,
     }
 }
 
@@ -126,7 +118,7 @@ fn echo_pod(name: &str) -> k8s_core::Pod {
             name: Some(name.to_string()),
             ..Default::default()
         },
-        spec: Some(k8s_core::PodSpec {
+        spec:     Some(k8s_core::PodSpec {
             restart_policy: Some("Never".to_string()),
             containers: vec![k8s_core::Container {
                 name: "echo".to_string(),
@@ -140,7 +132,7 @@ fn echo_pod(name: &str) -> k8s_core::Pod {
             }],
             ..Default::default()
         }),
-        status: None,
+        status:   None,
     }
 }
 
@@ -238,9 +230,7 @@ async fn pod_manager_integration() {
     {
         println!(">> test_delete_nonexistent_pod_is_ok");
 
-        let result = manager
-            .delete_pod("nonexistent-pod-12345", "default")
-            .await;
+        let result = manager.delete_pod("nonexistent-pod-12345", "default").await;
 
         assert!(result.is_ok(), "delete of non-existent pod should be Ok");
 
@@ -256,7 +246,7 @@ async fn pod_manager_integration() {
                 name: Some("test-bad-image".to_string()),
                 ..Default::default()
             },
-            spec: Some(k8s_core::PodSpec {
+            spec:     Some(k8s_core::PodSpec {
                 restart_policy: Some("Never".to_string()),
                 containers: vec![k8s_core::Container {
                     name: "bad".to_string(),
@@ -266,7 +256,7 @@ async fn pod_manager_integration() {
                 }],
                 ..Default::default()
             }),
-            status: None,
+            status:   None,
         };
 
         // Use short timeout to trigger timeout error.

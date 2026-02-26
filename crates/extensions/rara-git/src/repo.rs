@@ -4,7 +4,7 @@ use crate::error::GitError;
 
 /// Wrapper around a `git2::Repository` with SSH key for remote operations.
 pub struct GitRepo {
-    inner: git2::Repository,
+    inner:        git2::Repository,
     ssh_key_path: PathBuf,
 }
 
@@ -46,7 +46,7 @@ impl GitRepo {
         })??;
 
         Ok(Self {
-            inner: repo,
+            inner:        repo,
             ssh_key_path: key_path,
         })
     }
@@ -57,7 +57,7 @@ impl GitRepo {
             path: path.display().to_string(),
         })?;
         Ok(Self {
-            inner: repo,
+            inner:        repo,
             ssh_key_path: ssh_key.to_owned(),
         })
     }
@@ -88,7 +88,7 @@ impl GitRepo {
             Err(e) => {
                 return Err(GitError::Worktree {
                     message: format!("failed to create branch: {e}"),
-                })
+                });
             }
         };
 
@@ -145,9 +145,12 @@ impl GitRepo {
         let tree_oid = index.write_tree().map_err(|e| GitError::Commit {
             message: format!("failed to write tree: {e}"),
         })?;
-        let tree = self.inner.find_tree(tree_oid).map_err(|e| GitError::Commit {
-            message: format!("failed to find tree: {e}"),
-        })?;
+        let tree = self
+            .inner
+            .find_tree(tree_oid)
+            .map_err(|e| GitError::Commit {
+                message: format!("failed to find tree: {e}"),
+            })?;
 
         // Check if tree differs from HEAD
         if let Ok(head) = self.inner.head() {
@@ -158,16 +161,13 @@ impl GitRepo {
             }
         }
 
-        let sig =
-            git2::Signature::now(author, &format!("{author}@rara")).map_err(|e| GitError::Commit {
+        let sig = git2::Signature::now(author, &format!("{author}@rara")).map_err(|e| {
+            GitError::Commit {
                 message: format!("failed to create signature: {e}"),
-            })?;
+            }
+        })?;
 
-        let parent = self
-            .inner
-            .head()
-            .ok()
-            .and_then(|h| h.peel_to_commit().ok());
+        let parent = self.inner.head().ok().and_then(|h| h.peel_to_commit().ok());
         let parents: Vec<&git2::Commit<'_>> = parent.iter().collect();
 
         self.inner
@@ -248,18 +248,16 @@ impl GitRepo {
             fo.remote_callbacks(callbacks);
 
             remote
-                .fetch(
-                    &["refs/heads/*:refs/remotes/origin/*"],
-                    Some(&mut fo),
-                    None,
-                )
+                .fetch(&["refs/heads/*:refs/remotes/origin/*"], Some(&mut fo), None)
                 .map_err(|e| GitError::Sync {
                     message: format!("fetch failed: {e}"),
                 })?;
 
-            let fetch_head = repo.find_reference("FETCH_HEAD").map_err(|e| GitError::Sync {
-                message: format!("no FETCH_HEAD: {e}"),
-            })?;
+            let fetch_head = repo
+                .find_reference("FETCH_HEAD")
+                .map_err(|e| GitError::Sync {
+                    message: format!("no FETCH_HEAD: {e}"),
+                })?;
             let commit = fetch_head.peel_to_commit().map_err(|e| GitError::Sync {
                 message: format!("FETCH_HEAD not a commit: {e}"),
             })?;
@@ -276,15 +274,14 @@ impl GitRepo {
     }
 
     /// Get the path to the repository working directory.
-    pub fn workdir(&self) -> Option<&Path> {
-        self.inner.workdir()
-    }
+    pub fn workdir(&self) -> Option<&Path> { self.inner.workdir() }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::TempDir;
+
+    use super::*;
 
     fn init_repo(dir: &Path) -> git2::Repository {
         let repo = git2::Repository::init(dir).unwrap();

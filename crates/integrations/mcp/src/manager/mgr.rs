@@ -24,6 +24,8 @@ use serde_json::Value;
 use tokio::sync::RwLock;
 use tracing::{info, instrument, warn};
 
+#[cfg(feature = "k8s")]
+use crate::manager::managed_client::PodRegistry;
 use crate::{
     manager::{
         erm::ElicitationRequestManager,
@@ -33,9 +35,6 @@ use crate::{
     },
     oauth::OAuthCredentialsStoreMode,
 };
-
-#[cfg(feature = "k8s")]
-use crate::manager::managed_client::PodRegistry;
 
 /// Possible connection states for a managed server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,10 +50,10 @@ pub enum ConnectionStatus {
 /// Manages the lifecycle of multiple MCP server connections.
 #[derive(Clone)]
 pub struct McpManager {
-    inner:      Arc<RwLock<McpManagerInner>>,
+    inner:        Arc<RwLock<McpManagerInner>>,
     /// Per-server log ring buffer.  Lives outside the `RwLock` because
     /// `McpLogBuffer` carries its own `Arc<RwLock<…>>` internally.
-    log_buffer: McpLogBuffer,
+    log_buffer:   McpLogBuffer,
     /// Tracks active K8s pods so they can be cleaned up on server stop.
     #[cfg(feature = "k8s")]
     pod_registry: PodRegistry,
@@ -71,7 +70,7 @@ impl McpManager {
     #[instrument(skip_all)]
     pub fn new(registry: McpRegistryRef, store_mode: OAuthCredentialsStoreMode) -> Self {
         Self {
-            inner:      Arc::new(RwLock::new(McpManagerInner {
+            inner: Arc::new(RwLock::new(McpManagerInner {
                 clients: HashMap::new(),
                 elicitation_requests: ElicitationRequestManager::default(),
                 registry,
@@ -452,7 +451,8 @@ impl McpManager {
     /// Returns the names of servers that were (re)started.
     #[instrument(skip(self))]
     pub async fn reconnect_dead(&self) -> Vec<String> {
-        // 1. Find dead servers (in clients map, startup completed, but transport closed)
+        // 1. Find dead servers (in clients map, startup completed, but transport
+        //    closed)
         let dead_names: Vec<String> = {
             let inner = self.inner.read().await;
             let mut dead = Vec::new();
@@ -505,10 +505,7 @@ impl McpManager {
 
     /// Spawn a background task that periodically checks for dead MCP servers
     /// and reconnects them. Returns the task handle.
-    pub fn spawn_heartbeat(
-        &self,
-        interval: std::time::Duration,
-    ) -> tokio::task::JoinHandle<()> {
+    pub fn spawn_heartbeat(&self, interval: std::time::Duration) -> tokio::task::JoinHandle<()> {
         let manager = self.clone();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(interval);

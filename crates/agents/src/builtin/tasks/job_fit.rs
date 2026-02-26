@@ -20,21 +20,20 @@
 
 use std::sync::Arc;
 
-use agent_core::provider::LlmProvider;
-use agent_core::tool_registry::ToolRegistry;
+use agent_core::{provider::LlmProvider, tool_registry::ToolRegistry};
 
-use crate::builtin::tasks::completion::{
-    run_completion, run_with_tools, DEFAULT_TASK_TOOL_ITERATIONS,
+use crate::builtin::tasks::{
+    completion::{DEFAULT_TASK_TOOL_ITERATIONS, run_completion, run_with_tools},
+    error::TaskAgentError,
 };
-use crate::builtin::tasks::error::TaskAgentError;
 
 /// Evaluates how well a candidate's resume matches a job posting.
 pub struct JobFitAgent {
-    provider:        Arc<dyn LlmProvider>,
-    model:           String,
-    prompt_repo:     Arc<dyn agent_core::prompt::PromptRepo>,
-    tools:           Option<Arc<ToolRegistry>>,
-    max_iterations:  usize,
+    provider:       Arc<dyn LlmProvider>,
+    model:          String,
+    prompt_repo:    Arc<dyn agent_core::prompt::PromptRepo>,
+    tools:          Option<Arc<ToolRegistry>>,
+    max_iterations: usize,
 }
 
 impl JobFitAgent {
@@ -87,9 +86,7 @@ impl JobFitAgent {
                 )
                 .await
             }
-            _ => {
-                run_completion(&*self.provider, &self.model, &system_prompt, &user_input).await
-            }
+            _ => run_completion(&*self.provider, &self.model, &system_prompt, &user_input).await,
         }
     }
 

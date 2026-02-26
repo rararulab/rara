@@ -41,9 +41,9 @@ pub struct AppState {
     pub job_service:         rara_backend_admin::job::service::JobService,
     pub chat_service:        rara_domain_chat::service::ChatService,
     // -- shared --
-    pub settings_svc:   rara_backend_admin::settings::SettingsSvc,
-    pub notify_client:  rara_domain_shared::notify::client::NotifyClient,
-    pub contact_repo:   rara_telegram_bot::contacts::repository::ContactRepository,
+    pub settings_svc:        rara_backend_admin::settings::SettingsSvc,
+    pub notify_client:       rara_domain_shared::notify::client::NotifyClient,
+    pub contact_repo:        rara_telegram_bot::contacts::repository::ContactRepository,
 
     // -- LLM provider --
     pub llm_provider: agent_core::provider::LlmProviderLoaderRef,
@@ -53,7 +53,7 @@ pub struct AppState {
 
     // -- memory --
     pub memory_manager: Arc<rara_memory::MemoryManager>,
-    pub lazy_mem0: Option<Arc<rara_memory::LazyMem0Client>>,
+    pub lazy_mem0:      Option<Arc<rara_memory::LazyMem0Client>>,
 
     // -- agent scheduler --
     pub agent_scheduler: Arc<crate::agent_scheduler::AgentScheduler>,
@@ -111,9 +111,7 @@ impl AppState {
         // -- prompt repo -------------------------------------------------------
 
         let prompt_repo: Arc<dyn agent_core::prompt::PromptRepo> = Arc::new(
-            agent_core::prompt::BuiltinPromptRepo::new(
-                agent_core::prompt::all_builtin_prompts(),
-            ),
+            agent_core::prompt::BuiltinPromptRepo::new(agent_core::prompt::all_builtin_prompts()),
         );
         info!("Prompt repository initialized");
 
@@ -137,8 +135,9 @@ impl AppState {
         let interview_service = rara_backend_admin::interview::wire_interview_service(pool.clone());
         let scheduler_service = rara_backend_admin::scheduler::wire_scheduler_service(pool.clone());
         let analytics_service = rara_backend_admin::analytics::wire_analytics_service(pool.clone());
-        let job_service = rara_backend_admin::job::wire_job_service(pool.clone(), ai_service.clone())
-            .whatever_context("Failed to initialize job service")?;
+        let job_service =
+            rara_backend_admin::job::wire_job_service(pool.clone(), ai_service.clone())
+                .whatever_context("Failed to initialize job service")?;
         info!("Job service initialized");
 
         // -- chat service ----------------------------------------------------
@@ -188,9 +187,12 @@ impl AppState {
         let mem0 = rara_memory::Mem0Client::new(mem0_base_url);
         let memos = rara_memory::MemosClient::new(memos_base_url, memos_token);
         let hindsight = rara_memory::HindsightClient::new(hindsight_base_url, hindsight_bank_id);
-        let memory_manager = Arc::new(
-            rara_memory::MemoryManager::new(mem0, memos, hindsight, "default".to_owned()),
-        );
+        let memory_manager = Arc::new(rara_memory::MemoryManager::new(
+            mem0,
+            memos,
+            hindsight,
+            "default".to_owned(),
+        ));
         info!("memory manager initialized");
 
         // Layer 2: Services
@@ -224,9 +226,8 @@ impl AppState {
         )));
 
         // -- codex agent dispatch (PG-backed via rara-coding-task) --------
-        let workspace_manager = rara_workspace::WorkspaceManager::new(
-            rara_paths::workspaces_dir().clone(),
-        );
+        let workspace_manager =
+            rara_workspace::WorkspaceManager::new(rara_paths::workspaces_dir().clone());
         let default_repo_url = std::env::var("RARA_DEFAULT_REPO_URL")
             .unwrap_or_else(|_| "https://github.com/crrow/job".to_owned());
         let coding_task_service = rara_coding_task::service::wire(
@@ -287,12 +288,12 @@ impl AppState {
         tool_registry.register_service(Arc::new(
             crate::tools::services::InstallMcpServerTool::new(mcp_manager.clone()),
         ));
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::ListMcpServersTool::new(mcp_manager.clone()),
-        ));
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::RemoveMcpServerTool::new(mcp_manager.clone()),
-        ));
+        tool_registry.register_service(Arc::new(crate::tools::services::ListMcpServersTool::new(
+            mcp_manager.clone(),
+        )));
+        tool_registry.register_service(Arc::new(crate::tools::services::RemoveMcpServerTool::new(
+            mcp_manager.clone(),
+        )));
 
         // -- pipeline service ---------------------------------------------------
 
@@ -311,7 +312,11 @@ impl AppState {
         info!("Pipeline service initialized");
 
         // Register pipeline control tools on the main rara agent.
-        rara_backend_admin::pipeline::register_rara_tools(&mut tool_registry, &pipeline_service, &settings_svc);
+        rara_backend_admin::pipeline::register_rara_tools(
+            &mut tool_registry,
+            &pipeline_service,
+            &settings_svc,
+        );
 
         // -- subagent tool -------------------------------------------------------
 
@@ -389,7 +394,8 @@ impl AppState {
         let chat_agent = rara_agents::builtin::chat::ChatAgent::new(orchestrator.clone());
         let chat_service = rara_domain_chat::service::ChatService::new(
             session_repo,
-            Arc::new(settings_svc.clone()) as Arc<dyn rara_domain_shared::settings::SettingsUpdater>,
+            Arc::new(settings_svc.clone())
+                as Arc<dyn rara_domain_shared::settings::SettingsUpdater>,
             chat_agent,
         );
         info!("Chat service initialized");
@@ -506,7 +512,9 @@ impl AppState {
         ));
 
         // MCP admin routes (plain axum::Router, no OpenAPI metadata).
-        router = router.merge(rara_backend_admin::mcp::mcp_router(self.mcp_manager.clone()));
+        router = router.merge(rara_backend_admin::mcp::mcp_router(
+            self.mcp_manager.clone(),
+        ));
 
         // Coding task routes (plain axum::Router, no OpenAPI metadata).
         router = router.merge(rara_backend_admin::coding_task::routes(
@@ -520,10 +528,9 @@ impl AppState {
         api.merge(pipeline_api);
 
         // Model admin routes (OpenAPI).
-        let model_repo: std::sync::Arc<dyn agent_core::model_repo::ModelRepo> =
-            std::sync::Arc::new(rara_backend_admin::models::SettingsModelRepo::new(
-                self.settings_svc.clone(),
-            ));
+        let model_repo: std::sync::Arc<dyn agent_core::model_repo::ModelRepo> = std::sync::Arc::new(
+            rara_backend_admin::models::SettingsModelRepo::new(self.settings_svc.clone()),
+        );
         merge_openapi_router(
             &mut router,
             &mut api,
@@ -544,10 +551,7 @@ impl AppState {
         // mem0 on-demand pod configuration endpoint.
         if self.lazy_mem0.is_some() {
             let mem0_configure = axum::Router::new()
-                .route(
-                    "/api/memory/configure",
-                    axum::routing::post(configure_mem0),
-                )
+                .route("/api/memory/configure", axum::routing::post(configure_mem0))
                 .with_state(self.clone());
             router = router.merge(mem0_configure);
         }
@@ -641,7 +645,8 @@ impl SettingsLlmProviderLoader {
 // Dispatcher trait adapters
 // ---------------------------------------------------------------------------
 
-/// Adapter that implements [`SessionPersister`] by delegating to [`ChatService`].
+/// Adapter that implements [`SessionPersister`] by delegating to
+/// [`ChatService`].
 struct ChatServicePersister(rara_domain_chat::service::ChatService);
 
 #[async_trait]
@@ -678,7 +683,8 @@ impl rara_agents::dispatcher::SessionPersister for ChatServicePersister {
     }
 }
 
-/// Adapter that implements [`ScheduledJobCallback`] by delegating to [`AgentScheduler`].
+/// Adapter that implements [`ScheduledJobCallback`] by delegating to
+/// [`AgentScheduler`].
 struct AgentSchedulerCallback(Arc<crate::agent_scheduler::AgentScheduler>);
 
 #[async_trait]
@@ -707,8 +713,7 @@ async fn configure_mem0(
     axum::extract::State(state): axum::extract::State<AppState>,
     axum::Json(body): axum::Json<ConfigureMem0Request>,
 ) -> axum::response::Response {
-    use axum::http::StatusCode;
-    use axum::response::IntoResponse;
+    use axum::{http::StatusCode, response::IntoResponse};
 
     let Some(lazy) = &state.lazy_mem0 else {
         return (
@@ -746,9 +751,9 @@ impl agent_core::provider::LlmProviderLoader for SettingsLlmProviderLoader {
                 let config = async_openai::config::OpenAIConfig::new()
                     .with_api_base(format!("{}/v1", base_url))
                     .with_api_key("ollama");
-                Ok(Arc::new(
-                    agent_core::provider::OpenAiProvider::with_config(config),
-                ))
+                Ok(Arc::new(agent_core::provider::OpenAiProvider::with_config(
+                    config,
+                )))
             }
             _ => {
                 let api_key = settings
@@ -756,9 +761,7 @@ impl agent_core::provider::LlmProviderLoader for SettingsLlmProviderLoader {
                     .openrouter_api_key
                     .clone()
                     .ok_or(agent_core::err::ProviderNotConfiguredSnafu.build())?;
-                Ok(Arc::new(agent_core::provider::OpenAiProvider::new(
-                    api_key,
-                )))
+                Ok(Arc::new(agent_core::provider::OpenAiProvider::new(api_key)))
             }
         }
     }

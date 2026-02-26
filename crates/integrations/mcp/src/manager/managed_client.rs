@@ -51,15 +51,14 @@
 //! callers (e.g. tool calls arriving during startup) can simply await
 //! the same future rather than racing to create duplicate connections.
 
+#[cfg(feature = "k8s")]
+use std::collections::HashMap;
 use std::{
     collections::HashSet,
     ffi::OsString,
     sync::Arc,
     time::{Duration, Instant},
 };
-
-#[cfg(feature = "k8s")]
-use std::collections::HashMap;
 
 use anyhow::Result;
 use futures::{
@@ -222,7 +221,8 @@ impl AsyncManagedClient {
 
     /// Returns `true` if the client started successfully AND the underlying
     /// transport is still alive. Returns `false` if still connecting, startup
-    /// failed, or the transport has closed (process exited, connection dropped).
+    /// failed, or the transport has closed (process exited, connection
+    /// dropped).
     pub(crate) async fn is_alive(&self) -> bool {
         match self.client.peek() {
             Some(Ok(mc)) => !mc.client.is_transport_closed().await,
@@ -432,12 +432,11 @@ async fn make_rmcp_client(
                 .unwrap_or(crate::k8s::DEFAULT_NAMESPACE);
             let port = config.pod_port.unwrap_or(crate::k8s::DEFAULT_PORT);
 
-            let pod_mgr =
-                crate::k8s::McpPodManager::new()
-                    .await
-                    .map_err(|e| StartupOutcomeError::Failed {
-                        error: format!("K8s client init failed: {e}"),
-                    })?;
+            let pod_mgr = crate::k8s::McpPodManager::new().await.map_err(|e| {
+                StartupOutcomeError::Failed {
+                    error: format!("K8s client init failed: {e}"),
+                }
+            })?;
 
             let (pod_name, pod_ip, pod_port) = pod_mgr
                 .create_mcp_pod(
@@ -456,10 +455,7 @@ async fn make_rmcp_client(
             // Register the pod so it can be cleaned up when the server stops.
             {
                 let mut registry = pod_registry.lock().await;
-                registry.insert(
-                    server_name.to_string(),
-                    (pod_name, namespace.to_string()),
-                );
+                registry.insert(server_name.to_string(), (pod_name, namespace.to_string()));
             }
 
             let url = format!("http://{pod_ip}:{pod_port}");

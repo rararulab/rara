@@ -25,12 +25,14 @@ use serde::{Deserialize, Serialize};
 use utoipa_axum::router::OpenApiRouter;
 use uuid::Uuid;
 
-use super::pg_repository::PgPipelineRepository;
-use super::repository::PipelineRepository;
-use super::service::{PipelineError, PipelineService};
-use super::types::{
-    DiscoveredJob, DiscoveredJobAction, DiscoveredJobWithDetails, DiscoveredJobsStats,
-    PipelineEvent, PipelineRun,
+use super::{
+    pg_repository::PgPipelineRepository,
+    repository::PipelineRepository,
+    service::{PipelineError, PipelineService},
+    types::{
+        DiscoveredJob, DiscoveredJobAction, DiscoveredJobWithDetails, DiscoveredJobsStats,
+        PipelineEvent, PipelineRun,
+    },
 };
 
 /// Build `/api/v1/pipeline/...` routes.
@@ -75,7 +77,7 @@ struct PipelineStatusResponse {
 
 #[derive(Debug, Deserialize)]
 struct ListRunsQuery {
-    limit: Option<i64>,
+    limit:  Option<i64>,
     offset: Option<i64>,
 }
 
@@ -116,17 +118,18 @@ async fn stream_events(
     State(service): State<PipelineService>,
 ) -> Sse<impl futures::Stream<Item = Result<Event, axum::Error>>> {
     let rx = service.subscribe();
-    let stream =
-        tokio_stream::wrappers::BroadcastStream::new(rx).filter_map(|result| async move {
-            match result {
-                Ok(event) => {
-                    let name = event.event_type_name();
-                    let data = serde_json::to_string(&event).unwrap_or_default();
-                    Some(Ok::<_, axum::Error>(Event::default().event(name).data(data)))
-                }
-                Err(_) => None, // lagged, skip
+    let stream = tokio_stream::wrappers::BroadcastStream::new(rx).filter_map(|result| async move {
+        match result {
+            Ok(event) => {
+                let name = event.event_type_name();
+                let data = serde_json::to_string(&event).unwrap_or_default();
+                Some(Ok::<_, axum::Error>(
+                    Event::default().event(name).data(data),
+                ))
             }
-        });
+            Err(_) => None, // lagged, skip
+        }
+    });
     Sse::new(stream).keep_alive(
         KeepAlive::new()
             .interval(std::time::Duration::from_secs(15))
@@ -184,7 +187,8 @@ async fn get_run_events(
     Ok(Json(events))
 }
 
-/// `GET /api/v1/pipeline/runs/{id}/jobs` -- get discovered jobs for a pipeline run.
+/// `GET /api/v1/pipeline/runs/{id}/jobs` -- get discovered jobs for a pipeline
+/// run.
 async fn get_run_jobs(
     State(service): State<PipelineService>,
     Path(id): Path<Uuid>,
@@ -205,20 +209,20 @@ async fn get_run_jobs(
 
 #[derive(Debug, Deserialize)]
 struct ListDiscoveredJobsQuery {
-    action: Option<String>,
+    action:    Option<String>,
     min_score: Option<i32>,
     max_score: Option<i32>,
-    run_id: Option<Uuid>,
-    sort_by: Option<String>,
-    limit: Option<i64>,
-    offset: Option<i64>,
+    run_id:    Option<Uuid>,
+    sort_by:   Option<String>,
+    limit:     Option<i64>,
+    offset:    Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
 struct PaginatedDiscoveredJobs {
-    items: Vec<DiscoveredJobWithDetails>,
-    total: i64,
-    limit: i64,
+    items:  Vec<DiscoveredJobWithDetails>,
+    total:  i64,
+    limit:  i64,
     offset: i64,
 }
 
@@ -241,16 +245,13 @@ fn parse_action(s: &str) -> Result<DiscoveredJobAction, PipelineError> {
     }
 }
 
-/// `GET /api/v1/pipeline/discovered-jobs` -- list all discovered jobs with filters.
+/// `GET /api/v1/pipeline/discovered-jobs` -- list all discovered jobs with
+/// filters.
 async fn list_discovered_jobs(
     State(service): State<PipelineService>,
     Query(q): Query<ListDiscoveredJobsQuery>,
 ) -> Result<Json<PaginatedDiscoveredJobs>, PipelineError> {
-    let action = q
-        .action
-        .as_deref()
-        .map(parse_action)
-        .transpose()?;
+    let action = q.action.as_deref().map(parse_action).transpose()?;
     let limit = q.limit.unwrap_or(20);
     let offset = q.offset.unwrap_or(0);
 
@@ -299,7 +300,8 @@ async fn get_discovered_jobs_stats(
     Ok(Json(stats))
 }
 
-/// `PATCH /api/v1/pipeline/discovered-jobs/{id}` -- update action on a discovered job.
+/// `PATCH /api/v1/pipeline/discovered-jobs/{id}` -- update action on a
+/// discovered job.
 async fn update_discovered_job_action(
     State(service): State<PipelineService>,
     Path(id): Path<Uuid>,

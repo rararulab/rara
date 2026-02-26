@@ -1,9 +1,11 @@
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
+
 use uuid::Uuid;
 
-use super::repository::ResumeRepository;
-use super::types::{ResumeError, ResumeProject, SetupResumeProjectRequest};
+use super::{
+    repository::ResumeRepository,
+    types::{ResumeError, ResumeProject, SetupResumeProjectRequest},
+};
 
 pub struct ResumeService<R: ResumeRepository> {
     repo: Arc<R>,
@@ -18,12 +20,13 @@ impl<R: ResumeRepository> Clone for ResumeService<R> {
 }
 
 impl<R: ResumeRepository> ResumeService<R> {
-    pub fn new(repo: Arc<R>) -> Self {
-        Self { repo }
-    }
+    pub fn new(repo: Arc<R>) -> Self { Self { repo } }
 
     /// Set up a new resume project: validate URL, clone repo, persist config.
-    pub async fn setup(&self, req: SetupResumeProjectRequest) -> Result<ResumeProject, ResumeError> {
+    pub async fn setup(
+        &self,
+        req: SetupResumeProjectRequest,
+    ) -> Result<ResumeProject, ResumeError> {
         // Check if already exists
         if self.repo.get().await?.is_some() {
             return Err(ResumeError::AlreadyExists);
@@ -39,8 +42,8 @@ impl<R: ResumeRepository> ResumeService<R> {
 
         // Get SSH key
         let ssh_dir = rara_paths::data_dir().join("ssh");
-        let keypair = rara_git::get_or_create_keypair(&ssh_dir)
-            .map_err(|e| ResumeError::GitFailed {
+        let keypair =
+            rara_git::get_or_create_keypair(&ssh_dir).map_err(|e| ResumeError::GitFailed {
                 message: e.to_string(),
             })?;
 
@@ -64,17 +67,15 @@ impl<R: ResumeRepository> ResumeService<R> {
     }
 
     /// Get the current resume project configuration.
-    pub async fn get(&self) -> Result<Option<ResumeProject>, ResumeError> {
-        self.repo.get().await
-    }
+    pub async fn get(&self) -> Result<Option<ResumeProject>, ResumeError> { self.repo.get().await }
 
     /// Sync (fetch + reset) the resume project from remote.
     pub async fn sync(&self) -> Result<ResumeProject, ResumeError> {
         let project = self.repo.get().await?.ok_or(ResumeError::NotFound)?;
 
         let ssh_dir = rara_paths::data_dir().join("ssh");
-        let keypair = rara_git::get_or_create_keypair(&ssh_dir)
-            .map_err(|e| ResumeError::GitFailed {
+        let keypair =
+            rara_git::get_or_create_keypair(&ssh_dir).map_err(|e| ResumeError::GitFailed {
                 message: e.to_string(),
             })?;
 
@@ -141,11 +142,7 @@ fn sync_git_repo(
     fo.remote_callbacks(callbacks);
 
     remote
-        .fetch(
-            &["refs/heads/*:refs/remotes/origin/*"],
-            Some(&mut fo),
-            None,
-        )
+        .fetch(&["refs/heads/*:refs/remotes/origin/*"], Some(&mut fo), None)
         .map_err(|e| ResumeError::GitFailed {
             message: format!("fetch failed: {e}"),
         })?;

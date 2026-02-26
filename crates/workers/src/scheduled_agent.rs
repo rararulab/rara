@@ -107,4 +107,3 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
         Ok(())
     }
 }
-

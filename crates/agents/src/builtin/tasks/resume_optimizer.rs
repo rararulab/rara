@@ -48,10 +48,16 @@ impl ResumeOptimizerAgent {
     ) -> Result<String, TaskAgentError> {
         let user_input =
             format!("## Current Resume\n{resume}\n\n## Target Job Description\n{job_description}");
-        let base = self.prompt_repo.get("ai/resume_optimizer.system.md").await
+        let base = self
+            .prompt_repo
+            .get("ai/resume_optimizer.system.md")
+            .await
             .map(|e| e.content)
             .unwrap_or_default();
-        let soul = self.prompt_repo.get("agent/soul.md").await
+        let soul = self
+            .prompt_repo
+            .get("agent/soul.md")
+            .await
             .map(|e| e.content)
             .unwrap_or_default();
         let system_prompt = if soul.trim().is_empty() {

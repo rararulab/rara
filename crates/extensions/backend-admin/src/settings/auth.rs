@@ -1,6 +1,7 @@
 use axum::{Json, http::StatusCode};
-use crate::settings::SettingsSvc;
 use utoipa_axum::router::OpenApiRouter;
+
+use crate::settings::SettingsSvc;
 
 #[derive(Debug, serde::Serialize, utoipa::ToSchema)]
 pub struct SshKeyResponse {

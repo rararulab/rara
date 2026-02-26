@@ -164,7 +164,8 @@ impl AgentTool for ListMcpServersTool {
     fn name(&self) -> &str { "list_mcp_servers" }
 
     fn description(&self) -> &str {
-        "List all registered MCP servers with their status (enabled, connected) and available tools."
+        "List all registered MCP servers with their status (enabled, connected) and available \
+         tools."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -220,7 +221,11 @@ impl AgentTool for ListMcpServersTool {
         let total = servers.len();
         let connected_count = servers
             .iter()
-            .filter(|s| s.get("connected").and_then(|v| v.as_bool()).unwrap_or(false))
+            .filter(|s| {
+                s.get("connected")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+            })
             .count();
 
         Ok(json!({

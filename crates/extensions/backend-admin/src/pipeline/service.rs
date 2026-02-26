@@ -26,34 +26,35 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use axum::http::StatusCode;
 use agent_core::{
     model::LlmProviderLoaderRef,
     runner::{AgentRunner, RunnerEvent, UserContent},
     tool_registry::ToolRegistry,
 };
+use axum::http::StatusCode;
 use rara_domain_shared::notify::types::{NotificationPriority, SendTelegramNotificationRequest};
-
-use crate::settings::SettingsSvc;
 use snafu::Snafu;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
-use super::pg_repository::PgPipelineRepository;
-use super::repository::PipelineRepository;
-use super::tools::pipeline_tools;
-use super::types::{PipelineRunStatus, PipelineStreamEvent};
+use super::{
+    pg_repository::PgPipelineRepository,
+    repository::PipelineRepository,
+    tools::pipeline_tools,
+    types::{PipelineRunStatus, PipelineStreamEvent},
+};
+use crate::settings::SettingsSvc;
 
 /// Maximum agent loop iterations per pipeline run.
 const PIPELINE_MAX_ITERATIONS: usize = 25;
 
 /// Template for the user message sent to the pipeline agent.
 /// `{run_id}` is replaced at runtime with the actual pipeline run UUID.
-const PIPELINE_KICK_TEMPLATE: &str =
-    "Execute the job pipeline. Your pipeline run ID is: {run_id}\n\n\
-     Read preferences, search for matching jobs across ALL listed locations, \
-     parse results into structured records, score every new job, process \
-     high-scoring ones, and report stats at the end using report_pipeline_stats.";
+const PIPELINE_KICK_TEMPLATE: &str = "Execute the job pipeline. Your pipeline run ID is: \
+                                      {run_id}\n\nRead preferences, search for matching jobs \
+                                      across ALL listed locations, parse results into structured \
+                                      records, score every new job, process high-scoring ones, \
+                                      and report stats at the end using report_pipeline_stats.";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -108,13 +109,13 @@ pub struct PipelineService {
     contact_lookup: Arc<dyn tool_core::contact_lookup::ContactLookup>,
 
     /// Whether a pipeline run is currently in progress.
-    running:       Arc<AtomicBool>,
+    running:            Arc<AtomicBool>,
     /// Cancel flag: set to true to signal the running pipeline to stop.
-    cancel_flag:   Arc<AtomicBool>,
+    cancel_flag:        Arc<AtomicBool>,
     /// Mutex to serialize concurrent `run()` attempts.
-    run_lock:      Arc<Mutex<()>>,
+    run_lock:           Arc<Mutex<()>>,
     /// Broadcast channel for streaming pipeline events to SSE clients.
-    broadcast_tx:  Arc<tokio::sync::broadcast::Sender<PipelineStreamEvent>>,
+    broadcast_tx:       Arc<tokio::sync::broadcast::Sender<PipelineStreamEvent>>,
     /// One-shot guard for stale DB run reconciliation after process startup.
     startup_reconciled: Arc<AtomicBool>,
 }
@@ -159,9 +160,7 @@ impl PipelineService {
     }
 
     /// Get a reference to the database pool.
-    pub fn pool(&self) -> sqlx::PgPool {
-        self.pool.clone()
-    }
+    pub fn pool(&self) -> sqlx::PgPool { self.pool.clone() }
 
     /// Trigger a pipeline run. Returns immediately after spawning the
     /// background task (fire-and-forget).
@@ -214,7 +213,8 @@ impl PipelineService {
     /// Check if the pipeline is currently running.
     pub fn is_running(&self) -> bool { self.running.load(Ordering::SeqCst) }
 
-    /// Best-effort repair for runs left as `Running` after process restart/crash.
+    /// Best-effort repair for runs left as `Running` after process
+    /// restart/crash.
     pub async fn reconcile_stale_runs_if_needed(&self) {
         if self.is_running() {
             return;
@@ -251,13 +251,18 @@ impl PipelineService {
 
         // 1. Create a persistent pipeline run record.
         let repo = PgPipelineRepository::new(self.pool.clone());
-        let mut pipeline_run = repo.create_run().await.map_err(|e| PipelineError::RunFailed {
-            message: format!("failed to create pipeline run: {e}"),
-        })?;
+        let mut pipeline_run = repo
+            .create_run()
+            .await
+            .map_err(|e| PipelineError::RunFailed {
+                message: format!("failed to create pipeline run: {e}"),
+            })?;
         let run_id = pipeline_run.id;
 
         // 2. Broadcast Started event.
-        let _ = self.broadcast_tx.send(PipelineStreamEvent::Started { run_id });
+        let _ = self
+            .broadcast_tx
+            .send(PipelineStreamEvent::Started { run_id });
 
         let settings = self.settings_svc.current();
         let provider_hint = settings.ai.provider.clone();
@@ -265,19 +270,21 @@ impl PipelineService {
 
         // Build pipeline-specific tool registry (includes report_pipeline_stats).
         let mut tools = self.build_pipeline_tools().await;
-        tools.register_service(Arc::new(
-            super::tools::ReportPipelineStatsTool::new(self.pool.clone()),
-        ));
-        tools.register_service(Arc::new(
-            super::tools::SaveDiscoveredJobTool::new(self.pool.clone()),
-        ));
+        tools.register_service(Arc::new(super::tools::ReportPipelineStatsTool::new(
+            self.pool.clone(),
+        )));
+        tools.register_service(Arc::new(super::tools::SaveDiscoveredJobTool::new(
+            self.pool.clone(),
+        )));
         let tools = Arc::new(tools);
 
-        let system_prompt = self.prompt_repo.get("pipeline/pipeline.md").await
+        let system_prompt = self
+            .prompt_repo
+            .get("pipeline/pipeline.md")
+            .await
             .map(|e| e.content)
             .unwrap_or_default();
-        let kick_message =
-            PIPELINE_KICK_TEMPLATE.replace("{run_id}", &run_id.to_string());
+        let kick_message = PIPELINE_KICK_TEMPLATE.replace("{run_id}", &run_id.to_string());
 
         // Build the agent runner and start streaming.
         let runner = AgentRunner::builder()
@@ -299,28 +306,28 @@ impl PipelineService {
                 RunnerEvent::Thinking => PipelineStreamEvent::Thinking,
                 RunnerEvent::ThinkingDone => PipelineStreamEvent::ThinkingDone,
                 RunnerEvent::Iteration(index) => PipelineStreamEvent::Iteration { index: *index },
-                RunnerEvent::ToolCallStart { id, name, arguments } => {
-                    PipelineStreamEvent::ToolCallStart {
-                        id: id.clone(),
-                        name: name.clone(),
-                        arguments: Some(arguments.clone()),
-                    }
-                }
+                RunnerEvent::ToolCallStart {
+                    id,
+                    name,
+                    arguments,
+                } => PipelineStreamEvent::ToolCallStart {
+                    id:        id.clone(),
+                    name:      name.clone(),
+                    arguments: Some(arguments.clone()),
+                },
                 RunnerEvent::ToolCallEnd {
                     id,
                     name,
                     success,
                     error,
                     result,
-                } => {
-                    PipelineStreamEvent::ToolCallEnd {
-                        id: id.clone(),
-                        name: name.clone(),
-                        success: *success,
-                        error: error.clone(),
-                        result: result.clone(),
-                    }
-                }
+                } => PipelineStreamEvent::ToolCallEnd {
+                    id:      id.clone(),
+                    name:    name.clone(),
+                    success: *success,
+                    error:   error.clone(),
+                    result:  result.clone(),
+                },
                 RunnerEvent::TextDelta(text) => {
                     PipelineStreamEvent::TextDelta { text: text.clone() }
                 }
@@ -344,7 +351,7 @@ impl PipelineService {
                     }
 
                     PipelineStreamEvent::Done {
-                        summary: text.clone(),
+                        summary:    text.clone(),
                         iterations: *iterations,
                         tool_calls: *tool_calls_made,
                     }
@@ -454,7 +461,12 @@ impl PipelineService {
                 "text": body,
                 "parse_mode": "Markdown",
             });
-            match reqwest::Client::new().post(&url).json(&payload).send().await {
+            match reqwest::Client::new()
+                .post(&url)
+                .json(&payload)
+                .send()
+                .await
+            {
                 Ok(resp) if !resp.status().is_success() => {
                     let status = resp.status();
                     let text = resp.text().await.unwrap_or_default();
@@ -494,8 +506,10 @@ impl PipelineService {
     /// Build the tool registry for the pipeline agent.
     ///
     /// Includes:
-    /// - Standard primitive tools (db_query, db_mutate, notify, send_email, etc.)
-    /// - Pipeline-specific tools (get_job_preferences, score_job, optimize_resume)
+    /// - Standard primitive tools (db_query, db_mutate, notify, send_email,
+    ///   etc.)
+    /// - Pipeline-specific tools (get_job_preferences, score_job,
+    ///   optimize_resume)
     /// - The existing job_pipeline tool (save job URL)
     async fn build_pipeline_tools(&self) -> ToolRegistry {
         let mut registry = ToolRegistry::new();
@@ -532,12 +546,10 @@ impl PipelineService {
             self.ai_service.clone(),
             self.settings_svc.clone(),
         )));
-        registry.register_service(Arc::new(
-            super::tools::SearchJobsWithJobServiceTool::new(
-                self.job_service.clone(),
-                self.pool.clone(),
-            ),
-        ));
+        registry.register_service(Arc::new(super::tools::SearchJobsWithJobServiceTool::new(
+            self.job_service.clone(),
+            self.pool.clone(),
+        )));
         registry.register_service(Arc::new(
             super::tools::ListDiscoveredJobsForScoringTool::new(self.pool.clone()),
         ));

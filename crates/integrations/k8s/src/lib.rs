@@ -33,12 +33,12 @@ pub use types::*;
 /// Re-export commonly used `k8s-openapi` types so callers don't need to
 /// depend on `k8s-openapi` directly.
 pub mod k8s_types {
-    pub use k8s_openapi::api::core::v1::{
-        Container, ContainerPort, EnvVar, HTTPGetAction, Pod, PodSpec, Probe,
-        ResourceRequirements,
-    };
-    pub use k8s_openapi::apimachinery::pkg::{
-        api::resource::Quantity, util::intstr::IntOrString,
+    pub use k8s_openapi::{
+        api::core::v1::{
+            Container, ContainerPort, EnvVar, HTTPGetAction, Pod, PodSpec, Probe,
+            ResourceRequirements,
+        },
+        apimachinery::pkg::{api::resource::Quantity, util::intstr::IntOrString},
     };
     pub use kube::api::ObjectMeta;
 }

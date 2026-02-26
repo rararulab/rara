@@ -22,8 +22,8 @@
 //!
 //! Each backend has a distinct trigger policy:
 //!
-//! - **mem0** — fires at session-end (via [`consolidate_session`]) or
-//!   explicit fact addition (via [`add_fact`]). Never per-turn.
+//! - **mem0** — fires at session-end (via [`consolidate_session`]) or explicit
+//!   fact addition (via [`add_fact`]). Never per-turn.
 //! - **Memos** — only written via the explicit `memory_write` tool
 //!   ([`write_note`]). No automatic writes.
 //! - **Hindsight** — fires at session-end (via [`consolidate_session`]) or
@@ -45,11 +45,11 @@
 //! # Error Handling
 //!
 //! - [`search`], [`consolidate_session`], and [`add_fact`] are **best-effort**:
-//!   individual backend failures are logged as warnings but do not propagate
-//!   as errors. This ensures the agent remains functional even if one backend
-//!   is down.
-//! - [`write_note`], [`get_user_profile`], and [`deep_recall`] propagate
-//!   errors directly since they target a single backend.
+//!   individual backend failures are logged as warnings but do not propagate as
+//!   errors. This ensures the agent remains functional even if one backend is
+//!   down.
+//! - [`write_note`], [`get_user_profile`], and [`deep_recall`] propagate errors
+//!   directly since they target a single backend.
 //!
 //! [`search`]: MemoryManager::search
 //! [`write_note`]: MemoryManager::write_note
@@ -58,11 +58,13 @@
 //! [`get_user_profile`]: MemoryManager::get_user_profile
 //! [`deep_recall`]: MemoryManager::deep_recall
 
-use crate::error::MemoryResult;
-use crate::fusion::reciprocal_rank_fusion;
-use crate::hindsight_client::HindsightClient;
-use crate::mem0_client::{Mem0Client, Mem0Memory, Mem0Message};
-use crate::memos_client::MemosClient;
+use crate::{
+    error::MemoryResult,
+    fusion::reciprocal_rank_fusion,
+    hindsight_client::HindsightClient,
+    mem0_client::{Mem0Client, Mem0Memory, Mem0Message},
+    memos_client::MemosClient,
+};
 
 /// Which backend a [`SearchResult`] originated from.
 ///
@@ -95,14 +97,14 @@ impl std::fmt::Display for MemorySource {
 #[derive(Debug, Clone)]
 pub struct SearchResult {
     /// Backend-specific identifier (mem0 memory ID or Hindsight record ID).
-    pub id: String,
+    pub id:      String,
     /// Which backend this result originated from.
-    pub source: MemorySource,
+    pub source:  MemorySource,
     /// The memory content (fact text, note content, or recalled passage).
     pub content: String,
     /// Fused relevance score (higher is better). After RRF, items appearing
     /// in multiple backends receive a boosted score.
-    pub score: f64,
+    pub score:   f64,
 }
 
 /// High-level memory orchestrator backed by three external services.
@@ -112,10 +114,10 @@ pub struct SearchResult {
 /// - **Hindsight** — 4-network (world/experience/opinion/observation)
 ///   retain/recall/reflect.
 pub struct MemoryManager {
-    mem0: Mem0Client,
-    memos: MemosClient,
+    mem0:      Mem0Client,
+    memos:     MemosClient,
     hindsight: HindsightClient,
-    user_id: String,
+    user_id:   String,
 }
 
 impl MemoryManager {
@@ -162,10 +164,10 @@ impl MemoryManager {
                 let set: Vec<SearchResult> = memories
                     .into_iter()
                     .map(|m| SearchResult {
-                        id: m.id,
-                        source: MemorySource::Mem0,
+                        id:      m.id,
+                        source:  MemorySource::Mem0,
                         content: m.memory,
-                        score: m.score.unwrap_or(0.0),
+                        score:   m.score.unwrap_or(0.0),
                     })
                     .collect();
                 result_sets.push(set);
@@ -180,10 +182,10 @@ impl MemoryManager {
                 let set: Vec<SearchResult> = memories
                     .into_iter()
                     .map(|m| SearchResult {
-                        id: m.id,
-                        source: MemorySource::Hindsight,
+                        id:      m.id,
+                        source:  MemorySource::Hindsight,
                         content: m.content,
-                        score: m.score,
+                        score:   m.score,
                     })
                     .collect();
                 result_sets.push(set);
@@ -229,10 +231,7 @@ impl MemoryManager {
     ///
     /// This method is best-effort: partial backend failures are logged as
     /// warnings but do not propagate as errors.
-    pub async fn consolidate_session(
-        &self,
-        exchanges: &[(String, String)],
-    ) -> MemoryResult<()> {
+    pub async fn consolidate_session(&self, exchanges: &[(String, String)]) -> MemoryResult<()> {
         if exchanges.is_empty() {
             return Ok(());
         }
@@ -243,11 +242,11 @@ impl MemoryManager {
             .flat_map(|(user, assistant)| {
                 vec![
                     Mem0Message {
-                        role: "user".to_owned(),
+                        role:    "user".to_owned(),
                         content: user.clone(),
                     },
                     Mem0Message {
-                        role: "assistant".to_owned(),
+                        role:    "assistant".to_owned(),
                         content: assistant.clone(),
                     },
                 ]
@@ -286,7 +285,7 @@ impl MemoryManager {
     /// Best-effort: partial backend failures are logged as warnings.
     pub async fn add_fact(&self, content: &str) -> MemoryResult<()> {
         let messages = vec![Mem0Message {
-            role: "user".to_owned(),
+            role:    "user".to_owned(),
             content: content.to_owned(),
         }];
 
@@ -333,9 +332,9 @@ impl MemoryManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hindsight_client::HindsightClient;
-    use crate::mem0_client::Mem0Client;
-    use crate::memos_client::MemosClient;
+    use crate::{
+        hindsight_client::HindsightClient, mem0_client::Mem0Client, memos_client::MemosClient,
+    };
 
     /// Build a MemoryManager from environment variables.
     /// Returns None if required env vars are not set.
@@ -344,12 +343,18 @@ mod tests {
         let memos_url = std::env::var("MEMOS_BASE_URL").ok()?;
         let memos_token = std::env::var("MEMOS_TOKEN").unwrap_or_default();
         let hindsight_url = std::env::var("HINDSIGHT_BASE_URL").ok()?;
-        let hindsight_bank = std::env::var("HINDSIGHT_BANK_ID").unwrap_or_else(|_| "integration-test".into());
+        let hindsight_bank =
+            std::env::var("HINDSIGHT_BANK_ID").unwrap_or_else(|_| "integration-test".into());
 
         let mem0 = Mem0Client::new(mem0_url);
         let memos = MemosClient::new(memos_url, memos_token);
         let hindsight = HindsightClient::new(hindsight_url, hindsight_bank);
-        Some(MemoryManager::new(mem0, memos, hindsight, "integration-test".into()))
+        Some(MemoryManager::new(
+            mem0,
+            memos,
+            hindsight,
+            "integration-test".into(),
+        ))
     }
 
     // -- unit tests (no infra needed) --
@@ -364,13 +369,22 @@ mod tests {
     // -- integration tests --
 
     #[tokio::test]
-    #[ignore = "requires all 3 memory services (set MEM0_BASE_URL, MEMOS_BASE_URL, HINDSIGHT_BASE_URL)"]
+    #[ignore = "requires all 3 memory services (set MEM0_BASE_URL, MEMOS_BASE_URL, \
+                HINDSIGHT_BASE_URL)"]
     async fn search_returns_fused_results() {
         let mm = manager().expect("memory service env vars required");
-        let results = mm.search("programming languages", 10).await.expect("search failed");
+        let results = mm
+            .search("programming languages", 10)
+            .await
+            .expect("search failed");
         println!("search returned {} fused results", results.len());
         for r in &results {
-            println!("  [{:.4}] [{}] {}", r.score, r.source, &r.content[..r.content.len().min(80)]);
+            println!(
+                "  [{:.4}] [{}] {}",
+                r.score,
+                r.source,
+                &r.content[..r.content.len().min(80)]
+            );
         }
     }
 
@@ -379,7 +393,11 @@ mod tests {
     async fn write_note_and_verify() {
         let mm = manager().expect("memory service env vars required");
 
-        let name = mm.write_note("integration test note from MemoryManager", &["rara-test", "integration"])
+        let name = mm
+            .write_note(
+                "integration test note from MemoryManager",
+                &["rara-test", "integration"],
+            )
             .await
             .expect("write_note failed");
         println!("write_note returned: {name}");
@@ -428,7 +446,10 @@ mod tests {
     #[ignore = "requires mem0 service (set MEM0_BASE_URL)"]
     async fn get_user_profile() {
         let mm = manager().expect("memory service env vars required");
-        let profile = mm.get_user_profile().await.expect("get_user_profile failed");
+        let profile = mm
+            .get_user_profile()
+            .await
+            .expect("get_user_profile failed");
         println!("user profile has {} facts", profile.len());
         for fact in &profile {
             println!("  - {}", fact.memory);
@@ -439,7 +460,8 @@ mod tests {
     #[ignore = "requires Hindsight service (set HINDSIGHT_BASE_URL)"]
     async fn deep_recall() {
         let mm = manager().expect("memory service env vars required");
-        let response = mm.deep_recall("What are the user's career goals?")
+        let response = mm
+            .deep_recall("What are the user's career goals?")
             .await
             .expect("deep_recall failed");
         println!("deep_recall: {}", &response[..response.len().min(200)]);

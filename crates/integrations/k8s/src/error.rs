@@ -25,13 +25,14 @@ pub enum K8sError {
 
     /// Error from the kube-runtime wait condition.
     #[snafu(display("K8s wait error: {source}"))]
-    WaitCondition {
-        source: kube::runtime::wait::Error,
-    },
+    WaitCondition { source: kube::runtime::wait::Error },
 
     /// Pod did not become ready within the timeout.
     #[snafu(display("Pod {name} failed to become ready within {timeout_secs}s"))]
-    PodTimeout { name: String, timeout_secs: u64 },
+    PodTimeout {
+        name:         String,
+        timeout_secs: u64,
+    },
 
     /// Pod was created but has no IP assigned.
     #[snafu(display("Pod {name} has no IP assigned"))]

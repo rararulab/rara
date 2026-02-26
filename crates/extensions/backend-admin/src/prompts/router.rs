@@ -27,13 +27,13 @@
 
 use std::sync::Arc;
 
+use agent_core::prompt::PromptRepo;
 use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
     routing::get,
 };
-use agent_core::prompt::PromptRepo;
 use serde::Serialize;
 use utoipa_axum::router::OpenApiRouter;
 
@@ -65,14 +65,8 @@ type RepoState = Arc<dyn PromptRepo>;
 /// [`PromptRepo`] as shared state.
 pub fn routes(repo: Arc<dyn PromptRepo>) -> OpenApiRouter {
     OpenApiRouter::new()
-        .route(
-            "/api/v1/prompts",
-            get(list_prompts),
-        )
-        .route(
-            "/api/v1/prompts/{*name}",
-            get(get_prompt),
-        )
+        .route("/api/v1/prompts", get(list_prompts))
+        .route("/api/v1/prompts/{*name}", get(get_prompt))
         .with_state(repo)
 }
 

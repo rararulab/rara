@@ -15,8 +15,7 @@
 //! Pipeline tool that lets the agent trigger JobSpy discovery through the
 //! domain `JobService`, with stable normalization and database persistence.
 
-use std::collections::HashSet;
-use std::str::FromStr;
+use std::{collections::HashSet, str::FromStr};
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -26,15 +25,12 @@ use tool_core::AgentTool;
 use tracing::warn;
 use uuid::Uuid;
 
+use super::super::{
+    pg_repository::PgPipelineRepository, repository::PipelineRepository, types::DiscoveredJobAction,
+};
 use crate::job::{
     error::SourceError,
     types::{DiscoveryCriteria, NormalizedJob},
-};
-
-use super::super::{
-    pg_repository::PgPipelineRepository,
-    repository::PipelineRepository,
-    types::DiscoveredJobAction,
 };
 
 /// Agent tool wrapper for `JobService::discover()` + `JobRepository::save()`.
@@ -54,14 +50,14 @@ impl SearchJobsWithJobServiceTool {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct SearchJobsWithJobServiceParams {
-    run_id:                           Uuid,
-    keywords:                        Vec<String>,
-    location:                        Option<String>,
-    job_type:                        Option<String>,
-    max_results:                     Option<u32>,
-    posted_after:                    Option<String>,
+    run_id:       Uuid,
+    keywords:     Vec<String>,
+    location:     Option<String>,
+    job_type:     Option<String>,
+    max_results:  Option<u32>,
+    posted_after: Option<String>,
     #[serde(default)]
-    sites:                           Vec<String>,
+    sites:        Vec<String>,
 }
 
 #[async_trait]
@@ -70,9 +66,8 @@ impl AgentTool for SearchJobsWithJobServiceTool {
 
     fn description(&self) -> &str {
         "Search jobs via the backend JobService (JobSpy), normalize and deduplicate results, \
-         persist new jobs to the job database, enqueue them for scoring in the current run, \
-         and return summary counts. \
-         Prefer this over raw MCP scraping for stable pipeline search."
+         persist new jobs to the job database, enqueue them for scoring in the current run, and \
+         return summary counts. Prefer this over raw MCP scraping for stable pipeline search."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -117,11 +112,15 @@ impl AgentTool for SearchJobsWithJobServiceTool {
     }
 
     async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
-        let parsed: SearchJobsWithJobServiceParams = serde_json::from_value(params)
-            .map_err(|e| anyhow::anyhow!("invalid parameters for search_jobs_with_job_service: {e}"))?;
+        let parsed: SearchJobsWithJobServiceParams =
+            serde_json::from_value(params).map_err(|e| {
+                anyhow::anyhow!("invalid parameters for search_jobs_with_job_service: {e}")
+            })?;
 
         if parsed.keywords.iter().all(|k| k.trim().is_empty()) {
-            return Err(anyhow::anyhow!("keywords must contain at least one non-empty string"));
+            return Err(anyhow::anyhow!(
+                "keywords must contain at least one non-empty string"
+            ));
         }
 
         let max_results = parsed.max_results.unwrap_or(25).clamp(1, 100);
@@ -134,8 +133,14 @@ impl AgentTool for SearchJobsWithJobServiceTool {
                 .map(|k| k.trim().to_owned())
                 .filter(|k| !k.is_empty())
                 .collect(),
-            location: parsed.location.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()),
-            job_type: parsed.job_type.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()),
+            location: parsed
+                .location
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty()),
+            job_type: parsed
+                .job_type
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty()),
             max_results: Some(max_results),
             posted_after,
             sites: parsed.sites,
@@ -184,12 +189,7 @@ impl AgentTool for SearchJobsWithJobServiceTool {
         }
         for job in &persisted_jobs {
             match pipeline_repo
-                .insert_discovered_job(
-                    parsed.run_id,
-                    job.id,
-                    None,
-                    DiscoveredJobAction::Discovered,
-                )
+                .insert_discovered_job(parsed.run_id, job.id, None, DiscoveredJobAction::Discovered)
                 .await
             {
                 Ok(_) => queued_for_scoring_count += 1,
@@ -228,7 +228,10 @@ impl AgentTool for SearchJobsWithJobServiceTool {
 
 fn is_job_unique_violation(error: &SourceError) -> bool {
     match error {
-        SourceError::NonRetryable { source_name, message } if source_name == "pg" => {
+        SourceError::NonRetryable {
+            source_name,
+            message,
+        } if source_name == "pg" => {
             message.contains("uq_job_source")
                 || (message.contains("duplicate key value")
                     && message.contains("source_job_id")
@@ -249,7 +252,9 @@ fn parse_posted_after(input: Option<&str>) -> anyhow::Result<Option<jiff::Timest
     }
 
     // Accept a date-only input by assuming start-of-day UTC.
-    if raw.len() == 10 && raw.as_bytes().get(4) == Some(&b'-') && raw.as_bytes().get(7) == Some(&b'-')
+    if raw.len() == 10
+        && raw.as_bytes().get(4) == Some(&b'-')
+        && raw.as_bytes().get(7) == Some(&b'-')
     {
         let normalized = format!("{raw}T00:00:00Z");
         if let Ok(ts) = jiff::Timestamp::from_str(&normalized) {
@@ -266,7 +271,8 @@ fn parse_posted_after(input: Option<&str>) -> anyhow::Result<Option<jiff::Timest
     }
 
     Err(anyhow::anyhow!(
-        "invalid posted_after timestamp: '{raw}'. Use ISO-8601 like 2026-02-22T00:00:00Z (date-only is also accepted)"
+        "invalid posted_after timestamp: '{raw}'. Use ISO-8601 like 2026-02-22T00:00:00Z \
+         (date-only is also accepted)"
     ))
 }
 

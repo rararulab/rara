@@ -14,8 +14,8 @@
 
 //! # rara-coding-task
 //!
-//! Persistent coding task management — dispatch CLI agents (Claude Code / Codex)
-//! with PG-backed storage, git workspace isolation, tmux observability,
+//! Persistent coding task management — dispatch CLI agents (Claude Code /
+//! Codex) with PG-backed storage, git workspace isolation, tmux observability,
 //! and PR lifecycle management.
 
 pub mod error;

@@ -12,14 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Layer 2 service tools for memory retrieval, writing, and recall strategy management.
+//! Layer 2 service tools for memory retrieval, writing, and recall strategy
+//! management.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rara_memory::MemoryManager;
-use rara_memory::recall_engine::{
-    InjectTarget, RecallAction, RecallRule, RecallRuleUpdate, RecallStrategyEngine, Trigger,
+use rara_memory::{
+    MemoryManager,
+    recall_engine::{
+        InjectTarget, RecallAction, RecallRule, RecallRuleUpdate, RecallStrategyEngine, Trigger,
+    },
 };
 use serde_json::json;
 use tool_core::AgentTool;
@@ -241,11 +244,7 @@ impl AgentTool for MemoryWriteTool {
         let tags: Vec<&str> = params
             .get("tags")
             .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str())
-                    .collect::<Vec<_>>()
-            })
+            .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
             .unwrap_or_default();
 
         let name = self
@@ -272,20 +271,16 @@ pub struct RecallStrategyAddTool {
 
 impl RecallStrategyAddTool {
     /// Create a `recall_strategy_add` tool.
-    pub fn new(engine: Arc<RecallStrategyEngine>) -> Self {
-        Self { engine }
-    }
+    pub fn new(engine: Arc<RecallStrategyEngine>) -> Self { Self { engine } }
 }
 
 #[async_trait]
 impl AgentTool for RecallStrategyAddTool {
-    fn name(&self) -> &str {
-        "recall_strategy_add"
-    }
+    fn name(&self) -> &str { "recall_strategy_add" }
 
     fn description(&self) -> &str {
-        "Register a new recall strategy rule. Rules control when and how memory is queried \
-         and injected into the system prompt."
+        "Register a new recall strategy rule. Rules control when and how memory is queried and \
+         injected into the system prompt."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -378,16 +373,12 @@ pub struct RecallStrategyListTool {
 
 impl RecallStrategyListTool {
     /// Create a `recall_strategy_list` tool.
-    pub fn new(engine: Arc<RecallStrategyEngine>) -> Self {
-        Self { engine }
-    }
+    pub fn new(engine: Arc<RecallStrategyEngine>) -> Self { Self { engine } }
 }
 
 #[async_trait]
 impl AgentTool for RecallStrategyListTool {
-    fn name(&self) -> &str {
-        "recall_strategy_list"
-    }
+    fn name(&self) -> &str { "recall_strategy_list" }
 
     fn description(&self) -> &str {
         "List all recall strategy rules with their triggers, actions, and status."
@@ -432,16 +423,12 @@ pub struct RecallStrategyUpdateTool {
 
 impl RecallStrategyUpdateTool {
     /// Create a `recall_strategy_update` tool.
-    pub fn new(engine: Arc<RecallStrategyEngine>) -> Self {
-        Self { engine }
-    }
+    pub fn new(engine: Arc<RecallStrategyEngine>) -> Self { Self { engine } }
 }
 
 #[async_trait]
 impl AgentTool for RecallStrategyUpdateTool {
-    fn name(&self) -> &str {
-        "recall_strategy_update"
-    }
+    fn name(&self) -> &str { "recall_strategy_update" }
 
     fn description(&self) -> &str {
         "Update an existing recall strategy rule. Only the provided fields are changed."
@@ -523,20 +510,14 @@ pub struct RecallStrategyRemoveTool {
 
 impl RecallStrategyRemoveTool {
     /// Create a `recall_strategy_remove` tool.
-    pub fn new(engine: Arc<RecallStrategyEngine>) -> Self {
-        Self { engine }
-    }
+    pub fn new(engine: Arc<RecallStrategyEngine>) -> Self { Self { engine } }
 }
 
 #[async_trait]
 impl AgentTool for RecallStrategyRemoveTool {
-    fn name(&self) -> &str {
-        "recall_strategy_remove"
-    }
+    fn name(&self) -> &str { "recall_strategy_remove" }
 
-    fn description(&self) -> &str {
-        "Remove a recall strategy rule by ID."
-    }
+    fn description(&self) -> &str { "Remove a recall strategy rule by ID." }
 
     fn parameters_schema(&self) -> serde_json::Value {
         json!({

@@ -21,17 +21,15 @@
 //! Both include retry-on-empty: if the LLM returns an empty response, the
 //! function retries once with a nudge message.
 
+use agent_core::{provider::LlmProvider, tool_registry::ToolRegistry};
 use async_openai::types::chat::{
     ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
     ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
     ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestToolMessageArgs,
-    ChatCompletionRequestUserMessageArgs, ChatCompletionToolChoiceOption,
-    ChatCompletionTools, CreateChatCompletionRequestArgs, ToolChoiceOptions,
+    ChatCompletionRequestUserMessageArgs, ChatCompletionToolChoiceOption, ChatCompletionTools,
+    CreateChatCompletionRequestArgs, ToolChoiceOptions,
 };
 use tracing::{info, warn};
-
-use agent_core::provider::LlmProvider;
-use agent_core::tool_registry::ToolRegistry;
 
 use crate::builtin::tasks::error::TaskAgentError;
 
@@ -48,8 +46,8 @@ pub enum TaskAgentMode {
 pub const DEFAULT_TASK_TOOL_ITERATIONS: usize = 5;
 
 /// Nudge message appended when the LLM returns an empty response.
-const EMPTY_RESPONSE_NUDGE: &str =
-    "Your previous response was empty. Please provide your analysis based on the information available.";
+const EMPTY_RESPONSE_NUDGE: &str = "Your previous response was empty. Please provide your \
+                                    analysis based on the information available.";
 
 /// Send a single system + user message completion request and return the
 /// assistant's text response. Retries once on empty response.
@@ -68,8 +66,7 @@ pub(crate) async fn run_completion(
     // Retry once with a nudge.
     warn!("LLM returned empty response, retrying with nudge");
     let nudged_input = format!("{user_input}\n\n{EMPTY_RESPONSE_NUDGE}");
-    let retry_result =
-        run_completion_inner(provider, model, system_prompt, &nudged_input).await?;
+    let retry_result = run_completion_inner(provider, model, system_prompt, &nudged_input).await?;
 
     if retry_result.trim().is_empty() {
         return Err(TaskAgentError::EmptyResponse);
@@ -102,12 +99,13 @@ async fn run_completion_inner(
         .build()
         .expect("chat completion request");
 
-    let response = provider
-        .chat_completion(request)
-        .await
-        .map_err(|e| TaskAgentError::RequestFailed {
-            message: e.to_string(),
-        })?;
+    let response =
+        provider
+            .chat_completion(request)
+            .await
+            .map_err(|e| TaskAgentError::RequestFailed {
+                message: e.to_string(),
+            })?;
 
     let choice = response
         .choices
@@ -139,11 +137,11 @@ pub(crate) async fn run_with_tools(
     }
 
     let tool_defs: Vec<ChatCompletionTools> =
-        tools.to_chat_completion_tools().map_err(|e| {
-            TaskAgentError::RequestFailed {
+        tools
+            .to_chat_completion_tools()
+            .map_err(|e| TaskAgentError::RequestFailed {
                 message: format!("failed to build tool definitions: {e}"),
-            }
-        })?;
+            })?;
 
     let result = run_tool_loop_inner(
         provider,
@@ -221,12 +219,13 @@ async fn run_tool_loop_inner(
             .build()
             .expect("chat completion request with tools");
 
-        let response = provider
-            .chat_completion(request)
-            .await
-            .map_err(|e| TaskAgentError::RequestFailed {
-                message: e.to_string(),
-            })?;
+        let response =
+            provider
+                .chat_completion(request)
+                .await
+                .map_err(|e| TaskAgentError::RequestFailed {
+                    message: e.to_string(),
+                })?;
 
         let choice = response
             .choices
@@ -309,10 +308,7 @@ async fn run_tool_loop_inner(
 }
 
 /// Build a tool response message for the conversation history.
-fn build_tool_response_message(
-    tool_call_id: &str,
-    content: &str,
-) -> ChatCompletionRequestMessage {
+fn build_tool_response_message(tool_call_id: &str, content: &str) -> ChatCompletionRequestMessage {
     ChatCompletionRequestToolMessageArgs::default()
         .tool_call_id(tool_call_id)
         .content(content)
@@ -328,9 +324,7 @@ mod tests {
     #[test]
     fn task_agent_mode_debug() {
         let single = TaskAgentMode::SingleRound;
-        let with_tools = TaskAgentMode::WithTools {
-            max_iterations: 3,
-        };
+        let with_tools = TaskAgentMode::WithTools { max_iterations: 3 };
         // Ensure Debug is implemented.
         assert!(format!("{single:?}").contains("SingleRound"));
         assert!(format!("{with_tools:?}").contains("WithTools"));

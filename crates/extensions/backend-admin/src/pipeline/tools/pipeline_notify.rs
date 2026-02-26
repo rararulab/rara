@@ -24,12 +24,11 @@ use rara_domain_shared::notify::{
     client::NotifyClient,
     types::{NotificationPriority, SendTelegramNotificationRequest},
 };
-
-use crate::settings::SettingsSvc;
 use serde_json::json;
+use tool_core::AgentTool;
 use tracing::warn;
 
-use tool_core::AgentTool;
+use crate::settings::SettingsSvc;
 
 /// Pipeline-specific notify tool that routes messages to the dedicated
 /// Telegram channel (via Bot API) when configured, falling back to the
@@ -95,7 +94,10 @@ impl AgentTool for PipelineNotifyTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("missing required parameter: message"))?;
 
-        let subject = params.get("subject").and_then(|v| v.as_str()).map(String::from);
+        let subject = params
+            .get("subject")
+            .and_then(|v| v.as_str())
+            .map(String::from);
 
         let settings = self.settings_svc.current();
 
@@ -117,7 +119,12 @@ impl AgentTool for PipelineNotifyTool {
                 "text": body,
                 "parse_mode": "Markdown",
             });
-            match reqwest::Client::new().post(&url).json(&payload).send().await {
+            match reqwest::Client::new()
+                .post(&url)
+                .json(&payload)
+                .send()
+                .await
+            {
                 Ok(resp) if !resp.status().is_success() => {
                     let status = resp.status();
                     let text = resp.text().await.unwrap_or_default();

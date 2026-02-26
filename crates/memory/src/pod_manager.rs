@@ -18,8 +18,7 @@
 //! available at runtime. The pod runs `mem0/mem0-api-server` with ChromaDB
 //! as the vector backend.
 
-use std::collections::BTreeMap;
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use rara_k8s::k8s_types::*;
 
@@ -80,23 +79,23 @@ impl Mem0PodManager {
 
         let env_vars = vec![
             EnvVar {
-                name: "OPENAI_API_KEY".into(),
-                value: Some(openai_api_key.into()),
+                name:       "OPENAI_API_KEY".into(),
+                value:      Some(openai_api_key.into()),
                 value_from: None,
             },
             EnvVar {
-                name: "CHROMA_HOST".into(),
-                value: Some(chroma_host.into()),
+                name:       "CHROMA_HOST".into(),
+                value:      Some(chroma_host.into()),
                 value_from: None,
             },
             EnvVar {
-                name: "CHROMA_PORT".into(),
-                value: Some(chroma_port.to_string()),
+                name:       "CHROMA_PORT".into(),
+                value:      Some(chroma_port.to_string()),
                 value_from: None,
             },
             EnvVar {
-                name: "HISTORY_DB_PATH".into(),
-                value: Some("/tmp/mem0_history.db".into()),
+                name:       "HISTORY_DB_PATH".into(),
+                value:      Some("/tmp/mem0_history.db".into()),
                 value_from: None,
             },
         ];
@@ -129,10 +128,10 @@ exec uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1"#
         let i32_port = i32::from(DEFAULT_PORT);
         let probe = Probe {
             http_get: Some(HTTPGetAction {
-                path: Some("/".into()),
-                port: IntOrString::Int(i32_port),
-                scheme: Some("HTTP".into()),
-                host: None,
+                path:         Some("/".into()),
+                port:         IntOrString::Int(i32_port),
+                scheme:       Some("HTTP".into()),
+                host:         None,
                 http_headers: None,
             }),
             initial_delay_seconds: Some(60),
@@ -149,7 +148,7 @@ exec uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1"#
                 labels: Some(labels),
                 ..Default::default()
             },
-            spec: Some(PodSpec {
+            spec:     Some(PodSpec {
                 restart_policy: Some("Never".into()),
                 containers: vec![Container {
                     name: "mem0".into(),
@@ -167,18 +166,16 @@ exec uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1"#
                 }],
                 ..Default::default()
             }),
-            status: None,
+            status:   None,
         };
 
         let handle = self
             .inner
             .create_pod(pod, namespace, Duration::from_secs(300))
             .await?;
-        let ip = handle
-            .ip
-            .ok_or_else(|| rara_k8s::K8sError::NoPodIp {
-                name: handle.name.clone(),
-            })?;
+        let ip = handle.ip.ok_or_else(|| rara_k8s::K8sError::NoPodIp {
+            name: handle.name.clone(),
+        })?;
         Ok((handle.name, ip, handle.port.unwrap_or(DEFAULT_PORT)))
     }
 

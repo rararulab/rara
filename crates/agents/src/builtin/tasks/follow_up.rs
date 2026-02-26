@@ -42,10 +42,16 @@ impl FollowUpDraftAgent {
 
     /// Draft a follow-up email based on the given context.
     pub async fn draft(&self, context: &str) -> Result<String, TaskAgentError> {
-        let base = self.prompt_repo.get("ai/follow_up.system.md").await
+        let base = self
+            .prompt_repo
+            .get("ai/follow_up.system.md")
+            .await
             .map(|e| e.content)
             .unwrap_or_default();
-        let soul = self.prompt_repo.get("agent/soul.md").await
+        let soul = self
+            .prompt_repo
+            .get("agent/soul.md")
+            .await
             .map(|e| e.content)
             .unwrap_or_default();
         let system_prompt = if soul.trim().is_empty() {

@@ -21,9 +21,7 @@ use tool_core::AgentTool;
 use uuid::Uuid;
 
 use super::super::{
-    pg_repository::PgPipelineRepository,
-    repository::PipelineRepository,
-    types::DiscoveredJobAction,
+    pg_repository::PgPipelineRepository, repository::PipelineRepository, types::DiscoveredJobAction,
 };
 
 pub struct UpdateDiscoveredJobScoreActionTool {
@@ -39,8 +37,8 @@ impl AgentTool for UpdateDiscoveredJobScoreActionTool {
     fn name(&self) -> &str { "update_discovered_job_score_action" }
 
     fn description(&self) -> &str {
-        "Update a discovered job's score and/or action in pipeline_discovered_jobs. \
-         Use this after scoring each job and after notifying/applying/skipping."
+        "Update a discovered job's score and/or action in pipeline_discovered_jobs. Use this after \
+         scoring each job and after notifying/applying/skipping."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -76,7 +74,10 @@ impl AgentTool for UpdateDiscoveredJobScoreActionTool {
             .parse()
             .map_err(|e| anyhow::anyhow!("invalid discovered job id UUID: {e}"))?;
 
-        let score = params.get("score").and_then(|v| v.as_i64()).map(|v| v as i32);
+        let score = params
+            .get("score")
+            .and_then(|v| v.as_i64())
+            .map(|v| v as i32);
         let action = match params.get("action").and_then(|v| v.as_str()) {
             Some("discovered") => Some(DiscoveredJobAction::Discovered),
             Some("notified") => Some(DiscoveredJobAction::Notified),

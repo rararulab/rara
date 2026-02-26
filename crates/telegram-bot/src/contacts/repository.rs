@@ -54,10 +54,7 @@ impl ContactRepository {
         .ok_or(ContactError::NotFound { id })
     }
 
-    pub async fn create(
-        &self,
-        req: CreateContactRequest,
-    ) -> Result<TelegramContact, ContactError> {
+    pub async fn create(&self, req: CreateContactRequest) -> Result<TelegramContact, ContactError> {
         let username = req.telegram_username.trim_start_matches('@').to_lowercase();
         if username.is_empty() {
             return Err(ContactError::Validation {
@@ -74,8 +71,8 @@ impl ContactRepository {
 
         sqlx::query_as::<_, TelegramContact>(
             "INSERT INTO telegram_contact (name, telegram_username, chat_id, notes, enabled) \
-             VALUES ($1, $2, $3, $4, $5) \
-             RETURNING id, name, telegram_username, chat_id, notes, enabled, created_at, updated_at",
+             VALUES ($1, $2, $3, $4, $5) RETURNING id, name, telegram_username, chat_id, notes, \
+             enabled, created_at, updated_at",
         )
         .bind(req.name.trim())
         .bind(&username)
@@ -111,10 +108,9 @@ impl ContactRepository {
         let enabled = req.enabled.unwrap_or(existing.enabled);
 
         sqlx::query_as::<_, TelegramContact>(
-            "UPDATE telegram_contact \
-             SET name = $2, telegram_username = $3, chat_id = $4, notes = $5, enabled = $6 \
-             WHERE id = $1 \
-             RETURNING id, name, telegram_username, chat_id, notes, enabled, created_at, updated_at",
+            "UPDATE telegram_contact SET name = $2, telegram_username = $3, chat_id = $4, notes = \
+             $5, enabled = $6 WHERE id = $1 RETURNING id, name, telegram_username, chat_id, \
+             notes, enabled, created_at, updated_at",
         )
         .bind(id)
         .bind(name.trim())
@@ -165,14 +161,11 @@ impl ContactRepository {
 
     /// Update chat_id for a contact identified by username. Used by the bot
     /// when it sees a message from a known contact.
-    pub async fn set_chat_id(
-        &self,
-        username: &str,
-        chat_id: i64,
-    ) -> Result<(), ContactError> {
+    pub async fn set_chat_id(&self, username: &str, chat_id: i64) -> Result<(), ContactError> {
         let normalized = username.trim_start_matches('@').to_lowercase();
         sqlx::query(
-            "UPDATE telegram_contact SET chat_id = $2 WHERE telegram_username = $1 AND (chat_id IS NULL OR chat_id != $2)",
+            "UPDATE telegram_contact SET chat_id = $2 WHERE telegram_username = $1 AND (chat_id \
+             IS NULL OR chat_id != $2)",
         )
         .bind(&normalized)
         .bind(chat_id)

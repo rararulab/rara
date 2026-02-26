@@ -20,9 +20,9 @@ use sqlx::PgPool;
 use tool_core::AgentTool;
 use tracing::warn;
 
-use super::super::pg_repository::PgPipelineRepository;
-use super::super::repository::PipelineRepository;
-use super::super::types::DiscoveredJobAction;
+use super::super::{
+    pg_repository::PgPipelineRepository, repository::PipelineRepository, types::DiscoveredJobAction,
+};
 
 /// Pipeline agent tool that saves a discovered job to the
 /// `pipeline_discovered_jobs` table.
@@ -39,10 +39,9 @@ impl AgentTool for SaveDiscoveredJobTool {
     fn name(&self) -> &str { "save_discovered_job" }
 
     fn description(&self) -> &str {
-        "Save a discovered job to the database for tracking. Call this for each \
-         job after it has been persisted to the job table, so the frontend can \
-         display all discovered jobs for a pipeline run. Requires the job_id \
-         (UUID) from the job table."
+        "Save a discovered job to the database for tracking. Call this for each job after it has \
+         been persisted to the job table, so the frontend can display all discovered jobs for a \
+         pipeline run. Requires the job_id (UUID) from the job table."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -90,7 +89,10 @@ impl AgentTool for SaveDiscoveredJobTool {
             .parse()
             .map_err(|e| anyhow::anyhow!("invalid job_id UUID: {e}"))?;
 
-        let score = params.get("score").and_then(|v| v.as_i64()).map(|v| v as i32);
+        let score = params
+            .get("score")
+            .and_then(|v| v.as_i64())
+            .map(|v| v as i32);
 
         let action = match params.get("action").and_then(|v| v.as_str()) {
             Some("notified") => DiscoveredJobAction::Notified,

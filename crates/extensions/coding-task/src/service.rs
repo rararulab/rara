@@ -24,14 +24,15 @@ use rara_domain_shared::{
     settings::model::Settings,
 };
 use rara_workspace::WorkspaceManager;
-use tokio::sync::watch;
-use tokio::process::Command;
+use tokio::{process::Command, sync::watch};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::error::{CodingTaskError, ExecutionSnafu, WorkspaceSnafu};
-use crate::repository::CodingTaskRepository;
-use crate::types::{AgentType, CodingTask, CodingTaskStatus};
+use crate::{
+    error::{CodingTaskError, ExecutionSnafu, WorkspaceSnafu},
+    repository::CodingTaskRepository,
+    types::{AgentType, CodingTask, CodingTaskStatus},
+};
 
 /// Orchestrates coding task lifecycle: workspace setup, agent dispatch,
 /// PR creation, notifications.
@@ -110,7 +111,14 @@ impl CodingTaskService {
         let prompt = prompt.to_owned();
         tokio::spawn(async move {
             if let Err(e) = svc
-                .run_task(task_id, &repo_url, &branch, &tmux_session, &prompt, agent_type)
+                .run_task(
+                    task_id,
+                    &repo_url,
+                    &branch,
+                    &tmux_session,
+                    &prompt,
+                    agent_type,
+                )
                 .await
             {
                 warn!(id = %task_id, error = %e, "coding task execution failed");
@@ -121,7 +129,12 @@ impl CodingTaskService {
                     .await;
                 let _ = svc.repo.set_completed(task_id).await;
                 svc.send_notification(
-                    task_id, &prompt, &branch, agent_type, false, Some(&e.to_string()),
+                    task_id,
+                    &prompt,
+                    &branch,
+                    agent_type,
+                    false,
+                    Some(&e.to_string()),
                 )
                 .await;
             }
@@ -147,12 +160,22 @@ impl CodingTaskService {
             .workspace_manager
             .ensure_repo(repo_url)
             .await
-            .map_err(|e| WorkspaceSnafu { message: e.to_string() }.build())?;
+            .map_err(|e| {
+                WorkspaceSnafu {
+                    message: e.to_string(),
+                }
+                .build()
+            })?;
         let worktree_path = self
             .workspace_manager
             .create_worktree(&repo_path, branch)
             .await
-            .map_err(|e| WorkspaceSnafu { message: e.to_string() }.build())?;
+            .map_err(|e| {
+                WorkspaceSnafu {
+                    message: e.to_string(),
+                }
+                .build()
+            })?;
 
         let wt_str = worktree_path.to_string_lossy().to_string();
         self.repo
@@ -187,7 +210,12 @@ impl CodingTaskService {
             .args(["new-session", "-d", "-s", tmux_session, &agent_cmd])
             .output()
             .await
-            .map_err(|e| ExecutionSnafu { message: e.to_string() }.build())?;
+            .map_err(|e| {
+                ExecutionSnafu {
+                    message: e.to_string(),
+                }
+                .build()
+            })?;
 
         if !tmux_out.status.success() {
             let stderr = String::from_utf8_lossy(&tmux_out.stderr);
@@ -206,20 +234,13 @@ impl CodingTaskService {
                 .await;
             match has {
                 Ok(o) if o.status.success() => continue, // still running
-                _ => break,                               // session ended
+                _ => break,                              // session ended
             }
         }
 
         // 5. Capture output (tmux pane history)
         let capture = Command::new("tmux")
-            .args([
-                "capture-pane",
-                "-t",
-                tmux_session,
-                "-p",
-                "-S",
-                "-1000",
-            ])
+            .args(["capture-pane", "-t", tmux_session, "-p", "-S", "-1000"])
             .output()
             .await;
         let output = match capture {
@@ -237,7 +258,10 @@ impl CodingTaskService {
                 "--title",
                 &format!("rara: {}", truncate(prompt, 60)),
                 "--body",
-                &format!("Automated PR from rara coding task `{}`\n\nPrompt:\n> {}", id, prompt),
+                &format!(
+                    "Automated PR from rara coding task `{}`\n\nPrompt:\n> {}",
+                    id, prompt
+                ),
                 "--head",
                 branch,
             ])
@@ -285,9 +309,7 @@ impl CodingTaskService {
     }
 
     /// List all tasks.
-    pub async fn list(&self) -> Result<Vec<CodingTask>, CodingTaskError> {
-        self.repo.list().await
-    }
+    pub async fn list(&self) -> Result<Vec<CodingTask>, CodingTaskError> { self.repo.list().await }
 
     /// Merge the PR for a completed task.
     pub async fn merge(&self, id: Uuid) -> Result<(), CodingTaskError> {
@@ -303,7 +325,12 @@ impl CodingTaskService {
             .args(["pr", "merge", pr_url, "--merge", "--delete-branch"])
             .output()
             .await
-            .map_err(|e| ExecutionSnafu { message: e.to_string() }.build())?;
+            .map_err(|e| {
+                ExecutionSnafu {
+                    message: e.to_string(),
+                }
+                .build()
+            })?;
 
         if out.status.success() {
             self.repo
@@ -333,9 +360,7 @@ impl CodingTaskService {
         self.repo
             .update_status(id, CodingTaskStatus::Failed)
             .await?;
-        self.repo
-            .update_error(id, "cancelled by user")
-            .await?;
+        self.repo.update_error(id, "cancelled by user").await?;
         self.repo.set_completed(id).await?;
         Ok(())
     }
@@ -417,5 +442,11 @@ pub fn wire(
     default_repo_url: String,
 ) -> CodingTaskService {
     let repo = Arc::new(crate::pg_repository::PgCodingTaskRepository::new(pool));
-    CodingTaskService::new(repo, workspace_manager, notify, settings_rx, default_repo_url)
+    CodingTaskService::new(
+        repo,
+        workspace_manager,
+        notify,
+        settings_rx,
+        default_repo_url,
+    )
 }

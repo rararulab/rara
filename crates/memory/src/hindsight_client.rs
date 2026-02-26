@@ -28,11 +28,12 @@
 //! ## Three Operations
 //!
 //! 1. **retain** — store content into the four-network model. Hindsight
-//!    automatically distributes the information across the appropriate networks.
+//!    automatically distributes the information across the appropriate
+//!    networks.
 //! 2. **recall** — hybrid retrieval combining semantic search, BM25 keyword
 //!    matching, graph traversal, and temporal decay.
-//! 3. **reflect** — personality-conditioned deep reasoning that synthesizes
-//!    an answer from information across all four networks.
+//! 3. **reflect** — personality-conditioned deep reasoning that synthesizes an
+//!    answer from information across all four networks.
 //!
 //! ## Scoping
 //!
@@ -53,9 +54,9 @@
 //! straightforward.
 
 use serde::Deserialize;
+use snafu::ResultExt;
 
 use crate::error::{HindsightSnafu, HttpSnafu, MemoryResult};
-use snafu::ResultExt;
 
 /// Client for the Hindsight memory service.
 ///
@@ -63,12 +64,12 @@ use snafu::ResultExt;
 /// operations are scoped to that bank.
 pub struct HindsightClient {
     /// Shared HTTP client (connection pooling, keep-alive).
-    client: reqwest::Client,
+    client:   reqwest::Client,
     /// Base URL without trailing slash, e.g. `http://localhost:8888`.
     base_url: String,
     /// Memory bank identifier. Isolates memory stores for different
     /// agents or users.
-    bank_id: String,
+    bank_id:  String,
 }
 
 impl HindsightClient {
@@ -92,10 +93,7 @@ impl HindsightClient {
     ///
     /// Assumed endpoint: `POST /api/v1/banks/{bank_id}/retain`
     pub async fn retain(&self, content: &str) -> MemoryResult<()> {
-        let url = format!(
-            "{}/api/v1/banks/{}/retain",
-            self.base_url, self.bank_id
-        );
+        let url = format!("{}/api/v1/banks/{}/retain", self.base_url, self.bank_id);
         let body = serde_json::json!({
             "content": content,
         });
@@ -127,15 +125,8 @@ impl HindsightClient {
     /// Returns up to `top_k` results sorted by relevance.
     ///
     /// Assumed endpoint: `POST /api/v1/banks/{bank_id}/recall`
-    pub async fn recall(
-        &self,
-        query: &str,
-        top_k: usize,
-    ) -> MemoryResult<Vec<HindsightMemory>> {
-        let url = format!(
-            "{}/api/v1/banks/{}/recall",
-            self.base_url, self.bank_id
-        );
+    pub async fn recall(&self, query: &str, top_k: usize) -> MemoryResult<Vec<HindsightMemory>> {
+        let url = format!("{}/api/v1/banks/{}/recall", self.base_url, self.bank_id);
         let body = serde_json::json!({
             "query": query,
             "top_k": top_k,
@@ -171,10 +162,7 @@ impl HindsightClient {
     ///
     /// Assumed endpoint: `POST /api/v1/banks/{bank_id}/reflect`
     pub async fn reflect(&self, query: &str) -> MemoryResult<String> {
-        let url = format!(
-            "{}/api/v1/banks/{}/reflect",
-            self.base_url, self.bank_id
-        );
+        let url = format!("{}/api/v1/banks/{}/reflect", self.base_url, self.bank_id);
         let body = serde_json::json!({
             "query": query,
         });
@@ -209,14 +197,14 @@ impl HindsightClient {
 #[derive(Debug, Clone, Deserialize)]
 pub struct HindsightMemory {
     /// Unique record identifier within the bank.
-    pub id: String,
+    pub id:      String,
     /// The memory content text.
     pub content: String,
     /// Which of the four networks this memory belongs to:
     /// `"world"`, `"experience"`, `"opinion"`, or `"observation"`.
     pub network: String,
     /// Relevance score from the hybrid retrieval pipeline (higher is better).
-    pub score: f64,
+    pub score:   f64,
 }
 
 /// Internal response wrapper for the reflect endpoint.
@@ -232,7 +220,8 @@ mod tests {
 
     fn client() -> Option<HindsightClient> {
         let url = std::env::var("HINDSIGHT_BASE_URL").ok()?;
-        let bank_id = std::env::var("HINDSIGHT_BANK_ID").unwrap_or_else(|_| "integration-test".into());
+        let bank_id =
+            std::env::var("HINDSIGHT_BANK_ID").unwrap_or_else(|_| "integration-test".into());
         Some(HindsightClient::new(url, bank_id))
     }
 
@@ -242,18 +231,26 @@ mod tests {
         let c = client().expect("HINDSIGHT_BASE_URL required");
 
         // Retain some content
-        c.retain("The user is a Rust developer who lives in Shanghai and enjoys systems programming.")
-            .await
-            .expect("retain failed");
+        c.retain(
+            "The user is a Rust developer who lives in Shanghai and enjoys systems programming.",
+        )
+        .await
+        .expect("retain failed");
         println!("retained content successfully");
 
         // Recall
-        let memories = c.recall("What programming language does the user prefer?", 5)
+        let memories = c
+            .recall("What programming language does the user prefer?", 5)
             .await
             .expect("recall failed");
         println!("recall returned {} memories", memories.len());
         for m in &memories {
-            println!("  [{:.3}] [{}] {}", m.score, m.network, &m.content[..m.content.len().min(80)]);
+            println!(
+                "  [{:.3}] [{}] {}",
+                m.score,
+                m.network,
+                &m.content[..m.content.len().min(80)]
+            );
         }
     }
 
@@ -262,7 +259,8 @@ mod tests {
     async fn reflect() {
         let c = client().expect("HINDSIGHT_BASE_URL required");
 
-        let response = c.reflect("What do you know about the user's technical background?")
+        let response = c
+            .reflect("What do you know about the user's technical background?")
             .await
             .expect("reflect failed");
         println!("reflect response: {}", &response[..response.len().min(200)]);

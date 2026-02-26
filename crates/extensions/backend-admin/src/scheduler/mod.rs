@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod router;
 pub mod engine;
 pub mod error;
 pub mod pg_repository;
 pub mod repository;
+mod router;
 pub mod service;
 pub mod types;
 
 pub use engine::{CronEngine, TaskExecutor};
-pub use router::{routes, HistoryQuery, TaskListQuery};
+pub use router::{HistoryQuery, TaskListQuery, routes};
 
 /// Wire up the scheduler service with a PostgreSQL repository.
 #[must_use]

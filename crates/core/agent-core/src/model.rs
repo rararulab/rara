@@ -25,8 +25,8 @@ pub enum LlmProviderFamily {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModelCapabilities {
-    pub provider:             LlmProviderFamily,
-    pub supports_tools:       bool,
+    pub provider:              LlmProviderFamily,
+    pub supports_tools:        bool,
     pub tools_disabled_reason: Option<&'static str>,
 }
 
@@ -39,9 +39,7 @@ impl ModelCapabilities {
         // Ollama serves many raw models whose chat templates/tool-calling support
         // varies. Keep the deny-list small and explicit so unsupported models
         // degrade gracefully without breaking tool-capable ones.
-        if matches!(provider, LlmProviderFamily::Ollama)
-            && canonical.starts_with("deepseek-r1")
-        {
+        if matches!(provider, LlmProviderFamily::Ollama) && canonical.starts_with("deepseek-r1") {
             return Self {
                 provider,
                 supports_tools: false,
@@ -109,10 +107,8 @@ mod tests {
 
     #[test]
     fn detects_ollama_registry_prefix_as_no_tools() {
-        let caps = ModelCapabilities::detect(
-            Some("ollama"),
-            "registry.ollama.ai/library/deepseek-r1:14b",
-        );
+        let caps =
+            ModelCapabilities::detect(Some("ollama"), "registry.ollama.ai/library/deepseek-r1:14b");
         assert!(!caps.supports_tools);
     }
 

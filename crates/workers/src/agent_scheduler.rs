@@ -63,7 +63,7 @@ impl AgentScheduler {
     pub fn new(jobs_path: PathBuf) -> Self {
         Self {
             jobs_path,
-            jobs:       RwLock::new(Vec::new()),
+            jobs: RwLock::new(Vec::new()),
             save_mutex: Mutex::new(()),
         }
     }
@@ -288,20 +288,14 @@ impl AgentScheduler {
     /// delayed poll simply fires the missed trigger on the next tick, and
     /// once `mark_executed` updates `last_run_at` the same trigger will not
     /// fire again.
-    fn is_cron_due(
-        expr: &str,
-        last_run_at: Option<jiff::Timestamp>,
-        now: jiff::Timestamp,
-    ) -> bool {
+    fn is_cron_due(expr: &str, last_run_at: Option<jiff::Timestamp>, now: jiff::Timestamp) -> bool {
         let Ok(cron) = croner::Cron::from_str(expr) else {
             warn!(expr, "invalid cron expression in agent job");
             return false;
         };
 
         // Anchor: find the next occurrence after last_run_at (or epoch).
-        let anchor = last_run_at
-            .map(|ts| ts.as_second())
-            .unwrap_or(0);
+        let anchor = last_run_at.map(|ts| ts.as_second()).unwrap_or(0);
         let anchor_chrono =
             chrono::DateTime::from_timestamp(anchor, 0).unwrap_or_else(chrono::Utc::now);
 
@@ -588,14 +582,22 @@ mod tests {
     fn cron_due_recently_run_does_not_fire_again() {
         let now = jiff::Timestamp::now();
         let ten_secs_ago = now - std::time::Duration::from_secs(10);
-        assert!(!AgentScheduler::is_cron_due("* * * * *", Some(ten_secs_ago), now));
+        assert!(!AgentScheduler::is_cron_due(
+            "* * * * *",
+            Some(ten_secs_ago),
+            now
+        ));
     }
 
     #[test]
     fn cron_due_fires_after_interval_elapsed() {
         let now = jiff::Timestamp::now();
         let seventy_secs_ago = now - std::time::Duration::from_secs(70);
-        assert!(AgentScheduler::is_cron_due("* * * * *", Some(seventy_secs_ago), now));
+        assert!(AgentScheduler::is_cron_due(
+            "* * * * *",
+            Some(seventy_secs_ago),
+            now
+        ));
     }
 
     #[test]

@@ -65,18 +65,18 @@ impl IntoResponse for OllamaError {
 pub struct OllamaHealthResponse {
     pub healthy: bool,
     pub version: Option<String>,
-    pub url: String,
+    pub url:     String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct OllamaLocalModel {
-    pub name: String,
-    pub size: u64,
-    pub parameter_size: Option<String>,
+    pub name:               String,
+    pub size:               u64,
+    pub parameter_size:     Option<String>,
     pub quantization_level: Option<String>,
-    pub family: Option<String>,
-    pub modified_at: String,
-    pub capabilities: Vec<String>,
+    pub family:             Option<String>,
+    pub modified_at:        String,
+    pub capabilities:       Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -86,7 +86,7 @@ pub struct OllamaModelListResponse {
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct PullModelRequest {
-    pub name: String,
+    pub name:     String,
     #[serde(default)]
     pub insecure: bool,
 }
@@ -98,10 +98,10 @@ pub struct DeleteModelRequest {
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct OllamaModelInfo {
-    pub name: String,
+    pub name:       String,
     pub model_info: serde_json::Value,
-    pub template: Option<String>,
-    pub system: Option<String>,
+    pub template:   Option<String>,
+    pub system:     Option<String>,
     pub parameters: Option<String>,
 }
 
@@ -110,9 +110,9 @@ pub struct OllamaModelInfo {
 pub enum PullProgressEvent {
     #[serde(rename = "progress")]
     Progress {
-        status: String,
+        status:    String,
         completed: Option<u64>,
-        total: Option<u64>,
+        total:     Option<u64>,
     },
     #[serde(rename = "done")]
     Done { status: String },
@@ -162,16 +162,12 @@ async fn ollama_health(
         return Ok(Json(OllamaHealthResponse {
             healthy: false,
             version: None,
-            url: base_url,
+            url:     base_url,
         }));
     }
 
     // Get version
-    let version = match client
-        .get(format!("{base_url}/api/version"))
-        .send()
-        .await
-    {
+    let version = match client.get(format!("{base_url}/api/version")).send().await {
         Ok(resp) => {
             let body: serde_json::Value = resp.json().await.unwrap_or_default();
             body.get("version")
@@ -213,7 +209,7 @@ async fn ollama_list_models(
         .send()
         .await
         .map_err(|e| OllamaError::Unreachable {
-            url: base_url.clone(),
+            url:     base_url.clone(),
             message: e.to_string(),
         })?;
 
@@ -307,7 +303,7 @@ async fn ollama_pull_model(
         .send()
         .await
         .map_err(|e| OllamaError::Unreachable {
-            url: base_url.clone(),
+            url:     base_url.clone(),
             message: e.to_string(),
         })?;
 
@@ -320,56 +316,55 @@ async fn ollama_pull_model(
 
     let byte_stream = resp.bytes_stream();
 
-    let sse_stream = byte_stream
-        .map(move |chunk: Result<axum::body::Bytes, reqwest::Error>| {
-            let chunk = match chunk {
-                Ok(bytes) => bytes,
-                Err(e) => {
-                    let event = PullProgressEvent::Error {
-                        message: e.to_string(),
-                    };
-                    let data = serde_json::to_string(&event).unwrap_or_default();
-                    return Ok(Event::default().data(data));
-                }
-            };
+    let sse_stream = byte_stream.map(move |chunk: Result<axum::body::Bytes, reqwest::Error>| {
+        let chunk = match chunk {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                let event = PullProgressEvent::Error {
+                    message: e.to_string(),
+                };
+                let data = serde_json::to_string(&event).unwrap_or_default();
+                return Ok(Event::default().data(data));
+            }
+        };
 
-            let text = String::from_utf8_lossy(&chunk);
-            let mut last_event = None;
+        let text = String::from_utf8_lossy(&chunk);
+        let mut last_event = None;
 
-            for line in text.lines() {
-                let line = line.trim();
-                if line.is_empty() {
-                    continue;
-                }
-                if let Ok(obj) = serde_json::from_str::<serde_json::Value>(line) {
-                    let status = obj
-                        .get("status")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_owned();
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if let Ok(obj) = serde_json::from_str::<serde_json::Value>(line) {
+                let status = obj
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_owned();
 
-                    if status.contains("success") {
-                        last_event = Some(PullProgressEvent::Done { status });
-                    } else {
-                        let completed = obj.get("completed").and_then(|v| v.as_u64());
-                        let total = obj.get("total").and_then(|v| v.as_u64());
-                        last_event = Some(PullProgressEvent::Progress {
-                            status,
-                            completed,
-                            total,
-                        });
-                    }
+                if status.contains("success") {
+                    last_event = Some(PullProgressEvent::Done { status });
+                } else {
+                    let completed = obj.get("completed").and_then(|v| v.as_u64());
+                    let total = obj.get("total").and_then(|v| v.as_u64());
+                    last_event = Some(PullProgressEvent::Progress {
+                        status,
+                        completed,
+                        total,
+                    });
                 }
             }
+        }
 
-            let event = last_event.unwrap_or(PullProgressEvent::Progress {
-                status: "processing...".to_owned(),
-                completed: None,
-                total: None,
-            });
-            let data = serde_json::to_string(&event).unwrap_or_default();
-            Ok(Event::default().data(data))
+        let event = last_event.unwrap_or(PullProgressEvent::Progress {
+            status:    "processing...".to_owned(),
+            completed: None,
+            total:     None,
         });
+        let data = serde_json::to_string(&event).unwrap_or_default();
+        Ok(Event::default().data(data))
+    });
 
     Ok(Sse::new(sse_stream).keep_alive(KeepAlive::default()))
 }
@@ -402,7 +397,7 @@ async fn ollama_delete_model(
         .send()
         .await
         .map_err(|e| OllamaError::Unreachable {
-            url: base_url.clone(),
+            url:     base_url.clone(),
             message: e.to_string(),
         })?;
 
@@ -448,14 +443,12 @@ async fn ollama_model_info(
         .send()
         .await
         .map_err(|e| OllamaError::Unreachable {
-            url: base_url.clone(),
+            url:     base_url.clone(),
             message: e.to_string(),
         })?;
 
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
-        return Err(OllamaError::ModelNotFound {
-            name: name.clone(),
-        });
+        return Err(OllamaError::ModelNotFound { name: name.clone() });
     }
 
     if !resp.status().is_success() {

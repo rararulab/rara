@@ -1,17 +1,17 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::repository::ResumeRepository;
-use super::types::{ResumeError, ResumeProject, ResumeProjectRow};
+use super::{
+    repository::ResumeRepository,
+    types::{ResumeError, ResumeProject, ResumeProjectRow},
+};
 
 pub struct PgResumeRepository {
     pool: PgPool,
 }
 
 impl PgResumeRepository {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
+    pub fn new(pool: PgPool) -> Self { Self { pool } }
 }
 
 #[async_trait::async_trait]
@@ -24,7 +24,8 @@ impl ResumeRepository for PgResumeRepository {
         local_path: &str,
     ) -> Result<ResumeProject, ResumeError> {
         let row: ResumeProjectRow = sqlx::query_as(
-            "INSERT INTO resume_project (id, name, git_url, local_path) VALUES ($1, $2, $3, $4) RETURNING *",
+            "INSERT INTO resume_project (id, name, git_url, local_path) VALUES ($1, $2, $3, $4) \
+             RETURNING *",
         )
         .bind(id)
         .bind(name)

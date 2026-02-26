@@ -12,7 +12,9 @@ categories.workspace = true
 description = "Background worker implementations for job automation"
 
 [dependencies]
+agent-core = { workspace = true }
 anyhow.workspace = true
+async-openai = { workspace = true }
 async-trait.workspace = true
 axum = { workspace = true }
 chrono = { workspace = true }
@@ -22,12 +24,9 @@ crawl4ai = { workspace = true }
 croner.workspace = true
 jiff.workspace = true
 opendal.workspace = true
-async-openai = { workspace = true }
-agent-core = { workspace = true }
 rara-agents = { workspace = true }
-rara-coding-task = { workspace = true }
 rara-backend-admin = { workspace = true }
-rara-workspace = { workspace = true }
+rara-coding-task = { workspace = true }
 rara-composio = { workspace = true }
 rara-domain-chat = { workspace = true }
 rara-domain-shared = { workspace = true }
@@ -38,6 +37,7 @@ rara-server = { workspace = true }
 rara-sessions = { workspace = true }
 rara-skills = { workspace = true }
 rara-telegram-bot = { workspace = true }
+rara-workspace = { workspace = true }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

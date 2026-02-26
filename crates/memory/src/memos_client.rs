@@ -18,8 +18,8 @@
 //! Memos is the **storage layer** of the memory system. It provides:
 //!
 //! - **Human-readable Markdown notes** — agents can write meeting notes,
-//!   summaries, and daily exchange logs that are easily browsable in the
-//!   Memos web UI.
+//!   summaries, and daily exchange logs that are easily browsable in the Memos
+//!   web UI.
 //! - **Tag-based organisation** — notes can be tagged with `#hashtag` syntax.
 //! - **Filter queries** — the API supports Google AIP-160 filter syntax for
 //!   listing memos (e.g. `filter=tag == 'daily-log'`).
@@ -45,9 +45,9 @@
 //! instance (not shared with the main rara database).
 
 use serde::{Deserialize, Serialize};
-
-use crate::error::{HttpSnafu, MemosSnafu, MemoryResult};
 use snafu::ResultExt;
+
+use crate::error::{HttpSnafu, MemoryResult, MemosSnafu};
 
 /// Client for the Memos v1 REST API.
 ///
@@ -55,11 +55,11 @@ use snafu::ResultExt;
 /// All requests include a `Bearer {token}` authorization header.
 pub struct MemosClient {
     /// Shared HTTP client (connection pooling, keep-alive).
-    client: reqwest::Client,
+    client:   reqwest::Client,
     /// Base URL without trailing slash, e.g. `http://localhost:5230`.
     base_url: String,
     /// Bearer token for authentication (created in Memos Settings → Tokens).
-    token: String,
+    token:    String,
 }
 
 impl MemosClient {
@@ -78,11 +78,7 @@ impl MemosClient {
     /// Create a new memo.
     ///
     /// `POST /api/v1/memos`
-    pub async fn create_memo(
-        &self,
-        content: &str,
-        visibility: &str,
-    ) -> MemoryResult<MemoEntry> {
+    pub async fn create_memo(&self, content: &str, visibility: &str) -> MemoryResult<MemoEntry> {
         let url = format!("{}/api/v1/memos", self.base_url);
         let body = serde_json::json!({
             "content": content,
@@ -179,11 +175,7 @@ impl MemosClient {
     /// Update a memo's content.
     ///
     /// `PATCH /api/v1/memos/{id}`
-    pub async fn update_memo(
-        &self,
-        id: &str,
-        content: &str,
-    ) -> MemoryResult<MemoEntry> {
+    pub async fn update_memo(&self, id: &str, content: &str) -> MemoryResult<MemoEntry> {
         let url = format!("{}/api/v1/memos/{id}", self.base_url);
         let body = serde_json::json!({
             "content": content,
@@ -246,16 +238,16 @@ impl MemosClient {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoEntry {
     /// Resource name, e.g. `"memos/123"`.
-    pub name: String,
+    pub name:        String,
     /// Unique identifier.
-    pub uid: String,
+    pub uid:         String,
     /// Markdown content.
-    pub content: String,
+    pub content:     String,
     /// Visibility level (e.g. `"PRIVATE"`, `"PUBLIC"`).
-    pub visibility: String,
+    pub visibility:  String,
     /// Whether the memo is pinned.
     #[serde(default)]
-    pub pinned: bool,
+    pub pinned:      bool,
     /// Creation timestamp (RFC 3339).
     #[serde(rename = "createTime", default)]
     pub create_time: String,
@@ -307,7 +299,8 @@ mod tests {
         let c = client().expect("MEMOS_BASE_URL required");
 
         // Create
-        let entry = c.create_memo("integration test memo #rara-test", "PRIVATE")
+        let entry = c
+            .create_memo("integration test memo #rara-test", "PRIVATE")
             .await
             .expect("create_memo failed");
         println!("created memo: {} (uid={})", entry.name, entry.uid);
@@ -319,14 +312,18 @@ mod tests {
         // List
         let memos = c.list_memos(10, None).await.expect("list_memos failed");
         println!("list_memos returned {} entries", memos.len());
-        assert!(memos.iter().any(|m| m.uid == entry.uid), "created memo not found in list");
+        assert!(
+            memos.iter().any(|m| m.uid == entry.uid),
+            "created memo not found in list"
+        );
 
         // Get
         let fetched = c.get_memo(id).await.expect("get_memo failed");
         assert_eq!(fetched.uid, entry.uid);
 
         // Update
-        let updated = c.update_memo(id, "updated integration test memo #rara-test")
+        let updated = c
+            .update_memo(id, "updated integration test memo #rara-test")
             .await
             .expect("update_memo failed");
         assert!(updated.content.contains("updated"));
@@ -341,7 +338,8 @@ mod tests {
     async fn list_with_filter() {
         let c = client().expect("MEMOS_BASE_URL required");
         // This may return empty but should not error
-        let memos = c.list_memos(5, Some("tag == 'rara-test'"))
+        let memos = c
+            .list_memos(5, Some("tag == 'rara-test'"))
             .await
             .expect("list_memos with filter failed");
         println!("filtered list returned {} entries", memos.len());

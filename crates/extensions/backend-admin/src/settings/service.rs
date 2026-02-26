@@ -3,11 +3,10 @@
 use std::sync::{Arc, RwLock};
 
 use chrono::Utc;
+use rara_domain_shared::settings::model::{Settings, UpdateRequest};
 use snafu::{ResultExt, Whatever, whatever};
 use tokio::sync::watch;
 use yunara_store::KVStore;
-
-use rara_domain_shared::settings::model::{Settings, UpdateRequest};
 
 /// KV key for persisted runtime settings JSON.
 pub const RUNTIME_SETTINGS_KV_KEY: &str = "runtime_settings.v1";
@@ -83,10 +82,7 @@ impl SettingsSvc {
 
 #[async_trait::async_trait]
 impl rara_domain_shared::settings::SettingsUpdater for SettingsSvc {
-    async fn update_settings(
-        &self,
-        patch: UpdateRequest,
-    ) -> anyhow::Result<Settings> {
+    async fn update_settings(&self, patch: UpdateRequest) -> anyhow::Result<Settings> {
         self.update(patch).await.map_err(|e| anyhow::anyhow!("{e}"))
     }
 }

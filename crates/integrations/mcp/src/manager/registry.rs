@@ -227,7 +227,8 @@ pub struct McpServerConfig {
     pub tools_disabled: HashSet<String>,
 
     // ── Pod transport (k8s feature) ─────────────────────────────────
-    /// Container image for the MCP server pod. Required when `transport` is `Pod`.
+    /// Container image for the MCP server pod. Required when `transport` is
+    /// `Pod`.
     #[cfg(feature = "k8s")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pod_image:     Option<String>,
@@ -320,7 +321,11 @@ mod tests {
         assert_eq!(config.pod_namespace.as_deref(), Some("mcp-servers"));
         assert_eq!(config.pod_port, Some(8080));
         assert_eq!(
-            config.pod_labels.as_ref().and_then(|l| l.get("team")).map(String::as_str),
+            config
+                .pod_labels
+                .as_ref()
+                .and_then(|l| l.get("team"))
+                .map(String::as_str),
             Some("platform")
         );
 

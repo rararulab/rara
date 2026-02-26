@@ -18,14 +18,12 @@
 //! user can trigger/cancel/check the pipeline from a chat session.
 
 use async_trait::async_trait;
+use rara_domain_shared::settings::model::{JobPipelineRuntimeSettingsPatch, UpdateRequest};
 use serde_json::json;
 use tool_core::AgentTool;
 
-use rara_domain_shared::settings::model::{JobPipelineRuntimeSettingsPatch, UpdateRequest};
-
-use crate::settings::SettingsSvc;
-
 use super::super::service::PipelineService;
+use crate::settings::SettingsSvc;
 
 // ---------------------------------------------------------------------------
 // RunJobPipelineTool
@@ -45,8 +43,8 @@ impl AgentTool for RunJobPipelineTool {
     fn name(&self) -> &str { "run_job_pipeline" }
 
     fn description(&self) -> &str {
-        "Trigger the automated job pipeline. The pipeline agent will search for jobs, score \
-         them against the user's preferences, optimize resumes for high-scoring jobs, create \
+        "Trigger the automated job pipeline. The pipeline agent will search for jobs, score them \
+         against the user's preferences, optimize resumes for high-scoring jobs, create \
          applications, and send notifications. The pipeline runs in the background."
     }
 
@@ -131,9 +129,7 @@ impl PipelineStatusTool {
 impl AgentTool for PipelineStatusTool {
     fn name(&self) -> &str { "pipeline_status" }
 
-    fn description(&self) -> &str {
-        "Check if the job pipeline is currently running."
-    }
+    fn description(&self) -> &str { "Check if the job pipeline is currently running." }
 
     fn parameters_schema(&self) -> serde_json::Value {
         json!({

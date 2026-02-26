@@ -10,16 +10,16 @@ use uuid::Uuid;
 /// A resume project backed by a GitHub repository.
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ResumeProject {
-    pub id: Uuid,
-    pub name: String,
-    pub git_url: String,
-    pub local_path: String,
+    pub id:             Uuid,
+    pub name:           String,
+    pub git_url:        String,
+    pub local_path:     String,
     #[schema(value_type = Option<String>)]
     pub last_synced_at: Option<Timestamp>,
     #[schema(value_type = String)]
-    pub created_at: Timestamp,
+    pub created_at:     Timestamp,
     #[schema(value_type = String)]
-    pub updated_at: Timestamp,
+    pub updated_at:     Timestamp,
 }
 
 // ---------------------------------------------------------------------------
@@ -29,7 +29,7 @@ pub struct ResumeProject {
 /// Request to set up a new resume project.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct SetupResumeProjectRequest {
-    pub name: String,
+    pub name:    String,
     pub git_url: String,
 }
 
@@ -45,27 +45,27 @@ pub struct UpdateResumeProjectRequest {
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct ResumeProjectRow {
-    pub id: Uuid,
-    pub name: String,
-    pub git_url: String,
-    pub local_path: String,
+    pub id:             Uuid,
+    pub name:           String,
+    pub git_url:        String,
+    pub local_path:     String,
     pub last_synced_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub created_at:     chrono::DateTime<chrono::Utc>,
+    pub updated_at:     chrono::DateTime<chrono::Utc>,
 }
 
 impl From<ResumeProjectRow> for ResumeProject {
     fn from(row: ResumeProjectRow) -> Self {
         Self {
-            id: row.id,
-            name: row.name,
-            git_url: row.git_url,
-            local_path: row.local_path,
-            last_synced_at: row.last_synced_at.map(|t| {
-                rara_domain_shared::convert::chrono_to_timestamp(t)
-            }),
-            created_at: rara_domain_shared::convert::chrono_to_timestamp(row.created_at),
-            updated_at: rara_domain_shared::convert::chrono_to_timestamp(row.updated_at),
+            id:             row.id,
+            name:           row.name,
+            git_url:        row.git_url,
+            local_path:     row.local_path,
+            last_synced_at: row
+                .last_synced_at
+                .map(|t| rara_domain_shared::convert::chrono_to_timestamp(t)),
+            created_at:     rara_domain_shared::convert::chrono_to_timestamp(row.created_at),
+            updated_at:     rara_domain_shared::convert::chrono_to_timestamp(row.updated_at),
         }
     }
 }
@@ -98,8 +98,14 @@ impl axum::response::IntoResponse for ResumeError {
             Self::NotFound => (axum::http::StatusCode::NOT_FOUND, self.to_string()),
             Self::AlreadyExists => (axum::http::StatusCode::CONFLICT, self.to_string()),
             Self::InvalidGitUrl { .. } => (axum::http::StatusCode::BAD_REQUEST, self.to_string()),
-            Self::GitFailed { .. } => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
-            Self::Repository { .. } => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
+            Self::GitFailed { .. } => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                self.to_string(),
+            ),
+            Self::Repository { .. } => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                self.to_string(),
+            ),
         };
         (status, axum::Json(serde_json::json!({ "error": msg }))).into_response()
     }

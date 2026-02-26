@@ -18,16 +18,17 @@ use axum::{
     Json,
     extract::{Path, Query, State},
 };
-use super::{
-    error::SchedulerError,
-    service::SchedulerService,
-    types::{ScheduledTask, TaskFilter, TaskRunRecord},
-};
 use rara_domain_shared::id::SchedulerTaskId;
 use serde::Deserialize;
 use tracing::instrument;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
+
+use super::{
+    error::SchedulerError,
+    service::SchedulerService,
+    types::{ScheduledTask, TaskFilter, TaskRunRecord},
+};
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct TaskListQuery {

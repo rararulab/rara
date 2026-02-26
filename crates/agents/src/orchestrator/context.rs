@@ -7,7 +7,8 @@ use async_openai::types::chat::{
 };
 use rara_sessions::types::{ChatMessage, ContentBlock, MessageContent, MessageRole};
 
-/// Convert a session ChatMessage to an async_openai ChatCompletionRequestMessage.
+/// Convert a session ChatMessage to an async_openai
+/// ChatCompletionRequestMessage.
 pub fn to_chat_message(msg: &ChatMessage) -> ChatCompletionRequestMessage {
     match msg.role {
         MessageRole::System => ChatCompletionRequestSystemMessageArgs::default()
@@ -27,9 +28,7 @@ pub fn to_chat_message(msg: &ChatMessage) -> ChatCompletionRequestMessage {
                     .map(|b| match b {
                         ContentBlock::Text { text } => {
                             ChatCompletionRequestUserMessageContentPart::Text(
-                                ChatCompletionRequestMessageContentPartText {
-                                    text: text.clone(),
-                                },
+                                ChatCompletionRequestMessageContentPartText { text: text.clone() },
                             )
                         }
                         ContentBlock::ImageUrl { url } => {
@@ -68,9 +67,7 @@ pub fn to_chat_message(msg: &ChatMessage) -> ChatCompletionRequestMessage {
 }
 
 /// Rough token estimate: ~3 chars per token.
-pub fn estimate_tokens(text: &str) -> usize {
-    (text.chars().count() + 2) / 3
-}
+pub fn estimate_tokens(text: &str) -> usize { (text.chars().count() + 2) / 3 }
 
 /// Estimate total tokens for a message history.
 pub fn estimate_history_tokens(messages: &[ChatMessage]) -> usize {
@@ -88,10 +85,7 @@ mod tests {
     fn to_chat_message_user() {
         let msg = ChatMessage::user("hello");
         let converted = to_chat_message(&msg);
-        assert!(matches!(
-            converted,
-            ChatCompletionRequestMessage::User(_)
-        ));
+        assert!(matches!(converted, ChatCompletionRequestMessage::User(_)));
     }
 
     #[test]
@@ -108,10 +102,7 @@ mod tests {
     fn to_chat_message_system() {
         let msg = ChatMessage::system("you are helpful");
         let converted = to_chat_message(&msg);
-        assert!(matches!(
-            converted,
-            ChatCompletionRequestMessage::System(_)
-        ));
+        assert!(matches!(converted, ChatCompletionRequestMessage::System(_)));
     }
 
     #[test]
@@ -124,10 +115,7 @@ mod tests {
 
     #[test]
     fn estimate_history_tokens_sums() {
-        let messages = vec![
-            ChatMessage::user("hello"),
-            ChatMessage::assistant("world!"),
-        ];
+        let messages = vec![ChatMessage::user("hello"), ChatMessage::assistant("world!")];
         assert_eq!(estimate_history_tokens(&messages), 12);
     }
 }

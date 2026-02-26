@@ -1,10 +1,10 @@
 //! Scheduled agent -- executes due jobs from the agent scheduler.
 
 use agent_core::runner::UserContent;
-use crate::orchestrator::{context::to_chat_message, AgentOrchestrator, error::OrchestratorError};
 use rara_sessions::types::ChatMessage;
 
 use super::AgentOutput;
+use crate::orchestrator::{AgentOrchestrator, context::to_chat_message, error::OrchestratorError};
 
 /// Default maximum iterations for scheduled job execution.
 const DEFAULT_MAX_ITERATIONS: usize = 15;
@@ -16,9 +16,7 @@ pub struct ScheduledAgent {
 }
 
 impl ScheduledAgent {
-    pub fn new(orchestrator: AgentOrchestrator) -> Self {
-        Self { orchestrator }
-    }
+    pub fn new(orchestrator: AgentOrchestrator) -> Self { Self { orchestrator } }
 
     /// Execute a single scheduled job.
     ///
@@ -33,7 +31,9 @@ impl ScheduledAgent {
         let settings = self.orchestrator.settings();
         let model = settings.ai.model_for_key("scheduled");
         let provider_hint = settings.ai.provider.clone();
-        let max_iterations = settings.agent.max_iterations
+        let max_iterations = settings
+            .agent
+            .max_iterations
             .map(|n| n as usize)
             .unwrap_or(DEFAULT_MAX_ITERATIONS);
         let tools = self.orchestrator.tools().clone();

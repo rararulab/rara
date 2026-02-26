@@ -32,9 +32,7 @@ pub struct GetJobPreferencesTool {
 }
 
 impl GetJobPreferencesTool {
-    pub fn new(settings_svc: crate::settings::SettingsSvc) -> Self {
-        Self { settings_svc }
-    }
+    pub fn new(settings_svc: crate::settings::SettingsSvc) -> Self { Self { settings_svc } }
 }
 
 #[async_trait]
@@ -148,13 +146,11 @@ impl AgentTool for ScoreJobTool {
         // Use the candidate's preferences as a pseudo-resume for the fit
         // scoring agent. The preferences text typically contains target roles,
         // tech stack, and experience level -- close enough for scoring.
-        let jd = format!(
-            "**Title**: {job_title}\n**Company**: {company}\n\n{job_description}"
-        );
+        let jd = format!("**Title**: {job_title}\n**Company**: {company}\n\n{job_description}");
         let resume_proxy = format!(
-            "## Candidate Profile / Preferences\n\n{preferences}\n\n\
-             (Note: score the JOB against these PREFERENCES. Respond with ONLY a \
-             JSON object containing: score (0-100), summary, strengths[], gaps[].)"
+            "## Candidate Profile / Preferences\n\n{preferences}\n\n(Note: score the JOB against \
+             these PREFERENCES. Respond with ONLY a JSON object containing: score (0-100), \
+             summary, strengths[], gaps[].)"
         );
 
         let agent = match self.ai_service.job_fit().await {
@@ -184,17 +180,16 @@ impl AgentTool for ScoreJobTool {
 
 /// Creates a git worktree in the resume project for a specific job application.
 ///
-/// The worktree is created at `{resume_project_path}/.worktrees/apply-{company}-{role}`
-/// on branch `apply/{company}-{role}`. Returns the worktree path and a recursive
-/// file listing so the agent knows what files are available.
+/// The worktree is created at
+/// `{resume_project_path}/.worktrees/apply-{company}-{role}` on branch `apply/
+/// {company}-{role}`. Returns the worktree path and a recursive file listing so
+/// the agent knows what files are available.
 pub struct PrepareResumeWorktreeTool {
     settings_svc: crate::settings::SettingsSvc,
 }
 
 impl PrepareResumeWorktreeTool {
-    pub fn new(settings_svc: crate::settings::SettingsSvc) -> Self {
-        Self { settings_svc }
-    }
+    pub fn new(settings_svc: crate::settings::SettingsSvc) -> Self { Self { settings_svc } }
 }
 
 #[async_trait]
@@ -202,9 +197,9 @@ impl AgentTool for PrepareResumeWorktreeTool {
     fn name(&self) -> &str { "prepare_resume_worktree" }
 
     fn description(&self) -> &str {
-        "Create a git worktree in the resume project for a specific job application. \
-         Returns the worktree path and a recursive file listing of all files in the \
-         worktree so you know what data files are available to modify."
+        "Create a git worktree in the resume project for a specific job application. Returns the \
+         worktree path and a recursive file listing of all files in the worktree so you know what \
+         data files are available to modify."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -258,9 +253,7 @@ impl AgentTool for PrepareResumeWorktreeTool {
         let slug_role = slugify(role);
         let branch_name = format!("apply/{slug_company}-{slug_role}");
         let worktree_dir_name = format!("apply-{slug_company}-{slug_role}");
-        let worktree_path = resume_dir
-            .join(".worktrees")
-            .join(&worktree_dir_name);
+        let worktree_path = resume_dir.join(".worktrees").join(&worktree_dir_name);
 
         // Create .worktrees directory if it doesn't exist.
         if let Err(e) = std::fs::create_dir_all(resume_dir.join(".worktrees")) {
@@ -342,8 +335,8 @@ impl AgentTool for ReadResumeFileTool {
     fn name(&self) -> &str { "read_resume_file" }
 
     fn description(&self) -> &str {
-        "Read the content of a file from a resume worktree. Use this to inspect \
-         data files before modifying them."
+        "Read the content of a file from a resume worktree. Use this to inspect data files before \
+         modifying them."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -410,9 +403,8 @@ impl AgentTool for WriteResumeFileTool {
     fn name(&self) -> &str { "write_resume_file" }
 
     fn description(&self) -> &str {
-        "Write content to a file in the resume worktree. Use this to modify \
-         data files (e.g. experience, skills, summary) to tailor the resume \
-         for a specific job."
+        "Write content to a file in the resume worktree. Use this to modify data files (e.g. \
+         experience, skills, summary) to tailor the resume for a specific job."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -505,8 +497,8 @@ impl AgentTool for RenderResumeTool {
     fn name(&self) -> &str { "render_resume" }
 
     fn description(&self) -> &str {
-        "Run `make` in the resume worktree to compile the resume into a PDF. \
-         Returns the path to the generated PDF file."
+        "Run `make` in the resume worktree to compile the resume into a PDF. Returns the path to \
+         the generated PDF file."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -610,8 +602,8 @@ impl AgentTool for FinalizeResumeTool {
     fn name(&self) -> &str { "finalize_resume" }
 
     fn description(&self) -> &str {
-        "Commit all changes in the resume worktree and finalize the optimized resume. \
-         Returns the PDF path for use as an email attachment."
+        "Commit all changes in the resume worktree and finalize the optimized resume. Returns the \
+         PDF path for use as an email attachment."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -734,27 +726,31 @@ fn git2_create_worktree(
         .map_err(|e| format!("failed to peel HEAD to commit: {e}"))?;
 
     // Try to create a new branch; if it already exists, find the existing one.
-    let (reference, status_label) =
-        match repo.branch(branch_name, &head, false) {
-            Ok(branch) => (branch.into_reference(), "created"),
-            Err(e) if e.code() == git2::ErrorCode::Exists => {
-                // Branch already exists — look it up.
-                let branch = repo
-                    .find_branch(branch_name, git2::BranchType::Local)
-                    .map_err(|e2| {
-                        format!("branch '{branch_name}' exists but failed to find it: {e2}")
-                    })?;
-                (branch.into_reference(), "created_from_existing_branch")
-            }
-            Err(e) => return Err(format!("failed to create branch '{branch_name}': {e}")),
-        };
+    let (reference, status_label) = match repo.branch(branch_name, &head, false) {
+        Ok(branch) => (branch.into_reference(), "created"),
+        Err(e) if e.code() == git2::ErrorCode::Exists => {
+            // Branch already exists — look it up.
+            let branch = repo
+                .find_branch(branch_name, git2::BranchType::Local)
+                .map_err(|e2| {
+                    format!("branch '{branch_name}' exists but failed to find it: {e2}")
+                })?;
+            (branch.into_reference(), "created_from_existing_branch")
+        }
+        Err(e) => return Err(format!("failed to create branch '{branch_name}': {e}")),
+    };
 
     // Add the worktree with the branch as its HEAD reference.
     let mut opts = git2::WorktreeAddOptions::new();
     opts.reference(Some(&reference));
 
     repo.worktree(worktree_dir_name, worktree_path, Some(&opts))
-        .map_err(|e| format!("failed to add worktree at '{}': {e}", worktree_path.display()))?;
+        .map_err(|e| {
+            format!(
+                "failed to add worktree at '{}': {e}",
+                worktree_path.display()
+            )
+        })?;
 
     Ok(status_label.to_owned())
 }
@@ -775,7 +771,9 @@ fn git2_stage_and_commit(worktree_path: &str, commit_msg: &str) -> Result<bool, 
         .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
         .map_err(|e| format!("git add failed: {e}"))?;
 
-    index.write().map_err(|e| format!("index write failed: {e}"))?;
+    index
+        .write()
+        .map_err(|e| format!("index write failed: {e}"))?;
 
     // Write the index as a tree.
     let tree_oid = index
@@ -816,7 +814,13 @@ fn git2_stage_and_commit(worktree_path: &str, commit_msg: &str) -> Result<bool, 
 fn slugify(s: &str) -> String {
     s.to_lowercase()
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .split('-')
         .filter(|seg| !seg.is_empty())
@@ -833,9 +837,12 @@ fn validate_path_within(
     target: &std::path::Path,
 ) -> Result<(), String> {
     // Canonicalize base_dir (must exist).
-    let canon_base = base_dir
-        .canonicalize()
-        .map_err(|e| format!("cannot resolve base directory '{}': {e}", base_dir.display()))?;
+    let canon_base = base_dir.canonicalize().map_err(|e| {
+        format!(
+            "cannot resolve base directory '{}': {e}",
+            base_dir.display()
+        )
+    })?;
 
     // For the target, canonicalize if it exists; otherwise canonicalize the
     // parent and append the filename.
@@ -845,18 +852,18 @@ fn validate_path_within(
             .map_err(|e| format!("cannot resolve target path '{}': {e}", target.display()))?
     } else {
         // Target doesn't exist yet (write case). Canonicalize parent.
-        let parent = target.parent().ok_or_else(|| {
-            format!("target path has no parent: {}", target.display())
-        })?;
+        let parent = target
+            .parent()
+            .ok_or_else(|| format!("target path has no parent: {}", target.display()))?;
         let parent_canon = parent.canonicalize().map_err(|e| {
             format!(
                 "cannot resolve parent directory '{}': {e}",
                 parent.display()
             )
         })?;
-        let file_name = target.file_name().ok_or_else(|| {
-            format!("target path has no file name: {}", target.display())
-        })?;
+        let file_name = target
+            .file_name()
+            .ok_or_else(|| format!("target path has no file name: {}", target.display()))?;
         parent_canon.join(file_name)
     };
 

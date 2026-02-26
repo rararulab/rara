@@ -27,12 +27,12 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, FromRepr)]
 #[repr(u8)]
 pub enum CodingTaskStatus {
-    Pending     = 0,
-    Cloning     = 1,
-    Running     = 2,
-    Completed   = 3,
-    Failed      = 4,
-    Merged      = 5,
+    Pending = 0,
+    Cloning = 1,
+    Running = 2,
+    Completed = 3,
+    Failed = 4,
+    Merged = 5,
     MergeFailed = 6,
 }
 
@@ -40,7 +40,7 @@ pub enum CodingTaskStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, FromRepr)]
 #[repr(u8)]
 pub enum AgentType {
-    Codex  = 0,
+    Codex = 0,
     Claude = 1,
 }
 
@@ -84,9 +84,7 @@ pub struct CreateCodingTaskRequest {
     pub session_key: Option<String>,
 }
 
-fn default_agent_type() -> AgentType {
-    AgentType::Claude
-}
+fn default_agent_type() -> AgentType { AgentType::Claude }
 
 /// Compact summary returned in list endpoints.
 #[derive(Debug, Serialize)]
@@ -127,8 +125,7 @@ pub struct CodingTaskDetail {
 // ---------------------------------------------------------------------------
 
 fn chrono_to_timestamp(dt: chrono::DateTime<chrono::Utc>) -> Timestamp {
-    Timestamp::from_millisecond(dt.timestamp_millis())
-        .unwrap_or_else(|_| Timestamp::UNIX_EPOCH)
+    Timestamp::from_millisecond(dt.timestamp_millis()).unwrap_or_else(|_| Timestamp::UNIX_EPOCH)
 }
 
 fn opt_chrono_to_timestamp(dt: Option<chrono::DateTime<chrono::Utc>>) -> Option<Timestamp> {
@@ -141,8 +138,7 @@ impl From<crate::pg_repository::CodingTaskRow> for CodingTask {
             id:             row.id,
             status:         CodingTaskStatus::from_repr(row.status as u8)
                 .unwrap_or(CodingTaskStatus::Pending),
-            agent_type:     AgentType::from_repr(row.agent_type as u8)
-                .unwrap_or(AgentType::Claude),
+            agent_type:     AgentType::from_repr(row.agent_type as u8).unwrap_or(AgentType::Claude),
             repo_url:       row.repo_url,
             branch:         row.branch,
             prompt:         row.prompt,

@@ -7,8 +7,8 @@
 //! - [`run_single`](SubagentExecutor::run_single) — Run one sub-agent.
 //! - [`run_chain`](SubagentExecutor::run_chain) — Run sequentially, piping
 //!   output via `{previous}`.
-//! - [`run_parallel`](SubagentExecutor::run_parallel) — Run concurrently
-//!   with a semaphore limit.
+//! - [`run_parallel`](SubagentExecutor::run_parallel) — Run concurrently with a
+//!   semaphore limit.
 //!
 //! # Tool Isolation
 //!
@@ -20,13 +20,12 @@ use std::sync::Arc;
 
 use tracing::{info, warn};
 
+use super::definition::{AgentDefinition, AgentDefinitionRegistry};
 use crate::{
     model::LlmProviderLoaderRef,
     runner::{AgentRunner, UserContent},
     tool_registry::ToolRegistry,
 };
-
-use super::definition::{AgentDefinition, AgentDefinitionRegistry};
 
 /// Structured result from running a single sub-agent.
 ///
@@ -66,7 +65,8 @@ pub struct SubagentResult {
 pub struct SubagentExecutor {
     /// Shared LLM provider loader for creating sub-agent runners.
     llm_provider:  LlmProviderLoaderRef,
-    /// Registry of all available agent definitions (loaded from `agents/` dirs).
+    /// Registry of all available agent definitions (loaded from `agents/`
+    /// dirs).
     definitions:   Arc<AgentDefinitionRegistry>,
     /// Snapshot of the parent agent's tools, taken before `SubagentTool` was
     /// registered. Sub-agents receive a filtered subset of these tools.
@@ -82,10 +82,12 @@ impl SubagentExecutor {
     /// # Arguments
     ///
     /// - `llm_provider` — Shared LLM provider loader.
-    /// - `definitions` — Registry of agent definitions (loaded from markdown files).
+    /// - `definitions` — Registry of agent definitions (loaded from markdown
+    ///   files).
     /// - `parent_tools` — Snapshot of the parent's tool registry. **Must be
     ///   captured before `SubagentTool` is registered** to prevent recursion.
-    /// - `default_model` — Fallback model name for agents that don't specify one.
+    /// - `default_model` — Fallback model name for agents that don't specify
+    ///   one.
     pub fn new(
         llm_provider: LlmProviderLoaderRef,
         definitions: Arc<AgentDefinitionRegistry>,
@@ -101,9 +103,7 @@ impl SubagentExecutor {
     }
 
     /// Access the agent definition registry.
-    pub fn definitions(&self) -> &AgentDefinitionRegistry {
-        &self.definitions
-    }
+    pub fn definitions(&self) -> &AgentDefinitionRegistry { &self.definitions }
 
     /// Build a filtered [`ToolRegistry`] for a sub-agent.
     ///
@@ -136,9 +136,9 @@ impl SubagentExecutor {
     /// Execute a single sub-agent with an isolated context.
     ///
     /// Creates a fresh [`AgentRunner`] configured with the agent definition's
-    /// system prompt, model (or `default_model` fallback), and filtered tool set.
-    /// The sub-agent runs its full tool-calling loop and returns the final
-    /// assistant text as a [`SubagentResult`].
+    /// system prompt, model (or `default_model` fallback), and filtered tool
+    /// set. The sub-agent runs its full tool-calling loop and returns the
+    /// final assistant text as a [`SubagentResult`].
     ///
     /// Sub-agents do not receive streaming events (`on_event` is `None`) since
     /// their output is consumed by the parent agent, not streamed to a UI.
@@ -281,11 +281,11 @@ impl SubagentExecutor {
                     Some(d) => executor.run_single(&d, &task).await,
                     None => SubagentResult {
                         agent_name,
-                        output:     String::new(),
+                        output: String::new(),
                         iterations: 0,
                         tool_calls: 0,
-                        success:    false,
-                        error:      Some("agent definition not found".to_string()),
+                        success: false,
+                        error: Some("agent definition not found".to_string()),
                     },
                 }
             }));

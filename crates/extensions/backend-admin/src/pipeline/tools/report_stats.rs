@@ -36,10 +36,9 @@ impl AgentTool for ReportPipelineStatsTool {
     fn name(&self) -> &str { "report_pipeline_stats" }
 
     fn description(&self) -> &str {
-        "Report pipeline execution statistics. MUST be called at the end of the \
-         pipeline run with accurate counts. Supports auto-aggregation from \
-         pipeline_discovered_jobs to reduce counting errors. This updates the \
-         database so the frontend displays correct numbers."
+        "Report pipeline execution statistics. MUST be called at the end of the pipeline run with \
+         accurate counts. Supports auto-aggregation from pipeline_discovered_jobs to reduce \
+         counting errors. This updates the database so the frontend displays correct numbers."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -107,10 +106,10 @@ impl AgentTool for ReportPipelineStatsTool {
             .and_then(|v| v.as_i64())
             .map(|v| v as i32);
 
-        let (agg_jobs_found, agg_jobs_scored, agg_jobs_applied, agg_jobs_notified) = if auto_aggregate
-        {
-            let row = sqlx::query_as::<_, (i32, i32, i32, i32)>(
-                r#"
+        let (agg_jobs_found, agg_jobs_scored, agg_jobs_applied, agg_jobs_notified) =
+            if auto_aggregate {
+                let row = sqlx::query_as::<_, (i32, i32, i32, i32)>(
+                    r#"
                 SELECT
                     COUNT(*)::INT AS jobs_found,
                     COUNT(*) FILTER (WHERE score IS NOT NULL)::INT AS jobs_scored,
@@ -119,23 +118,23 @@ impl AgentTool for ReportPipelineStatsTool {
                 FROM pipeline_discovered_jobs
                 WHERE run_id = $1
                 "#,
-            )
-            .bind(run_id)
-            .fetch_one(&self.pool)
-            .await;
+                )
+                .bind(run_id)
+                .fetch_one(&self.pool)
+                .await;
 
-            match row {
-                Ok((jobs_found, jobs_scored, jobs_applied, jobs_notified)) => {
-                    (jobs_found, jobs_scored, jobs_applied, jobs_notified)
+                match row {
+                    Ok((jobs_found, jobs_scored, jobs_applied, jobs_notified)) => {
+                        (jobs_found, jobs_scored, jobs_applied, jobs_notified)
+                    }
+                    Err(e) => {
+                        warn!(error = %e, run_id = %run_id, "report_pipeline_stats: aggregation query failed");
+                        return Ok(json!({ "error": format!("{e}") }));
+                    }
                 }
-                Err(e) => {
-                    warn!(error = %e, run_id = %run_id, "report_pipeline_stats: aggregation query failed");
-                    return Ok(json!({ "error": format!("{e}") }));
-                }
-            }
-        } else {
-            (0, 0, 0, 0)
-        };
+            } else {
+                (0, 0, 0, 0)
+            };
 
         let jobs_found = manual_jobs_found.unwrap_or(agg_jobs_found);
         let jobs_scored = manual_jobs_scored.unwrap_or(agg_jobs_scored);
@@ -149,7 +148,8 @@ impl AgentTool for ReportPipelineStatsTool {
                 || manual_jobs_notified.is_none())
         {
             return Err(anyhow::anyhow!(
-                "when auto_aggregate is false, jobs_found/jobs_scored/jobs_applied/jobs_notified are required"
+                "when auto_aggregate is false, jobs_found/jobs_scored/jobs_applied/jobs_notified \
+                 are required"
             ));
         }
 

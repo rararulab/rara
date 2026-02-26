@@ -2,24 +2,24 @@ use axum::{Json, extract::State, http::StatusCode};
 use rara_domain_shared::settings::model::{
     AgentRuntimeSettingsPatch, GmailRuntimeSettingsPatch, Settings, UpdateRequest,
 };
+use utoipa_axum::router::OpenApiRouter;
 
 use crate::settings::SettingsSvc;
-use utoipa_axum::router::OpenApiRouter;
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct GmailAdminSettingsView {
-    pub configured: bool,
+    pub configured:        bool,
     pub auto_send_enabled: bool,
-    pub address: Option<String>,
+    pub address:           Option<String>,
     pub app_password_hint: Option<String>,
     #[schema(value_type = Option<String>)]
-    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub updated_at:        Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize, utoipa::ToSchema)]
 pub struct GmailAdminUpdateRequest {
-    pub address: Option<String>,
-    pub app_password: Option<String>,
+    pub address:           Option<String>,
+    pub app_password:      Option<String>,
     pub auto_send_enabled: Option<bool>,
 }
 
@@ -44,8 +44,8 @@ async fn update_gmail_settings(
         .update(UpdateRequest {
             agent: Some(AgentRuntimeSettingsPatch {
                 gmail: Some(GmailRuntimeSettingsPatch {
-                    address: req.address,
-                    app_password: req.app_password,
+                    address:           req.address,
+                    app_password:      req.app_password,
                     auto_send_enabled: req.auto_send_enabled,
                 }),
                 ..AgentRuntimeSettingsPatch::default()
@@ -67,11 +67,11 @@ impl From<Settings> for GmailAdminSettingsView {
     fn from(value: Settings) -> Self {
         let gmail = value.agent.gmail;
         Self {
-            configured: gmail.address.is_some() && gmail.app_password.is_some(),
+            configured:        gmail.address.is_some() && gmail.app_password.is_some(),
             auto_send_enabled: gmail.auto_send_enabled,
-            address: gmail.address,
+            address:           gmail.address,
             app_password_hint: secret_hint(gmail.app_password.as_deref()),
-            updated_at: value.updated_at,
+            updated_at:        value.updated_at,
         }
     }
 }

@@ -17,8 +17,10 @@
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::error::CodingTaskError;
-use crate::types::{CodingTask, CodingTaskStatus};
+use crate::{
+    error::CodingTaskError,
+    types::{CodingTask, CodingTaskStatus},
+};
 
 #[async_trait]
 pub trait CodingTaskRepository: Send + Sync {

@@ -67,12 +67,10 @@ impl PgSkillCache {
 
     /// Load all cached skill metadata from the database.
     pub async fn load_all(&self) -> Result<HashMap<String, CachedSkill>> {
-        let rows = sqlx::query_as::<_, SkillCacheRow>(
-            "SELECT * FROM skill_cache ORDER BY name",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .context(SqlxSnafu)?;
+        let rows = sqlx::query_as::<_, SkillCacheRow>("SELECT * FROM skill_cache ORDER BY name")
+            .fetch_all(&self.pool)
+            .await
+            .context(SqlxSnafu)?;
 
         let mut map = HashMap::with_capacity(rows.len());
         for row in rows {

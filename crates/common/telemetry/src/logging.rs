@@ -577,21 +577,22 @@ pub fn init_global_logging(
 
         #[cfg(feature = "tokio-console")]
         let subscriber = {
-            let tokio_console_layer =
-                if let Some(tokio_console_addr) = &tracing_opts.tokio_console_addr {
-                    let addr: std::net::SocketAddr = tokio_console_addr.parse().unwrap_or_else(|e| {
+            let tokio_console_layer = if let Some(tokio_console_addr) =
+                &tracing_opts.tokio_console_addr
+            {
+                let addr: std::net::SocketAddr = tokio_console_addr.parse().unwrap_or_else(|e| {
                     panic!("Invalid binding address '{tokio_console_addr}' for tokio-console: {e}");
                 });
-                    println!("tokio-console listening on {{addr}}");
+                println!("tokio-console listening on {{addr}}");
 
-                    Some(
-                        console_subscriber::ConsoleLayer::builder()
-                            .server_addr(addr)
-                            .spawn(),
-                    )
-                } else {
-                    None
-                };
+                Some(
+                    console_subscriber::ConsoleLayer::builder()
+                        .server_addr(addr)
+                        .spawn(),
+                )
+            } else {
+                None
+            };
 
             Registry::default()
                 .with(dyn_filter)

@@ -15,7 +15,7 @@
 mod router;
 
 pub use router::{
-    routes, BindChannelRequest, CreateSessionRequest, ForkSessionRequest, GetMessagesQuery,
+    BindChannelRequest, CreateSessionRequest, ForkSessionRequest, GetMessagesQuery,
     ListSessionsQuery, SendMessageRequest, SendMessageResponse, SetFavoritesRequest,
-    UpdateSessionRequest,
+    UpdateSessionRequest, routes,
 };

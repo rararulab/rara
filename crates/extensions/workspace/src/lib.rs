@@ -33,9 +33,7 @@ pub struct WorkspaceManager {
 }
 
 impl WorkspaceManager {
-    pub fn new(base_dir: PathBuf) -> Self {
-        Self { base_dir }
-    }
+    pub fn new(base_dir: PathBuf) -> Self { Self { base_dir } }
 
     /// Sanitize a repo URL into a directory name.
     /// e.g. `"https://github.com/crrow/job"` → `"github.com-crrow-job"`
@@ -81,11 +79,7 @@ impl WorkspaceManager {
     /// Create a worktree branch for a task.
     ///
     /// Returns the path to the new worktree directory.
-    pub async fn create_worktree(
-        &self,
-        repo_path: &Path,
-        branch: &str,
-    ) -> Result<PathBuf> {
+    pub async fn create_worktree(&self, repo_path: &Path, branch: &str) -> Result<PathBuf> {
         let worktree_path = repo_path.join(".worktrees").join(branch);
         let out = Command::new("git")
             .args(["worktree", "add"])
@@ -104,11 +98,7 @@ impl WorkspaceManager {
     }
 
     /// Cleanup a worktree after task completion.
-    pub async fn cleanup_worktree(
-        &self,
-        repo_path: &Path,
-        branch: &str,
-    ) -> Result<()> {
+    pub async fn cleanup_worktree(&self, repo_path: &Path, branch: &str) -> Result<()> {
         let worktree_path = repo_path.join(".worktrees").join(branch);
         let _ = Command::new("git")
             .args(["worktree", "remove", "--force"])

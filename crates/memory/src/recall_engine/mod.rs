@@ -37,6 +37,6 @@ pub mod types;
 pub use defaults::default_rules;
 pub use engine::RecallStrategyEngine;
 pub use types::{
-    EventKind, InjectionPayload, InjectTarget, MatchedAction, RecallAction, RecallContext,
+    EventKind, InjectTarget, InjectionPayload, MatchedAction, RecallAction, RecallContext,
     RecallRule, RecallRuleUpdate, Trigger,
 };

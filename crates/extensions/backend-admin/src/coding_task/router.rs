@@ -14,14 +14,17 @@
 
 //! REST API routes for coding task management.
 
-use axum::extract::{Path, State};
-use axum::routing::{get, post};
-use axum::Json;
+use axum::{
+    Json,
+    extract::{Path, State},
+    routing::{get, post},
+};
+use rara_coding_task::{
+    error::CodingTaskError,
+    service::CodingTaskService,
+    types::{CodingTaskDetail, CodingTaskSummary, CreateCodingTaskRequest},
+};
 use uuid::Uuid;
-
-use rara_coding_task::error::CodingTaskError;
-use rara_coding_task::service::CodingTaskService;
-use rara_coding_task::types::{CodingTaskDetail, CodingTaskSummary, CreateCodingTaskRequest};
 
 /// Build the coding-task routes. Returns a plain `axum::Router` (no OpenAPI).
 pub fn routes(service: CodingTaskService) -> axum::Router {

@@ -1,9 +1,11 @@
 //! Sub-agent tool — the LLM-callable tool that dispatches sub-agents.
 //!
-//! This module defines [`SubagentTool`], an implementation of [`tool_core::AgentTool`]
-//! that the parent agent can invoke to spawn specialized child agents. It acts as
-//! a thin adapter between the LLM's JSON tool-calling interface and the
-//! [`SubagentExecutor`](super::executor::SubagentExecutor) which does the real work.
+//! This module defines [`SubagentTool`], an implementation of
+//! [`tool_core::AgentTool`] that the parent agent can invoke to spawn
+//! specialized child agents. It acts as a thin adapter between the LLM's JSON
+//! tool-calling interface and the
+//! [`SubagentExecutor`](super::executor::SubagentExecutor) which does the real
+//! work.
 //!
 //! # JSON Parameter Formats
 //!
@@ -35,17 +37,16 @@
 //!
 //! Parallel mode enforces two limits:
 //! - **Task count**: at most [`MAX_PARALLEL_TASKS`] (8) tasks per invocation.
-//! - **Concurrency**: at most [`DEFAULT_CONCURRENCY`] (4) tasks run simultaneously,
-//!   even if the caller requests more via `max_concurrency`.
+//! - **Concurrency**: at most [`DEFAULT_CONCURRENCY`] (4) tasks run
+//!   simultaneously, even if the caller requests more via `max_concurrency`.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use crate::{model::LlmProviderLoaderRef, tool_registry::ToolRegistry};
-
 use super::{definition::AgentDefinitionRegistry, executor::SubagentExecutor};
+use crate::{model::LlmProviderLoaderRef, tool_registry::ToolRegistry};
 
 /// Hard upper limit on the number of parallel sub-agent tasks in a single
 /// invocation. Prevents the LLM from spawning an unbounded number of
@@ -67,9 +68,9 @@ const DEFAULT_CONCURRENCY: usize = 4;
 ///
 /// - `agent` — Name of the agent definition to use (must exist in the
 ///   [`AgentDefinitionRegistry`]).
-/// - `task` — Natural-language task description. In chain mode, may contain
-///   the `{previous}` placeholder which is replaced with the prior step's
-///   output before execution.
+/// - `task` — Natural-language task description. In chain mode, may contain the
+///   `{previous}` placeholder which is replaced with the prior step's output
+///   before execution.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SubagentStep {
     /// Agent definition name (e.g. "scout", "planner", "worker").
@@ -80,26 +81,27 @@ pub struct SubagentStep {
 
 /// Deserialized parameters for the `"subagent"` tool call.
 ///
-/// Supports three execution modes as an untagged enum. **Variant order matters**:
-/// serde's `#[serde(untagged)]` tries variants top-to-bottom, so `Chain` and
-/// `Parallel` (which have distinctive top-level keys) must come before `Single`
-/// (which only has `agent` + `task` — fields that also appear inside chain/parallel
-/// step objects). If `Single` were first, JSON like `{"chain": [...]}` could
-/// accidentally match `Single` with extra ignored fields.
+/// Supports three execution modes as an untagged enum. **Variant order
+/// matters**: serde's `#[serde(untagged)]` tries variants top-to-bottom, so
+/// `Chain` and `Parallel` (which have distinctive top-level keys) must come
+/// before `Single` (which only has `agent` + `task` — fields that also appear
+/// inside chain/parallel step objects). If `Single` were first, JSON like
+/// `{"chain": [...]}` could accidentally match `Single` with extra ignored
+/// fields.
 ///
 /// # Variants
 ///
-/// - [`Chain`](SubagentParams::Chain) — Sequential execution with output piping.
-/// - [`Parallel`](SubagentParams::Parallel) — Concurrent execution with semaphore.
+/// - [`Chain`](SubagentParams::Chain) — Sequential execution with output
+///   piping.
+/// - [`Parallel`](SubagentParams::Parallel) — Concurrent execution with
+///   semaphore.
 /// - [`Single`](SubagentParams::Single) — Run one agent with one task.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum SubagentParams {
     /// Sequential chain: each step can reference `{previous}` to receive the
     /// prior step's output. Stops on first failure (fail-fast).
-    Chain {
-        chain: Vec<SubagentStep>,
-    },
+    Chain { chain: Vec<SubagentStep> },
     /// Concurrent execution: all tasks run independently with a semaphore-based
     /// concurrency limit. Does NOT stop on individual failures.
     Parallel {
@@ -109,10 +111,7 @@ pub enum SubagentParams {
         max_concurrency: Option<usize>,
     },
     /// Run a single sub-agent with one task. Simplest mode.
-    Single {
-        agent: String,
-        task:  String,
-    },
+    Single { agent: String, task: String },
 }
 
 /// The `"subagent"` tool — registered in the parent agent's [`ToolRegistry`]
@@ -136,12 +135,15 @@ impl SubagentTool {
     ///
     /// # Arguments
     ///
-    /// - `llm_provider` — Shared LLM provider loader for creating sub-agent runners.
-    /// - `definitions` — Registry of agent definitions (loaded from markdown files).
-    /// - `parent_tools` — Snapshot of the parent's tool registry. **Must be captured
-    ///   before this tool is registered** to prevent recursive sub-agent spawning.
-    /// - `default_model` — Fallback model name (e.g. `"openai/gpt-4o"`) used when
-    ///   an agent definition's `model` field is `None`.
+    /// - `llm_provider` — Shared LLM provider loader for creating sub-agent
+    ///   runners.
+    /// - `definitions` — Registry of agent definitions (loaded from markdown
+    ///   files).
+    /// - `parent_tools` — Snapshot of the parent's tool registry. **Must be
+    ///   captured before this tool is registered** to prevent recursive
+    ///   sub-agent spawning.
+    /// - `default_model` — Fallback model name (e.g. `"openai/gpt-4o"`) used
+    ///   when an agent definition's `model` field is `None`.
     pub fn new(
         llm_provider: LlmProviderLoaderRef,
         definitions: Arc<AgentDefinitionRegistry>,
@@ -149,34 +151,27 @@ impl SubagentTool {
         default_model: impl Into<String>,
     ) -> Self {
         Self {
-            executor: SubagentExecutor::new(
-                llm_provider,
-                definitions,
-                parent_tools,
-                default_model,
-            ),
+            executor: SubagentExecutor::new(llm_provider, definitions, parent_tools, default_model),
         }
     }
 }
 
 /// Implementation of the [`tool_core::AgentTool`] trait, making `SubagentTool`
-/// callable by the parent agent's LLM through the standard tool-calling protocol.
+/// callable by the parent agent's LLM through the standard tool-calling
+/// protocol.
 #[async_trait]
 impl tool_core::AgentTool for SubagentTool {
     /// Tool name used by the LLM to invoke this tool in a tool_call.
-    fn name(&self) -> &str {
-        "subagent"
-    }
+    fn name(&self) -> &str { "subagent" }
 
     /// Human-readable description shown to the LLM, explaining the three
-    /// available execution modes (single, chain, parallel) and their JSON formats.
+    /// available execution modes (single, chain, parallel) and their JSON
+    /// formats.
     fn description(&self) -> &str {
-        "Run sub-agents to handle complex tasks. Supports three modes:\n\
-         1. Single: {\"agent\": \"<name>\", \"task\": \"<description>\"}\n\
-         2. Chain: {\"chain\": [{\"agent\": \"<name>\", \"task\": \"...\"}]} \
-         — sequential, use {previous} to reference prior output\n\
-         3. Parallel: {\"parallel\": [{\"agent\": \"<name>\", \"task\": \"...\"}]} \
-         — concurrent execution"
+        "Run sub-agents to handle complex tasks. Supports three modes:\n1. Single: {\"agent\": \
+         \"<name>\", \"task\": \"<description>\"}\n2. Chain: {\"chain\": [{\"agent\": \"<name>\", \
+         \"task\": \"...\"}]} — sequential, use {previous} to reference prior output\n3. Parallel: \
+         {\"parallel\": [{\"agent\": \"<name>\", \"task\": \"...\"}]} — concurrent execution"
     }
 
     /// Generate the JSON Schema for this tool's parameters.

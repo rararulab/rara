@@ -24,11 +24,10 @@ mod router;
 pub mod service;
 pub mod types;
 
-pub use router::{bot_routes, discovery_routes};
-pub use service::JobService;
-
 use std::sync::Arc;
 
+pub use router::{bot_routes, discovery_routes};
+pub use service::JobService;
 use sqlx::PgPool;
 
 /// Wire the unified [`JobService`] with all dependencies.
@@ -37,8 +36,7 @@ pub fn wire_job_service(
     ai_service: rara_agents::builtin::tasks::TaskAgentService,
 ) -> Result<service::JobService, error::SourceError> {
     let driver = jobspy::JobSpyDriver::new()?;
-    let japandev_driver =
-        japandev::JapanDevDriver::new(japandev::JapanDevConfig::default());
+    let japandev_driver = japandev::JapanDevDriver::new(japandev::JapanDevConfig::default());
     let job_repo: Arc<dyn repository::JobRepository> =
         Arc::new(pg_repository::PgJobRepository::new(pool));
     Ok(service::JobService::new(

@@ -32,7 +32,8 @@ pub struct Mem0Client {
 }
 
 impl Mem0Client {
-    /// Create a new mem0 client that talks to the Python execution worker gRPC endpoint.
+    /// Create a new mem0 client that talks to the Python execution worker gRPC
+    /// endpoint.
     pub fn new(worker_endpoint: String) -> Self {
         Self {
             worker: ExecutionWorkerClient::new(worker_endpoint),
@@ -66,7 +67,10 @@ impl Mem0Client {
         self.invoke("mem0.update", &request).await
     }
 
-    pub async fn history(&self, request: Mem0HistoryRequest) -> MemoryResult<Vec<Mem0HistoryEntry>> {
+    pub async fn history(
+        &self,
+        request: Mem0HistoryRequest,
+    ) -> MemoryResult<Vec<Mem0HistoryEntry>> {
         let wrapped: ExecutorValue<Vec<Mem0HistoryEntry>> =
             self.invoke("mem0.history", &request).await?;
         Ok(wrapped.value)
@@ -122,14 +126,14 @@ impl Mem0Client {
     ) -> MemoryResult<Vec<Mem0Memory>> {
         let response = self
             .search_mem0(Mem0SearchRequest {
-                query: query.to_owned(),
-                user_id: Some(user_id.to_owned()),
-                run_id: None,
-                agent_id: None,
-                limit: Some(top_k),
-                filters: None,
+                query:     query.to_owned(),
+                user_id:   Some(user_id.to_owned()),
+                run_id:    None,
+                agent_id:  None,
+                limit:     Some(top_k),
+                filters:   None,
                 threshold: None,
-                rerank: None,
+                rerank:    None,
             })
             .await?;
         Ok(response.results)
@@ -188,60 +192,60 @@ pub enum Mem0JsonValue {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Mem0Message {
-    pub role: String,
+    pub role:    String,
     pub content: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Mem0AddRequest {
-    pub messages: Vec<Mem0Message>,
+    pub messages:    Vec<Mem0Message>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<String>,
+    pub user_id:     Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
+    pub agent_id:    Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub run_id: Option<String>,
+    pub run_id:      Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<Mem0JsonObject>,
+    pub metadata:    Option<Mem0JsonObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub infer: Option<bool>,
+    pub infer:       Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub prompt: Option<String>,
+    pub prompt:      Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Mem0GetAllRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<String>,
+    pub user_id:  Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub run_id: Option<String>,
+    pub run_id:   Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub filters: Option<Mem0JsonObject>,
+    pub filters:  Option<Mem0JsonObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub limit: Option<usize>,
+    pub limit:    Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Mem0SearchRequest {
-    pub query: String,
+    pub query:     String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<String>,
+    pub user_id:   Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub run_id: Option<String>,
+    pub run_id:    Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
+    pub agent_id:  Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub limit: Option<usize>,
+    pub limit:     Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub filters: Option<Mem0JsonObject>,
+    pub filters:   Option<Mem0JsonObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub threshold: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub rerank: Option<bool>,
+    pub rerank:    Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -252,7 +256,7 @@ pub struct Mem0GetRequest {
 #[derive(Debug, Clone, Serialize)]
 pub struct Mem0UpdateRequest {
     pub memory_id: String,
-    pub data: String,
+    pub data:      String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -268,9 +272,9 @@ pub struct Mem0DeleteRequest {
 #[derive(Debug, Clone, Serialize)]
 pub struct Mem0DeleteAllRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<String>,
+    pub user_id:  Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub run_id: Option<String>,
+    pub run_id:   Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
 }
@@ -278,7 +282,7 @@ pub struct Mem0DeleteAllRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Mem0AddResponse {
-    pub results: Vec<Mem0Event>,
+    pub results:   Vec<Mem0Event>,
     #[serde(default)]
     pub relations: Option<Mem0JsonValue>,
 }
@@ -286,7 +290,7 @@ pub struct Mem0AddResponse {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Mem0ListResponse {
-    pub results: Vec<Mem0Memory>,
+    pub results:   Vec<Mem0Memory>,
     #[serde(default)]
     pub relations: Option<Mem0JsonValue>,
 }
@@ -322,13 +326,13 @@ impl Mem0GetWireResponse {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Mem0Event {
-    pub id: String,
-    pub event: String,
-    pub memory: String,
+    pub id:              String,
+    pub event:           String,
+    pub memory:          String,
     #[serde(default)]
-    pub actor_id: Option<String>,
+    pub actor_id:        Option<String>,
     #[serde(default)]
-    pub role: Option<String>,
+    pub role:            Option<String>,
     #[serde(default)]
     pub previous_memory: Option<String>,
 }
@@ -336,24 +340,24 @@ pub struct Mem0Event {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Mem0Memory {
-    pub id: String,
-    pub memory: String,
+    pub id:         String,
+    pub memory:     String,
     #[serde(default)]
-    pub hash: Option<String>,
+    pub hash:       Option<String>,
     #[serde(default)]
-    pub user_id: Option<String>,
+    pub user_id:    Option<String>,
     #[serde(default)]
-    pub agent_id: Option<String>,
+    pub agent_id:   Option<String>,
     #[serde(default)]
-    pub run_id: Option<String>,
+    pub run_id:     Option<String>,
     #[serde(default)]
-    pub actor_id: Option<String>,
+    pub actor_id:   Option<String>,
     #[serde(default)]
-    pub role: Option<String>,
+    pub role:       Option<String>,
     #[serde(default)]
-    pub score: Option<f64>,
+    pub score:      Option<f64>,
     #[serde(default)]
-    pub metadata: Option<Mem0JsonObject>,
+    pub metadata:   Option<Mem0JsonObject>,
     #[serde(default)]
     pub created_at: Option<String>,
     #[serde(default)]
@@ -363,18 +367,18 @@ pub struct Mem0Memory {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Mem0HistoryEntry {
-    pub id: String,
-    pub memory_id: String,
+    pub id:         String,
+    pub memory_id:  String,
     pub old_memory: Option<String>,
     pub new_memory: Option<String>,
-    pub event: String,
+    pub event:      String,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
     pub is_deleted: bool,
     #[serde(default)]
-    pub actor_id: Option<String>,
+    pub actor_id:   Option<String>,
     #[serde(default)]
-    pub role: Option<String>,
+    pub role:       Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -382,25 +386,25 @@ struct EmptyPayload {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use testcontainers::{
+        GenericImage, ImageExt,
+        core::{IntoContainerPort, WaitFor, wait::HttpWaitStrategy},
+        runners::AsyncRunner,
+    };
 
-    use testcontainers::core::wait::HttpWaitStrategy;
-    use testcontainers::core::WaitFor;
-    use testcontainers::core::IntoContainerPort;
-    use testcontainers::runners::AsyncRunner;
-    use testcontainers::{GenericImage, ImageExt};
+    use super::*;
 
     #[test]
     fn search_request_serializes_limit_field() {
         let req = Mem0SearchRequest {
-            query: "rust".into(),
-            user_id: Some("u1".into()),
-            run_id: None,
-            agent_id: None,
-            limit: Some(5),
-            filters: None,
+            query:     "rust".into(),
+            user_id:   Some("u1".into()),
+            run_id:    None,
+            agent_id:  None,
+            limit:     Some(5),
+            filters:   None,
             threshold: None,
-            rerank: None,
+            rerank:    None,
         };
 
         let json = serde_json::to_value(req).expect("serialize");
@@ -448,7 +452,10 @@ mod tests {
                     .with_expected_status_code(200_u16),
             ))
             .with_exposed_port(8000.tcp());
-        let chroma_container: testcontainers::ContainerAsync<GenericImage> = chroma.start().await.expect("failed to start chroma container");
+        let chroma_container: testcontainers::ContainerAsync<GenericImage> = chroma
+            .start()
+            .await
+            .expect("failed to start chroma container");
         let chroma_port = chroma_container
             .get_host_port_ipv4(8000)
             .await
@@ -458,14 +465,20 @@ mod tests {
             .with_wait_for(WaitFor::http(
                 HttpWaitStrategy::new("/readyz")
                     .with_port(8080.tcp())
-                        .with_expected_status_code(200_u16),
+                    .with_expected_status_code(200_u16),
             ))
             .with_exposed_port(8080.tcp())
             .with_exposed_port(50051.tcp())
             .with_env_var("PYTHONUNBUFFERED", "1");
-        let container = image.start().await.expect("failed to start rara-py-worker container");
+        let container = image
+            .start()
+            .await
+            .expect("failed to start rara-py-worker container");
 
-        let host = container.get_host().await.expect("failed to get container host");
+        let host = container
+            .get_host()
+            .await
+            .expect("failed to get container host");
         let port = container
             .get_host_port_ipv4(50051)
             .await
@@ -483,29 +496,32 @@ mod tests {
 
         let add_res = client
             .add(Mem0AddRequest {
-                messages: vec![Mem0Message {
-                    role: "user".to_owned(),
+                messages:    vec![Mem0Message {
+                    role:    "user".to_owned(),
                     content: "I like Rust and I prefer terminal-based tools.".to_owned(),
                 }],
-                user_id: Some(user_id.clone()),
-                agent_id: None,
-                run_id: None,
-                metadata: None,
-                infer: Some(false),
+                user_id:     Some(user_id.clone()),
+                agent_id:    None,
+                run_id:      None,
+                metadata:    None,
+                infer:       Some(false),
                 memory_type: None,
-                prompt: None,
+                prompt:      None,
             })
             .await
             .expect("mem0.add should succeed");
-        assert!(!add_res.results.is_empty(), "expected at least one added memory");
+        assert!(
+            !add_res.results.is_empty(),
+            "expected at least one added memory"
+        );
 
         let all = client
             .get_all(Mem0GetAllRequest {
-                user_id: Some(user_id.clone()),
-                run_id: None,
+                user_id:  Some(user_id.clone()),
+                run_id:   None,
                 agent_id: None,
-                filters: None,
-                limit: Some(10),
+                filters:  None,
+                limit:    Some(10),
             })
             .await
             .expect("mem0.get_all should succeed");
@@ -519,8 +535,8 @@ mod tests {
 
         client
             .delete_all(Mem0DeleteAllRequest {
-                user_id: Some(user_id),
-                run_id: None,
+                user_id:  Some(user_id),
+                run_id:   None,
                 agent_id: None,
             })
             .await
@@ -562,9 +578,9 @@ mod tests {
                 serde_json::Value::Array(values) => {
                     Mem0JsonValue::Array(values.into_iter().map(convert).collect())
                 }
-                serde_json::Value::Object(map) => Mem0JsonValue::Object(
-                    map.into_iter().map(|(k, v)| (k, convert(v))).collect(),
-                ),
+                serde_json::Value::Object(map) => {
+                    Mem0JsonValue::Object(map.into_iter().map(|(k, v)| (k, convert(v))).collect())
+                }
             }
         }
 

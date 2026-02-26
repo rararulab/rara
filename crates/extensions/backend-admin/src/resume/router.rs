@@ -1,15 +1,10 @@
-use axum::{
-    extract::State,
-    http::StatusCode,
-    routing::post,
-    Json,
-};
+use axum::{Json, extract::State, http::StatusCode, routing::post};
 use utoipa_axum::router::OpenApiRouter;
 
-use super::repository::ResumeRepository;
-use super::service::ResumeService;
-use super::types::{
-    ResumeError, ResumeProject, SetupResumeProjectRequest, UpdateResumeProjectRequest,
+use super::{
+    repository::ResumeRepository,
+    service::ResumeService,
+    types::{ResumeError, ResumeProject, SetupResumeProjectRequest, UpdateResumeProjectRequest},
 };
 
 struct RouteState<R: ResumeRepository> {

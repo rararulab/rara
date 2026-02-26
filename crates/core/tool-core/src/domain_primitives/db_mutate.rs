@@ -92,9 +92,9 @@ impl AgentTool for DbMutateTool {
     fn name(&self) -> &str { "db_mutate" }
 
     fn description(&self) -> &str {
-        "Create or update records in database tables. Allowed tables: application, \
-         resume, interview_plan. Actions: \"create\" (INSERT) or \"update\" (UPDATE by id). DELETE \
-         is not supported. Returns the created/updated record id."
+        "Create or update records in database tables. Allowed tables: application, resume, \
+         interview_plan. Actions: \"create\" (INSERT) or \"update\" (UPDATE by id). DELETE is not \
+         supported. Returns the created/updated record id."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {

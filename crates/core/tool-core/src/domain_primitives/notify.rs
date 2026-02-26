@@ -29,11 +29,10 @@ use rara_domain_shared::{
     },
     settings::model::Settings,
 };
-use tokio::sync::watch;
 use serde_json::json;
+use tokio::sync::watch;
 
-use crate::contact_lookup::ContactLookup;
-use crate::AgentTool;
+use crate::{AgentTool, contact_lookup::ContactLookup};
 
 /// Layer 1 primitive: send a Telegram message.
 ///
@@ -71,8 +70,8 @@ impl AgentTool for NotifyTool {
 
     fn description(&self) -> &str {
         "Send a message to a Telegram chat. Use this to proactively notify or communicate with \
-         users via Telegram. Supports text, bold subject headers, and photo attachments. Specify \
-         a recipient by Telegram username (e.g. \"ryan\") to send to a specific person. Omit \
+         users via Telegram. Supports text, bold subject headers, and photo attachments. Specify a \
+         recipient by Telegram username (e.g. \"ryan\") to send to a specific person. Omit \
          recipient to send to the default chat."
     }
 
@@ -117,7 +116,10 @@ impl AgentTool for NotifyTool {
             .and_then(|v| v.as_str())
             .map(|s| s.trim_start_matches('@').to_owned());
 
-        let subject = params.get("subject").and_then(|v| v.as_str()).map(String::from);
+        let subject = params
+            .get("subject")
+            .and_then(|v| v.as_str())
+            .map(String::from);
 
         let photo_path = params
             .get("photo_path")

@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod router;
 pub mod error;
 pub mod pg_repository;
 pub mod prep_generator;
 pub mod repository;
+mod router;
 pub mod service;
 pub mod types;
 

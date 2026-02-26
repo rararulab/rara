@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod router;
 pub mod error;
 pub mod pg_repository;
 pub mod repository;
+mod router;
 pub mod service;
 pub mod types;
 
-pub use router::{routes, DerivedRates, LatestQuery, SnapshotListQuery};
+pub use router::{DerivedRates, LatestQuery, SnapshotListQuery, routes};
 
 /// Wire up the analytics service with a PostgreSQL repository.
 #[must_use]

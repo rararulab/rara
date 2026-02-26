@@ -20,8 +20,7 @@ use axum::{
     routing::{get, post},
 };
 use rara_agents::dispatcher::{
-    AgentDispatcher, AgentTaskKind, DispatcherStatus, TaskRecord, TaskStatus,
-    log_store::LogFilter,
+    AgentDispatcher, AgentTaskKind, DispatcherStatus, TaskRecord, TaskStatus, log_store::LogFilter,
 };
 use serde::{Deserialize, Serialize};
 
@@ -33,18 +32,16 @@ pub fn dispatcher_router(dispatcher: Arc<AgentDispatcher>) -> axum::Router {
         .with_state(dispatcher)
 }
 
-async fn get_status(
-    State(dispatcher): State<Arc<AgentDispatcher>>,
-) -> Json<DispatcherStatus> {
+async fn get_status(State(dispatcher): State<Arc<AgentDispatcher>>) -> Json<DispatcherStatus> {
     Json(dispatcher.status().await)
 }
 
 #[derive(Deserialize)]
 struct HistoryParams {
-    limit: Option<usize>,
-    kind: Option<String>,
+    limit:  Option<usize>,
+    kind:   Option<String>,
     status: Option<String>,
-    since: Option<String>,
+    since:  Option<String>,
 }
 
 async fn get_history(
@@ -70,9 +67,7 @@ async fn get_history(
         _ => None,
     });
 
-    let since = params
-        .since
-        .and_then(|s| s.parse::<jiff::Timestamp>().ok());
+    let since = params.since.and_then(|s| s.parse::<jiff::Timestamp>().ok());
 
     let filter = LogFilter {
         limit: params.limit.unwrap_or(50),

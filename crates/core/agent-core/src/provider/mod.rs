@@ -28,9 +28,8 @@ use async_openai::types::chat::{
 };
 use async_trait::async_trait;
 
+pub use self::openai::{OPENROUTER_API_BASE, OPENROUTER_API_KEY_ENV, OpenAiProvider};
 use crate::err::Result;
-
-pub use self::openai::{OpenAiProvider, OPENROUTER_API_BASE, OPENROUTER_API_KEY_ENV};
 
 pub type LlmProviderRef = Arc<dyn LlmProvider>;
 

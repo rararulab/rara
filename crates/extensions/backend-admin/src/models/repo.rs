@@ -28,9 +28,7 @@ pub struct SettingsModelRepo {
 }
 
 impl SettingsModelRepo {
-    pub fn new(settings_svc: SettingsSvc) -> Self {
-        Self { settings_svc }
-    }
+    pub fn new(settings_svc: SettingsSvc) -> Self { Self { settings_svc } }
 }
 
 #[async_trait::async_trait]
@@ -49,10 +47,7 @@ impl ModelRepo for SettingsModelRepo {
     async fn set(&self, key: &str, model: &str) -> Result<(), ModelRepoError> {
         let patch = UpdateRequest {
             ai:           Some(AiRuntimeSettingsPatch {
-                models: Some(HashMap::from([(
-                    key.to_owned(),
-                    Some(model.to_owned()),
-                )])),
+                models: Some(HashMap::from([(key.to_owned(), Some(model.to_owned()))])),
                 ..Default::default()
             }),
             telegram:     None,

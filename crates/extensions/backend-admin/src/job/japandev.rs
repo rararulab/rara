@@ -198,10 +198,7 @@ impl JapanDevDriver {
 
 /// Fetch a JapanDev job detail page and extract the description from
 /// the `__NUXT_DATA__` SSR payload.
-async fn fetch_description(
-    client: &reqwest::Client,
-    url: &str,
-) -> Result<Option<String>, String> {
+async fn fetch_description(client: &reqwest::Client, url: &str) -> Result<Option<String>, String> {
     let resp = client
         .get(url)
         .header("Accept", "text/html")
@@ -370,9 +367,7 @@ impl From<JapanDevHit> for RawJob {
         // Construct detail URL: /jobs/{company_slug}/{job_slug}
         let company_slug = hit.company.as_ref().and_then(|c| c.slug.as_deref());
         let url = match (company_slug, hit.slug.as_deref()) {
-            (Some(cs), Some(js)) => {
-                Some(format!("{JAPANDEV_SITE_URL}/jobs/{cs}/{js}"))
-            }
+            (Some(cs), Some(js)) => Some(format!("{JAPANDEV_SITE_URL}/jobs/{cs}/{js}")),
             (_, Some(js)) => Some(format!("{JAPANDEV_SITE_URL}/jobs/{js}")),
             _ => None,
         };

@@ -26,8 +26,7 @@
 //! 1. Bundled: `<project_root>/agents/` — shipped with the binary
 //! 2. User: `<data_dir>/agents/` — user-defined, can override bundled by name
 
-use std::collections::HashMap;
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 
 use serde::Deserialize;
 use tracing::warn;
@@ -81,7 +80,8 @@ pub struct AgentDefinition {
 }
 
 impl AgentDefinition {
-    /// Parse a markdown string with YAML frontmatter into an [`AgentDefinition`].
+    /// Parse a markdown string with YAML frontmatter into an
+    /// [`AgentDefinition`].
     ///
     /// The content must start with `---`, followed by valid YAML, then a
     /// closing `---` line. Everything after the closing delimiter becomes
@@ -126,24 +126,16 @@ pub struct AgentDefinitionRegistry {
 }
 
 impl AgentDefinitionRegistry {
-    pub fn new() -> Self {
-        Self::default()
-    }
+    pub fn new() -> Self { Self::default() }
 
     /// Register (or replace) an agent definition.
-    pub fn register(&mut self, def: AgentDefinition) {
-        self.defs.insert(def.name.clone(), def);
-    }
+    pub fn register(&mut self, def: AgentDefinition) { self.defs.insert(def.name.clone(), def); }
 
     /// Look up an agent definition by name.
-    pub fn get(&self, name: &str) -> Option<&AgentDefinition> {
-        self.defs.get(name)
-    }
+    pub fn get(&self, name: &str) -> Option<&AgentDefinition> { self.defs.get(name) }
 
     /// Return all registered definitions (unordered).
-    pub fn list(&self) -> Vec<&AgentDefinition> {
-        self.defs.values().collect()
-    }
+    pub fn list(&self) -> Vec<&AgentDefinition> { self.defs.values().collect() }
 
     /// Scan a directory for `.md` files and parse each as an agent definition.
     ///

@@ -1,25 +1,25 @@
 use axum::{Json, extract::State, http::StatusCode};
 use rara_domain_shared::settings::model::{Settings, TelegramRuntimeSettingsPatch, UpdateRequest};
+use utoipa_axum::router::OpenApiRouter;
 
 use crate::settings::SettingsSvc;
-use utoipa_axum::router::OpenApiRouter;
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct TgAdminSettingsView {
-    pub configured: bool,
-    pub chat_id: Option<i64>,
-    pub allowed_group_chat_id: Option<i64>,
+    pub configured:              bool,
+    pub chat_id:                 Option<i64>,
+    pub allowed_group_chat_id:   Option<i64>,
     pub notification_channel_id: Option<i64>,
-    pub token_hint: Option<String>,
+    pub token_hint:              Option<String>,
     #[schema(value_type = Option<String>)]
-    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub updated_at:              Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, utoipa::ToSchema)]
 pub struct TgAdminUpdateRequest {
-    pub bot_token: Option<String>,
-    pub chat_id: Option<i64>,
-    pub allowed_group_chat_id: Option<i64>,
+    pub bot_token:               Option<String>,
+    pub chat_id:                 Option<i64>,
+    pub allowed_group_chat_id:   Option<i64>,
     /// `None` = leave unchanged, `Some(None)` = clear, `Some(Some(id))` = set.
     pub notification_channel_id: Option<Option<i64>>,
 }
@@ -60,9 +60,9 @@ async fn update_tg_settings(
     let updated = state
         .update(UpdateRequest {
             telegram: Some(TelegramRuntimeSettingsPatch {
-                bot_token: req.bot_token,
-                chat_id: req.chat_id,
-                allowed_group_chat_id: req.allowed_group_chat_id,
+                bot_token:               req.bot_token,
+                chat_id:                 req.chat_id,
+                allowed_group_chat_id:   req.allowed_group_chat_id,
                 notification_channel_id: req.notification_channel_id,
             }),
             ..UpdateRequest::default()
@@ -82,12 +82,12 @@ impl TgAdminSettingsView {
     fn from_settings(settings: &Settings) -> Self {
         let telegram = &settings.telegram;
         Self {
-            configured: telegram.bot_token.is_some() && telegram.chat_id.is_some(),
-            chat_id: telegram.chat_id,
-            allowed_group_chat_id: telegram.allowed_group_chat_id,
+            configured:              telegram.bot_token.is_some() && telegram.chat_id.is_some(),
+            chat_id:                 telegram.chat_id,
+            allowed_group_chat_id:   telegram.allowed_group_chat_id,
             notification_channel_id: telegram.notification_channel_id,
-            token_hint: secret_hint(telegram.bot_token.as_deref()),
-            updated_at: settings.updated_at,
+            token_hint:              secret_hint(telegram.bot_token.as_deref()),
+            updated_at:              settings.updated_at,
         }
     }
 }

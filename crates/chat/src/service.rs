@@ -21,11 +21,8 @@
 
 use std::sync::Arc;
 
+use agent_core::{runner::UserContent, tool_registry::ToolRegistry};
 use chrono::Utc;
-use agent_core::{
-    runner::UserContent,
-    tool_registry::ToolRegistry,
-};
 use rara_agents::builtin::chat::ChatAgent;
 use rara_sessions::{
     repository::SessionRepository,
@@ -38,11 +35,10 @@ use tokio::sync::mpsc;
 use tracing::{info, instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::stream::ChatStreamEvent;
-
 use crate::{
     error::ChatError,
     model_catalog::{ChatModel, ModelCatalog},
+    stream::ChatStreamEvent,
 };
 
 /// Inactivity threshold after which we consider a session "ended" and
@@ -65,14 +61,14 @@ const SESSION_INACTIVITY_THRESHOLD: chrono::Duration = chrono::Duration::minutes
 #[derive(Clone)]
 pub struct ChatService {
     /// Persistence layer for sessions, messages, and channel bindings.
-    session_repo:  Arc<dyn SessionRepository>,
+    session_repo:     Arc<dyn SessionRepository>,
     /// Cached catalog of models fetched from OpenRouter.
-    model_catalog: ModelCatalog,
+    model_catalog:    ModelCatalog,
     /// Settings updater for persisting favorite models.
     settings_updater: Arc<dyn rara_domain_shared::settings::SettingsUpdater>,
     /// Built-in chat agent — encapsulates prompt assembly, tool construction,
     /// context compaction, and memory reflection.
-    chat_agent:    ChatAgent,
+    chat_agent:       ChatAgent,
 }
 
 impl ChatService {
@@ -470,12 +466,20 @@ impl ChatService {
             context_length,
             base_system_prompt,
             user_content,
-        } = self.prepare_session_data(key, &user_text, &image_urls).await?;
+        } = self
+            .prepare_session_data(key, &user_text, &image_urls)
+            .await?;
 
         // Delegate agent execution to ChatAgent.
         let (output, compaction) = self
             .chat_agent
-            .run(&base_system_prompt, user_content, &history, &model, context_length)
+            .run(
+                &base_system_prompt,
+                user_content,
+                &history,
+                &model,
+                context_length,
+            )
             .await
             .map_err(|e| ChatError::AgentError {
                 message: e.to_string(),
@@ -528,7 +532,9 @@ impl ChatService {
             context_length,
             base_system_prompt,
             user_content,
-        } = self.prepare_session_data(key, &user_text, &image_urls).await?;
+        } = self
+            .prepare_session_data(key, &user_text, &image_urls)
+            .await?;
 
         // Delegate streaming setup to ChatAgent.
         let stream_setup = self
@@ -551,7 +557,9 @@ impl ChatService {
         }
 
         // Start the streaming agent loop.
-        let mut runner_rx = stream_setup.runner.run_streaming(stream_setup.effective_tools);
+        let mut runner_rx = stream_setup
+            .runner
+            .run_streaming(stream_setup.effective_tools);
 
         // Channel for ChatStreamEvents sent to the SSE handler.
         let (tx, rx) = mpsc::channel::<ChatStreamEvent>(128);
@@ -742,7 +750,6 @@ impl ChatService {
 
         Ok(())
     }
-
 }
 
 impl std::fmt::Debug for ChatService {
@@ -760,12 +767,12 @@ impl std::fmt::Debug for ChatService {
 /// Bundle returned by [`ChatService::prepare_session_data`] containing
 /// session-level data needed by the [`ChatAgent`].
 struct SessionData {
-    session:           SessionEntry,
-    history:           Vec<ChatMessage>,
-    model:             String,
-    context_length:    usize,
+    session:            SessionEntry,
+    history:            Vec<ChatMessage>,
+    model:              String,
+    context_length:     usize,
     base_system_prompt: String,
-    user_content:      UserContent,
+    user_content:       UserContent,
 }
 
 /// Extract (user_text, assistant_text) pairs from a message history.
@@ -785,10 +792,7 @@ fn extract_exchange_pairs(messages: &[ChatMessage]) -> Vec<(String, String)> {
                 j += 1;
             }
             if j < messages.len() && messages[j].role == MessageRole::Assistant {
-                pairs.push((
-                    messages[i].content.as_text(),
-                    messages[j].content.as_text(),
-                ));
+                pairs.push((messages[i].content.as_text(), messages[j].content.as_text()));
                 i = j + 1;
                 continue;
             }
@@ -824,5 +828,4 @@ mod tests {
         assert!(result.len() <= 50);
         assert!(result.ends_with("..."));
     }
-
 }

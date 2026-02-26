@@ -334,10 +334,12 @@ mod tests {
     use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::postgres::Postgres;
 
-    use super::*;
-    use super::super::{
-        pg_repository::PgInterviewPlanRepository, prep_generator::MockPrepGenerator,
-        types::InterviewRound,
+    use super::{
+        super::{
+            pg_repository::PgInterviewPlanRepository, prep_generator::MockPrepGenerator,
+            types::InterviewRound,
+        },
+        *,
     };
 
     // -- Helpers ------------------------------------------------------------

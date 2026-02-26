@@ -51,29 +51,32 @@ impl ServerArgs {
             .whatever_context("Failed to load config")?;
 
         // Priority: Langfuse (OTLP + auth) > general OTLP endpoint > no OTLP.
-        let logging_opts = if config.langfuse.public_key.is_some()
-            && config.langfuse.secret_key.is_some()
-        {
-            common_telemetry::logging::build_langfuse_logging_options(
-                Some(&config.langfuse.host),
-                config.langfuse.public_key.as_deref(),
-                config.langfuse.secret_key.as_deref(),
-            )
-        } else if let Some(ref endpoint) = config.telemetry.otlp_endpoint {
-            use common_telemetry::logging::{LoggingOptions, OtlpExportProtocol};
-            let protocol = config.telemetry.otlp_protocol.as_deref().and_then(|p| match p {
-                "grpc" => Some(OtlpExportProtocol::Grpc),
-                _ => Some(OtlpExportProtocol::Http),
-            });
-            LoggingOptions {
-                enable_otlp_tracing:  true,
-                otlp_endpoint:        Some(endpoint.clone()),
-                otlp_export_protocol: protocol,
-                ..Default::default()
-            }
-        } else {
-            common_telemetry::logging::LoggingOptions::default()
-        };
+        let logging_opts =
+            if config.langfuse.public_key.is_some() && config.langfuse.secret_key.is_some() {
+                common_telemetry::logging::build_langfuse_logging_options(
+                    Some(&config.langfuse.host),
+                    config.langfuse.public_key.as_deref(),
+                    config.langfuse.secret_key.as_deref(),
+                )
+            } else if let Some(ref endpoint) = config.telemetry.otlp_endpoint {
+                use common_telemetry::logging::{LoggingOptions, OtlpExportProtocol};
+                let protocol = config
+                    .telemetry
+                    .otlp_protocol
+                    .as_deref()
+                    .and_then(|p| match p {
+                        "grpc" => Some(OtlpExportProtocol::Grpc),
+                        _ => Some(OtlpExportProtocol::Http),
+                    });
+                LoggingOptions {
+                    enable_otlp_tracing: true,
+                    otlp_endpoint: Some(endpoint.clone()),
+                    otlp_export_protocol: protocol,
+                    ..Default::default()
+                }
+            } else {
+                common_telemetry::logging::LoggingOptions::default()
+            };
 
         let _guards = common_telemetry::logging::init_global_logging(
             "rara",

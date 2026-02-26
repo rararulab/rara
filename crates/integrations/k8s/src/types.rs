@@ -20,32 +20,32 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PodHandle {
     /// The generated pod name.
-    pub name: String,
+    pub name:      String,
     /// The namespace the pod was created in.
     pub namespace: String,
     /// The pod's cluster IP (if assigned).
-    pub ip: Option<String>,
+    pub ip:        Option<String>,
     /// The container port (if configured).
-    pub port: Option<u16>,
+    pub port:      Option<u16>,
 }
 
 /// Current status of a pod.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PodStatus {
-    pub name: String,
+    pub name:      String,
     pub namespace: String,
     /// Pod phase (e.g. "Running", "Pending", "Failed").
-    pub phase: String,
+    pub phase:     String,
     /// Whether the pod is considered ready.
-    pub ready: bool,
+    pub ready:     bool,
     /// The pod's cluster IP (if assigned).
-    pub ip: Option<String>,
+    pub ip:        Option<String>,
 }
 
 /// Output from executing a command inside a pod.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecOutput {
-    pub stdout: String,
-    pub stderr: String,
+    pub stdout:    String,
+    pub stderr:    String,
     pub exit_code: Option<i32>,
 }

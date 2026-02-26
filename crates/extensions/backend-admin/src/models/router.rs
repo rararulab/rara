@@ -27,13 +27,13 @@
 
 use std::sync::Arc;
 
+use agent_core::model_repo::ModelRepo;
 use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
     routing::get,
 };
-use agent_core::model_repo::ModelRepo;
 use serde::{Deserialize, Serialize};
 use utoipa_axum::router::OpenApiRouter;
 
@@ -77,10 +77,7 @@ type RepoState = Arc<dyn ModelRepo>;
 /// Build an [`OpenApiRouter`] with model CRUD endpoints.
 pub fn routes(repo: Arc<dyn ModelRepo>) -> OpenApiRouter {
     OpenApiRouter::new()
-        .route(
-            "/api/v1/models",
-            get(list_models),
-        )
+        .route("/api/v1/models", get(list_models))
         .route(
             "/api/v1/models/fallbacks",
             get(get_fallbacks).put(set_fallbacks),
@@ -162,10 +159,7 @@ async fn set_fallbacks(
         (status = 200, description = "Model for key", body = ModelValueView),
     )
 )]
-async fn get_model(
-    State(repo): State<RepoState>,
-    Path(key): Path<String>,
-) -> Json<ModelValueView> {
+async fn get_model(State(repo): State<RepoState>, Path(key): Path<String>) -> Json<ModelValueView> {
     let model = repo.get(&key).await;
     Json(ModelValueView { key, model })
 }

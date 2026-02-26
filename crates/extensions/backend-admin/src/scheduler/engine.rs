@@ -180,10 +180,12 @@ mod tests {
     use jiff::Timestamp;
     use rara_domain_shared::id::SchedulerTaskId;
 
-    use super::*;
-    use super::super::{
-        repository::SchedulerRepository,
-        types::{CreateTaskRequest, TaskRunRecord},
+    use super::{
+        super::{
+            repository::SchedulerRepository,
+            types::{CreateTaskRequest, TaskRunRecord},
+        },
+        *,
     };
 
     // ---- Mock executor implementations ----

@@ -1,10 +1,10 @@
 //! Proactive agent -- reviews recent activity and takes autonomous actions.
 
 use agent_core::runner::UserContent;
-use crate::orchestrator::{context::to_chat_message, AgentOrchestrator, error::OrchestratorError};
 use rara_sessions::types::ChatMessage;
 
 use super::AgentOutput;
+use crate::orchestrator::{AgentOrchestrator, context::to_chat_message, error::OrchestratorError};
 
 /// Default maximum number of agent loop iterations per proactive run.
 const DEFAULT_MAX_ITERATIONS: usize = 15;
@@ -16,9 +16,7 @@ pub struct ProactiveAgent {
 }
 
 impl ProactiveAgent {
-    pub fn new(orchestrator: AgentOrchestrator) -> Self {
-        Self { orchestrator }
-    }
+    pub fn new(orchestrator: AgentOrchestrator) -> Self { Self { orchestrator } }
 
     /// Build the user prompt for a proactive review cycle.
     ///
@@ -26,8 +24,8 @@ impl ProactiveAgent {
     pub fn build_user_prompt(activity_summary: &str) -> String {
         format!(
             "以下是最近24小时的用户活动摘要：\n\n{}\n\n根据你的行为策略，\
-             决定是否需要主动联系用户。\n你可以使用工具查询更多信息、发送通知、或安排后续任务。\
-             \n如果没有值得做的事情，直接回复 DONE。",
+             决定是否需要主动联系用户。\n你可以使用工具查询更多信息、发送通知、或安排后续任务。\\
+             n如果没有值得做的事情，直接回复 DONE。",
             activity_summary
         )
     }
@@ -47,7 +45,9 @@ impl ProactiveAgent {
         let settings = self.orchestrator.settings();
         let model = settings.ai.model_for_key("proactive");
         let provider_hint = settings.ai.provider.clone();
-        let max_iterations = settings.agent.max_iterations
+        let max_iterations = settings
+            .agent
+            .max_iterations
             .map(|n| n as usize)
             .unwrap_or(DEFAULT_MAX_ITERATIONS);
         let tools = self.orchestrator.tools().clone();

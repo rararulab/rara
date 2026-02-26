@@ -29,8 +29,7 @@
 //! explicitly mentioned (e.g. `@botname ...`). Private chats remain fully
 //! interactive.
 
-use std::sync::Arc;
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use teloxide::{
@@ -311,8 +310,8 @@ const EDIT_THROTTLE: std::time::Duration = std::time::Duration::from_millis(1500
 ///
 /// 1. Sends a `ChatAction::Typing` indicator (no placeholder message).
 /// 2. Consumes SSE events from the streaming endpoint.
-/// 3. On `TextDelta`: accumulates text; on the first non-empty content, sends
-///    a real message and records its `message_id`. Subsequent deltas edit the
+/// 3. On `TextDelta`: accumulates text; on the first non-empty content, sends a
+///    real message and records its `message_id`. Subsequent deltas edit the
 ///    message every ~1.5 seconds (throttled).
 /// 4. On `ToolCallStart`: appends a status line like "Using tool: search_web".
 /// 5. On `Done`: final edit with the complete response (Markdown -> HTML).
@@ -368,8 +367,7 @@ async fn stream_and_relay(
                         tool_calls_done,
                         tool_calls_failed,
                     );
-                    message_id =
-                        send_or_edit(state, msg, message_id, &display, None).await;
+                    message_id = send_or_edit(state, msg, message_id, &display, None).await;
                     last_edit = Instant::now();
                 }
             }
@@ -382,14 +380,10 @@ async fn stream_and_relay(
                     tool_calls_failed,
                 );
                 // Always send/edit on tool start (important UX feedback).
-                message_id =
-                    send_or_edit(state, msg, message_id, &display, None).await;
+                message_id = send_or_edit(state, msg, message_id, &display, None).await;
                 last_edit = Instant::now();
             }
-            ChatStreamEvent::ToolCallEnd {
-                success,
-                ..
-            } => {
+            ChatStreamEvent::ToolCallEnd { success, .. } => {
                 tool_calls_done += 1;
                 if !success {
                     tool_calls_failed += 1;
@@ -442,24 +436,10 @@ async fn stream_and_relay(
 
     if chunks.len() == 1 {
         // Single chunk: edit or send the message.
-        send_or_edit(
-            state,
-            msg,
-            message_id,
-            &chunks[0],
-            Some(ParseMode::Html),
-        )
-        .await;
+        send_or_edit(state, msg, message_id, &chunks[0], Some(ParseMode::Html)).await;
     } else {
         // Multiple chunks: edit/send first chunk, send rest as new messages.
-        send_or_edit(
-            state,
-            msg,
-            message_id,
-            &chunks[0],
-            Some(ParseMode::Html),
-        )
-        .await;
+        send_or_edit(state, msg, message_id, &chunks[0], Some(ParseMode::Html)).await;
         for chunk in &chunks[1..] {
             state
                 .bot
@@ -514,12 +494,7 @@ async fn send_or_edit(
 
 /// Build a progress display string showing accumulated text and a single-line
 /// tool status summary (e.g. "⏳ Working... (3 tool calls)").
-fn build_progress_text(
-    text: &str,
-    total: usize,
-    done: usize,
-    failed: usize,
-) -> String {
+fn build_progress_text(text: &str, total: usize, done: usize, failed: usize) -> String {
     let mut display = String::new();
     if total > 0 {
         let pending = total.saturating_sub(done);
@@ -575,17 +550,16 @@ async fn fallback_sync_reply(
         Ok(response) => {
             let reply_text = response.message.text_content();
             if !reply_text.is_empty() {
-                let reply_text =
-                    if matches!(msg.chat.kind, teloxide::types::ChatKind::Public(..)) {
-                        let mention = mention_sender(msg);
-                        if mention.is_empty() {
-                            reply_text
-                        } else {
-                            format!("{mention}\n{reply_text}")
-                        }
-                    } else {
+                let reply_text = if matches!(msg.chat.kind, teloxide::types::ChatKind::Public(..)) {
+                    let mention = mention_sender(msg);
+                    if mention.is_empty() {
                         reply_text
-                    };
+                    } else {
+                        format!("{mention}\n{reply_text}")
+                    }
+                } else {
+                    reply_text
+                };
 
                 let html = markdown_to_telegram_html(&reply_text);
                 let chunks = chunk_message(&html, TELEGRAM_MAX_MESSAGE_LEN);
@@ -1798,7 +1772,10 @@ async fn handle_code(
     if prompt.is_empty() {
         state
             .bot
-            .send_message(msg.chat.id, "Usage: /code <prompt>\n\nExample: /code fix the login bug")
+            .send_message(
+                msg.chat.id,
+                "Usage: /code <prompt>\n\nExample: /code fix the login bug",
+            )
             .await?;
         return Ok(());
     }
@@ -1808,15 +1785,16 @@ async fn handle_code(
         .send_chat_action(msg.chat.id, ChatAction::Typing)
         .await?;
 
-    match state.http_client.dispatch_coding_task(prompt, "Claude").await {
+    match state
+        .http_client
+        .dispatch_coding_task(prompt, "Claude")
+        .await
+    {
         Ok(task) => {
             let text = format!(
-                "\u{1F680} Coding task dispatched!\n\n\
-                 ID: <code>{}</code>\n\
-                 Branch: <code>{}</code>\n\
-                 Tmux: <code>{}</code>\n\
-                 Status: {}\n\n\
-                 You'll be notified when it completes.",
+                "\u{1F680} Coding task dispatched!\n\nID: <code>{}</code>\nBranch: \
+                 <code>{}</code>\nTmux: <code>{}</code>\nStatus: {}\n\nYou'll be notified when it \
+                 completes.",
                 task.id, task.branch, task.tmux_session, task.status
             );
             state
@@ -1828,7 +1806,10 @@ async fn handle_code(
         Err(e) => {
             state
                 .bot
-                .send_message(msg.chat.id, format!("\u{274c} Failed to dispatch task: {e}"))
+                .send_message(
+                    msg.chat.id,
+                    format!("\u{274c} Failed to dispatch task: {e}"),
+                )
                 .await?;
         }
     }
@@ -1836,15 +1817,15 @@ async fn handle_code(
 }
 
 /// Handle `/tasks` — list coding tasks.
-async fn handle_tasks(
-    msg: &Message,
-    state: &Arc<BotState>,
-) -> Result<(), teloxide::RequestError> {
+async fn handle_tasks(msg: &Message, state: &Arc<BotState>) -> Result<(), teloxide::RequestError> {
     match state.http_client.list_coding_tasks().await {
         Ok(tasks) if tasks.is_empty() => {
             state
                 .bot
-                .send_message(msg.chat.id, "No coding tasks found.\n\nUse /code <prompt> to dispatch one.")
+                .send_message(
+                    msg.chat.id,
+                    "No coding tasks found.\n\nUse /code <prompt> to dispatch one.",
+                )
                 .await?;
         }
         Ok(tasks) => {

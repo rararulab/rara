@@ -1,6 +1,6 @@
-mod router;
 pub mod pg_repository;
 pub mod repository;
+mod router;
 pub mod service;
 pub mod types;
 

@@ -286,11 +286,15 @@ mod tests {
     use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::postgres::Postgres;
 
-    use super::*;
-    use super::super::{
-        error::ApplicationError,
-        pg_repository::PgApplicationRepository,
-        types::{ApplicationChannel, ApplicationFilter, ApplicationStatus, ChangeSource, Priority},
+    use super::{
+        super::{
+            error::ApplicationError,
+            pg_repository::PgApplicationRepository,
+            types::{
+                ApplicationChannel, ApplicationFilter, ApplicationStatus, ChangeSource, Priority,
+            },
+        },
+        *,
     };
 
     // -----------------------------------------------------------------------

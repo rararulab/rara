@@ -39,12 +39,12 @@ mod tests {
     #[test]
     fn test_interpolation_all_variables() {
         let ctx = RecallContext {
-            user_text: "hello world".to_owned(),
-            turn_count: 1,
-            events: vec![],
+            user_text:               "hello world".to_owned(),
+            turn_count:              1,
+            events:                  vec![],
             elapsed_since_last_secs: 0,
-            summary: Some("conversation about Rust".to_owned()),
-            session_topic: Some("programming".to_owned()),
+            summary:                 Some("conversation about Rust".to_owned()),
+            session_topic:           Some("programming".to_owned()),
         };
 
         let result = interpolate(
@@ -60,12 +60,12 @@ mod tests {
     #[test]
     fn test_interpolation_none_values() {
         let ctx = RecallContext {
-            user_text: "query text".to_owned(),
-            turn_count: 1,
-            events: vec![],
+            user_text:               "query text".to_owned(),
+            turn_count:              1,
+            events:                  vec![],
             elapsed_since_last_secs: 0,
-            summary: None,
-            session_topic: None,
+            summary:                 None,
+            session_topic:           None,
         };
 
         let result = interpolate("{user_text} | {summary} | {session_topic}", &ctx);
@@ -75,12 +75,12 @@ mod tests {
     #[test]
     fn test_interpolation_no_variables() {
         let ctx = RecallContext {
-            user_text: "ignored".to_owned(),
-            turn_count: 1,
-            events: vec![],
+            user_text:               "ignored".to_owned(),
+            turn_count:              1,
+            events:                  vec![],
             elapsed_since_last_secs: 0,
-            summary: None,
-            session_topic: None,
+            summary:                 None,
+            session_topic:           None,
         };
 
         let result = interpolate("static query", &ctx);

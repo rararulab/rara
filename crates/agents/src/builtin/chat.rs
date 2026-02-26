@@ -6,15 +6,11 @@ use agent_core::{
     runner::{AgentRunner, UserContent},
     tool_registry::ToolRegistry,
 };
-use crate::orchestrator::{
-    context::to_chat_message,
-    AgentOrchestrator,
-    error::OrchestratorError,
-};
 use rara_memory::recall_engine::{EventKind, RecallContext};
 use rara_sessions::types::ChatMessage;
 
 use super::AgentOutput;
+use crate::orchestrator::{AgentOrchestrator, context::to_chat_message, error::OrchestratorError};
 
 /// Effect returned when compaction occurs, so the caller can persist.
 pub struct CompactionEffect {
@@ -22,16 +18,15 @@ pub struct CompactionEffect {
     pub summary: ChatMessage,
 }
 
-/// Interactive chat agent with memory injection, MCP tools, and context compaction.
+/// Interactive chat agent with memory injection, MCP tools, and context
+/// compaction.
 #[derive(Clone)]
 pub struct ChatAgent {
     orchestrator: AgentOrchestrator,
 }
 
 impl ChatAgent {
-    pub fn new(orchestrator: AgentOrchestrator) -> Self {
-        Self { orchestrator }
-    }
+    pub fn new(orchestrator: AgentOrchestrator) -> Self { Self { orchestrator } }
 
     /// Execute a single chat interaction.
     ///
@@ -51,23 +46,33 @@ impl ChatAgent {
         model: &str,
         context_length: usize,
     ) -> Result<(AgentOutput, Option<CompactionEffect>), OrchestratorError> {
-        let PrepareResult { runner, effective_tools, compaction } = self
-            .prepare(base_system_prompt, user_content, history, model, context_length)
+        let PrepareResult {
+            runner,
+            effective_tools,
+            compaction,
+        } = self
+            .prepare(
+                base_system_prompt,
+                user_content,
+                history,
+                model,
+                context_length,
+            )
             .await?;
 
-        let result = runner
-            .run(&effective_tools, None)
-            .await
-            .map_err(|e| OrchestratorError::AgentError {
+        let result = runner.run(&effective_tools, None).await.map_err(|e| {
+            OrchestratorError::AgentError {
                 message: e.to_string(),
-            })?;
+            }
+        })?;
 
         let output = AgentOutput::from_run_response(&result);
 
         Ok((output, compaction))
     }
 
-    /// Streaming variant -- returns the runner and tools for the caller to drive.
+    /// Streaming variant -- returns the runner and tools for the caller to
+    /// drive.
     ///
     /// The caller (ChatService) owns the streaming loop and persistence.
     /// This method returns a prepared runner + tools so the caller can call
@@ -80,8 +85,18 @@ impl ChatAgent {
         model: &str,
         context_length: usize,
     ) -> Result<ChatAgentStreamSetup, OrchestratorError> {
-        let PrepareResult { runner, effective_tools, compaction } = self
-            .prepare(base_system_prompt, user_content, history, model, context_length)
+        let PrepareResult {
+            runner,
+            effective_tools,
+            compaction,
+        } = self
+            .prepare(
+                base_system_prompt,
+                user_content,
+                history,
+                model,
+                context_length,
+            )
             .await?;
 
         Ok(ChatAgentStreamSetup {
@@ -92,10 +107,9 @@ impl ChatAgent {
         })
     }
 
-    /// Return a reference to the orchestrator (for accessors like tools(), settings()).
-    pub fn orchestrator(&self) -> &AgentOrchestrator {
-        &self.orchestrator
-    }
+    /// Return a reference to the orchestrator (for accessors like tools(),
+    /// settings()).
+    pub fn orchestrator(&self) -> &AgentOrchestrator { &self.orchestrator }
 
     /// Common preparation logic shared by [`run`] and [`prepare_streaming`].
     ///
@@ -114,7 +128,9 @@ impl ChatAgent {
         let (effective_history, compaction) =
             if self.orchestrator.needs_compaction(history, context_length) {
                 let summary = self.orchestrator.summarize_history(history, model).await?;
-                let effect = CompactionEffect { summary: summary.clone() };
+                let effect = CompactionEffect {
+                    summary: summary.clone(),
+                };
                 (vec![summary], Some(effect))
             } else {
                 (history.to_vec(), None)
@@ -131,9 +147,7 @@ impl ChatAgent {
             events.push(EventKind::NewSession);
         }
 
-        let summary_text = compaction
-            .as_ref()
-            .map(|e| e.summary.content.as_text());
+        let summary_text = compaction.as_ref().map(|e| e.summary.content.as_text());
 
         let recall_ctx = RecallContext {
             user_text: user_text.to_owned(),
@@ -167,22 +181,26 @@ impl ChatAgent {
             chat_history,
         );
 
-        Ok(PrepareResult { runner, effective_tools, compaction })
+        Ok(PrepareResult {
+            runner,
+            effective_tools,
+            compaction,
+        })
     }
 }
 
 /// Internal result from [`ChatAgent::prepare`].
 struct PrepareResult {
-    runner: AgentRunner,
+    runner:          AgentRunner,
     effective_tools: Arc<ToolRegistry>,
-    compaction: Option<CompactionEffect>,
+    compaction:      Option<CompactionEffect>,
 }
 
 /// Setup bundle for streaming chat -- caller drives the stream loop.
 pub struct ChatAgentStreamSetup {
-    pub runner: AgentRunner,
+    pub runner:          AgentRunner,
     pub effective_tools: Arc<ToolRegistry>,
-    pub orchestrator: AgentOrchestrator,
+    pub orchestrator:    AgentOrchestrator,
     /// If compaction occurred, the caller must persist this.
-    pub compaction: Option<CompactionEffect>,
+    pub compaction:      Option<CompactionEffect>,
 }

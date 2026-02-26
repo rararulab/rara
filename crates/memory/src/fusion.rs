@@ -32,7 +32,8 @@
 //! ## References
 //!
 //! [rrf]: https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf
-//!   "Reciprocal Rank Fusion outperforms Condorcet and individual Rank Learning Methods (Cormack et al., 2009)"
+//!   "Reciprocal Rank Fusion outperforms Condorcet and individual Rank Learning
+//! Methods (Cormack et al., 2009)"
 
 use std::collections::HashMap;
 

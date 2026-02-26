@@ -39,9 +39,7 @@ pub struct PipelineSchedulerWorker {
 }
 
 impl PipelineSchedulerWorker {
-    pub fn new() -> Self {
-        Self { last_run_at: None }
-    }
+    pub fn new() -> Self { Self { last_run_at: None } }
 }
 
 impl Default for PipelineSchedulerWorker {
@@ -95,8 +93,7 @@ fn is_cron_due(expr: &str, last_run_at: Option<jiff::Timestamp>) -> bool {
     };
 
     let anchor_secs = last_run_at.map(|ts| ts.as_second()).unwrap_or(0);
-    let anchor =
-        chrono::DateTime::from_timestamp(anchor_secs, 0).unwrap_or_else(chrono::Utc::now);
+    let anchor = chrono::DateTime::from_timestamp(anchor_secs, 0).unwrap_or_else(chrono::Utc::now);
     let now = chrono::Utc::now();
 
     cron.find_next_occurrence(&anchor, false)

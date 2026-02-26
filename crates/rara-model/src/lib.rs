@@ -18,4 +18,3 @@
 //! and the SQL migrations that define and evolve those tables.
 
 #![deny(unsafe_code)]
-

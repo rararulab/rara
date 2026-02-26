@@ -120,7 +120,7 @@ impl Default for MemoryConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct LangfuseConfig {
-    pub host: String,
+    pub host:       String,
     pub public_key: Option<String>,
     pub secret_key: Option<String>,
 }
@@ -128,7 +128,7 @@ pub struct LangfuseConfig {
 impl Default for LangfuseConfig {
     fn default() -> Self {
         Self {
-            host: "http://localhost:3000".to_owned(),
+            host:       "http://localhost:3000".to_owned(),
             public_key: None,
             secret_key: None,
         }
@@ -294,9 +294,9 @@ impl AppConfig {
         // Read worker interval settings (applied at startup; restart to change).
         let worker_cfg = app_state.settings_svc.current().workers;
         info!(
-            agent_scheduler_secs    = worker_cfg.agent_scheduler_interval_secs,
+            agent_scheduler_secs = worker_cfg.agent_scheduler_interval_secs,
             pipeline_scheduler_secs = worker_cfg.pipeline_scheduler_interval_secs,
-            proactive_hours         = worker_cfg.proactive_agent_interval_hours,
+            proactive_hours = worker_cfg.proactive_agent_interval_hours,
             "Worker intervals from settings"
         );
 
@@ -319,15 +319,15 @@ impl AppConfig {
                 app_state.agent_scheduler.clone(),
             ))
             .name("agent-scheduler")
-            .interval(Duration::from_secs(worker_cfg.agent_scheduler_interval_secs))
+            .interval(Duration::from_secs(
+                worker_cfg.agent_scheduler_interval_secs,
+            ))
             .spawn();
 
         // -- pipeline scheduler worker (checks cron from settings) ------------
 
         let _pipeline_scheduler_handle = worker_manager
-            .fallible_worker(
-                rara_workers::pipeline_scheduler::PipelineSchedulerWorker::new(),
-            )
+            .fallible_worker(rara_workers::pipeline_scheduler::PipelineSchedulerWorker::new())
             .name("pipeline-scheduler")
             .interval(Duration::from_secs(
                 worker_cfg.pipeline_scheduler_interval_secs,

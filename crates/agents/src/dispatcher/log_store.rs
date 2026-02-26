@@ -11,10 +11,10 @@ use super::types::{AgentTaskKind, TaskRecord, TaskStatus};
 
 /// Filter for querying the log store.
 pub struct LogFilter {
-    pub limit: usize,
-    pub kind: Option<AgentTaskKind>,
+    pub limit:  usize,
+    pub kind:   Option<AgentTaskKind>,
     pub status: Option<TaskStatus>,
-    pub since: Option<jiff::Timestamp>,
+    pub since:  Option<jiff::Timestamp>,
 }
 
 /// Aggregate statistics about dispatcher activity.
@@ -22,10 +22,10 @@ pub struct LogFilter {
 pub struct DispatcherStats {
     pub total_submitted: u64,
     pub total_completed: u64,
-    pub total_errors: u64,
-    pub total_deduped: u64,
+    pub total_errors:    u64,
+    pub total_deduped:   u64,
     pub total_cancelled: u64,
-    pub uptime_seconds: u64,
+    pub uptime_seconds:  u64,
 }
 
 /// Pluggable storage for task execution records.
@@ -38,13 +38,13 @@ pub trait DispatcherLogStore: Send + Sync + 'static {
 
 /// In-memory ring buffer implementation of [`DispatcherLogStore`].
 pub struct InMemoryLogStore {
-    records: RwLock<VecDeque<TaskRecord>>,
-    capacity: usize,
-    submitted: AtomicU64,
-    completed: AtomicU64,
-    errors: AtomicU64,
-    deduped: AtomicU64,
-    cancelled: AtomicU64,
+    records:    RwLock<VecDeque<TaskRecord>>,
+    capacity:   usize,
+    submitted:  AtomicU64,
+    completed:  AtomicU64,
+    errors:     AtomicU64,
+    deduped:    AtomicU64,
+    cancelled:  AtomicU64,
     started_at: jiff::Timestamp,
 }
 
@@ -127,10 +127,10 @@ impl DispatcherLogStore for InMemoryLogStore {
         DispatcherStats {
             total_submitted: self.submitted.load(Ordering::Relaxed),
             total_completed: self.completed.load(Ordering::Relaxed),
-            total_errors: self.errors.load(Ordering::Relaxed),
-            total_deduped: self.deduped.load(Ordering::Relaxed),
+            total_errors:    self.errors.load(Ordering::Relaxed),
+            total_deduped:   self.deduped.load(Ordering::Relaxed),
             total_cancelled: self.cancelled.load(Ordering::Relaxed),
-            uptime_seconds: uptime,
+            uptime_seconds:  uptime,
         }
     }
 }

@@ -14,8 +14,10 @@
 
 //! Error types for the coding-task extension.
 
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::{
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
 use snafu::Snafu;
 use uuid::Uuid;
 
@@ -43,9 +45,9 @@ impl IntoResponse for CodingTaskError {
         let status = match &self {
             Self::NotFound { .. } => StatusCode::NOT_FOUND,
             Self::InvalidTransition { .. } => StatusCode::CONFLICT,
-            Self::Repository { .. }
-            | Self::Workspace { .. }
-            | Self::Execution { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Repository { .. } | Self::Workspace { .. } | Self::Execution { .. } => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         };
         let body = serde_json::json!({ "error": self.to_string() });
         (status, axum::Json(body)).into_response()

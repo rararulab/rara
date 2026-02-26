@@ -19,11 +19,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
-use super::{
-    error::SourceError,
-    repository::JobRepository,
-    types::NormalizedJob,
-};
+use super::{error::SourceError, repository::JobRepository, types::NormalizedJob};
 
 // ---------------------------------------------------------------------------
 // DB row types (inlined from rara-model)

@@ -3,9 +3,9 @@
 #[derive(Debug, Clone)]
 pub struct PromptSpec {
     /// Unique name, e.g. `"ai/job_fit.system.md"`.
-    pub name: &'static str,
+    pub name:            &'static str,
     /// Human-readable description.
-    pub description: &'static str,
+    pub description:     &'static str,
     /// Default content compiled into the binary.
     pub default_content: &'static str,
 }
@@ -14,11 +14,11 @@ pub struct PromptSpec {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PromptEntry {
     /// Unique name, e.g. `"ai/job_fit.system.md"`.
-    pub name: String,
+    pub name:        String,
     /// Human-readable description.
     pub description: String,
     /// Current effective content (compiled-in default).
-    pub content: String,
+    pub content:     String,
 }
 
 /// Errors produced by prompt operations.

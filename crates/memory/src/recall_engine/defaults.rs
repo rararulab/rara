@@ -14,74 +14,72 @@
 
 //! Default recall rules seeded when the engine starts with no persisted rules.
 
-use super::types::{
-    EventKind, InjectTarget, RecallAction, RecallRule, Trigger,
-};
+use super::types::{EventKind, InjectTarget, RecallAction, RecallRule, Trigger};
 
 /// Return the built-in default recall rules.
 ///
 /// These rules replicate the previously-hardcoded recall behavior:
 ///
-/// 1. **user-profile** -- always inject the user profile into the system
-///    prompt (priority 0, runs first).
+/// 1. **user-profile** -- always inject the user profile into the system prompt
+///    (priority 0, runs first).
 /// 2. **new-session-context** -- on new/short sessions, search memory for
 ///    context relevant to the user's message.
-/// 3. **post-compaction** -- after history compaction, search memory using
-///    the compacted summary to recover lost details.
+/// 3. **post-compaction** -- after history compaction, search memory using the
+///    compacted summary to recover lost details.
 /// 4. **session-resume** -- when resuming an inactive session, search for
 ///    relevant context.
 pub fn default_rules() -> Vec<RecallRule> {
     vec![
         RecallRule {
-            id: "default-user-profile".to_owned(),
-            name: "user-profile".to_owned(),
-            trigger: Trigger::Always,
-            action: RecallAction::GetProfile,
-            inject: InjectTarget::SystemPrompt,
+            id:       "default-user-profile".to_owned(),
+            name:     "user-profile".to_owned(),
+            trigger:  Trigger::Always,
+            action:   RecallAction::GetProfile,
+            inject:   InjectTarget::SystemPrompt,
             priority: 0,
-            enabled: true,
+            enabled:  true,
         },
         RecallRule {
-            id: "default-new-session-context".to_owned(),
-            name: "new-session-context".to_owned(),
-            trigger: Trigger::Event {
+            id:       "default-new-session-context".to_owned(),
+            name:     "new-session-context".to_owned(),
+            trigger:  Trigger::Event {
                 kind: EventKind::NewSession,
             },
-            action: RecallAction::Search {
+            action:   RecallAction::Search {
                 query_template: "{user_text}".to_owned(),
-                limit: 5,
+                limit:          5,
             },
-            inject: InjectTarget::SystemPrompt,
+            inject:   InjectTarget::SystemPrompt,
             priority: 5,
-            enabled: true,
+            enabled:  true,
         },
         RecallRule {
-            id: "default-post-compaction".to_owned(),
-            name: "post-compaction".to_owned(),
-            trigger: Trigger::Event {
+            id:       "default-post-compaction".to_owned(),
+            name:     "post-compaction".to_owned(),
+            trigger:  Trigger::Event {
                 kind: EventKind::Compaction,
             },
-            action: RecallAction::Search {
+            action:   RecallAction::Search {
                 query_template: "{summary}".to_owned(),
-                limit: 5,
+                limit:          5,
             },
-            inject: InjectTarget::SystemPrompt,
+            inject:   InjectTarget::SystemPrompt,
             priority: 10,
-            enabled: true,
+            enabled:  true,
         },
         RecallRule {
-            id: "default-session-resume".to_owned(),
-            name: "session-resume".to_owned(),
-            trigger: Trigger::Event {
+            id:       "default-session-resume".to_owned(),
+            name:     "session-resume".to_owned(),
+            trigger:  Trigger::Event {
                 kind: EventKind::SessionResume,
             },
-            action: RecallAction::Search {
+            action:   RecallAction::Search {
                 query_template: "{user_text}".to_owned(),
-                limit: 3,
+                limit:          3,
             },
-            inject: InjectTarget::SystemPrompt,
+            inject:   InjectTarget::SystemPrompt,
             priority: 20,
-            enabled: true,
+            enabled:  true,
         },
     ]
 }

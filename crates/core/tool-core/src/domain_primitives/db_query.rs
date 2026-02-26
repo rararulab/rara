@@ -92,8 +92,8 @@ impl AgentTool for DbQueryTool {
     fn name(&self) -> &str { "db_query" }
 
     fn description(&self) -> &str {
-        "Query database tables (read-only). Allowed tables: application, resume, \
-         interview_plan. Use filters to narrow results. Returns a JSON array of matching rows."
+        "Query database tables (read-only). Allowed tables: application, resume, interview_plan. \
+         Use filters to narrow results. Returns a JSON array of matching rows."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
