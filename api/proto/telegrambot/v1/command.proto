@@ -22,26 +22,40 @@ option go_package = "github.com/crrow/job/pb/telegrambot/v1;telegrambotpb";
 option java_outer_classname = "TelegramBotCommandProto";
 option java_package = "com.job.api.telegrambot.v1";
 
+// Request to send a plain text Telegram message to a chat.
 message SendMessageRequest {
+  // Telegram chat ID that should receive the message.
   int64 chat_id = 1;
+  // Message text to send.
   string text = 2;
 }
 
+// Response for a SendMessage request.
 message SendMessageResponse {
+  // Whether the request was accepted for processing.
   bool accepted = 1;
 }
 
+// Request to dispatch a higher-level bot command.
 message DispatchCommandRequest {
+  // Command name (for example, "sync_settings").
   string command = 1;
+  // JSON-encoded command payload.
   string payload_json = 2;
 }
 
+// Response for a DispatchCommand request.
 message DispatchCommandResponse {
+  // Whether the command was accepted for processing.
   bool accepted = 1;
+  // Optional status/detail message.
   string message = 2;
 }
 
+// Service for external command/control operations on the Telegram bot.
 service TelegramBotCommandService {
+  // Sends a plain text message to a specific Telegram chat.
   rpc SendMessage(SendMessageRequest) returns (SendMessageResponse);
+  // Dispatches a bot command with an optional JSON payload.
   rpc DispatchCommand(DispatchCommandRequest) returns (DispatchCommandResponse);
 }
