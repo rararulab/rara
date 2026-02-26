@@ -16,7 +16,7 @@
 //!
 //! Each [`McpToolBridge`] wraps a single MCP tool from a connected server and
 //! implements [`AgentTool`] so it can be registered directly in a
-//! [`ToolRegistry`].
+//! `ToolRegistry`.
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;

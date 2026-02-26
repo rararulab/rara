@@ -16,7 +16,7 @@
 //!
 //! [`ModelCatalog`] fetches available models from the OpenRouter API and
 //! caches them for a configurable TTL. When no API key is available (or on
-//! fetch failure) it falls back to a hand-picked [`CURATED_MODELS`] list.
+//! fetch failure) it falls back to a hand-picked `CURATED_MODELS` list.
 
 use std::{
     sync::Arc,

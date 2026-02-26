@@ -100,6 +100,7 @@ spec:
             - name: MEMOS_DRIVER
               value: "postgres"
             - name: MEMOS_DSN
+              # yamllint disable-next-line rule:line-length
               value: "postgresql://{{ .Values.memos.postgresql.auth.user }}:{{ .Values.memos.postgresql.auth.password }}@{{ include "rara-infra.fullname" . }}-memos-pg:5432/{{ .Values.memos.postgresql.auth.database }}?sslmode=disable"
           livenessProbe:
             httpGet:

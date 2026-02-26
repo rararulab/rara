@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Background worker that polls the [`AgentScheduler`] and submits due jobs
-//! to the [`AgentDispatcher`].
+//! Background worker that polls the `AgentScheduler` and submits due jobs
+//! to the `AgentDispatcher`.
 
 use std::sync::Arc;
 

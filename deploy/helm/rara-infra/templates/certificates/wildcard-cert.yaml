@@ -11,8 +11,8 @@ metadata:
     "helm.sh/hook-weight": "4"
 spec:
   secretName: {{ include "rara-infra.fullname" . }}-wildcard-tls
-  duration: 8760h # true year
-  renewBefore: 720h # 30 days
+  duration: 8760h  # true year
+  renewBefore: 720h  # 30 days
   commonName: "*.{{ .Values.global.domain }}"
   dnsNames:
     - "*.{{ .Values.global.domain }}"

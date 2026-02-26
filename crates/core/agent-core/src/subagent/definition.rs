@@ -68,7 +68,7 @@ pub struct AgentDefinition {
     pub model:          Option<String>,
     /// Tool whitelist — only these tools are available to the sub-agent.
     /// When empty, all parent tools are inherited (minus "subagent" itself).
-    /// Tool names must match those registered in the parent [`ToolRegistry`].
+    /// Tool names must match those registered in the parent tool registry.
     pub tools:          Vec<String>,
     /// Maximum LLM round-trips before the sub-agent gives up.
     /// When `None`, defaults to 15 in the executor.

@@ -17,7 +17,7 @@
 //!
 //! Session metadata and channel bindings are stored in PostgreSQL.
 //! Messages are stored as append-only JSONL files on the local filesystem,
-//! managed by [`SessionStore`](crate::store::SessionStore) which provides
+//! managed by [`SessionStore`] which provides
 //! binary-indexed O(1) random access by sequence number.
 
 use std::path::PathBuf;
@@ -63,7 +63,7 @@ use crate::{
 };
 
 /// Repository backed by PostgreSQL (sessions, bindings) and
-/// [`SessionStore`](crate::store::SessionStore) (messages).
+/// [`SessionStore`] (messages).
 ///
 /// # Message storage
 ///

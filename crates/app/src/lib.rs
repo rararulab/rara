@@ -42,7 +42,7 @@ use yunara_store::{config::DatabaseConfig, db::DBStore};
 /// Loaded from Consul KV (when `CONSUL_HTTP_ADDR` is set) or
 /// `RARA__`-prefixed environment variables (local dev fallback).
 /// For runtime-changeable values (OpenRouter key, Telegram token, …) see
-/// [`rara_backend_admin::settings::SettingsSvc`].
+/// `rara_backend_admin::settings::SettingsSvc`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {

@@ -38,7 +38,11 @@ static TEST_SERVER_BIN: LazyLock<PathBuf> = LazyLock::new(|| {
         .find(|p| p.join("Cargo.lock").exists())
         .expect("could not locate workspace root");
     let bin = workspace_root.join("target/debug/examples/test_mcp_server");
-    assert!(bin.exists(), "test server binary not found at {bin:?}");
+    assert!(
+        bin.exists(),
+        "test server binary not found at {}",
+        bin.display()
+    );
     bin
 });
 

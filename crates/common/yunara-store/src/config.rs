@@ -23,7 +23,7 @@ use crate::{db::DBStore, err::Result};
 /// Database configuration
 #[derive(Debug, Clone, SmartDefault, bon::Builder, Deserialize)]
 #[serde(default)]
-#[builder(on(String, into), on(Duration, into))]
+#[builder(on(String, into))]
 pub struct DatabaseConfig {
     /// PostgreSQL database URL, e.g. `postgres://user:pass@host:5432/dbname`
     #[default(_code = "\"postgres://postgres:postgres@localhost:5432/job\".to_string()")]

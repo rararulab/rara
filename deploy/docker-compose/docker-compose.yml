@@ -131,6 +131,7 @@ services:
       - "${MEMOS_PORT:-5230}:5230"
     environment:
       MEMOS_DRIVER: postgres
+      # yamllint disable-next-line rule:line-length
       MEMOS_DSN: "postgresql://${MEMOS_PG_USER:-memos}:${MEMOS_PG_PASSWORD:-memos}@memos-pg:5432/${MEMOS_PG_DB:-memos}?sslmode=disable"
     depends_on:
       memos-pg:
@@ -163,6 +164,7 @@ services:
     ports:
       - "${HINDSIGHT_PORT:-8100}:8888"
     environment:
+      # yamllint disable-next-line rule:line-length
       HINDSIGHT_DB_URL: "postgresql://${HINDSIGHT_PG_USER:-hindsight}:${HINDSIGHT_PG_PASSWORD:-hindsight}@hindsight-pg:5432/${HINDSIGHT_PG_DB:-hindsight}"
     depends_on:
       hindsight-pg:

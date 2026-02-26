@@ -125,7 +125,7 @@ pub fn kill_process_group(_process_group_id: u32) -> std::io::Result<bool> { Ok(
 /// 2. **`SIGKILL`** (after a grace period) — forcefully kills any survivors.
 ///
 /// The grace period between SIGTERM and SIGKILL is controlled by
-/// [`Self::GRACE_PERIOD`] (default: 2 seconds). The SIGKILL escalation runs
+/// `GRACE_PERIOD` (default: 2 seconds). The SIGKILL escalation runs
 /// on a detached background thread so that `Drop` itself returns immediately.
 ///
 /// On non-Unix platforms the guard is a no-op — it stores nothing and its

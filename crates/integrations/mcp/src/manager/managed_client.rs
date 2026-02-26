@@ -46,7 +46,7 @@
 //! - Multiple `.clone().await` callers get the **same** result.
 //! - Once resolved, subsequent awaits return instantly.
 //!
-//! This lets [`McpManager`] store the `AsyncManagedClient` immediately
+//! This lets `McpManager` store the `AsyncManagedClient` immediately
 //! in its clients map, before the handshake completes, so concurrent
 //! callers (e.g. tool calls arriving during startup) can simply await
 //! the same future rather than racing to create duplicate connections.

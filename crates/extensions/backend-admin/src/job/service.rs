@@ -128,7 +128,7 @@ impl JobService {
     /// Discover jobs from all configured sources (JobSpy + JapanDev),
     /// running them concurrently and merging the results.
     ///
-    /// This is the async counterpart of [`discover()`] and is the
+    /// This is the async counterpart of [`Self::discover`] and is the
     /// preferred entry point for callers in async contexts.
     pub async fn discover_all(
         &self,

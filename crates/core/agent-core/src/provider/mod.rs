@@ -17,7 +17,7 @@
 //! [`LlmProvider`] defines the interface for chat completions (streaming and
 //! non-streaming).  Concrete implementations live in sub-modules:
 //!
-//! - [`openai`] — OpenAI-compatible provider (also works with OpenRouter)
+//! - [`OpenAiProvider`] — OpenAI-compatible provider (also works with OpenRouter)
 
 mod openai;
 

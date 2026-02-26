@@ -33,19 +33,19 @@
 //!
 //! # Three Execution Modes
 //!
-//! 1. **Single** — Run one sub-agent with a task: ```json {"agent": "scout",
-//!    "task": "Find all authentication code"} ```
+//! 1. **Single** — Run one sub-agent with a task:
+//!    `{"agent": "scout", "task": "Find all authentication code"}`
 //!
 //! 2. **Chain** — Run sub-agents sequentially. Each step can reference
 //!    `{previous}` to receive the prior step's output. Stops on first error.
-//!    ```json {"chain": [ {"agent": "scout",   "task": "Find relevant code"},
-//!    {"agent": "planner", "task": "Create plan based on: {previous}"},
-//!    {"agent": "worker",  "task": "Implement: {previous}"} ]} ```
+//!    `{"chain": [{"agent": "scout", "task": "Find relevant code"},`
+//!    `{"agent": "planner", "task": "Create plan based on: {previous}"},`
+//!    `{"agent": "worker", "task": "Implement: {previous}"}]}`
 //!
 //! 3. **Parallel** — Run sub-agents concurrently with a semaphore-based
-//!    concurrency limit (default 4, max 8). ```json {"parallel": [ {"agent":
-//!    "scout", "task": "Find models"}, {"agent": "scout", "task": "Find
-//!    providers"} ]} ```
+//!    concurrency limit (default 4, max 8).
+//!    `{"parallel": [{"agent": "scout", "task": "Find models"}, {"agent":`
+//!    `"scout", "task": "Find providers"}]}`
 //!
 //! # Agent Definitions
 //!

@@ -56,6 +56,7 @@ spec:
 
               # Database
               put_kv "rara/config/database/database_url" \
+                # yamllint disable-next-line rule:line-length
                 "{{ $ov.databaseUrl | default (printf "postgres://postgres:%s@%s-postgresql:5432/%s" .Values.postgresql.auth.postgresPassword .Release.Name .Values.postgresql.auth.database) }}"
 
               # Object store (MinIO)

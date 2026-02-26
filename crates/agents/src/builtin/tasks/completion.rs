@@ -15,8 +15,8 @@
 //! Shared completion helpers for task agents.
 //!
 //! Provides two execution modes:
-//! - [`run_completion`]: single-round LLM call (no tools)
-//! - [`run_with_tools`]: multi-round tool-calling loop for analysis agents
+//! - `run_completion`: single-round LLM call (no tools)
+//! - `run_with_tools`: multi-round tool-calling loop for analysis agents
 //!
 //! Both include retry-on-empty: if the LLM returns an empty response, the
 //! function retries once with a nudge message.

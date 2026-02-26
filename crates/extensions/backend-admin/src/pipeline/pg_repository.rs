@@ -13,7 +13,7 @@
 // limitations under the License.
 
 //! PostgreSQL-backed implementation of
-//! [`crate::repository::PipelineRepository`].
+//! [`super::repository::PipelineRepository`].
 
 use async_trait::async_trait;
 use rara_domain_shared::convert::timestamp_opt_to_chrono;

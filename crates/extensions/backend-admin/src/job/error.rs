@@ -56,7 +56,7 @@ pub enum SourceError {
     },
 
     /// The raw data could not be normalized into a valid
-    /// [`NormalizedJob`].
+    /// `NormalizedJob`.
     #[snafu(display(
         "Normalization failed for job '{source_job_id}' from '{source_name}': {message}"
     ))]

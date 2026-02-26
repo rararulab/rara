@@ -67,7 +67,7 @@ pub fn to_chat_message(msg: &ChatMessage) -> ChatCompletionRequestMessage {
 }
 
 /// Rough token estimate: ~3 chars per token.
-pub fn estimate_tokens(text: &str) -> usize { (text.chars().count() + 2) / 3 }
+pub fn estimate_tokens(text: &str) -> usize { text.chars().count().div_ceil(3) }
 
 /// Estimate total tokens for a message history.
 pub fn estimate_history_tokens(messages: &[ChatMessage]) -> usize {

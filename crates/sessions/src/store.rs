@@ -17,8 +17,7 @@
 //! [`SessionStore`] manages per-session message files on the local filesystem.
 //! Each session key maps to two files:
 //!
-//! - `{key}.jsonl` — one JSON-serialized
-//!   [`ChatMessage`](crate::types::ChatMessage) per line
+//! - `{key}.jsonl` — one JSON-serialized [`ChatMessage`] per line
 //! - `{key}.idx` — packed array of `u64` little-endian byte offsets into the
 //!   JSONL file
 //!

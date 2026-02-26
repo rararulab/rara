@@ -24,7 +24,7 @@ use crate::{types::JdParseRequest, worker_state::AppState};
 /// Worker that drains the JD parse channel on each tick.
 ///
 /// For every [`JdParseRequest`]:
-/// 1. Calls [`JobService::parse_jd`] which runs the AI agent and saves the job.
+/// 1. Calls `JobService::parse_jd`, which runs the AI agent and saves the job.
 /// 2. Logs the outcome.
 pub struct JdParserWorker {
     rx: mpsc::Receiver<JdParseRequest>,

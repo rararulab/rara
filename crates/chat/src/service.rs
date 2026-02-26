@@ -51,7 +51,7 @@ const SESSION_INACTIVITY_THRESHOLD: chrono::Duration = chrono::Duration::minutes
 ///
 /// 1. **Session persistence** — CRUD operations on sessions and messages,
 ///    delegated to a [`SessionRepository`] implementation.
-/// 2. **LLM execution** — Building and running an [`AgentRunner`] with the
+/// 2. **LLM execution** — Building and running an `AgentRunner` with the
 ///    session's conversation history and registered tools.
 /// 3. **Channel routing** — Mapping external messaging channels to internal
 ///    session keys via channel bindings.
@@ -301,7 +301,7 @@ impl ChatService {
     /// Append a pre-built message to a session without invoking the LLM.
     ///
     /// This is useful for background workers that run their own
-    /// [`AgentRunner`] loop and need to persist the conversation turns
+    /// `AgentRunner` loop and need to persist the conversation turns
     /// after the fact.
     #[instrument(skip(self, message))]
     pub async fn append_message_raw(

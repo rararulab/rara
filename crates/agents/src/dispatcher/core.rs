@@ -124,7 +124,7 @@ impl AgentDispatcher {
 // Run loop
 // ---------------------------------------------------------------------------
 
-#[expect(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 async fn run_loop(
     mut rx: mpsc::Receiver<DispatcherCommand>,
     running: Arc<RwLock<HashMap<String, RunningTaskInner>>>,
@@ -189,7 +189,7 @@ async fn run_loop(
     }
 }
 
-#[expect(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 async fn handle_submit(
     task: AgentTask,
     result_tx: oneshot::Sender<TaskResult>,
@@ -360,7 +360,7 @@ async fn handle_cancel(
     }
 }
 
-#[expect(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 async fn try_dispatch(
     running: &Arc<RwLock<HashMap<String, RunningTaskInner>>>,
     queue: &Arc<Mutex<BinaryHeap<PrioritizedTask>>>,

@@ -64,9 +64,9 @@ impl ServerArgs {
                     .telemetry
                     .otlp_protocol
                     .as_deref()
-                    .and_then(|p| match p {
-                        "grpc" => Some(OtlpExportProtocol::Grpc),
-                        _ => Some(OtlpExportProtocol::Http),
+                    .map(|p| match p {
+                        "grpc" => OtlpExportProtocol::Grpc,
+                        _ => OtlpExportProtocol::Http,
                     });
                 LoggingOptions {
                     enable_otlp_tracing: true,

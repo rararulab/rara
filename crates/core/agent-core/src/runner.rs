@@ -546,7 +546,7 @@ impl AgentRunner {
         })
     }
 
-    /// Streaming variant of [`run`]. Spawns the agent loop in a background
+    /// Streaming variant of [`Self::run`]. Spawns the agent loop in a background
     /// task and returns a channel receiver yielding [`RunnerEvent`]s in
     /// real-time, including incremental text/reasoning deltas.
     pub fn run_streaming(self, tools: Arc<ToolRegistry>) -> mpsc::Receiver<RunnerEvent> {

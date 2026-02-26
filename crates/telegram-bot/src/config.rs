@@ -105,10 +105,10 @@ impl BotConfig {
     /// 2. Loads runtime settings from the KV store (falls back to env vars).
     /// 3. Builds a `reqwest::Client` with a 45-second timeout (must exceed the
     ///    30-second Telegram long-poll timeout).
-    /// 4. Calls [`bot::initialize`] to delete any webhook and verify the token
+    /// 4. Calls `bot::initialize` to delete any webhook and verify the token
     ///    via `getMe`.
-    /// 5. Wires [`BotState`], [`TelegramOutbound`], and [`NotifyClient`] into a
-    ///    [`BotApp`].
+    /// 5. Wires `BotState`, `TelegramOutbound`, and `NotifyClient` into a
+///    [`BotApp`].
     pub async fn open(self) -> Result<BotApp, Whatever> {
         let db_store = self
             .db_config

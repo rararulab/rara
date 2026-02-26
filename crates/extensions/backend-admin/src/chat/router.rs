@@ -148,7 +148,7 @@ pub struct BindChannelRequest {
 // Router
 // ---------------------------------------------------------------------------
 
-/// Build an axum [`Router`] with all chat endpoints and the given
+/// Build an axum `Router` with all chat endpoints and the given
 /// [`ChatService`] as shared state.
 pub fn routes(service: ChatService) -> OpenApiRouter {
     model_routes(service.clone())

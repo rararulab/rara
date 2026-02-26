@@ -25,7 +25,7 @@ pub struct AgentOutput {
 }
 
 impl AgentOutput {
-    /// Build from an [`AgentRunResponse`], extracting the response text.
+    /// Build from an `AgentRunResponse`, extracting the response text.
     pub fn from_run_response(response: &agent_core::runner::AgentRunResponse) -> Self {
         Self {
             response_text:   response.response_text(),

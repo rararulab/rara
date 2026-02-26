@@ -4,7 +4,7 @@
 //! [`tool_core::AgentTool`] that the parent agent can invoke to spawn
 //! specialized child agents. It acts as a thin adapter between the LLM's JSON
 //! tool-calling interface and the
-//! [`SubagentExecutor`](super::executor::SubagentExecutor) which does the real
+//! [`SubagentExecutor`] which does the real
 //! work.
 //!
 //! # JSON Parameter Formats
@@ -36,8 +36,8 @@
 //! # Concurrency Limits
 //!
 //! Parallel mode enforces two limits:
-//! - **Task count**: at most [`MAX_PARALLEL_TASKS`] (8) tasks per invocation.
-//! - **Concurrency**: at most [`DEFAULT_CONCURRENCY`] (4) tasks run
+//! - **Task count**: at most `MAX_PARALLEL_TASKS` (8) tasks per invocation.
+//! - **Concurrency**: at most `DEFAULT_CONCURRENCY` (4) tasks run
 //!   simultaneously, even if the caller requests more via `max_concurrency`.
 
 use std::sync::Arc;
@@ -106,7 +106,7 @@ pub enum SubagentParams {
     /// concurrency limit. Does NOT stop on individual failures.
     Parallel {
         parallel:        Vec<SubagentStep>,
-        /// Optional concurrency limit (clamped to [`DEFAULT_CONCURRENCY`]).
+        /// Optional concurrency limit (clamped to `DEFAULT_CONCURRENCY`).
         #[serde(default)]
         max_concurrency: Option<usize>,
     },

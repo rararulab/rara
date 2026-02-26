@@ -16,7 +16,7 @@
 //! schedule.
 //!
 //! The worker polls on a configurable interval (default 60s). On each tick it
-//! reads the `pipeline_cron` field from [`JobPipelineSettings`]. It uses a
+//! reads the `pipeline_cron` field from `JobPipelineSettings`. It uses a
 //! forward-looking cron check anchored on `last_run_at` to determine whether
 //! the cron has fired, preventing duplicate execution regardless of poll
 //! interval.

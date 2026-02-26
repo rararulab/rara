@@ -17,7 +17,7 @@
 //! This crate provides a separate process that bridges Telegram users with
 //! the main job service. It runs three concurrent loops:
 //!
-//! 1. **Telegram polling** — manual [`getUpdates`] long-polling loop that
+//! 1. **Telegram polling** — manual `getUpdates` long-polling loop that
 //!    receives messages and dispatches them to command/message handlers.
 //! 2. **Notification consumer** — dequeues messages from a `pgmq` queue and
 //!    delivers them to Telegram chats.
@@ -37,15 +37,15 @@
 //!
 //! | Module          | Purpose                                               |
 //! |-----------------|-------------------------------------------------------|
-//! | [`config`]      | Environment parsing and dependency wiring              |
-//! | [`app`]         | Process lifecycle, notification consumer, settings sync|
-//! | [`bot`]         | Manual `getUpdates` long-polling loop                  |
-//! | [`handlers`]    | Message routing, command handlers, callback queries    |
-//! | [`state`]       | Shared runtime state with hot-update support           |
-//! | [`outbound`]    | Message sending with Markdown formatting and chunking  |
-//! | [`markdown`]    | Markdown-to-Telegram-HTML converter                    |
-//! | [`command`]     | Telegram command definitions                           |
-//! | [`http_client`] | Typed HTTP client for main service API calls           |
+//! | `config`      | Environment parsing and dependency wiring              |
+//! | `app`         | Process lifecycle, notification consumer, settings sync|
+//! | `bot`         | Manual `getUpdates` long-polling loop                  |
+//! | `handlers`    | Message routing, command handlers, callback queries    |
+//! | `state`       | Shared runtime state with hot-update support           |
+//! | `outbound`    | Message sending with Markdown formatting and chunking  |
+//! | `markdown`    | Markdown-to-Telegram-HTML converter                    |
+//! | `command`     | Telegram command definitions                           |
+//! | `http_client` | Typed HTTP client for main service API calls           |
 
 mod app;
 mod bot;

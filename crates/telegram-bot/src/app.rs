@@ -77,7 +77,7 @@ impl BotApp {
     ///
     /// The caller supplies a [`CancellationToken`], a
     /// [`watch::Receiver<Settings>`] for instant settings propagation, and a
-    /// [`NotifyClient`] that are already initialized by the app crate.
+    /// `NotifyClient` that is already initialized by the app crate.
     /// This avoids creating a second DB pool.
     ///
     /// Returns `Ok(Some(bot))` if Telegram credentials are available (from
@@ -328,7 +328,7 @@ impl BotApp {
     ///
     /// Spawns three tokio tasks:
     /// 1. `getUpdates` polling loop
-    ///    ([`bot::start_polling`](crate::bot::start_polling))
+    ///    (`bot::start_polling`)
     /// 2. Notification consumer loop (pgmq -> Telegram delivery)
     /// 3. Settings watch loop (watch channel -> hot credential update)
     ///

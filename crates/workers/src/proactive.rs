@@ -13,7 +13,7 @@
 // limitations under the License.
 
 //! Proactive agent worker that periodically reviews recent chat activity
-//! and submits a task to the [`AgentDispatcher`] for autonomous action.
+//! and submits a task to the `AgentDispatcher` for autonomous action.
 
 use async_trait::async_trait;
 use chrono::Utc;

@@ -101,6 +101,7 @@ spec:
               protocol: TCP
           env:
             - name: HINDSIGHT_DB_URL
+              # yamllint disable-next-line rule:line-length
               value: "postgresql://{{ .Values.hindsight.postgresql.auth.user }}:{{ .Values.hindsight.postgresql.auth.password }}@{{ include "rara-infra.fullname" . }}-hindsight-pg:5432/{{ .Values.hindsight.postgresql.auth.database }}"
             {{- range $name, $value := .Values.hindsight.env }}
             - name: {{ $name }}

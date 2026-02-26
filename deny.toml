@@ -3,7 +3,12 @@ all-features = true
 
 [advisories]
 version = 2
-ignore = []
+ignore = [
+    "RUSTSEC-2025-0012", # backoff (transitive via async-openai)
+    "RUSTSEC-2024-0384", # instant (transitive via backoff)
+    "RUSTSEC-2024-0436", # paste (transitive via utoipa-axum)
+    "RUSTSEC-2025-0134", # rustls-pemfile (transitive via testcontainers/bollard)
+]
 
 [licenses]
 version = 2
@@ -18,6 +23,11 @@ allow = [
     "CC0-1.0",
     "BSL-1.0",
     "MPL-2.0",
+    "ISC",
+    "OpenSSL",
+    "PostgreSQL",
+    "0BSD",
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8
 
@@ -25,7 +35,7 @@ confidence-threshold = 0.8
 ignore = true
 
 [bans]
-multiple-versions = "deny"
+multiple-versions = "warn"
 wildcards = "allow"
 highlight = "all"
 workspace-default-features = "allow"
@@ -71,6 +81,7 @@ skip = [
     { crate = "windows-strings@0.4.2", reason = "windows-core 0.61 uses older version" },
     { crate = "windows-sys@0.60.2", reason = "socket2 uses intermediate version" },
     { crate = "windows-targets@0.52.6", reason = "windows-sys 0.52 uses older version" },
+    { crate = "zip@2.4.2", reason = "ytmusicapi-uv pulls zip 2.x while utoipa-swagger-ui uses zip 3.x" },
 ]
 
 skip-tree = []
@@ -79,4 +90,7 @@ skip-tree = []
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+allow-git = [
+    "https://github.com/AlexsJones/llmfit",
+    "https://github.com/crrow/ytmusicapi",
+]

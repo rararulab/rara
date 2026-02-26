@@ -125,7 +125,7 @@ impl McpManager {
 
     /// Start a single server connection.
     ///
-    /// Creates an [`AsyncManagedClient`] that lazily performs the MCP
+    /// Creates an `AsyncManagedClient` that lazily performs the MCP
     /// handshake, stores it immediately (so other callers can observe
     /// the pending state), then awaits startup completion.
     #[instrument(skip(self, config), fields(server = %name))]

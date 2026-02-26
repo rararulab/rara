@@ -8,7 +8,7 @@ rules:
       .github/
       target/
   line-length:
-    max: 120
+    max: 240
     level: warning
   truthy:
     allowed-values: ['true', 'false']

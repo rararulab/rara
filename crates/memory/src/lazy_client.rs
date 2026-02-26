@@ -61,7 +61,7 @@ pub struct LazyMem0Client {
 }
 
 impl LazyMem0Client {
-    /// Create a new lazy client. No pod is created until [`ensure_ready`] is
+    /// Create a new lazy client. No pod is created until [`Self::ensure_ready`] is
     /// called.
     pub fn new(
         pod_manager: Mem0PodManager,
@@ -84,7 +84,7 @@ impl LazyMem0Client {
     /// Set the OpenAI API key at runtime.
     ///
     /// Does **not** create the pod yet -- the pod is created lazily on the
-    /// first mem0 operation via [`ensure_ready`].
+    /// first mem0 operation via [`Self::ensure_ready`].
     pub async fn set_api_key(&self, key: String) {
         let mut guard = self.openai_api_key.write().await;
         *guard = Some(key);
