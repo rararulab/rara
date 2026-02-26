@@ -1,0 +1,24 @@
+[project]
+name = "rara-py-worker"
+version = "0.1.0"
+description = "Execution plane Python worker"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115",
+  "grpcio>=1.68",
+  "grpcio-reflection>=1.68",
+  "opentelemetry-api>=1.28",
+  "opentelemetry-sdk>=1.28",
+  "protobuf>=5.0",
+  "uvicorn>=0.30",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

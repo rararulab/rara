@@ -1,0 +1,42 @@
+set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
+
+PYTHON_VERSION := `cat .python-version`
+DEFAULT_TAG := `printf "rara-py-worker:%s" "$(cat .python-version)"`
+REPO_ROOT := `git rev-parse --show-toplevel`
+
+[doc("show local rara-py-worker environment values")]
+env:
+    @echo "PYTHON_VERSION={{PYTHON_VERSION}}"
+    @echo "DEFAULT_TAG={{DEFAULT_TAG}}"
+    @echo "REPO_ROOT={{REPO_ROOT}}"
+
+[doc("sync local uv environment with dev dependencies")]
+sync:
+    uv sync --dev
+
+[doc("run python-worker tests")]
+test:
+    uv run --dev python -m pytest tests -q
+
+[doc("build rara-py-worker image (tag defaults to rara-py-worker:<.python-version>)")]
+build-image tag=DEFAULT_TAG:
+    @echo "🐳 Building rara-py-worker with Python {{PYTHON_VERSION}} (tag={{tag}})..."
+    cd {{REPO_ROOT}} && docker build \
+        --build-arg PYTHON_VERSION={{PYTHON_VERSION}} \
+        --tag {{tag}} \
+        --file execution/workers/rara-py-worker/Dockerfile \
+        .
+
+[doc("build rara-py-worker image with explicit Python version")]
+build-image-python python_version tag="":
+    @tag_arg="${tag:-rara-py-worker:{{python_version}}}"; \
+    echo "🐳 Building rara-py-worker with Python {{python_version}} (tag=$tag_arg)..."; \
+    cd {{REPO_ROOT}} && docker build \
+        --build-arg PYTHON_VERSION={{python_version}} \
+        --tag "$tag_arg" \
+        --file execution/workers/rara-py-worker/Dockerfile \
+        .
+
+[doc("smoke test container: build image, run container, verify HTTP probes and gRPC Status")]
+test-container tag="" worker_name="smoke-worker" http_port="18080" grpc_port="15051":
+    bash scripts/test_container.sh "{{tag}}" "{{worker_name}}" "{{http_port}}" "{{grpc_port}}"

@@ -1,0 +1,147 @@
+syntax = "proto3";
+
+// Execution worker RPC contract for invoking capabilities and querying tasks.
+package execution.v1;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/crrow/job/bindings/go/pb/execution/v1;executionv1";
+
+// ExecutionWorkerService exposes sync/async capability execution operations.
+service ExecutionWorkerService {
+  // Returns the current worker identity (name + runtime kind).
+  rpc Status(StatusRequest) returns (StatusResponse);
+  // Executes a capability synchronously and returns the result inline.
+  rpc Invoke(InvokeRequest) returns (InvokeResponse);
+  // Submits a capability execution request as an asynchronous task.
+  rpc SubmitTask(SubmitTaskRequest) returns (SubmitTaskResponse);
+  // Queries the current state/result of a previously submitted task.
+  rpc GetTask(GetTaskRequest) returns (GetTaskResponse);
+}
+
+// Empty status request.
+message StatusRequest {}
+
+// Status RPC response using the common success/error envelope pattern.
+message StatusResponse {
+  oneof outcome {
+    StatusSuccess success = 1;
+    WorkerError error = 2;
+  }
+}
+
+// Successful status payload.
+message StatusSuccess {
+  WorkerIdentity worker = 1;
+}
+
+// Runtime worker identity exposed to callers.
+message WorkerIdentity {
+  string name = 1;
+  WorkerKind kind = 2;
+}
+
+// Worker implementation kind.
+enum WorkerKind {
+  // Unknown/unspecified worker kind.
+  WORKER_KIND_UNSPECIFIED = 0;
+  // Python-based worker implementation.
+  WORKER_KIND_PYTHON = 1;
+  // Go-based worker implementation.
+  WORKER_KIND_GO = 2;
+}
+
+// Synchronous capability invocation request.
+message InvokeRequest {
+  string capability = 1;
+  google.protobuf.Struct payload = 2;
+  uint32 timeout_ms = 3;
+  map<string, string> metadata = 4;
+}
+
+// Common worker error envelope.
+message WorkerError {
+  string code = 1;
+  string message = 2;
+  bool retryable = 3;
+  google.protobuf.Struct details = 4;
+}
+
+// Synchronous invoke response using the common success/error envelope pattern.
+message InvokeResponse {
+  oneof outcome {
+    InvokeSuccess success = 1;
+    WorkerError error = 2;
+  }
+}
+
+// Successful synchronous invocation payload.
+message InvokeSuccess {
+  string capability = 1;
+  google.protobuf.Struct result = 2;
+  uint32 duration_ms = 3;
+}
+
+// Asynchronous capability submission request.
+message SubmitTaskRequest {
+  string capability = 1;
+  google.protobuf.Struct payload = 2;
+  uint32 timeout_ms = 3;
+  map<string, string> metadata = 4;
+}
+
+// Async submission response using the common success/error envelope pattern.
+message SubmitTaskResponse {
+  oneof outcome {
+    TaskRef task = 1;
+    WorkerError error = 2;
+  }
+}
+
+// Task query request.
+message GetTaskRequest {
+  string task_id = 1;
+}
+
+// Task query response using the common success/error envelope pattern.
+message GetTaskResponse {
+  oneof outcome {
+    TaskStatus task = 1;
+    WorkerError error = 2;
+  }
+}
+
+// Lightweight task reference returned on async submit.
+message TaskRef {
+  string id = 1;
+  TaskState status = 2;
+}
+
+// Task lifecycle states.
+enum TaskState {
+  // Unknown/unspecified task state.
+  TASK_STATE_UNSPECIFIED = 0;
+  // Task is queued and waiting to run.
+  TASK_STATE_QUEUED = 1;
+  // Task is currently running.
+  TASK_STATE_RUNNING = 2;
+  // Task completed successfully.
+  TASK_STATE_SUCCEEDED = 3;
+  // Task completed with failure.
+  TASK_STATE_FAILED = 4;
+  // Task was canceled.
+  TASK_STATE_CANCELED = 5;
+}
+
+// Full task status payload including timestamps and optional result/error.
+message TaskStatus {
+  string id = 1;
+  string capability = 2;
+  TaskState status = 3;
+  google.protobuf.Struct result = 4;
+  WorkerError error = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp started_at = 7;
+  google.protobuf.Timestamp finished_at = 8;
+}

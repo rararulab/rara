@@ -1,0 +1,2 @@
+"""Python execution worker skeleton."""
+

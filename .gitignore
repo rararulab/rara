@@ -68,6 +68,11 @@ desktop/build/
 desktop/artifacts/
 desktop/.electrobun/
 
+# Python caches
+__pycache__/
+*.pyc
+*.egg-info/
+
 # Helm chart dependencies (downloaded via helm dependency build)
 deploy/helm/*/charts/
 deploy/helm/*/Chart.lock
