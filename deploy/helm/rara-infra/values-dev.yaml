@@ -80,7 +80,7 @@ alloy:
 # ------------------------------------------------------------------------------
 quickwit:
   searcher:
-    replicaCount: true
+    replicaCount: 1
     resources:
       requests:
         cpu: 100m
@@ -89,7 +89,7 @@ quickwit:
         cpu: 500m
         memory: 512Mi
   indexer:
-    replicaCount: true
+    replicaCount: 1
     resources:
       requests:
         cpu: 100m
@@ -98,7 +98,7 @@ quickwit:
         cpu: 500m
         memory: 512Mi
   metastore:
-    replicaCount: true
+    replicaCount: 1
     resources:
       requests:
         cpu: 100m
@@ -107,7 +107,7 @@ quickwit:
         cpu: 250m
         memory: 256Mi
   control_plane:
-    replicaCount: true
+    replicaCount: 1
     resources:
       requests:
         cpu: 100m
@@ -151,7 +151,7 @@ langfuse:
 # ------------------------------------------------------------------------------
 consul:
   server:
-    replicas: true
+    replicas: 1
     storage: 1Gi
     resources:
       requests:
@@ -198,10 +198,10 @@ chromadb:
   resources:
     requests:
       cpu: 100m
-      memory: 128Mi
+      memory: 256Mi
     limits:
       cpu: 500m
-      memory: 512Mi
+      memory: 1Gi
   persistence:
     size: 512Mi
 
@@ -218,11 +218,33 @@ crawl4ai:
       memory: 1Gi
 
 # ------------------------------------------------------------------------------
+# Ollama (CPU, persistence enabled to retain cloud signin/model tags)
+# ------------------------------------------------------------------------------
+ollama:
+  enabled: true
+  auth:
+    existingSecret: "rara-infra-ollama-auth"
+  persistence:
+    enabled: true
+    size: 5Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+# ------------------------------------------------------------------------------
 # Mem0 REST API — managed at runtime via on-demand K8s pods.
 # Set enabled: true for a persistent Helm-managed deployment.
 # ------------------------------------------------------------------------------
 mem0:
-  enabled: false
+  enabled: true
+  env:
+    OLLAMA_BASE_URL: "http://rara-infra-ollama:11434"
+    MEM0_OLLAMA_BASE_URL: "http://rara-infra-ollama:11434"
+    MEM0_OLLAMA_LLM_MODEL: "qwen3.5:cloud"
 
 # ------------------------------------------------------------------------------
 # Memos
@@ -253,14 +275,19 @@ memos:
 # true via: helm upgrade --set hindsight.enabled=true --set hindsight.env.HINDSIGHT_API_LLM_API_KEY=sk-xxx
 # ------------------------------------------------------------------------------
 hindsight:
-  enabled: false
+  enabled: true
+  env:
+    HINDSIGHT_API_LLM_PROVIDER: "ollama"
+    HINDSIGHT_API_LLM_MODEL: "qwen3.5:cloud"
+    HINDSIGHT_API_LLM_BASE_URL: "http://rara-infra-ollama:11434/v1"
+    HINDSIGHT_API_LLM_API_KEY: ""
   resources:
     requests:
       cpu: 100m
-      memory: 128Mi
+      memory: 256Mi
     limits:
       cpu: 500m
-      memory: 512Mi
+      memory: 1Gi
   postgresql:
     resources:
       requests:

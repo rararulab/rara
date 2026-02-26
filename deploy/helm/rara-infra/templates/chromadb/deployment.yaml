@@ -7,7 +7,7 @@ metadata:
   labels:
     {{- include "rara-infra.componentLabels" (dict "root" . "component" "chromadb") | nindent 4 }}
 spec:
-  replicas: true
+  replicas: 1
   selector:
     matchLabels:
       {{- include "rara-infra.componentSelectorLabels" (dict "root" . "component" "chromadb") | nindent 6 }}

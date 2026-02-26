@@ -220,7 +220,7 @@ hosts:
     LB_IP=$(kubectl get svc {{ RELEASE }}-traefik -n {{ NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
     if [ -z "$LB_IP" ]; then echo "ERROR: Traefik LoadBalancer IP not found"; exit 1; fi
     DOMAIN=$(helm get values {{ RELEASE }} -n {{ NAMESPACE }} -o json 2>/dev/null | jq -r '.global.domain // "rara.local"')
-    SERVICES="grafana prometheus alertmanager langfuse quickwit consul minio traefik tempo memos hindsight"
+    SERVICES="grafana prometheus alertmanager langfuse quickwit consul minio traefik tempo memos hindsight ollama"
     HOSTS_LINE="${LB_IP}  $(for s in $SERVICES; do printf "%s.${DOMAIN} " "$s"; done)"
     MARKER="# rara-infra managed"
     # Remove old entries
@@ -246,6 +246,7 @@ doctor:
     MEM0_ENABLED=$(echo "$VALUES" | jq -r '.mem0.enabled // true')
     MEMOS_ENABLED=$(echo "$VALUES" | jq -r '.memos.enabled // true')
     HINDSIGHT_ENABLED=$(echo "$VALUES" | jq -r '.hindsight.enabled // true')
+    OLLAMA_ENABLED=$(echo "$VALUES" | jq -r '.ollama.enabled // false')
 
     check() {
       local name="$1"; shift
@@ -287,14 +288,11 @@ doctor:
     check_endpoint() {
       local name="$1" svc="$2" port="$3" path="${4:-/}"
       if kubectl get svc "$svc" -n "$NS" &>/dev/null; then
-        local code
-        code=$(kubectl exec deploy/"$(kubectl get deploy -n "$NS" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)" \
-          -n "$NS" -- curl -s -o /dev/null -w '%{http_code}' "http://${svc}:${port}${path}" 2>/dev/null || echo "000")
-        if [[ "$code" =~ ^[23] ]]; then
-          printf " ${PASS}  %-28s %s\n" "$name" "HTTP $code"
+        if kubectl get --raw "/api/v1/namespaces/${NS}/services/http:${svc}:${port}/proxy${path}" >/dev/null 2>&1; then
+          printf " ${PASS}  %-28s %s\n" "$name" "proxied via kube-apiserver"
           ok=$((ok + 1))
         else
-          printf " ${FAIL}  %-28s %s\n" "$name" "HTTP $code"
+          printf " ${FAIL}  %-28s %s\n" "$name" "service proxy request failed"
           fail=$((fail + 1))
         fi
       else
@@ -325,6 +323,7 @@ doctor:
     echo "🧠 Memory Services"
     if [ "$MEM0_ENABLED" = "true" ]; then
       check_pod_ready "Mem0"           "app.kubernetes.io/component=mem0"
+      check_endpoint "Mem0 API"        "{{ RELEASE }}-mem0" "8000" "/"
     else
       skip_disabled "Mem0"
     fi
@@ -337,10 +336,19 @@ doctor:
     fi
     if [ "$HINDSIGHT_ENABLED" = "true" ]; then
       check_pod_ready "Hindsight"      "app.kubernetes.io/component=hindsight"
+      check_endpoint "Hindsight API"   "{{ RELEASE }}-hindsight" "8888" "/metrics"
       check_pod_ready "Hindsight PG"   "app.kubernetes.io/component=hindsight-pg"
     else
       skip_disabled "Hindsight"
+      skip_disabled "Hindsight API"
       skip_disabled "Hindsight PG"
+    fi
+    if [ "$OLLAMA_ENABLED" = "true" ]; then
+      check_pod_ready "Ollama"         "app.kubernetes.io/component=ollama"
+      check_endpoint "Ollama API"      "{{ RELEASE }}-ollama" "11434" "/api/tags"
+    else
+      skip_disabled "Ollama"
+      skip_disabled "Ollama API"
     fi
 
     # -- Ingress & TLS --
@@ -371,7 +379,7 @@ doctor:
     check_pod_ready "Consul Server"  "app=consul,component=server"
     check_pod_ready "Consul Client"  "app=consul,component=client"
     check "Consul KV (rara/config/)" bash -c \
-      "count=\$(kubectl exec {{ RELEASE }}-consul-server-0 -n $NS -- \
+      "count=\$(kubectl exec consul-server-0 -n $NS -- \
         curl -sf http://127.0.0.1:8500/v1/kv/rara/config/?keys 2>/dev/null | jq '. | length'); \
        if [ \"\$count\" -gt 0 ] 2>/dev/null; then echo \"\${count} keys\"; else echo 'no keys found'; false; fi"
 
@@ -391,8 +399,12 @@ doctor:
     ENDPOINT_SERVICES="grafana prometheus alertmanager langfuse quickwit consul minio traefik"
     if [ "$MEMOS_ENABLED" = "true" ]; then ENDPOINT_SERVICES="$ENDPOINT_SERVICES memos"; fi
     if [ "$HINDSIGHT_ENABLED" = "true" ]; then ENDPOINT_SERVICES="$ENDPOINT_SERVICES hindsight"; fi
+    if [ "$OLLAMA_ENABLED" = "true" ]; then ENDPOINT_SERVICES="$ENDPOINT_SERVICES ollama"; fi
     for svc in $ENDPOINT_SERVICES; do
-      url="https://${svc}.${DOMAIN}"
+      path="/"
+      if [ "$svc" = "ollama" ]; then path="/api/tags"; fi
+      if [ "$svc" = "hindsight" ]; then path="/metrics"; fi
+      url="https://${svc}.${DOMAIN}${path}"
       code=$(curl -skL --noproxy "*" --max-time 5 --resolve "${svc}.${DOMAIN}:443:${LB_IP}" -o /dev/null -w '%{http_code}' "$url" 2>/dev/null || echo "000")
       if [[ "$code" =~ ^[23] ]]; then
         printf " ${PASS}  %-28s %s\n" "$svc" "$url  (HTTP $code)"

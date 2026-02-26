@@ -7,7 +7,7 @@ metadata:
   labels:
     {{- include "rara-infra.componentLabels" (dict "root" . "component" "memos-pg") | nindent 4 }}
 spec:
-  replicas: true
+  replicas: 1
   selector:
     matchLabels:
       {{- include "rara-infra.componentSelectorLabels" (dict "root" . "component" "memos-pg") | nindent 6 }}
@@ -79,7 +79,7 @@ metadata:
   labels:
     {{- include "rara-infra.componentLabels" (dict "root" . "component" "memos") | nindent 4 }}
 spec:
-  replicas: true
+  replicas: 1
   selector:
     matchLabels:
       {{- include "rara-infra.componentSelectorLabels" (dict "root" . "component" "memos") | nindent 6 }}

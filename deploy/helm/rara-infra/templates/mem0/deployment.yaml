@@ -7,7 +7,7 @@ metadata:
   labels:
     {{- include "rara-infra.componentLabels" (dict "root" . "component" "mem0") | nindent 4 }}
 spec:
-  replicas: true
+  replicas: 1
   selector:
     matchLabels:
       {{- include "rara-infra.componentSelectorLabels" (dict "root" . "component" "mem0") | nindent 6 }}
@@ -23,9 +23,9 @@ spec:
           command: ["sh", "-c"]
           args:
             - |
-              pip install --quiet --no-cache-dir chromadb &&
+              pip install --quiet --no-cache-dir chromadb ollama &&
               python3 /app/patch_config.py &&
-              exec uvicorn main:app --host 0.0.0.0 --port 8000 --workers true
+              exec uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1
           workingDir: /app
           ports:
             - name: http

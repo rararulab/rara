@@ -196,13 +196,13 @@ quickwit:
         force_path_style_access: true
         region: us-east-1
   searcher:
-    replicaCount: true
+    replicaCount: 1
   indexer:
-    replicaCount: true
+    replicaCount: 1
   metastore:
-    replicaCount: true
+    replicaCount: 1
   control_plane:
-    replicaCount: true
+    replicaCount: 1
   janitor:
     enabled: true
 
@@ -276,7 +276,7 @@ consul:
     name: consul
     datacenter: rara-dc1
   server:
-    replicas: true
+    replicas: 1
     storage: 5Gi
     storageClass: null
   client:
@@ -420,6 +420,34 @@ crawl4ai:
   service:
     type: ClusterIP
     port: 11235
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+# ------------------------------------------------------------------------------
+# Ollama — LLM API server (custom template)
+# CPU-only by default. Can serve local models or cloud-backed tags.
+# ------------------------------------------------------------------------------
+ollama:
+  enabled: false
+  image:
+    repository: ollama/ollama
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 11434
+  env: {}
+  auth:
+    existingSecret: ""
+  persistence:
+    enabled: false
+    size: 5Gi
+    storageClass: ""
   resources:
     requests:
       cpu: 250m

@@ -1,0 +1,83 @@
+{{- if .Values.ollama.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rara-infra.fullname" . }}-ollama
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rara-infra.componentLabels" (dict "root" . "component" "ollama") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "rara-infra.componentSelectorLabels" (dict "root" . "component" "ollama") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "rara-infra.componentLabels" (dict "root" . "component" "ollama") | nindent 8 }}
+    spec:
+      containers:
+        - name: ollama
+          image: "{{ .Values.ollama.image.repository }}:{{ .Values.ollama.image.tag }}"
+          imagePullPolicy: {{ .Values.ollama.image.pullPolicy }}
+          command: ["ollama", "serve"]
+          ports:
+            - name: http
+              containerPort: 11434
+              protocol: TCP
+          env:
+            - name: OLLAMA_HOST
+              value: "0.0.0.0:11434"
+            {{- range $name, $value := .Values.ollama.env }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /api/tags
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /api/tags
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          {{- with .Values.ollama.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: ollama-data
+              mountPath: /root/.ollama
+            {{- if .Values.ollama.auth.existingSecret }}
+            - name: ollama-auth
+              mountPath: /root/.ollama/id_ed25519
+              subPath: id_ed25519
+              readOnly: true
+            - name: ollama-auth
+              mountPath: /root/.ollama/id_ed25519.pub
+              subPath: id_ed25519.pub
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{- if .Values.ollama.persistence.enabled }}
+        - name: ollama-data
+          persistentVolumeClaim:
+            claimName: {{ include "rara-infra.fullname" . }}-ollama
+        {{- else }}
+        - name: ollama-data
+          emptyDir: {}
+        {{- end }}
+        {{- if .Values.ollama.auth.existingSecret }}
+        - name: ollama-auth
+          secret:
+            secretName: {{ .Values.ollama.auth.existingSecret | quote }}
+            defaultMode: 0600
+        {{- end }}
+{{- end }}

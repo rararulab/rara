@@ -1,0 +1,89 @@
+{{- if .Values.mem0.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rara-infra.fullname" . }}-mem0-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rara-infra.componentLabels" (dict "root" . "component" "mem0") | nindent 4 }}
+data:
+  patch_config.py: |
+    import json
+    import os
+    import pathlib
+    import re
+
+
+    MAIN_PATH = pathlib.Path("/app/main.py")
+
+
+    def _env(name: str, default: str) -> str:
+        value = os.environ.get(name)
+        if value is None or not value.strip():
+            return default
+        return value.strip()
+
+
+    chroma_host = _env("CHROMA_HOST", "chromadb")
+    chroma_port = int(_env("CHROMA_PORT", "8000"))
+    history_db_path = _env("HISTORY_DB_PATH", "/tmp/mem0_history.db")
+    ollama_base_url = _env("MEM0_OLLAMA_BASE_URL", _env("OLLAMA_BASE_URL", "http://host.docker.internal:11434"))
+    llm_model = _env("MEM0_OLLAMA_LLM_MODEL", "llama3.2:latest")
+    embed_model = _env("MEM0_OLLAMA_EMBED_MODEL", "nomic-embed-text:latest")
+
+    config = {
+        "version": "v1.1",
+        "vector_store": {
+            "provider": "chroma",
+            "config": {
+                "host": chroma_host,
+                "port": chroma_port,
+                "collection_name": "memories",
+            },
+        },
+        "llm": {
+            "provider": "ollama",
+            "config": {
+                "model": llm_model,
+                "ollama_base_url": ollama_base_url,
+                "temperature": 0.0,
+                "max_tokens": 256,
+            },
+        },
+        "embedder": {
+            "provider": "ollama",
+            "config": {
+                "model": embed_model,
+                "ollama_base_url": ollama_base_url,
+            },
+        },
+        "history_db_path": history_db_path,
+    }
+
+    replacement = (
+        "DEFAULT_CONFIG = " + json.dumps(config, indent=4) +
+        "\\n\\n\\ntry:\\n"
+        "    MEMORY_INSTANCE = Memory.from_config(DEFAULT_CONFIG)\\n"
+        "except Exception as e:\\n"
+        "    logging.exception('Mem0 startup initialization failed; service will start without active MEMORY_INSTANCE')\\n"
+        "    MEMORY_INSTANCE = None\\n"
+    )
+
+    content = MAIN_PATH.read_text()
+    updated, count = re.subn(
+        r"DEFAULT_CONFIG = \{.*?\nMEMORY_INSTANCE = Memory\.from_config\(DEFAULT_CONFIG\)",
+        replacement,
+        content,
+        count=1,
+        flags=re.S,
+    )
+    if count != 1:
+        raise RuntimeError("Failed to patch mem0 main.py DEFAULT_CONFIG block")
+
+    MAIN_PATH.write_text(updated)
+    print("Patched /app/main.py for Chroma + Ollama")
+    print(f"  CHROMA_HOST={chroma_host}:{chroma_port}")
+    print(f"  OLLAMA_BASE_URL={ollama_base_url}")
+    print(f"  LLM_MODEL={llm_model}")
+    print(f"  EMBED_MODEL={embed_model}")
+{{- end }}

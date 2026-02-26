@@ -7,7 +7,7 @@ metadata:
   labels:
     {{- include "rara-infra.componentLabels" (dict "root" . "component" "hindsight-pg") | nindent 4 }}
 spec:
-  replicas: true
+  replicas: 1
   selector:
     matchLabels:
       {{- include "rara-infra.componentSelectorLabels" (dict "root" . "component" "hindsight-pg") | nindent 6 }}
@@ -79,7 +79,7 @@ metadata:
   labels:
     {{- include "rara-infra.componentLabels" (dict "root" . "component" "hindsight") | nindent 4 }}
 spec:
-  replicas: true
+  replicas: 1
   selector:
     matchLabels:
       {{- include "rara-infra.componentSelectorLabels" (dict "root" . "component" "hindsight") | nindent 6 }}
@@ -109,7 +109,7 @@ spec:
             {{- end }}
           livenessProbe:
             httpGet:
-              path: /
+              path: /metrics
               port: http
             initialDelaySeconds: 30
             periodSeconds: 15
@@ -117,7 +117,7 @@ spec:
             failureThreshold: 5
           readinessProbe:
             httpGet:
-              path: /
+              path: /metrics
               port: http
             initialDelaySeconds: 15
             periodSeconds: 10
