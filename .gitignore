@@ -78,3 +78,5 @@ deploy/helm/*/charts/
 deploy/helm/*/Chart.lock
 
 .pytest_cache/
+.venv/
+.worktrees/

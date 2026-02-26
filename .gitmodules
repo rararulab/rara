@@ -1,4 +1,0 @@
-[submodule "libs/rara-infra"]
-	path = libs/rara-infra
-	url = https://github.com/crrow/rara-infra
-	branch = main
