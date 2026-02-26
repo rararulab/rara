@@ -296,6 +296,7 @@ consul:
 #   consulSeed.overrides.mem0BaseUrl: "https://mem0.rara.local"
 #   consulSeed.overrides.memosBaseUrl: "https://memos.rara.local"
 #   consulSeed.overrides.hindsightBaseUrl: "https://hindsight.rara.local"
+#   consulSeed.overrides.ollamaBaseUrl: "https://ollama.rara.local"
 #   ... etc.
 # ------------------------------------------------------------------------------
 consulSeed:
@@ -310,6 +311,7 @@ consulSeed:
     memosToken: ""
     hindsightBaseUrl: ""
     hindsightBankId: ""
+    ollamaBaseUrl: ""
     crawl4aiBaseUrl: ""
     telemetryOtlpEndpoint: ""
     langfuseHost: ""

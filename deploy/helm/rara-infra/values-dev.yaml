@@ -162,6 +162,16 @@ consul:
         memory: 256Mi
 
 # ------------------------------------------------------------------------------
+# Consul seed URL overrides (use local Traefik domains for local app)
+# ------------------------------------------------------------------------------
+consulSeed:
+  overrides:
+    mem0BaseUrl: "https://mem0.rara.local"
+    memosBaseUrl: "https://memos.rara.local"
+    hindsightBaseUrl: "https://hindsight.rara.local"
+    ollamaBaseUrl: "https://ollama.rara.local"
+
+# ------------------------------------------------------------------------------
 # MinIO
 # ------------------------------------------------------------------------------
 minio:

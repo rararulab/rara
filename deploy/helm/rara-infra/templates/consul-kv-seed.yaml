@@ -95,6 +95,12 @@ spec:
                 "{{ $ov.hindsightBankId | default "default" }}"
               {{- end }}
 
+              {{- if or .Values.ollama.enabled $ov.ollamaBaseUrl }}
+              # Memory / AI (Ollama service)
+              put_kv "rara/config/memory/ollama_base_url" \
+                "{{ $ov.ollamaBaseUrl | default (printf "http://%s-ollama:11434" .Release.Name) }}"
+              {{- end }}
+
               # Crawl4AI
               put_kv "rara/config/crawl4ai/base_url" \
                 "{{ $ov.crawl4aiBaseUrl | default (printf "http://%s-crawl4ai:11235" .Release.Name) }}"
