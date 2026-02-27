@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod codex_oauth;
 pub mod model;
 
 /// Trait for crates that need to mutate runtime settings without depending on

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use axum::{Json, extract::State, http::StatusCode, response::Redirect};
-use rara_domain_shared::settings::codex_oauth::{
+use rara_codex_oauth::{
     CODEX_CLIENT_ID, CODEX_TOKEN_ENDPOINT, PendingCodexOAuth, StoredCodexTokens, build_auth_url,
     callback_uri, clear_pending_oauth, clear_tokens, compute_expires_at_unix,
     generate_code_challenge, generate_code_verifier, generate_nonce, load_pending_oauth,
