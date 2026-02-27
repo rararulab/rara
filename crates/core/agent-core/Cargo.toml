@@ -18,6 +18,7 @@ backon.workspace = true
 base.workspace = true
 bon.workspace = true
 futures.workspace = true
+jiff.workspace = true
 opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"] }
 serde.workspace = true
 serde_json.workspace = true
@@ -27,6 +28,7 @@ tokio.workspace = true
 tool-core.workspace = true
 tracing.workspace = true
 tracing-opentelemetry = "0.32.0"
+uuid.workspace = true
 
 [dev-dependencies]
 common-telemetry.workspace = true

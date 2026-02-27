@@ -29,7 +29,7 @@
 //!
 //! The kernel does NOT own business logic. It wires together:
 //! - [`agent_core::runner::AgentRunner`] for LLM execution
-//! - [`memory_core`] traits for 3-layer memory
+//! - [`agent_core::memory`] traits for 3-layer memory
 //! - [`agent_core::tool_registry::ToolRegistry`] for tool dispatch
 
 pub mod error;
@@ -37,5 +37,5 @@ pub mod kernel;
 pub mod registry;
 
 pub use error::{KernelError, Result};
-pub use kernel::{Kernel, KernelConfig};
+pub use kernel::Kernel;
 pub use registry::{AgentEntry, AgentManifest, AgentRegistry, AgentState};

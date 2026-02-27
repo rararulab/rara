@@ -16,7 +16,6 @@ agent-core.workspace = true
 async-trait.workspace = true
 dashmap = "6"
 jiff.workspace = true
-memory-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true

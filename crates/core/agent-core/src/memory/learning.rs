@@ -17,7 +17,7 @@
 //! Semantically equivalent to Hindsight's 4-network model:
 //! retain experiences, recall relevant ones, and reflect for synthesis.
 
-use crate::{
+use super::{
     error::Result,
     types::{MemoryContext, RecallEntry, Scope},
 };

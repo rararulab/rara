@@ -14,6 +14,7 @@
 
 pub mod context;
 pub mod err;
+pub mod memory;
 pub mod model;
 pub mod model_repo;
 pub mod prompt;

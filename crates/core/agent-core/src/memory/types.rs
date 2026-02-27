@@ -44,7 +44,7 @@ pub enum Scope {
 
 // ─── State Layer types ───────────────────────────────────────────────
 
-/// A conversation message fed into [`StateMemory::add`](crate::StateMemory::add).
+/// A conversation message fed into [`StateMemory::add`](super::StateMemory::add).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: String,
@@ -66,7 +66,7 @@ pub struct StateFact {
     pub updated_at: Option<Timestamp>,
 }
 
-/// Result of a single [`StateMemory::add`](crate::StateMemory::add) event.
+/// Result of a single [`StateMemory::add`](super::StateMemory::add) event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateEvent {
     pub id: Uuid,

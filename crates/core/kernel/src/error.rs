@@ -46,8 +46,8 @@ impl From<agent_core::err::Error> for KernelError {
     }
 }
 
-impl From<memory_core::MemoryError> for KernelError {
-    fn from(err: memory_core::MemoryError) -> Self {
+impl From<agent_core::memory::MemoryError> for KernelError {
+    fn from(err: agent_core::memory::MemoryError) -> Self {
         Self::Memory {
             message: err.to_string(),
         }

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use agent_core::{
     context::{
-        self, AgentContext, CompletionFeatures, MemoryFeatures, PromptFeatures, SessionFeatures,
+        self, CompletionFeatures, PromptFeatures, SessionFeatures,
         SettingsFeatures, ToolFeatures,
     },
     model::LlmProviderLoaderRef,
@@ -205,7 +205,7 @@ impl CompletionFeatures for AgentContextImpl {
         // Run the recall engine if available, otherwise fall back to legacy
         // hardcoded behavior.
         if let Some(ctx) = recall_ctx {
-            let payloads = MemoryFeatures::run_recall_engine(self, ctx).await;
+            let payloads = agent_core::context::AgentContext::run_recall_engine(self, ctx).await;
             for payload in &payloads {
                 if matches!(payload.target, context::InjectTarget::SystemPrompt) {
                     system_prompt.push_str(&format!(
@@ -370,11 +370,16 @@ impl PromptFeatures for AgentContextImpl {
 }
 
 // ---------------------------------------------------------------------------
-// MemoryFeatures
+// AgentContext
 // ---------------------------------------------------------------------------
 
 #[async_trait]
-impl MemoryFeatures for AgentContextImpl {
+impl agent_core::context::AgentContext for AgentContextImpl {
+    fn memory(&self) -> Option<Arc<dyn agent_core::memory::Memory>> {
+        // TODO: wire up once MemoryManager implements the Memory trait
+        None
+    }
+
     async fn run_recall_engine(
         &self,
         ctx: &context::RecallContext,
@@ -488,6 +493,6 @@ impl std::fmt::Debug for AgentContextImpl {
 
 // Ensure AgentContextImpl satisfies AgentContext (compile-time check).
 const _: () = {
-    fn _assert_agent_context<T: AgentContext>() {}
+    fn _assert_agent_context<T: agent_core::context::AgentContext>() {}
     fn _check() { _assert_agent_context::<AgentContextImpl>() }
 };

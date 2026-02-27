@@ -20,17 +20,17 @@
 //!
 //! - **Agent registry** — spawn, list, kill agents
 //! - **LLM execution** — delegates to [`AgentRunner`] from `agent-core`
-//! - **Memory** — 3-layer memory (State/Knowledge/Learning) via `memory-core` traits
+//! - **Memory** — 3-layer memory (State/Knowledge/Learning) via `agent-core::memory` traits
 //! - **Tools** — shared [`ToolRegistry`] with per-agent filtering
 
 use std::sync::Arc;
 
 use agent_core::{
+    memory::{Memory, MemoryContext},
     model::LlmProviderLoaderRef,
     runner::{AgentRunResponse, AgentRunner, OnEvent, RunnerEvent, UserContent},
     tool_registry::ToolRegistry,
 };
-use memory_core::{KnowledgeMemory, LearningMemory, MemoryContext, StateMemory};
 use tokio::sync::mpsc;
 use tracing::info;
 use uuid::Uuid;
@@ -40,64 +40,31 @@ use crate::{
     registry::{AgentEntry, AgentManifest, AgentRegistry, AgentState},
 };
 
-/// Kernel configuration.
-#[derive(Debug, Clone)]
-pub struct KernelConfig {
-    /// Default user ID for memory context.
-    pub user_id: Uuid,
-}
-
 /// The unified agent orchestrator.
 pub struct Kernel {
-    config: KernelConfig,
     registry: AgentRegistry,
     llm_provider: LlmProviderLoaderRef,
     tools: Arc<ToolRegistry>,
-
-    // 3-layer memory (all optional — kernel works without memory)
-    state_memory: Option<Arc<dyn StateMemory>>,
-    knowledge_memory: Option<Arc<dyn KnowledgeMemory>>,
-    learning_memory: Option<Arc<dyn LearningMemory>>,
+    memory: Arc<dyn Memory>,
 }
 
 impl Kernel {
     /// Create a new kernel with the given configuration.
+    ///
+    /// Memory is a required subsystem. Use a noop implementation if no
+    /// persistence is needed.
     pub fn boot(
-        config: KernelConfig,
         llm_provider: LlmProviderLoaderRef,
         tools: Arc<ToolRegistry>,
+        memory: Arc<dyn Memory>,
     ) -> Self {
         info!("Booting kernel");
         Self {
-            config,
             registry: AgentRegistry::new(),
             llm_provider,
             tools,
-            state_memory: None,
-            knowledge_memory: None,
-            learning_memory: None,
+            memory,
         }
-    }
-
-    /// Attach the state memory layer.
-    #[must_use]
-    pub fn with_state_memory(mut self, memory: Arc<dyn StateMemory>) -> Self {
-        self.state_memory = Some(memory);
-        self
-    }
-
-    /// Attach the knowledge memory layer.
-    #[must_use]
-    pub fn with_knowledge_memory(mut self, memory: Arc<dyn KnowledgeMemory>) -> Self {
-        self.knowledge_memory = Some(memory);
-        self
-    }
-
-    /// Attach the learning memory layer.
-    #[must_use]
-    pub fn with_learning_memory(mut self, memory: Arc<dyn LearningMemory>) -> Self {
-        self.learning_memory = Some(memory);
-        self
     }
 
     // -- Agent lifecycle -------------------------------------------------------
@@ -188,27 +155,22 @@ impl Kernel {
     // -- Memory access ---------------------------------------------------------
 
     /// Build a [`MemoryContext`] for the given agent.
-    pub fn memory_context(&self, agent_id: Uuid, session_id: Option<Uuid>) -> MemoryContext {
+    pub fn memory_context(
+        &self,
+        user_id: Uuid,
+        agent_id: Uuid,
+        session_id: Option<Uuid>,
+    ) -> MemoryContext {
         MemoryContext {
-            user_id: self.config.user_id,
+            user_id,
             agent_id,
             session_id,
         }
     }
 
-    /// Access the state memory layer (if attached).
-    pub fn state_memory(&self) -> Option<&Arc<dyn StateMemory>> {
-        self.state_memory.as_ref()
-    }
-
-    /// Access the knowledge memory layer (if attached).
-    pub fn knowledge_memory(&self) -> Option<&Arc<dyn KnowledgeMemory>> {
-        self.knowledge_memory.as_ref()
-    }
-
-    /// Access the learning memory layer (if attached).
-    pub fn learning_memory(&self) -> Option<&Arc<dyn LearningMemory>> {
-        self.learning_memory.as_ref()
+    /// Access the memory subsystem.
+    pub fn memory(&self) -> &Arc<dyn Memory> {
+        &self.memory
     }
 
     /// Access the agent registry.

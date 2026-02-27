@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # memory-core
+//! # Memory
 //!
 //! Pure trait abstractions for a 3-layer x 3-scope memory system.
 //!
@@ -48,3 +48,11 @@ pub use knowledge::KnowledgeMemory;
 pub use learning::LearningMemory;
 pub use state::StateMemory;
 pub use types::*;
+
+/// Unified memory trait — combines all three memory layers.
+///
+/// Any type implementing `StateMemory + KnowledgeMemory + LearningMemory`
+/// automatically implements `Memory` via blanket impl.
+/// Consumers hold `Arc<dyn Memory>` for polymorphic access to all layers.
+pub trait Memory: StateMemory + KnowledgeMemory + LearningMemory {}
+impl<T: StateMemory + KnowledgeMemory + LearningMemory> Memory for T {}

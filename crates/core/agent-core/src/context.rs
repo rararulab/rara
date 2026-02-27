@@ -11,6 +11,7 @@ use base::shared_string::SharedString;
 
 use crate::{
     err,
+    memory::Memory,
     model::LlmProviderLoaderRef,
     prompt::PromptRepo,
     runner::{AgentRunner, UserContent},
@@ -18,7 +19,7 @@ use crate::{
 };
 
 // ---------------------------------------------------------------------------
-// Protocol types (mirrors of rara_memory types -- avoids dependency)
+// Protocol types (recall engine)
 // ---------------------------------------------------------------------------
 
 /// Where to inject recalled content.
@@ -39,20 +40,20 @@ pub enum EventKind {
 /// Context for recall engine evaluation.
 #[derive(Debug, Clone)]
 pub struct RecallContext {
-    pub user_text: String,
-    pub turn_count: usize,
-    pub events: Vec<EventKind>,
+    pub user_text:               String,
+    pub turn_count:              usize,
+    pub events:                  Vec<EventKind>,
     pub elapsed_since_last_secs: u64,
-    pub summary: Option<String>,
-    pub session_topic: Option<String>,
+    pub summary:                 Option<String>,
+    pub session_topic:           Option<String>,
 }
 
 /// Recall result ready for prompt injection.
 #[derive(Debug, Clone)]
 pub struct InjectionPayload {
     pub rule_name: String,
-    pub target: InjectTarget,
-    pub content: String,
+    pub target:    InjectTarget,
+    pub content:   String,
 }
 
 // ---------------------------------------------------------------------------
@@ -87,11 +88,7 @@ pub trait CompletionFeatures: Send + Sync {
     ) -> AgentRunner;
 
     /// Summarize conversation history text into a compact form.
-    async fn summarize_history(
-        &self,
-        history_text: &str,
-        model: &str,
-    ) -> err::Result<String>;
+    async fn summarize_history(&self, history_text: &str, model: &str) -> err::Result<String>;
 }
 
 /// Static and dynamic tool access.
@@ -108,16 +105,6 @@ pub trait ToolFeatures: Send + Sync {
 pub trait PromptFeatures: Send + Sync {
     /// Return the prompt repository.
     fn prompt_repo(&self) -> &Arc<dyn PromptRepo>;
-}
-
-/// Memory injection and recall.
-#[async_trait]
-pub trait MemoryFeatures: Send + Sync {
-    /// Run the recall engine.
-    async fn run_recall_engine(&self, ctx: &RecallContext) -> Vec<InjectionPayload>;
-
-    /// Fire-and-forget memory consolidation.
-    fn spawn_session_consolidation(&self, exchanges: Vec<(String, String)>);
 }
 
 /// Runtime settings access.
@@ -149,7 +136,7 @@ pub trait SessionFeatures: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// Composed Traits (blanket impls)
+// Composed Traits
 // ---------------------------------------------------------------------------
 
 /// Base context for all agents.
@@ -160,14 +147,27 @@ pub trait BaseContext:
 impl<T: CompletionFeatures + ToolFeatures + PromptFeatures + SettingsFeatures> BaseContext for T {}
 
 /// Full agent context with all features.
-pub trait AgentContext: BaseContext + MemoryFeatures + SessionFeatures {}
-impl<T: BaseContext + MemoryFeatures + SessionFeatures> AgentContext for T {}
+///
+/// Provides access to the unified [`Memory`] layer via [`memory()`](AgentContext::memory).
+/// Also exposes recall-engine and session-consolidation operations that will
+/// eventually be replaced by direct use of the [`Memory`] trait.
+#[async_trait]
+pub trait AgentContext: BaseContext + SessionFeatures {
+    /// Return the unified memory layer (state + knowledge + learning).
+    ///
+    /// Returns `None` when no memory backend is configured.
+    fn memory(&self) -> Option<Arc<dyn Memory>>;
+
+    /// Run the recall engine for prompt injection.
+    async fn run_recall_engine(&self, ctx: &RecallContext) -> Vec<InjectionPayload>;
+
+    /// Fire-and-forget session consolidation into long-term memory.
+    fn spawn_session_consolidation(&self, exchanges: Vec<(String, String)>);
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 /// Rough token estimate: ~3 chars per token.
-pub fn estimate_tokens(text: &str) -> usize {
-    text.chars().count().div_ceil(3)
-}
+pub fn estimate_tokens(text: &str) -> usize { text.chars().count().div_ceil(3) }

@@ -19,7 +19,7 @@
 
 use uuid::Uuid;
 
-use crate::{
+use super::{
     error::Result,
     types::{KnowledgeNote, MemoryContext, Scope},
 };

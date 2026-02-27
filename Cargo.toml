@@ -130,7 +130,6 @@ members = [
     "crates/integrations/keyring-store",
     "crates/core/agent-core",
     "crates/core/kernel",
-    "crates/core/memory-core",
     "crates/core/tool-core",
     "crates/integrations/k8s",
     "crates/integrations/composio",
@@ -219,8 +218,6 @@ testcontainers-modules = { version = "0.14", features = ["postgres", "k3s"] }
 
 # Internal workspace crates (use =version to keep in sync with workspace version)
 agent-core = { path = "crates/core/agent-core" }
-memory-core = { path = "crates/core/memory-core" }
-rara-kernel = { path = "crates/core/kernel" }
 base = { path = "crates/common/base" }
 common-runtime = { path = "crates/common/runtime" }
 common-telemetry = { path = "crates/common/telemetry" }
@@ -242,6 +239,7 @@ rara-domain-shared = { path = "crates/domain/shared" }
 rara-error = { path = "crates/common/error" }
 rara-git = { path = "crates/extensions/rara-git" }
 rara-k8s = { path = "crates/integrations/k8s" }
+rara-kernel = { path = "crates/core/kernel" }
 rara-keyring-store = { path = "crates/integrations/keyring-store" }
 rara-mcp = { path = "crates/integrations/mcp" }
 rara-memory = { path = "crates/memory" }
