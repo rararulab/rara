@@ -30,6 +30,7 @@
 //! | Event Bus   | [`EventBus`]     | Inter-component event broadcasting |
 
 pub mod agent_context;
+pub mod channel;
 pub mod context;
 pub mod defaults;
 pub mod error;
