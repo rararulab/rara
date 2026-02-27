@@ -228,6 +228,7 @@ rara-agents = { path = "crates/agents" }
 rara-api = { path = "api" }
 rara-app = { path = "crates/app" }
 rara-backend-admin = { path = "crates/extensions/backend-admin" }
+rara-channels = { path = "crates/core/channels" }
 rara-cli = { path = "crates/cmd" }
 rara-codex-oauth = { path = "crates/integrations/codex-oauth" }
 rara-coding-task = { path = "crates/extensions/coding-task" }
@@ -238,7 +239,6 @@ rara-domain-shared = { path = "crates/domain/shared" }
 rara-error = { path = "crates/common/error" }
 rara-git = { path = "crates/extensions/rara-git" }
 rara-k8s = { path = "crates/integrations/k8s" }
-rara-channels = { path = "crates/core/channels" }
 rara-kernel = { path = "crates/core/kernel" }
 rara-keyring-store = { path = "crates/integrations/keyring-store" }
 rara-mcp = { path = "crates/integrations/mcp" }

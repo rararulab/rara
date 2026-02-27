@@ -21,5 +21,7 @@
 //!
 //! - [`TelegramAdapter`](telegram::TelegramAdapter) — Telegram Bot API via
 //!   `getUpdates` long polling.
+//! - [`WebAdapter`](web::WebAdapter) — WebSocket + SSE for web chat UI.
 
 pub mod telegram;
+pub mod web;
