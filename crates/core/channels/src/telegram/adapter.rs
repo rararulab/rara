@@ -38,7 +38,7 @@
 //! │              │     │                    │
 //! │              │     └── loop             │
 //! │              │                          │
-//! │  send()  ─► bot.send_message()          │
+//! │  send()  ─► bot.send_message() (HTML)   │
 //! │  stop()  ─► shutdown signal             │
 //! └─────────────────────────────────────────┘
 //! ```
@@ -50,14 +50,14 @@ use async_trait::async_trait;
 use rara_kernel::channel::adapter::ChannelAdapter;
 use rara_kernel::channel::bridge::ChannelBridge;
 use rara_kernel::channel::types::{
-    AgentPhase, ChannelMessage, ChannelType, ChannelUser, MessageContent, MessageRole,
-    OutboundMessage,
+    AgentPhase, ChannelMessage, ChannelType, ChannelUser, ContentBlock, MessageContent,
+    MessageRole, OutboundMessage,
 };
 use rara_kernel::error::KernelError;
-use teloxide::payloads::GetUpdatesSetters;
+use teloxide::payloads::{GetUpdatesSetters, SendMessageSetters};
 use teloxide::requests::{Request, Requester};
 use teloxide::types::{AllowedUpdate, ChatAction, ChatId, Update, UpdateKind};
-use tokio::sync::watch;
+use tokio::sync::{watch, RwLock};
 use tracing::{error, info, warn};
 
 /// Long-polling timeout in seconds (Telegram server-side wait).
@@ -87,7 +87,7 @@ const MAX_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(60);
 /// 2. For each inbound text message, the adapter converts the Telegram
 ///    [`Update`] to a [`ChannelMessage`] and calls `bridge.dispatch()`. The
 ///    response string is sent back to the originating chat via
-///    `bot.send_message()`.
+///    `bot.send_message()` formatted as Telegram HTML.
 /// 3. Call [`stop`](ChannelAdapter::stop) to signal the polling loop to exit
 ///    gracefully.
 pub struct TelegramAdapter {
@@ -96,6 +96,8 @@ pub struct TelegramAdapter {
     polling_timeout: u32,
     shutdown_tx: watch::Sender<bool>,
     shutdown_rx: watch::Receiver<bool>,
+    /// Bot username from getMe (set during start).
+    bot_username: Arc<RwLock<Option<String>>>,
 }
 
 impl TelegramAdapter {
@@ -114,6 +116,7 @@ impl TelegramAdapter {
             polling_timeout: POLL_TIMEOUT_SECS,
             shutdown_tx,
             shutdown_rx,
+            bot_username: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -160,13 +163,27 @@ impl ChannelAdapter for TelegramAdapter {
             "telegram adapter: bot identity verified"
         );
 
+        // Store bot username for metadata enrichment.
+        if let Some(ref username) = me.username {
+            *self.bot_username.write().await = Some(username.clone());
+        }
+
         let bot = self.bot.clone();
         let allowed_chat_ids = self.allowed_chat_ids.clone();
         let polling_timeout = self.polling_timeout;
         let mut shutdown_rx = self.shutdown_rx.clone();
+        let bot_username = Arc::clone(&self.bot_username);
 
         tokio::spawn(async move {
-            polling_loop(bot, bridge, allowed_chat_ids, polling_timeout, &mut shutdown_rx).await;
+            polling_loop(
+                bot,
+                bridge,
+                allowed_chat_ids,
+                polling_timeout,
+                &mut shutdown_rx,
+                bot_username,
+            )
+            .await;
         });
 
         info!("telegram adapter started");
@@ -175,12 +192,18 @@ impl ChannelAdapter for TelegramAdapter {
 
     async fn send(&self, message: OutboundMessage) -> Result<(), KernelError> {
         let chat_id = parse_chat_id(&message.session_key)?;
-        self.bot
-            .send_message(ChatId(chat_id), &message.content)
-            .await
-            .map_err(|e| KernelError::Other {
-                message: format!("failed to send telegram message: {e}").into(),
-            })?;
+        let html = crate::telegram::markdown::markdown_to_telegram_html(&message.content);
+        let chunks = crate::telegram::markdown::chunk_message(&html, 4096);
+
+        for chunk in chunks {
+            self.bot
+                .send_message(ChatId(chat_id), &chunk)
+                .parse_mode(teloxide::types::ParseMode::Html)
+                .await
+                .map_err(|e| KernelError::Other {
+                    message: format!("failed to send telegram message: {e}").into(),
+                })?;
+        }
         Ok(())
     }
 
@@ -222,6 +245,7 @@ async fn polling_loop(
     allowed_chat_ids: Vec<i64>,
     polling_timeout: u32,
     shutdown_rx: &mut watch::Receiver<bool>,
+    bot_username: Arc<RwLock<Option<String>>>,
 ) {
     let mut offset: Option<i32> = None;
     let mut retry_delay = INITIAL_RETRY_DELAY;
@@ -238,7 +262,7 @@ async fn polling_loop(
         let mut request = bot
             .get_updates()
             .timeout(polling_timeout)
-            .allowed_updates(vec![AllowedUpdate::Message]);
+            .allowed_updates(vec![AllowedUpdate::Message, AllowedUpdate::EditedMessage]);
 
         if let Some(off) = offset {
             request = request.offset(off);
@@ -269,8 +293,9 @@ async fn polling_loop(
                     let bridge = Arc::clone(&bridge);
                     let bot = bot.clone();
                     let allowed = allowed_chat_ids.clone();
+                    let bot_username = Arc::clone(&bot_username);
                     tokio::spawn(async move {
-                        handle_update(update, &bridge, &bot, &allowed).await;
+                        handle_update(update, &bridge, &bot, &allowed, &bot_username).await;
                     });
                 }
             }
@@ -298,15 +323,18 @@ async fn polling_loop(
 /// Handle a single Telegram update.
 ///
 /// Extracts text from the message, converts it to a [`ChannelMessage`],
-/// dispatches it via the bridge, and sends the response back.
+/// dispatches it via the bridge, and sends the response back as Telegram HTML.
+/// Also handles photo messages with multimodal content.
 async fn handle_update(
     update: Update,
     bridge: &Arc<dyn ChannelBridge>,
     bot: &teloxide::Bot,
     allowed_chat_ids: &[i64],
+    bot_username: &Arc<RwLock<Option<String>>>,
 ) {
-    let UpdateKind::Message(ref msg) = update.kind else {
-        return;
+    let msg = match &update.kind {
+        UpdateKind::Message(msg) | UpdateKind::EditedMessage(msg) => msg,
+        _ => return,
     };
 
     let chat_id = msg.chat.id.0;
@@ -315,6 +343,15 @@ async fn handle_update(
     if !allowed_chat_ids.is_empty() && !allowed_chat_ids.contains(&chat_id) {
         warn!(chat_id, "telegram adapter: dropping message from unauthorized chat");
         return;
+    }
+
+    // Photo messages — download and forward as multimodal content.
+    if let Some(photos) = msg.photo() {
+        // photos is sorted by size, take the largest.
+        if let Some(photo) = photos.last() {
+            handle_photo(bot, bridge, msg, photo, chat_id, bot_username).await;
+            return;
+        }
     }
 
     // Extract text content.
@@ -327,7 +364,8 @@ async fn handle_update(
     }
 
     // Convert to ChannelMessage.
-    let channel_message = telegram_update_to_channel_message(&update, text);
+    let channel_message =
+        telegram_msg_to_channel_message(&update, msg, text, bot_username).await;
 
     // Send typing indicator.
     let _ = bot.send_chat_action(ChatId(chat_id), ChatAction::Typing).await;
@@ -336,9 +374,7 @@ async fn handle_update(
     match bridge.dispatch(channel_message).await {
         Ok(response) => {
             if !response.trim().is_empty() {
-                if let Err(e) = bot.send_message(ChatId(chat_id), &response).await {
-                    error!(error = %e, chat_id, "telegram adapter: failed to send response");
-                }
+                send_html_chunks(bot, chat_id, &response).await;
             }
         }
         Err(e) => {
@@ -350,17 +386,143 @@ async fn handle_update(
     }
 }
 
-/// Convert a Telegram [`Update`] with text content into a [`ChannelMessage`].
-///
-/// Extracts user info, chat ID (used as session key), and message text.
-fn telegram_update_to_channel_message(update: &Update, text: &str) -> ChannelMessage {
-    let msg = match &update.kind {
-        UpdateKind::Message(msg) => msg,
-        _ => unreachable!("caller ensures this is a Message update"),
+/// Send a response as Telegram HTML, splitting into chunks if necessary.
+async fn send_html_chunks(bot: &teloxide::Bot, chat_id: i64, response: &str) {
+    let html = crate::telegram::markdown::markdown_to_telegram_html(response);
+    let chunks = crate::telegram::markdown::chunk_message(&html, 4096);
+    for chunk in chunks {
+        if let Err(e) = bot
+            .send_message(ChatId(chat_id), &chunk)
+            .parse_mode(teloxide::types::ParseMode::Html)
+            .await
+        {
+            error!(error = %e, chat_id, "telegram adapter: failed to send response chunk");
+        }
+    }
+}
+
+/// Handle a photo message: download, encode as base64, and dispatch as
+/// multimodal content.
+async fn handle_photo(
+    bot: &teloxide::Bot,
+    bridge: &Arc<dyn ChannelBridge>,
+    msg: &teloxide::types::Message,
+    photo: &teloxide::types::PhotoSize,
+    chat_id: i64,
+    bot_username: &Arc<RwLock<Option<String>>>,
+) {
+    // 1. Get file path from Telegram.
+    let file = match bot.get_file(photo.file.id.clone()).await {
+        Ok(f) => f,
+        Err(e) => {
+            error!(error = %e, "failed to get file info");
+            return;
+        }
     };
 
+    // 2. Download the file via HTTP.
+    let url = format!(
+        "https://api.telegram.org/file/bot{}/{}",
+        bot.token(),
+        file.path
+    );
+    let bytes = match reqwest::get(&url).await {
+        Ok(resp) => match resp.bytes().await {
+            Ok(b) => b,
+            Err(e) => {
+                error!(error = %e, "failed to download photo");
+                return;
+            }
+        },
+        Err(e) => {
+            error!(error = %e, "failed to fetch photo URL");
+            return;
+        }
+    };
+
+    // 3. Convert to base64 data URL.
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let data_url = format!("data:image/jpeg;base64,{b64}");
+
+    // 4. Build multimodal ChannelMessage.
+    let caption = msg
+        .caption()
+        .unwrap_or("Analyze this image")
+        .to_owned();
+    let content = MessageContent::Multimodal(vec![
+        ContentBlock::Text { text: caption },
+        ContentBlock::ImageUrl { url: data_url },
+    ]);
+
+    let (platform_id, display_name) = extract_user_info(msg);
+    let mut metadata = build_metadata_from_msg(msg);
+
+    // Include bot username in metadata if available.
+    if let Some(ref username) = *bot_username.read().await {
+        metadata.insert(
+            "telegram_bot_username".to_owned(),
+            serde_json::Value::String(username.clone()),
+        );
+    }
+
+    let channel_message = ChannelMessage {
+        id: ulid::Ulid::new().to_string(),
+        channel_type: ChannelType::Telegram,
+        user: ChannelUser {
+            platform_id,
+            display_name,
+        },
+        session_key: format_session_key(chat_id),
+        role: MessageRole::User,
+        content,
+        tool_call_id: None,
+        tool_name: None,
+        timestamp: jiff::Timestamp::now(),
+        metadata,
+    };
+
+    let _ = bot
+        .send_chat_action(ChatId(chat_id), ChatAction::Typing)
+        .await;
+
+    match bridge.dispatch(channel_message).await {
+        Ok(response) => {
+            if !response.trim().is_empty() {
+                send_html_chunks(bot, chat_id, &response).await;
+            }
+        }
+        Err(e) => {
+            error!(error = %e, chat_id, "bridge dispatch failed for photo");
+            let _ = bot
+                .send_message(ChatId(chat_id), format!("Error: {e}"))
+                .await;
+        }
+    }
+}
+
+/// Convert a Telegram message with text content into a [`ChannelMessage`].
+///
+/// Extracts user info, chat ID (used as session key), and message text.
+/// Includes bot username in metadata when available.
+async fn telegram_msg_to_channel_message(
+    update: &Update,
+    msg: &teloxide::types::Message,
+    text: &str,
+    bot_username: &Arc<RwLock<Option<String>>>,
+) -> ChannelMessage {
     let chat_id = msg.chat.id.0;
     let (platform_id, display_name) = extract_user_info(msg);
+
+    let mut metadata = build_metadata(update, msg);
+
+    // Include bot username in metadata if available.
+    if let Some(ref username) = *bot_username.read().await {
+        metadata.insert(
+            "telegram_bot_username".to_owned(),
+            serde_json::Value::String(username.clone()),
+        );
+    }
 
     ChannelMessage {
         id: ulid::Ulid::new().to_string(),
@@ -375,7 +537,7 @@ fn telegram_update_to_channel_message(update: &Update, text: &str) -> ChannelMes
         tool_call_id: None,
         tool_name: None,
         timestamp: jiff::Timestamp::now(),
-        metadata: build_metadata(update, msg),
+        metadata,
     }
 }
 
@@ -408,6 +570,32 @@ fn build_metadata(
         "telegram_update_id".to_owned(),
         serde_json::Value::Number(update.id.0.into()),
     );
+    meta.insert(
+        "telegram_message_id".to_owned(),
+        serde_json::Value::Number(msg.id.0.into()),
+    );
+    meta.insert(
+        "telegram_chat_id".to_owned(),
+        serde_json::json!(msg.chat.id.0),
+    );
+    if let Some(ref user) = msg.from {
+        if let Some(ref username) = user.username {
+            meta.insert(
+                "telegram_username".to_owned(),
+                serde_json::Value::String(username.clone()),
+            );
+        }
+    }
+    meta
+}
+
+/// Build metadata from a Telegram message (without an Update reference).
+///
+/// Used for photo messages where the full [`Update`] is not passed through.
+fn build_metadata_from_msg(
+    msg: &teloxide::types::Message,
+) -> HashMap<String, serde_json::Value> {
+    let mut meta = HashMap::new();
     meta.insert(
         "telegram_message_id".to_owned(),
         serde_json::Value::Number(msg.id.0.into()),
