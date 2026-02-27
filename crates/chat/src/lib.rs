@@ -17,7 +17,7 @@
 //! Chat domain crate — orchestrates session-based AI conversations.
 //!
 //! This crate sits between the HTTP transport layer and the lower-level
-//! [`rara_sessions`] (persistence) and [`rara_agents`] (LLM execution)
+//! [`rara_sessions`] (persistence) and [`rara_kernel`] (LLM execution)
 //! crates. It is responsible for:
 //!
 //! - Managing the lifecycle of chat sessions (create, list, get, delete).

@@ -120,7 +120,6 @@ members = [
     "crates/paths",
     "crates/jobspy-sys",
     "crates/workers",
-    "crates/agents",
     "crates/sessions",
     "crates/chat",
     "crates/memory",
@@ -224,7 +223,6 @@ common-worker = { path = "crates/common/worker" }
 crawl4ai = { path = "crates/common/crawl4ai" }
 jobspy-sys = { path = "crates/jobspy-sys" }
 object-store = { path = "crates/common/object-store" }
-rara-agents = { path = "crates/agents" }
 rara-api = { path = "api" }
 rara-app = { path = "crates/app" }
 rara-backend-admin = { path = "crates/extensions/backend-admin" }
