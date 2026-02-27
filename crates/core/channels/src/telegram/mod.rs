@@ -18,3 +18,4 @@ pub mod adapter;
 pub mod markdown;
 
 pub use adapter::TelegramAdapter;
+pub use adapter::TelegramConfig;
