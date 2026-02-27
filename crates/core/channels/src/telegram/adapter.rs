@@ -54,14 +54,17 @@ use rara_kernel::channel::command::{
     CommandResult,
 };
 use rara_kernel::channel::types::{
-    AgentPhase, ChannelMessage, ChannelType, ChannelUser, ContentBlock, MessageContent,
-    MessageRole, OutboundMessage,
+    AgentPhase, ChannelMessage, ChannelType, ChannelUser, ContentBlock, InlineButton,
+    MessageContent, MessageRole, OutboundMessage, ReplyMarkup,
 };
 use rara_kernel::error::KernelError;
-use teloxide::payloads::{EditMessageTextSetters, GetUpdatesSetters, SendMessageSetters};
+use teloxide::payloads::{
+    EditMessageTextSetters, GetUpdatesSetters, SendMessageSetters, SendPhotoSetters,
+};
 use teloxide::requests::{Request, Requester};
 use teloxide::types::{
-    AllowedUpdate, ChatAction, ChatId, MaybeInaccessibleMessage, Update, UpdateKind,
+    AllowedUpdate, ChatAction, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile,
+    MaybeInaccessibleMessage, MessageId, ParseMode, ReplyParameters, Update, UpdateKind,
 };
 use tokio::sync::{watch, RwLock};
 use tracing::{error, info, warn};
@@ -220,17 +223,75 @@ impl ChannelAdapter for TelegramAdapter {
 
     async fn send(&self, message: OutboundMessage) -> Result<(), KernelError> {
         let chat_id = parse_chat_id(&message.session_key)?;
+
+        // Case 1: Edit an existing message.
+        if let Some(ref edit_id) = message.edit_message_id {
+            let msg_id = parse_message_id(edit_id)?;
+            let html = crate::telegram::markdown::markdown_to_telegram_html(&message.content);
+            let mut req = self
+                .bot
+                .edit_message_text(ChatId(chat_id), msg_id, &html)
+                .parse_mode(ParseMode::Html);
+            if let Some(keyboard) = convert_reply_markup(&message.reply_markup) {
+                req = req.reply_markup(keyboard);
+            }
+            req.await.map_err(|e| KernelError::Other {
+                message: format!("failed to edit telegram message: {e}").into(),
+            })?;
+            return Ok(());
+        }
+
+        // Case 2: Send a photo.
+        if let Some(ref photo) = message.photo {
+            let file_name = mime_to_filename(&photo.mime_type);
+            let input_file = InputFile::memory(photo.data.clone()).file_name(file_name);
+            let mut req = self.bot.send_photo(ChatId(chat_id), input_file);
+            if let Some(ref caption) = photo.caption {
+                req = req.caption(caption).parse_mode(ParseMode::Html);
+            }
+            if let Some(ref reply_id) = message.reply_to_message_id {
+                if let Ok(msg_id) = parse_message_id(reply_id) {
+                    req = req.reply_parameters(ReplyParameters::new(msg_id));
+                }
+            }
+            if let Some(keyboard) = convert_reply_markup(&message.reply_markup) {
+                req = req.reply_markup(keyboard);
+            }
+            req.await.map_err(|e| KernelError::Other {
+                message: format!("failed to send telegram photo: {e}").into(),
+            })?;
+            return Ok(());
+        }
+
+        // Case 3: Send text message (with optional reply-to and keyboard).
         let html = crate::telegram::markdown::markdown_to_telegram_html(&message.content);
         let chunks = crate::telegram::markdown::chunk_message(&html, 4096);
 
-        for chunk in chunks {
-            self.bot
-                .send_message(ChatId(chat_id), &chunk)
-                .parse_mode(teloxide::types::ParseMode::Html)
-                .await
-                .map_err(|e| KernelError::Other {
-                    message: format!("failed to send telegram message: {e}").into(),
-                })?;
+        for (i, chunk) in chunks.iter().enumerate() {
+            let mut req = self
+                .bot
+                .send_message(ChatId(chat_id), chunk)
+                .parse_mode(ParseMode::Html);
+
+            // Attach reply-to only on the first chunk.
+            if i == 0 {
+                if let Some(ref reply_id) = message.reply_to_message_id {
+                    if let Ok(msg_id) = parse_message_id(reply_id) {
+                        req = req.reply_parameters(ReplyParameters::new(msg_id));
+                    }
+                }
+            }
+
+            // Attach keyboard only on the last chunk.
+            if i == chunks.len() - 1 {
+                if let Some(keyboard) = convert_reply_markup(&message.reply_markup) {
+                    req = req.reply_markup(keyboard);
+                }
+            }
+
+            req.await.map_err(|e| KernelError::Other {
+                message: format!("failed to send telegram message: {e}").into(),
+            })?;
         }
         Ok(())
     }
@@ -694,6 +755,61 @@ pub fn parse_chat_id(session_key: &str) -> Result<i64, KernelError> {
     })
 }
 
+/// Parse a string into a teloxide [`MessageId`].
+pub fn parse_message_id(id: &str) -> Result<MessageId, KernelError> {
+    id.parse::<i32>()
+        .map(MessageId)
+        .map_err(|_| KernelError::Other {
+            message: format!("invalid telegram message id: {id}").into(),
+        })
+}
+
+/// Convert a kernel [`ReplyMarkup`] to a teloxide [`InlineKeyboardMarkup`].
+///
+/// Returns `None` if the input is `None` or [`ReplyMarkup::RemoveKeyboard`]
+/// (which cannot be represented as an inline keyboard).
+fn convert_reply_markup(markup: &Option<ReplyMarkup>) -> Option<InlineKeyboardMarkup> {
+    match markup {
+        Some(ReplyMarkup::InlineKeyboard { rows }) => {
+            let tg_rows: Vec<Vec<InlineKeyboardButton>> = rows
+                .iter()
+                .map(|row| row.iter().map(convert_inline_button).collect())
+                .collect();
+            Some(InlineKeyboardMarkup::new(tg_rows))
+        }
+        Some(ReplyMarkup::RemoveKeyboard) | None => None,
+    }
+}
+
+/// Convert a kernel [`InlineButton`] to a teloxide [`InlineKeyboardButton`].
+fn convert_inline_button(button: &InlineButton) -> InlineKeyboardButton {
+    if let Some(ref data) = button.callback_data {
+        InlineKeyboardButton::callback(&button.text, data)
+    } else if let Some(ref url) = button.url {
+        match url.parse::<reqwest::Url>() {
+            Ok(parsed) => InlineKeyboardButton::url(&button.text, parsed),
+            Err(_) => {
+                // Fallback to callback with text as data if URL is invalid.
+                InlineKeyboardButton::callback(&button.text, &button.text)
+            }
+        }
+    } else {
+        // Fallback: use text as callback data.
+        InlineKeyboardButton::callback(&button.text, &button.text)
+    }
+}
+
+/// Map a MIME type to a sensible filename for Telegram uploads.
+fn mime_to_filename(mime: &str) -> String {
+    match mime {
+        "image/jpeg" | "image/jpg" => "photo.jpg".to_owned(),
+        "image/png" => "photo.png".to_owned(),
+        "image/gif" => "photo.gif".to_owned(),
+        "image/webp" => "photo.webp".to_owned(),
+        _ => "photo.bin".to_owned(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Command & callback handling
 // ---------------------------------------------------------------------------
@@ -1044,5 +1160,134 @@ mod tests {
         let bot_username = Arc::new(RwLock::new(None));
         let result = parse_command("hello world", &bot_username).await;
         assert!(result.is_none());
+    }
+
+    // --- Rich outbound message helpers ---
+
+    #[test]
+    fn test_parse_message_id_valid() {
+        let msg_id = parse_message_id("123").unwrap();
+        assert_eq!(msg_id, MessageId(123));
+    }
+
+    #[test]
+    fn test_parse_message_id_negative() {
+        // Telegram message IDs are always positive, but the parser should
+        // handle the i32 range.
+        let msg_id = parse_message_id("-1").unwrap();
+        assert_eq!(msg_id, MessageId(-1));
+    }
+
+    #[test]
+    fn test_parse_message_id_invalid() {
+        let result = parse_message_id("abc");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_message_id_empty() {
+        let result = parse_message_id("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_convert_reply_markup_none() {
+        assert!(convert_reply_markup(&None).is_none());
+    }
+
+    #[test]
+    fn test_convert_reply_markup_remove_keyboard() {
+        let markup = Some(ReplyMarkup::RemoveKeyboard);
+        assert!(convert_reply_markup(&markup).is_none());
+    }
+
+    #[test]
+    fn test_convert_reply_markup_inline_keyboard() {
+        let markup = Some(ReplyMarkup::InlineKeyboard {
+            rows: vec![vec![
+                InlineButton {
+                    text: "Yes".to_owned(),
+                    callback_data: Some("yes".to_owned()),
+                    url: None,
+                },
+                InlineButton {
+                    text: "No".to_owned(),
+                    callback_data: Some("no".to_owned()),
+                    url: None,
+                },
+            ]],
+        });
+        let result = convert_reply_markup(&markup).unwrap();
+        assert_eq!(result.inline_keyboard.len(), 1);
+        assert_eq!(result.inline_keyboard[0].len(), 2);
+        assert_eq!(result.inline_keyboard[0][0].text, "Yes");
+        assert_eq!(result.inline_keyboard[0][1].text, "No");
+    }
+
+    #[test]
+    fn test_convert_reply_markup_url_button() {
+        let markup = Some(ReplyMarkup::InlineKeyboard {
+            rows: vec![vec![InlineButton {
+                text: "Open".to_owned(),
+                callback_data: None,
+                url: Some("https://example.com".to_owned()),
+            }]],
+        });
+        let result = convert_reply_markup(&markup).unwrap();
+        assert_eq!(result.inline_keyboard[0][0].text, "Open");
+    }
+
+    #[test]
+    fn test_convert_reply_markup_fallback_button() {
+        // Button with neither callback_data nor url falls back to text as callback.
+        let markup = Some(ReplyMarkup::InlineKeyboard {
+            rows: vec![vec![InlineButton {
+                text: "Click".to_owned(),
+                callback_data: None,
+                url: None,
+            }]],
+        });
+        let result = convert_reply_markup(&markup).unwrap();
+        assert_eq!(result.inline_keyboard[0][0].text, "Click");
+    }
+
+    #[test]
+    fn test_convert_reply_markup_multiple_rows() {
+        let markup = Some(ReplyMarkup::InlineKeyboard {
+            rows: vec![
+                vec![InlineButton {
+                    text: "A".to_owned(),
+                    callback_data: Some("a".to_owned()),
+                    url: None,
+                }],
+                vec![
+                    InlineButton {
+                        text: "B".to_owned(),
+                        callback_data: Some("b".to_owned()),
+                        url: None,
+                    },
+                    InlineButton {
+                        text: "C".to_owned(),
+                        callback_data: Some("c".to_owned()),
+                        url: None,
+                    },
+                ],
+            ],
+        });
+        let result = convert_reply_markup(&markup).unwrap();
+        assert_eq!(result.inline_keyboard.len(), 2);
+        assert_eq!(result.inline_keyboard[0].len(), 1);
+        assert_eq!(result.inline_keyboard[1].len(), 2);
+    }
+
+    #[test]
+    fn test_mime_to_filename() {
+        assert_eq!(mime_to_filename("image/jpeg"), "photo.jpg");
+        assert_eq!(mime_to_filename("image/jpg"), "photo.jpg");
+        assert_eq!(mime_to_filename("image/png"), "photo.png");
+        assert_eq!(mime_to_filename("image/gif"), "photo.gif");
+        assert_eq!(mime_to_filename("image/webp"), "photo.webp");
+        assert_eq!(mime_to_filename("application/octet-stream"), "photo.bin");
+        assert_eq!(mime_to_filename("unknown"), "photo.bin");
     }
 }
