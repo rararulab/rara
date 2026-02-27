@@ -104,6 +104,21 @@ type OpenRouterModel = {
   name: string;
   contextLength: number | null;
 };
+
+/** Well-known OpenAI models available through Codex OAuth. */
+const CODEX_KNOWN_MODELS: OpenRouterModel[] = [
+  { id: "o3-pro", name: "o3-pro", contextLength: 200000 },
+  { id: "o3", name: "o3", contextLength: 200000 },
+  { id: "o3-mini", name: "o3-mini", contextLength: 200000 },
+  { id: "o4-mini", name: "o4-mini", contextLength: 200000 },
+  { id: "gpt-4.1", name: "gpt-4.1", contextLength: 1047576 },
+  { id: "gpt-4.1-mini", name: "gpt-4.1-mini", contextLength: 1047576 },
+  { id: "gpt-4.1-nano", name: "gpt-4.1-nano", contextLength: 1047576 },
+  { id: "gpt-4o", name: "gpt-4o", contextLength: 128000 },
+  { id: "gpt-4o-mini", name: "gpt-4o-mini", contextLength: 128000 },
+  { id: "codex-mini-latest", name: "codex-mini-latest", contextLength: 192000 },
+];
+
 type TgAdminSettingsView = {
   configured: boolean;
   chat_id: number | null;
@@ -839,29 +854,6 @@ export default function Settings() {
   };
 
   const fetchModels = useCallback(async () => {
-    if (aiProvider === "codex") {
-      setModelsLoading(true);
-      setModelsError(null);
-      try {
-        const resp = await api.codexOAuthModels();
-        const loaded = resp.models
-          .map((m) => ({
-            id: m.id,
-            name: m.id,
-            contextLength: null,
-          } satisfies OpenRouterModel))
-          .sort((a, b) => a.id.localeCompare(b.id));
-        setModels(loaded);
-        setToast({ kind: "success", message: `Fetched ${loaded.length} models.` });
-      } catch (e: unknown) {
-        const message = e instanceof Error ? e.message : "Failed to fetch models";
-        setModelsError(message);
-      } finally {
-        setModelsLoading(false);
-      }
-      return;
-    }
-
     const key = aiApiKey.trim() || aiSettingsQuery.data?.openrouter_api_key?.trim() || "";
     if (!key) {
       setModelsError("Please enter your OpenRouter API key first.");
@@ -935,18 +927,13 @@ export default function Settings() {
 
   useEffect(() => {
     if (selectedSetting !== "ai") return;
+    if (aiProvider !== "openrouter") return;
     if (models.length > 0) return;
     if (modelsLoading || modelsError) return;
-    if (aiProvider === "openrouter") {
-      if (!aiSettingsQuery.data?.openrouter_api_key) return;
-      void fetchModels();
-    } else if (aiProvider === "codex") {
-      if (!codexConnected) return;
-      void fetchModels();
-    }
+    if (!aiSettingsQuery.data?.openrouter_api_key) return;
+    void fetchModels();
   }, [
     aiProvider,
-    codexConnected,
     fetchModels,
     models.length,
     modelsLoading,
@@ -1048,6 +1035,14 @@ export default function Settings() {
                     placeholder={key === "default" ? "openai/gpt-4o" : `(falls back to default)`}
                     className="h-8 text-sm font-mono"
                   />
+                ) : aiProvider === "codex" ? (
+                  <Input
+                    value={currentValue}
+                    onChange={(e) => setModelKey(key, e.target.value || undefined)}
+                    placeholder={key === "default" ? "codex-mini-latest" : `(falls back to default)`}
+                    list={`codex-models-${key}`}
+                    className="h-8 text-sm font-mono"
+                  />
                 ) : (
                   <div className="flex-1 min-w-0">
                     <Select
@@ -1086,6 +1081,13 @@ export default function Settings() {
             );
           })}
         </div>
+        {aiProvider === "codex" && MODEL_KEYS.map((key) => (
+          <datalist key={key} id={`codex-models-${key}`}>
+            {CODEX_KNOWN_MODELS.map((m) => (
+              <option key={m.id} value={m.id} />
+            ))}
+          </datalist>
+        ))}
       </div>
     );
   };
@@ -1149,10 +1151,11 @@ export default function Settings() {
             ))}
           </div>
         )}
-        {aiProvider === "ollama" ? (
+        {aiProvider === "ollama" || aiProvider === "codex" ? (
           <div className="flex items-center gap-2">
             <Input
               placeholder="Model name to add..."
+              list={aiProvider === "codex" ? "codex-fallback-models" : undefined}
               className="h-8 text-sm font-mono"
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
@@ -1164,6 +1167,13 @@ export default function Settings() {
                 }
               }}
             />
+            {aiProvider === "codex" && (
+              <datalist id="codex-fallback-models">
+                {CODEX_KNOWN_MODELS.filter((m) => !fallbackModels.includes(m.id)).map((m) => (
+                  <option key={m.id} value={m.id} />
+                ))}
+              </datalist>
+            )}
             <p className="text-xs text-muted-foreground shrink-0">Press Enter to add</p>
           </div>
         ) : (
@@ -1926,12 +1936,12 @@ export default function Settings() {
                   <Label htmlFor={aiProvider === "ollama" ? "ollama-default-model" : "models-search"} className="text-xl font-semibold">
                     Models
                   </Label>
-                  {(aiProvider === "openrouter" || aiProvider === "codex") && (
+                  {aiProvider === "openrouter" && (
                     <Button
                       type="button"
                       variant="outline"
                       onClick={fetchModels}
-                      disabled={modelsLoading || (aiProvider === "codex" && !codexConnected)}
+                      disabled={modelsLoading}
                       className="h-10 px-4"
                     >
                       <Download className="h-4 w-4" />
@@ -2177,36 +2187,9 @@ export default function Settings() {
                   </>
                 ) : (
                   <>
-                    {models.length > 0 && (
-                      <>
-                        <div className="relative">
-                          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                          <Input
-                            id="models-search"
-                            value={modelSearch}
-                            onChange={(e) => setModelSearch(e.target.value)}
-                            placeholder="Search models..."
-                            className="h-11 pl-10"
-                          />
-                        </div>
-                        <p className="text-sm text-muted-foreground">
-                          Showing {filteredModels.length} models
-                        </p>
-                      </>
-                    )}
-                    {!codexConnected && models.length === 0 && (
-                      <p className="text-sm text-muted-foreground">
-                        Connect Codex OAuth first, then fetch available models.
-                      </p>
-                    )}
-                    {codexConnected && models.length === 0 && !modelsLoading && (
-                      <p className="text-sm text-muted-foreground">
-                        Click Fetch to load available OpenAI models.
-                      </p>
-                    )}
-                    {modelsError && (
-                      <p className="text-sm text-destructive">{modelsError}</p>
-                    )}
+                    <p className="text-sm text-muted-foreground">
+                      Select from known OpenAI models or type a custom model id.
+                    </p>
                     {renderModelKeyTable()}
                     {renderFallbackModelsEditor()}
                   </>

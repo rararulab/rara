@@ -83,7 +83,7 @@ async function requestBlob(path: string, options?: RequestInit & { timeoutMs?: n
   }
 }
 
-import type { PipelineDiscoveredJob, PaginatedDiscoveredJobs, DiscoveredJobsStats, LlmfitRecommendationsResponse, OllamaHealthResponse, OllamaModelListResponse, OllamaModelInfo, DispatcherStatus, TaskRecord, AgentTaskKind, TaskStatus, CodexOAuthStartResponse, CodexOAuthStatusResponse, CodexOAuthModelsResponse } from './types';
+import type { PipelineDiscoveredJob, PaginatedDiscoveredJobs, DiscoveredJobsStats, LlmfitRecommendationsResponse, OllamaHealthResponse, OllamaModelListResponse, OllamaModelInfo, DispatcherStatus, TaskRecord, AgentTaskKind, TaskStatus, CodexOAuthStartResponse, CodexOAuthStatusResponse } from './types';
 
 export const api = {
   get: <T>(path: string) => request<T>(path),
@@ -148,8 +148,6 @@ export const api = {
     request<CodexOAuthStatusResponse>('/api/v1/ai/codex/oauth/status'),
   codexOAuthDisconnect: () =>
     request<CodexOAuthStatusResponse>('/api/v1/ai/codex/oauth/disconnect', { method: 'POST' }),
-  codexOAuthModels: () =>
-    request<CodexOAuthModelsResponse>('/api/v1/ai/codex/oauth/models'),
 
   updateDiscoveredJobAction(id: string, action: string): Promise<PipelineDiscoveredJob> {
     return request<PipelineDiscoveredJob>(`/api/v1/pipeline/discovered-jobs/${id}`, {

@@ -219,14 +219,6 @@ export interface CodexOAuthStatusResponse {
   expires_at_unix: number | null;
 }
 
-export interface CodexOAuthModelEntry {
-  id: string;
-  owned_by: string;
-}
-
-export interface CodexOAuthModelsResponse {
-  models: CodexOAuthModelEntry[];
-}
 
 export interface ModelEntryView {
   key: string;
