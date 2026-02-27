@@ -69,6 +69,10 @@ use tracing::{error, info, warn};
 /// Long-polling timeout in seconds (Telegram server-side wait).
 const POLL_TIMEOUT_SECS: u32 = 30;
 
+/// Groups with this many members or fewer are treated like private chats --
+/// the bot responds to every message without requiring an @mention or keyword.
+const SMALL_GROUP_THRESHOLD: u32 = 3;
+
 /// Initial error retry delay.
 const INITIAL_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
 
@@ -108,6 +112,11 @@ pub struct TelegramAdapter {
     command_handlers: Vec<Arc<dyn CommandHandler>>,
     /// Registered callback handlers for interactive elements.
     callback_handlers: Vec<Arc<dyn CallbackHandler>>,
+    /// Primary chat ID for privileged commands (e.g. /search, /jd).
+    primary_chat_id: Option<i64>,
+    /// Allowed group chat ID. If set, only this group is authorized for
+    /// group-chat interactions. Other groups receive an "unauthorized" message.
+    allowed_group_chat_id: Option<i64>,
 }
 
 impl TelegramAdapter {
@@ -129,6 +138,8 @@ impl TelegramAdapter {
             bot_username: Arc::new(RwLock::new(None)),
             command_handlers: Vec::new(),
             callback_handlers: Vec::new(),
+            primary_chat_id: None,
+            allowed_group_chat_id: None,
         }
     }
 
@@ -147,6 +158,24 @@ impl TelegramAdapter {
     /// Register callback handlers.
     pub fn with_callback_handlers(mut self, handlers: Vec<Arc<dyn CallbackHandler>>) -> Self {
         self.callback_handlers = handlers;
+        self
+    }
+
+    /// Set the primary chat ID for privileged commands.
+    ///
+    /// Commands like `/search` and `/jd` are restricted to this chat only.
+    pub fn with_primary_chat_id(mut self, id: i64) -> Self {
+        self.primary_chat_id = Some(id);
+        self
+    }
+
+    /// Set the allowed group chat ID.
+    ///
+    /// When set, only the specified group is authorized for group-chat
+    /// interactions. Messages from other groups receive an "unauthorized"
+    /// response and are not dispatched further.
+    pub fn with_allowed_group_chat_id(mut self, id: i64) -> Self {
+        self.allowed_group_chat_id = Some(id);
         self
     }
 
@@ -199,6 +228,8 @@ impl ChannelAdapter for TelegramAdapter {
         let bot_username = Arc::clone(&self.bot_username);
         let command_handlers = self.command_handlers.clone();
         let callback_handlers = self.callback_handlers.clone();
+        let primary_chat_id = self.primary_chat_id;
+        let allowed_group_chat_id = self.allowed_group_chat_id;
 
         tokio::spawn(async move {
             polling_loop(
@@ -210,6 +241,8 @@ impl ChannelAdapter for TelegramAdapter {
                 bot_username,
                 command_handlers,
                 callback_handlers,
+                primary_chat_id,
+                allowed_group_chat_id,
             )
             .await;
         });
@@ -276,6 +309,8 @@ async fn polling_loop(
     bot_username: Arc<RwLock<Option<String>>>,
     command_handlers: Vec<Arc<dyn CommandHandler>>,
     callback_handlers: Vec<Arc<dyn CallbackHandler>>,
+    primary_chat_id: Option<i64>,
+    allowed_group_chat_id: Option<i64>,
 ) {
     let mut offset: Option<i32> = None;
     let mut retry_delay = INITIAL_RETRY_DELAY;
@@ -339,6 +374,8 @@ async fn polling_loop(
                             &bot_username,
                             &cmd_handlers,
                             &cb_handlers,
+                            primary_chat_id,
+                            allowed_group_chat_id,
                         )
                         .await;
                     });
@@ -378,6 +415,8 @@ async fn handle_update(
     bot_username: &Arc<RwLock<Option<String>>>,
     command_handlers: &[Arc<dyn CommandHandler>],
     callback_handlers: &[Arc<dyn CallbackHandler>],
+    _primary_chat_id: Option<i64>,
+    allowed_group_chat_id: Option<i64>,
 ) {
     // Handle callback queries (inline keyboard button presses).
     if let UpdateKind::CallbackQuery(query) = &update.kind {
@@ -398,6 +437,52 @@ async fn handle_update(
         return;
     }
 
+    // --- Group chat authorization ---
+    let group_chat = is_group_chat(msg);
+
+    if group_chat {
+        // Check if this is a small group (treat like private chat).
+        let trigger_text = msg.text().or_else(|| msg.caption()).unwrap_or_default();
+        let username_guard = bot_username.read().await;
+        let username_ref = username_guard.as_deref();
+
+        let is_small = matches!(
+            bot.get_chat_member_count(msg.chat.id).await,
+            Ok(n) if n <= SMALL_GROUP_THRESHOLD
+        );
+
+        if !is_small {
+            // Large group: only respond to @mentions or rara keywords.
+            let should_respond = is_group_mention(msg, trigger_text, username_ref)
+                || contains_rara_keyword(trigger_text);
+            if !should_respond {
+                return;
+            }
+        }
+
+        // Check allowed group chat authorization.
+        if let Some(allowed_id) = allowed_group_chat_id {
+            if chat_id != allowed_id {
+                warn!(
+                    chat_id,
+                    allowed_group_chat_id = allowed_id,
+                    "telegram adapter: dropping group message from unauthorized group"
+                );
+                let _ = bot
+                    .send_message(
+                        ChatId(chat_id),
+                        "This group is not authorized. Please configure the allowed group \
+                         chat ID in the adapter settings.",
+                    )
+                    .await;
+                return;
+            }
+        }
+
+        // Release the read lock before continuing.
+        drop(username_guard);
+    }
+
     // Photo messages — download and forward as multimodal content.
     if let Some(photos) = msg.photo() {
         // photos is sorted by size, take the largest.
@@ -408,9 +493,24 @@ async fn handle_update(
     }
 
     // Extract text content.
-    let Some(text) = msg.text() else {
+    let Some(raw_text) = msg.text() else {
         return;
     };
+
+    if raw_text.trim().is_empty() {
+        return;
+    }
+
+    // Strip @mention from text in group chats.
+    let text: String;
+    {
+        let username_guard = bot_username.read().await;
+        text = if group_chat {
+            strip_group_mention(raw_text, username_guard.as_deref())
+        } else {
+            raw_text.to_owned()
+        };
+    }
 
     if text.trim().is_empty() {
         return;
@@ -418,7 +518,7 @@ async fn handle_update(
 
     // Check for commands (text starting with '/').
     if text.starts_with('/') {
-        if let Some(cmd_info) = parse_command(text, bot_username).await {
+        if let Some(cmd_info) = parse_command(&text, bot_username).await {
             handle_command(bot, bridge, msg, &cmd_info, command_handlers, bot_username).await;
             return;
         }
@@ -426,7 +526,7 @@ async fn handle_update(
 
     // Convert to ChannelMessage.
     let channel_message =
-        telegram_msg_to_channel_message(&update, msg, text, bot_username).await;
+        telegram_msg_to_channel_message(&update, msg, &text, bot_username).await;
 
     // Send typing indicator.
     let _ = bot.send_chat_action(ChatId(chat_id), ChatAction::Typing).await;
@@ -435,6 +535,17 @@ async fn handle_update(
     match bridge.dispatch(channel_message).await {
         Ok(response) => {
             if !response.trim().is_empty() {
+                // In group chats, prepend @mention to the sender.
+                let response = if group_chat {
+                    let mention = mention_sender(msg);
+                    if mention.is_empty() {
+                        response
+                    } else {
+                        format!("{mention}\n{response}")
+                    }
+                } else {
+                    response
+                };
                 send_html_chunks(bot, chat_id, &response).await;
             }
         }
@@ -936,6 +1047,87 @@ async fn handle_callback_query(
     let _ = bot.answer_callback_query(query.id.clone()).await;
 }
 
+// ---------------------------------------------------------------------------
+// Group chat helpers
+// ---------------------------------------------------------------------------
+
+/// Check whether a Telegram message originates from a group (or supergroup)
+/// chat. Returns `false` for private chats.
+fn is_group_chat(msg: &teloxide::types::Message) -> bool {
+    matches!(msg.chat.kind, teloxide::types::ChatKind::Public(..))
+}
+
+/// Check whether the message contains an @mention of the bot via message
+/// entities or a plain-text `@botname` substring.
+fn is_group_mention(
+    msg: &teloxide::types::Message,
+    text: &str,
+    bot_username: Option<&str>,
+) -> bool {
+    let Some(username) = bot_username else {
+        return false;
+    };
+    let expected = username.to_lowercase();
+
+    // Check structured entities first (most reliable).
+    if let Some(entities) = msg.parse_entities() {
+        for entity in entities {
+            if matches!(
+                entity.kind(),
+                teloxide::types::MessageEntityKind::Mention
+            ) {
+                let mention = entity
+                    .text()
+                    .trim()
+                    .trim_start_matches('@')
+                    .to_lowercase();
+                if mention == expected {
+                    return true;
+                }
+            }
+        }
+    }
+
+    // Fallback: substring check.
+    let mention = format!("@{expected}");
+    text.to_lowercase().contains(&mention)
+}
+
+/// Check whether the text contains any "rara" keyword variant.
+///
+/// Supported variants: "rara" (case-insensitive), Japanese hiragana/katakana,
+/// and Chinese characters.
+fn contains_rara_keyword(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("rara")
+        || lower.contains("らら")
+        || lower.contains("ララ")
+        || lower.contains("拉拉")
+}
+
+/// Strip the bot @mention from message text.
+///
+/// Removes the `@botname` substring and trims surrounding whitespace.
+fn strip_group_mention(text: &str, bot_username: Option<&str>) -> String {
+    let Some(username) = bot_username else {
+        return text.trim().to_owned();
+    };
+    let mention = format!("@{username}");
+    text.replace(&mention, "").trim().to_owned()
+}
+
+/// Build an @username or first-name string for replying to the sender in a
+/// group chat. Returns an empty string if the sender is unknown.
+fn mention_sender(msg: &teloxide::types::Message) -> String {
+    let Some(sender) = msg.from.as_ref() else {
+        return String::new();
+    };
+    if let Some(username) = &sender.username {
+        return format!("@{username}");
+    }
+    sender.first_name.clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1044,5 +1236,95 @@ mod tests {
         let bot_username = Arc::new(RwLock::new(None));
         let result = parse_command("hello world", &bot_username).await;
         assert!(result.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Group chat helper tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_contains_rara_keyword_various() {
+        // ASCII case-insensitive.
+        assert!(contains_rara_keyword("hey Rara, help"));
+        assert!(contains_rara_keyword("RARA please"));
+        assert!(contains_rara_keyword("hello rara!"));
+        // Japanese hiragana.
+        assert!(contains_rara_keyword("こんにちは、らら"));
+        // Japanese katakana.
+        assert!(contains_rara_keyword("ララに聞いて"));
+        // Chinese characters.
+        assert!(contains_rara_keyword("拉拉你好"));
+        // No match.
+        assert!(!contains_rara_keyword("hello world"));
+        assert!(!contains_rara_keyword("random text"));
+    }
+
+    #[test]
+    fn test_strip_group_mention() {
+        // With bot username present.
+        assert_eq!(
+            strip_group_mention("@mybot hello world", Some("mybot")),
+            "hello world"
+        );
+        // Mention in middle of text.
+        assert_eq!(
+            strip_group_mention("hey @mybot what's up", Some("mybot")),
+            "hey  what's up"
+        );
+        // No mention present — returns trimmed original.
+        assert_eq!(
+            strip_group_mention("hello world", Some("mybot")),
+            "hello world"
+        );
+        // No bot username — returns trimmed original.
+        assert_eq!(
+            strip_group_mention("  @someone hello  ", None),
+            "@someone hello"
+        );
+    }
+
+    #[test]
+    fn test_with_primary_chat_id() {
+        let bot = teloxide::Bot::new("fake_token");
+        let adapter = TelegramAdapter::new(bot, vec![]).with_primary_chat_id(12345);
+        assert_eq!(adapter.primary_chat_id, Some(12345));
+    }
+
+    #[test]
+    fn test_with_allowed_group_chat_id() {
+        let bot = teloxide::Bot::new("fake_token");
+        let adapter =
+            TelegramAdapter::new(bot, vec![]).with_allowed_group_chat_id(-100_999_888);
+        assert_eq!(adapter.allowed_group_chat_id, Some(-100_999_888));
+    }
+
+    #[test]
+    fn test_small_group_threshold_constant() {
+        // Ensure the constant is set to the expected value.
+        assert_eq!(SMALL_GROUP_THRESHOLD, 3);
+    }
+
+    #[test]
+    fn test_strip_group_mention_only_mention() {
+        // When the entire message is just the mention.
+        assert_eq!(strip_group_mention("@mybot", Some("mybot")), "");
+    }
+
+    #[test]
+    fn test_strip_group_mention_multiple_mentions() {
+        // Multiple mentions of the bot.
+        assert_eq!(
+            strip_group_mention("@mybot hello @mybot", Some("mybot")),
+            "hello"
+        );
+    }
+
+    #[test]
+    fn test_contains_rara_keyword_embedded() {
+        // "rara" embedded inside a larger word should still match.
+        assert!(contains_rara_keyword("prerara-something"));
+        // But these should not match.
+        assert!(!contains_rara_keyword("rad"));
+        assert!(!contains_rara_keyword("ordinary text"));
     }
 }
