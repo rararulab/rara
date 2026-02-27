@@ -57,5 +57,6 @@
 
 pub mod adapter;
 pub mod bridge;
+pub mod command;
 pub mod router;
 pub mod types;

@@ -49,14 +49,20 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use rara_kernel::channel::adapter::ChannelAdapter;
 use rara_kernel::channel::bridge::ChannelBridge;
+use rara_kernel::channel::command::{
+    CallbackContext, CallbackHandler, CallbackResult, CommandContext, CommandHandler, CommandInfo,
+    CommandResult,
+};
 use rara_kernel::channel::types::{
     AgentPhase, ChannelMessage, ChannelType, ChannelUser, ContentBlock, MessageContent,
     MessageRole, OutboundMessage,
 };
 use rara_kernel::error::KernelError;
-use teloxide::payloads::{GetUpdatesSetters, SendMessageSetters};
+use teloxide::payloads::{EditMessageTextSetters, GetUpdatesSetters, SendMessageSetters};
 use teloxide::requests::{Request, Requester};
-use teloxide::types::{AllowedUpdate, ChatAction, ChatId, Update, UpdateKind};
+use teloxide::types::{
+    AllowedUpdate, ChatAction, ChatId, MaybeInaccessibleMessage, Update, UpdateKind,
+};
 use tokio::sync::{watch, RwLock};
 use tracing::{error, info, warn};
 
@@ -98,6 +104,10 @@ pub struct TelegramAdapter {
     shutdown_rx: watch::Receiver<bool>,
     /// Bot username from getMe (set during start).
     bot_username: Arc<RwLock<Option<String>>>,
+    /// Registered command handlers for slash commands.
+    command_handlers: Vec<Arc<dyn CommandHandler>>,
+    /// Registered callback handlers for interactive elements.
+    callback_handlers: Vec<Arc<dyn CallbackHandler>>,
 }
 
 impl TelegramAdapter {
@@ -117,12 +127,26 @@ impl TelegramAdapter {
             shutdown_tx,
             shutdown_rx,
             bot_username: Arc::new(RwLock::new(None)),
+            command_handlers: Vec::new(),
+            callback_handlers: Vec::new(),
         }
     }
 
     /// Create a new Telegram adapter with a custom polling timeout.
     pub fn with_polling_timeout(mut self, timeout_secs: u32) -> Self {
         self.polling_timeout = timeout_secs;
+        self
+    }
+
+    /// Register command handlers.
+    pub fn with_command_handlers(mut self, handlers: Vec<Arc<dyn CommandHandler>>) -> Self {
+        self.command_handlers = handlers;
+        self
+    }
+
+    /// Register callback handlers.
+    pub fn with_callback_handlers(mut self, handlers: Vec<Arc<dyn CallbackHandler>>) -> Self {
+        self.callback_handlers = handlers;
         self
     }
 
@@ -173,6 +197,8 @@ impl ChannelAdapter for TelegramAdapter {
         let polling_timeout = self.polling_timeout;
         let mut shutdown_rx = self.shutdown_rx.clone();
         let bot_username = Arc::clone(&self.bot_username);
+        let command_handlers = self.command_handlers.clone();
+        let callback_handlers = self.callback_handlers.clone();
 
         tokio::spawn(async move {
             polling_loop(
@@ -182,6 +208,8 @@ impl ChannelAdapter for TelegramAdapter {
                 polling_timeout,
                 &mut shutdown_rx,
                 bot_username,
+                command_handlers,
+                callback_handlers,
             )
             .await;
         });
@@ -246,6 +274,8 @@ async fn polling_loop(
     polling_timeout: u32,
     shutdown_rx: &mut watch::Receiver<bool>,
     bot_username: Arc<RwLock<Option<String>>>,
+    command_handlers: Vec<Arc<dyn CommandHandler>>,
+    callback_handlers: Vec<Arc<dyn CallbackHandler>>,
 ) {
     let mut offset: Option<i32> = None;
     let mut retry_delay = INITIAL_RETRY_DELAY;
@@ -262,7 +292,11 @@ async fn polling_loop(
         let mut request = bot
             .get_updates()
             .timeout(polling_timeout)
-            .allowed_updates(vec![AllowedUpdate::Message, AllowedUpdate::EditedMessage]);
+            .allowed_updates(vec![
+                AllowedUpdate::Message,
+                AllowedUpdate::EditedMessage,
+                AllowedUpdate::CallbackQuery,
+            ]);
 
         if let Some(off) = offset {
             request = request.offset(off);
@@ -294,8 +328,19 @@ async fn polling_loop(
                     let bot = bot.clone();
                     let allowed = allowed_chat_ids.clone();
                     let bot_username = Arc::clone(&bot_username);
+                    let cmd_handlers = command_handlers.clone();
+                    let cb_handlers = callback_handlers.clone();
                     tokio::spawn(async move {
-                        handle_update(update, &bridge, &bot, &allowed, &bot_username).await;
+                        handle_update(
+                            update,
+                            &bridge,
+                            &bot,
+                            &allowed,
+                            &bot_username,
+                            &cmd_handlers,
+                            &cb_handlers,
+                        )
+                        .await;
                     });
                 }
             }
@@ -331,7 +376,15 @@ async fn handle_update(
     bot: &teloxide::Bot,
     allowed_chat_ids: &[i64],
     bot_username: &Arc<RwLock<Option<String>>>,
+    command_handlers: &[Arc<dyn CommandHandler>],
+    callback_handlers: &[Arc<dyn CallbackHandler>],
 ) {
+    // Handle callback queries (inline keyboard button presses).
+    if let UpdateKind::CallbackQuery(query) = &update.kind {
+        handle_callback_query(bot, query, callback_handlers, bot_username).await;
+        return;
+    }
+
     let msg = match &update.kind {
         UpdateKind::Message(msg) | UpdateKind::EditedMessage(msg) => msg,
         _ => return,
@@ -361,6 +414,14 @@ async fn handle_update(
 
     if text.trim().is_empty() {
         return;
+    }
+
+    // Check for commands (text starting with '/').
+    if text.starts_with('/') {
+        if let Some(cmd_info) = parse_command(text, bot_username).await {
+            handle_command(bot, bridge, msg, &cmd_info, command_handlers, bot_username).await;
+            return;
+        }
     }
 
     // Convert to ChannelMessage.
@@ -633,6 +694,248 @@ pub fn parse_chat_id(session_key: &str) -> Result<i64, KernelError> {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Command & callback handling
+// ---------------------------------------------------------------------------
+
+/// Parse a command from text, stripping bot mention if present.
+///
+/// Handles formats like `/search keywords` and `/search@botname keywords`.
+async fn parse_command(
+    text: &str,
+    bot_username: &Arc<RwLock<Option<String>>>,
+) -> Option<CommandInfo> {
+    if !text.starts_with('/') {
+        return None;
+    }
+
+    let text = text.trim();
+    // Split into command part and args.
+    let (cmd_part, args) = match text.find(char::is_whitespace) {
+        Some(pos) => (&text[..pos], text[pos..].trim()),
+        None => (text, ""),
+    };
+
+    // Strip the '/' prefix.
+    let cmd_part = &cmd_part[1..];
+
+    // Strip @botname suffix if present.
+    let name = if let Some(at_pos) = cmd_part.find('@') {
+        let mentioned_bot = &cmd_part[at_pos + 1..];
+        // Verify it's our bot.
+        if let Some(ref our_username) = *bot_username.read().await {
+            if !mentioned_bot.eq_ignore_ascii_case(our_username) {
+                return None; // Command for a different bot.
+            }
+        }
+        cmd_part[..at_pos].to_lowercase()
+    } else {
+        cmd_part.to_lowercase()
+    };
+
+    if name.is_empty() {
+        return None;
+    }
+
+    Some(CommandInfo {
+        name,
+        args: args.to_owned(),
+        raw: text.to_owned(),
+    })
+}
+
+/// Find a matching command handler and execute the command.
+async fn handle_command(
+    bot: &teloxide::Bot,
+    _bridge: &Arc<dyn ChannelBridge>,
+    msg: &teloxide::types::Message,
+    cmd: &CommandInfo,
+    handlers: &[Arc<dyn CommandHandler>],
+    bot_username: &Arc<RwLock<Option<String>>>,
+) {
+    let chat_id = msg.chat.id.0;
+
+    // Find matching handler.
+    let handler = handlers
+        .iter()
+        .find(|h| h.commands().iter().any(|def| def.name == cmd.name));
+
+    let Some(handler) = handler else {
+        // Unknown command — send help text.
+        let known: Vec<String> = handlers
+            .iter()
+            .flat_map(|h| h.commands())
+            .map(|d| format!("/{} \u{2014} {}", d.name, d.description))
+            .collect();
+
+        let text = if known.is_empty() {
+            format!("Unknown command: /{}\nNo commands are registered.", cmd.name)
+        } else {
+            format!(
+                "Unknown command: /{}\n\nAvailable commands:\n{}",
+                cmd.name,
+                known.join("\n")
+            )
+        };
+        let _ = bot.send_message(ChatId(chat_id), text).await;
+        return;
+    };
+
+    let (platform_id, display_name) = extract_user_info(msg);
+    let mut metadata = build_metadata_from_msg(msg);
+    if let Some(ref username) = *bot_username.read().await {
+        metadata.insert(
+            "telegram_bot_username".to_owned(),
+            serde_json::Value::String(username.clone()),
+        );
+    }
+
+    let context = CommandContext {
+        channel_type: ChannelType::Telegram,
+        session_key: format_session_key(chat_id),
+        user: ChannelUser {
+            platform_id,
+            display_name,
+        },
+        metadata,
+    };
+
+    // Send typing indicator.
+    let _ = bot
+        .send_chat_action(ChatId(chat_id), ChatAction::Typing)
+        .await;
+
+    match handler.handle(cmd, &context).await {
+        Ok(CommandResult::Text(text)) => {
+            send_html_chunks(bot, chat_id, &text).await;
+        }
+        Ok(CommandResult::Html(html)) => {
+            let chunks = crate::telegram::markdown::chunk_message(&html, 4096);
+            for chunk in chunks {
+                let _ = bot
+                    .send_message(ChatId(chat_id), &chunk)
+                    .parse_mode(teloxide::types::ParseMode::Html)
+                    .await;
+            }
+        }
+        Ok(CommandResult::None) => {
+            // Handler handled it internally.
+        }
+        Err(e) => {
+            error!(error = %e, "command handler failed for /{}", cmd.name);
+            let _ = bot
+                .send_message(ChatId(chat_id), format!("Error: {e}"))
+                .await;
+        }
+    }
+}
+
+/// Handle a callback query by routing to the appropriate handler.
+async fn handle_callback_query(
+    bot: &teloxide::Bot,
+    query: &teloxide::types::CallbackQuery,
+    handlers: &[Arc<dyn CallbackHandler>],
+    bot_username: &Arc<RwLock<Option<String>>>,
+) {
+    let Some(ref data) = query.data else {
+        return;
+    };
+
+    // Find matching handler by prefix.
+    let handler = handlers.iter().find(|h| data.starts_with(h.prefix()));
+
+    let Some(handler) = handler else {
+        warn!(data = %data, "no callback handler found for prefix");
+        // Answer the callback to dismiss the loading indicator.
+        let _ = bot.answer_callback_query(query.id.clone()).await;
+        return;
+    };
+
+    // Extract chat_id from the callback query message.
+    let chat_id = query
+        .message
+        .as_ref()
+        .map(|m| match m {
+            MaybeInaccessibleMessage::Regular(msg) => msg.chat.id.0,
+            MaybeInaccessibleMessage::Inaccessible(msg) => msg.chat.id.0,
+        })
+        .unwrap_or(0);
+
+    let message_id = query.message.as_ref().map(|m| match m {
+        MaybeInaccessibleMessage::Regular(msg) => msg.id.0.to_string(),
+        MaybeInaccessibleMessage::Inaccessible(msg) => msg.message_id.0.to_string(),
+    });
+
+    let (platform_id, display_name) = {
+        let user = &query.from;
+        let id = user.id.0.to_string();
+        let name = if let Some(ref last) = user.last_name {
+            Some(format!("{} {last}", user.first_name))
+        } else {
+            Some(user.first_name.clone())
+        };
+        (id, name)
+    };
+
+    let mut metadata = HashMap::new();
+    metadata.insert(
+        "telegram_chat_id".to_owned(),
+        serde_json::json!(chat_id),
+    );
+    if let Some(ref username) = query.from.username {
+        metadata.insert(
+            "telegram_username".to_owned(),
+            serde_json::Value::String(username.clone()),
+        );
+    }
+    if let Some(ref username) = *bot_username.read().await {
+        metadata.insert(
+            "telegram_bot_username".to_owned(),
+            serde_json::Value::String(username.clone()),
+        );
+    }
+
+    let context = CallbackContext {
+        channel_type: ChannelType::Telegram,
+        session_key: format_session_key(chat_id),
+        user: ChannelUser {
+            platform_id,
+            display_name,
+        },
+        data: data.clone(),
+        message_id: message_id.clone(),
+        metadata,
+    };
+
+    match handler.handle(&context).await {
+        Ok(CallbackResult::EditMessage { text }) => {
+            if let Some(ref msg) = query.message {
+                let html = crate::telegram::markdown::markdown_to_telegram_html(&text);
+                let (chat_id_obj, msg_id) = match msg {
+                    MaybeInaccessibleMessage::Regular(m) => (m.chat.id, m.id),
+                    MaybeInaccessibleMessage::Inaccessible(m) => (m.chat.id, m.message_id),
+                };
+                let _ = bot
+                    .edit_message_text(chat_id_obj, msg_id, &html)
+                    .parse_mode(teloxide::types::ParseMode::Html)
+                    .await;
+            }
+        }
+        Ok(CallbackResult::SendMessage { text }) => {
+            send_html_chunks(bot, chat_id, &text).await;
+        }
+        Ok(CallbackResult::Ack) => {
+            // Just acknowledge.
+        }
+        Err(e) => {
+            error!(error = %e, "callback handler failed");
+        }
+    }
+
+    // Always answer the callback query to dismiss the loading indicator.
+    let _ = bot.answer_callback_query(query.id.clone()).await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -699,5 +1002,47 @@ mod tests {
         let bot = teloxide::Bot::new("fake_token");
         let adapter = TelegramAdapter::new(bot, vec![]).with_polling_timeout(60);
         assert_eq!(adapter.polling_timeout, 60);
+    }
+
+    #[tokio::test]
+    async fn parse_command_basic() {
+        let bot_username = Arc::new(RwLock::new(Some("testbot".to_owned())));
+        let cmd = parse_command("/search rust developer", &bot_username)
+            .await
+            .unwrap();
+        assert_eq!(cmd.name, "search");
+        assert_eq!(cmd.args, "rust developer");
+    }
+
+    #[tokio::test]
+    async fn parse_command_no_args() {
+        let bot_username = Arc::new(RwLock::new(None));
+        let cmd = parse_command("/help", &bot_username).await.unwrap();
+        assert_eq!(cmd.name, "help");
+        assert_eq!(cmd.args, "");
+    }
+
+    #[tokio::test]
+    async fn parse_command_with_bot_mention() {
+        let bot_username = Arc::new(RwLock::new(Some("mybot".to_owned())));
+        let cmd = parse_command("/search@mybot keywords", &bot_username)
+            .await
+            .unwrap();
+        assert_eq!(cmd.name, "search");
+        assert_eq!(cmd.args, "keywords");
+    }
+
+    #[tokio::test]
+    async fn parse_command_wrong_bot_returns_none() {
+        let bot_username = Arc::new(RwLock::new(Some("mybot".to_owned())));
+        let result = parse_command("/search@otherbot keywords", &bot_username).await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn parse_command_not_a_command() {
+        let bot_username = Arc::new(RwLock::new(None));
+        let result = parse_command("hello world", &bot_username).await;
+        assert!(result.is_none());
     }
 }
