@@ -32,7 +32,7 @@ rara-mcp = { workspace = true }
 rara-paths = { workspace = true }
 rara-sessions = { workspace = true }
 rara-skills = { workspace = true }
-rara-telegram-bot = { workspace = true }
+rara-channels = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

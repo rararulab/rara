@@ -19,7 +19,7 @@ use sqlx::PgPool;
 use tool_core::contact_lookup::{ContactLookup, ResolvedContact};
 use uuid::Uuid;
 
-use crate::contacts::{
+use crate::telegram::contacts::{
     error::{ContactError, DuplicateUsernameSnafu, NotFoundSnafu, RepositorySnafu},
     types::{CreateContactRequest, TelegramContact, UpdateContactRequest},
 };

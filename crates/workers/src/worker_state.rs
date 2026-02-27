@@ -43,7 +43,7 @@ pub struct AppState {
     // -- shared --
     pub settings_svc:        rara_backend_admin::settings::SettingsSvc,
     pub notify_client:       rara_domain_shared::notify::client::NotifyClient,
-    pub contact_repo:        rara_telegram_bot::contacts::repository::ContactRepository,
+    pub contact_repo:        rara_channels::telegram::contacts::repository::ContactRepository,
 
     // -- LLM provider --
     pub llm_provider: rara_kernel::provider::LlmProviderLoaderRef,
@@ -148,7 +148,7 @@ impl AppState {
         let composio_auth_provider: Arc<dyn rara_composio::ComposioAuthProvider> =
             Arc::new(SettingsComposioAuthProvider::new(settings_svc.clone()));
         let contact_repo =
-            rara_telegram_bot::contacts::repository::ContactRepository::new(pool.clone());
+            rara_channels::telegram::contacts::repository::ContactRepository::new(pool.clone());
         let contact_lookup: Arc<dyn tool_core::contact_lookup::ContactLookup> =
             Arc::new(contact_repo.clone());
         let mut tool_registry = rara_kernel::tool::ToolRegistry::new();
