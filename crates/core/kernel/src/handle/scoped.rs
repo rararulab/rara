@@ -20,15 +20,31 @@
 //! - Enforces tool subset restrictions (children can only use parent's tools)
 //! - Limits concurrent children via a per-agent semaphore
 //!
-//! Trait implementations (ProcessOps, MemoryOps, etc.) will be added in
-//! Task 3 when `Kernel.spawn()` is implemented.
+//! Trait implementations: ProcessOps, MemoryOps, EventOps, GuardOps.
 
 use std::sync::Arc;
 
-use tokio::sync::Semaphore;
+use async_trait::async_trait;
+use dashmap::DashMap;
+use jiff::Timestamp;
+use tokio::sync::{oneshot, Semaphore};
+use tracing::{info, warn};
 
+use crate::error::{KernelError, Result};
+use crate::event::{EventBus, KernelEvent};
+use crate::guard::{Guard, GuardContext};
+use crate::memory::Memory;
+use crate::process::manifest_loader::ManifestLoader;
 use crate::process::principal::Principal;
-use crate::process::{AgentId, ProcessTable};
+use crate::process::{
+    AgentEnv, AgentId, AgentManifest, AgentProcess, AgentResult, ProcessInfo, ProcessState,
+    ProcessTable, SessionId,
+};
+use crate::provider::LlmProviderLoaderRef;
+use crate::runner::{AgentRunner, UserContent};
+use crate::tool::ToolRegistry;
+
+use super::{AgentHandle, EventOps, GuardOps, MemoryOps, ProcessOps};
 
 /// Per-process scoped handle to kernel capabilities.
 ///
@@ -43,6 +59,8 @@ use crate::process::{AgentId, ProcessTable};
 pub struct ScopedKernelHandle {
     /// The agent process this handle belongs to.
     pub(crate) agent_id: AgentId,
+    /// The session this agent belongs to.
+    pub(crate) session_id: SessionId,
     /// The identity under which this agent runs.
     pub(crate) principal: Principal,
     /// Tools this agent is allowed to use (children can only subset these).
@@ -56,8 +74,6 @@ pub struct ScopedKernelHandle {
 /// Shared kernel state that `ScopedKernelHandle` delegates to.
 ///
 /// This struct holds the "real" kernel state shared by all handles via `Arc`.
-/// It will be extended in Task 3 with LLM provider, tool registry, memory,
-/// event bus, and guard components.
 pub(crate) struct KernelInner {
     /// The global process table tracking all running agents.
     pub process_table: ProcessTable,
@@ -65,12 +81,22 @@ pub(crate) struct KernelInner {
     pub global_semaphore: Arc<Semaphore>,
     /// Default maximum number of children per agent.
     pub default_child_limit: usize,
-    // More fields will be added in Task 3:
-    // pub llm_provider: Arc<dyn LlmProvider>,
-    // pub tool_registry: Arc<dyn ToolRegistry>,
-    // pub memory: Arc<dyn Memory>,
-    // pub event_bus: Arc<dyn EventBus>,
-    // pub guard: Arc<dyn Guard>,
+    /// Default max LLM iterations for spawned agents.
+    pub default_max_iterations: usize,
+    /// LLM provider loader for acquiring providers.
+    pub llm_provider: LlmProviderLoaderRef,
+    /// Global tool registry (spawned agents get filtered subsets).
+    pub tool_registry: Arc<ToolRegistry>,
+    /// 3-layer memory (not used for cross-agent KV — see shared_kv).
+    pub memory: Arc<dyn Memory>,
+    /// Event bus for publishing kernel events.
+    pub event_bus: Arc<dyn EventBus>,
+    /// Guard for tool approval checks.
+    pub guard: Arc<dyn Guard>,
+    /// Manifest loader for looking up named agent definitions.
+    pub manifest_loader: ManifestLoader,
+    /// Cross-agent shared key-value store (simple DashMap).
+    pub shared_kv: DashMap<String, serde_json::Value>,
 }
 
 impl ScopedKernelHandle {
@@ -88,6 +114,287 @@ impl ScopedKernelHandle {
     pub fn allowed_tools(&self) -> &[String] {
         &self.allowed_tools
     }
+
+    /// Validate that all requested child tools are a subset of this agent's tools.
+    fn validate_tool_subset(&self, child_tools: &[String]) -> Result<()> {
+        for tool_name in child_tools {
+            if !self.allowed_tools.is_empty()
+                && !self.allowed_tools.iter().any(|t| t == tool_name)
+            {
+                return Err(KernelError::ToolNotAllowed {
+                    tool_name: tool_name.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Build a filtered ToolRegistry for a child based on manifest tools.
+    fn build_child_tool_registry(&self, manifest_tools: &[String]) -> ToolRegistry {
+        if manifest_tools.is_empty() {
+            // Inherit parent's tools
+            self.inner.tool_registry.filtered(&self.allowed_tools)
+        } else {
+            // Intersect manifest tools with parent's allowed tools
+            let effective_tools: Vec<String> = if self.allowed_tools.is_empty() {
+                manifest_tools.to_vec()
+            } else {
+                manifest_tools
+                    .iter()
+                    .filter(|t| self.allowed_tools.iter().any(|a| a == *t))
+                    .cloned()
+                    .collect()
+            };
+            self.inner.tool_registry.filtered(&effective_tools)
+        }
+    }
+
+    /// Recursively kill a process and all its children.
+    fn kill_recursive(&self, target_id: AgentId) -> Result<()> {
+        // First kill all children
+        let children = self.inner.process_table.children_of(target_id);
+        for child in children {
+            self.kill_recursive(child.agent_id)?;
+        }
+        // Then kill the target
+        self.inner
+            .process_table
+            .set_state(target_id, ProcessState::Cancelled)?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl ProcessOps for ScopedKernelHandle {
+    /// Spawn a child agent.
+    ///
+    /// - Validates child tools are a subset of parent's tools
+    /// - Acquires per-agent child semaphore (limits concurrent children)
+    /// - Acquires global semaphore (limits total concurrent agents)
+    /// - Creates AgentProcess in process table
+    /// - Builds filtered ToolRegistry for the child
+    /// - Spawns tokio task running AgentRunner
+    /// - Returns AgentHandle with oneshot receiver
+    async fn spawn(&self, manifest: AgentManifest, input: String) -> Result<AgentHandle> {
+        // 1. Validate tool subset
+        if !manifest.tools.is_empty() {
+            self.validate_tool_subset(&manifest.tools)?;
+        }
+
+        // 2. Acquire per-agent child semaphore (non-blocking try)
+        let _child_permit = self.child_semaphore.clone().try_acquire_owned().map_err(|_| {
+            KernelError::SpawnLimitReached {
+                message: format!(
+                    "agent {} reached max child limit",
+                    self.agent_id
+                ),
+            }
+        })?;
+
+        // 3. Acquire global semaphore (non-blocking try)
+        let _global_permit =
+            self.inner
+                .global_semaphore
+                .clone()
+                .try_acquire_owned()
+                .map_err(|_| KernelError::SpawnLimitReached {
+                    message: "global concurrency limit reached".to_string(),
+                })?;
+
+        // 4. Create AgentProcess
+        let child_id = AgentId::new();
+        let max_iterations = manifest
+            .max_iterations
+            .unwrap_or(self.inner.default_max_iterations);
+        let child_limit = manifest
+            .max_children
+            .unwrap_or(self.inner.default_child_limit);
+
+        let process = AgentProcess {
+            agent_id: child_id,
+            parent_id: Some(self.agent_id),
+            session_id: self.session_id.clone(),
+            manifest: manifest.clone(),
+            principal: self.principal.clone(),
+            env: AgentEnv::default(),
+            state: ProcessState::Running,
+            created_at: Timestamp::now(),
+            finished_at: None,
+            result: None,
+        };
+        self.inner.process_table.insert(process);
+
+        // 5. Build filtered ToolRegistry
+        let child_tools = self.build_child_tool_registry(&manifest.tools);
+        let child_tool_names: Vec<String> = child_tools.tool_names();
+
+        // 6. Create child ScopedKernelHandle
+        let child_handle = Arc::new(ScopedKernelHandle {
+            agent_id: child_id,
+            session_id: self.session_id.clone(),
+            principal: self.principal.clone(),
+            allowed_tools: child_tool_names,
+            child_semaphore: Arc::new(Semaphore::new(child_limit)),
+            inner: Arc::clone(&self.inner),
+        });
+
+        // 7. Build AgentRunner
+        let model_name = manifest.model.clone();
+        let system_prompt = manifest.system_prompt.clone();
+        let provider_hint = manifest.provider_hint.clone().unwrap_or_default();
+        let llm_provider = Arc::clone(&self.inner.llm_provider);
+
+        let runner = AgentRunner::builder()
+            .llm_provider(llm_provider)
+            .provider_hint(provider_hint)
+            .model_name(model_name)
+            .system_prompt(system_prompt)
+            .user_content(UserContent::Text(input))
+            .max_iterations(max_iterations)
+            .build();
+
+        // 8. Create oneshot channel for result
+        let (result_tx, result_rx) = oneshot::channel();
+        let process_table = Arc::clone(&self.inner);
+
+        // 9. Spawn tokio task
+        tokio::spawn(async move {
+            let _child_permit = _child_permit;
+            let _global_permit = _global_permit;
+            let _child_handle = child_handle;
+
+            let run_result = runner.run(&child_tools, None).await;
+
+            match run_result {
+                Ok(response) => {
+                    let agent_result = AgentResult {
+                        output: response.response_text(),
+                        iterations: response.iterations,
+                        tool_calls: response.tool_calls_made,
+                    };
+
+                    let _ = process_table
+                        .process_table
+                        .set_state(child_id, ProcessState::Completed);
+                    let _ = process_table
+                        .process_table
+                        .set_result(child_id, agent_result.clone());
+
+                    info!(
+                        agent_id = %child_id,
+                        iterations = agent_result.iterations,
+                        tool_calls = agent_result.tool_calls,
+                        "agent process completed"
+                    );
+
+                    let _ = result_tx.send(agent_result);
+                }
+                Err(err) => {
+                    warn!(
+                        agent_id = %child_id,
+                        error = %err,
+                        "agent process failed"
+                    );
+
+                    let _ = process_table
+                        .process_table
+                        .set_state(child_id, ProcessState::Failed);
+
+                    let error_result = AgentResult {
+                        output: format!("Error: {err}"),
+                        iterations: 0,
+                        tool_calls: 0,
+                    };
+                    let _ = process_table
+                        .process_table
+                        .set_result(child_id, error_result.clone());
+                    let _ = result_tx.send(error_result);
+                }
+            }
+        });
+
+        Ok(AgentHandle {
+            agent_id: child_id,
+            result_rx,
+        })
+    }
+
+    async fn send(&self, _agent_id: AgentId, _message: String) -> Result<String> {
+        Err(KernelError::Other {
+            message: "send not yet implemented".into(),
+        })
+    }
+
+    fn status(&self, agent_id: AgentId) -> Result<ProcessInfo> {
+        self.inner
+            .process_table
+            .get(agent_id)
+            .map(|p| ProcessInfo::from(&p))
+            .ok_or(KernelError::ProcessNotFound {
+                id: agent_id.to_string(),
+            })
+    }
+
+    fn kill(&self, agent_id: AgentId) -> Result<()> {
+        self.kill_recursive(agent_id)
+    }
+
+    fn children(&self) -> Vec<ProcessInfo> {
+        self.inner.process_table.children_of(self.agent_id)
+    }
+}
+
+impl MemoryOps for ScopedKernelHandle {
+    fn mem_store(&self, key: &str, value: serde_json::Value) -> Result<()> {
+        self.inner.shared_kv.insert(key.to_string(), value);
+        Ok(())
+    }
+
+    fn mem_recall(&self, key: &str) -> Result<Option<serde_json::Value>> {
+        Ok(self.inner.shared_kv.get(key).map(|v| v.value().clone()))
+    }
+}
+
+#[async_trait]
+impl EventOps for ScopedKernelHandle {
+    async fn publish(&self, event_type: &str, _payload: serde_json::Value) -> Result<()> {
+        // Map to a KernelEvent. We use ToolExecuted as a generic carrier for now.
+        // In a more complete implementation, we would add custom event types.
+        self.inner
+            .event_bus
+            .publish(KernelEvent::ToolExecuted {
+                agent_id: self.agent_id.0,
+                tool_name: format!("event:{event_type}"),
+                success: true,
+                timestamp: Timestamp::now(),
+            })
+            .await;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl GuardOps for ScopedKernelHandle {
+    fn requires_approval(&self, _tool_name: &str) -> bool {
+        // We cannot call async check_tool synchronously, so we use a heuristic:
+        // For now, return false (no approval required by default).
+        // A more sophisticated implementation would maintain a cached policy.
+        false
+    }
+
+    async fn request_approval(&self, tool_name: &str, summary: &str) -> Result<bool> {
+        let guard_ctx = GuardContext {
+            agent_id: self.agent_id.0,
+            user_id: uuid::Uuid::nil(),
+            session_id: uuid::Uuid::nil(),
+        };
+        let verdict = self
+            .inner
+            .guard
+            .check_tool(&guard_ctx, tool_name, &serde_json::json!({"summary": summary}))
+            .await;
+        Ok(verdict.is_allow())
+    }
 }
 
 #[cfg(test)]
@@ -96,10 +403,21 @@ mod tests {
     use crate::process::principal::Principal;
 
     fn make_kernel_inner() -> Arc<KernelInner> {
+        use crate::defaults::noop::{NoopEventBus, NoopGuard, NoopMemory};
+        use crate::provider::EnvLlmProviderLoader;
+
         Arc::new(KernelInner {
             process_table: ProcessTable::new(),
             global_semaphore: Arc::new(Semaphore::new(10)),
             default_child_limit: 5,
+            default_max_iterations: 25,
+            llm_provider: Arc::new(EnvLlmProviderLoader::default()) as LlmProviderLoaderRef,
+            tool_registry: Arc::new(ToolRegistry::new()),
+            memory: Arc::new(NoopMemory),
+            event_bus: Arc::new(NoopEventBus),
+            guard: Arc::new(NoopGuard),
+            manifest_loader: ManifestLoader::new(),
+            shared_kv: DashMap::new(),
         })
     }
 
@@ -111,6 +429,7 @@ mod tests {
 
         let handle = ScopedKernelHandle {
             agent_id,
+            session_id: SessionId::new("test-session"),
             principal: principal.clone(),
             allowed_tools: tools.clone(),
             child_semaphore: Arc::new(Semaphore::new(5)),
@@ -127,9 +446,9 @@ mod tests {
     fn test_kernel_inner_shared() {
         let inner = make_kernel_inner();
 
-        // Two handles sharing the same inner
         let handle1 = ScopedKernelHandle {
             agent_id: AgentId::new(),
+            session_id: SessionId::new("session-1"),
             principal: Principal::user("user-1"),
             allowed_tools: vec![],
             child_semaphore: Arc::new(Semaphore::new(3)),
@@ -138,21 +457,323 @@ mod tests {
 
         let handle2 = ScopedKernelHandle {
             agent_id: AgentId::new(),
+            session_id: SessionId::new("session-2"),
             principal: Principal::admin("admin-1"),
             allowed_tools: vec!["bash".to_string()],
             child_semaphore: Arc::new(Semaphore::new(3)),
             inner: Arc::clone(&inner),
         };
 
-        // Both share the same process table
         assert_eq!(handle1.inner.process_table.list().len(), 0);
         assert_eq!(handle2.inner.process_table.list().len(), 0);
-
-        // Different agent IDs
         assert_ne!(handle1.agent_id(), handle2.agent_id());
-
-        // Different principals
         assert!(!handle1.principal().is_admin());
         assert!(handle2.principal().is_admin());
+    }
+
+    #[test]
+    fn test_validate_tool_subset_ok() {
+        let handle = ScopedKernelHandle {
+            agent_id: AgentId::new(),
+            session_id: SessionId::new("test"),
+            principal: Principal::user("test"),
+            allowed_tools: vec!["read_file".to_string(), "grep".to_string(), "bash".to_string()],
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner: make_kernel_inner(),
+        };
+
+        assert!(handle
+            .validate_tool_subset(&["read_file".to_string(), "grep".to_string()])
+            .is_ok());
+    }
+
+    #[test]
+    fn test_validate_tool_subset_denied() {
+        let handle = ScopedKernelHandle {
+            agent_id: AgentId::new(),
+            session_id: SessionId::new("test"),
+            principal: Principal::user("test"),
+            allowed_tools: vec!["read_file".to_string()],
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner: make_kernel_inner(),
+        };
+
+        let result = handle.validate_tool_subset(&["bash".to_string()]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_tool_subset_empty_parent_allows_all() {
+        let handle = ScopedKernelHandle {
+            agent_id: AgentId::new(),
+            session_id: SessionId::new("test"),
+            principal: Principal::user("test"),
+            allowed_tools: vec![], // empty = no restriction
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner: make_kernel_inner(),
+        };
+
+        assert!(handle
+            .validate_tool_subset(&["anything".to_string()])
+            .is_ok());
+    }
+
+    #[test]
+    fn test_memory_ops_store_recall() {
+        let inner = make_kernel_inner();
+        let handle = ScopedKernelHandle {
+            agent_id: AgentId::new(),
+            session_id: SessionId::new("test"),
+            principal: Principal::user("test"),
+            allowed_tools: vec![],
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner: Arc::clone(&inner),
+        };
+
+        handle
+            .mem_store("key1", serde_json::json!({"data": 42}))
+            .unwrap();
+
+        let recalled = handle.mem_recall("key1").unwrap();
+        assert!(recalled.is_some());
+        assert_eq!(recalled.unwrap()["data"], 42);
+
+        let missing = handle.mem_recall("nonexistent").unwrap();
+        assert!(missing.is_none());
+    }
+
+    #[test]
+    fn test_memory_ops_shared_across_handles() {
+        let inner = make_kernel_inner();
+
+        let handle1 = ScopedKernelHandle {
+            agent_id: AgentId::new(),
+            session_id: SessionId::new("test"),
+            principal: Principal::user("user-1"),
+            allowed_tools: vec![],
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner: Arc::clone(&inner),
+        };
+
+        let handle2 = ScopedKernelHandle {
+            agent_id: AgentId::new(),
+            session_id: SessionId::new("test"),
+            principal: Principal::user("user-2"),
+            allowed_tools: vec![],
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner: Arc::clone(&inner),
+        };
+
+        handle1
+            .mem_store("shared_key", serde_json::json!("hello"))
+            .unwrap();
+        let recalled = handle2.mem_recall("shared_key").unwrap();
+        assert_eq!(recalled.unwrap(), serde_json::json!("hello"));
+    }
+
+    #[test]
+    fn test_kill_recursive() {
+        let inner = make_kernel_inner();
+        let parent_id = AgentId::new();
+        let child1_id = AgentId::new();
+        let child2_id = AgentId::new();
+        let grandchild_id = AgentId::new();
+
+        // Insert parent
+        inner.process_table.insert(AgentProcess {
+            agent_id: parent_id,
+            parent_id: None,
+            session_id: SessionId::new("test"),
+            manifest: test_manifest("parent"),
+            principal: Principal::user("test"),
+            env: AgentEnv::default(),
+            state: ProcessState::Running,
+            created_at: Timestamp::now(),
+            finished_at: None,
+            result: None,
+        });
+
+        // Insert children
+        inner.process_table.insert(AgentProcess {
+            agent_id: child1_id,
+            parent_id: Some(parent_id),
+            session_id: SessionId::new("test"),
+            manifest: test_manifest("child1"),
+            principal: Principal::user("test"),
+            env: AgentEnv::default(),
+            state: ProcessState::Running,
+            created_at: Timestamp::now(),
+            finished_at: None,
+            result: None,
+        });
+
+        inner.process_table.insert(AgentProcess {
+            agent_id: child2_id,
+            parent_id: Some(parent_id),
+            session_id: SessionId::new("test"),
+            manifest: test_manifest("child2"),
+            principal: Principal::user("test"),
+            env: AgentEnv::default(),
+            state: ProcessState::Running,
+            created_at: Timestamp::now(),
+            finished_at: None,
+            result: None,
+        });
+
+        // Insert grandchild
+        inner.process_table.insert(AgentProcess {
+            agent_id: grandchild_id,
+            parent_id: Some(child1_id),
+            session_id: SessionId::new("test"),
+            manifest: test_manifest("grandchild"),
+            principal: Principal::user("test"),
+            env: AgentEnv::default(),
+            state: ProcessState::Running,
+            created_at: Timestamp::now(),
+            finished_at: None,
+            result: None,
+        });
+
+        let handle = ScopedKernelHandle {
+            agent_id: AgentId::new(), // some external caller
+            session_id: SessionId::new("test"),
+            principal: Principal::user("test"),
+            allowed_tools: vec![],
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner: Arc::clone(&inner),
+        };
+
+        // Kill parent — should cascade to children and grandchild
+        handle.kill_recursive(parent_id).unwrap();
+
+        assert_eq!(
+            inner.process_table.get(parent_id).unwrap().state,
+            ProcessState::Cancelled
+        );
+        assert_eq!(
+            inner.process_table.get(child1_id).unwrap().state,
+            ProcessState::Cancelled
+        );
+        assert_eq!(
+            inner.process_table.get(child2_id).unwrap().state,
+            ProcessState::Cancelled
+        );
+        assert_eq!(
+            inner.process_table.get(grandchild_id).unwrap().state,
+            ProcessState::Cancelled
+        );
+    }
+
+    #[test]
+    fn test_status_found() {
+        let inner = make_kernel_inner();
+        let agent_id = AgentId::new();
+
+        inner.process_table.insert(AgentProcess {
+            agent_id,
+            parent_id: None,
+            session_id: SessionId::new("test"),
+            manifest: test_manifest("scout"),
+            principal: Principal::user("test"),
+            env: AgentEnv::default(),
+            state: ProcessState::Running,
+            created_at: Timestamp::now(),
+            finished_at: None,
+            result: None,
+        });
+
+        let handle = ScopedKernelHandle {
+            agent_id: AgentId::new(),
+            session_id: SessionId::new("test"),
+            principal: Principal::user("test"),
+            allowed_tools: vec![],
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner,
+        };
+
+        let info = handle.status(agent_id).unwrap();
+        assert_eq!(info.name, "scout");
+        assert_eq!(info.state, ProcessState::Running);
+    }
+
+    #[test]
+    fn test_status_not_found() {
+        let inner = make_kernel_inner();
+        let handle = ScopedKernelHandle {
+            agent_id: AgentId::new(),
+            session_id: SessionId::new("test"),
+            principal: Principal::user("test"),
+            allowed_tools: vec![],
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner,
+        };
+
+        assert!(handle.status(AgentId::new()).is_err());
+    }
+
+    #[test]
+    fn test_children_empty() {
+        let inner = make_kernel_inner();
+        let handle = ScopedKernelHandle {
+            agent_id: AgentId::new(),
+            session_id: SessionId::new("test"),
+            principal: Principal::user("test"),
+            allowed_tools: vec![],
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner,
+        };
+
+        assert!(handle.children().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_guard_ops_request_approval() {
+        let inner = make_kernel_inner();
+        let handle = ScopedKernelHandle {
+            agent_id: AgentId::new(),
+            session_id: SessionId::new("test"),
+            principal: Principal::user("test"),
+            allowed_tools: vec![],
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner,
+        };
+
+        // NoopGuard always allows
+        let approved = handle.request_approval("bash", "run a command").await.unwrap();
+        assert!(approved);
+    }
+
+    #[tokio::test]
+    async fn test_event_ops_publish() {
+        let inner = make_kernel_inner();
+        let handle = ScopedKernelHandle {
+            agent_id: AgentId::new(),
+            session_id: SessionId::new("test"),
+            principal: Principal::user("test"),
+            allowed_tools: vec![],
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner,
+        };
+
+        // Should not panic — NoopEventBus just swallows events
+        handle
+            .publish("test_event", serde_json::json!({"key": "value"}))
+            .await
+            .unwrap();
+    }
+
+    /// Helper to create a test manifest.
+    fn test_manifest(name: &str) -> AgentManifest {
+        AgentManifest {
+            name: name.to_string(),
+            description: format!("Test agent: {name}"),
+            model: "test-model".to_string(),
+            system_prompt: "You are a test agent.".to_string(),
+            provider_hint: None,
+            max_iterations: Some(10),
+            tools: vec!["read_file".to_string()],
+            max_children: None,
+            metadata: serde_json::Value::Null,
+        }
     }
 }

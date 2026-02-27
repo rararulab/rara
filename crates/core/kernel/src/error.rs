@@ -90,6 +90,30 @@ pub enum KernelError {
     /// Agent execution failed.
     #[snafu(display("agent execution failed: {message}"))]
     AgentExecution { message: String },
+
+    /// Process not found in process table.
+    #[snafu(display("process not found: {id}"))]
+    ProcessNotFound { id: String },
+
+    /// Permission denied for the requested operation.
+    #[snafu(display("permission denied: {reason}"))]
+    PermissionDenied { reason: String },
+
+    /// Spawn limit reached (global or per-agent).
+    #[snafu(display("spawn limit reached: {message}"))]
+    SpawnLimitReached { message: String },
+
+    /// Tool not allowed for the agent.
+    #[snafu(display("tool not allowed: {tool_name}"))]
+    ToolNotAllowed { tool_name: String },
+
+    /// Manifest not found by name.
+    #[snafu(display("manifest not found: {name}"))]
+    ManifestNotFound { name: String },
+
+    /// Agent process was cancelled or failed before producing a result.
+    #[snafu(display("spawn failed: {message}"))]
+    SpawnFailed { message: String },
 }
 
 impl From<crate::memory::MemoryError> for KernelError {

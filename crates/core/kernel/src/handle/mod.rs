@@ -26,6 +26,7 @@
 //! that implements all four subsystem traits.
 
 pub mod scoped;
+pub mod spawn_tool;
 
 use async_trait::async_trait;
 use tokio::sync::oneshot;
@@ -42,6 +43,15 @@ pub struct AgentHandle {
     pub agent_id: AgentId,
     /// Receiver for the agent's result. Resolves when the agent finishes.
     pub result_rx: oneshot::Receiver<AgentResult>,
+}
+
+impl std::fmt::Debug for AgentHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentHandle")
+            .field("agent_id", &self.agent_id)
+            .field("result_rx", &"<oneshot::Receiver>")
+            .finish()
+    }
 }
 
 // ---- Subsystem traits ----

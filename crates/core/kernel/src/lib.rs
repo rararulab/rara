@@ -57,3 +57,11 @@ pub use context::RunContext;
 pub use error::{KernelError, Result};
 pub use kernel::{Kernel, KernelConfig};
 pub use registry::{AgentEntry, AgentManifest, AgentRegistry, AgentState, GuardPolicy};
+
+// New process model re-exports
+pub use handle::{AgentHandle, ProcessOps, MemoryOps, EventOps, GuardOps, KernelHandle};
+pub use handle::scoped::ScopedKernelHandle;
+pub use handle::spawn_tool::SpawnTool;
+pub use process::{AgentId, SessionId, AgentProcess, ProcessState, ProcessInfo, ProcessTable};
+pub use process::principal::{Principal, UserId, Role};
+pub use process::manifest_loader::ManifestLoader;

@@ -12,312 +12,541 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Kernel — the unified orchestrator for agent lifecycle and execution.
+//! Kernel — the unified OS-inspired orchestrator for agent lifecycle.
 //!
 //! The [`Kernel`] is the single entry point for all agent operations.
-//! It holds 7 component slots and drives the LLM ↔ Tool execution loop.
+//! It manages a [`ProcessTable`] of running agents, enforces concurrency
+//! limits via dual semaphores (global + per-agent), and provides
+//! [`spawn`](Kernel::spawn) as the primary API for creating agent processes.
+//!
+//! # Architecture
+//!
+//! ```text
+//! Kernel (top-level)
+//!   ├── ProcessTable  (all running agents)
+//!   ├── global_semaphore (max total concurrent agents)
+//!   ├── ManifestLoader  (named agent definitions)
+//!   └── KernelInner (shared state via Arc)
+//!         ├── LlmProviderLoader
+//!         ├── ToolRegistry
+//!         ├── Memory
+//!         ├── EventBus
+//!         ├── Guard
+//!         └── shared_kv (cross-agent KV)
+//! ```
+//!
+//! Each spawned agent receives a [`ScopedKernelHandle`] providing syscall-like
+//! access to kernel capabilities (ProcessOps, MemoryOps, EventOps, GuardOps).
 
 use std::sync::Arc;
 
+use dashmap::DashMap;
 use jiff::Timestamp;
+use tokio::sync::{oneshot, Semaphore};
 use tracing::info;
-use uuid::Uuid;
 
-use crate::{
-    context::RunContext,
-    error::{KernelError, Result},
-    event::{EventBus, KernelEvent},
-    guard::{Guard, GuardContext},
-    llm::{ChatMessage, ChatRequest, ChatResponse, ChatRole, LlmApi, ToolDefinition},
-    memory::Memory,
-    prompt::PromptRepo,
-    registry::{AgentEntry, AgentManifest, AgentRegistry, AgentState},
-    session::SessionStore,
-    tool::ToolRegistry,
+use crate::error::{KernelError, Result};
+use crate::event::EventBus;
+use crate::guard::Guard;
+use crate::handle::scoped::{KernelInner, ScopedKernelHandle};
+use crate::handle::AgentHandle;
+use crate::memory::Memory;
+use crate::process::manifest_loader::ManifestLoader;
+use crate::process::principal::Principal;
+use crate::process::{
+    AgentEnv, AgentId, AgentManifest, AgentProcess, AgentResult, ProcessState,
+    ProcessTable, SessionId,
 };
+use crate::provider::LlmProviderLoaderRef;
+use crate::runner::{AgentRunner, UserContent};
+use crate::tool::ToolRegistry;
 
 /// Kernel configuration.
 #[derive(Debug, Clone)]
 pub struct KernelConfig {
-    /// Default user ID for memory context.
-    pub user_id: Uuid,
+    /// Maximum number of concurrent agent processes globally.
+    pub max_concurrency: usize,
+    /// Default maximum number of children per agent.
+    pub default_child_limit: usize,
+    /// Default max LLM iterations for spawned agents.
+    pub default_max_iterations: usize,
+}
+
+impl Default for KernelConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrency: 16,
+            default_child_limit: 8,
+            default_max_iterations: 25,
+        }
+    }
 }
 
 /// The unified agent orchestrator.
 ///
-/// Holds 7 component slots + agent registry. Drives the LLM ↔ Tool
-/// execution loop for any registered agent.
+/// Acts as an OS kernel for agents: manages the process table, enforces
+/// concurrency limits, and provides `spawn()` as the primary entry point.
 pub struct Kernel {
-    // -- 7 Components --
-    llm:      Arc<dyn LlmApi>,
-    tools:    Arc<ToolRegistry>,
-    memory:   Arc<dyn Memory>,
-    sessions: Arc<dyn SessionStore>,
-    prompts:  Arc<dyn PromptRepo>,
-    guard:    Arc<dyn Guard>,
-    bus:      Arc<dyn EventBus>,
-
-    // -- Runtime state --
-    registry: AgentRegistry,
-    config:   KernelConfig,
+    /// Shared kernel internals (process table, components, etc.).
+    inner: Arc<KernelInner>,
+    /// Kernel configuration.
+    config: KernelConfig,
 }
 
 impl Kernel {
-    /// Boot a new kernel with all 7 components.
-    pub fn boot(
+    /// Create a new Kernel with the given configuration and components.
+    pub fn new(
         config: KernelConfig,
-        llm: Arc<dyn LlmApi>,
-        tools: Arc<ToolRegistry>,
+        llm_provider: LlmProviderLoaderRef,
+        tool_registry: Arc<ToolRegistry>,
         memory: Arc<dyn Memory>,
-        sessions: Arc<dyn SessionStore>,
-        prompts: Arc<dyn PromptRepo>,
+        event_bus: Arc<dyn EventBus>,
         guard: Arc<dyn Guard>,
-        bus: Arc<dyn EventBus>,
+        manifest_loader: ManifestLoader,
     ) -> Self {
-        info!("Booting kernel");
-        Self {
-            llm,
-            tools,
+        info!(
+            max_concurrency = config.max_concurrency,
+            default_child_limit = config.default_child_limit,
+            default_max_iterations = config.default_max_iterations,
+            "booting kernel"
+        );
+
+        let inner = Arc::new(KernelInner {
+            process_table: ProcessTable::new(),
+            global_semaphore: Arc::new(Semaphore::new(config.max_concurrency)),
+            default_child_limit: config.default_child_limit,
+            default_max_iterations: config.default_max_iterations,
+            llm_provider,
+            tool_registry,
             memory,
-            sessions,
-            prompts,
+            event_bus,
             guard,
-            bus,
-            registry: AgentRegistry::new(),
-            config,
-        }
+            manifest_loader,
+            shared_kv: DashMap::new(),
+        });
+
+        Self { inner, config }
     }
 
-    // -- Agent lifecycle -------------------------------------------------------
-
-    /// Register a new agent and return its ID.
-    pub fn register_agent(&self, manifest: AgentManifest) -> Result<Uuid> {
-        let id = self.registry.register(manifest)?;
-        info!(agent_id = %id, "Agent registered");
-        Ok(id)
-    }
-
-    /// Get an agent entry by ID.
-    pub fn get_agent(&self, id: Uuid) -> Result<AgentEntry> {
-        self.registry.get(id)
-    }
-
-    /// Find an agent by name.
-    pub fn find_agent(&self, name: &str) -> Option<AgentEntry> {
-        self.registry.find_by_name(name)
-    }
-
-    /// List all registered agents.
-    pub fn list_agents(&self) -> Vec<AgentEntry> {
-        self.registry.list()
-    }
-
-    /// Remove an agent from the registry.
-    pub fn kill_agent(&self, id: Uuid) -> Result<AgentEntry> {
-        let entry = self.registry.remove(id)?;
-        info!(agent_id = %id, name = %entry.name, "Agent killed");
-        Ok(entry)
-    }
-
-    // -- Message dispatch ------------------------------------------------------
-
-    /// Send a message to an agent and run the full LLM ↔ Tool loop.
-    pub async fn send(&self, agent_id: Uuid, user_text: String) -> Result<ChatResponse> {
-        let entry = self.registry.get(agent_id)?;
-        self.registry.set_state(agent_id, AgentState::Running)?;
-
-        let ctx = self.create_context(&entry);
-
-        // 1. Load history
-        let history = ctx.sessions.load_history(ctx.session_id).await
-            .map_err(|e| KernelError::Session { message: e.to_string() })?;
-
-        // 2. Build messages: history + user message
-        let user_msg = ChatMessage {
-            role:         ChatRole::User,
-            content:      Some(user_text.clone()),
-            tool_calls:   Vec::new(),
-            tool_call_id: None,
-        };
-
-        let mut messages = history;
-        messages.push(user_msg.clone());
-
-        // 3. Run the LLM ↔ Tool loop
-        let response = self.run_loop(&ctx, messages).await;
-
-        // 4. Save exchange on success
-        if let Ok(ref resp) = response {
-            let assistant_msg = ChatMessage {
-                role:         ChatRole::Assistant,
-                content:      resp.content.clone(),
-                tool_calls:   Vec::new(),
-                tool_call_id: None,
-            };
-            let _ = ctx.sessions.append(
-                ctx.session_id,
-                crate::session::Exchange {
-                    user_message:      user_msg,
-                    assistant_message: assistant_msg,
-                },
-            ).await;
-        }
-
-        self.registry.set_state(agent_id, AgentState::Idle)?;
-        response
-    }
-
-    // -- Core execution loop ---------------------------------------------------
-
-    async fn run_loop(
+    /// Spawn a top-level agent process (no parent).
+    ///
+    /// This is the primary entry point for external callers (workers, channel
+    /// adapters, HTTP handlers) to create a new agent.
+    ///
+    /// # Arguments
+    /// - `manifest` — the agent definition to run
+    /// - `input` — the user message / task description
+    /// - `principal` — the identity under which the agent runs
+    /// - `session_id` — the session this agent belongs to
+    /// - `parent_id` — optional parent agent ID (for process tree)
+    pub async fn spawn(
         &self,
-        ctx: &RunContext,
-        mut messages: Vec<ChatMessage>,
-    ) -> Result<ChatResponse> {
-        let guard_ctx = GuardContext {
-            agent_id:   ctx.agent_id,
-            user_id:    ctx.user_id,
-            session_id: ctx.session_id,
+        manifest: AgentManifest,
+        input: String,
+        principal: Principal,
+        session_id: SessionId,
+        parent_id: Option<AgentId>,
+    ) -> Result<AgentHandle> {
+        // Acquire global semaphore
+        let _global_permit =
+            self.inner
+                .global_semaphore
+                .clone()
+                .try_acquire_owned()
+                .map_err(|_| KernelError::SpawnLimitReached {
+                    message: "global concurrency limit reached".to_string(),
+                })?;
+
+        // Create AgentProcess
+        let agent_id = AgentId::new();
+        let max_iterations = manifest
+            .max_iterations
+            .unwrap_or(self.config.default_max_iterations);
+        let child_limit = manifest
+            .max_children
+            .unwrap_or(self.config.default_child_limit);
+
+        let process = AgentProcess {
+            agent_id,
+            parent_id,
+            session_id: session_id.clone(),
+            manifest: manifest.clone(),
+            principal: principal.clone(),
+            env: AgentEnv::default(),
+            state: ProcessState::Running,
+            created_at: Timestamp::now(),
+            finished_at: None,
+            result: None,
         };
+        self.inner.process_table.insert(process);
 
-        // Build tool definitions from the registry
-        let tool_defs: Vec<ToolDefinition> = ctx.tools.iter().map(|(name, tool, _, _)| {
-            ToolDefinition {
-                name:        name.to_owned(),
-                description: tool.description().to_owned(),
-                parameters:  tool.parameters_schema(),
-            }
-        }).collect();
+        // Build tool registry for this agent
+        let agent_tools = self.inner.tool_registry.filtered(&manifest.tools);
+        let tool_names: Vec<String> = agent_tools.tool_names();
 
-        for iteration in 0..ctx.max_iterations {
-            let request = ChatRequest {
-                model:         ctx.model.clone(),
-                system_prompt: ctx.system_prompt.clone(),
-                messages:      messages.clone(),
-                tools:         if tool_defs.is_empty() { None } else { Some(tool_defs.clone()) },
-                temperature:   None,
-            };
+        // Create ScopedKernelHandle for the agent
+        let scoped_handle = Arc::new(ScopedKernelHandle {
+            agent_id,
+            session_id,
+            principal,
+            allowed_tools: tool_names,
+            child_semaphore: Arc::new(Semaphore::new(child_limit)),
+            inner: Arc::clone(&self.inner),
+        });
 
-            let response = ctx.llm.chat(request).await?;
+        // Build AgentRunner
+        let model_name = manifest.model.clone();
+        let system_prompt = manifest.system_prompt.clone();
+        let provider_hint = manifest.provider_hint.clone().unwrap_or_default();
+        let llm_provider = Arc::clone(&self.inner.llm_provider);
 
-            // No tool calls → terminal response
-            if response.tool_calls.is_empty() {
-                info!(iterations = iteration + 1, "Agent loop completed");
-                return Ok(response);
-            }
+        let runner = AgentRunner::builder()
+            .llm_provider(llm_provider)
+            .provider_hint(provider_hint)
+            .model_name(model_name)
+            .system_prompt(system_prompt)
+            .user_content(UserContent::Text(input))
+            .max_iterations(max_iterations)
+            .build();
 
-            // Append assistant message with tool calls
-            messages.push(ChatMessage {
-                role:         ChatRole::Assistant,
-                content:      response.content.clone(),
-                tool_calls:   response.tool_calls.iter().map(|tc| crate::llm::ToolCall {
-                    id:        tc.id.clone(),
-                    name:      tc.name.clone(),
-                    arguments: tc.arguments.clone(),
-                }).collect(),
-                tool_call_id: None,
-            });
+        // Create oneshot channel for result
+        let (result_tx, result_rx) = oneshot::channel();
+        let inner_ref = Arc::clone(&self.inner);
 
-            // Execute each tool call
-            for call in &response.tool_calls {
-                // Guard check
-                let verdict = ctx.guard.check_tool(&guard_ctx, &call.name, &call.arguments).await;
-                let tool_result = if verdict.is_allow() {
-                    match ctx.tools.get(&call.name) {
-                        Some(tool) => {
-                            match tool.execute(call.arguments.clone()).await {
-                                Ok(result) => {
-                                    ctx.bus.publish(KernelEvent::ToolExecuted {
-                                        agent_id:  ctx.agent_id,
-                                        tool_name: call.name.to_string(),
-                                        success:   true,
-                                        timestamp: Timestamp::now(),
-                                    }).await;
-                                    result.to_string()
-                                }
-                                Err(e) => {
-                                    ctx.bus.publish(KernelEvent::ToolExecuted {
-                                        agent_id:  ctx.agent_id,
-                                        tool_name: call.name.to_string(),
-                                        success:   false,
-                                        timestamp: Timestamp::now(),
-                                    }).await;
-                                    format!("Tool error: {e}")
-                                }
-                            }
-                        }
-                        None => format!("Tool not found: {}", call.name),
-                    }
-                } else {
-                    let reason = match &verdict {
-                        crate::guard::Verdict::Deny { reason } => reason.clone(),
-                        crate::guard::Verdict::NeedApproval { prompt } => {
-                            format!("Approval required: {prompt}")
-                        }
-                        _ => "Denied".to_owned(),
+        // Spawn tokio task
+        tokio::spawn(async move {
+            let _global_permit = _global_permit;
+            let _scoped_handle = scoped_handle;
+
+            let run_result = runner.run(&agent_tools, None).await;
+
+            match run_result {
+                Ok(response) => {
+                    let agent_result = AgentResult {
+                        output: response.response_text(),
+                        iterations: response.iterations,
+                        tool_calls: response.tool_calls_made,
                     };
-                    ctx.bus.publish(KernelEvent::GuardDenied {
-                        agent_id:  ctx.agent_id,
-                        tool_name: call.name.to_string(),
-                        reason:    reason.clone(),
-                        timestamp: Timestamp::now(),
-                    }).await;
-                    format!("Guard denied: {reason}")
-                };
 
-                // Append tool result message
-                messages.push(ChatMessage {
-                    role:         ChatRole::Tool,
-                    content:      Some(tool_result),
-                    tool_calls:   Vec::new(),
-                    tool_call_id: Some(call.id.to_string()),
-                });
+                    let _ = inner_ref
+                        .process_table
+                        .set_state(agent_id, ProcessState::Completed);
+                    let _ = inner_ref
+                        .process_table
+                        .set_result(agent_id, agent_result.clone());
+
+                    info!(
+                        agent_id = %agent_id,
+                        iterations = agent_result.iterations,
+                        tool_calls = agent_result.tool_calls,
+                        "agent process completed"
+                    );
+
+                    let _ = result_tx.send(agent_result);
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        agent_id = %agent_id,
+                        error = %err,
+                        "agent process failed"
+                    );
+
+                    let _ = inner_ref
+                        .process_table
+                        .set_state(agent_id, ProcessState::Failed);
+
+                    let error_result = AgentResult {
+                        output: format!("Error: {err}"),
+                        iterations: 0,
+                        tool_calls: 0,
+                    };
+                    let _ = inner_ref
+                        .process_table
+                        .set_result(agent_id, error_result.clone());
+                    let _ = result_tx.send(error_result);
+                }
             }
-        }
+        });
 
-        // Max iterations exceeded
-        Err(KernelError::Llm {
-            message: format!(
-                "agent loop exceeded max iterations ({})",
-                ctx.max_iterations
-            ),
+        Ok(AgentHandle {
+            agent_id,
+            result_rx,
         })
     }
 
-    // -- Context creation ------------------------------------------------------
+    /// Spawn a named agent by looking up its manifest.
+    ///
+    /// Convenience method that resolves a manifest name to an `AgentManifest`
+    /// and delegates to [`spawn`](Self::spawn).
+    pub async fn spawn_named(
+        &self,
+        agent_name: &str,
+        input: String,
+        principal: Principal,
+        session_id: SessionId,
+        parent_id: Option<AgentId>,
+    ) -> Result<AgentHandle> {
+        let manifest = self
+            .inner
+            .manifest_loader
+            .get(agent_name)
+            .ok_or(KernelError::ManifestNotFound {
+                name: agent_name.to_string(),
+            })?
+            .clone();
 
-    fn create_context(&self, entry: &AgentEntry) -> RunContext {
-        RunContext {
-            agent_id:       entry.id,
-            session_id:     entry.session_id,
-            user_id:        self.config.user_id,
-            llm:            Arc::clone(&self.llm),
-            tools:          Arc::new(self.tools.filtered(&entry.tools)),
-            memory:         Arc::clone(&self.memory),
-            sessions:       Arc::clone(&self.sessions),
-            prompts:        Arc::clone(&self.prompts),
-            guard:          Arc::clone(&self.guard),
-            bus:            Arc::clone(&self.bus),
-            model:          entry.model.clone(),
-            system_prompt:  entry.system_prompt.clone(),
-            max_iterations: entry.max_iterations,
+        self.spawn(manifest, input, principal, session_id, parent_id)
+            .await
+    }
+
+    /// Access the process table for querying.
+    pub fn process_table(&self) -> &ProcessTable {
+        &self.inner.process_table
+    }
+
+    /// Access the manifest loader for looking up named manifests.
+    pub fn manifest_loader(&self) -> &ManifestLoader {
+        &self.inner.manifest_loader
+    }
+
+    /// Access the tool registry.
+    pub fn tool_registry(&self) -> &Arc<ToolRegistry> {
+        &self.inner.tool_registry
+    }
+
+    /// Access the event bus.
+    pub fn event_bus(&self) -> &Arc<dyn EventBus> {
+        &self.inner.event_bus
+    }
+
+    /// Access the memory subsystem.
+    pub fn memory(&self) -> &Arc<dyn Memory> {
+        &self.inner.memory
+    }
+
+    /// Access the kernel config.
+    pub fn config(&self) -> &KernelConfig {
+        &self.config
+    }
+
+    /// Access the shared KernelInner (for constructing ScopedKernelHandles externally).
+    pub(crate) fn inner(&self) -> &Arc<KernelInner> {
+        &self.inner
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::defaults::noop::{NoopEventBus, NoopGuard, NoopMemory};
+    use crate::process::principal::Principal;
+    use crate::provider::EnvLlmProviderLoader;
+
+    fn make_test_kernel(max_concurrency: usize, child_limit: usize) -> Kernel {
+        let config = KernelConfig {
+            max_concurrency,
+            default_child_limit: child_limit,
+            default_max_iterations: 5,
+        };
+
+        let mut loader = ManifestLoader::new();
+        loader.load_bundled();
+
+        Kernel::new(
+            config,
+            Arc::new(EnvLlmProviderLoader::default()) as LlmProviderLoaderRef,
+            Arc::new(ToolRegistry::new()),
+            Arc::new(NoopMemory),
+            Arc::new(NoopEventBus),
+            Arc::new(NoopGuard),
+            loader,
+        )
+    }
+
+    fn test_manifest(name: &str) -> AgentManifest {
+        AgentManifest {
+            name: name.to_string(),
+            description: format!("Test agent: {name}"),
+            model: "test-model".to_string(),
+            system_prompt: "You are a test agent.".to_string(),
+            provider_hint: None,
+            max_iterations: Some(5),
+            tools: vec![],
+            max_children: None,
+            metadata: serde_json::Value::Null,
         }
     }
 
-    // -- Component accessors ---------------------------------------------------
+    #[test]
+    fn test_kernel_creation() {
+        let kernel = make_test_kernel(10, 5);
+        assert_eq!(kernel.config().max_concurrency, 10);
+        assert_eq!(kernel.config().default_child_limit, 5);
+        assert_eq!(kernel.process_table().list().len(), 0);
+    }
 
-    /// Access the memory subsystem.
-    pub fn memory(&self) -> &Arc<dyn Memory> { &self.memory }
+    #[test]
+    fn test_kernel_manifest_loader() {
+        let kernel = make_test_kernel(10, 5);
+        assert!(kernel.manifest_loader().get("scout").is_some());
+        assert!(kernel.manifest_loader().get("planner").is_some());
+        assert!(kernel.manifest_loader().get("worker").is_some());
+        assert!(kernel.manifest_loader().get("nonexistent").is_none());
+    }
 
-    /// Access the agent registry.
-    pub fn registry(&self) -> &AgentRegistry { &self.registry }
+    #[test]
+    fn test_kernel_default_config() {
+        let config = KernelConfig::default();
+        assert_eq!(config.max_concurrency, 16);
+        assert_eq!(config.default_child_limit, 8);
+        assert_eq!(config.default_max_iterations, 25);
+    }
 
-    /// Access the tool registry.
-    pub fn tools(&self) -> &Arc<ToolRegistry> { &self.tools }
+    #[tokio::test]
+    async fn test_kernel_spawn_creates_process() {
+        let kernel = make_test_kernel(10, 5);
+        let manifest = test_manifest("test-agent");
+        let principal = Principal::user("test-user");
+        let session_id = SessionId::new("test-session");
 
-    /// Access the prompt repository.
-    pub fn prompts(&self) -> &Arc<dyn PromptRepo> { &self.prompts }
+        // spawn will fail because there's no real LLM provider,
+        // but the process should be created in the table
+        let handle = kernel
+            .spawn(manifest, "hello".to_string(), principal, session_id, None)
+            .await;
 
-    /// Access the event bus.
-    pub fn bus(&self) -> &Arc<dyn EventBus> { &self.bus }
+        // The spawn itself should succeed (it just launches a task)
+        assert!(handle.is_ok());
+        let handle = handle.unwrap();
+
+        // Process should appear in the table
+        let process = kernel.process_table().get(handle.agent_id);
+        assert!(process.is_some());
+        let process = process.unwrap();
+        assert_eq!(process.manifest.name, "test-agent");
+        // It's running (or may have already failed due to no LLM, but was created as Running)
+    }
+
+    #[tokio::test]
+    async fn test_kernel_spawn_global_limit() {
+        let kernel = make_test_kernel(2, 5);
+        let principal = Principal::user("test-user");
+        let session_id = SessionId::new("test-session");
+
+        // Spawn 2 agents (global limit is 2)
+        let h1 = kernel
+            .spawn(
+                test_manifest("a1"),
+                "task 1".to_string(),
+                principal.clone(),
+                session_id.clone(),
+                None,
+            )
+            .await;
+        assert!(h1.is_ok());
+
+        let h2 = kernel
+            .spawn(
+                test_manifest("a2"),
+                "task 2".to_string(),
+                principal.clone(),
+                session_id.clone(),
+                None,
+            )
+            .await;
+        assert!(h2.is_ok());
+
+        // Third spawn should fail (global limit reached)
+        let h3 = kernel
+            .spawn(
+                test_manifest("a3"),
+                "task 3".to_string(),
+                principal,
+                session_id,
+                None,
+            )
+            .await;
+        assert!(h3.is_err());
+        let err = h3.unwrap_err();
+        assert!(
+            err.to_string().contains("global concurrency limit"),
+            "expected global limit error, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_kernel_spawn_named_success() {
+        let kernel = make_test_kernel(10, 5);
+        let principal = Principal::user("test-user");
+        let session_id = SessionId::new("test-session");
+
+        let handle = kernel
+            .spawn_named(
+                "scout",
+                "find something".to_string(),
+                principal,
+                session_id,
+                None,
+            )
+            .await;
+        assert!(handle.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_kernel_spawn_named_not_found() {
+        let kernel = make_test_kernel(10, 5);
+        let principal = Principal::user("test-user");
+        let session_id = SessionId::new("test-session");
+
+        let result = kernel
+            .spawn_named(
+                "nonexistent",
+                "task".to_string(),
+                principal,
+                session_id,
+                None,
+            )
+            .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("manifest not found"));
+    }
+
+    #[tokio::test]
+    async fn test_kernel_spawn_with_parent() {
+        let kernel = make_test_kernel(10, 5);
+        let principal = Principal::user("test-user");
+        let session_id = SessionId::new("test-session");
+
+        let parent_handle = kernel
+            .spawn(
+                test_manifest("parent"),
+                "parent task".to_string(),
+                principal.clone(),
+                session_id.clone(),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let child_handle = kernel
+            .spawn(
+                test_manifest("child"),
+                "child task".to_string(),
+                principal,
+                session_id,
+                Some(parent_handle.agent_id),
+            )
+            .await
+            .unwrap();
+
+        let child_process = kernel.process_table().get(child_handle.agent_id).unwrap();
+        assert_eq!(child_process.parent_id, Some(parent_handle.agent_id));
+
+        let children = kernel
+            .process_table()
+            .children_of(parent_handle.agent_id);
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].agent_id, child_handle.agent_id);
+    }
 }
