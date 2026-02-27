@@ -32,9 +32,7 @@
 pub mod agent_context;
 pub mod agent_output;
 pub mod channel;
-pub mod context;
 pub mod defaults;
-pub mod dispatcher;
 pub mod error;
 pub mod event;
 pub mod guard;
@@ -47,16 +45,12 @@ pub mod model_repo;
 pub mod process;
 pub mod prompt;
 pub mod provider;
-pub mod registry;
 pub mod runner;
 pub mod session;
-pub mod subagent;
 pub mod tool;
 
-pub use context::RunContext;
 pub use error::{KernelError, Result};
 pub use kernel::{Kernel, KernelConfig};
-pub use registry::{AgentEntry, AgentManifest, AgentRegistry, AgentState, GuardPolicy};
 
 // New process model re-exports
 pub use handle::{AgentHandle, ProcessOps, MemoryOps, EventOps, GuardOps, KernelHandle};

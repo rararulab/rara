@@ -72,8 +72,8 @@ pub struct AppState {
     // -- coding tasks --
     pub coding_task_service: rara_coding_task::service::CodingTaskService,
 
-    // -- dispatcher --
-    pub dispatcher: Arc<rara_kernel::dispatcher::AgentDispatcher>,
+    // -- kernel --
+    pub kernel: Arc<rara_kernel::Kernel>,
 
     // -- prompt repo --
     pub prompt_repo: Arc<dyn rara_kernel::prompt::PromptRepo>,
@@ -299,45 +299,6 @@ impl AppState {
             &settings_svc,
         );
 
-        // -- subagent tool -------------------------------------------------------
-
-        // Snapshot current tools BEFORE adding SubagentTool (prevents recursion).
-        let subagent_parent_tools = Arc::new(tool_registry.filtered(&[]));
-
-        // Load agent definitions: bundled first, then user-defined (override).
-        let agent_defs = {
-            let mut registry = rara_kernel::subagent::AgentDefinitionRegistry::new();
-            // Bundled agent definitions (embedded at compile time)
-            for def in rara_kernel::subagent::all_bundled_agents() {
-                registry.register(def);
-            }
-            // User-defined agent definitions (override bundled)
-            let user_dir = rara_paths::data_dir().join("agents");
-            if let Ok(user) = rara_kernel::subagent::AgentDefinitionRegistry::load_dir(&user_dir) {
-                for def in user.list() {
-                    registry.register(def.clone());
-                }
-            }
-            let count = registry.list().len();
-            if count > 0 {
-                info!(count, "agent definitions loaded");
-            }
-            Arc::new(registry)
-        };
-
-        // Default model for sub-agents: use the chat model from settings.
-        let subagent_default_model = {
-            let s = settings_svc.current();
-            s.ai.model_for_key("chat")
-        };
-
-        tool_registry.register_service(Arc::new(rara_kernel::subagent::SubagentTool::new(
-            llm_provider.clone(),
-            agent_defs,
-            subagent_parent_tools,
-            subagent_default_model,
-        )));
-
         // -- recall strategy engine -------------------------------------------
 
         let recall_engine = Arc::new(rara_memory::RecallStrategyEngine::new(
@@ -384,25 +345,27 @@ impl AppState {
         );
         info!("Chat service initialized");
 
-        // -- agent dispatcher ---------------------------------------------------
+        // -- kernel ---------------------------------------------------------------
 
-        let session_persister: Arc<dyn crate::task_executor::SessionPersister> =
-            Arc::new(ChatServicePersister(chat_service.clone()));
-        let job_callback: Arc<dyn crate::task_executor::ScheduledJobCallback> =
-            Arc::new(AgentSchedulerCallback(agent_scheduler.clone()));
-        let executor: Arc<dyn rara_kernel::dispatcher::TaskExecutor> =
-            Arc::new(crate::task_executor::WorkerTaskExecutor::new(
-                Arc::clone(&agent_ctx),
-                session_persister,
-                job_callback,
-            ));
-        let log_store: Arc<dyn rara_kernel::dispatcher::DispatcherLogStore> =
-            Arc::new(rara_kernel::dispatcher::InMemoryLogStore::new(200));
-        let dispatcher = Arc::new(rara_kernel::dispatcher::AgentDispatcher::new(
-            executor,
-            log_store,
+        let mut manifest_loader = rara_kernel::process::manifest_loader::ManifestLoader::new();
+        manifest_loader.load_bundled();
+        let user_agent_dir = rara_paths::data_dir().join("agents");
+        let _ = manifest_loader.load_dir(&user_agent_dir);
+
+        let kernel = Arc::new(rara_kernel::Kernel::new(
+            rara_kernel::KernelConfig {
+                max_concurrency: 16,
+                default_child_limit: 4,
+                default_max_iterations: 25,
+            },
+            llm_provider.clone(),
+            tools.clone(),
+            Arc::new(rara_kernel::defaults::noop::NoopMemory) as Arc<dyn rara_kernel::memory::Memory>,
+            Arc::new(rara_kernel::defaults::broadcast_bus::BroadcastEventBus::default()) as Arc<dyn rara_kernel::event::EventBus>,
+            Arc::new(rara_kernel::defaults::noop_guard::NoopGuard) as Arc<dyn rara_kernel::guard::Guard>,
+            manifest_loader,
         ));
-        info!("Agent dispatcher initialized");
+        info!("Kernel initialized");
 
         Ok(Self {
             ai_service,
@@ -425,7 +388,7 @@ impl AppState {
             agent_ctx,
             pipeline_service,
             coding_task_service,
-            dispatcher,
+            kernel,
             prompt_repo,
             proactive_notify: Arc::new(RwLock::new(None)),
         })
@@ -618,69 +581,6 @@ impl SettingsLlmProviderLoader {
             settings,
             codex_refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Dispatcher trait adapters
-// ---------------------------------------------------------------------------
-
-/// Adapter that implements [`SessionPersister`] by delegating to
-/// [`ChatService`].
-struct ChatServicePersister(rara_domain_chat::service::ChatService);
-
-#[async_trait]
-impl crate::task_executor::SessionPersister for ChatServicePersister {
-    async fn persist_messages(
-        &self,
-        session_key: &str,
-        user_text: &str,
-        assistant_text: &str,
-    ) -> Result<(), String> {
-        let key = rara_sessions::types::SessionKey::from_raw(session_key);
-        self.0
-            .append_messages(&key, user_text, assistant_text)
-            .await
-            .map_err(|e| e.to_string())
-    }
-
-    async fn persist_role_message(
-        &self,
-        session_key: &str,
-        role: &str,
-        text: &str,
-    ) -> Result<(), String> {
-        let key = rara_sessions::types::SessionKey::from_raw(session_key);
-        let msg = match role {
-            "user" => rara_sessions::types::ChatMessage::user(text),
-            "assistant" => rara_sessions::types::ChatMessage::assistant(text),
-            "system" => rara_sessions::types::ChatMessage::system(text),
-            _ => rara_sessions::types::ChatMessage::user(text),
-        };
-        self.0
-            .append_message_raw(&key, &msg)
-            .await
-            .map_err(|e| e.to_string())
-            .map(|_| ())
-    }
-
-    async fn ensure_session(&self, session_key: &str) {
-        let key = rara_sessions::types::SessionKey::from_raw(session_key);
-        let _ = self.0.ensure_session(&key, None, None, None).await;
-    }
-}
-
-/// Adapter that implements [`ScheduledJobCallback`] by delegating to
-/// [`AgentScheduler`].
-struct AgentSchedulerCallback(Arc<crate::agent_scheduler::AgentScheduler>);
-
-#[async_trait]
-impl crate::task_executor::ScheduledJobCallback for AgentSchedulerCallback {
-    async fn mark_executed(&self, job_id: &str) -> Result<(), String> {
-        self.0
-            .mark_executed(job_id)
-            .await
-            .map_err(|e| e.to_string())
     }
 }
 

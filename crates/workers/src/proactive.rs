@@ -13,12 +13,12 @@
 // limitations under the License.
 
 //! Proactive agent worker that periodically reviews recent chat activity
-//! and submits a task to the `AgentDispatcher` for autonomous action.
+//! and spawns a Kernel agent process for autonomous action.
 
 use async_trait::async_trait;
 use chrono::Utc;
 use common_worker::{FallibleWorker, WorkError, WorkResult, WorkerContext};
-use rara_kernel::dispatcher::{AgentTaskKind, Priority};
+use rara_kernel::process::{AgentManifest, SessionId, principal::Principal};
 use rara_sessions::types::SessionKey;
 use tracing::{info, warn};
 
@@ -30,8 +30,8 @@ const PROACTIVE_SESSION_KEY: &str = "agent:proactive";
 /// Maximum number of historical messages loaded for context.
 const PROACTIVE_HISTORY_LIMIT: i64 = 50;
 
-/// Background worker that reviews recent chat sessions and submits a
-/// proactive agent task to the dispatcher.
+/// Background worker that reviews recent chat sessions and spawns a
+/// proactive agent via the Kernel.
 pub struct ProactiveAgentWorker;
 
 #[async_trait]
@@ -59,39 +59,51 @@ impl FallibleWorker<AppState> for ProactiveAgentWorker {
             return Ok(());
         }
 
-        // 2. Ensure proactive session exists and load history
+        // 2. Ensure proactive session exists
         let session_key = SessionKey::from_raw(PROACTIVE_SESSION_KEY);
         let _ = state
             .chat_service
             .ensure_session(&session_key, Some("Proactive Agent"), None, None)
             .await;
-        let history = state
-            .chat_service
-            .get_messages(&session_key, None, Some(PROACTIVE_HISTORY_LIMIT))
+
+        // 3. Build user prompt from activity summary
+        let user_prompt = crate::builtin_agents::proactive::ProactiveAgent::build_user_prompt(
+            &activity_summary,
+        );
+
+        // 4. Build manifest and spawn via Kernel (fire-and-forget)
+        let policy = state.agent_ctx.build_worker_policy().await;
+        let model = state.agent_ctx.model_for_key("proactive");
+
+        let manifest = AgentManifest {
+            name: "proactive".to_string(),
+            description: "Proactive agent reviewing recent activity".to_string(),
+            model,
+            system_prompt: policy,
+            provider_hint: state.agent_ctx.provider_hint(),
+            max_iterations: Some(state.agent_ctx.max_iterations("proactive")),
+            tools: vec![], // inherit all tools
+            max_children: None,
+            metadata: serde_json::Value::Null,
+        };
+
+        let session_id = SessionId::new(PROACTIVE_SESSION_KEY);
+        let principal = Principal::admin("system");
+
+        match state
+            .kernel
+            .spawn(manifest, user_prompt, principal, session_id, None)
             .await
-            .unwrap_or_default();
-
-        // 3. Submit task to dispatcher (fire-and-forget)
-        let history_converted = history
-                .iter()
-                .map(rara_domain_chat::message_utils::to_chat_message)
-                .collect();
-
-            let task = rara_kernel::dispatcher::AgentTask::builder()
-            .kind(AgentTaskKind::Proactive)
-            .priority(Priority::Low)
-            .session_key(PROACTIVE_SESSION_KEY.to_owned())
-            .message(activity_summary)
-            .history(history_converted)
-            .dedup_key("proactive".to_owned())
-            .build();
-
-        match state.dispatcher.submit(task).await {
-            Ok(_rx) => {
-                info!("proactive agent: task submitted to dispatcher");
+        {
+            Ok(handle) => {
+                info!(
+                    agent_id = %handle.agent_id,
+                    "proactive agent: process spawned via kernel"
+                );
+                // Fire-and-forget: we don't await the handle result.
             }
             Err(e) => {
-                warn!(error = %e, "proactive agent: failed to submit task to dispatcher");
+                warn!(error = %e, "proactive agent: failed to spawn via kernel");
             }
         }
 
