@@ -20,11 +20,13 @@
 //! - Token persistence in keyring
 //! - Short-lived pending OAuth state persistence
 //! - Token-expiry/refresh policy
+//! - Ephemeral local callback server on port 1455
 //!
-//! Callers in other layers should keep only orchestration logic.
-//! For example:
-//! - `backend-admin` should map HTTP requests/responses and call this crate.
-//! - `workers` should load/refresh/persist tokens through this crate.
+//! The Codex public OAuth client (`app_EMoamEEZ73f0CkXaXp7hrann`) only
+//! accepts `http://localhost:1455/auth/callback` as its redirect URI.
+//! We therefore spin up a one-shot axum server on that port to capture
+//! the authorization code, exchange it for tokens, and redirect the
+//! browser to the frontend settings page.
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rara_keyring_store::{DefaultKeyringStore, KeyringStore};
@@ -42,10 +44,12 @@ pub const CODEX_TOKEN_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
 pub const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 /// Requested OAuth scopes for Codex provider integration.
 pub const CODEX_SCOPES: &str = "openid profile email offline_access";
-/// Environment variable used to build callback URLs (points to backend).
-pub const PUBLIC_BASE_URL_ENV: &str = "RARA_PUBLIC_BASE_URL";
+/// The **only** redirect URI accepted by the Codex public OAuth client.
+pub const CODEX_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
+/// Local port that the ephemeral callback server binds to.
+pub const CODEX_CALLBACK_PORT: u16 = 1455;
 /// Environment variable for the frontend base URL used for post-OAuth redirects.
-/// Falls back to `RARA_PUBLIC_BASE_URL`, then `http://localhost:5173`.
+/// Falls back to `http://localhost:5173`.
 pub const FRONTEND_BASE_URL_ENV: &str = "RARA_FRONTEND_URL";
 /// Environment variable used to override OAuth client id.
 pub const CODEX_CLIENT_ID_ENV: &str = "RARA_CODEX_CLIENT_ID";
@@ -79,21 +83,11 @@ struct TokenResponse {
     expires_in:    Option<u64>,
 }
 
-/// Build the external OAuth callback URI.
-///
-/// Defaults to `http://localhost:25555` when `RARA_PUBLIC_BASE_URL` is unset.
-pub fn callback_uri() -> String {
-    let base =
-        std::env::var(PUBLIC_BASE_URL_ENV).unwrap_or_else(|_| "http://localhost:25555".into());
-    format!(
-        "{}/api/v1/ai/codex/oauth/callback",
-        base.trim_end_matches('/')
-    )
-}
-
 /// Construct the full authorization URL for redirecting the user.
+///
+/// Uses the fixed redirect URI `http://localhost:1455/auth/callback` that is
+/// pre-registered with the Codex public OAuth client.
 pub fn build_auth_url(
-    redirect_uri: &str,
     state: &str,
     code_challenge: &str,
 ) -> Result<String, String> {
@@ -101,12 +95,14 @@ pub fn build_auth_url(
     let mut url = reqwest::Url::parse(CODEX_AUTH_ENDPOINT).map_err(|e| e.to_string())?;
     url.query_pairs_mut()
         .append_pair("client_id", &client_id)
-        .append_pair("redirect_uri", redirect_uri)
+        .append_pair("redirect_uri", CODEX_REDIRECT_URI)
         .append_pair("response_type", "code")
         .append_pair("scope", CODEX_SCOPES)
         .append_pair("code_challenge", code_challenge)
         .append_pair("code_challenge_method", "S256")
-        .append_pair("state", state);
+        .append_pair("state", state)
+        .append_pair("id_token_add_organizations", "true")
+        .append_pair("codex_cli_simplified_flow", "true");
     Ok(url.into())
 }
 
@@ -224,14 +220,13 @@ pub fn should_refresh_token(expires_at_unix: Option<u64>) -> bool {
 pub async fn exchange_authorization_code(
     code: &str,
     code_verifier: &str,
-    redirect_uri: &str,
 ) -> Result<StoredCodexTokens, String> {
     let client_id = codex_client_id();
     let form = [
         ("grant_type", "authorization_code"),
         ("client_id", client_id.as_str()),
         ("code", code),
-        ("redirect_uri", redirect_uri),
+        ("redirect_uri", CODEX_REDIRECT_URI),
         ("code_verifier", code_verifier),
     ];
     let token = send_token_request(&form, "oauth token exchange").await?;
@@ -271,13 +266,120 @@ pub async fn refresh_tokens(current: &StoredCodexTokens) -> Result<StoredCodexTo
 
 /// Build the frontend base URL used for post-OAuth redirects.
 ///
-/// Priority: `RARA_FRONTEND_URL` > `RARA_PUBLIC_BASE_URL` > `http://localhost:5173`
+/// Priority: `RARA_FRONTEND_URL` > `http://localhost:5173`
 pub fn frontend_base_url() -> String {
     std::env::var(FRONTEND_BASE_URL_ENV)
-        .or_else(|_| std::env::var(PUBLIC_BASE_URL_ENV))
         .unwrap_or_else(|_| "http://localhost:5173".into())
         .trim_end_matches('/')
         .to_owned()
+}
+
+// ---------------------------------------------------------------------------
+// Ephemeral callback server
+// ---------------------------------------------------------------------------
+
+/// Start a one-shot HTTP server on `localhost:1455` that waits for the OAuth
+/// callback, exchanges the code for tokens, saves them, and redirects the
+/// browser to the frontend settings page.
+///
+/// Returns `Ok(())` after successfully handling the callback or an error
+/// description on failure. The server shuts itself down after the first
+/// request to `/auth/callback`.
+pub async fn start_callback_server() -> Result<(), String> {
+    use std::sync::Arc;
+    use tokio::sync::oneshot;
+
+    let (tx, rx) = oneshot::channel::<Result<(), String>>();
+    let tx = Arc::new(std::sync::Mutex::new(Some(tx)));
+
+    let app = axum::Router::new().route(
+        "/auth/callback",
+        axum::routing::get({
+            let tx = Arc::clone(&tx);
+            move |query: axum::extract::Query<CallbackQuery>| {
+                let tx = Arc::clone(&tx);
+                async move { handle_callback(query, tx).await }
+            }
+        }),
+    );
+
+    let addr: std::net::SocketAddr = ([127, 0, 0, 1], CODEX_CALLBACK_PORT).into();
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .map_err(|e| format!("failed to bind callback server on {addr}: {e}"))?;
+
+    tracing::info!("codex oauth callback server listening on {addr}");
+
+    // Serve until the callback is handled.
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                // Wait for callback handler to signal completion.
+                let _ = rx.await;
+                tracing::info!("codex oauth callback server shutting down");
+            })
+            .await
+            .ok();
+    });
+
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+struct CallbackQuery {
+    code:  Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+}
+
+async fn handle_callback(
+    axum::extract::Query(query): axum::extract::Query<CallbackQuery>,
+    tx: std::sync::Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<Result<(), String>>>>>,
+) -> axum::response::Redirect {
+    let frontend = frontend_base_url();
+    let err_url = format!("{frontend}/settings?section=providers&codex_oauth=error");
+    let ok_url = format!("{frontend}/settings?section=providers&codex_oauth=success");
+
+    let result = handle_callback_inner(&query).await;
+    let redirect_url = match &result {
+        Ok(()) => &ok_url,
+        Err(e) => {
+            tracing::warn!(error = %e, "codex oauth callback failed");
+            &err_url
+        }
+    };
+
+    // Signal the server to shut down (fire-and-forget).
+    if let Ok(mut guard) = tx.lock() {
+        if let Some(tx) = guard.take() {
+            let _ = tx.send(result);
+        }
+    }
+
+    axum::response::Redirect::to(redirect_url)
+}
+
+async fn handle_callback_inner(query: &CallbackQuery) -> Result<(), String> {
+    if let Some(ref oauth_err) = query.error {
+        return Err(format!("provider returned error: {oauth_err}"));
+    }
+
+    let pending = load_pending_oauth()?
+        .ok_or_else(|| "no pending oauth state found".to_owned())?;
+
+    validate_state(&pending.state, query.state.as_deref())?;
+
+    let code = query
+        .code
+        .as_deref()
+        .ok_or_else(|| "missing authorization code".to_owned())?;
+
+    let tokens = exchange_authorization_code(code, &pending.code_verifier).await?;
+    save_tokens(&tokens)?;
+    clear_pending_oauth()?;
+
+    tracing::info!("codex oauth tokens saved successfully");
+    Ok(())
 }
 
 fn codex_client_id() -> String {
@@ -331,5 +433,15 @@ mod tests {
     fn compute_expires_at_adds_offset() {
         assert_eq!(compute_expires_at_unix(1000, Some(120)), Some(1120));
         assert_eq!(compute_expires_at_unix(1000, None), None);
+    }
+
+    #[test]
+    fn build_auth_url_includes_required_params() {
+        let url = build_auth_url("test-state", "test-challenge").unwrap();
+        assert!(url.contains("id_token_add_organizations=true"));
+        assert!(url.contains("codex_cli_simplified_flow=true"));
+        assert!(url.contains("redirect_uri=http"));
+        assert!(url.contains("localhost%3A1455"));
+        assert!(url.contains("code_challenge_method=S256"));
     }
 }

@@ -14,10 +14,13 @@ categories.workspace = true
 workspace = true
 
 [dependencies]
+axum.workspace = true
 base64.workspace = true
 rara-keyring-store.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+tokio.workspace = true
+tracing.workspace = true
 uuid.workspace = true

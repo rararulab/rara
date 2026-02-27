@@ -11,12 +11,14 @@ This document describes how Codex OAuth is layered in the codebase and why.
   - Stores/loads tokens using keyring.
   - Stores pending OAuth state in short-lived in-process memory.
   - Implements token refresh policy (`should_refresh_token`).
+  - **Runs ephemeral callback server on `localhost:1455`** — the only
+    redirect URI accepted by the Codex public OAuth client.
 
 - `crates/extensions/backend-admin/src/settings/codex_oauth.rs`
-  - Owns HTTP route wiring only.
+  - Owns HTTP route wiring only (`/start`, `/status`, `/disconnect`).
   - Translates API requests to integration calls.
-  - Returns redirect/status/disconnect responses.
   - Must not re-implement token exchange/refresh rules.
+  - Does NOT handle the OAuth callback — that lives on port 1455.
 
 - `crates/workers/src/worker_state.rs`
   - Owns runtime orchestration only.
@@ -27,9 +29,14 @@ This document describes how Codex OAuth is layered in the codebase and why.
 
 1. Frontend calls `POST /api/v1/ai/codex/oauth/start`.
 2. Backend creates `state` + PKCE verifier/challenge via integration crate.
-3. Backend persists pending OAuth state in keyring and returns `auth_url`.
-4. User authenticates at OpenAI and is redirected to `/api/v1/ai/codex/oauth/callback`.
-5. Backend validates `state`, exchanges `code` through integration crate, persists tokens, then redirects to UI success/error page.
+3. Backend starts ephemeral callback server on `localhost:1455`.
+4. Backend returns `auth_url` — frontend opens it in a new browser tab.
+5. User authenticates at OpenAI and is redirected to
+   `http://localhost:1455/auth/callback` (pre-registered redirect URI).
+6. Ephemeral server validates `state`, exchanges `code` for tokens via
+   integration crate, persists tokens in keyring, then redirects the
+   browser to the frontend settings page (`/settings?codex_oauth=success`).
+7. Ephemeral server shuts itself down.
 
 ## Token Refresh Flow
 
@@ -39,6 +46,13 @@ This document describes how Codex OAuth is layered in the codebase and why.
 4. Worker re-loads token (double-check) and refreshes via integration crate.
 5. Worker persists refreshed token and constructs OpenAI provider with latest access token.
 
+## Why localhost:1455?
+
+The Codex public OAuth client (`app_EMoamEEZ73f0CkXaXp7hrann`) only
+accepts `http://localhost:1455/auth/callback` as its redirect URI.
+This is the same approach used by the official Codex CLI and other
+third-party tools (Roo Code, OpenCode, etc.).
+
 ## Rationale
 
 - Avoids boundary leakage from integration concerns into `backend-admin` and worker internals.
@@ -47,15 +61,10 @@ This document describes how Codex OAuth is layered in the codebase and why.
 
 ## Environment Variables
 
-- `RARA_PUBLIC_BASE_URL`
-  - Base URL used to build OAuth callback URI (points to backend).
-  - Defaults to `http://localhost:25555`.
-  - Example: `https://api.example.com` in production.
 - `RARA_FRONTEND_URL`
   - Frontend base URL used for post-OAuth redirects.
-  - Falls back to `RARA_PUBLIC_BASE_URL`, then `http://localhost:5173`.
-  - In production (shared domain), set same as `RARA_PUBLIC_BASE_URL`.
-  - In dev mode with separate frontend, set to `http://localhost:5173`.
+  - Defaults to `http://localhost:5173`.
+  - In production (shared domain), set to your public URL.
 - `RARA_CODEX_CLIENT_ID`
   - Optional override for Codex OAuth client id.
   - Use this when default client id is not accepted in your environment/account.

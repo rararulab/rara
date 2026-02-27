@@ -12,37 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use axum::{Json, extract::State, http::StatusCode, response::Redirect};
-use tracing::warn;
+use axum::{Json, extract::State, http::StatusCode};
 use rara_codex_oauth::{
-    PendingCodexOAuth, build_auth_url, callback_uri, clear_pending_oauth, clear_tokens,
-    exchange_authorization_code, frontend_base_url, generate_code_challenge,
-    generate_code_verifier, generate_nonce, load_pending_oauth, load_tokens, save_pending_oauth,
-    save_tokens, validate_state,
+    PendingCodexOAuth, build_auth_url, clear_pending_oauth, clear_tokens,
+    generate_code_challenge, generate_code_verifier, generate_nonce, load_tokens,
+    save_pending_oauth, start_callback_server,
 };
 use serde::Serialize;
+use tracing::warn;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::settings::SettingsSvc;
 
-fn success_redirect() -> String {
-    format!("{}/settings?section=providers&codex_oauth=success", frontend_base_url())
-}
-
-fn error_redirect() -> String {
-    format!("{}/settings?section=providers&codex_oauth=error", frontend_base_url())
-}
-
 // Note: this module intentionally stays thin.
 // Provider-specific OAuth/token logic lives in `rara-codex-oauth`.
+//
+// The callback is handled by an ephemeral server on localhost:1455
+// (required by OpenAI's registered redirect_uri), NOT by the main
+// backend server. So we only expose /start, /status, /disconnect here.
 pub(super) fn routes() -> OpenApiRouter<SettingsSvc> {
     OpenApiRouter::new().nest(
         "/api/v1/ai/codex/oauth",
         OpenApiRouter::new()
             .routes(routes!(oauth_start))
             .routes(routes!(oauth_status))
-            .routes(routes!(oauth_disconnect))
-            .route("/callback", axum::routing::get(oauth_callback)),
+            .routes(routes!(oauth_disconnect)),
     )
 }
 
@@ -57,13 +51,6 @@ pub struct OAuthStatusResponse {
     pub expires_at_unix: Option<u64>,
 }
 
-#[derive(Debug, serde::Deserialize)]
-pub struct OAuthCallbackQuery {
-    code:  Option<String>,
-    state: Option<String>,
-    error: Option<String>,
-}
-
 #[utoipa::path(
     post,
     path = "/start",
@@ -76,58 +63,27 @@ async fn oauth_start(
     let oauth_state = generate_nonce();
     let code_verifier = generate_code_verifier();
     let code_challenge = generate_code_challenge(&code_verifier);
-    let redirect_uri = callback_uri();
 
-    let auth_url = build_auth_url(&redirect_uri, &oauth_state, &code_challenge)
+    let auth_url = build_auth_url(&oauth_state, &code_challenge)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
     let pending = PendingCodexOAuth {
         state: oauth_state,
         code_verifier,
     };
     save_pending_oauth(&pending).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
+    // Start ephemeral callback server on localhost:1455 (OpenAI's
+    // pre-registered redirect_uri). It handles a single callback then
+    // shuts itself down.
+    start_callback_server()
+        .await
+        .map_err(|e| {
+            warn!(error = %e, "failed to start codex oauth callback server");
+            (StatusCode::INTERNAL_SERVER_ERROR, e)
+        })?;
+
     Ok(Json(OAuthStartResponse { auth_url }))
-}
-
-async fn oauth_callback(
-    State(_state): State<SettingsSvc>,
-    axum::extract::Query(query): axum::extract::Query<OAuthCallbackQuery>,
-) -> Redirect {
-    let err_url = error_redirect();
-    if let Some(ref oauth_err) = query.error {
-        warn!(error = %oauth_err, "codex oauth callback received error from provider");
-        return Redirect::to(&err_url);
-    }
-
-    let Some(pending) = load_pending_oauth().ok().flatten() else {
-        warn!("codex oauth callback: no pending oauth state found");
-        return Redirect::to(&err_url);
-    };
-    if let Err(e) = validate_state(&pending.state, query.state.as_deref()) {
-        warn!(error = %e, "codex oauth callback: state validation failed");
-        return Redirect::to(&err_url);
-    }
-    let Some(code) = query.code.as_deref() else {
-        warn!("codex oauth callback: missing authorization code");
-        return Redirect::to(&err_url);
-    };
-
-    // Perform the provider token exchange in integration layer, then persist.
-    let tokens =
-        match exchange_authorization_code(code, &pending.code_verifier, &callback_uri()).await {
-            Ok(tokens) => tokens,
-            Err(e) => {
-                warn!(error = %e, "codex oauth token exchange failed");
-                return Redirect::to(&err_url);
-            }
-        };
-    if let Err(e) = save_tokens(&tokens) {
-        warn!(error = %e, "codex oauth: failed to save tokens");
-        return Redirect::to(&err_url);
-    }
-    let _ = clear_pending_oauth();
-
-    Redirect::to(&success_redirect())
 }
 
 #[utoipa::path(
