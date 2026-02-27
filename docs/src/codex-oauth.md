@@ -8,7 +8,8 @@ This document describes how Codex OAuth is layered in the codebase and why.
   - Owns Codex provider-specific behavior.
   - Builds OAuth URLs and PKCE values.
   - Exchanges authorization code and refresh token at OpenAI token endpoint.
-  - Stores/loads tokens and pending OAuth state using keyring.
+  - Stores/loads tokens using keyring.
+  - Stores pending OAuth state in short-lived in-process memory.
   - Implements token refresh policy (`should_refresh_token`).
 
 - `crates/extensions/backend-admin/src/settings/codex_oauth.rs`
@@ -43,3 +44,12 @@ This document describes how Codex OAuth is layered in the codebase and why.
 - Avoids boundary leakage from integration concerns into `backend-admin` and worker internals.
 - Keeps provider-specific behavior in one place for easier maintenance and testing.
 - Prevents duplicated OAuth logic and constant drift.
+
+## Environment Variables
+
+- `RARA_PUBLIC_BASE_URL`
+  - Base URL used to build OAuth callback URI.
+  - Example: `http://localhost:8000` or your public URL in production.
+- `RARA_CODEX_CLIENT_ID`
+  - Optional override for Codex OAuth client id.
+  - Use this when default client id is not accepted in your environment/account.

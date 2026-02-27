@@ -18,6 +18,7 @@
 //! - OAuth URL construction and PKCE helpers
 //! - Authorization-code and refresh-token exchanges
 //! - Token persistence in keyring
+//! - Short-lived pending OAuth state persistence
 //! - Token-expiry/refresh policy
 //!
 //! Callers in other layers should keep only orchestration logic.
@@ -34,16 +35,22 @@ use sha2::{Digest, Sha256};
 pub const CODEX_AUTH_ENDPOINT: &str = "https://auth.openai.com/oauth/authorize";
 /// OpenAI token endpoint for Codex OAuth.
 pub const CODEX_TOKEN_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
-/// Public client id used by this application for Codex OAuth.
+/// Default public client id for Codex OAuth.
+///
+/// Override with `RARA_CODEX_CLIENT_ID` in environments where this default is
+/// not accepted.
 pub const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 /// Requested OAuth scopes for Codex provider integration.
 pub const CODEX_SCOPES: &str = "openid profile email offline_access";
 /// Environment variable used to build callback URLs.
 pub const PUBLIC_BASE_URL_ENV: &str = "RARA_PUBLIC_BASE_URL";
+/// Environment variable used to override OAuth client id.
+pub const CODEX_CLIENT_ID_ENV: &str = "RARA_CODEX_CLIENT_ID";
 const REFRESH_SKEW_SECS: u64 = 60;
 const CODEX_KEYRING_SERVICE: &str = "rara-ai-codex";
 const CODEX_TOKEN_ACCOUNT: &str = "tokens";
-const CODEX_PENDING_ACCOUNT: &str = "oauth-pending";
+static PENDING_OAUTH: std::sync::LazyLock<std::sync::Mutex<Option<PendingCodexOAuth>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 
 /// Persisted Codex credentials (keyring-backed).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,9 +94,10 @@ pub fn build_auth_url(
     state: &str,
     code_challenge: &str,
 ) -> Result<String, String> {
+    let client_id = codex_client_id();
     let mut url = reqwest::Url::parse(CODEX_AUTH_ENDPOINT).map_err(|e| e.to_string())?;
     url.query_pairs_mut()
-        .append_pair("client_id", CODEX_CLIENT_ID)
+        .append_pair("client_id", &client_id)
         .append_pair("redirect_uri", redirect_uri)
         .append_pair("response_type", "code")
         .append_pair("scope", CODEX_SCOPES)
@@ -131,35 +139,29 @@ pub fn clear_tokens() -> Result<(), String> {
     Ok(())
 }
 
-/// Load pending OAuth state from keyring.
+/// Load pending OAuth state from in-process temporary storage.
 pub fn load_pending_oauth() -> Result<Option<PendingCodexOAuth>, String> {
-    let store = DefaultKeyringStore;
-    let Some(raw) = store
-        .load(CODEX_KEYRING_SERVICE, CODEX_PENDING_ACCOUNT)
-        .map_err(|e| format!("keyring load failed: {e}"))?
-    else {
-        return Ok(None);
-    };
-    serde_json::from_str(&raw)
-        .map(Some)
-        .map_err(|e| e.to_string())
+    let guard = PENDING_OAUTH
+        .lock()
+        .map_err(|_| "pending oauth lock poisoned".to_owned())?;
+    Ok(guard.clone())
 }
 
-/// Save pending OAuth state to keyring.
+/// Save pending OAuth state to in-process temporary storage.
 pub fn save_pending_oauth(pending: &PendingCodexOAuth) -> Result<(), String> {
-    let store = DefaultKeyringStore;
-    let raw = serde_json::to_string(pending).map_err(|e| e.to_string())?;
-    store
-        .save(CODEX_KEYRING_SERVICE, CODEX_PENDING_ACCOUNT, &raw)
-        .map_err(|e| format!("keyring save failed: {e}"))
+    let mut guard = PENDING_OAUTH
+        .lock()
+        .map_err(|_| "pending oauth lock poisoned".to_owned())?;
+    *guard = Some(pending.clone());
+    Ok(())
 }
 
-/// Clear pending OAuth state from keyring.
+/// Clear pending OAuth state from in-process temporary storage.
 pub fn clear_pending_oauth() -> Result<(), String> {
-    let store = DefaultKeyringStore;
-    let _ = store
-        .delete(CODEX_KEYRING_SERVICE, CODEX_PENDING_ACCOUNT)
-        .map_err(|e| format!("keyring delete failed: {e}"))?;
+    let mut guard = PENDING_OAUTH
+        .lock()
+        .map_err(|_| "pending oauth lock poisoned".to_owned())?;
+    *guard = None;
     Ok(())
 }
 
@@ -221,9 +223,10 @@ pub async fn exchange_authorization_code(
     code_verifier: &str,
     redirect_uri: &str,
 ) -> Result<StoredCodexTokens, String> {
+    let client_id = codex_client_id();
     let form = [
         ("grant_type", "authorization_code"),
-        ("client_id", CODEX_CLIENT_ID),
+        ("client_id", client_id.as_str()),
         ("code", code),
         ("redirect_uri", redirect_uri),
         ("code_verifier", code_verifier),
@@ -246,9 +249,10 @@ pub async fn refresh_tokens(current: &StoredCodexTokens) -> Result<StoredCodexTo
         .refresh_token
         .as_deref()
         .ok_or_else(|| "codex token expired and no refresh token is available".to_owned())?;
+    let client_id = codex_client_id();
     let form = [
         ("grant_type", "refresh_token"),
-        ("client_id", CODEX_CLIENT_ID),
+        ("client_id", client_id.as_str()),
         ("refresh_token", refresh_token),
     ];
     let token = send_token_request(&form, "codex token refresh").await?;
@@ -260,6 +264,10 @@ pub async fn refresh_tokens(current: &StoredCodexTokens) -> Result<StoredCodexTo
         id_token:        token.id_token.or_else(|| current.id_token.clone()),
         expires_at_unix: compute_expires_at_unix(now_unix(), token.expires_in),
     })
+}
+
+fn codex_client_id() -> String {
+    std::env::var(CODEX_CLIENT_ID_ENV).unwrap_or_else(|_| CODEX_CLIENT_ID.to_owned())
 }
 
 async fn send_token_request(form: &[(&str, &str)], context: &str) -> Result<TokenResponse, String> {
