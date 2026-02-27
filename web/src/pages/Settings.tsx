@@ -1003,7 +1003,7 @@ export default function Settings() {
       <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
         <p className="text-sm font-semibold">Model Assignments</p>
         <p className="text-xs text-muted-foreground">
-          Assign models to keys. Unset keys fall back to &quot;default&quot;, then &quot;openai/gpt-4o&quot;.
+          Assign models to keys. Unset keys fall back to &quot;default&quot;, then &quot;{aiProvider === "codex" ? "codex-mini-latest" : "openai/gpt-4o"}&quot;.
         </p>
         <div className="space-y-2">
           {MODEL_KEYS.map((key) => {
@@ -1011,11 +1011,11 @@ export default function Settings() {
             return (
               <div key={key} className="flex items-center gap-2 rounded border bg-background px-3 py-2">
                 <span className="w-24 shrink-0 text-sm font-medium">{key}</span>
-                {aiProvider === "ollama" ? (
+                {aiProvider === "ollama" || aiProvider === "codex" ? (
                   <Input
                     value={currentValue}
                     onChange={(e) => setModelKey(key, e.target.value || undefined)}
-                    placeholder={key === "default" ? "openai/gpt-4o" : `(falls back to default)`}
+                    placeholder={key === "default" ? (aiProvider === "codex" ? "codex-mini-latest" : "openai/gpt-4o") : `(falls back to default)`}
                     className="h-8 text-sm font-mono"
                   />
                 ) : (
