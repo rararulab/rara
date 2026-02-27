@@ -42,8 +42,11 @@ pub const CODEX_TOKEN_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
 pub const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 /// Requested OAuth scopes for Codex provider integration.
 pub const CODEX_SCOPES: &str = "openid profile email offline_access";
-/// Environment variable used to build callback URLs.
+/// Environment variable used to build callback URLs (points to backend).
 pub const PUBLIC_BASE_URL_ENV: &str = "RARA_PUBLIC_BASE_URL";
+/// Environment variable for the frontend base URL used for post-OAuth redirects.
+/// Falls back to `RARA_PUBLIC_BASE_URL`, then `http://localhost:5173`.
+pub const FRONTEND_BASE_URL_ENV: &str = "RARA_FRONTEND_URL";
 /// Environment variable used to override OAuth client id.
 pub const CODEX_CLIENT_ID_ENV: &str = "RARA_CODEX_CLIENT_ID";
 const REFRESH_SKEW_SECS: u64 = 60;
@@ -78,10 +81,10 @@ struct TokenResponse {
 
 /// Build the external OAuth callback URI.
 ///
-/// Defaults to `http://localhost:8000` when `RARA_PUBLIC_BASE_URL` is unset.
+/// Defaults to `http://localhost:25555` when `RARA_PUBLIC_BASE_URL` is unset.
 pub fn callback_uri() -> String {
     let base =
-        std::env::var(PUBLIC_BASE_URL_ENV).unwrap_or_else(|_| "http://localhost:8000".into());
+        std::env::var(PUBLIC_BASE_URL_ENV).unwrap_or_else(|_| "http://localhost:25555".into());
     format!(
         "{}/api/v1/ai/codex/oauth/callback",
         base.trim_end_matches('/')
@@ -264,6 +267,17 @@ pub async fn refresh_tokens(current: &StoredCodexTokens) -> Result<StoredCodexTo
         id_token:        token.id_token.or_else(|| current.id_token.clone()),
         expires_at_unix: compute_expires_at_unix(now_unix(), token.expires_in),
     })
+}
+
+/// Build the frontend base URL used for post-OAuth redirects.
+///
+/// Priority: `RARA_FRONTEND_URL` > `RARA_PUBLIC_BASE_URL` > `http://localhost:5173`
+pub fn frontend_base_url() -> String {
+    std::env::var(FRONTEND_BASE_URL_ENV)
+        .or_else(|_| std::env::var(PUBLIC_BASE_URL_ENV))
+        .unwrap_or_else(|_| "http://localhost:5173".into())
+        .trim_end_matches('/')
+        .to_owned()
 }
 
 fn codex_client_id() -> String {

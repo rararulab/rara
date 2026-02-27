@@ -48,8 +48,14 @@ This document describes how Codex OAuth is layered in the codebase and why.
 ## Environment Variables
 
 - `RARA_PUBLIC_BASE_URL`
-  - Base URL used to build OAuth callback URI.
-  - Example: `http://localhost:8000` or your public URL in production.
+  - Base URL used to build OAuth callback URI (points to backend).
+  - Defaults to `http://localhost:25555`.
+  - Example: `https://api.example.com` in production.
+- `RARA_FRONTEND_URL`
+  - Frontend base URL used for post-OAuth redirects.
+  - Falls back to `RARA_PUBLIC_BASE_URL`, then `http://localhost:5173`.
+  - In production (shared domain), set same as `RARA_PUBLIC_BASE_URL`.
+  - In dev mode with separate frontend, set to `http://localhost:5173`.
 - `RARA_CODEX_CLIENT_ID`
   - Optional override for Codex OAuth client id.
   - Use this when default client id is not accepted in your environment/account.
