@@ -1,10 +1,15 @@
 //! Proactive agent -- reviews recent activity and takes autonomous actions.
 
-use agent_core::runner::UserContent;
+use std::sync::Arc;
+
+use agent_core::{
+    context::AgentContext,
+    runner::UserContent,
+};
 use rara_sessions::types::ChatMessage;
 
 use super::AgentOutput;
-use crate::orchestrator::{AgentOrchestrator, context::to_chat_message, error::OrchestratorError};
+use crate::orchestrator::{context::to_chat_message, error::OrchestratorError};
 
 /// Default maximum number of agent loop iterations per proactive run.
 const DEFAULT_MAX_ITERATIONS: usize = 15;
@@ -12,11 +17,11 @@ const DEFAULT_MAX_ITERATIONS: usize = 15;
 /// Proactive agent that reviews recent activity and takes autonomous action.
 #[derive(Clone)]
 pub struct ProactiveAgent {
-    orchestrator: AgentOrchestrator,
+    ctx: Arc<dyn AgentContext>,
 }
 
 impl ProactiveAgent {
-    pub fn new(orchestrator: AgentOrchestrator) -> Self { Self { orchestrator } }
+    pub fn new(ctx: Arc<dyn AgentContext>) -> Self { Self { ctx } }
 
     /// Build the user prompt for a proactive review cycle.
     ///
@@ -41,26 +46,22 @@ impl ProactiveAgent {
     ) -> Result<AgentOutput, OrchestratorError> {
         let user_prompt = Self::build_user_prompt(activity_summary);
 
-        let policy = self.orchestrator.build_worker_policy().await;
-        let settings = self.orchestrator.settings();
-        let model = settings.ai.model_for_key("proactive");
-        let provider_hint = settings.ai.provider.clone();
-        let max_iterations = settings
-            .agent
-            .max_iterations
-            .map(|n| n as usize)
-            .unwrap_or(DEFAULT_MAX_ITERATIONS);
-        let tools = self.orchestrator.tools().clone();
+        let policy = self.ctx.build_worker_policy().await;
+        let model = self.ctx.model_for_key("proactive");
+        let provider_hint = self.ctx.provider_hint();
+        let max_iterations = self.ctx.max_iterations("proactive");
+        let _ = max_iterations; // use below
+        let tools = self.ctx.tools().clone();
         let chat_history = history.iter().map(to_chat_message).collect();
 
         let runner = agent_core::runner::AgentRunner::builder()
-            .llm_provider(self.orchestrator.llm_provider().clone())
+            .llm_provider(self.ctx.llm_provider().clone())
             .provider_hint(provider_hint.unwrap_or_default())
             .model_name(model)
             .system_prompt(policy)
             .user_content(UserContent::Text(user_prompt))
             .history(chat_history)
-            .max_iterations(max_iterations)
+            .max_iterations(self.ctx.max_iterations("proactive"))
             .build();
 
         let result = runner

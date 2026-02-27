@@ -1,22 +1,24 @@
 //! Scheduled agent -- executes due jobs from the agent scheduler.
 
-use agent_core::runner::UserContent;
+use std::sync::Arc;
+
+use agent_core::{
+    context::AgentContext,
+    runner::UserContent,
+};
 use rara_sessions::types::ChatMessage;
 
 use super::AgentOutput;
-use crate::orchestrator::{AgentOrchestrator, context::to_chat_message, error::OrchestratorError};
-
-/// Default maximum iterations for scheduled job execution.
-const DEFAULT_MAX_ITERATIONS: usize = 15;
+use crate::orchestrator::{context::to_chat_message, error::OrchestratorError};
 
 /// Agent that executes scheduled jobs with full tool access.
 #[derive(Clone)]
 pub struct ScheduledAgent {
-    orchestrator: AgentOrchestrator,
+    ctx: Arc<dyn AgentContext>,
 }
 
 impl ScheduledAgent {
-    pub fn new(orchestrator: AgentOrchestrator) -> Self { Self { orchestrator } }
+    pub fn new(ctx: Arc<dyn AgentContext>) -> Self { Self { ctx } }
 
     /// Execute a single scheduled job.
     ///
@@ -27,23 +29,18 @@ impl ScheduledAgent {
         message: &str,
         history: Option<&[ChatMessage]>,
     ) -> Result<AgentOutput, OrchestratorError> {
-        let policy = self.orchestrator.build_worker_policy().await;
-        let settings = self.orchestrator.settings();
-        let model = settings.ai.model_for_key("scheduled");
-        let provider_hint = settings.ai.provider.clone();
-        let max_iterations = settings
-            .agent
-            .max_iterations
-            .map(|n| n as usize)
-            .unwrap_or(DEFAULT_MAX_ITERATIONS);
-        let tools = self.orchestrator.tools().clone();
+        let policy = self.ctx.build_worker_policy().await;
+        let model = self.ctx.model_for_key("scheduled");
+        let provider_hint = self.ctx.provider_hint();
+        let max_iterations = self.ctx.max_iterations("scheduled");
+        let tools = self.ctx.tools().clone();
 
         let chat_history = history
             .map(|h| h.iter().map(to_chat_message).collect())
             .unwrap_or_default();
 
         let runner = agent_core::runner::AgentRunner::builder()
-            .llm_provider(self.orchestrator.llm_provider().clone())
+            .llm_provider(self.ctx.llm_provider().clone())
             .provider_hint(provider_hint.unwrap_or_default())
             .model_name(model)
             .system_prompt(policy)

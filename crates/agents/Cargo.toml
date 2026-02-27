@@ -13,6 +13,7 @@ categories.workspace = true
 [dependencies]
 agent-core.workspace = true
 async-openai.workspace = true
+base.workspace = true
 async-trait.workspace = true
 axum.workspace = true
 bon.workspace = true

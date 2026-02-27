@@ -63,8 +63,8 @@ pub struct AppState {
     // -- MCP --
     pub mcp_manager: rara_mcp::manager::mgr::McpManager,
 
-    // -- orchestrator --
-    pub orchestrator: rara_agents::orchestrator::AgentOrchestrator,
+    // -- agent context --
+    pub agent_ctx: std::sync::Arc<dyn agent_core::context::AgentContext>,
 
     // -- pipeline --
     pub pipeline_service: rara_backend_admin::pipeline::service::PipelineService,
@@ -361,22 +361,25 @@ impl AppState {
 
         let tools = Arc::new(tool_registry);
 
-        let orchestrator = rara_agents::orchestrator::AgentOrchestrator::new(
-            llm_provider.clone(),
-            tools.clone(),
-            mcp_manager.clone(),
-            skill_registry.clone(),
-            Some(Arc::clone(&memory_manager)),
-            Some(recall_engine),
-            settings_svc.subscribe(),
-            prompt_repo.clone(),
+        let agent_ctx: Arc<dyn agent_core::context::AgentContext> = Arc::new(
+            rara_agents::orchestrator::AgentContextImpl::new(
+                llm_provider.clone(),
+                tools.clone(),
+                mcp_manager.clone(),
+                skill_registry.clone(),
+                Some(Arc::clone(&memory_manager)),
+                Some(recall_engine),
+                settings_svc.subscribe(),
+                prompt_repo.clone(),
+            ),
         );
 
-        let chat_agent = rara_agents::builtin::chat::ChatAgent::new(orchestrator.clone());
+        let chat_agent = rara_agents::builtin::chat::ChatAgent::new(Arc::clone(&agent_ctx));
         let chat_service = rara_domain_chat::service::ChatService::new(
             session_repo,
             Arc::new(settings_svc.clone())
                 as Arc<dyn rara_domain_shared::settings::SettingsUpdater>,
+            settings_svc.subscribe(),
             chat_agent,
         );
         info!("Chat service initialized");
@@ -390,7 +393,7 @@ impl AppState {
         let log_store: Arc<dyn rara_agents::dispatcher::DispatcherLogStore> =
             Arc::new(rara_agents::dispatcher::InMemoryLogStore::new(200));
         let dispatcher = Arc::new(rara_agents::dispatcher::AgentDispatcher::new(
-            orchestrator.clone(),
+            Arc::clone(&agent_ctx),
             session_persister,
             job_callback,
             log_store,
@@ -415,7 +418,7 @@ impl AppState {
             agent_scheduler,
             skill_registry,
             mcp_manager,
-            orchestrator,
+            agent_ctx,
             pipeline_service,
             coding_task_service,
             dispatcher,

@@ -24,6 +24,7 @@ use std::sync::Arc;
 use agent_core::{runner::UserContent, tool_registry::ToolRegistry};
 use chrono::Utc;
 use rara_agents::builtin::chat::ChatAgent;
+use rara_domain_shared::settings::model::Settings;
 use rara_sessions::{
     repository::SessionRepository,
     types::{
@@ -31,7 +32,7 @@ use rara_sessions::{
         SessionKey,
     },
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tracing::{info, instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
@@ -66,6 +67,8 @@ pub struct ChatService {
     model_catalog:    ModelCatalog,
     /// Settings updater for persisting favorite models.
     settings_updater: Arc<dyn rara_domain_shared::settings::SettingsUpdater>,
+    /// Watch receiver for runtime settings (used by list_models).
+    settings_rx:      watch::Receiver<Settings>,
     /// Built-in chat agent — encapsulates prompt assembly, tool construction,
     /// context compaction, and memory reflection.
     chat_agent:       ChatAgent,
@@ -74,7 +77,7 @@ pub struct ChatService {
 impl ChatService {
     /// Create a new chat service with the given dependencies.
     ///
-    /// The `chat_agent` encapsulates the orchestrator and handles LLM
+    /// The `chat_agent` encapsulates the agent context and handles LLM
     /// provider access, tool management, prompt assembly, and memory
     /// reflection. The `settings_updater` is used for persisting user
     /// preferences such as favorite models.
@@ -82,25 +85,27 @@ impl ChatService {
     pub fn new(
         session_repo: Arc<dyn SessionRepository>,
         settings_updater: Arc<dyn rara_domain_shared::settings::SettingsUpdater>,
+        settings_rx: watch::Receiver<Settings>,
         chat_agent: ChatAgent,
     ) -> Self {
         Self {
             session_repo,
             model_catalog: ModelCatalog::new(),
             settings_updater,
+            settings_rx,
             chat_agent,
         }
     }
 
     /// Read the current default model from runtime settings.
     fn current_default_model(&self) -> String {
-        self.chat_agent.orchestrator().current_default_model()
+        self.chat_agent.ctx().current_default_model()
     }
 
     /// Read the current system prompt from runtime settings, falling back
     /// to a built-in default when no custom prompt is configured.
     async fn current_system_prompt(&self) -> String {
-        self.chat_agent.orchestrator().current_system_prompt().await
+        self.chat_agent.ctx().current_system_prompt().await
     }
 
     // -- model catalog ------------------------------------------------------
@@ -108,7 +113,7 @@ impl ChatService {
     /// List available models, dynamically fetching from OpenRouter when an
     /// API key is configured. Favorites are marked and sorted to the top.
     pub async fn list_models(&self) -> Vec<ChatModel> {
-        let settings = self.chat_agent.orchestrator().settings();
+        let settings = self.settings_rx.borrow().clone();
         let api_key = settings.ai.openrouter_api_key.as_deref();
         let favorites = &settings.ai.favorite_models;
         self.model_catalog.list_models(api_key, favorites).await
@@ -314,7 +319,7 @@ impl ChatService {
     }
 
     /// Return a reference to the tools registry shared by this service.
-    pub fn tools(&self) -> &Arc<ToolRegistry> { self.chat_agent.orchestrator().tools() }
+    pub fn tools(&self) -> &Arc<ToolRegistry> { self.chat_agent.ctx().tools() }
 
     /// Persist a compaction effect: clear old messages, store the summary.
     async fn persist_compaction(
@@ -382,7 +387,7 @@ impl ChatService {
                         "session inactivity detected, consolidating previous exchanges"
                     );
                     self.chat_agent
-                        .orchestrator()
+                        .ctx()
                         .spawn_session_consolidation(exchanges);
                 }
             }
