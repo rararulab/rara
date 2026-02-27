@@ -128,7 +128,6 @@ members = [
     "crates/integrations/mcp",
     "crates/integrations/codex-oauth",
     "crates/integrations/keyring-store",
-    "crates/core/agent-core",
     "crates/core/kernel",
     "crates/core/tool-core",
     "crates/integrations/k8s",
@@ -217,7 +216,6 @@ testcontainers = "0.26"
 testcontainers-modules = { version = "0.14", features = ["postgres", "k3s"] }
 
 # Internal workspace crates (use =version to keep in sync with workspace version)
-agent-core = { path = "crates/core/agent-core" }
 base = { path = "crates/common/base" }
 common-runtime = { path = "crates/common/runtime" }
 common-telemetry = { path = "crates/common/telemetry" }

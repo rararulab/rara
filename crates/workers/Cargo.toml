@@ -12,7 +12,6 @@ categories.workspace = true
 description = "Background worker implementations for job automation"
 
 [dependencies]
-# agent-core removed — use rara-kernel directly
 anyhow.workspace = true
 async-openai = { workspace = true }
 async-trait.workspace = true
