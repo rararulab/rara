@@ -22,7 +22,7 @@ use uuid::Uuid;
 use crate::{
     event::EventBus,
     guard::Guard,
-    llm::LlmProvider,
+    llm::LlmApi,
     memory::Memory,
     prompt::PromptRepo,
     session::SessionStore,
@@ -41,7 +41,7 @@ pub struct AgentContext {
     pub user_id:    Uuid,
 
     // -- 7 Component references --
-    pub llm:      Arc<dyn LlmProvider>,
+    pub llm:      Arc<dyn LlmApi>,
     pub tools:    Arc<ToolRegistry>,
     pub memory:   Arc<dyn Memory>,
     pub sessions: Arc<dyn SessionStore>,

@@ -108,12 +108,12 @@ pub struct ChatStreamDelta {
 }
 
 // ---------------------------------------------------------------------------
-// LlmProvider trait
+// LlmApi trait
 // ---------------------------------------------------------------------------
 
 /// Unified LLM access — send chat completion requests.
 #[async_trait]
-pub trait LlmProvider: Send + Sync {
+pub trait LlmApi: Send + Sync {
     /// Send a chat completion request and return the full response.
     async fn chat(&self, request: ChatRequest) -> crate::error::Result<ChatResponse>;
 

@@ -21,7 +21,7 @@
 //!
 //! | Component   | Trait            | Purpose                          |
 //! |-------------|------------------|----------------------------------|
-//! | LLM         | [`LlmProvider`]  | Chat completion requests         |
+//! | LLM         | [`LlmApi`]       | Chat completion requests         |
 //! | Tool        | [`ToolRegistry`] | Tool registration + dispatch     |
 //! | Memory      | [`Memory`]       | 3-layer memory (State/Knowledge/Learning) |
 //! | Session     | [`SessionStore`] | Conversation history persistence |
@@ -38,7 +38,9 @@ pub mod kernel;
 pub mod llm;
 pub mod memory;
 pub mod model;
+pub mod model_repo;
 pub mod prompt;
+pub mod provider;
 pub mod registry;
 pub mod session;
 pub mod tool;

@@ -16,11 +16,11 @@
 //!
 //! Core model types (LlmProviderFamily, ModelCapabilities, ToolCall) are
 //! re-exported from rara-kernel. Provider types (LlmProvider,
-//! LlmProviderLoader, etc.) are re-exported from the local provider module
+//! LlmProviderLoader, etc.) are re-exported from the kernel provider module
 //! for backward compatibility.
 
 // Re-export core model types from rara-kernel (single source of truth).
 pub use rara_kernel::model::*;
 
-// Re-exports from provider module for backward compatibility.
-pub use crate::provider::*;
+// Re-exports from kernel provider module for backward compatibility.
+pub use rara_kernel::provider::*;

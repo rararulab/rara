@@ -28,6 +28,7 @@ rara-agents = { workspace = true }
 rara-backend-admin = { workspace = true }
 rara-codex-oauth = { workspace = true }
 rara-coding-task = { workspace = true }
+rara-kernel = { workspace = true }
 rara-composio = { workspace = true }
 rara-domain-chat = { workspace = true }
 rara-domain-shared = { workspace = true }

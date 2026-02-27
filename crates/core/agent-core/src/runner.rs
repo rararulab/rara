@@ -327,15 +327,15 @@ impl AgentRunner {
                         request_builder.parallel_tool_calls(true);
                     }
 
-                    let request = request_builder.build().map_err(|e| Error::Other {
+                    let request = request_builder.build().map_err(|e| rara_kernel::KernelError::Other {
                         message: format!("failed to build request: {e}").into(),
                     })?;
                     provider.chat_completion(request).await
                 })
                 .retry(ExponentialBuilder::default().with_max_times(2))
                 .sleep(tokio::time::sleep)
-                .when(is_retryable_provider_error)
-                .notify(|err: &Error, dur| {
+                .when(rara_kernel::error::is_retryable_provider_error)
+                .notify(|err: &rara_kernel::KernelError, dur| {
                     error!(
                         iteration,
                         error = %err,

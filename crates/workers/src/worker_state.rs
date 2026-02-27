@@ -679,10 +679,10 @@ impl rara_agents::dispatcher::ScheduledJobCallback for AgentSchedulerCallback {
 }
 
 #[async_trait]
-impl agent_core::provider::LlmProviderLoader for SettingsLlmProviderLoader {
+impl rara_kernel::provider::LlmProviderLoader for SettingsLlmProviderLoader {
     async fn acquire_provider(
         &self,
-    ) -> agent_core::err::Result<Arc<dyn agent_core::provider::LlmProvider>> {
+    ) -> rara_kernel::error::Result<Arc<dyn rara_kernel::provider::LlmProvider>> {
         let settings = self.settings.current();
         match settings.ai.provider.as_deref().unwrap_or("openrouter") {
             "ollama" => {
@@ -702,21 +702,21 @@ impl agent_core::provider::LlmProviderLoader for SettingsLlmProviderLoader {
                 // Token persistence and refresh rules live in integration layer.
                 // Worker only orchestrates load -> maybe refresh -> construct provider.
                 let mut tokens = rara_codex_oauth::load_tokens()
-                    .map_err(|e| agent_core::err::Error::Provider { message: e.into() })?
-                    .ok_or(agent_core::err::ProviderNotConfiguredSnafu.build())?;
+                    .map_err(|e| rara_kernel::KernelError::Provider { message: e.into() })?
+                    .ok_or(rara_kernel::error::ProviderNotConfiguredSnafu.build())?;
 
                 if rara_codex_oauth::should_refresh_token(tokens.expires_at_unix) {
                     let _guard = self.codex_refresh_lock.lock().await;
                     // Double-check in case another request refreshed already.
                     tokens = rara_codex_oauth::load_tokens()
-                        .map_err(|e| agent_core::err::Error::Provider { message: e.into() })?
-                        .ok_or(agent_core::err::ProviderNotConfiguredSnafu.build())?;
+                        .map_err(|e| rara_kernel::KernelError::Provider { message: e.into() })?
+                        .ok_or(rara_kernel::error::ProviderNotConfiguredSnafu.build())?;
                     if rara_codex_oauth::should_refresh_token(tokens.expires_at_unix) {
                         let refreshed_tokens = rara_codex_oauth::refresh_tokens(&tokens)
                             .await
-                            .map_err(|e| agent_core::err::Error::Provider { message: e.into() })?;
+                            .map_err(|e| rara_kernel::KernelError::Provider { message: e.into() })?;
                         rara_codex_oauth::save_tokens(&refreshed_tokens).map_err(|e| {
-                            agent_core::err::Error::Provider {
+                            rara_kernel::KernelError::Provider {
                                 message: format!("failed to persist refreshed codex token: {e}")
                                     .into(),
                             }
@@ -736,7 +736,7 @@ impl agent_core::provider::LlmProviderLoader for SettingsLlmProviderLoader {
                     .ai
                     .openrouter_api_key
                     .clone()
-                    .ok_or(agent_core::err::ProviderNotConfiguredSnafu.build())?;
+                    .ok_or(rara_kernel::error::ProviderNotConfiguredSnafu.build())?;
                 Ok(Arc::new(agent_core::provider::OpenAiProvider::new(api_key)))
             }
         }

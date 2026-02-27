@@ -27,7 +27,7 @@ use async_openai::{
 use async_trait::async_trait;
 
 use super::LlmProvider;
-use crate::err::{Error, Result};
+use crate::error::{KernelError, Result};
 
 pub const OPENROUTER_API_KEY_ENV: &str = "OPENROUTER_KEY";
 
@@ -71,7 +71,7 @@ impl LlmProvider for OpenAiProvider {
             .chat()
             .create(request)
             .await
-            .map_err(|e| Error::Provider {
+            .map_err(|e| KernelError::Provider {
                 message: e.to_string().into(),
             })
     }
@@ -84,7 +84,7 @@ impl LlmProvider for OpenAiProvider {
             .chat()
             .create_stream(request)
             .await
-            .map_err(|e| Error::Provider {
+            .map_err(|e| KernelError::Provider {
                 message: e.to_string().into(),
             })
     }

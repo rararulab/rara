@@ -28,7 +28,7 @@ use crate::{
     error::{KernelError, Result},
     event::{EventBus, KernelEvent},
     guard::{Guard, GuardContext},
-    llm::{ChatMessage, ChatRequest, ChatResponse, ChatRole, LlmProvider, ToolDefinition},
+    llm::{ChatMessage, ChatRequest, ChatResponse, ChatRole, LlmApi, ToolDefinition},
     memory::Memory,
     prompt::PromptRepo,
     registry::{AgentEntry, AgentManifest, AgentRegistry, AgentState},
@@ -49,7 +49,7 @@ pub struct KernelConfig {
 /// execution loop for any registered agent.
 pub struct Kernel {
     // -- 7 Components --
-    llm:      Arc<dyn LlmProvider>,
+    llm:      Arc<dyn LlmApi>,
     tools:    Arc<ToolRegistry>,
     memory:   Arc<dyn Memory>,
     sessions: Arc<dyn SessionStore>,
@@ -66,7 +66,7 @@ impl Kernel {
     /// Boot a new kernel with all 7 components.
     pub fn boot(
         config: KernelConfig,
-        llm: Arc<dyn LlmProvider>,
+        llm: Arc<dyn LlmApi>,
         tools: Arc<ToolRegistry>,
         memory: Arc<dyn Memory>,
         sessions: Arc<dyn SessionStore>,
