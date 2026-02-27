@@ -1,0 +1,31 @@
+[package]
+name = "rara-channels"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Channel adapters (WebSocket, SSE) for rara-kernel ChannelAdapter trait"
+
+[dependencies]
+rara-kernel = { path = "../kernel" }
+axum = { workspace = true, features = ["ws"] }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+jiff = { workspace = true }
+futures = { workspace = true }
+dashmap = "6"
+ulid = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }
+
+[lints]
+workspace = true
