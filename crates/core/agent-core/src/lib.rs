@@ -14,11 +14,13 @@
 
 pub mod context;
 pub mod err;
-pub mod memory;
 pub mod model;
 pub mod model_repo;
-pub mod prompt;
 pub mod provider;
 pub mod runner;
 pub mod subagent;
-pub mod tool_registry;
+
+// Re-export shared modules from rara-kernel (single source of truth).
+pub use rara_kernel::memory;
+pub use rara_kernel::prompt;
+pub use rara_kernel::tool as tool_registry;

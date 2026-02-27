@@ -141,6 +141,14 @@ pub fn is_retryable_provider_error(err: &Error) -> bool {
     }
 }
 
+impl From<rara_kernel::KernelError> for Error {
+    fn from(err: rara_kernel::KernelError) -> Self {
+        Self::Other {
+            message: err.to_string().into(),
+        }
+    }
+}
+
 pub mod prelude {
     pub use super::*;
 }
