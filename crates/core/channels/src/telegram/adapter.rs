@@ -45,6 +45,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::RwLock as StdRwLock;
 
 use async_trait::async_trait;
 use rara_kernel::channel::adapter::ChannelAdapter;
@@ -88,6 +89,27 @@ const MAX_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(60);
 /// to avoid hitting Telegram API rate limits.
 const EDIT_THROTTLE: std::time::Duration = std::time::Duration::from_millis(1500);
 
+/// Runtime configuration for the Telegram adapter.
+///
+/// Can be updated at runtime via [`TelegramAdapter::config_handle`] to change
+/// authorization settings without restarting the adapter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TelegramConfig {
+    /// Primary chat ID for privileged commands (e.g. /search, /jd).
+    pub primary_chat_id: Option<i64>,
+    /// Allowed group chat ID. Only this group is authorized for bot interaction.
+    pub allowed_group_chat_id: Option<i64>,
+}
+
+impl Default for TelegramConfig {
+    fn default() -> Self {
+        Self {
+            primary_chat_id: None,
+            allowed_group_chat_id: None,
+        }
+    }
+}
+
 /// Telegram channel adapter using `getUpdates` long polling.
 ///
 /// # Configuration
@@ -98,6 +120,10 @@ const EDIT_THROTTLE: std::time::Duration = std::time::Duration::from_millis(1500
 ///
 /// - `polling_timeout` — long-poll timeout in seconds (default: 30). The HTTP
 ///   client timeout is set 15 seconds higher to avoid premature disconnects.
+///
+/// - `config` — runtime-updatable settings (primary chat ID, allowed group
+///   chat ID). Obtain a shared handle via [`config_handle`](Self::config_handle)
+///   and mutate through `std::sync::RwLock::write()`.
 ///
 /// # Lifecycle
 ///
@@ -121,11 +147,8 @@ pub struct TelegramAdapter {
     command_handlers: Vec<Arc<dyn CommandHandler>>,
     /// Registered callback handlers for interactive elements.
     callback_handlers: Vec<Arc<dyn CallbackHandler>>,
-    /// Primary chat ID for privileged commands (e.g. /search, /jd).
-    primary_chat_id: Option<i64>,
-    /// Allowed group chat ID. If set, only this group is authorized for
-    /// group-chat interactions. Other groups receive an "unauthorized" message.
-    allowed_group_chat_id: Option<i64>,
+    /// Runtime-updatable configuration (primary chat ID, allowed group chat ID).
+    config: Arc<StdRwLock<TelegramConfig>>,
     /// Optional contact tracker for recording username-to-chat_id mappings.
     contact_tracker: Option<Arc<dyn ContactTracker>>,
 }
@@ -149,8 +172,7 @@ impl TelegramAdapter {
             bot_username: Arc::new(RwLock::new(None)),
             command_handlers: Vec::new(),
             callback_handlers: Vec::new(),
-            primary_chat_id: None,
-            allowed_group_chat_id: None,
+            config: Arc::new(StdRwLock::new(TelegramConfig::default())),
             contact_tracker: None,
         }
     }
@@ -176,8 +198,12 @@ impl TelegramAdapter {
     /// Set the primary chat ID for privileged commands.
     ///
     /// Commands like `/search` and `/jd` are restricted to this chat only.
-    pub fn with_primary_chat_id(mut self, id: i64) -> Self {
-        self.primary_chat_id = Some(id);
+    /// This is a convenience builder that mutates the internal config.
+    pub fn with_primary_chat_id(self, id: i64) -> Self {
+        {
+            let mut cfg = self.config.write().unwrap_or_else(|e| e.into_inner());
+            cfg.primary_chat_id = Some(id);
+        }
         self
     }
 
@@ -186,9 +212,43 @@ impl TelegramAdapter {
     /// When set, only the specified group is authorized for group-chat
     /// interactions. Messages from other groups receive an "unauthorized"
     /// response and are not dispatched further.
-    pub fn with_allowed_group_chat_id(mut self, id: i64) -> Self {
-        self.allowed_group_chat_id = Some(id);
+    /// This is a convenience builder that mutates the internal config.
+    pub fn with_allowed_group_chat_id(self, id: i64) -> Self {
+        {
+            let mut cfg = self.config.write().unwrap_or_else(|e| e.into_inner());
+            cfg.allowed_group_chat_id = Some(id);
+        }
         self
+    }
+
+    /// Set the full runtime config.
+    ///
+    /// Replaces the current config with the provided one.
+    pub fn with_config(self, config: TelegramConfig) -> Self {
+        {
+            let mut cfg = self.config.write().unwrap_or_else(|e| e.into_inner());
+            *cfg = config;
+        }
+        self
+    }
+
+    /// Return a shared handle to the runtime config.
+    ///
+    /// Callers can use this to update configuration at runtime (e.g. change the
+    /// primary chat ID) without restarting the adapter. The polling loop reads
+    /// the config on every update, so changes take effect immediately.
+    pub fn config_handle(&self) -> Arc<StdRwLock<TelegramConfig>> {
+        Arc::clone(&self.config)
+    }
+
+    /// Read a snapshot of the current config.
+    ///
+    /// If the lock is poisoned, recovers and returns the inner value.
+    pub fn current_config(&self) -> TelegramConfig {
+        match self.config.read() {
+            Ok(g) => g.clone(),
+            Err(e) => e.into_inner().clone(),
+        }
     }
 
     /// Set a contact tracker for recording username-to-chat_id mappings.
@@ -250,8 +310,7 @@ impl ChannelAdapter for TelegramAdapter {
         let bot_username = Arc::clone(&self.bot_username);
         let command_handlers = self.command_handlers.clone();
         let callback_handlers = self.callback_handlers.clone();
-        let primary_chat_id = self.primary_chat_id;
-        let allowed_group_chat_id = self.allowed_group_chat_id;
+        let config = Arc::clone(&self.config);
         let contact_tracker = self.contact_tracker.clone();
 
         tokio::spawn(async move {
@@ -264,8 +323,7 @@ impl ChannelAdapter for TelegramAdapter {
                 bot_username,
                 command_handlers,
                 callback_handlers,
-                primary_chat_id,
-                allowed_group_chat_id,
+                config,
                 contact_tracker,
             )
             .await;
@@ -391,8 +449,7 @@ async fn polling_loop(
     bot_username: Arc<RwLock<Option<String>>>,
     command_handlers: Vec<Arc<dyn CommandHandler>>,
     callback_handlers: Vec<Arc<dyn CallbackHandler>>,
-    primary_chat_id: Option<i64>,
-    allowed_group_chat_id: Option<i64>,
+    config: Arc<StdRwLock<TelegramConfig>>,
     contact_tracker: Option<Arc<dyn ContactTracker>>,
 ) {
     let mut offset: Option<i32> = None;
@@ -448,6 +505,7 @@ async fn polling_loop(
                     let bot_username = Arc::clone(&bot_username);
                     let cmd_handlers = command_handlers.clone();
                     let cb_handlers = callback_handlers.clone();
+                    let config = Arc::clone(&config);
                     let tracker = contact_tracker.clone();
                     tokio::spawn(async move {
                         handle_update(
@@ -458,8 +516,7 @@ async fn polling_loop(
                             &bot_username,
                             &cmd_handlers,
                             &cb_handlers,
-                            primary_chat_id,
-                            allowed_group_chat_id,
+                            &config,
                             tracker.as_ref(),
                         )
                         .await;
@@ -500,10 +557,15 @@ async fn handle_update(
     bot_username: &Arc<RwLock<Option<String>>>,
     command_handlers: &[Arc<dyn CommandHandler>],
     callback_handlers: &[Arc<dyn CallbackHandler>],
-    _primary_chat_id: Option<i64>,
-    allowed_group_chat_id: Option<i64>,
+    config: &Arc<StdRwLock<TelegramConfig>>,
     contact_tracker: Option<&Arc<dyn ContactTracker>>,
 ) {
+    // Read a snapshot of the runtime config for this update.
+    let cfg = match config.read() {
+        Ok(g) => g.clone(),
+        Err(e) => e.into_inner().clone(),
+    };
+
     // Handle callback queries (inline keyboard button presses).
     if let UpdateKind::CallbackQuery(query) = &update.kind {
         handle_callback_query(bot, query, callback_handlers, bot_username).await;
@@ -556,7 +618,7 @@ async fn handle_update(
         }
 
         // Check allowed group chat authorization.
-        if let Some(allowed_id) = allowed_group_chat_id {
+        if let Some(allowed_id) = cfg.allowed_group_chat_id {
             if chat_id != allowed_id {
                 warn!(
                     chat_id,
@@ -1657,7 +1719,7 @@ mod tests {
     fn test_with_primary_chat_id() {
         let bot = teloxide::Bot::new("fake_token");
         let adapter = TelegramAdapter::new(bot, vec![]).with_primary_chat_id(12345);
-        assert_eq!(adapter.primary_chat_id, Some(12345));
+        assert_eq!(adapter.current_config().primary_chat_id, Some(12345));
     }
 
     #[test]
@@ -1665,7 +1727,60 @@ mod tests {
         let bot = teloxide::Bot::new("fake_token");
         let adapter =
             TelegramAdapter::new(bot, vec![]).with_allowed_group_chat_id(-100_999_888);
-        assert_eq!(adapter.allowed_group_chat_id, Some(-100_999_888));
+        assert_eq!(
+            adapter.current_config().allowed_group_chat_id,
+            Some(-100_999_888)
+        );
+    }
+
+    // --- TelegramConfig tests ---
+
+    #[test]
+    fn test_default_config() {
+        let config = TelegramConfig::default();
+        assert_eq!(config.primary_chat_id, None);
+        assert_eq!(config.allowed_group_chat_id, None);
+    }
+
+    #[test]
+    fn test_with_config() {
+        let bot = teloxide::Bot::new("fake_token");
+        let config = TelegramConfig {
+            primary_chat_id: Some(111),
+            allowed_group_chat_id: Some(-100_222),
+        };
+        let adapter = TelegramAdapter::new(bot, vec![]).with_config(config.clone());
+        assert_eq!(adapter.current_config(), config);
+    }
+
+    #[test]
+    fn test_config_handle_returns_shared_ref() {
+        let bot = teloxide::Bot::new("fake_token");
+        let adapter = TelegramAdapter::new(bot, vec![]).with_primary_chat_id(42);
+        let handle = adapter.config_handle();
+        // Reading through the handle should see the same config.
+        let cfg = handle.read().unwrap().clone();
+        assert_eq!(cfg.primary_chat_id, Some(42));
+    }
+
+    #[test]
+    fn test_config_update_reflected() {
+        let bot = teloxide::Bot::new("fake_token");
+        let adapter = TelegramAdapter::new(bot, vec![]);
+        assert_eq!(adapter.current_config().primary_chat_id, None);
+
+        // Obtain handle and update config externally.
+        let handle = adapter.config_handle();
+        {
+            let mut cfg = handle.write().unwrap();
+            cfg.primary_chat_id = Some(999);
+            cfg.allowed_group_chat_id = Some(-100_777);
+        }
+
+        // Adapter should reflect the new values.
+        let cfg = adapter.current_config();
+        assert_eq!(cfg.primary_chat_id, Some(999));
+        assert_eq!(cfg.allowed_group_chat_id, Some(-100_777));
     }
 
     #[test]
@@ -1914,9 +2029,7 @@ mod tests {
         assert_eq!(text.to_owned(), "Hello there");
     }
 
-    // -----------------------------------------------------------------------
-    // Contact tracker tests
-    // -----------------------------------------------------------------------
+    // --- Contact tracker tests ---
 
     #[test]
     fn test_with_contact_tracker() {
