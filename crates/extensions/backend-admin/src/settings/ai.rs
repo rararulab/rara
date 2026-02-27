@@ -1,3 +1,17 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use axum::{Json, extract::State, http::StatusCode};
 use rara_domain_shared::settings::model::{AiRuntimeSettingsPatch, Settings, UpdateRequest};
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -5,13 +19,15 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use crate::settings::SettingsSvc;
 
 pub(super) fn routes() -> OpenApiRouter<SettingsSvc> {
-    OpenApiRouter::new().nest(
-        "/api/v1",
-        OpenApiRouter::new()
-            .routes(routes!(get_ai_settings, update_ai_settings))
-            .routes(routes!(get_ollama_model_recommendations))
-            .merge(crate::settings::ollama::ollama_management_routes()),
-    )
+    OpenApiRouter::new()
+        .nest(
+            "/api/v1",
+            OpenApiRouter::new()
+                .routes(routes!(get_ai_settings, update_ai_settings))
+                .routes(routes!(get_ollama_model_recommendations))
+                .merge(crate::settings::ollama::ollama_management_routes()),
+        )
+        .merge(crate::settings::codex_oauth::routes())
 }
 
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]

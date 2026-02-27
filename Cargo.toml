@@ -126,6 +126,7 @@ members = [
     "crates/memory",
     "crates/skills",
     "crates/integrations/mcp",
+    "crates/integrations/codex-oauth",
     "crates/integrations/keyring-store",
     "crates/core/agent-core",
     "crates/core/tool-core",
@@ -228,6 +229,7 @@ rara-api = { path = "api" }
 rara-app = { path = "crates/app" }
 rara-backend-admin = { path = "crates/extensions/backend-admin" }
 rara-cli = { path = "crates/cmd" }
+rara-codex-oauth = { path = "crates/integrations/codex-oauth" }
 rara-coding-task = { path = "crates/extensions/coding-task" }
 rara-composio = { path = "crates/integrations/composio" }
 rara-consul = { path = "crates/common/rara-consul" }

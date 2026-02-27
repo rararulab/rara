@@ -104,6 +104,21 @@ type OpenRouterModel = {
   name: string;
   contextLength: number | null;
 };
+
+/** Well-known OpenAI models available through Codex OAuth. */
+const CODEX_KNOWN_MODELS: OpenRouterModel[] = [
+  { id: "o3-pro", name: "o3-pro", contextLength: 200000 },
+  { id: "o3", name: "o3", contextLength: 200000 },
+  { id: "o3-mini", name: "o3-mini", contextLength: 200000 },
+  { id: "o4-mini", name: "o4-mini", contextLength: 200000 },
+  { id: "gpt-4.1", name: "gpt-4.1", contextLength: 1047576 },
+  { id: "gpt-4.1-mini", name: "gpt-4.1-mini", contextLength: 1047576 },
+  { id: "gpt-4.1-nano", name: "gpt-4.1-nano", contextLength: 1047576 },
+  { id: "gpt-4o", name: "gpt-4o", contextLength: 128000 },
+  { id: "gpt-4o-mini", name: "gpt-4o-mini", contextLength: 128000 },
+  { id: "codex-mini-latest", name: "codex-mini-latest", contextLength: 192000 },
+];
+
 type TgAdminSettingsView = {
   configured: boolean;
   chat_id: number | null;
@@ -203,6 +218,11 @@ export default function Settings() {
   const aiSettingsQuery = useQuery({
     queryKey: ["ai-admin-settings"],
     queryFn: () => api.get<AiAdminSettingsView>("/api/v1/ai/settings"),
+  });
+
+  const codexOAuthStatusQuery = useQuery({
+    queryKey: ["codex-oauth-status"],
+    queryFn: () => api.codexOAuthStatus(),
   });
 
 
@@ -756,6 +776,34 @@ export default function Settings() {
     },
   });
 
+  const [codexAuthUrl, setCodexAuthUrl] = useState<string | null>(null);
+
+  const codexOAuthStartMutation = useMutation({
+    mutationFn: () => api.codexOAuthStart(),
+    onSuccess: (resp) => {
+      setCodexAuthUrl(resp.auth_url);
+    },
+    onError: (e: unknown) => {
+      const message = e instanceof Error ? e.message : "Failed to start Codex OAuth";
+      setToast({ kind: "error", message });
+    },
+  });
+
+  const codexOAuthDisconnectMutation = useMutation({
+    mutationFn: () => api.codexOAuthDisconnect(),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["codex-oauth-status"] }),
+        queryClient.invalidateQueries({ queryKey: ["ai-admin-settings"] }),
+      ]);
+      setToast({ kind: "success", message: "Codex OAuth disconnected." });
+    },
+    onError: (e: unknown) => {
+      const message = e instanceof Error ? e.message : "Failed to disconnect Codex OAuth";
+      setToast({ kind: "error", message });
+    },
+  });
+
   const handleSave = () => {
     if (selectedSetting === "ai") {
       if (!aiPatch && !modelAdminDiff.hasChanges) {
@@ -852,7 +900,7 @@ export default function Settings() {
     } finally {
       setModelsLoading(false);
     }
-  }, [aiApiKey, aiSettingsQuery.data?.openrouter_api_key]);
+  }, [aiProvider, aiApiKey, aiSettingsQuery.data?.openrouter_api_key]);
 
   useEffect(() => {
     if (!toast) return;
@@ -861,17 +909,35 @@ export default function Settings() {
   }, [toast]);
 
   useEffect(() => {
+    const oauthResult = searchParams.get("codex_oauth");
+    if (!oauthResult) return;
+    if (oauthResult === "success") {
+      setToast({ kind: "success", message: "Codex OAuth connected." });
+    } else {
+      setToast({ kind: "error", message: "Codex OAuth failed. Please retry." });
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete("codex_oauth");
+    setSearchParams(next, { replace: true });
+    void queryClient.invalidateQueries({ queryKey: ["codex-oauth-status"] });
+    void queryClient.invalidateQueries({ queryKey: ["ai-admin-settings"] });
+  }, [queryClient, searchParams, setSearchParams]);
+
+  const codexConnected = Boolean(codexOAuthStatusQuery.data?.connected);
+
+  useEffect(() => {
     if (selectedSetting !== "ai") return;
     if (aiProvider !== "openrouter") return;
-    if (!aiSettingsQuery.data?.openrouter_api_key) return;
     if (models.length > 0) return;
-    if (modelsLoading) return;
+    if (modelsLoading || modelsError) return;
+    if (!aiSettingsQuery.data?.openrouter_api_key) return;
     void fetchModels();
   }, [
     aiProvider,
     fetchModels,
     models.length,
     modelsLoading,
+    modelsError,
     selectedSetting,
     aiSettingsQuery.data?.openrouter_api_key,
   ]);
@@ -903,7 +969,12 @@ export default function Settings() {
   const currentTelegram = tgSettingsQuery.data;
   const aiCurrent = aiSettingsQuery.data;
   const gmailCurrent = gmailSettingsQuery.data;
-  const providerLabel = (aiCurrent?.provider ?? "openrouter") === "ollama" ? "Ollama" : "OpenRouter";
+  const providerLabel =
+    (aiCurrent?.provider ?? "openrouter") === "ollama"
+      ? "Ollama"
+      : (aiCurrent?.provider ?? "openrouter") === "codex"
+        ? "Codex OAuth"
+        : "OpenRouter";
 
   const dialogTitle =
     selectedSetting === "ai"
@@ -964,6 +1035,14 @@ export default function Settings() {
                     placeholder={key === "default" ? "openai/gpt-4o" : `(falls back to default)`}
                     className="h-8 text-sm font-mono"
                   />
+                ) : aiProvider === "codex" ? (
+                  <Input
+                    value={currentValue}
+                    onChange={(e) => setModelKey(key, e.target.value || undefined)}
+                    placeholder={key === "default" ? "codex-mini-latest" : `(falls back to default)`}
+                    list={`codex-models-${key}`}
+                    className="h-8 text-sm font-mono"
+                  />
                 ) : (
                   <div className="flex-1 min-w-0">
                     <Select
@@ -1002,6 +1081,13 @@ export default function Settings() {
             );
           })}
         </div>
+        {aiProvider === "codex" && MODEL_KEYS.map((key) => (
+          <datalist key={key} id={`codex-models-${key}`}>
+            {CODEX_KNOWN_MODELS.map((m) => (
+              <option key={m.id} value={m.id} />
+            ))}
+          </datalist>
+        ))}
       </div>
     );
   };
@@ -1065,10 +1151,11 @@ export default function Settings() {
             ))}
           </div>
         )}
-        {aiProvider === "ollama" ? (
+        {aiProvider === "ollama" || aiProvider === "codex" ? (
           <div className="flex items-center gap-2">
             <Input
               placeholder="Model name to add..."
+              list={aiProvider === "codex" ? "codex-fallback-models" : undefined}
               className="h-8 text-sm font-mono"
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
@@ -1080,6 +1167,13 @@ export default function Settings() {
                 }
               }}
             />
+            {aiProvider === "codex" && (
+              <datalist id="codex-fallback-models">
+                {CODEX_KNOWN_MODELS.filter((m) => !fallbackModels.includes(m.id)).map((m) => (
+                  <option key={m.id} value={m.id} />
+                ))}
+              </datalist>
+            )}
             <p className="text-xs text-muted-foreground shrink-0">Press Enter to add</p>
           </div>
         ) : (
@@ -1403,6 +1497,7 @@ export default function Settings() {
                       Default: {modelMap["default"] ?? "openai/gpt-4o"}
                       {providerLabel === "OpenRouter" && <> · Key: {aiCurrent?.openrouter_api_key ? "Set" : "Not set"}</>}
                       {providerLabel === "Ollama" && <> · URL: {aiCurrent?.ollama_base_url ?? "localhost:11434"}</>}
+                      {providerLabel === "Codex OAuth" && <> · OAuth: {codexConnected ? "Connected" : "Not connected"}</>}
                     </p>
                   </div>
                 </div>
@@ -1675,19 +1770,22 @@ export default function Settings() {
               {/* Provider selector */}
               <div className="space-y-3 rounded-xl border bg-card p-4">
                 <Label className="text-base font-semibold">Provider</Label>
-                <Select value={aiProvider} onValueChange={setAiProvider}>
+                <Select value={aiProvider} onValueChange={(v) => { setAiProvider(v); setModels([]); setModelSearch(""); setModelsError(null); }}>
                   <SelectTrigger className="h-11">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="openrouter">OpenRouter (Cloud)</SelectItem>
                     <SelectItem value="ollama">Ollama (Local)</SelectItem>
+                    <SelectItem value="codex">Codex OAuth (ChatGPT)</SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
                   {aiProvider === "ollama"
                     ? "Ollama runs models locally — no API key needed."
-                    : "OpenRouter provides access to many cloud LLM providers."}
+                    : aiProvider === "codex"
+                      ? "Codex OAuth uses your ChatGPT account token via OAuth."
+                      : "OpenRouter provides access to many cloud LLM providers."}
                 </p>
               </div>
 
@@ -1751,6 +1849,85 @@ export default function Settings() {
                   <p className="text-xs text-muted-foreground">
                     Default: http://localhost:11434. Change if Ollama runs on a different host/port.
                   </p>
+                </div>
+              )}
+
+              {aiProvider === "codex" && (
+                <div className="space-y-3 rounded-xl border bg-card p-4">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-base font-semibold">Codex OAuth</Label>
+                    {codexOAuthStatusQuery.isLoading ? (
+                      <Badge variant="secondary">Loading...</Badge>
+                    ) : codexConnected ? (
+                      <Badge variant="default">Connected</Badge>
+                    ) : (
+                      <Badge variant="secondary">Not connected</Badge>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {codexOAuthStatusQuery.data?.expires_at_unix
+                      ? `Access token expiry: ${new Date(codexOAuthStatusQuery.data.expires_at_unix * 1000).toLocaleString()}`
+                      : "No expiry timestamp available."}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="default"
+                      onClick={() => codexOAuthStartMutation.mutate()}
+                      disabled={codexOAuthStartMutation.isPending}
+                    >
+                      {codexOAuthStartMutation.isPending ? "Generating..." : "Connect Codex"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => codexOAuthDisconnectMutation.mutate()}
+                      disabled={!codexConnected || codexOAuthDisconnectMutation.isPending}
+                    >
+                      Disconnect
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => codexOAuthStatusQuery.refetch()}
+                      disabled={codexOAuthStatusQuery.isFetching}
+                    >
+                      <RefreshCw className={`h-3 w-3 mr-1 ${codexOAuthStatusQuery.isFetching ? "animate-spin" : ""}`} />
+                      Refresh status
+                    </Button>
+                  </div>
+                  {codexAuthUrl && (
+                    <div className="space-y-2 rounded-lg border border-dashed p-3">
+                      <p className="text-xs text-muted-foreground">Open the link below to sign in with your ChatGPT account:</p>
+                      <div className="flex items-center gap-2">
+                        <input
+                          readOnly
+                          value={codexAuthUrl}
+                          className="flex-1 rounded-md border bg-muted px-2 py-1 text-xs font-mono select-all"
+                          onFocus={(e) => e.target.select()}
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            void navigator.clipboard.writeText(codexAuthUrl);
+                            setToast({ kind: "success", message: "URL copied to clipboard." });
+                          }}
+                        >
+                          Copy
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="default"
+                          size="sm"
+                          onClick={() => window.open(codexAuthUrl, "_blank")}
+                        >
+                          Open
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1986,7 +2163,7 @@ export default function Settings() {
                     {renderModelKeyTable()}
                     {renderFallbackModelsEditor()}
                   </div>
-                ) : (
+                ) : aiProvider === "openrouter" ? (
                   <>
                     <div className="relative">
                       <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -2005,6 +2182,14 @@ export default function Settings() {
                       <p className="text-sm text-destructive">{modelsError}</p>
                     )}
 
+                    {renderModelKeyTable()}
+                    {renderFallbackModelsEditor()}
+                  </>
+                ) : (
+                  <>
+                    <p className="text-sm text-muted-foreground">
+                      Select from known OpenAI models or type a custom model id.
+                    </p>
                     {renderModelKeyTable()}
                     {renderFallbackModelsEditor()}
                   </>

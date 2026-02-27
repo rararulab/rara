@@ -22,6 +22,7 @@ jobspy-sys = { workspace = true }
 llmfit-core = { workspace = true }
 opendal = { workspace = true }
 rara-agents = { workspace = true }
+rara-codex-oauth = { workspace = true }
 rara-coding-task = { workspace = true }
 rara-composio = { workspace = true }
 rara-domain-chat = { workspace = true }

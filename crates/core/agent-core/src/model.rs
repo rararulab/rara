@@ -20,6 +20,7 @@ use base::shared_string::SharedString;
 pub enum LlmProviderFamily {
     OpenRouter,
     Ollama,
+    Codex,
     Unknown,
 }
 
@@ -69,6 +70,7 @@ fn detect_provider_family(provider_hint: Option<&str>, model_name: &str) -> LlmP
     match provider_hint.as_deref() {
         Some("ollama") => return LlmProviderFamily::Ollama,
         Some("openrouter") => return LlmProviderFamily::OpenRouter,
+        Some("codex") => return LlmProviderFamily::Codex,
         _ => {}
     }
 
@@ -125,5 +127,12 @@ mod tests {
         assert_eq!(caps.provider, LlmProviderFamily::OpenRouter);
         assert!(caps.supports_tools);
         assert!(caps.tools_disabled_reason.is_none());
+    }
+
+    #[test]
+    fn detects_codex_provider_hint() {
+        let caps = ModelCapabilities::detect(Some("codex"), "gpt-5");
+        assert_eq!(caps.provider, LlmProviderFamily::Codex);
+        assert!(caps.supports_tools);
     }
 }

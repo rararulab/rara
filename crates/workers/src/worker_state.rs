@@ -581,7 +581,8 @@ fn merge_openapi_router(
 /// A fresh [`OpenAiProvider`](agent_core::provider::OpenAiProvider) is created
 /// on every call so that runtime API-key changes take effect immediately.
 struct SettingsLlmProviderLoader {
-    settings: rara_backend_admin::settings::SettingsSvc,
+    settings:           rara_backend_admin::settings::SettingsSvc,
+    codex_refresh_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// Composio auth provider that reads credentials from runtime settings.
@@ -610,7 +611,12 @@ impl rara_composio::ComposioAuthProvider for SettingsComposioAuthProvider {
 }
 
 impl SettingsLlmProviderLoader {
-    fn new(settings: rara_backend_admin::settings::SettingsSvc) -> Self { Self { settings } }
+    fn new(settings: rara_backend_admin::settings::SettingsSvc) -> Self {
+        Self {
+            settings,
+            codex_refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -685,6 +691,39 @@ impl agent_core::provider::LlmProviderLoader for SettingsLlmProviderLoader {
                 let config = async_openai::config::OpenAIConfig::new()
                     .with_api_base(format!("{}/v1", base_url))
                     .with_api_key("ollama");
+                Ok(Arc::new(agent_core::provider::OpenAiProvider::with_config(
+                    config,
+                )))
+            }
+            "codex" => {
+                // Token persistence and refresh rules live in integration layer.
+                // Worker only orchestrates load -> maybe refresh -> construct provider.
+                let mut tokens = rara_codex_oauth::load_tokens()
+                    .map_err(|e| agent_core::err::Error::Provider { message: e.into() })?
+                    .ok_or(agent_core::err::ProviderNotConfiguredSnafu.build())?;
+
+                if rara_codex_oauth::should_refresh_token(tokens.expires_at_unix) {
+                    let _guard = self.codex_refresh_lock.lock().await;
+                    // Double-check in case another request refreshed already.
+                    tokens = rara_codex_oauth::load_tokens()
+                        .map_err(|e| agent_core::err::Error::Provider { message: e.into() })?
+                        .ok_or(agent_core::err::ProviderNotConfiguredSnafu.build())?;
+                    if rara_codex_oauth::should_refresh_token(tokens.expires_at_unix) {
+                        let refreshed_tokens = rara_codex_oauth::refresh_tokens(&tokens)
+                            .await
+                            .map_err(|e| agent_core::err::Error::Provider { message: e.into() })?;
+                        rara_codex_oauth::save_tokens(&refreshed_tokens).map_err(|e| {
+                            agent_core::err::Error::Provider {
+                                message: format!("failed to persist refreshed codex token: {e}")
+                                    .into(),
+                            }
+                        })?;
+                        tokens = refreshed_tokens;
+                    }
+                }
+
+                let config =
+                    async_openai::config::OpenAIConfig::new().with_api_key(tokens.access_token);
                 Ok(Arc::new(agent_core::provider::OpenAiProvider::with_config(
                     config,
                 )))
