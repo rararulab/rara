@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use super::types::{ChannelType, ChannelUser};
+use super::types::{ChannelType, ChannelUser, InlineButton};
 use crate::error::KernelError;
 
 // ---------------------------------------------------------------------------
@@ -66,12 +66,21 @@ pub struct CommandContext {
     pub metadata: HashMap<String, serde_json::Value>,
 }
 
+#[derive(Debug)]
 /// Result returned by a command handler.
 pub enum CommandResult {
     /// Plain text response (adapter will format for the platform).
     Text(String),
     /// HTML-formatted response (adapter sends as-is if platform supports HTML).
     Html(String),
+    /// HTML text with inline keyboard buttons.
+    ///
+    /// The adapter should render the keyboard as platform-specific interactive
+    /// elements (e.g. Telegram inline keyboard).
+    HtmlWithKeyboard {
+        html: String,
+        keyboard: Vec<Vec<InlineButton>>,
+    },
     /// No visible response needed (handler sent its own messages).
     None,
 }
@@ -140,6 +149,7 @@ pub struct CallbackContext {
     pub metadata: HashMap<String, serde_json::Value>,
 }
 
+#[derive(Debug)]
 /// Result returned by a callback handler.
 pub enum CallbackResult {
     /// Edit the originating message with new text.

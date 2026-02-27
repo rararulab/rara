@@ -1,0 +1,225 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Backend service client trait for Telegram command handlers.
+//!
+//! Abstracts all HTTP calls to the main service so command handlers
+//! remain testable without a running backend.
+
+use async_trait::async_trait;
+use serde::Deserialize;
+use snafu::Snafu;
+
+// ---------------------------------------------------------------------------
+// Error
+// ---------------------------------------------------------------------------
+
+/// Error returned by [`BotServiceClient`] operations.
+#[derive(Debug, Snafu)]
+pub enum BotServiceError {
+    /// A generic service-level error.
+    #[snafu(display("{message}"))]
+    Service { message: String },
+}
+
+// ---------------------------------------------------------------------------
+// Response types
+// ---------------------------------------------------------------------------
+
+/// Channel-to-session binding.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChannelBinding {
+    pub session_key: String,
+}
+
+/// Summary of a chat session (used in list views).
+#[derive(Debug, Clone, Deserialize)]
+pub struct SessionListItem {
+    pub key: String,
+    pub title: Option<String>,
+    pub message_count: i64,
+    pub updated_at: String,
+}
+
+/// Detailed information about a single chat session.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SessionDetail {
+    pub key: String,
+    pub title: Option<String>,
+    pub model: Option<String>,
+    pub message_count: i64,
+    pub preview: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// A job discovered through the search API.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DiscoveryJob {
+    pub title: String,
+    pub company: String,
+    pub location: Option<String>,
+    pub url: Option<String>,
+    pub salary_min: Option<i32>,
+    pub salary_max: Option<i32>,
+    pub salary_currency: Option<String>,
+}
+
+/// Information about a configured MCP server.
+#[derive(Debug, Clone, Deserialize)]
+pub struct McpServerInfo {
+    pub name: String,
+    pub status: McpServerStatus,
+}
+
+/// Connection status of an MCP server.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum McpServerStatus {
+    Connected,
+    Connecting,
+    Disconnected,
+    Error { message: String },
+}
+
+/// Response from dispatching a coding task.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CodingTask {
+    pub id: String,
+    pub branch: String,
+    pub tmux_session: String,
+    pub status: String,
+}
+
+/// Summary of a coding task (used in list views).
+#[derive(Debug, Clone, Deserialize)]
+pub struct CodingTaskSummary {
+    pub id: String,
+    pub status: String,
+    pub agent_type: String,
+    pub branch: String,
+    pub prompt: String,
+    pub pr_url: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Trait
+// ---------------------------------------------------------------------------
+
+/// Async trait abstracting all backend API calls used by command handlers.
+///
+/// Implementations may call the real HTTP service or return hardcoded data
+/// for testing.
+#[async_trait]
+pub trait BotServiceClient: Send + Sync {
+    // -- Session management --------------------------------------------------
+
+    /// Look up the session bound to a Telegram channel.
+    async fn get_channel_session(
+        &self,
+        account: &str,
+        chat_id: &str,
+    ) -> Result<Option<ChannelBinding>, BotServiceError>;
+
+    /// Create or update a channel-to-session binding.
+    async fn bind_channel(
+        &self,
+        channel_type: &str,
+        account: &str,
+        chat_id: &str,
+        session_key: &str,
+    ) -> Result<ChannelBinding, BotServiceError>;
+
+    /// Create a new chat session.
+    async fn create_session(
+        &self,
+        key: &str,
+        title: Option<&str>,
+    ) -> Result<(), BotServiceError>;
+
+    /// Delete all messages from a session.
+    async fn clear_session_messages(
+        &self,
+        session_key: &str,
+    ) -> Result<(), BotServiceError>;
+
+    /// List recent sessions.
+    async fn list_sessions(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<SessionListItem>, BotServiceError>;
+
+    /// Get detailed information about a session.
+    async fn get_session(
+        &self,
+        key: &str,
+    ) -> Result<SessionDetail, BotServiceError>;
+
+    /// Update session fields (e.g. model).
+    async fn update_session(
+        &self,
+        key: &str,
+        model: Option<&str>,
+    ) -> Result<SessionDetail, BotServiceError>;
+
+    // -- Job discovery -------------------------------------------------------
+
+    /// Search for jobs matching the given criteria.
+    async fn discover_jobs(
+        &self,
+        keywords: Vec<String>,
+        location: Option<String>,
+        max_results: u32,
+    ) -> Result<Vec<DiscoveryJob>, BotServiceError>;
+
+    /// Submit raw JD text for parsing.
+    async fn submit_jd_parse(&self, text: &str) -> Result<(), BotServiceError>;
+
+    // -- MCP servers ---------------------------------------------------------
+
+    /// List all configured MCP servers.
+    async fn list_mcp_servers(&self) -> Result<Vec<McpServerInfo>, BotServiceError>;
+
+    /// Get a single MCP server's info.
+    async fn get_mcp_server(
+        &self,
+        name: &str,
+    ) -> Result<McpServerInfo, BotServiceError>;
+
+    /// Add a new MCP server configuration.
+    async fn add_mcp_server(
+        &self,
+        name: &str,
+        command: &str,
+        args: &[String],
+    ) -> Result<McpServerInfo, BotServiceError>;
+
+    /// Start an existing MCP server.
+    async fn start_mcp_server(&self, name: &str) -> Result<(), BotServiceError>;
+
+    /// Remove an MCP server configuration.
+    async fn remove_mcp_server(&self, name: &str) -> Result<(), BotServiceError>;
+
+    // -- Coding tasks --------------------------------------------------------
+
+    /// Dispatch a new coding task.
+    async fn dispatch_coding_task(
+        &self,
+        prompt: &str,
+        agent: &str,
+    ) -> Result<CodingTask, BotServiceError>;
+
+    /// List all coding tasks.
+    async fn list_coding_tasks(&self) -> Result<Vec<CodingTaskSummary>, BotServiceError>;
+}
