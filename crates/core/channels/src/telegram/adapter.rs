@@ -53,6 +53,7 @@ use rara_kernel::channel::command::{
     CallbackContext, CallbackHandler, CallbackResult, CommandContext, CommandHandler, CommandInfo,
     CommandResult,
 };
+use crate::telegram::contacts::ContactTracker;
 use rara_kernel::channel::types::{
     AgentPhase, ChannelMessage, ChannelType, ChannelUser, ContentBlock, InlineButton,
     MessageContent, MessageRole, OutboundMessage, ReplyMarkup, StreamEvent,
@@ -125,6 +126,8 @@ pub struct TelegramAdapter {
     /// Allowed group chat ID. If set, only this group is authorized for
     /// group-chat interactions. Other groups receive an "unauthorized" message.
     allowed_group_chat_id: Option<i64>,
+    /// Optional contact tracker for recording username-to-chat_id mappings.
+    contact_tracker: Option<Arc<dyn ContactTracker>>,
 }
 
 impl TelegramAdapter {
@@ -148,6 +151,7 @@ impl TelegramAdapter {
             callback_handlers: Vec::new(),
             primary_chat_id: None,
             allowed_group_chat_id: None,
+            contact_tracker: None,
         }
     }
 
@@ -184,6 +188,16 @@ impl TelegramAdapter {
     /// response and are not dispatched further.
     pub fn with_allowed_group_chat_id(mut self, id: i64) -> Self {
         self.allowed_group_chat_id = Some(id);
+        self
+    }
+
+    /// Set a contact tracker for recording username-to-chat_id mappings.
+    ///
+    /// When set, every incoming message from a user with a Telegram username
+    /// will trigger a [`ContactTracker::track`] call, recording the mapping
+    /// for outbound notification routing.
+    pub fn with_contact_tracker(mut self, tracker: Arc<dyn ContactTracker>) -> Self {
+        self.contact_tracker = Some(tracker);
         self
     }
 
@@ -238,6 +252,7 @@ impl ChannelAdapter for TelegramAdapter {
         let callback_handlers = self.callback_handlers.clone();
         let primary_chat_id = self.primary_chat_id;
         let allowed_group_chat_id = self.allowed_group_chat_id;
+        let contact_tracker = self.contact_tracker.clone();
 
         tokio::spawn(async move {
             polling_loop(
@@ -251,6 +266,7 @@ impl ChannelAdapter for TelegramAdapter {
                 callback_handlers,
                 primary_chat_id,
                 allowed_group_chat_id,
+                contact_tracker,
             )
             .await;
         });
@@ -377,6 +393,7 @@ async fn polling_loop(
     callback_handlers: Vec<Arc<dyn CallbackHandler>>,
     primary_chat_id: Option<i64>,
     allowed_group_chat_id: Option<i64>,
+    contact_tracker: Option<Arc<dyn ContactTracker>>,
 ) {
     let mut offset: Option<i32> = None;
     let mut retry_delay = INITIAL_RETRY_DELAY;
@@ -431,6 +448,7 @@ async fn polling_loop(
                     let bot_username = Arc::clone(&bot_username);
                     let cmd_handlers = command_handlers.clone();
                     let cb_handlers = callback_handlers.clone();
+                    let tracker = contact_tracker.clone();
                     tokio::spawn(async move {
                         handle_update(
                             update,
@@ -442,6 +460,7 @@ async fn polling_loop(
                             &cb_handlers,
                             primary_chat_id,
                             allowed_group_chat_id,
+                            tracker.as_ref(),
                         )
                         .await;
                     });
@@ -483,6 +502,7 @@ async fn handle_update(
     callback_handlers: &[Arc<dyn CallbackHandler>],
     _primary_chat_id: Option<i64>,
     allowed_group_chat_id: Option<i64>,
+    contact_tracker: Option<&Arc<dyn ContactTracker>>,
 ) {
     // Handle callback queries (inline keyboard button presses).
     if let UpdateKind::CallbackQuery(query) = &update.kind {
@@ -496,6 +516,15 @@ async fn handle_update(
     };
 
     let chat_id = msg.chat.id.0;
+
+    // Track contact if username is available.
+    if let Some(tracker) = contact_tracker {
+        if let Some(ref user) = msg.from {
+            if let Some(ref username) = user.username {
+                tracker.track(username, chat_id).await;
+            }
+        }
+    }
 
     // Check if this chat is allowed.
     if !allowed_chat_ids.is_empty() && !allowed_chat_ids.contains(&chat_id) {
@@ -1883,5 +1912,26 @@ mod tests {
         // We verify the non-group branch:
         assert!(!false); // is_group = false
         assert_eq!(text.to_owned(), "Hello there");
+    }
+
+    // -----------------------------------------------------------------------
+    // Contact tracker tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_with_contact_tracker() {
+        use crate::telegram::contacts::NoopContactTracker;
+
+        let bot = teloxide::Bot::new("fake_token");
+        let tracker = Arc::new(NoopContactTracker);
+        let adapter = TelegramAdapter::new(bot, vec![]).with_contact_tracker(tracker);
+        assert!(adapter.contact_tracker.is_some());
+    }
+
+    #[test]
+    fn test_without_contact_tracker() {
+        let bot = teloxide::Bot::new("fake_token");
+        let adapter = TelegramAdapter::new(bot, vec![]);
+        assert!(adapter.contact_tracker.is_none());
     }
 }
