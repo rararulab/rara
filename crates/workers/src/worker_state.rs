@@ -633,11 +633,12 @@ impl SettingsLlmProviderLoader {
         &self,
         refresh_token: &str,
     ) -> Result<CodexTokenResponse, String> {
-        const CODEX_TOKEN_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
-        const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
         let form = [
             ("grant_type", "refresh_token"),
-            ("client_id", CODEX_CLIENT_ID),
+            (
+                "client_id",
+                rara_domain_shared::settings::codex_oauth::CODEX_CLIENT_ID,
+            ),
             ("refresh_token", refresh_token),
         ];
         let form_body = reqwest::Url::parse_with_params("https://localhost.invalid", form)
@@ -647,7 +648,7 @@ impl SettingsLlmProviderLoader {
             .to_owned();
         let client = reqwest::Client::new();
         let response = client
-            .post(CODEX_TOKEN_ENDPOINT)
+            .post(rara_domain_shared::settings::codex_oauth::CODEX_TOKEN_ENDPOINT)
             .header("content-type", "application/x-www-form-urlencoded")
             .body(form_body)
             .send()
@@ -753,50 +754,44 @@ impl agent_core::provider::LlmProviderLoader for SettingsLlmProviderLoader {
                 )))
             }
             "codex" => {
-                let mut tokens = rara_backend_admin::settings::codex_oauth::load_tokens()
+                let mut tokens = rara_domain_shared::settings::codex_oauth::load_tokens()
                     .map_err(|e| agent_core::err::Error::Provider { message: e.into() })?
                     .ok_or(agent_core::err::ProviderNotConfiguredSnafu.build())?;
 
                 if Self::should_refresh_codex_token(tokens.expires_at_unix) {
                     let _guard = self.codex_refresh_lock.lock().await;
                     // Double-check in case another request refreshed already.
-                    tokens = rara_backend_admin::settings::codex_oauth::load_tokens()
+                    tokens = rara_domain_shared::settings::codex_oauth::load_tokens()
                         .map_err(|e| agent_core::err::Error::Provider { message: e.into() })?
                         .ok_or(agent_core::err::ProviderNotConfiguredSnafu.build())?;
                     if Self::should_refresh_codex_token(tokens.expires_at_unix) {
                         let refresh_token = tokens.refresh_token.clone().ok_or_else(|| {
                             agent_core::err::Error::Provider {
-                                message:
-                                    "codex token expired and no refresh token is available".into(),
+                                message: "codex token expired and no refresh token is available"
+                                    .into(),
                             }
                         })?;
-                        let refreshed =
-                            self.refresh_codex_access_token(&refresh_token)
-                                .await
-                                .map_err(|e| agent_core::err::Error::Provider {
-                                    message: e.into(),
-                                })?;
+                        let refreshed = self
+                            .refresh_codex_access_token(&refresh_token)
+                            .await
+                            .map_err(|e| agent_core::err::Error::Provider { message: e.into() })?;
                         let refreshed_tokens =
-                            rara_backend_admin::settings::codex_oauth::StoredCodexTokens {
+                            rara_domain_shared::settings::codex_oauth::StoredCodexTokens {
                                 access_token: refreshed.access_token.clone(),
                                 refresh_token: refreshed
                                     .refresh_token
                                     .or(tokens.refresh_token.clone()),
                                 id_token: refreshed.id_token.or(tokens.id_token.clone()),
-                                expires_at_unix: refreshed.expires_in.map(|in_secs| {
-                                    std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .map_or(0, |d| d.as_secs())
-                                        .saturating_add(in_secs)
-                                }),
+                                expires_at_unix:
+                                    rara_domain_shared::settings::codex_oauth::compute_expires_at_unix(
+                                        rara_domain_shared::settings::codex_oauth::now_unix(),
+                                        refreshed.expires_in,
+                                    ),
                             };
-                        rara_backend_admin::settings::codex_oauth::save_tokens(&refreshed_tokens)
+                        rara_domain_shared::settings::codex_oauth::save_tokens(&refreshed_tokens)
                             .map_err(|e| agent_core::err::Error::Provider {
-                                message: format!(
-                                    "failed to persist refreshed codex token: {e}"
-                                )
-                                .into(),
-                            })?;
+                            message: format!("failed to persist refreshed codex token: {e}").into(),
+                        })?;
                         tokens = refreshed_tokens;
                     }
                 }

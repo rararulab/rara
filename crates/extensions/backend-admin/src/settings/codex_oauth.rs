@@ -13,24 +13,19 @@
 // limitations under the License.
 
 use axum::{Json, extract::State, http::StatusCode, response::Redirect};
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use rara_keyring_store::{DefaultKeyringStore, KeyringStore};
+use rara_domain_shared::settings::codex_oauth::{
+    CODEX_CLIENT_ID, CODEX_TOKEN_ENDPOINT, PendingCodexOAuth, StoredCodexTokens, build_auth_url,
+    callback_uri, clear_pending_oauth, clear_tokens, compute_expires_at_unix,
+    generate_code_challenge, generate_code_verifier, generate_nonce, load_pending_oauth,
+    load_tokens, now_unix, save_pending_oauth, save_tokens, validate_state,
+};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::settings::SettingsSvc;
 
-const CODEX_AUTH_ENDPOINT: &str = "https://auth.openai.com/oauth/authorize";
-const CODEX_TOKEN_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
-const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
-const CODEX_SCOPES: &str = "openid profile email offline_access";
 const CODEX_SUCCESS_REDIRECT: &str = "/settings?section=providers&codex_oauth=success";
 const CODEX_ERROR_REDIRECT: &str = "/settings?section=providers&codex_oauth=error";
-const PUBLIC_BASE_URL_ENV: &str = "RARA_PUBLIC_BASE_URL";
-const CODEX_KEYRING_SERVICE: &str = "rara-ai-codex";
-const CODEX_TOKEN_ACCOUNT: &str = "tokens";
-const CODEX_PENDING_ACCOUNT: &str = "oauth-pending";
 
 pub(super) fn routes() -> OpenApiRouter<SettingsSvc> {
     OpenApiRouter::new().nest(
@@ -67,20 +62,6 @@ struct TokenResponse {
     refresh_token: Option<String>,
     id_token:      Option<String>,
     expires_in:    Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StoredCodexTokens {
-    pub access_token:    String,
-    pub refresh_token:   Option<String>,
-    pub id_token:        Option<String>,
-    pub expires_at_unix: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PendingCodexOAuth {
-    state:         String,
-    code_verifier: String,
 }
 
 #[utoipa::path(
@@ -176,28 +157,6 @@ async fn oauth_disconnect(
     }))
 }
 
-fn callback_uri() -> String {
-    let base =
-        std::env::var(PUBLIC_BASE_URL_ENV).unwrap_or_else(|_| "http://localhost:8000".into());
-    format!(
-        "{}/api/v1/ai/codex/oauth/callback",
-        base.trim_end_matches('/')
-    )
-}
-
-fn build_auth_url(redirect_uri: &str, state: &str, code_challenge: &str) -> Result<String, String> {
-    let mut url = reqwest::Url::parse(CODEX_AUTH_ENDPOINT).map_err(|e| e.to_string())?;
-    url.query_pairs_mut()
-        .append_pair("client_id", CODEX_CLIENT_ID)
-        .append_pair("redirect_uri", redirect_uri)
-        .append_pair("response_type", "code")
-        .append_pair("scope", CODEX_SCOPES)
-        .append_pair("code_challenge", code_challenge)
-        .append_pair("code_challenge_method", "S256")
-        .append_pair("state", state);
-    Ok(url.into())
-}
-
 async fn exchange_code(
     code: &str,
     code_verifier: &str,
@@ -236,123 +195,4 @@ async fn exchange_code(
         .json::<TokenResponse>()
         .await
         .map_err(|e| format!("failed to parse oauth token response: {e}"))
-}
-
-pub fn load_tokens() -> Result<Option<StoredCodexTokens>, String> {
-    let store = DefaultKeyringStore;
-    let Some(raw) = store
-        .load(CODEX_KEYRING_SERVICE, CODEX_TOKEN_ACCOUNT)
-        .map_err(|e| format!("keyring load failed: {e}"))?
-    else {
-        return Ok(None);
-    };
-    serde_json::from_str(&raw)
-        .map(Some)
-        .map_err(|e| e.to_string())
-}
-
-pub fn save_tokens(tokens: &StoredCodexTokens) -> Result<(), String> {
-    let store = DefaultKeyringStore;
-    let raw = serde_json::to_string(tokens).map_err(|e| e.to_string())?;
-    store
-        .save(CODEX_KEYRING_SERVICE, CODEX_TOKEN_ACCOUNT, &raw)
-        .map_err(|e| format!("keyring save failed: {e}"))
-}
-
-fn clear_tokens() -> Result<(), String> {
-    let store = DefaultKeyringStore;
-    let _ = store
-        .delete(CODEX_KEYRING_SERVICE, CODEX_TOKEN_ACCOUNT)
-        .map_err(|e| format!("keyring delete failed: {e}"))?;
-    Ok(())
-}
-
-fn load_pending_oauth() -> Result<Option<PendingCodexOAuth>, String> {
-    let store = DefaultKeyringStore;
-    let Some(raw) = store
-        .load(CODEX_KEYRING_SERVICE, CODEX_PENDING_ACCOUNT)
-        .map_err(|e| format!("keyring load failed: {e}"))?
-    else {
-        return Ok(None);
-    };
-    serde_json::from_str(&raw)
-        .map(Some)
-        .map_err(|e| e.to_string())
-}
-
-fn save_pending_oauth(pending: &PendingCodexOAuth) -> Result<(), String> {
-    let store = DefaultKeyringStore;
-    let raw = serde_json::to_string(pending).map_err(|e| e.to_string())?;
-    store
-        .save(CODEX_KEYRING_SERVICE, CODEX_PENDING_ACCOUNT, &raw)
-        .map_err(|e| format!("keyring save failed: {e}"))
-}
-
-fn clear_pending_oauth() -> Result<(), String> {
-    let store = DefaultKeyringStore;
-    let _ = store
-        .delete(CODEX_KEYRING_SERVICE, CODEX_PENDING_ACCOUNT)
-        .map_err(|e| format!("keyring delete failed: {e}"))?;
-    Ok(())
-}
-
-fn generate_nonce() -> String { uuid::Uuid::new_v4().simple().to_string() }
-
-fn generate_code_verifier() -> String {
-    format!(
-        "{}{}",
-        uuid::Uuid::new_v4().simple(),
-        uuid::Uuid::new_v4().simple()
-    )
-}
-
-fn generate_code_challenge(verifier: &str) -> String {
-    let digest = Sha256::digest(verifier.as_bytes());
-    URL_SAFE_NO_PAD.encode(digest)
-}
-
-fn validate_state(expected: &str, actual: Option<&str>) -> Result<(), String> {
-    let Some(actual) = actual else {
-        return Err("missing oauth state".to_owned());
-    };
-    if expected.is_empty() {
-        return Err("missing expected oauth state".to_owned());
-    }
-    if expected != actual {
-        return Err("oauth state mismatch".to_owned());
-    }
-    Ok(())
-}
-
-fn now_unix() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
-}
-
-fn compute_expires_at_unix(now_unix: u64, expires_in_secs: Option<u64>) -> Option<u64> {
-    expires_in_secs.map(|v| now_unix.saturating_add(v))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn validate_state_rejects_mismatch() {
-        let err = validate_state("expected", Some("other")).expect_err("should fail");
-        assert!(err.contains("state"));
-    }
-
-    #[test]
-    fn validate_state_accepts_exact_match() {
-        let result = validate_state("same", Some("same"));
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn compute_expires_at_adds_offset() {
-        assert_eq!(compute_expires_at_unix(1000, Some(120)), Some(1120));
-        assert_eq!(compute_expires_at_unix(1000, None), None);
-    }
 }

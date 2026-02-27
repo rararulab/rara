@@ -12,7 +12,6 @@ agent-core = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
-base64 = { workspace = true }
 bon = { workspace = true }
 chrono = { workspace = true }
 derive_more = { workspace = true }
@@ -28,7 +27,6 @@ rara-composio = { workspace = true }
 rara-domain-chat = { workspace = true }
 rara-domain-shared = { workspace = true }
 rara-git = { workspace = true }
-rara-keyring-store = { workspace = true }
 rara-mcp = { workspace = true }
 rara-paths = { workspace = true }
 rara-sessions = { workspace = true }
@@ -37,7 +35,6 @@ rara-telegram-bot = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
 snafu = { workspace = true }
 sqlx = { workspace = true }
 strum = { workspace = true }
