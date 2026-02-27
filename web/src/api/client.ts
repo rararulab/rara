@@ -83,7 +83,7 @@ async function requestBlob(path: string, options?: RequestInit & { timeoutMs?: n
   }
 }
 
-import type { PipelineDiscoveredJob, PaginatedDiscoveredJobs, DiscoveredJobsStats, LlmfitRecommendationsResponse, OllamaHealthResponse, OllamaModelListResponse, OllamaModelInfo, DispatcherStatus, TaskRecord, AgentTaskKind, TaskStatus, CodexOAuthStartResponse, CodexOAuthStatusResponse } from './types';
+import type { PipelineDiscoveredJob, PaginatedDiscoveredJobs, DiscoveredJobsStats, LlmfitRecommendationsResponse, OllamaHealthResponse, OllamaModelListResponse, OllamaModelInfo, CodexOAuthStartResponse, CodexOAuthStatusResponse } from './types';
 
 export const api = {
   get: <T>(path: string) => request<T>(path),
@@ -156,26 +156,4 @@ export const api = {
     });
   },
 
-  // -- Agent Dispatcher --
-
-  fetchDispatcherStatus(): Promise<DispatcherStatus> {
-    return request<DispatcherStatus>('/api/dispatcher/status');
-  },
-
-  fetchDispatcherHistory(params?: {
-    limit?: number;
-    kind?: AgentTaskKind;
-    status?: TaskStatus;
-  }): Promise<TaskRecord[]> {
-    const searchParams = new URLSearchParams();
-    if (params?.limit) searchParams.set('limit', String(params.limit));
-    if (params?.kind) searchParams.set('kind', params.kind);
-    if (params?.status) searchParams.set('status', params.status);
-    const query = searchParams.toString();
-    return request<TaskRecord[]>(`/api/dispatcher/history${query ? `?${query}` : ''}`);
-  },
-
-  cancelDispatcherTask(taskId: string): Promise<{ success: boolean }> {
-    return request<{ success: boolean }>(`/api/dispatcher/cancel/${taskId}`, { method: 'POST' });
-  },
 };

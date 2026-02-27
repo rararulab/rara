@@ -524,11 +524,6 @@ impl AppState {
             rara_backend_admin::models::routes(model_repo),
         );
 
-        // Dispatcher routes (plain axum::Router, no OpenAPI metadata).
-        router = router.merge(crate::dispatcher_routes::dispatcher_router(
-            self.dispatcher.clone(),
-        ));
-
         // Prompt admin routes.
         let (prompt_router, prompt_api) =
             rara_backend_admin::prompts::routes(self.prompt_repo.clone()).split_for_parts();

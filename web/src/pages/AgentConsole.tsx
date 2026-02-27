@@ -29,7 +29,6 @@ import {
 import Chat from "@/pages/Chat";
 import AgentStatus from "@/pages/AgentStatus";
 import { AgentJobsPanel } from "@/pages/Scheduler";
-import AgentDispatcher from "@/pages/AgentDispatcher";
 import CodingTasks from "@/pages/CodingTasks";
 import { cn } from "@/lib/utils";
 import { useServerStatus } from "@/hooks/use-server-status";
@@ -46,11 +45,6 @@ const OPS_TABS = [
     key: "scheduler",
     label: "Scheduler",
     icon: <Clock className="h-4 w-4" />,
-  },
-  {
-    key: "dispatcher",
-    label: "Dispatcher",
-    icon: <Activity className="h-4 w-4" />,
   },
 ];
 
@@ -283,11 +277,6 @@ export default function AgentConsole() {
               {activeOpsTab === "scheduler" && (
                 <div className="w-full p-6">
                   <AgentJobsPanel />
-                </div>
-              )}
-              {activeOpsTab === "dispatcher" && (
-                <div className="w-full p-6">
-                  <AgentDispatcher />
                 </div>
               )}
             </div>

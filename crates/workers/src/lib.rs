@@ -20,7 +20,6 @@
 pub mod agent_scheduler;
 pub mod agent_scheduler_routes;
 pub mod builtin_agents;
-pub mod dispatcher_routes;
 pub mod jd_parser;
 pub mod orchestrator;
 pub mod pipeline_scheduler;
