@@ -18,7 +18,19 @@ use dashmap::DashMap;
 use jiff::Timestamp;
 use uuid::Uuid;
 
-use crate::error::{KernelError, Result};
+use crate::{error::{KernelError, Result}, memory::Scope};
+
+/// Guard policy for an agent.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub enum GuardPolicy {
+    /// No restrictions — all tool calls allowed.
+    #[default]
+    Permissive,
+    /// All tool calls require human approval.
+    Restricted,
+    /// Custom policy name (resolved at runtime).
+    Custom(String),
+}
 
 /// Runtime state of an agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -46,6 +58,10 @@ pub struct AgentManifest {
     pub max_iterations: Option<usize>,
     /// Tool names this agent is allowed to use (empty = all tools).
     pub tools: Vec<String>,
+    /// Memory scope for this agent.
+    pub memory_scope: Scope,
+    /// Guard policy for this agent.
+    pub guard_policy: GuardPolicy,
     /// Arbitrary metadata.
     pub metadata: serde_json::Value,
 }

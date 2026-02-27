@@ -12,58 +12,79 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Kernel — the unified orchestrator for agent lifecycle, memory, and LLM
-//! execution.
+//! Kernel — the unified orchestrator for agent lifecycle and execution.
 //!
-//! The [`Kernel`] struct is the single entry point for all agent operations.
-//! It coordinates:
-//!
-//! - **Agent registry** — spawn, list, kill agents
-//! - **LLM execution** — delegates to [`AgentRunner`] from `agent-core`
-//! - **Memory** — 3-layer memory (State/Knowledge/Learning) via `agent-core::memory` traits
-//! - **Tools** — shared [`ToolRegistry`] with per-agent filtering
+//! The [`Kernel`] is the single entry point for all agent operations.
+//! It holds 7 component slots and drives the LLM ↔ Tool execution loop.
 
 use std::sync::Arc;
 
-use agent_core::{
-    memory::{Memory, MemoryContext},
-    model::LlmProviderLoaderRef,
-    runner::{AgentRunResponse, AgentRunner, OnEvent, RunnerEvent, UserContent},
-    tool_registry::ToolRegistry,
-};
-use tokio::sync::mpsc;
+use jiff::Timestamp;
 use tracing::info;
 use uuid::Uuid;
 
 use crate::{
-    error::Result,
+    context::AgentContext,
+    error::{KernelError, Result},
+    event::{EventBus, KernelEvent},
+    guard::{Guard, GuardContext},
+    llm::{ChatMessage, ChatRequest, ChatResponse, ChatRole, LlmProvider, ToolDefinition},
+    memory::Memory,
+    prompt::PromptRepo,
     registry::{AgentEntry, AgentManifest, AgentRegistry, AgentState},
+    session::SessionStore,
+    tool::ToolRegistry,
 };
 
+/// Kernel configuration.
+#[derive(Debug, Clone)]
+pub struct KernelConfig {
+    /// Default user ID for memory context.
+    pub user_id: Uuid,
+}
+
 /// The unified agent orchestrator.
+///
+/// Holds 7 component slots + agent registry. Drives the LLM ↔ Tool
+/// execution loop for any registered agent.
 pub struct Kernel {
+    // -- 7 Components --
+    llm:      Arc<dyn LlmProvider>,
+    tools:    Arc<ToolRegistry>,
+    memory:   Arc<dyn Memory>,
+    sessions: Arc<dyn SessionStore>,
+    prompts:  Arc<dyn PromptRepo>,
+    guard:    Arc<dyn Guard>,
+    bus:      Arc<dyn EventBus>,
+
+    // -- Runtime state --
     registry: AgentRegistry,
-    llm_provider: LlmProviderLoaderRef,
-    tools: Arc<ToolRegistry>,
-    memory: Arc<dyn Memory>,
+    config:   KernelConfig,
 }
 
 impl Kernel {
-    /// Create a new kernel with the given configuration.
-    ///
-    /// Memory is a required subsystem. Use a noop implementation if no
-    /// persistence is needed.
+    /// Boot a new kernel with all 7 components.
     pub fn boot(
-        llm_provider: LlmProviderLoaderRef,
+        config: KernelConfig,
+        llm: Arc<dyn LlmProvider>,
         tools: Arc<ToolRegistry>,
         memory: Arc<dyn Memory>,
+        sessions: Arc<dyn SessionStore>,
+        prompts: Arc<dyn PromptRepo>,
+        guard: Arc<dyn Guard>,
+        bus: Arc<dyn EventBus>,
     ) -> Self {
         info!("Booting kernel");
         Self {
-            registry: AgentRegistry::new(),
-            llm_provider,
+            llm,
             tools,
             memory,
+            sessions,
+            prompts,
+            guard,
+            bus,
+            registry: AgentRegistry::new(),
+            config,
         }
     }
 
@@ -100,103 +121,203 @@ impl Kernel {
 
     // -- Message dispatch ------------------------------------------------------
 
-    /// Send a message to an agent and wait for the full response.
-    pub async fn send_message(
-        &self,
-        agent_id: Uuid,
-        message: impl Into<UserContent>,
-    ) -> Result<AgentRunResponse> {
+    /// Send a message to an agent and run the full LLM ↔ Tool loop.
+    pub async fn send(&self, agent_id: Uuid, user_text: String) -> Result<ChatResponse> {
         let entry = self.registry.get(agent_id)?;
         self.registry.set_state(agent_id, AgentState::Running)?;
 
-        let tools = self.tools.filtered(&entry.tools);
-        let runner = self.build_runner(&entry, message.into());
+        let ctx = self.create_context(&entry);
 
-        let result = runner.run(&tools, None).await;
+        // 1. Load history
+        let history = ctx.sessions.load_history(ctx.session_id).await
+            .map_err(|e| KernelError::Session { message: e.to_string() })?;
+
+        // 2. Build messages: history + user message
+        let user_msg = ChatMessage {
+            role:         ChatRole::User,
+            content:      Some(user_text.clone()),
+            tool_calls:   Vec::new(),
+            tool_call_id: None,
+        };
+
+        let mut messages = history;
+        messages.push(user_msg.clone());
+
+        // 3. Run the LLM ↔ Tool loop
+        let response = self.run_loop(&ctx, messages).await;
+
+        // 4. Save exchange on success
+        if let Ok(ref resp) = response {
+            let assistant_msg = ChatMessage {
+                role:         ChatRole::Assistant,
+                content:      resp.content.clone(),
+                tool_calls:   Vec::new(),
+                tool_call_id: None,
+            };
+            let _ = ctx.sessions.append(
+                ctx.session_id,
+                crate::session::Exchange {
+                    user_message:      user_msg,
+                    assistant_message: assistant_msg,
+                },
+            ).await;
+        }
 
         self.registry.set_state(agent_id, AgentState::Idle)?;
-        Ok(result?)
+        response
     }
 
-    /// Send a message with an event callback.
-    pub async fn send_message_with_events(
+    // -- Core execution loop ---------------------------------------------------
+
+    async fn run_loop(
         &self,
-        agent_id: Uuid,
-        message: impl Into<UserContent>,
-        on_event: &OnEvent,
-    ) -> Result<AgentRunResponse> {
-        let entry = self.registry.get(agent_id)?;
-        self.registry.set_state(agent_id, AgentState::Running)?;
+        ctx: &AgentContext,
+        mut messages: Vec<ChatMessage>,
+    ) -> Result<ChatResponse> {
+        let guard_ctx = GuardContext {
+            agent_id:   ctx.agent_id,
+            user_id:    ctx.user_id,
+            session_id: ctx.session_id,
+        };
 
-        let tools = self.tools.filtered(&entry.tools);
-        let runner = self.build_runner(&entry, message.into());
+        // Build tool definitions from the registry
+        let tool_defs: Vec<ToolDefinition> = ctx.tools.iter().map(|(name, tool, _, _)| {
+            ToolDefinition {
+                name:        name.to_owned(),
+                description: tool.description().to_owned(),
+                parameters:  tool.parameters_schema(),
+            }
+        }).collect();
 
-        let result = runner.run(&tools, Some(on_event)).await;
+        for iteration in 0..ctx.max_iterations {
+            let request = ChatRequest {
+                model:         ctx.model.clone(),
+                system_prompt: ctx.system_prompt.clone(),
+                messages:      messages.clone(),
+                tools:         if tool_defs.is_empty() { None } else { Some(tool_defs.clone()) },
+                temperature:   None,
+            };
 
-        self.registry.set_state(agent_id, AgentState::Idle)?;
-        Ok(result?)
+            let response = ctx.llm.chat(request).await?;
+
+            // No tool calls → terminal response
+            if response.tool_calls.is_empty() {
+                info!(iterations = iteration + 1, "Agent loop completed");
+                return Ok(response);
+            }
+
+            // Append assistant message with tool calls
+            messages.push(ChatMessage {
+                role:         ChatRole::Assistant,
+                content:      response.content.clone(),
+                tool_calls:   response.tool_calls.iter().map(|tc| crate::llm::ToolCall {
+                    id:        tc.id.clone(),
+                    name:      tc.name.clone(),
+                    arguments: tc.arguments.clone(),
+                }).collect(),
+                tool_call_id: None,
+            });
+
+            // Execute each tool call
+            for call in &response.tool_calls {
+                // Guard check
+                let verdict = ctx.guard.check_tool(&guard_ctx, &call.name, &call.arguments).await;
+                let tool_result = if verdict.is_allow() {
+                    match ctx.tools.get(&call.name) {
+                        Some(tool) => {
+                            match tool.execute(call.arguments.clone()).await {
+                                Ok(result) => {
+                                    ctx.bus.publish(KernelEvent::ToolExecuted {
+                                        agent_id:  ctx.agent_id,
+                                        tool_name: call.name.to_string(),
+                                        success:   true,
+                                        timestamp: Timestamp::now(),
+                                    }).await;
+                                    result.to_string()
+                                }
+                                Err(e) => {
+                                    ctx.bus.publish(KernelEvent::ToolExecuted {
+                                        agent_id:  ctx.agent_id,
+                                        tool_name: call.name.to_string(),
+                                        success:   false,
+                                        timestamp: Timestamp::now(),
+                                    }).await;
+                                    format!("Tool error: {e}")
+                                }
+                            }
+                        }
+                        None => format!("Tool not found: {}", call.name),
+                    }
+                } else {
+                    let reason = match &verdict {
+                        crate::guard::Verdict::Deny { reason } => reason.clone(),
+                        crate::guard::Verdict::NeedApproval { prompt } => {
+                            format!("Approval required: {prompt}")
+                        }
+                        _ => "Denied".to_owned(),
+                    };
+                    ctx.bus.publish(KernelEvent::GuardDenied {
+                        agent_id:  ctx.agent_id,
+                        tool_name: call.name.to_string(),
+                        reason:    reason.clone(),
+                        timestamp: Timestamp::now(),
+                    }).await;
+                    format!("Guard denied: {reason}")
+                };
+
+                // Append tool result message
+                messages.push(ChatMessage {
+                    role:         ChatRole::Tool,
+                    content:      Some(tool_result),
+                    tool_calls:   Vec::new(),
+                    tool_call_id: Some(call.id.to_string()),
+                });
+            }
+        }
+
+        // Max iterations exceeded
+        Err(KernelError::Llm {
+            message: format!(
+                "agent loop exceeded max iterations ({})",
+                ctx.max_iterations
+            ),
+        })
     }
 
-    /// Send a message with streaming responses.
-    pub fn send_message_streaming(
-        &self,
-        agent_id: Uuid,
-        message: impl Into<UserContent>,
-    ) -> Result<mpsc::Receiver<RunnerEvent>> {
-        let entry = self.registry.get(agent_id)?;
-        self.registry.set_state(agent_id, AgentState::Running)?;
+    // -- Context creation ------------------------------------------------------
 
-        let tools = Arc::new(self.tools.filtered(&entry.tools));
-        let runner = self.build_runner(&entry, message.into());
-
-        Ok(runner.run_streaming(tools))
-    }
-
-    // -- Memory access ---------------------------------------------------------
-
-    /// Build a [`MemoryContext`] for the given agent.
-    pub fn memory_context(
-        &self,
-        user_id: Uuid,
-        agent_id: Uuid,
-        session_id: Option<Uuid>,
-    ) -> MemoryContext {
-        MemoryContext {
-            user_id,
-            agent_id,
-            session_id,
+    fn create_context(&self, entry: &AgentEntry) -> AgentContext {
+        AgentContext {
+            agent_id:       entry.id,
+            session_id:     entry.session_id,
+            user_id:        self.config.user_id,
+            llm:            Arc::clone(&self.llm),
+            tools:          Arc::new(self.tools.filtered(&entry.tools)),
+            memory:         Arc::clone(&self.memory),
+            sessions:       Arc::clone(&self.sessions),
+            prompts:        Arc::clone(&self.prompts),
+            guard:          Arc::clone(&self.guard),
+            bus:            Arc::clone(&self.bus),
+            model:          entry.model.clone(),
+            system_prompt:  entry.system_prompt.clone(),
+            max_iterations: entry.max_iterations,
         }
     }
 
+    // -- Component accessors ---------------------------------------------------
+
     /// Access the memory subsystem.
-    pub fn memory(&self) -> &Arc<dyn Memory> {
-        &self.memory
-    }
+    pub fn memory(&self) -> &Arc<dyn Memory> { &self.memory }
 
     /// Access the agent registry.
-    pub fn registry(&self) -> &AgentRegistry {
-        &self.registry
-    }
+    pub fn registry(&self) -> &AgentRegistry { &self.registry }
 
     /// Access the tool registry.
-    pub fn tools(&self) -> &Arc<ToolRegistry> {
-        &self.tools
-    }
+    pub fn tools(&self) -> &Arc<ToolRegistry> { &self.tools }
 
-    // -- Internal --------------------------------------------------------------
+    /// Access the prompt repository.
+    pub fn prompts(&self) -> &Arc<dyn PromptRepo> { &self.prompts }
 
-    fn build_runner(&self, entry: &AgentEntry, content: UserContent) -> AgentRunner {
-        let hint = entry
-            .provider_hint
-            .clone()
-            .unwrap_or_default();
-        AgentRunner::builder()
-            .llm_provider(self.llm_provider.clone())
-            .provider_hint(hint)
-            .model_name(entry.model.clone())
-            .system_prompt(entry.system_prompt.clone())
-            .user_content(content)
-            .max_iterations(entry.max_iterations)
-            .build()
-    }
+    /// Access the event bus.
+    pub fn bus(&self) -> &Arc<dyn EventBus> { &self.bus }
 }

@@ -12,14 +12,17 @@ categories.workspace = true
 description = "Unified agent orchestrator: lifecycle, memory, LLM execution, tool dispatch"
 
 [dependencies]
-agent-core.workspace = true
+async-openai.workspace = true
 async-trait.workspace = true
+base.workspace = true
 dashmap = "6"
+futures.workspace = true
 jiff.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true
 tokio.workspace = true
+tool-core.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 

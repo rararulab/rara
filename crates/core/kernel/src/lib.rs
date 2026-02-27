@@ -14,28 +14,36 @@
 
 //! # rara-kernel
 //!
-//! Unified agent orchestrator — coordinates agent lifecycle, 3-layer memory,
-//! LLM execution, and tool dispatch.
+//! Unified agent orchestrator — the single core crate for agent lifecycle,
+//! 7-component architecture, and LLM ↔ Tool execution loop.
 //!
-//! ## Architecture
+//! ## 7 Components
 //!
-//! ```text
-//!                      +------------------+
-//!                      |     Kernel        |  <-- unified entry point
-//!                      +--+--+--+--+------+
-//!          registry ------+  |  |  +------ tools (ToolRegistry)
-//!          memory (3-layer) -+  +-- llm (AgentRunner)
-//! ```
-//!
-//! The kernel does NOT own business logic. It wires together:
-//! - [`agent_core::runner::AgentRunner`] for LLM execution
-//! - [`agent_core::memory`] traits for 3-layer memory
-//! - [`agent_core::tool_registry::ToolRegistry`] for tool dispatch
+//! | Component   | Trait            | Purpose                          |
+//! |-------------|------------------|----------------------------------|
+//! | LLM         | [`LlmProvider`]  | Chat completion requests         |
+//! | Tool        | [`ToolRegistry`] | Tool registration + dispatch     |
+//! | Memory      | [`Memory`]       | 3-layer memory (State/Knowledge/Learning) |
+//! | Session     | [`SessionStore`] | Conversation history persistence |
+//! | Prompt      | [`PromptRepo`]   | System prompt templates          |
+//! | Guard       | [`Guard`]        | Tool approval + output moderation |
+//! | Event Bus   | [`EventBus`]     | Inter-component event broadcasting |
 
+pub mod context;
+pub mod defaults;
 pub mod error;
+pub mod event;
+pub mod guard;
 pub mod kernel;
+pub mod llm;
+pub mod memory;
+pub mod model;
+pub mod prompt;
 pub mod registry;
+pub mod session;
+pub mod tool;
 
+pub use context::AgentContext;
 pub use error::{KernelError, Result};
-pub use kernel::Kernel;
-pub use registry::{AgentEntry, AgentManifest, AgentRegistry, AgentState};
+pub use kernel::{Kernel, KernelConfig};
+pub use registry::{AgentEntry, AgentManifest, AgentRegistry, AgentState, GuardPolicy};

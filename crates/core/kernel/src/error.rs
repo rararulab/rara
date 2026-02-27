@@ -25,29 +25,37 @@ pub enum KernelError {
     #[snafu(display("agent already exists: {name}"))]
     AgentAlreadyExists { name: String },
 
-    /// Agent runner error.
-    #[snafu(display("agent runner error: {message}"))]
-    Runner { message: String },
+    /// LLM provider error.
+    #[snafu(display("llm error: {message}"))]
+    Llm { message: String },
 
     /// Memory subsystem error.
     #[snafu(display("memory error: {message}"))]
     Memory { message: String },
+
+    /// Session store error.
+    #[snafu(display("session error: {message}"))]
+    Session { message: String },
+
+    /// Guard error.
+    #[snafu(display("guard error: {message}"))]
+    Guard { message: String },
+
+    /// Event bus error.
+    #[snafu(display("event error: {message}"))]
+    Event { message: String },
+
+    /// Tool registry error.
+    #[snafu(display("tool error: {message}"))]
+    Tool { message: String },
 
     /// Kernel boot/initialization error.
     #[snafu(display("boot failed: {message}"))]
     Boot { message: String },
 }
 
-impl From<agent_core::err::Error> for KernelError {
-    fn from(err: agent_core::err::Error) -> Self {
-        Self::Runner {
-            message: err.to_string(),
-        }
-    }
-}
-
-impl From<agent_core::memory::MemoryError> for KernelError {
-    fn from(err: agent_core::memory::MemoryError) -> Self {
+impl From<crate::memory::MemoryError> for KernelError {
+    fn from(err: crate::memory::MemoryError) -> Self {
         Self::Memory {
             message: err.to_string(),
         }
