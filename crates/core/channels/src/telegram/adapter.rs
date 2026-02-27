@@ -1102,6 +1102,47 @@ async fn handle_command(
                     .await;
             }
         }
+        Ok(CommandResult::HtmlWithKeyboard { html, keyboard }) => {
+            let tg_keyboard = teloxide::types::InlineKeyboardMarkup::new(
+                keyboard.into_iter().map(|row| {
+                    row.into_iter()
+                        .map(|btn| {
+                            if let Some(url) = btn.url {
+                                teloxide::types::InlineKeyboardButton::url(btn.text, url.parse().unwrap())
+                            } else {
+                                teloxide::types::InlineKeyboardButton::callback(
+                                    btn.text,
+                                    btn.callback_data.unwrap_or_default(),
+                                )
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                }).collect::<Vec<_>>(),
+            );
+            let chunks = crate::telegram::markdown::chunk_message(&html, 4096);
+            if chunks.len() == 1 {
+                let _ = bot
+                    .send_message(ChatId(chat_id), &chunks[0])
+                    .parse_mode(teloxide::types::ParseMode::Html)
+                    .reply_markup(tg_keyboard)
+                    .await;
+            } else {
+                for (i, chunk) in chunks.iter().enumerate() {
+                    if i == chunks.len() - 1 {
+                        let _ = bot
+                            .send_message(ChatId(chat_id), chunk)
+                            .parse_mode(teloxide::types::ParseMode::Html)
+                            .reply_markup(tg_keyboard.clone())
+                            .await;
+                    } else {
+                        let _ = bot
+                            .send_message(ChatId(chat_id), chunk)
+                            .parse_mode(teloxide::types::ParseMode::Html)
+                            .await;
+                    }
+                }
+            }
+        }
         Ok(CommandResult::None) => {
             // Handler handled it internally.
         }
