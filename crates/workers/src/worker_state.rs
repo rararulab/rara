@@ -696,6 +696,8 @@ impl agent_core::provider::LlmProviderLoader for SettingsLlmProviderLoader {
                 )))
             }
             "codex" => {
+                // Token persistence and refresh rules live in integration layer.
+                // Worker only orchestrates load -> maybe refresh -> construct provider.
                 let mut tokens = rara_codex_oauth::load_tokens()
                     .map_err(|e| agent_core::err::Error::Provider { message: e.into() })?
                     .ok_or(agent_core::err::ProviderNotConfiguredSnafu.build())?;

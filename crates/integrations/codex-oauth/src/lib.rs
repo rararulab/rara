@@ -12,21 +12,40 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Shared Codex OAuth integration primitives.
+//!
+//! This crate centralizes all provider-specific OAuth behavior:
+//! - OAuth URL construction and PKCE helpers
+//! - Authorization-code and refresh-token exchanges
+//! - Token persistence in keyring
+//! - Token-expiry/refresh policy
+//!
+//! Callers in other layers should keep only orchestration logic.
+//! For example:
+//! - `backend-admin` should map HTTP requests/responses and call this crate.
+//! - `workers` should load/refresh/persist tokens through this crate.
+
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rara_keyring_store::{DefaultKeyringStore, KeyringStore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+/// OpenAI authorization endpoint for Codex OAuth.
 pub const CODEX_AUTH_ENDPOINT: &str = "https://auth.openai.com/oauth/authorize";
+/// OpenAI token endpoint for Codex OAuth.
 pub const CODEX_TOKEN_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
+/// Public client id used by this application for Codex OAuth.
 pub const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+/// Requested OAuth scopes for Codex provider integration.
 pub const CODEX_SCOPES: &str = "openid profile email offline_access";
+/// Environment variable used to build callback URLs.
 pub const PUBLIC_BASE_URL_ENV: &str = "RARA_PUBLIC_BASE_URL";
 const REFRESH_SKEW_SECS: u64 = 60;
 const CODEX_KEYRING_SERVICE: &str = "rara-ai-codex";
 const CODEX_TOKEN_ACCOUNT: &str = "tokens";
 const CODEX_PENDING_ACCOUNT: &str = "oauth-pending";
 
+/// Persisted Codex credentials (keyring-backed).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredCodexTokens {
     pub access_token:    String,
@@ -35,6 +54,7 @@ pub struct StoredCodexTokens {
     pub expires_at_unix: Option<u64>,
 }
 
+/// Temporary OAuth state stored between `/start` and `/callback`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingCodexOAuth {
     pub state:         String,
@@ -49,6 +69,9 @@ struct TokenResponse {
     expires_in:    Option<u64>,
 }
 
+/// Build the external OAuth callback URI.
+///
+/// Defaults to `http://localhost:8000` when `RARA_PUBLIC_BASE_URL` is unset.
 pub fn callback_uri() -> String {
     let base =
         std::env::var(PUBLIC_BASE_URL_ENV).unwrap_or_else(|_| "http://localhost:8000".into());
@@ -58,6 +81,7 @@ pub fn callback_uri() -> String {
     )
 }
 
+/// Construct the full authorization URL for redirecting the user.
 pub fn build_auth_url(
     redirect_uri: &str,
     state: &str,
@@ -75,6 +99,7 @@ pub fn build_auth_url(
     Ok(url.into())
 }
 
+/// Load persisted Codex tokens from keyring.
 pub fn load_tokens() -> Result<Option<StoredCodexTokens>, String> {
     let store = DefaultKeyringStore;
     let Some(raw) = store
@@ -88,6 +113,7 @@ pub fn load_tokens() -> Result<Option<StoredCodexTokens>, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Save Codex tokens to keyring.
 pub fn save_tokens(tokens: &StoredCodexTokens) -> Result<(), String> {
     let store = DefaultKeyringStore;
     let raw = serde_json::to_string(tokens).map_err(|e| e.to_string())?;
@@ -96,6 +122,7 @@ pub fn save_tokens(tokens: &StoredCodexTokens) -> Result<(), String> {
         .map_err(|e| format!("keyring save failed: {e}"))
 }
 
+/// Delete persisted Codex tokens from keyring.
 pub fn clear_tokens() -> Result<(), String> {
     let store = DefaultKeyringStore;
     let _ = store
@@ -104,6 +131,7 @@ pub fn clear_tokens() -> Result<(), String> {
     Ok(())
 }
 
+/// Load pending OAuth state from keyring.
 pub fn load_pending_oauth() -> Result<Option<PendingCodexOAuth>, String> {
     let store = DefaultKeyringStore;
     let Some(raw) = store
@@ -117,6 +145,7 @@ pub fn load_pending_oauth() -> Result<Option<PendingCodexOAuth>, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Save pending OAuth state to keyring.
 pub fn save_pending_oauth(pending: &PendingCodexOAuth) -> Result<(), String> {
     let store = DefaultKeyringStore;
     let raw = serde_json::to_string(pending).map_err(|e| e.to_string())?;
@@ -125,6 +154,7 @@ pub fn save_pending_oauth(pending: &PendingCodexOAuth) -> Result<(), String> {
         .map_err(|e| format!("keyring save failed: {e}"))
 }
 
+/// Clear pending OAuth state from keyring.
 pub fn clear_pending_oauth() -> Result<(), String> {
     let store = DefaultKeyringStore;
     let _ = store
@@ -133,8 +163,10 @@ pub fn clear_pending_oauth() -> Result<(), String> {
     Ok(())
 }
 
+/// Generate a cryptographically random OAuth state value.
 pub fn generate_nonce() -> String { uuid::Uuid::new_v4().simple().to_string() }
 
+/// Generate a PKCE code verifier.
 pub fn generate_code_verifier() -> String {
     format!(
         "{}{}",
@@ -143,11 +175,13 @@ pub fn generate_code_verifier() -> String {
     )
 }
 
+/// Compute a PKCE code challenge from verifier (S256).
 pub fn generate_code_challenge(verifier: &str) -> String {
     let digest = Sha256::digest(verifier.as_bytes());
     URL_SAFE_NO_PAD.encode(digest)
 }
 
+/// Validate callback state against expected state.
 pub fn validate_state(expected: &str, actual: Option<&str>) -> Result<(), String> {
     let Some(actual) = actual else {
         return Err("missing oauth state".to_owned());
@@ -161,16 +195,19 @@ pub fn validate_state(expected: &str, actual: Option<&str>) -> Result<(), String
     Ok(())
 }
 
+/// Current unix timestamp in seconds.
 pub fn now_unix() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
 }
 
+/// Convert `expires_in` value into absolute unix expiry.
 pub fn compute_expires_at_unix(now_unix: u64, expires_in_secs: Option<u64>) -> Option<u64> {
     expires_in_secs.map(|v| now_unix.saturating_add(v))
 }
 
+/// Whether token is close enough to expiry that refresh should be attempted.
 pub fn should_refresh_token(expires_at_unix: Option<u64>) -> bool {
     let Some(expires_at_unix) = expires_at_unix else {
         return false;
@@ -178,6 +215,7 @@ pub fn should_refresh_token(expires_at_unix: Option<u64>) -> bool {
     now_unix().saturating_add(REFRESH_SKEW_SECS) >= expires_at_unix
 }
 
+/// Exchange OAuth authorization code for tokens.
 pub async fn exchange_authorization_code(
     code: &str,
     code_verifier: &str,
@@ -199,6 +237,10 @@ pub async fn exchange_authorization_code(
     })
 }
 
+/// Refresh access token using a stored refresh token.
+///
+/// If token endpoint omits `refresh_token` or `id_token`, previous values are
+/// preserved.
 pub async fn refresh_tokens(current: &StoredCodexTokens) -> Result<StoredCodexTokens, String> {
     let refresh_token = current
         .refresh_token

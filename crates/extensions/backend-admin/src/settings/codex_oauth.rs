@@ -26,6 +26,8 @@ use crate::settings::SettingsSvc;
 const CODEX_SUCCESS_REDIRECT: &str = "/settings?section=providers&codex_oauth=success";
 const CODEX_ERROR_REDIRECT: &str = "/settings?section=providers&codex_oauth=error";
 
+// Note: this module intentionally stays thin.
+// Provider-specific OAuth/token logic lives in `rara-codex-oauth`.
 pub(super) fn routes() -> OpenApiRouter<SettingsSvc> {
     OpenApiRouter::new().nest(
         "/api/v1/ai/codex/oauth",
@@ -98,6 +100,7 @@ async fn oauth_callback(
         return Redirect::to(CODEX_ERROR_REDIRECT);
     };
 
+    // Perform the provider token exchange in integration layer, then persist.
     let tokens =
         match exchange_authorization_code(code, &pending.code_verifier, &callback_uri()).await {
             Ok(tokens) => tokens,
