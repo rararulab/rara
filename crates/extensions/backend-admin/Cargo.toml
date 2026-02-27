@@ -8,7 +8,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-agent-core = { workspace = true }
+rara-kernel = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }

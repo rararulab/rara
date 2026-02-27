@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use agent_core::{
-    context::AgentContext,
+use rara_kernel::{
+    agent_context::AgentContext,
     runner::UserContent,
 };
 use rara_sessions::types::ChatMessage;
@@ -54,7 +54,7 @@ impl ProactiveAgent {
         let tools = self.ctx.tools().clone();
         let chat_history = history.iter().map(to_chat_message).collect();
 
-        let runner = agent_core::runner::AgentRunner::builder()
+        let runner = rara_kernel::runner::AgentRunner::builder()
             .llm_provider(self.ctx.llm_provider().clone())
             .provider_hint(provider_hint.unwrap_or_default())
             .model_name(model)

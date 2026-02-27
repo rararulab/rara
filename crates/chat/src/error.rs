@@ -61,8 +61,8 @@ impl From<rara_sessions::error::SessionError> for ChatError {
 }
 
 /// Convert an agent-runner error into a [`ChatError::AgentError`].
-impl From<agent_core::err::Error> for ChatError {
-    fn from(err: agent_core::err::Error) -> Self {
+impl From<rara_kernel::error::KernelError> for ChatError {
+    fn from(err: rara_kernel::error::KernelError) -> Self {
         Self::AgentError {
             message: err.to_string(),
         }

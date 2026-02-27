@@ -46,7 +46,7 @@ pub struct AppState {
     pub contact_repo:        rara_telegram_bot::contacts::repository::ContactRepository,
 
     // -- LLM provider --
-    pub llm_provider: agent_core::provider::LlmProviderLoaderRef,
+    pub llm_provider: rara_kernel::provider::LlmProviderLoaderRef,
 
     // -- infra --
     pub object_store: Operator,
@@ -64,7 +64,7 @@ pub struct AppState {
     pub mcp_manager: rara_mcp::manager::mgr::McpManager,
 
     // -- agent context --
-    pub agent_ctx: std::sync::Arc<dyn agent_core::context::AgentContext>,
+    pub agent_ctx: std::sync::Arc<dyn rara_kernel::agent_context::AgentContext>,
 
     // -- pipeline --
     pub pipeline_service: rara_backend_admin::pipeline::service::PipelineService,
@@ -76,7 +76,7 @@ pub struct AppState {
     pub dispatcher: Arc<rara_agents::dispatcher::AgentDispatcher>,
 
     // -- prompt repo --
-    pub prompt_repo: Arc<dyn agent_core::prompt::PromptRepo>,
+    pub prompt_repo: Arc<dyn rara_kernel::prompt::PromptRepo>,
 
     // -- worker coordination --
     pub proactive_notify: Arc<RwLock<Option<IntervalOrNotifyHandle>>>,
@@ -105,14 +105,14 @@ impl AppState {
 
         // -- prompt repo -------------------------------------------------------
 
-        let prompt_repo: Arc<dyn agent_core::prompt::PromptRepo> = Arc::new(
-            agent_core::prompt::BuiltinPromptRepo::new(agent_core::prompt::all_builtin_prompts()),
+        let prompt_repo: Arc<dyn rara_kernel::prompt::PromptRepo> = Arc::new(
+            rara_kernel::prompt::BuiltinPromptRepo::new(rara_kernel::prompt::all_builtin_prompts()),
         );
         info!("Prompt repository initialized");
 
         // -- LLM provider ----------------------------------------------------
 
-        let llm_provider: agent_core::provider::LlmProviderLoaderRef =
+        let llm_provider: rara_kernel::provider::LlmProviderLoaderRef =
             Arc::new(SettingsLlmProviderLoader::new(settings_svc.clone()));
 
         // -- AI task agents --------------------------------------------------
@@ -151,7 +151,7 @@ impl AppState {
             rara_telegram_bot::contacts::repository::ContactRepository::new(pool.clone());
         let contact_lookup: Arc<dyn tool_core::contact_lookup::ContactLookup> =
             Arc::new(contact_repo.clone());
-        let mut tool_registry = agent_core::tool_registry::ToolRegistry::new();
+        let mut tool_registry = rara_kernel::tool::ToolRegistry::new();
         for tool in tool_core::default_primitives(tool_core::PrimitiveDeps {
             pool:                   pool.clone(),
             notify_client:          notify_client.clone(),
@@ -306,14 +306,14 @@ impl AppState {
 
         // Load agent definitions: bundled first, then user-defined (override).
         let agent_defs = {
-            let mut registry = agent_core::subagent::AgentDefinitionRegistry::new();
+            let mut registry = rara_kernel::subagent::AgentDefinitionRegistry::new();
             // Bundled agent definitions (embedded at compile time)
-            for def in agent_core::subagent::all_bundled_agents() {
+            for def in rara_kernel::subagent::all_bundled_agents() {
                 registry.register(def);
             }
             // User-defined agent definitions (override bundled)
             let user_dir = rara_paths::data_dir().join("agents");
-            if let Ok(user) = agent_core::subagent::AgentDefinitionRegistry::load_dir(&user_dir) {
+            if let Ok(user) = rara_kernel::subagent::AgentDefinitionRegistry::load_dir(&user_dir) {
                 for def in user.list() {
                     registry.register(def.clone());
                 }
@@ -331,7 +331,7 @@ impl AppState {
             s.ai.model_for_key("chat")
         };
 
-        tool_registry.register_service(Arc::new(agent_core::subagent::SubagentTool::new(
+        tool_registry.register_service(Arc::new(rara_kernel::subagent::SubagentTool::new(
             llm_provider.clone(),
             agent_defs,
             subagent_parent_tools,
@@ -361,7 +361,7 @@ impl AppState {
 
         let tools = Arc::new(tool_registry);
 
-        let agent_ctx: Arc<dyn agent_core::context::AgentContext> = Arc::new(
+        let agent_ctx: Arc<dyn rara_kernel::agent_context::AgentContext> = Arc::new(
             rara_agents::orchestrator::AgentContextImpl::new(
                 llm_provider.clone(),
                 tools.clone(),
@@ -511,7 +511,7 @@ impl AppState {
         api.merge(pipeline_api);
 
         // Model admin routes (OpenAPI).
-        let model_repo: std::sync::Arc<dyn agent_core::model_repo::ModelRepo> = std::sync::Arc::new(
+        let model_repo: std::sync::Arc<dyn rara_kernel::model_repo::ModelRepo> = std::sync::Arc::new(
             rara_backend_admin::models::SettingsModelRepo::new(self.settings_svc.clone()),
         );
         merge_openapi_router(
@@ -576,12 +576,12 @@ fn merge_openapi_router(
 // SettingsLlmProviderLoader
 // ---------------------------------------------------------------------------
 
-/// [`LlmProviderLoader`](agent_core::provider::LlmProviderLoader)
+/// [`LlmProviderLoader`](rara_kernel::provider::LlmProviderLoader)
 /// implementation that reads the API key from
 /// [`SettingsSvc`](rara_backend_admin::settings::SettingsSvc) runtime settings
 /// rather than from environment variables.
 ///
-/// A fresh [`OpenAiProvider`](agent_core::provider::OpenAiProvider) is created
+/// A fresh [`OpenAiProvider`](rara_kernel::provider::OpenAiProvider) is created
 /// on every call so that runtime API-key changes take effect immediately.
 struct SettingsLlmProviderLoader {
     settings:           rara_backend_admin::settings::SettingsSvc,
@@ -694,7 +694,7 @@ impl rara_kernel::provider::LlmProviderLoader for SettingsLlmProviderLoader {
                 let config = async_openai::config::OpenAIConfig::new()
                     .with_api_base(format!("{}/v1", base_url))
                     .with_api_key("ollama");
-                Ok(Arc::new(agent_core::provider::OpenAiProvider::with_config(
+                Ok(Arc::new(rara_kernel::provider::OpenAiProvider::with_config(
                     config,
                 )))
             }
@@ -727,7 +727,7 @@ impl rara_kernel::provider::LlmProviderLoader for SettingsLlmProviderLoader {
 
                 let config =
                     async_openai::config::OpenAIConfig::new().with_api_key(tokens.access_token);
-                Ok(Arc::new(agent_core::provider::OpenAiProvider::with_config(
+                Ok(Arc::new(rara_kernel::provider::OpenAiProvider::with_config(
                     config,
                 )))
             }
@@ -737,7 +737,7 @@ impl rara_kernel::provider::LlmProviderLoader for SettingsLlmProviderLoader {
                     .openrouter_api_key
                     .clone()
                     .ok_or(rara_kernel::error::ProviderNotConfiguredSnafu.build())?;
-                Ok(Arc::new(agent_core::provider::OpenAiProvider::new(api_key)))
+                Ok(Arc::new(rara_kernel::provider::OpenAiProvider::new(api_key)))
             }
         }
     }

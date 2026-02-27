@@ -27,7 +27,7 @@
 
 use std::sync::Arc;
 
-use agent_core::prompt::PromptRepo;
+use rara_kernel::prompt::PromptRepo;
 use axum::{
     Json,
     extract::{Path, State},

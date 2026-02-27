@@ -21,7 +21,7 @@
 
 use std::sync::Arc;
 
-use agent_core::{runner::UserContent, tool_registry::ToolRegistry};
+use rara_kernel::{runner::UserContent, tool::ToolRegistry};
 use chrono::Utc;
 use rara_agents::builtin::chat::ChatAgent;
 use rara_domain_shared::settings::model::Settings;

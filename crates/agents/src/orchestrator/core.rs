@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use agent_core::{
-    context::{
-        self, CompletionFeatures, PromptFeatures, SessionFeatures,
+use rara_kernel::{
+    agent_context::{
+        self as context, CompletionFeatures, PromptFeatures, SessionFeatures,
         SettingsFeatures, ToolFeatures,
     },
-    model::LlmProviderLoaderRef,
+    provider::LlmProviderLoaderRef,
     runner::{AgentRunner, MAX_ITERATIONS, UserContent},
-    tool_registry::ToolRegistry,
+    tool::ToolRegistry,
 };
 use async_openai::types::chat::ChatCompletionRequestMessage;
 use async_trait::async_trait;
@@ -23,7 +23,7 @@ use tracing::info;
 
 
 // ---------------------------------------------------------------------------
-// Conversions between agent_core::context types and rara_memory types
+// Conversions between rara_kernel::context types and rara_memory types
 // ---------------------------------------------------------------------------
 
 fn to_mem_event_kind(e: context::EventKind) -> mem_recall::EventKind {
@@ -75,7 +75,7 @@ pub struct AgentContextImpl {
     memory_manager: Option<Arc<MemoryManager>>,
     recall_engine:  Option<Arc<RecallStrategyEngine>>,
     settings_rx:    watch::Receiver<Settings>,
-    prompt_repo:    Arc<dyn agent_core::prompt::PromptRepo>,
+    prompt_repo:    Arc<dyn rara_kernel::prompt::PromptRepo>,
 }
 
 impl AgentContextImpl {
@@ -88,7 +88,7 @@ impl AgentContextImpl {
         memory_manager: Option<Arc<MemoryManager>>,
         recall_engine: Option<Arc<RecallStrategyEngine>>,
         settings_rx: watch::Receiver<Settings>,
-        prompt_repo: Arc<dyn agent_core::prompt::PromptRepo>,
+        prompt_repo: Arc<dyn rara_kernel::prompt::PromptRepo>,
     ) -> Self {
         Self {
             llm_provider,
@@ -205,7 +205,7 @@ impl CompletionFeatures for AgentContextImpl {
         // Run the recall engine if available, otherwise fall back to legacy
         // hardcoded behavior.
         if let Some(ctx) = recall_ctx {
-            let payloads = agent_core::context::AgentContext::run_recall_engine(self, ctx).await;
+            let payloads = rara_kernel::agent_context::AgentContext::run_recall_engine(self, ctx).await;
             for payload in &payloads {
                 if matches!(payload.target, context::InjectTarget::SystemPrompt) {
                     system_prompt.push_str(&format!(
@@ -292,7 +292,7 @@ impl CompletionFeatures for AgentContextImpl {
         &self,
         history_text: &str,
         model: &str,
-    ) -> agent_core::err::Result<String> {
+    ) -> rara_kernel::error::Result<String> {
         let summary_prompt = format!(
             "Summarize the following conversation history into a concise summary. Preserve key \
              facts, decisions, user preferences, and action items. Keep it under 500 words. \
@@ -366,7 +366,7 @@ impl ToolFeatures for AgentContextImpl {
 // ---------------------------------------------------------------------------
 
 impl PromptFeatures for AgentContextImpl {
-    fn prompt_repo(&self) -> &Arc<dyn agent_core::prompt::PromptRepo> { &self.prompt_repo }
+    fn prompt_repo(&self) -> &Arc<dyn rara_kernel::prompt::PromptRepo> { &self.prompt_repo }
 }
 
 // ---------------------------------------------------------------------------
@@ -374,8 +374,8 @@ impl PromptFeatures for AgentContextImpl {
 // ---------------------------------------------------------------------------
 
 #[async_trait]
-impl agent_core::context::AgentContext for AgentContextImpl {
-    fn memory(&self) -> Option<Arc<dyn agent_core::memory::Memory>> {
+impl rara_kernel::agent_context::AgentContext for AgentContextImpl {
+    fn memory(&self) -> Option<Arc<dyn rara_kernel::memory::Memory>> {
         // TODO: wire up once MemoryManager implements the Memory trait
         None
     }
@@ -493,6 +493,6 @@ impl std::fmt::Debug for AgentContextImpl {
 
 // Ensure AgentContextImpl satisfies AgentContext (compile-time check).
 const _: () = {
-    fn _assert_agent_context<T: agent_core::context::AgentContext>() {}
+    fn _assert_agent_context<T: rara_kernel::agent_context::AgentContext>() {}
     fn _check() { _assert_agent_context::<AgentContextImpl>() }
 };

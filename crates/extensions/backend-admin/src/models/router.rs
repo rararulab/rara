@@ -27,7 +27,7 @@
 
 use std::sync::Arc;
 
-use agent_core::model_repo::ModelRepo;
+use rara_kernel::model_repo::ModelRepo;
 use axum::{
     Json,
     extract::{Path, State},

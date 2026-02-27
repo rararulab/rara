@@ -26,10 +26,10 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use agent_core::{
-    model::LlmProviderLoaderRef,
+use rara_kernel::{
+    provider::LlmProviderLoaderRef,
     runner::{AgentRunner, RunnerEvent, UserContent},
-    tool_registry::ToolRegistry,
+    tool::ToolRegistry,
 };
 use axum::http::StatusCode;
 use rara_domain_shared::notify::types::{NotificationPriority, SendTelegramNotificationRequest};
@@ -105,7 +105,7 @@ pub struct PipelineService {
     notify_client:  rara_domain_shared::notify::client::NotifyClient,
     composio_auth:  Arc<dyn rara_composio::ComposioAuthProvider>,
     mcp_manager:    rara_mcp::manager::mgr::McpManager,
-    prompt_repo:    Arc<dyn agent_core::prompt::PromptRepo>,
+    prompt_repo:    Arc<dyn rara_kernel::prompt::PromptRepo>,
     contact_lookup: Arc<dyn tool_core::contact_lookup::ContactLookup>,
 
     /// Whether a pipeline run is currently in progress.
@@ -131,7 +131,7 @@ impl PipelineService {
         notify_client: rara_domain_shared::notify::client::NotifyClient,
         composio_auth: Arc<dyn rara_composio::ComposioAuthProvider>,
         mcp_manager: rara_mcp::manager::mgr::McpManager,
-        prompt_repo: Arc<dyn agent_core::prompt::PromptRepo>,
+        prompt_repo: Arc<dyn rara_kernel::prompt::PromptRepo>,
         contact_lookup: Arc<dyn tool_core::contact_lookup::ContactLookup>,
     ) -> Self {
         let (broadcast_tx, _) = tokio::sync::broadcast::channel(256);

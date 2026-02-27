@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
-use agent_core::{
-    context::{self, AgentContext, estimate_tokens},
+use rara_kernel::{
+    agent_context::{self as context, AgentContext, estimate_tokens},
     runner::{AgentRunner, UserContent},
-    tool_registry::ToolRegistry,
+    tool::ToolRegistry,
 };
 use rara_sessions::types::ChatMessage;
 

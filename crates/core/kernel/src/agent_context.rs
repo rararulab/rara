@@ -10,12 +10,12 @@ use async_trait::async_trait;
 use base::shared_string::SharedString;
 
 use crate::{
-    err,
+    error,
     memory::Memory,
-    model::LlmProviderLoaderRef,
     prompt::PromptRepo,
+    provider::LlmProviderLoaderRef,
     runner::{AgentRunner, UserContent},
-    tool_registry::ToolRegistry,
+    tool::ToolRegistry,
 };
 
 // ---------------------------------------------------------------------------
@@ -88,7 +88,7 @@ pub trait CompletionFeatures: Send + Sync {
     ) -> AgentRunner;
 
     /// Summarize conversation history text into a compact form.
-    async fn summarize_history(&self, history_text: &str, model: &str) -> err::Result<String>;
+    async fn summarize_history(&self, history_text: &str, model: &str) -> error::Result<String>;
 }
 
 /// Static and dynamic tool access.

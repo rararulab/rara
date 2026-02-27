@@ -3,7 +3,7 @@ use std::{
     sync::Arc,
 };
 
-use agent_core::context::AgentContext;
+use rara_kernel::agent_context::AgentContext;
 use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use tracing::{info, warn};
 

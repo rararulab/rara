@@ -37,7 +37,7 @@ pub mod resume_optimizer;
 
 use std::sync::Arc;
 
-use agent_core::{provider::LlmProviderLoaderRef, tool_registry::ToolRegistry};
+use rara_kernel::{provider::LlmProviderLoaderRef, tool::ToolRegistry};
 use rara_domain_shared::settings::model::Settings;
 use tokio::sync::watch;
 
@@ -61,7 +61,7 @@ use crate::builtin::tasks::{
 pub struct TaskAgentService {
     settings_rx:  watch::Receiver<Settings>,
     llm_provider: LlmProviderLoaderRef,
-    prompt_repo:  Arc<dyn agent_core::prompt::PromptRepo>,
+    prompt_repo:  Arc<dyn rara_kernel::prompt::PromptRepo>,
     /// Optional tool registry for analysis agents. When set, analysis agents
     /// (job_fit, jd_parser, jd_analyzer, resume_analyzer) are created with
     /// tool-calling capability.
@@ -73,7 +73,7 @@ impl TaskAgentService {
     pub fn new(
         settings_rx: watch::Receiver<Settings>,
         llm_provider: LlmProviderLoaderRef,
-        prompt_repo: Arc<dyn agent_core::prompt::PromptRepo>,
+        prompt_repo: Arc<dyn rara_kernel::prompt::PromptRepo>,
     ) -> Self {
         Self {
             settings_rx,
@@ -98,7 +98,7 @@ impl TaskAgentService {
     async fn provider_and_model(
         &self,
         key: &str,
-    ) -> Result<(Arc<dyn agent_core::provider::LlmProvider>, String), TaskAgentError> {
+    ) -> Result<(Arc<dyn rara_kernel::provider::LlmProvider>, String), TaskAgentError> {
         let current = self.settings_rx.borrow().clone();
         let model = current.ai.model_for_key(key);
 

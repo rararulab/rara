@@ -30,9 +30,10 @@ use tokio::sync::mpsc;
 use tracing::{error, info, trace, warn};
 
 use crate::{
-    err::prelude::*,
-    model::{LlmProviderLoaderRef, ModelCapabilities},
-    tool_registry::ToolRegistry,
+    error::{is_fallback_eligible, is_retryable_provider_error, KernelError, Result},
+    model::ModelCapabilities,
+    provider::LlmProviderLoaderRef,
+    tool::ToolRegistry,
 };
 
 /// Maximum number of tool-call loop iterations before giving up.
@@ -275,7 +276,7 @@ impl AgentRunner {
                 ChatCompletionRequestSystemMessageArgs::default()
                     .content(self.system_prompt.as_ref())
                     .build()
-                    .map_err(|e| Error::Other {
+                    .map_err(|e| KernelError::Other {
                         message: format!("failed to build system message: {e}").into(),
                     })?
                     .into(),
@@ -327,15 +328,15 @@ impl AgentRunner {
                         request_builder.parallel_tool_calls(true);
                     }
 
-                    let request = request_builder.build().map_err(|e| rara_kernel::KernelError::Other {
+                    let request = request_builder.build().map_err(|e| KernelError::Other {
                         message: format!("failed to build request: {e}").into(),
                     })?;
                     provider.chat_completion(request).await
                 })
                 .retry(ExponentialBuilder::default().with_max_times(2))
                 .sleep(tokio::time::sleep)
-                .when(rara_kernel::error::is_retryable_provider_error)
-                .notify(|err: &rara_kernel::KernelError, dur| {
+                .when(is_retryable_provider_error)
+                .notify(|err: &KernelError, dur| {
                     error!(
                         iteration,
                         error = %err,
@@ -378,7 +379,7 @@ impl AgentRunner {
             );
 
             let Some(choice) = response.choices.first() else {
-                return Err(Error::Other {
+                return Err(KernelError::Other {
                     message: "LLM returned no choices".into(),
                 });
             };
@@ -421,7 +422,7 @@ impl AgentRunner {
                 .content(assistant_text.as_str())
                 .tool_calls(raw_tool_calls.to_vec())
                 .build()
-                .map_err(|e| Error::Other {
+                .map_err(|e| KernelError::Other {
                     message: format!("failed to build assistant tool-call message: {e}").into(),
                 })?;
             messages.push(assistant_msg.into());
@@ -518,7 +519,7 @@ impl AgentRunner {
         // `last_response` is `None` only when `max_iterations == 0`, which is
         // a mis-configuration; in that case we still return a hard error.
         let Some(partial_response) = last_response else {
-            return Err(Error::Other {
+            return Err(KernelError::Other {
                 message: "agent loop exceeded max iterations (0 configured)".into(),
             });
         };
@@ -601,7 +602,7 @@ impl AgentRunner {
                 ChatCompletionRequestSystemMessageArgs::default()
                     .content(self.system_prompt.as_ref())
                     .build()
-                    .map_err(|e| Error::Other {
+                    .map_err(|e| KernelError::Other {
                         message: format!("failed to build system message: {e}").into(),
                     })?
                     .into(),
@@ -649,7 +650,7 @@ impl AgentRunner {
                 request_builder.parallel_tool_calls(true);
             }
 
-            let request = request_builder.build().map_err(|e| Error::Other {
+            let request = request_builder.build().map_err(|e| KernelError::Other {
                 message: format!("failed to build streaming request: {e}").into(),
             })?;
 
@@ -673,7 +674,7 @@ impl AgentRunner {
                             error = %e,
                             "streaming chunk error"
                         );
-                        return Err(Error::Provider {
+                        return Err(KernelError::Provider {
                             message: format!(
                                 "Model \"{model}\" returned an error during streaming: {e}"
                             )
@@ -788,7 +789,7 @@ impl AgentRunner {
                 .content(accumulated_text.clone())
                 .tool_calls(openai_tool_calls)
                 .build()
-                .map_err(|e| Error::Other {
+                .map_err(|e| KernelError::Other {
                     message: format!("failed to build assistant message: {e}").into(),
                 })?;
             messages.push(assistant_msg.into());
@@ -882,7 +883,7 @@ fn build_user_message(content: &UserContent) -> Result<ChatCompletionRequestMess
             let msg = ChatCompletionRequestUserMessageArgs::default()
                 .content(text.as_str())
                 .build()
-                .map_err(|e| Error::Other {
+                .map_err(|e| KernelError::Other {
                     message: format!("failed to build user message: {e}").into(),
                 })?;
             Ok(msg.into())
@@ -902,7 +903,7 @@ fn build_user_message(content: &UserContent) -> Result<ChatCompletionRequestMess
                 let image_url = ImageUrlArgs::default()
                     .url(url.as_str())
                     .build()
-                    .map_err(|e| Error::Other {
+                    .map_err(|e| KernelError::Other {
                         message: format!("failed to build image URL: {e}").into(),
                     })?;
                 parts.push(ChatCompletionRequestUserMessageContentPart::ImageUrl(
@@ -913,7 +914,7 @@ fn build_user_message(content: &UserContent) -> Result<ChatCompletionRequestMess
             let msg = ChatCompletionRequestUserMessageArgs::default()
                 .content(parts)
                 .build()
-                .map_err(|e| Error::Other {
+                .map_err(|e| KernelError::Other {
                     message: format!("failed to build multimodal user message: {e}").into(),
                 })?;
             Ok(msg.into())
@@ -930,7 +931,7 @@ fn build_tool_response_message(
         .tool_call_id(tool_call_id)
         .content(content)
         .build()
-        .map_err(|e| Error::Other {
+        .map_err(|e| KernelError::Other {
             message: format!("failed to build tool response message: {e}").into(),
         })?;
     Ok(msg.into())
@@ -944,13 +945,13 @@ mod tests {
     use test_case::test_case;
 
     use super::*;
-    use crate::model::EnvLlmProviderLoader;
+    use crate::provider::EnvLlmProviderLoader;
 
     /// Simple echo tool for testing.
     struct EchoTool;
 
     #[async_trait]
-    impl crate::tool_registry::AgentTool for EchoTool {
+    impl crate::tool::AgentTool for EchoTool {
         fn name(&self) -> &str { "echo_tool" }
 
         fn description(&self) -> &str { "Echoes input" }

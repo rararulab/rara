@@ -46,7 +46,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use super::{definition::AgentDefinitionRegistry, executor::SubagentExecutor};
-use crate::{model::LlmProviderLoaderRef, tool_registry::ToolRegistry};
+use crate::{provider::LlmProviderLoaderRef, tool::ToolRegistry};
 
 /// Hard upper limit on the number of parallel sub-agent tasks in a single
 /// invocation. Prevents the LLM from spawning an unbounded number of

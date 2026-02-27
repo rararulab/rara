@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use agent_core::{provider::LlmProvider, tool_registry::ToolRegistry};
+use rara_kernel::{provider::LlmProvider, tool::ToolRegistry};
 
 use crate::builtin::tasks::{
     completion::{DEFAULT_TASK_TOOL_ITERATIONS, run_completion, run_with_tools},
@@ -30,7 +30,7 @@ use crate::builtin::tasks::{
 pub struct JdParserAgent {
     provider:       Arc<dyn LlmProvider>,
     model:          String,
-    prompt_repo:    Arc<dyn agent_core::prompt::PromptRepo>,
+    prompt_repo:    Arc<dyn rara_kernel::prompt::PromptRepo>,
     tools:          Option<Arc<ToolRegistry>>,
     max_iterations: usize,
 }
@@ -39,7 +39,7 @@ impl JdParserAgent {
     pub(crate) fn new(
         provider: Arc<dyn LlmProvider>,
         model: String,
-        prompt_repo: Arc<dyn agent_core::prompt::PromptRepo>,
+        prompt_repo: Arc<dyn rara_kernel::prompt::PromptRepo>,
     ) -> Self {
         Self {
             provider,

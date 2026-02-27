@@ -16,7 +16,7 @@
 //!
 //! [`ChatStreamEvent`] is a domain-level representation of streaming events
 //! emitted during a chat turn. It is a 1:1 mapping from
-//! [`agent_core::runner::RunnerEvent`] with tool-call argument details
+//! [`rara_kernel::runner::RunnerEvent`] with tool-call argument details
 //! stripped (to keep payloads small).
 
 use serde::{Deserialize, Serialize};
@@ -67,9 +67,9 @@ impl ChatStreamEvent {
     }
 }
 
-impl From<agent_core::runner::RunnerEvent> for ChatStreamEvent {
-    fn from(event: agent_core::runner::RunnerEvent) -> Self {
-        use agent_core::runner::RunnerEvent;
+impl From<rara_kernel::runner::RunnerEvent> for ChatStreamEvent {
+    fn from(event: rara_kernel::runner::RunnerEvent) -> Self {
+        use rara_kernel::runner::RunnerEvent;
         match event {
             RunnerEvent::TextDelta(text) => Self::TextDelta { text },
             RunnerEvent::ReasoningDelta(text) => Self::ReasoningDelta { text },

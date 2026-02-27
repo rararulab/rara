@@ -7,7 +7,7 @@ pub mod types;
 
 use std::sync::Arc;
 
-use agent_core::tool_registry::ToolRegistry;
+use rara_kernel::tool::ToolRegistry;
 pub use router::routes;
 use service::PipelineService;
 

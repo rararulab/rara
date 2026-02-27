@@ -22,9 +22,9 @@ use tracing::{info, warn};
 
 use super::definition::{AgentDefinition, AgentDefinitionRegistry};
 use crate::{
-    model::LlmProviderLoaderRef,
+    provider::LlmProviderLoaderRef,
     runner::{AgentRunner, UserContent},
-    tool_registry::ToolRegistry,
+    tool::ToolRegistry,
 };
 
 /// Structured result from running a single sub-agent.

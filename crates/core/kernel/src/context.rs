@@ -34,7 +34,7 @@ use crate::{
 /// Contains identity information, references to all 7 kernel components, and
 /// per-agent configuration. Created by [`Kernel::create_context`] and passed
 /// to the execution loop.
-pub struct AgentContext {
+pub struct RunContext {
     // -- Identity --
     pub agent_id:   Uuid,
     pub session_id: Uuid,

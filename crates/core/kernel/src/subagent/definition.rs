@@ -31,7 +31,7 @@ use std::{collections::HashMap, path::Path};
 use serde::Deserialize;
 use tracing::warn;
 
-use crate::err::prelude::*;
+use crate::error::{KernelError, Result};
 
 /// Internal deserialization target for the YAML frontmatter section.
 /// All fields except `name` are optional with serde defaults.
@@ -96,7 +96,7 @@ impl AgentDefinition {
     pub fn parse(content: &str) -> Result<Self> {
         let (frontmatter, body) = split_frontmatter(content)?;
         let meta: AgentFrontmatter =
-            serde_yaml::from_str(&frontmatter).map_err(|e| Error::Other {
+            serde_yaml::from_str(&frontmatter).map_err(|e| KernelError::Other {
                 message: format!("invalid agent definition frontmatter: {e}").into(),
             })?;
         Ok(Self {
@@ -146,14 +146,14 @@ impl AgentDefinitionRegistry {
         if !dir.is_dir() {
             return Ok(registry);
         }
-        let entries = std::fs::read_dir(dir).map_err(|e| Error::IO {
+        let entries = std::fs::read_dir(dir).map_err(|e| KernelError::IO {
             source:   e,
             location: snafu::Location::new(file!(), line!(), 0),
         })?;
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().is_some_and(|ext| ext == "md") {
-                let content = std::fs::read_to_string(&path).map_err(|e| Error::IO {
+                let content = std::fs::read_to_string(&path).map_err(|e| KernelError::IO {
                     source:   e,
                     location: snafu::Location::new(file!(), line!(), 0),
                 })?;
@@ -182,12 +182,12 @@ impl AgentDefinitionRegistry {
 fn split_frontmatter(content: &str) -> Result<(String, String)> {
     let trimmed = content.trim_start();
     if !trimmed.starts_with("---") {
-        return Err(Error::Other {
+        return Err(KernelError::Other {
             message: "agent definition missing frontmatter (must start with ---)".into(),
         });
     }
     let after_open = &trimmed[3..];
-    let close_pos = after_open.find("\n---").ok_or_else(|| Error::Other {
+    let close_pos = after_open.find("\n---").ok_or_else(|| KernelError::Other {
         message: "agent definition missing closing --- delimiter".into(),
     })?;
     let frontmatter = after_open[..close_pos].trim().to_string();

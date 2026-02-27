@@ -12,19 +12,29 @@ categories.workspace = true
 description = "Unified agent orchestrator: lifecycle, memory, LLM execution, tool dispatch"
 
 [dependencies]
+anyhow.workspace = true
 async-openai.workspace = true
 async-trait.workspace = true
+backon.workspace = true
 base.workspace = true
+bon.workspace = true
 dashmap = "6"
 futures.workspace = true
 jiff.workspace = true
+opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"] }
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true
 snafu.workspace = true
 tokio.workspace = true
 tool-core.workspace = true
 tracing.workspace = true
+tracing-opentelemetry = "0.32.0"
 uuid.workspace = true
+
+[dev-dependencies]
+common-telemetry.workspace = true
+test-case = "^3"
 
 [lints]
 workspace = true

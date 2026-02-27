@@ -24,7 +24,7 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::{
-    context::AgentContext,
+    context::RunContext,
     error::{KernelError, Result},
     event::{EventBus, KernelEvent},
     guard::{Guard, GuardContext},
@@ -171,7 +171,7 @@ impl Kernel {
 
     async fn run_loop(
         &self,
-        ctx: &AgentContext,
+        ctx: &RunContext,
         mut messages: Vec<ChatMessage>,
     ) -> Result<ChatResponse> {
         let guard_ctx = GuardContext {
@@ -286,8 +286,8 @@ impl Kernel {
 
     // -- Context creation ------------------------------------------------------
 
-    fn create_context(&self, entry: &AgentEntry) -> AgentContext {
-        AgentContext {
+    fn create_context(&self, entry: &AgentEntry) -> RunContext {
+        RunContext {
             agent_id:       entry.id,
             session_id:     entry.session_id,
             user_id:        self.config.user_id,

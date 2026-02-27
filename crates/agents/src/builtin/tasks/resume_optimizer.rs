@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use agent_core::provider::LlmProvider;
+use rara_kernel::provider::LlmProvider;
 
 use crate::builtin::tasks::{completion::run_completion, error::TaskAgentError};
 
@@ -24,14 +24,14 @@ use crate::builtin::tasks::{completion::run_completion, error::TaskAgentError};
 pub struct ResumeOptimizerAgent {
     provider:    Arc<dyn LlmProvider>,
     model:       String,
-    prompt_repo: Arc<dyn agent_core::prompt::PromptRepo>,
+    prompt_repo: Arc<dyn rara_kernel::prompt::PromptRepo>,
 }
 
 impl ResumeOptimizerAgent {
     pub(crate) fn new(
         provider: Arc<dyn LlmProvider>,
         model: String,
-        prompt_repo: Arc<dyn agent_core::prompt::PromptRepo>,
+        prompt_repo: Arc<dyn rara_kernel::prompt::PromptRepo>,
     ) -> Self {
         Self {
             provider,

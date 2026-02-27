@@ -11,7 +11,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-agent-core.workspace = true
+rara-kernel.workspace = true
 async-openai.workspace = true
 base.workspace = true
 async-trait.workspace = true

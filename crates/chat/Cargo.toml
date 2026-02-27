@@ -12,7 +12,7 @@ categories.workspace = true
 description = "Chat domain service — session-based conversations backed by LLM agents"
 
 [dependencies]
-agent-core.workspace = true
+rara-kernel.workspace = true
 async-openai.workspace = true
 async-trait.workspace = true
 axum.workspace = true
