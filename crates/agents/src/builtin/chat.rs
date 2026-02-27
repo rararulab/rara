@@ -3,14 +3,14 @@
 use std::sync::Arc;
 
 use agent_core::{
+    context::{self, AgentContext, estimate_tokens},
     runner::{AgentRunner, UserContent},
     tool_registry::ToolRegistry,
 };
-use rara_memory::recall_engine::{EventKind, RecallContext};
 use rara_sessions::types::ChatMessage;
 
 use super::AgentOutput;
-use crate::orchestrator::{AgentOrchestrator, context::to_chat_message, error::OrchestratorError};
+use crate::orchestrator::{context::to_chat_message, error::OrchestratorError};
 
 /// Effect returned when compaction occurs, so the caller can persist.
 pub struct CompactionEffect {
@@ -22,11 +22,11 @@ pub struct CompactionEffect {
 /// compaction.
 #[derive(Clone)]
 pub struct ChatAgent {
-    orchestrator: AgentOrchestrator,
+    ctx: Arc<dyn AgentContext>,
 }
 
 impl ChatAgent {
-    pub fn new(orchestrator: AgentOrchestrator) -> Self { Self { orchestrator } }
+    pub fn new(ctx: Arc<dyn AgentContext>) -> Self { Self { ctx } }
 
     /// Execute a single chat interaction.
     ///
@@ -102,14 +102,13 @@ impl ChatAgent {
         Ok(ChatAgentStreamSetup {
             runner,
             effective_tools,
-            orchestrator: self.orchestrator.clone(),
+            ctx: self.ctx.clone(),
             compaction,
         })
     }
 
-    /// Return a reference to the orchestrator (for accessors like tools(),
-    /// settings()).
-    pub fn orchestrator(&self) -> &AgentOrchestrator { &self.orchestrator }
+    /// Return a reference to the agent context.
+    pub fn ctx(&self) -> &Arc<dyn AgentContext> { &self.ctx }
 
     /// Common preparation logic shared by [`run`] and [`prepare_streaming`].
     ///
@@ -124,14 +123,24 @@ impl ChatAgent {
         model: &str,
         context_length: usize,
     ) -> Result<PrepareResult, OrchestratorError> {
-        // 1. Check if compaction is needed
+        // 1. Check if compaction is needed (token-based)
+        let history_tokens = estimate_history_tokens(history);
         let (effective_history, compaction) =
-            if self.orchestrator.needs_compaction(history, context_length) {
-                let summary = self.orchestrator.summarize_history(history, model).await?;
+            if self.ctx.needs_compaction(history_tokens, context_length) {
+                let history_text = format_history_as_text(history);
+                let summary_text = self
+                    .ctx
+                    .summarize_history(&history_text, model)
+                    .await
+                    .map_err(|e| OrchestratorError::AgentError {
+                        message: format!("summarization failed: {e}"),
+                    })?;
+                let summary_msg =
+                    ChatMessage::assistant(format!("[Conversation Summary]\n{summary_text}"));
                 let effect = CompactionEffect {
-                    summary: summary.clone(),
+                    summary: summary_msg.clone(),
                 };
-                (vec![summary], Some(effect))
+                (vec![summary_msg], Some(effect))
             } else {
                 (history.to_vec(), None)
             };
@@ -141,15 +150,15 @@ impl ChatAgent {
 
         let mut events = Vec::new();
         if compaction.is_some() {
-            events.push(EventKind::Compaction);
+            events.push(context::EventKind::Compaction);
         }
         if effective_history.len() < 3 {
-            events.push(EventKind::NewSession);
+            events.push(context::EventKind::NewSession);
         }
 
         let summary_text = compaction.as_ref().map(|e| e.summary.content.as_text());
 
-        let recall_ctx = RecallContext {
+        let recall_ctx = context::RecallContext {
             user_text: user_text.to_owned(),
             turn_count: effective_history.len(),
             events,
@@ -160,7 +169,7 @@ impl ChatAgent {
 
         // 3. Build system prompt using the recall engine
         let system_prompt = self
-            .orchestrator
+            .ctx
             .build_chat_system_prompt(
                 base_system_prompt,
                 user_text,
@@ -170,11 +179,11 @@ impl ChatAgent {
             .await;
 
         // 4. Build effective tools (static + MCP)
-        let effective_tools = self.orchestrator.build_effective_tools().await;
+        let effective_tools = self.ctx.build_effective_tools().await;
 
         // 5. Convert history and build runner
         let chat_history = effective_history.iter().map(to_chat_message).collect();
-        let runner = self.orchestrator.build_runner(
+        let runner = self.ctx.build_runner(
             model.to_owned(),
             system_prompt,
             user_content,
@@ -200,7 +209,28 @@ struct PrepareResult {
 pub struct ChatAgentStreamSetup {
     pub runner:          AgentRunner,
     pub effective_tools: Arc<ToolRegistry>,
-    pub orchestrator:    AgentOrchestrator,
+    pub ctx:             Arc<dyn AgentContext>,
     /// If compaction occurred, the caller must persist this.
     pub compaction:      Option<CompactionEffect>,
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Format chat history as plain text for summarization.
+fn format_history_as_text(history: &[ChatMessage]) -> String {
+    history
+        .iter()
+        .map(|m| format!("{}: {}", m.role, m.content.as_text()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Estimate total tokens for a message history.
+fn estimate_history_tokens(messages: &[ChatMessage]) -> usize {
+    messages
+        .iter()
+        .map(|m| estimate_tokens(&m.content.as_text()) + 4)
+        .sum()
 }

@@ -3,6 +3,7 @@ use std::{
     sync::Arc,
 };
 
+use agent_core::context::AgentContext;
 use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use tracing::{info, warn};
 
@@ -16,10 +17,7 @@ use super::{
         TaskRecord, TaskResult, TaskStatus,
     },
 };
-use crate::{
-    builtin::{proactive::ProactiveAgent, scheduled::ScheduledAgent},
-    orchestrator::AgentOrchestrator,
-};
+use crate::builtin::{proactive::ProactiveAgent, scheduled::ScheduledAgent};
 
 /// Central dispatcher that serializes same-session tasks and parallelizes
 /// across different sessions.
@@ -33,7 +31,7 @@ pub struct AgentDispatcher {
 impl AgentDispatcher {
     /// Create a new dispatcher and spawn its run loop.
     pub fn new(
-        orchestrator: AgentOrchestrator,
+        ctx: Arc<dyn AgentContext>,
         session_persister: Arc<dyn SessionPersister>,
         job_callback: Arc<dyn ScheduledJobCallback>,
         log_store: Arc<dyn DispatcherLogStore>,
@@ -49,7 +47,7 @@ impl AgentDispatcher {
             Arc::clone(&running),
             Arc::clone(&queue),
             Arc::clone(&log_store),
-            orchestrator,
+            ctx,
             session_persister,
             job_callback,
             finish_tx,
@@ -130,7 +128,7 @@ async fn run_loop(
     running: Arc<RwLock<HashMap<String, RunningTaskInner>>>,
     queue: Arc<Mutex<BinaryHeap<PrioritizedTask>>>,
     log_store: Arc<dyn DispatcherLogStore>,
-    orchestrator: AgentOrchestrator,
+    ctx: Arc<dyn AgentContext>,
     session_persister: Arc<dyn SessionPersister>,
     job_callback: Arc<dyn ScheduledJobCallback>,
     finish_tx: mpsc::Sender<String>,
@@ -149,7 +147,7 @@ async fn run_loop(
                             &running,
                             &queue,
                             &log_store,
-                            &orchestrator,
+                            &ctx,
                             &session_persister,
                             &job_callback,
                             &finish_tx,
@@ -175,7 +173,7 @@ async fn run_loop(
                     &running,
                     &queue,
                     &log_store,
-                    &orchestrator,
+                    &ctx,
                     &session_persister,
                     &job_callback,
                     &finish_tx,
@@ -196,7 +194,7 @@ async fn handle_submit(
     running: &Arc<RwLock<HashMap<String, RunningTaskInner>>>,
     queue: &Arc<Mutex<BinaryHeap<PrioritizedTask>>>,
     log_store: &Arc<dyn DispatcherLogStore>,
-    orchestrator: &AgentOrchestrator,
+    ctx: &Arc<dyn AgentContext>,
     session_persister: &Arc<dyn SessionPersister>,
     job_callback: &Arc<dyn ScheduledJobCallback>,
     finish_tx: &mpsc::Sender<String>,
@@ -295,7 +293,7 @@ async fn handle_submit(
         running,
         queue,
         log_store,
-        orchestrator,
+        ctx,
         session_persister,
         job_callback,
         finish_tx,
@@ -365,7 +363,7 @@ async fn try_dispatch(
     running: &Arc<RwLock<HashMap<String, RunningTaskInner>>>,
     queue: &Arc<Mutex<BinaryHeap<PrioritizedTask>>>,
     log_store: &Arc<dyn DispatcherLogStore>,
-    orchestrator: &AgentOrchestrator,
+    ctx: &Arc<dyn AgentContext>,
     session_persister: &Arc<dyn SessionPersister>,
     job_callback: &Arc<dyn ScheduledJobCallback>,
     finish_tx: &mpsc::Sender<String>,
@@ -441,7 +439,7 @@ async fn try_dispatch(
         }
 
         // Spawn execution.
-        let orchestrator = orchestrator.clone();
+        let ctx = Arc::clone(ctx);
         let session_persister = Arc::clone(session_persister);
         let job_callback = Arc::clone(job_callback);
         let log_store = Arc::clone(log_store);
@@ -449,7 +447,7 @@ async fn try_dispatch(
 
         tokio::spawn(async move {
             let result =
-                execute_task(&pt.task, &orchestrator, &*session_persister, &*job_callback).await;
+                execute_task(&pt.task, &ctx, &*session_persister, &*job_callback).await;
 
             let finished_at = jiff::Timestamp::now();
             let duration_ms =
@@ -517,7 +515,7 @@ async fn try_dispatch(
 }
 
 #[tracing::instrument(
-    skip(task, orchestrator, session_persister, job_callback),
+    skip(task, ctx, session_persister, job_callback),
     fields(
         task_id = %task.id,
         task_kind = %task.kind,
@@ -526,7 +524,7 @@ async fn try_dispatch(
 )]
 async fn execute_task(
     task: &AgentTask,
-    orchestrator: &AgentOrchestrator,
+    ctx: &Arc<dyn AgentContext>,
     session_persister: &dyn SessionPersister,
     job_callback: &dyn ScheduledJobCallback,
 ) -> Result<crate::builtin::AgentOutput, crate::orchestrator::error::OrchestratorError> {
@@ -535,7 +533,7 @@ async fn execute_task(
 
     match &task.kind {
         AgentTaskKind::Proactive => {
-            let agent = ProactiveAgent::new(orchestrator.clone());
+            let agent = ProactiveAgent::new(Arc::clone(ctx));
             let output = agent.run(&task.message, &task.history).await?;
 
             // Persist conversation turns.
@@ -563,7 +561,7 @@ async fn execute_task(
             Ok(output)
         }
         AgentTaskKind::Scheduled { job_id } => {
-            let agent = ScheduledAgent::new(orchestrator.clone());
+            let agent = ScheduledAgent::new(Arc::clone(ctx));
             let history = if task.history.is_empty() {
                 None
             } else {

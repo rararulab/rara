@@ -1,27 +1,73 @@
 use std::sync::Arc;
 
 use agent_core::{
+    context::{
+        self, AgentContext, CompletionFeatures, MemoryFeatures, PromptFeatures, SessionFeatures,
+        SettingsFeatures, ToolFeatures,
+    },
     model::LlmProviderLoaderRef,
     runner::{AgentRunner, MAX_ITERATIONS, UserContent},
     tool_registry::ToolRegistry,
 };
 use async_openai::types::chat::ChatCompletionRequestMessage;
+use async_trait::async_trait;
+use base::shared_string::SharedString;
 use rara_domain_shared::settings::model::Settings;
 use rara_mcp::{manager::mgr::McpManager, tool_bridge::McpToolBridge};
 use rara_memory::{
     MemoryManager, RecallStrategyEngine,
-    recall_engine::{InjectTarget, InjectionPayload, RecallContext},
+    recall_engine as mem_recall,
 };
-use rara_sessions::types::ChatMessage;
 use tokio::sync::watch;
 use tracing::info;
 
-use super::{context::estimate_history_tokens, error::OrchestratorError};
 
-/// Orchestrates agent creation and execution by assembling system prompts,
+// ---------------------------------------------------------------------------
+// Conversions between agent_core::context types and rara_memory types
+// ---------------------------------------------------------------------------
+
+fn to_mem_event_kind(e: context::EventKind) -> mem_recall::EventKind {
+    match e {
+        context::EventKind::Compaction => mem_recall::EventKind::Compaction,
+        context::EventKind::NewSession => mem_recall::EventKind::NewSession,
+        context::EventKind::SessionResume => mem_recall::EventKind::SessionResume,
+    }
+}
+
+fn from_mem_inject_target(t: mem_recall::InjectTarget) -> context::InjectTarget {
+    match t {
+        mem_recall::InjectTarget::SystemPrompt => context::InjectTarget::SystemPrompt,
+        mem_recall::InjectTarget::ContextMessage => context::InjectTarget::ContextMessage,
+    }
+}
+
+fn to_mem_recall_context(ctx: &context::RecallContext) -> mem_recall::RecallContext {
+    mem_recall::RecallContext {
+        user_text:               ctx.user_text.clone(),
+        turn_count:              ctx.turn_count,
+        events:                  ctx.events.iter().map(|e| to_mem_event_kind(*e)).collect(),
+        elapsed_since_last_secs: ctx.elapsed_since_last_secs,
+        summary:                 ctx.summary.clone(),
+        session_topic:           ctx.session_topic.clone(),
+    }
+}
+
+fn from_mem_injection_payload(p: mem_recall::InjectionPayload) -> context::InjectionPayload {
+    context::InjectionPayload {
+        rule_name: p.rule_name,
+        target:    from_mem_inject_target(p.target),
+        content:   p.content,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AgentContextImpl
+// ---------------------------------------------------------------------------
+
+/// Implements all agent context feature traits by assembling system prompts,
 /// constructing tool registries, and managing conversation context.
 #[derive(Clone)]
-pub struct AgentOrchestrator {
+pub struct AgentContextImpl {
     llm_provider:   LlmProviderLoaderRef,
     tools:          Arc<ToolRegistry>,
     mcp_manager:    McpManager,
@@ -32,7 +78,7 @@ pub struct AgentOrchestrator {
     prompt_repo:    Arc<dyn agent_core::prompt::PromptRepo>,
 }
 
-impl AgentOrchestrator {
+impl AgentContextImpl {
     #[must_use]
     pub fn new(
         llm_provider: LlmProviderLoaderRef,
@@ -56,64 +102,23 @@ impl AgentOrchestrator {
         }
     }
 
-    // -- prompt construction ------------------------------------------------
+    // -- inherent accessors (not part of traits) ----------------------------
 
-    pub async fn build_chat_system_prompt(
-        &self,
-        base_prompt: &str,
-        user_text: &str,
-        history_len: usize,
-        recall_ctx: Option<&RecallContext>,
-    ) -> String {
-        let soul = self
-            .prompt_repo
-            .get("agent/soul.md")
-            .await
-            .map(|e| e.content)
-            .unwrap_or_default();
+    /// Return a snapshot of current settings.
+    #[must_use]
+    pub fn settings(&self) -> Settings { self.settings_rx.borrow().clone() }
 
-        let mut system_prompt = if soul.trim().is_empty() {
-            base_prompt.to_owned()
-        } else {
-            format!("{soul}\n\n# Chat Instructions\n{base_prompt}")
-        };
-
-        // Run the recall engine if available, otherwise fall back to legacy
-        // hardcoded behavior.
-        if let Some(ctx) = recall_ctx {
-            let payloads = self.run_recall_engine(ctx).await;
-            for payload in &payloads {
-                if matches!(payload.target, InjectTarget::SystemPrompt) {
-                    // Use the rule name to create a titled section.
-                    system_prompt.push_str(&format!(
-                        "\n\n## Memory: {}\n{}",
-                        payload.rule_name, payload.content
-                    ));
-                }
-            }
-            if !payloads.is_empty() {
-                info!(
-                    rules = payloads.len(),
-                    "recall engine injected memory into system prompt"
-                );
-            }
-        } else {
-            // Legacy path: when no RecallContext is provided, fall back to the
-            // old hardcoded logic. This keeps backward-compat for callers that
-            // haven't been updated yet.
-            self.legacy_memory_injection(&mut system_prompt, user_text, history_len)
-                .await;
-        }
-
-        // Inject skills listing.
-        let all_skills = self.skill_registry.list_all();
-        let skills_xml = rara_skills::prompt_gen::generate_skills_prompt(&all_skills);
-        if !skills_xml.is_empty() {
-            system_prompt.push_str(&format!("\n\n{skills_xml}"));
-        }
-
-        system_prompt
+    /// Return a reference to the recall engine (if configured).
+    pub fn recall_engine_ref(&self) -> Option<&Arc<RecallStrategyEngine>> {
+        self.recall_engine.as_ref()
     }
+
+    /// Return a watch::Receiver clone for settings (used by ChatService).
+    pub fn settings_rx(&self) -> watch::Receiver<Settings> {
+        self.settings_rx.clone()
+    }
+
+    // -- legacy helpers (kept for backward compat) --------------------------
 
     /// Legacy memory injection -- kept for backward-compat with callers that
     /// don't yet provide a RecallContext. Will be removed once all callers
@@ -167,8 +172,70 @@ impl AgentOrchestrator {
             }
         }
     }
+}
 
-    pub async fn build_worker_policy(&self) -> String {
+// ---------------------------------------------------------------------------
+// CompletionFeatures
+// ---------------------------------------------------------------------------
+
+#[async_trait]
+impl CompletionFeatures for AgentContextImpl {
+    fn llm_provider(&self) -> &LlmProviderLoaderRef { &self.llm_provider }
+
+    async fn build_chat_system_prompt(
+        &self,
+        base_prompt: &str,
+        user_text: &str,
+        history_len: usize,
+        recall_ctx: Option<&context::RecallContext>,
+    ) -> String {
+        let soul = self
+            .prompt_repo
+            .get("agent/soul.md")
+            .await
+            .map(|e| e.content)
+            .unwrap_or_default();
+
+        let mut system_prompt = if soul.trim().is_empty() {
+            base_prompt.to_owned()
+        } else {
+            format!("{soul}\n\n# Chat Instructions\n{base_prompt}")
+        };
+
+        // Run the recall engine if available, otherwise fall back to legacy
+        // hardcoded behavior.
+        if let Some(ctx) = recall_ctx {
+            let payloads = MemoryFeatures::run_recall_engine(self, ctx).await;
+            for payload in &payloads {
+                if matches!(payload.target, context::InjectTarget::SystemPrompt) {
+                    system_prompt.push_str(&format!(
+                        "\n\n## Memory: {}\n{}",
+                        payload.rule_name, payload.content
+                    ));
+                }
+            }
+            if !payloads.is_empty() {
+                info!(
+                    rules = payloads.len(),
+                    "recall engine injected memory into system prompt"
+                );
+            }
+        } else {
+            self.legacy_memory_injection(&mut system_prompt, user_text, history_len)
+                .await;
+        }
+
+        // Inject skills listing.
+        let all_skills = self.skill_registry.list_all();
+        let skills_xml = rara_skills::prompt_gen::generate_skills_prompt(&all_skills);
+        if !skills_xml.is_empty() {
+            system_prompt.push_str(&format!("\n\n{skills_xml}"));
+        }
+
+        system_prompt
+    }
+
+    async fn build_worker_policy(&self) -> String {
         let policy = self
             .prompt_repo
             .get("workers/agent_policy.md")
@@ -189,47 +256,7 @@ impl AgentOrchestrator {
         }
     }
 
-    // -- recall engine -------------------------------------------------------
-
-    /// Run the recall engine against the given context.
-    ///
-    /// Returns injection payloads ready for prompt assembly. If no recall
-    /// engine or memory manager is configured, returns an empty vec.
-    pub async fn run_recall_engine(&self, ctx: &RecallContext) -> Vec<InjectionPayload> {
-        let (Some(engine), Some(mm)) = (&self.recall_engine, &self.memory_manager) else {
-            return vec![];
-        };
-        engine.run(ctx, mm).await
-    }
-
-    /// Return a reference to the recall engine (if configured).
-    pub fn recall_engine(&self) -> Option<&Arc<RecallStrategyEngine>> {
-        self.recall_engine.as_ref()
-    }
-
-    // -- tool construction --------------------------------------------------
-
-    pub async fn build_effective_tools(&self) -> Arc<ToolRegistry> {
-        let mut registry = self.tools.filtered(&[]);
-
-        match McpToolBridge::from_manager(self.mcp_manager.clone()).await {
-            Ok(bridges) => {
-                for bridge in bridges {
-                    let server = bridge.server_name().to_string();
-                    registry.register_mcp(Arc::new(bridge), server);
-                }
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to fetch dynamic MCP tools");
-            }
-        }
-
-        Arc::new(registry)
-    }
-
-    // -- runner construction ------------------------------------------------
-
-    pub fn build_runner(
+    fn build_runner(
         &self,
         model: String,
         system_prompt: String,
@@ -261,19 +288,11 @@ impl AgentOrchestrator {
             .build()
     }
 
-    // -- context management -------------------------------------------------
-
-    pub async fn summarize_history(
+    async fn summarize_history(
         &self,
-        history: &[ChatMessage],
+        history_text: &str,
         model: &str,
-    ) -> Result<ChatMessage, OrchestratorError> {
-        let history_text: String = history
-            .iter()
-            .map(|m| format!("{}: {}", m.role, m.content.as_text()))
-            .collect::<Vec<_>>()
-            .join("\n");
-
+    ) -> agent_core::err::Result<String> {
         let summary_prompt = format!(
             "Summarize the following conversation history into a concise summary. Preserve key \
              facts, decisions, user preferences, and action items. Keep it under 500 words. \
@@ -299,13 +318,9 @@ impl AgentOrchestrator {
             .build();
 
         let empty_tools = ToolRegistry::default();
-        let result =
-            runner
-                .run(&empty_tools, None)
-                .await
-                .map_err(|e| OrchestratorError::AgentError {
-                    message: format!("summarization failed: {e}"),
-                })?;
+        let result = runner
+            .run(&empty_tools, None)
+            .await?;
 
         let summary = result
             .provider_response
@@ -315,26 +330,68 @@ impl AgentOrchestrator {
             .unwrap_or("[Summary unavailable]")
             .to_owned();
 
-        Ok(ChatMessage::assistant(format!(
-            "[Conversation Summary]\n{summary}"
-        )))
+        Ok(summary)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ToolFeatures
+// ---------------------------------------------------------------------------
+
+#[async_trait]
+impl ToolFeatures for AgentContextImpl {
+    fn tools(&self) -> &Arc<ToolRegistry> { &self.tools }
+
+    async fn build_effective_tools(&self) -> Arc<ToolRegistry> {
+        let mut registry = self.tools.filtered(&[]);
+
+        match McpToolBridge::from_manager(self.mcp_manager.clone()).await {
+            Ok(bridges) => {
+                for bridge in bridges {
+                    let server = bridge.server_name().to_string();
+                    registry.register_mcp(Arc::new(bridge), server);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to fetch dynamic MCP tools");
+            }
+        }
+
+        Arc::new(registry)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PromptFeatures
+// ---------------------------------------------------------------------------
+
+impl PromptFeatures for AgentContextImpl {
+    fn prompt_repo(&self) -> &Arc<dyn agent_core::prompt::PromptRepo> { &self.prompt_repo }
+}
+
+// ---------------------------------------------------------------------------
+// MemoryFeatures
+// ---------------------------------------------------------------------------
+
+#[async_trait]
+impl MemoryFeatures for AgentContextImpl {
+    async fn run_recall_engine(
+        &self,
+        ctx: &context::RecallContext,
+    ) -> Vec<context::InjectionPayload> {
+        let (Some(engine), Some(mm)) = (&self.recall_engine, &self.memory_manager) else {
+            return vec![];
+        };
+        let mem_ctx = to_mem_recall_context(ctx);
+        engine
+            .run(&mem_ctx, mm)
+            .await
+            .into_iter()
+            .map(from_mem_injection_payload)
+            .collect()
     }
 
-    #[must_use]
-    pub fn needs_compaction(&self, history: &[ChatMessage], context_length: usize) -> bool {
-        let tokens = estimate_history_tokens(history);
-        let threshold = (context_length as f64 * 0.80) as usize;
-        tokens > threshold
-    }
-
-    // -- memory consolidation ------------------------------------------------
-
-    /// Fire-and-forget consolidation of a completed session's exchanges.
-    ///
-    /// Spawns a background task that calls
-    /// [`MemoryManager::consolidate_session`] with all user-assistant pairs
-    /// from the session. Called at session boundaries, **not** per-turn.
-    pub fn spawn_session_consolidation(&self, exchanges: Vec<(String, String)>) {
+    fn spawn_session_consolidation(&self, exchanges: Vec<(String, String)>) {
         let Some(ref mm) = self.memory_manager else {
             return;
         };
@@ -347,31 +404,55 @@ impl AgentOrchestrator {
             }
         });
     }
+}
 
-    // -- accessors ----------------------------------------------------------
+// ---------------------------------------------------------------------------
+// SettingsFeatures
+// ---------------------------------------------------------------------------
 
-    pub fn tools(&self) -> &Arc<ToolRegistry> { &self.tools }
-
-    pub fn llm_provider(&self) -> &LlmProviderLoaderRef { &self.llm_provider }
-
-    /// Resolve the model for a given key from settings.
-    ///
-    /// Falls back to the `"default"` key, then to `"openai/gpt-4o"`.
-    #[must_use]
-    pub fn model_for_key(&self, key: &str) -> String {
+impl SettingsFeatures for AgentContextImpl {
+    fn model_for_key(&self, key: &str) -> String {
         self.settings_rx.borrow().ai.model_for_key(key)
     }
 
-    #[must_use]
-    pub fn current_default_model(&self) -> String { self.model_for_key("chat") }
+    fn current_default_model(&self) -> String { self.model_for_key("chat") }
 
-    #[must_use]
-    pub fn settings(&self) -> Settings { self.settings_rx.borrow().clone() }
+    fn provider_hint(&self) -> Option<String> {
+        self.settings_rx.borrow().ai.provider.clone()
+    }
 
-    /// Resolve the current system prompt asynchronously.
-    ///
-    /// Loads the base prompt and soul from the prompt repo and composes them.
-    pub async fn current_system_prompt(&self) -> String {
+    fn max_iterations(&self, _key: &str) -> usize {
+        self.settings_rx
+            .borrow()
+            .agent
+            .max_iterations
+            .map(|n| n as usize)
+            .unwrap_or(MAX_ITERATIONS)
+    }
+
+    fn fallback_models(&self) -> Vec<SharedString> {
+        self.settings_rx
+            .borrow()
+            .ai
+            .fallback_models
+            .iter()
+            .map(|s| s.clone().into())
+            .collect()
+    }
+
+    fn needs_compaction(&self, history_tokens: usize, context_length: usize) -> bool {
+        let threshold = (context_length as f64 * 0.80) as usize;
+        history_tokens > threshold
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SessionFeatures
+// ---------------------------------------------------------------------------
+
+#[async_trait]
+impl SessionFeatures for AgentContextImpl {
+    async fn current_system_prompt(&self) -> String {
         let base_prompt = self
             .prompt_repo
             .get("chat/default_system.md")
@@ -391,15 +472,22 @@ impl AgentOrchestrator {
             format!("{soul}\n\n# Chat Instructions\n{base_prompt}")
         }
     }
-
-    /// Return a reference to the prompt repository.
-    pub fn prompt_repo(&self) -> &Arc<dyn agent_core::prompt::PromptRepo> { &self.prompt_repo }
 }
 
-impl std::fmt::Debug for AgentOrchestrator {
+// ---------------------------------------------------------------------------
+// Debug
+// ---------------------------------------------------------------------------
+
+impl std::fmt::Debug for AgentContextImpl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AgentOrchestrator")
-            .field("default_model", &self.current_default_model())
+        f.debug_struct("AgentContextImpl")
+            .field("default_model", &SettingsFeatures::current_default_model(self))
             .finish_non_exhaustive()
     }
 }
+
+// Ensure AgentContextImpl satisfies AgentContext (compile-time check).
+const _: () = {
+    fn _assert_agent_context<T: AgentContext>() {}
+    fn _check() { _assert_agent_context::<AgentContextImpl>() }
+};

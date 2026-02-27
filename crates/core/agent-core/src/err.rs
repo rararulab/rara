@@ -44,6 +44,11 @@ pub enum Error {
         location: snafu::Location,
     },
 
+    #[snafu(display("context error: {message}"))]
+    Context {
+        message: SharedString,
+    },
+
     Other {
         message: SharedString,
     },
