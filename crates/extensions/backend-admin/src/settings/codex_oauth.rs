@@ -36,7 +36,9 @@ pub(super) fn routes() -> OpenApiRouter<SettingsSvc> {
     OpenApiRouter::new().nest(
         "/api/v1/ai/codex/oauth",
         OpenApiRouter::new()
-            .routes(routes!(oauth_start, oauth_status, oauth_disconnect))
+            .routes(routes!(oauth_start))
+            .routes(routes!(oauth_status))
+            .routes(routes!(oauth_disconnect))
             .route("/callback", axum::routing::get(oauth_callback)),
     )
 }
@@ -83,7 +85,7 @@ struct PendingCodexOAuth {
 
 #[utoipa::path(
     post,
-    path = "/ai/codex/oauth/start",
+    path = "/start",
     tag = "ai-admin",
     responses((status = 200, body = OAuthStartResponse))
 )]
@@ -130,9 +132,9 @@ async fn oauth_callback(
     };
 
     let tokens = StoredCodexTokens {
-        access_token: token_response.access_token,
-        refresh_token: token_response.refresh_token,
-        id_token: token_response.id_token,
+        access_token:    token_response.access_token,
+        refresh_token:   token_response.refresh_token,
+        id_token:        token_response.id_token,
         expires_at_unix: compute_expires_at_unix(now_unix(), token_response.expires_in),
     };
     if save_tokens(&tokens).is_err() {
@@ -145,7 +147,7 @@ async fn oauth_callback(
 
 #[utoipa::path(
     get,
-    path = "/ai/codex/oauth/status",
+    path = "/status",
     tag = "ai-admin",
     responses((status = 200, body = OAuthStatusResponse))
 )]
@@ -159,7 +161,7 @@ async fn oauth_status(State(_state): State<SettingsSvc>) -> Json<OAuthStatusResp
 
 #[utoipa::path(
     post,
-    path = "/ai/codex/oauth/disconnect",
+    path = "/disconnect",
     tag = "ai-admin",
     responses((status = 200, body = OAuthStatusResponse))
 )]
@@ -169,7 +171,7 @@ async fn oauth_disconnect(
     clear_tokens().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     clear_pending_oauth().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(Json(OAuthStatusResponse {
-        connected: false,
+        connected:       false,
         expires_at_unix: None,
     }))
 }
@@ -244,7 +246,9 @@ pub fn load_tokens() -> Result<Option<StoredCodexTokens>, String> {
     else {
         return Ok(None);
     };
-    serde_json::from_str(&raw).map(Some).map_err(|e| e.to_string())
+    serde_json::from_str(&raw)
+        .map(Some)
+        .map_err(|e| e.to_string())
 }
 
 pub fn save_tokens(tokens: &StoredCodexTokens) -> Result<(), String> {
@@ -271,7 +275,9 @@ fn load_pending_oauth() -> Result<Option<PendingCodexOAuth>, String> {
     else {
         return Ok(None);
     };
-    serde_json::from_str(&raw).map(Some).map_err(|e| e.to_string())
+    serde_json::from_str(&raw)
+        .map(Some)
+        .map_err(|e| e.to_string())
 }
 
 fn save_pending_oauth(pending: &PendingCodexOAuth) -> Result<(), String> {
