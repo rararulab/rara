@@ -19,9 +19,12 @@
 //! [`ChannelBridge::dispatch`]. The bridge is responsible for routing,
 //! policy enforcement, and agent invocation.
 
-use async_trait::async_trait;
+use std::pin::Pin;
 
-use super::types::ChannelMessage;
+use async_trait::async_trait;
+use futures::stream::{self, Stream};
+
+use super::types::{ChannelMessage, StreamEvent};
 use crate::error::KernelError;
 
 /// Kernel-side bridge that channel adapters interact with.
@@ -40,4 +43,19 @@ pub trait ChannelBridge: Send + Sync {
     ///
     /// Returns the agent's response text on success.
     async fn dispatch(&self, message: ChannelMessage) -> Result<String, KernelError>;
+
+    /// Dispatch an inbound message and return a stream of events.
+    ///
+    /// The default implementation wraps [`dispatch`](Self::dispatch) into a
+    /// single [`StreamEvent::Done`] event.  Bridge implementations that
+    /// support real-time streaming should override this.
+    async fn dispatch_stream(
+        &self,
+        message: ChannelMessage,
+    ) -> Result<Pin<Box<dyn Stream<Item = StreamEvent> + Send>>, KernelError> {
+        let text = self.dispatch(message).await?;
+        Ok(Box::pin(stream::once(async move {
+            StreamEvent::Done { text }
+        })))
+    }
 }

@@ -216,13 +216,21 @@ pub struct ChannelMessage {
 #[derive(Debug, Clone)]
 pub struct OutboundMessage {
     /// Target channel.
-    pub channel_type: ChannelType,
+    pub channel_type:          ChannelType,
     /// Target session.
-    pub session_key:  String,
+    pub session_key:           String,
     /// Response content (markdown-ish, adapter formats for platform).
-    pub content:      String,
+    pub content:               String,
     /// Optional metadata for platform-specific features.
-    pub metadata:     HashMap<String, serde_json::Value>,
+    pub metadata:              HashMap<String, serde_json::Value>,
+    /// Optional photo to attach (bytes + MIME type).
+    pub photo:                 Option<PhotoAttachment>,
+    /// Optional inline keyboard / buttons.
+    pub reply_markup:          Option<ReplyMarkup>,
+    /// Edit an existing message instead of sending a new one.
+    pub edit_message_id:       Option<String>,
+    /// Reply to a specific message.
+    pub reply_to_message_id:   Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -277,6 +285,113 @@ impl std::fmt::Display for AgentPhase {
     }
 }
 
+// ---------------------------------------------------------------------------
+// StreamEvent
+// ---------------------------------------------------------------------------
+
+/// Events emitted during streaming agent response generation.
+///
+/// Adapters consume these to provide progressive UX feedback (e.g.
+/// incremental message edits in Telegram, SSE chunks over WebSocket).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum StreamEvent {
+    /// Incremental text output from the LLM.
+    TextDelta { text: String },
+    /// Incremental reasoning/thinking text (may be hidden from user).
+    ReasoningDelta { text: String },
+    /// Agent started thinking (no content yet).
+    Thinking,
+    /// Agent finished thinking phase.
+    ThinkingDone,
+    /// Agent started a new iteration (multi-turn tool loop).
+    Iteration { index: usize },
+    /// A tool call has started executing.
+    ToolCallStart { id: String, name: String },
+    /// A tool call has finished.
+    ToolCallEnd {
+        id:      String,
+        name:    String,
+        success: bool,
+        error:   Option<String>,
+    },
+    /// Streaming completed successfully with the final accumulated text.
+    Done { text: String },
+    /// Streaming terminated with an error.
+    Error { message: String },
+}
+
+// ---------------------------------------------------------------------------
+// CommandInfo
+// ---------------------------------------------------------------------------
+
+/// Parsed command extracted from a channel message.
+///
+/// Adapters parse platform-specific command formats (e.g. `/search keywords`)
+/// and populate this struct for routing to command handlers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandInfo {
+    /// Command name without the leading slash (e.g. "search", "help").
+    pub name: String,
+    /// Raw argument string after the command name.
+    pub args: String,
+    /// The complete raw text including the command prefix.
+    pub raw:  String,
+}
+
+// ---------------------------------------------------------------------------
+// CallbackInfo
+// ---------------------------------------------------------------------------
+
+/// Callback data from an interactive element (e.g. inline keyboard button).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallbackInfo {
+    /// The callback data string (e.g. "switch:session-123", "search_more:3:rust@remote").
+    pub data:       String,
+    /// Platform-specific message ID that originated the callback.
+    pub message_id: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// PhotoAttachment
+// ---------------------------------------------------------------------------
+
+/// An image attachment for outbound messages.
+#[derive(Debug, Clone)]
+pub struct PhotoAttachment {
+    /// Image data as bytes.
+    pub data:      Vec<u8>,
+    /// MIME type (e.g. "image/jpeg", "image/png").
+    pub mime_type: String,
+    /// Optional caption text.
+    pub caption:   Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// ReplyMarkup / InlineButton
+// ---------------------------------------------------------------------------
+
+/// Reply markup for interactive elements.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ReplyMarkup {
+    /// Inline keyboard with rows of buttons.
+    InlineKeyboard { rows: Vec<Vec<InlineButton>> },
+    /// Remove any existing keyboard.
+    RemoveKeyboard,
+}
+
+/// A single inline button.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InlineButton {
+    /// Button label text.
+    pub text:          String,
+    /// Callback data sent when button is pressed.
+    pub callback_data: Option<String>,
+    /// URL to open when button is pressed.
+    pub url:           Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,5 +439,46 @@ mod tests {
     fn message_content_from_str() {
         let content: MessageContent = "hello".into();
         assert_eq!(content.as_text(), "hello");
+    }
+
+    #[test]
+    fn stream_event_serialization() {
+        let event = StreamEvent::TextDelta {
+            text: "hello".to_owned(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("text_delta"));
+
+        let event = StreamEvent::Done {
+            text: "final".to_owned(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("done"));
+    }
+
+    #[test]
+    fn command_info_basics() {
+        let cmd = CommandInfo {
+            name: "search".to_owned(),
+            args: "rust developer @ remote".to_owned(),
+            raw:  "/search rust developer @ remote".to_owned(),
+        };
+        assert_eq!(cmd.name, "search");
+    }
+
+    #[test]
+    fn outbound_message_defaults() {
+        let msg = OutboundMessage {
+            channel_type:        ChannelType::Telegram,
+            session_key:         "tg:123".to_owned(),
+            content:             "hello".to_owned(),
+            metadata:            Default::default(),
+            photo:               None,
+            reply_markup:        None,
+            edit_message_id:     None,
+            reply_to_message_id: None,
+        };
+        assert!(msg.photo.is_none());
+        assert!(msg.reply_markup.is_none());
     }
 }

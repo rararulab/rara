@@ -712,10 +712,14 @@ mod tests {
         let mut rx = tx.subscribe();
 
         let outbound = OutboundMessage {
-            channel_type: ChannelType::Web,
-            session_key: "sess-x".to_owned(),
-            content: "hello from agent".to_owned(),
-            metadata: HashMap::new(),
+            channel_type:        ChannelType::Web,
+            session_key:         "sess-x".to_owned(),
+            content:             "hello from agent".to_owned(),
+            metadata:            HashMap::new(),
+            photo:               None,
+            reply_markup:        None,
+            edit_message_id:     None,
+            reply_to_message_id: None,
         };
         adapter.send(outbound).await.unwrap();
 
