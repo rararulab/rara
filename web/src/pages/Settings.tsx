@@ -936,7 +936,7 @@ export default function Settings() {
   useEffect(() => {
     if (selectedSetting !== "ai") return;
     if (models.length > 0) return;
-    if (modelsLoading) return;
+    if (modelsLoading || modelsError) return;
     if (aiProvider === "openrouter") {
       if (!aiSettingsQuery.data?.openrouter_api_key) return;
       void fetchModels();
@@ -950,6 +950,7 @@ export default function Settings() {
     fetchModels,
     models.length,
     modelsLoading,
+    modelsError,
     selectedSetting,
     aiSettingsQuery.data?.openrouter_api_key,
   ]);
