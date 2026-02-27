@@ -15,7 +15,7 @@
 use axum::{Json, extract::State, http::StatusCode};
 use rara_codex_oauth::{
     PendingCodexOAuth, build_auth_url, clear_pending_oauth, clear_tokens,
-    generate_code_challenge, generate_code_verifier, generate_nonce, load_tokens,
+    generate_code_challenge, generate_code_verifier, generate_nonce, list_models, load_tokens,
     save_pending_oauth, start_callback_server,
 };
 use serde::Serialize;
@@ -36,7 +36,8 @@ pub(super) fn routes() -> OpenApiRouter<SettingsSvc> {
         OpenApiRouter::new()
             .routes(routes!(oauth_start))
             .routes(routes!(oauth_status))
-            .routes(routes!(oauth_disconnect)),
+            .routes(routes!(oauth_disconnect))
+            .routes(routes!(oauth_models)),
     )
 }
 
@@ -49,6 +50,17 @@ pub struct OAuthStartResponse {
 pub struct OAuthStatusResponse {
     pub connected:       bool,
     pub expires_at_unix: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct OAuthModelEntry {
+    pub id:       String,
+    pub owned_by: String,
+}
+
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct OAuthModelsResponse {
+    pub models: Vec<OAuthModelEntry>,
 }
 
 #[utoipa::path(
@@ -115,4 +127,34 @@ async fn oauth_disconnect(
         connected:       false,
         expires_at_unix: None,
     }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/models",
+    tag = "ai-admin",
+    responses((status = 200, body = OAuthModelsResponse))
+)]
+async fn oauth_models(
+    State(_state): State<SettingsSvc>,
+) -> Result<Json<OAuthModelsResponse>, (StatusCode, String)> {
+    let tokens = load_tokens()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?
+        .ok_or_else(|| {
+            (StatusCode::UNAUTHORIZED, "codex not connected".to_owned())
+        })?;
+    let models = list_models(&tokens.access_token)
+        .await
+        .map_err(|e| {
+            warn!(error = %e, "failed to fetch codex models");
+            (StatusCode::BAD_GATEWAY, e)
+        })?;
+    let entries = models
+        .into_iter()
+        .map(|m| OAuthModelEntry {
+            id:       m.id,
+            owned_by: m.owned_by,
+        })
+        .collect();
+    Ok(Json(OAuthModelsResponse { models: entries }))
 }

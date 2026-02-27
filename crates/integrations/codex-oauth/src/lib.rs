@@ -423,6 +423,41 @@ async fn send_token_request(form: &[(&str, &str)], context: &str) -> Result<Toke
         .map_err(|e| format!("failed to parse {context} response: {e}"))
 }
 
+/// A model returned by the OpenAI `/v1/models` endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodexModel {
+    pub id:       String,
+    pub owned_by: String,
+}
+
+/// Fetch available models from OpenAI using the stored access token.
+pub async fn list_models(access_token: &str) -> Result<Vec<CodexModel>, String> {
+    #[derive(Deserialize)]
+    struct ModelsResponse {
+        data: Vec<CodexModel>,
+    }
+
+    let response = reqwest::Client::new()
+        .get("https://api.openai.com/v1/models")
+        .header("Authorization", format!("Bearer {access_token}"))
+        .send()
+        .await
+        .map_err(|e| format!("failed to fetch openai models: {e}"))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "<unavailable>".to_owned());
+        return Err(format!("openai models request failed: {status} {body}"));
+    }
+    let parsed: ModelsResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("failed to parse openai models response: {e}"))?;
+    Ok(parsed.data)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

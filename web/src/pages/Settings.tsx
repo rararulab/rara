@@ -839,6 +839,29 @@ export default function Settings() {
   };
 
   const fetchModels = useCallback(async () => {
+    if (aiProvider === "codex") {
+      setModelsLoading(true);
+      setModelsError(null);
+      try {
+        const resp = await api.codexOAuthModels();
+        const loaded = resp.models
+          .map((m) => ({
+            id: m.id,
+            name: m.id,
+            contextLength: null,
+          } satisfies OpenRouterModel))
+          .sort((a, b) => a.id.localeCompare(b.id));
+        setModels(loaded);
+        setToast({ kind: "success", message: `Fetched ${loaded.length} models.` });
+      } catch (e: unknown) {
+        const message = e instanceof Error ? e.message : "Failed to fetch models";
+        setModelsError(message);
+      } finally {
+        setModelsLoading(false);
+      }
+      return;
+    }
+
     const key = aiApiKey.trim() || aiSettingsQuery.data?.openrouter_api_key?.trim() || "";
     if (!key) {
       setModelsError("Please enter your OpenRouter API key first.");
@@ -885,7 +908,7 @@ export default function Settings() {
     } finally {
       setModelsLoading(false);
     }
-  }, [aiApiKey, aiSettingsQuery.data?.openrouter_api_key]);
+  }, [aiProvider, aiApiKey, aiSettingsQuery.data?.openrouter_api_key]);
 
   useEffect(() => {
     if (!toast) return;
@@ -908,15 +931,22 @@ export default function Settings() {
     void queryClient.invalidateQueries({ queryKey: ["ai-admin-settings"] });
   }, [queryClient, searchParams, setSearchParams]);
 
+  const codexConnected = Boolean(codexOAuthStatusQuery.data?.connected);
+
   useEffect(() => {
     if (selectedSetting !== "ai") return;
-    if (aiProvider !== "openrouter") return;
-    if (!aiSettingsQuery.data?.openrouter_api_key) return;
     if (models.length > 0) return;
     if (modelsLoading) return;
-    void fetchModels();
+    if (aiProvider === "openrouter") {
+      if (!aiSettingsQuery.data?.openrouter_api_key) return;
+      void fetchModels();
+    } else if (aiProvider === "codex") {
+      if (!codexConnected) return;
+      void fetchModels();
+    }
   }, [
     aiProvider,
+    codexConnected,
     fetchModels,
     models.length,
     modelsLoading,
@@ -957,7 +987,6 @@ export default function Settings() {
       : (aiCurrent?.provider ?? "openrouter") === "codex"
         ? "Codex OAuth"
         : "OpenRouter";
-  const codexConnected = Boolean(codexOAuthStatusQuery.data?.connected);
 
   const dialogTitle =
     selectedSetting === "ai"
@@ -1003,7 +1032,7 @@ export default function Settings() {
       <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
         <p className="text-sm font-semibold">Model Assignments</p>
         <p className="text-xs text-muted-foreground">
-          Assign models to keys. Unset keys fall back to &quot;default&quot;, then &quot;{aiProvider === "codex" ? "codex-mini-latest" : "openai/gpt-4o"}&quot;.
+          Assign models to keys. Unset keys fall back to &quot;default&quot;, then &quot;openai/gpt-4o&quot;.
         </p>
         <div className="space-y-2">
           {MODEL_KEYS.map((key) => {
@@ -1011,11 +1040,11 @@ export default function Settings() {
             return (
               <div key={key} className="flex items-center gap-2 rounded border bg-background px-3 py-2">
                 <span className="w-24 shrink-0 text-sm font-medium">{key}</span>
-                {aiProvider === "ollama" || aiProvider === "codex" ? (
+                {aiProvider === "ollama" ? (
                   <Input
                     value={currentValue}
                     onChange={(e) => setModelKey(key, e.target.value || undefined)}
-                    placeholder={key === "default" ? (aiProvider === "codex" ? "codex-mini-latest" : "openai/gpt-4o") : `(falls back to default)`}
+                    placeholder={key === "default" ? "openai/gpt-4o" : `(falls back to default)`}
                     className="h-8 text-sm font-mono"
                   />
                 ) : (
@@ -1730,7 +1759,7 @@ export default function Settings() {
               {/* Provider selector */}
               <div className="space-y-3 rounded-xl border bg-card p-4">
                 <Label className="text-base font-semibold">Provider</Label>
-                <Select value={aiProvider} onValueChange={setAiProvider}>
+                <Select value={aiProvider} onValueChange={(v) => { setAiProvider(v); setModels([]); setModelSearch(""); setModelsError(null); }}>
                   <SelectTrigger className="h-11">
                     <SelectValue />
                   </SelectTrigger>
@@ -1896,12 +1925,12 @@ export default function Settings() {
                   <Label htmlFor={aiProvider === "ollama" ? "ollama-default-model" : "models-search"} className="text-xl font-semibold">
                     Models
                   </Label>
-                  {aiProvider === "openrouter" && (
+                  {(aiProvider === "openrouter" || aiProvider === "codex") && (
                     <Button
                       type="button"
                       variant="outline"
                       onClick={fetchModels}
-                      disabled={modelsLoading}
+                      disabled={modelsLoading || (aiProvider === "codex" && !codexConnected)}
                       className="h-10 px-4"
                     >
                       <Download className="h-4 w-4" />
@@ -2146,13 +2175,40 @@ export default function Settings() {
                     {renderFallbackModelsEditor()}
                   </>
                 ) : (
-                  <div className="space-y-3">
-                    <p className="text-sm text-muted-foreground">
-                      Codex provider uses OpenAI-compatible model ids configured below.
-                    </p>
+                  <>
+                    {models.length > 0 && (
+                      <>
+                        <div className="relative">
+                          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                          <Input
+                            id="models-search"
+                            value={modelSearch}
+                            onChange={(e) => setModelSearch(e.target.value)}
+                            placeholder="Search models..."
+                            className="h-11 pl-10"
+                          />
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                          Showing {filteredModels.length} models
+                        </p>
+                      </>
+                    )}
+                    {!codexConnected && models.length === 0 && (
+                      <p className="text-sm text-muted-foreground">
+                        Connect Codex OAuth first, then fetch available models.
+                      </p>
+                    )}
+                    {codexConnected && models.length === 0 && !modelsLoading && (
+                      <p className="text-sm text-muted-foreground">
+                        Click Fetch to load available OpenAI models.
+                      </p>
+                    )}
+                    {modelsError && (
+                      <p className="text-sm text-destructive">{modelsError}</p>
+                    )}
                     {renderModelKeyTable()}
                     {renderFallbackModelsEditor()}
-                  </div>
+                  </>
                 )}
               </div>
 
