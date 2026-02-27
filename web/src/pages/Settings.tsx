@@ -761,10 +761,12 @@ export default function Settings() {
     },
   });
 
+  const [codexAuthUrl, setCodexAuthUrl] = useState<string | null>(null);
+
   const codexOAuthStartMutation = useMutation({
     mutationFn: () => api.codexOAuthStart(),
     onSuccess: (resp) => {
-      window.location.href = resp.auth_url;
+      setCodexAuthUrl(resp.auth_url);
     },
     onError: (e: unknown) => {
       const message = e instanceof Error ? e.message : "Failed to start Codex OAuth";
@@ -1834,7 +1836,7 @@ export default function Settings() {
                       onClick={() => codexOAuthStartMutation.mutate()}
                       disabled={codexOAuthStartMutation.isPending}
                     >
-                      {codexOAuthStartMutation.isPending ? "Opening..." : "Connect Codex"}
+                      {codexOAuthStartMutation.isPending ? "Generating..." : "Connect Codex"}
                     </Button>
                     <Button
                       type="button"
@@ -1854,6 +1856,38 @@ export default function Settings() {
                       Refresh status
                     </Button>
                   </div>
+                  {codexAuthUrl && (
+                    <div className="space-y-2 rounded-lg border border-dashed p-3">
+                      <p className="text-xs text-muted-foreground">Open the link below to sign in with your ChatGPT account:</p>
+                      <div className="flex items-center gap-2">
+                        <input
+                          readOnly
+                          value={codexAuthUrl}
+                          className="flex-1 rounded-md border bg-muted px-2 py-1 text-xs font-mono select-all"
+                          onFocus={(e) => e.target.select()}
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            void navigator.clipboard.writeText(codexAuthUrl);
+                            setToast({ kind: "success", message: "URL copied to clipboard." });
+                          }}
+                        >
+                          Copy
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="default"
+                          size="sm"
+                          onClick={() => window.open(codexAuthUrl, "_blank")}
+                        >
+                          Open
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

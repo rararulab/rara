@@ -58,6 +58,10 @@ const CODEX_KEYRING_SERVICE: &str = "rara-ai-codex";
 const CODEX_TOKEN_ACCOUNT: &str = "tokens";
 static PENDING_OAUTH: std::sync::LazyLock<std::sync::Mutex<Option<PendingCodexOAuth>>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+/// Shutdown handle for the previous ephemeral callback server (if any).
+static CALLBACK_SHUTDOWN: std::sync::LazyLock<
+    std::sync::Mutex<Option<tokio_util::sync::CancellationToken>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 
 /// Persisted Codex credentials (keyring-backed).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -282,23 +286,30 @@ pub fn frontend_base_url() -> String {
 /// callback, exchanges the code for tokens, saves them, and redirects the
 /// browser to the frontend settings page.
 ///
-/// Returns `Ok(())` after successfully handling the callback or an error
-/// description on failure. The server shuts itself down after the first
-/// request to `/auth/callback`.
+/// If a previous callback server is still running it is shut down first so
+/// that the port is freed. This makes repeated `/start` calls safe.
 pub async fn start_callback_server() -> Result<(), String> {
-    use std::sync::Arc;
-    use tokio::sync::oneshot;
+    // Shut down any previous callback server.
+    let old_cancel = CALLBACK_SHUTDOWN
+        .lock()
+        .ok()
+        .and_then(|mut g| g.take());
+    if let Some(old) = old_cancel {
+        old.cancel();
+        // Give the old server a moment to release the socket.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
 
-    let (tx, rx) = oneshot::channel::<Result<(), String>>();
-    let tx = Arc::new(std::sync::Mutex::new(Some(tx)));
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let cancel_for_handler = cancel.clone();
 
     let app = axum::Router::new().route(
         "/auth/callback",
         axum::routing::get({
-            let tx = Arc::clone(&tx);
+            let cancel = cancel_for_handler;
             move |query: axum::extract::Query<CallbackQuery>| {
-                let tx = Arc::clone(&tx);
-                async move { handle_callback(query, tx).await }
+                let cancel = cancel.clone();
+                async move { handle_callback(query, cancel).await }
             }
         }),
     );
@@ -310,17 +321,21 @@ pub async fn start_callback_server() -> Result<(), String> {
 
     tracing::info!("codex oauth callback server listening on {addr}");
 
-    // Serve until the callback is handled.
+    let cancel_for_shutdown = cancel.clone();
     tokio::spawn(async move {
         axum::serve(listener, app)
             .with_graceful_shutdown(async move {
-                // Wait for callback handler to signal completion.
-                let _ = rx.await;
+                cancel_for_shutdown.cancelled().await;
                 tracing::info!("codex oauth callback server shutting down");
             })
             .await
             .ok();
     });
+
+    // Store the cancel token so the next call can shut us down.
+    if let Ok(mut guard) = CALLBACK_SHUTDOWN.lock() {
+        *guard = Some(cancel);
+    }
 
     Ok(())
 }
@@ -334,29 +349,24 @@ struct CallbackQuery {
 
 async fn handle_callback(
     axum::extract::Query(query): axum::extract::Query<CallbackQuery>,
-    tx: std::sync::Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<Result<(), String>>>>>,
+    cancel: tokio_util::sync::CancellationToken,
 ) -> axum::response::Redirect {
     let frontend = frontend_base_url();
     let err_url = format!("{frontend}/settings?section=providers&codex_oauth=error");
     let ok_url = format!("{frontend}/settings?section=providers&codex_oauth=success");
 
-    let result = handle_callback_inner(&query).await;
-    let redirect_url = match &result {
-        Ok(()) => &ok_url,
+    let redirect_url = match handle_callback_inner(&query).await {
+        Ok(()) => ok_url,
         Err(e) => {
             tracing::warn!(error = %e, "codex oauth callback failed");
-            &err_url
+            err_url
         }
     };
 
-    // Signal the server to shut down (fire-and-forget).
-    if let Ok(mut guard) = tx.lock() {
-        if let Some(tx) = guard.take() {
-            let _ = tx.send(result);
-        }
-    }
+    // Signal the server to shut down after responding.
+    cancel.cancel();
 
-    axum::response::Redirect::to(redirect_url)
+    axum::response::Redirect::to(&redirect_url)
 }
 
 async fn handle_callback_inner(query: &CallbackQuery) -> Result<(), String> {
