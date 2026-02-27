@@ -19,7 +19,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use rara_telegram_bot::contacts::{
+use rara_channels::telegram::contacts::{
     error::ContactError,
     repository::ContactRepository,
     types::{CreateContactRequest, TelegramContact, UpdateContactRequest},

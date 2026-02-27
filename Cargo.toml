@@ -116,7 +116,6 @@ members = [
     "crates/rara-model",
     "crates/domain/shared",
     "crates/server",
-    "crates/telegram-bot",
     "crates/paths",
     "crates/jobspy-sys",
     "crates/workers",
@@ -246,7 +245,6 @@ rara-paths = { path = "crates/paths" }
 rara-server = { path = "crates/server" }
 rara-sessions = { path = "crates/sessions" }
 rara-skills = { path = "crates/skills" }
-rara-telegram-bot = { path = "crates/telegram-bot" }
 rara-workers = { path = "crates/workers" }
 rara-workspace = { path = "crates/extensions/workspace" }
 tool-core = { path = "crates/core/tool-core" }

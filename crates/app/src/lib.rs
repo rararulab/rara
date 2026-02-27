@@ -31,6 +31,7 @@ use snafu::{ResultExt, Whatever};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
+use rara_kernel::channel::adapter::ChannelAdapter as _;
 use yunara_store::{config::DatabaseConfig, db::DBStore};
 
 // ---------------------------------------------------------------------------
@@ -318,27 +319,19 @@ impl AppConfig {
             ))
             .spawn();
 
-        // -- telegram bot (optional) -----------------------------------------
+        // -- telegram adapter (optional) --------------------------------------
 
-        let bot_handle = match Self::try_start_bot(
-            &cancellation_token,
-            &notify_client,
-            app_state.settings_svc.subscribe(),
-            &self.main_service_http_base,
-            db_store.pool().clone(),
-        )
-        .await
-        {
-            Ok(Some(handle)) => {
-                info!("Telegram bot started");
-                Some(handle)
+        let telegram_adapter = match Self::try_start_telegram(&app_state).await {
+            Ok(Some(adapter)) => {
+                info!("Telegram adapter started");
+                Some(adapter)
             }
             Ok(None) => {
-                info!("Telegram bot not configured, skipping");
+                info!("Telegram not configured (TELEGRAM_BOT_TOKEN unset), skipping");
                 None
             }
             Err(e) => {
-                warn!(error = %e, "Failed to start telegram bot, skipping");
+                warn!(error = %e, "Failed to start Telegram adapter, skipping");
                 None
             }
         };
@@ -377,9 +370,9 @@ impl AppConfig {
                 tokio::task::spawn_blocking(move || drop(rt));
             }
 
-            if let Some(bot) = bot_handle {
-                info!("Shutting down telegram bot");
-                bot.shutdown().await;
+            if let Some(adapter) = telegram_adapter {
+                info!("Shutting down Telegram adapter");
+                let _ = adapter.stop().await;
             }
 
             info!("Shutting down servers");
@@ -392,33 +385,65 @@ impl AppConfig {
         Ok(app_handle)
     }
 
-    /// Try to start the Telegram bot using shared infrastructure.
+    /// Try to start the Telegram adapter using shared infrastructure.
     ///
-    /// Returns `Ok(Some(handle))` if the bot started successfully,
+    /// Returns `Ok(Some(adapter))` if the adapter started successfully,
     /// `Ok(None)` if Telegram is not configured, or `Err` on failure.
-    async fn try_start_bot(
-        cancel: &CancellationToken,
-        notify_client: &NotifyClient,
-        settings_rx: tokio::sync::watch::Receiver<rara_domain_shared::settings::model::Settings>,
-        main_service_http_base: &str,
-        pool: sqlx::PgPool,
-    ) -> Result<Option<rara_telegram_bot::BotHandle>, Whatever> {
-        let telegram_config = std::env::var("TELEGRAM_BOT_TOKEN")
-            .ok()
-            .map(|token| rara_telegram_bot::TelegramConfig { bot_token: token });
+    async fn try_start_telegram(
+        state: &rara_workers::worker_state::AppState,
+    ) -> Result<Option<Arc<rara_channels::telegram::TelegramAdapter>>, Whatever> {
+        let token = match std::env::var("TELEGRAM_BOT_TOKEN") {
+            Ok(t) if !t.is_empty() => t,
+            _ => return Ok(None),
+        };
 
-        let bot_app = rara_telegram_bot::BotApp::from_shared(
-            cancel.child_token(),
-            settings_rx,
-            Arc::new(notify_client.clone()),
-            telegram_config,
-            main_service_http_base.to_owned(),
-            pool,
-        )
-        .await
-        .whatever_context("Failed to initialize telegram bot")?;
+        let bot = teloxide::Bot::new(&token);
 
-        Ok(bot_app.map(rara_telegram_bot::BotApp::spawn))
+        // Read initial settings for primary/group chat IDs.
+        let settings = state.settings_svc.current();
+        let tg = &settings.telegram;
+
+        let mut tg_config = rara_channels::telegram::TelegramConfig::default();
+        tg_config.primary_chat_id = tg.chat_id;
+        tg_config.allowed_group_chat_id = tg.allowed_group_chat_id;
+
+        // Build the bridge that routes messages to the chat service.
+        let bridge: Arc<dyn rara_kernel::channel::bridge::ChannelBridge> =
+            Arc::new(ChatServiceBridge {
+                chat_service: state.chat_service.clone(),
+            });
+
+        // Build contact tracker from the contact repository.
+        let contact_tracker: Arc<dyn rara_channels::telegram::contacts::ContactTracker> =
+            Arc::new(ContactRepoTracker {
+                repo: state.contact_repo.clone(),
+            });
+
+        let adapter = Arc::new(
+            rara_channels::telegram::TelegramAdapter::new(bot, vec![])
+                .with_config(tg_config)
+                .with_contact_tracker(contact_tracker),
+        );
+
+        // Start long-polling.
+        adapter
+            .start(bridge)
+            .await
+            .whatever_context("Failed to start Telegram adapter")?;
+
+        // Spawn a background task to hot-reload config from settings.
+        let config_handle = adapter.config_handle();
+        let mut settings_rx = state.settings_svc.subscribe();
+        tokio::spawn(async move {
+            while settings_rx.changed().await.is_ok() {
+                let s = settings_rx.borrow_and_update();
+                let mut cfg = config_handle.write().unwrap_or_else(|e| e.into_inner());
+                cfg.primary_chat_id = s.telegram.chat_id;
+                cfg.allowed_group_chat_id = s.telegram.allowed_group_chat_id;
+            }
+        });
+
+        Ok(Some(adapter))
     }
 
     async fn init_infra(&self) -> Result<(Operator, DBStore, NotifyClient), Whatever> {
@@ -499,6 +524,90 @@ async fn shutdown_signal(shutdown_rx: oneshot::Receiver<()>) {
         () = ctrl_c => { info!("Received Ctrl+C signal"); },
         () = terminate => { info!("Received terminate signal"); },
         _ = shutdown_rx => { info!("Received shutdown signal"); },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ChatServiceBridge — routes ChannelMessages to the ChatService
+// ---------------------------------------------------------------------------
+
+/// Bridge implementation that dispatches inbound channel messages to the
+/// [`ChatService`](rara_domain_chat::service::ChatService).
+///
+/// The session key from the [`ChannelMessage`] is used directly — the
+/// Telegram adapter already formats it as `tg:<chat_id>`.
+struct ChatServiceBridge {
+    chat_service: rara_domain_chat::service::ChatService,
+}
+
+#[async_trait::async_trait]
+impl rara_kernel::channel::bridge::ChannelBridge for ChatServiceBridge {
+    async fn dispatch(
+        &self,
+        message: rara_kernel::channel::types::ChannelMessage,
+    ) -> Result<String, rara_kernel::error::KernelError> {
+        let text = message.content.as_text();
+
+        if text.is_empty() {
+            return Ok(String::new());
+        }
+
+        let session_key = rara_sessions::types::SessionKey::from_raw(message.session_key.clone());
+
+        // Extract image URLs for multimodal messages.
+        let image_urls = match &message.content {
+            rara_kernel::channel::types::MessageContent::Multimodal(blocks) => {
+                let urls: Vec<String> = blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        rara_kernel::channel::types::ContentBlock::ImageUrl { url } => {
+                            Some(url.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                if urls.is_empty() { None } else { Some(urls) }
+            }
+            _ => None,
+        };
+
+        // Ensure session exists (creates on first message).
+        let _ = self
+            .chat_service
+            .ensure_session(&session_key, None, None, None)
+            .await
+            .map_err(|e| rara_kernel::error::KernelError::Other {
+                message: format!("session error: {e}").into(),
+            })?;
+
+        let response = self
+            .chat_service
+            .send_message(&session_key, text, image_urls)
+            .await
+            .map_err(|e| rara_kernel::error::KernelError::Other {
+                message: format!("chat error: {e}").into(),
+            })?;
+
+        Ok(response.content.as_text())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ContactRepoTracker — implements ContactTracker via ContactRepository
+// ---------------------------------------------------------------------------
+
+/// Bridges [`ContactTracker`](rara_channels::telegram::contacts::ContactTracker)
+/// to the PostgreSQL-backed [`ContactRepository`].
+struct ContactRepoTracker {
+    repo: rara_channels::telegram::contacts::repository::ContactRepository,
+}
+
+#[async_trait::async_trait]
+impl rara_channels::telegram::contacts::ContactTracker for ContactRepoTracker {
+    async fn track(&self, username: &str, chat_id: i64) {
+        if let Err(e) = self.repo.set_chat_id(username, chat_id).await {
+            tracing::debug!(username, chat_id, error = %e, "failed to track contact");
+        }
     }
 }
 
