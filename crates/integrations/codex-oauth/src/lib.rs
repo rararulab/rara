@@ -22,6 +22,7 @@ pub const CODEX_TOKEN_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
 pub const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 pub const CODEX_SCOPES: &str = "openid profile email offline_access";
 pub const PUBLIC_BASE_URL_ENV: &str = "RARA_PUBLIC_BASE_URL";
+const REFRESH_SKEW_SECS: u64 = 60;
 const CODEX_KEYRING_SERVICE: &str = "rara-ai-codex";
 const CODEX_TOKEN_ACCOUNT: &str = "tokens";
 const CODEX_PENDING_ACCOUNT: &str = "oauth-pending";
@@ -38,6 +39,14 @@ pub struct StoredCodexTokens {
 pub struct PendingCodexOAuth {
     pub state:         String,
     pub code_verifier: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TokenResponse {
+    access_token:  String,
+    refresh_token: Option<String>,
+    id_token:      Option<String>,
+    expires_in:    Option<u64>,
 }
 
 pub fn callback_uri() -> String {
@@ -160,6 +169,82 @@ pub fn now_unix() -> u64 {
 
 pub fn compute_expires_at_unix(now_unix: u64, expires_in_secs: Option<u64>) -> Option<u64> {
     expires_in_secs.map(|v| now_unix.saturating_add(v))
+}
+
+pub fn should_refresh_token(expires_at_unix: Option<u64>) -> bool {
+    let Some(expires_at_unix) = expires_at_unix else {
+        return false;
+    };
+    now_unix().saturating_add(REFRESH_SKEW_SECS) >= expires_at_unix
+}
+
+pub async fn exchange_authorization_code(
+    code: &str,
+    code_verifier: &str,
+    redirect_uri: &str,
+) -> Result<StoredCodexTokens, String> {
+    let form = [
+        ("grant_type", "authorization_code"),
+        ("client_id", CODEX_CLIENT_ID),
+        ("code", code),
+        ("redirect_uri", redirect_uri),
+        ("code_verifier", code_verifier),
+    ];
+    let token = send_token_request(&form, "oauth token exchange").await?;
+    Ok(StoredCodexTokens {
+        access_token:    token.access_token,
+        refresh_token:   token.refresh_token,
+        id_token:        token.id_token,
+        expires_at_unix: compute_expires_at_unix(now_unix(), token.expires_in),
+    })
+}
+
+pub async fn refresh_tokens(current: &StoredCodexTokens) -> Result<StoredCodexTokens, String> {
+    let refresh_token = current
+        .refresh_token
+        .as_deref()
+        .ok_or_else(|| "codex token expired and no refresh token is available".to_owned())?;
+    let form = [
+        ("grant_type", "refresh_token"),
+        ("client_id", CODEX_CLIENT_ID),
+        ("refresh_token", refresh_token),
+    ];
+    let token = send_token_request(&form, "codex token refresh").await?;
+    Ok(StoredCodexTokens {
+        access_token:    token.access_token,
+        refresh_token:   token
+            .refresh_token
+            .or_else(|| current.refresh_token.clone()),
+        id_token:        token.id_token.or_else(|| current.id_token.clone()),
+        expires_at_unix: compute_expires_at_unix(now_unix(), token.expires_in),
+    })
+}
+
+async fn send_token_request(form: &[(&str, &str)], context: &str) -> Result<TokenResponse, String> {
+    let form_body = reqwest::Url::parse_with_params("https://localhost.invalid", form)
+        .map_err(|e| format!("failed to encode {context} payload: {e}"))?
+        .query()
+        .unwrap_or_default()
+        .to_owned();
+    let response = reqwest::Client::new()
+        .post(CODEX_TOKEN_ENDPOINT)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(form_body)
+        .send()
+        .await
+        .map_err(|e| format!("{context} request failed: {e}"))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "<unavailable>".to_owned());
+        return Err(format!("{context} failed: {status} {body}"));
+    }
+    response
+        .json::<TokenResponse>()
+        .await
+        .map_err(|e| format!("failed to parse {context} response: {e}"))
 }
 
 #[cfg(test)]

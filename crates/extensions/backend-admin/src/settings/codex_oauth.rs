@@ -14,12 +14,11 @@
 
 use axum::{Json, extract::State, http::StatusCode, response::Redirect};
 use rara_codex_oauth::{
-    CODEX_CLIENT_ID, CODEX_TOKEN_ENDPOINT, PendingCodexOAuth, StoredCodexTokens, build_auth_url,
-    callback_uri, clear_pending_oauth, clear_tokens, compute_expires_at_unix,
-    generate_code_challenge, generate_code_verifier, generate_nonce, load_pending_oauth,
-    load_tokens, now_unix, save_pending_oauth, save_tokens, validate_state,
+    PendingCodexOAuth, build_auth_url, callback_uri, clear_pending_oauth, clear_tokens,
+    exchange_authorization_code, generate_code_challenge, generate_code_verifier, generate_nonce,
+    load_pending_oauth, load_tokens, save_pending_oauth, save_tokens, validate_state,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::settings::SettingsSvc;
@@ -49,19 +48,11 @@ pub struct OAuthStatusResponse {
     pub expires_at_unix: Option<u64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, serde::Deserialize)]
 pub struct OAuthCallbackQuery {
     code:  Option<String>,
     state: Option<String>,
     error: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TokenResponse {
-    access_token:  String,
-    refresh_token: Option<String>,
-    id_token:      Option<String>,
-    expires_in:    Option<u64>,
 }
 
 #[utoipa::path(
@@ -107,17 +98,11 @@ async fn oauth_callback(
         return Redirect::to(CODEX_ERROR_REDIRECT);
     };
 
-    let token_response = match exchange_code(code, &pending.code_verifier, &callback_uri()).await {
-        Ok(token_response) => token_response,
-        Err(_) => return Redirect::to(CODEX_ERROR_REDIRECT),
-    };
-
-    let tokens = StoredCodexTokens {
-        access_token:    token_response.access_token,
-        refresh_token:   token_response.refresh_token,
-        id_token:        token_response.id_token,
-        expires_at_unix: compute_expires_at_unix(now_unix(), token_response.expires_in),
-    };
+    let tokens =
+        match exchange_authorization_code(code, &pending.code_verifier, &callback_uri()).await {
+            Ok(tokens) => tokens,
+            Err(_) => return Redirect::to(CODEX_ERROR_REDIRECT),
+        };
     if save_tokens(&tokens).is_err() {
         return Redirect::to(CODEX_ERROR_REDIRECT);
     }
@@ -155,44 +140,4 @@ async fn oauth_disconnect(
         connected:       false,
         expires_at_unix: None,
     }))
-}
-
-async fn exchange_code(
-    code: &str,
-    code_verifier: &str,
-    redirect_uri: &str,
-) -> Result<TokenResponse, String> {
-    let form = [
-        ("grant_type", "authorization_code"),
-        ("client_id", CODEX_CLIENT_ID),
-        ("code", code),
-        ("redirect_uri", redirect_uri),
-        ("code_verifier", code_verifier),
-    ];
-    let form_body = reqwest::Url::parse_with_params("https://localhost.invalid", form)
-        .map_err(|e| format!("failed to encode oauth payload: {e}"))?
-        .query()
-        .unwrap_or_default()
-        .to_owned();
-    let client = reqwest::Client::new();
-    let response = client
-        .post(CODEX_TOKEN_ENDPOINT)
-        .header("content-type", "application/x-www-form-urlencoded")
-        .body(form_body)
-        .send()
-        .await
-        .map_err(|e| format!("oauth token exchange request failed: {e}"))?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "<unavailable>".to_owned());
-        return Err(format!("oauth token exchange failed: {status} {body}"));
-    }
-
-    response
-        .json::<TokenResponse>()
-        .await
-        .map_err(|e| format!("failed to parse oauth token response: {e}"))
 }
