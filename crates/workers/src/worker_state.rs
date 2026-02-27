@@ -581,7 +581,8 @@ fn merge_openapi_router(
 /// A fresh [`OpenAiProvider`](agent_core::provider::OpenAiProvider) is created
 /// on every call so that runtime API-key changes take effect immediately.
 struct SettingsLlmProviderLoader {
-    settings: rara_backend_admin::settings::SettingsSvc,
+    settings:           rara_backend_admin::settings::SettingsSvc,
+    codex_refresh_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// Composio auth provider that reads credentials from runtime settings.
@@ -610,7 +611,69 @@ impl rara_composio::ComposioAuthProvider for SettingsComposioAuthProvider {
 }
 
 impl SettingsLlmProviderLoader {
-    fn new(settings: rara_backend_admin::settings::SettingsSvc) -> Self { Self { settings } }
+    fn new(settings: rara_backend_admin::settings::SettingsSvc) -> Self {
+        Self {
+            settings,
+            codex_refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
+        }
+    }
+
+    fn should_refresh_codex_token(expires_at_unix: Option<u64>) -> bool {
+        const REFRESH_SKEW_SECS: u64 = 60;
+        let Some(expires_at_unix) = expires_at_unix else {
+            return false;
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        now.saturating_add(REFRESH_SKEW_SECS) >= expires_at_unix
+    }
+
+    async fn refresh_codex_access_token(
+        &self,
+        refresh_token: &str,
+    ) -> Result<CodexTokenResponse, String> {
+        const CODEX_TOKEN_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
+        const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+        let form = [
+            ("grant_type", "refresh_token"),
+            ("client_id", CODEX_CLIENT_ID),
+            ("refresh_token", refresh_token),
+        ];
+        let form_body = reqwest::Url::parse_with_params("https://localhost.invalid", form)
+            .map_err(|e| format!("failed to encode codex refresh payload: {e}"))?
+            .query()
+            .unwrap_or_default()
+            .to_owned();
+        let client = reqwest::Client::new();
+        let response = client
+            .post(CODEX_TOKEN_ENDPOINT)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(form_body)
+            .send()
+            .await
+            .map_err(|e| format!("codex token refresh request failed: {e}"))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "<unavailable>".to_owned());
+            return Err(format!("codex token refresh failed: {status} {body}"));
+        }
+        response
+            .json::<CodexTokenResponse>()
+            .await
+            .map_err(|e| format!("failed to parse codex refresh response: {e}"))
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CodexTokenResponse {
+    access_token:  String,
+    refresh_token: Option<String>,
+    id_token:      Option<String>,
+    expires_in:    Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -685,6 +748,61 @@ impl agent_core::provider::LlmProviderLoader for SettingsLlmProviderLoader {
                 let config = async_openai::config::OpenAIConfig::new()
                     .with_api_base(format!("{}/v1", base_url))
                     .with_api_key("ollama");
+                Ok(Arc::new(agent_core::provider::OpenAiProvider::with_config(
+                    config,
+                )))
+            }
+            "codex" => {
+                let mut tokens = rara_backend_admin::settings::codex_oauth::load_tokens()
+                    .map_err(|e| agent_core::err::Error::Provider { message: e.into() })?
+                    .ok_or(agent_core::err::ProviderNotConfiguredSnafu.build())?;
+
+                if Self::should_refresh_codex_token(tokens.expires_at_unix) {
+                    let _guard = self.codex_refresh_lock.lock().await;
+                    // Double-check in case another request refreshed already.
+                    tokens = rara_backend_admin::settings::codex_oauth::load_tokens()
+                        .map_err(|e| agent_core::err::Error::Provider { message: e.into() })?
+                        .ok_or(agent_core::err::ProviderNotConfiguredSnafu.build())?;
+                    if Self::should_refresh_codex_token(tokens.expires_at_unix) {
+                        let refresh_token = tokens.refresh_token.clone().ok_or_else(|| {
+                            agent_core::err::Error::Provider {
+                                message:
+                                    "codex token expired and no refresh token is available".into(),
+                            }
+                        })?;
+                        let refreshed =
+                            self.refresh_codex_access_token(&refresh_token)
+                                .await
+                                .map_err(|e| agent_core::err::Error::Provider {
+                                    message: e.into(),
+                                })?;
+                        let refreshed_tokens =
+                            rara_backend_admin::settings::codex_oauth::StoredCodexTokens {
+                                access_token: refreshed.access_token.clone(),
+                                refresh_token: refreshed
+                                    .refresh_token
+                                    .or(tokens.refresh_token.clone()),
+                                id_token: refreshed.id_token.or(tokens.id_token.clone()),
+                                expires_at_unix: refreshed.expires_in.map(|in_secs| {
+                                    std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .map_or(0, |d| d.as_secs())
+                                        .saturating_add(in_secs)
+                                }),
+                            };
+                        rara_backend_admin::settings::codex_oauth::save_tokens(&refreshed_tokens)
+                            .map_err(|e| agent_core::err::Error::Provider {
+                                message: format!(
+                                    "failed to persist refreshed codex token: {e}"
+                                )
+                                .into(),
+                            })?;
+                        tokens = refreshed_tokens;
+                    }
+                }
+
+                let config =
+                    async_openai::config::OpenAIConfig::new().with_api_key(tokens.access_token);
                 Ok(Arc::new(agent_core::provider::OpenAiProvider::with_config(
                     config,
                 )))

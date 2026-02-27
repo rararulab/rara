@@ -210,6 +210,15 @@ export interface AiAdminUpdateRequest {
   openrouter_api_key?: string;
 }
 
+export interface CodexOAuthStartResponse {
+  auth_url: string;
+}
+
+export interface CodexOAuthStatusResponse {
+  connected: boolean;
+  expires_at_unix: number | null;
+}
+
 export interface ModelEntryView {
   key: string;
   model: string;

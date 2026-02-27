@@ -36,7 +36,7 @@ pub struct Settings {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AISettings {
     pub openrouter_api_key: Option<String>,
-    /// LLM provider: `"openrouter"` (default) or `"ollama"`.
+    /// LLM provider: `"openrouter"` (default), `"ollama"`, or `"codex"`.
     #[serde(default)]
     pub provider:           Option<String>,
     /// Ollama API base URL. Defaults to `http://localhost:11434`.
@@ -63,6 +63,9 @@ impl AISettings {
     pub fn is_configured(&self) -> bool {
         match self.provider.as_deref().unwrap_or("openrouter") {
             "ollama" => true, // Ollama doesn't need an API key
+            // Codex credentials are stored out-of-band (keyring), not in
+            // runtime settings.
+            "codex" => true,
             _ => self.openrouter_api_key.is_some(),
         }
     }
@@ -236,8 +239,8 @@ pub struct UpdateRequest {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct AiRuntimeSettingsPatch {
     pub openrouter_api_key: Option<String>,
-    /// LLM provider: `"openrouter"` or `"ollama"`. Empty string clears
-    /// (reverts to default `"openrouter"`).
+    /// LLM provider: `"openrouter"`, `"ollama"`, or `"codex"`. Empty string
+    /// clears (reverts to default `"openrouter"`).
     pub provider:           Option<String>,
     /// Ollama API base URL. Empty string clears (reverts to default).
     pub ollama_base_url:    Option<String>,
@@ -516,6 +519,15 @@ mod tests {
         let ai = AISettings::default();
         assert_eq!(ai.model_for_key("job"), "openai/gpt-4o");
         assert_eq!(ai.model_for_key("chat"), "openai/gpt-4o");
+    }
+
+    #[test]
+    fn is_configured_for_codex_does_not_depend_on_settings_tokens() {
+        let codex = AISettings {
+            provider: Some("codex".to_owned()),
+            ..Default::default()
+        };
+        assert!(codex.is_configured());
     }
 
     #[test]

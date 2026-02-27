@@ -83,7 +83,7 @@ async function requestBlob(path: string, options?: RequestInit & { timeoutMs?: n
   }
 }
 
-import type { PipelineDiscoveredJob, PaginatedDiscoveredJobs, DiscoveredJobsStats, LlmfitRecommendationsResponse, OllamaHealthResponse, OllamaModelListResponse, OllamaModelInfo, DispatcherStatus, TaskRecord, AgentTaskKind, TaskStatus } from './types';
+import type { PipelineDiscoveredJob, PaginatedDiscoveredJobs, DiscoveredJobsStats, LlmfitRecommendationsResponse, OllamaHealthResponse, OllamaModelListResponse, OllamaModelInfo, DispatcherStatus, TaskRecord, AgentTaskKind, TaskStatus, CodexOAuthStartResponse, CodexOAuthStatusResponse } from './types';
 
 export const api = {
   get: <T>(path: string) => request<T>(path),
@@ -141,6 +141,13 @@ export const api = {
     }),
   ollamaModelInfo: (name: string) =>
     request<OllamaModelInfo>(`/api/v1/ai/ollama/models/${encodeURIComponent(name)}/info`),
+
+  codexOAuthStart: () =>
+    request<CodexOAuthStartResponse>('/api/v1/ai/codex/oauth/start', { method: 'POST' }),
+  codexOAuthStatus: () =>
+    request<CodexOAuthStatusResponse>('/api/v1/ai/codex/oauth/status'),
+  codexOAuthDisconnect: () =>
+    request<CodexOAuthStatusResponse>('/api/v1/ai/codex/oauth/disconnect', { method: 'POST' }),
 
   updateDiscoveredJobAction(id: string, action: string): Promise<PipelineDiscoveredJob> {
     return request<PipelineDiscoveredJob>(`/api/v1/pipeline/discovered-jobs/${id}`, {

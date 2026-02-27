@@ -205,6 +205,11 @@ export default function Settings() {
     queryFn: () => api.get<AiAdminSettingsView>("/api/v1/ai/settings"),
   });
 
+  const codexOAuthStatusQuery = useQuery({
+    queryKey: ["codex-oauth-status"],
+    queryFn: () => api.codexOAuthStatus(),
+  });
+
 
   const promptsQuery = useQuery({
     queryKey: ["prompt-admin"],
@@ -756,6 +761,32 @@ export default function Settings() {
     },
   });
 
+  const codexOAuthStartMutation = useMutation({
+    mutationFn: () => api.codexOAuthStart(),
+    onSuccess: (resp) => {
+      window.location.href = resp.auth_url;
+    },
+    onError: (e: unknown) => {
+      const message = e instanceof Error ? e.message : "Failed to start Codex OAuth";
+      setToast({ kind: "error", message });
+    },
+  });
+
+  const codexOAuthDisconnectMutation = useMutation({
+    mutationFn: () => api.codexOAuthDisconnect(),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["codex-oauth-status"] }),
+        queryClient.invalidateQueries({ queryKey: ["ai-admin-settings"] }),
+      ]);
+      setToast({ kind: "success", message: "Codex OAuth disconnected." });
+    },
+    onError: (e: unknown) => {
+      const message = e instanceof Error ? e.message : "Failed to disconnect Codex OAuth";
+      setToast({ kind: "error", message });
+    },
+  });
+
   const handleSave = () => {
     if (selectedSetting === "ai") {
       if (!aiPatch && !modelAdminDiff.hasChanges) {
@@ -861,6 +892,21 @@ export default function Settings() {
   }, [toast]);
 
   useEffect(() => {
+    const oauthResult = searchParams.get("codex_oauth");
+    if (!oauthResult) return;
+    if (oauthResult === "success") {
+      setToast({ kind: "success", message: "Codex OAuth connected." });
+    } else {
+      setToast({ kind: "error", message: "Codex OAuth failed. Please retry." });
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete("codex_oauth");
+    setSearchParams(next, { replace: true });
+    void queryClient.invalidateQueries({ queryKey: ["codex-oauth-status"] });
+    void queryClient.invalidateQueries({ queryKey: ["ai-admin-settings"] });
+  }, [queryClient, searchParams, setSearchParams]);
+
+  useEffect(() => {
     if (selectedSetting !== "ai") return;
     if (aiProvider !== "openrouter") return;
     if (!aiSettingsQuery.data?.openrouter_api_key) return;
@@ -903,7 +949,13 @@ export default function Settings() {
   const currentTelegram = tgSettingsQuery.data;
   const aiCurrent = aiSettingsQuery.data;
   const gmailCurrent = gmailSettingsQuery.data;
-  const providerLabel = (aiCurrent?.provider ?? "openrouter") === "ollama" ? "Ollama" : "OpenRouter";
+  const providerLabel =
+    (aiCurrent?.provider ?? "openrouter") === "ollama"
+      ? "Ollama"
+      : (aiCurrent?.provider ?? "openrouter") === "codex"
+        ? "Codex OAuth"
+        : "OpenRouter";
+  const codexConnected = Boolean(codexOAuthStatusQuery.data?.connected);
 
   const dialogTitle =
     selectedSetting === "ai"
@@ -1403,6 +1455,7 @@ export default function Settings() {
                       Default: {modelMap["default"] ?? "openai/gpt-4o"}
                       {providerLabel === "OpenRouter" && <> · Key: {aiCurrent?.openrouter_api_key ? "Set" : "Not set"}</>}
                       {providerLabel === "Ollama" && <> · URL: {aiCurrent?.ollama_base_url ?? "localhost:11434"}</>}
+                      {providerLabel === "Codex OAuth" && <> · OAuth: {codexConnected ? "Connected" : "Not connected"}</>}
                     </p>
                   </div>
                 </div>
@@ -1682,12 +1735,15 @@ export default function Settings() {
                   <SelectContent>
                     <SelectItem value="openrouter">OpenRouter (Cloud)</SelectItem>
                     <SelectItem value="ollama">Ollama (Local)</SelectItem>
+                    <SelectItem value="codex">Codex OAuth (ChatGPT)</SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
                   {aiProvider === "ollama"
                     ? "Ollama runs models locally — no API key needed."
-                    : "OpenRouter provides access to many cloud LLM providers."}
+                    : aiProvider === "codex"
+                      ? "Codex OAuth uses your ChatGPT account token via OAuth."
+                      : "OpenRouter provides access to many cloud LLM providers."}
                 </p>
               </div>
 
@@ -1751,6 +1807,53 @@ export default function Settings() {
                   <p className="text-xs text-muted-foreground">
                     Default: http://localhost:11434. Change if Ollama runs on a different host/port.
                   </p>
+                </div>
+              )}
+
+              {aiProvider === "codex" && (
+                <div className="space-y-3 rounded-xl border bg-card p-4">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-base font-semibold">Codex OAuth</Label>
+                    {codexOAuthStatusQuery.isLoading ? (
+                      <Badge variant="secondary">Loading...</Badge>
+                    ) : codexConnected ? (
+                      <Badge variant="default">Connected</Badge>
+                    ) : (
+                      <Badge variant="secondary">Not connected</Badge>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {codexOAuthStatusQuery.data?.expires_at_unix
+                      ? `Access token expiry: ${new Date(codexOAuthStatusQuery.data.expires_at_unix * 1000).toLocaleString()}`
+                      : "No expiry timestamp available."}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="default"
+                      onClick={() => codexOAuthStartMutation.mutate()}
+                      disabled={codexOAuthStartMutation.isPending}
+                    >
+                      {codexOAuthStartMutation.isPending ? "Opening..." : "Connect Codex"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => codexOAuthDisconnectMutation.mutate()}
+                      disabled={!codexConnected || codexOAuthDisconnectMutation.isPending}
+                    >
+                      Disconnect
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => codexOAuthStatusQuery.refetch()}
+                      disabled={codexOAuthStatusQuery.isFetching}
+                    >
+                      <RefreshCw className={`h-3 w-3 mr-1 ${codexOAuthStatusQuery.isFetching ? "animate-spin" : ""}`} />
+                      Refresh status
+                    </Button>
+                  </div>
                 </div>
               )}
 
@@ -1986,7 +2089,7 @@ export default function Settings() {
                     {renderModelKeyTable()}
                     {renderFallbackModelsEditor()}
                   </div>
-                ) : (
+                ) : aiProvider === "openrouter" ? (
                   <>
                     <div className="relative">
                       <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -2008,6 +2111,14 @@ export default function Settings() {
                     {renderModelKeyTable()}
                     {renderFallbackModelsEditor()}
                   </>
+                ) : (
+                  <div className="space-y-3">
+                    <p className="text-sm text-muted-foreground">
+                      Codex provider uses OpenAI-compatible model ids configured below.
+                    </p>
+                    {renderModelKeyTable()}
+                    {renderFallbackModelsEditor()}
+                  </div>
                 )}
               </div>
 
