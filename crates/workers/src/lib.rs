@@ -19,11 +19,15 @@
 
 pub mod agent_scheduler;
 pub mod agent_scheduler_routes;
+pub mod builtin_agents;
+pub mod dispatcher_routes;
 pub mod jd_parser;
+pub mod orchestrator;
 pub mod pipeline_scheduler;
 pub mod proactive;
 pub mod scheduled_agent;
 pub mod system_routes;
+pub mod task_executor;
 pub mod tools;
 pub mod types;
 pub mod worker_state;

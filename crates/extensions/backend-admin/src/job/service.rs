@@ -38,7 +38,7 @@ pub struct JobService {
     driver:     Arc<JobSpyDriver>,
     japandev:   Option<Arc<JapanDevDriver>>,
     job_repo:   Arc<dyn JobRepository>,
-    ai_service: rara_agents::builtin::tasks::TaskAgentService,
+    ai_service: crate::ai_tasks::TaskAgentService,
 }
 
 impl JobService {
@@ -47,7 +47,7 @@ impl JobService {
         driver: JobSpyDriver,
         japandev: Option<JapanDevDriver>,
         job_repo: Arc<dyn JobRepository>,
-        ai_service: rara_agents::builtin::tasks::TaskAgentService,
+        ai_service: crate::ai_tasks::TaskAgentService,
     ) -> Self {
         Self {
             driver: Arc::new(driver),
@@ -60,7 +60,7 @@ impl JobService {
     // -- Accessors ----------------------------------------------------------
 
     /// Access the AI service (for workers that need `jd_analyzer` etc.).
-    pub fn ai_service(&self) -> &rara_agents::builtin::tasks::TaskAgentService { &self.ai_service }
+    pub fn ai_service(&self) -> &crate::ai_tasks::TaskAgentService { &self.ai_service }
 
     /// Access the job repository directly.
     pub fn job_repo(&self) -> &Arc<dyn JobRepository> { &self.job_repo }

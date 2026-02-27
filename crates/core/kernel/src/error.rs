@@ -86,6 +86,10 @@ pub enum KernelError {
 
     #[snafu(display("{message}"))]
     Other { message: SharedString },
+
+    /// Agent execution failed.
+    #[snafu(display("agent execution failed: {message}"))]
+    AgentExecution { message: String },
 }
 
 impl From<crate::memory::MemoryError> for KernelError {

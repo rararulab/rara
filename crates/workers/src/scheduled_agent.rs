@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use common_worker::{FallibleWorker, WorkResult, WorkerContext};
-use rara_agents::dispatcher::{AgentTaskKind, Priority};
+use rara_kernel::dispatcher::{AgentTaskKind, Priority};
 use rara_sessions::types::SessionKey;
 use tracing::{info, warn};
 
@@ -76,14 +76,19 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
                 }
             };
 
-            let task = rara_agents::dispatcher::AgentTask::builder()
+            let history_converted = history
+                    .iter()
+                    .map(rara_domain_chat::message_utils::to_chat_message)
+                    .collect();
+
+                let task = rara_kernel::dispatcher::AgentTask::builder()
                 .kind(AgentTaskKind::Scheduled {
                     job_id: job.id.clone(),
                 })
                 .priority(Priority::Normal)
                 .session_key(job.session_key.clone())
                 .message(job.message.clone())
-                .history(history)
+                .history(history_converted)
                 .dedup_key(format!("scheduled:{}", job.id))
                 .build();
 

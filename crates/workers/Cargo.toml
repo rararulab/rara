@@ -16,6 +16,7 @@ anyhow.workspace = true
 async-openai = { workspace = true }
 async-trait.workspace = true
 axum = { workspace = true }
+base.workspace = true
 chrono = { workspace = true }
 common-runtime = { workspace = true }
 common-worker = { workspace = true }
@@ -23,7 +24,6 @@ crawl4ai = { workspace = true }
 croner.workspace = true
 jiff.workspace = true
 opendal.workspace = true
-rara-agents = { workspace = true }
 rara-backend-admin = { workspace = true }
 rara-codex-oauth = { workspace = true }
 rara-coding-task = { workspace = true }

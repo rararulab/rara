@@ -19,7 +19,6 @@ axum.workspace = true
 chrono.workspace = true
 futures.workspace = true
 opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"] }
-rara-agents.workspace = true
 rara-domain-shared.workspace = true
 rara-paths.workspace = true
 rara-sessions.workspace = true

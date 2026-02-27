@@ -18,7 +18,7 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use common_worker::{FallibleWorker, WorkError, WorkResult, WorkerContext};
-use rara_agents::dispatcher::{AgentTaskKind, Priority};
+use rara_kernel::dispatcher::{AgentTaskKind, Priority};
 use rara_sessions::types::SessionKey;
 use tracing::{info, warn};
 
@@ -72,12 +72,17 @@ impl FallibleWorker<AppState> for ProactiveAgentWorker {
             .unwrap_or_default();
 
         // 3. Submit task to dispatcher (fire-and-forget)
-        let task = rara_agents::dispatcher::AgentTask::builder()
+        let history_converted = history
+                .iter()
+                .map(rara_domain_chat::message_utils::to_chat_message)
+                .collect();
+
+            let task = rara_kernel::dispatcher::AgentTask::builder()
             .kind(AgentTaskKind::Proactive)
             .priority(Priority::Low)
             .session_key(PROACTIVE_SESSION_KEY.to_owned())
             .message(activity_summary)
-            .history(history)
+            .history(history_converted)
             .dedup_key("proactive".to_owned())
             .build();
 

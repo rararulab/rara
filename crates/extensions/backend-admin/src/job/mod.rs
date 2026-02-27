@@ -33,7 +33,7 @@ use sqlx::PgPool;
 /// Wire the unified [`JobService`] with all dependencies.
 pub fn wire_job_service(
     pool: PgPool,
-    ai_service: rara_agents::builtin::tasks::TaskAgentService,
+    ai_service: crate::ai_tasks::TaskAgentService,
 ) -> Result<service::JobService, error::SourceError> {
     let driver = jobspy::JobSpyDriver::new()?;
     let japandev_driver = japandev::JapanDevDriver::new(japandev::JapanDevConfig::default());

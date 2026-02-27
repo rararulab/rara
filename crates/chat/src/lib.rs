@@ -33,7 +33,9 @@
 //! HTTP routes are defined in `rara-backend-admin::chat` and expose all
 //! endpoints under `/api/v1/chat/`.
 
+pub mod agent;
 pub mod error;
+pub mod message_utils;
 pub mod model_catalog;
 pub mod service;
 pub mod stream;

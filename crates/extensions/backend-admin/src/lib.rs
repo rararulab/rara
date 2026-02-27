@@ -5,12 +5,12 @@
 //! all domain routes (resume, application, interview, scheduler, analytics,
 //! job, chat).
 
+pub mod ai_tasks;
 pub mod analytics;
 pub mod application;
 pub mod chat;
 pub mod coding_task;
 pub mod contacts;
-pub mod dispatcher;
 pub mod interview;
 pub mod job;
 pub mod mcp;

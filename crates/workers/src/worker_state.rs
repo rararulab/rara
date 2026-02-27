@@ -30,7 +30,7 @@ use yunara_store::db::DBStore;
 #[derive(Clone)]
 pub struct AppState {
     // -- AI --
-    pub ai_service: rara_agents::builtin::tasks::TaskAgentService,
+    pub ai_service: rara_backend_admin::ai_tasks::TaskAgentService,
 
     // -- domain services --
     pub resume_service:      rara_backend_admin::resume::ResumeAppService,
@@ -73,7 +73,7 @@ pub struct AppState {
     pub coding_task_service: rara_coding_task::service::CodingTaskService,
 
     // -- dispatcher --
-    pub dispatcher: Arc<rara_agents::dispatcher::AgentDispatcher>,
+    pub dispatcher: Arc<rara_kernel::dispatcher::AgentDispatcher>,
 
     // -- prompt repo --
     pub prompt_repo: Arc<dyn rara_kernel::prompt::PromptRepo>,
@@ -117,7 +117,7 @@ impl AppState {
 
         // -- AI task agents --------------------------------------------------
 
-        let ai_service = rara_agents::builtin::tasks::TaskAgentService::new(
+        let ai_service = rara_backend_admin::ai_tasks::TaskAgentService::new(
             settings_svc.subscribe(),
             llm_provider.clone(),
             prompt_repo.clone(),
@@ -362,7 +362,7 @@ impl AppState {
         let tools = Arc::new(tool_registry);
 
         let agent_ctx: Arc<dyn rara_kernel::agent_context::AgentContext> = Arc::new(
-            rara_agents::orchestrator::AgentContextImpl::new(
+            crate::orchestrator::AgentContextImpl::new(
                 llm_provider.clone(),
                 tools.clone(),
                 mcp_manager.clone(),
@@ -374,7 +374,7 @@ impl AppState {
             ),
         );
 
-        let chat_agent = rara_agents::builtin::chat::ChatAgent::new(Arc::clone(&agent_ctx));
+        let chat_agent = rara_domain_chat::agent::ChatAgent::new(Arc::clone(&agent_ctx));
         let chat_service = rara_domain_chat::service::ChatService::new(
             session_repo,
             Arc::new(settings_svc.clone())
@@ -386,16 +386,20 @@ impl AppState {
 
         // -- agent dispatcher ---------------------------------------------------
 
-        let session_persister: Arc<dyn rara_agents::dispatcher::SessionPersister> =
+        let session_persister: Arc<dyn crate::task_executor::SessionPersister> =
             Arc::new(ChatServicePersister(chat_service.clone()));
-        let job_callback: Arc<dyn rara_agents::dispatcher::ScheduledJobCallback> =
+        let job_callback: Arc<dyn crate::task_executor::ScheduledJobCallback> =
             Arc::new(AgentSchedulerCallback(agent_scheduler.clone()));
-        let log_store: Arc<dyn rara_agents::dispatcher::DispatcherLogStore> =
-            Arc::new(rara_agents::dispatcher::InMemoryLogStore::new(200));
-        let dispatcher = Arc::new(rara_agents::dispatcher::AgentDispatcher::new(
-            Arc::clone(&agent_ctx),
-            session_persister,
-            job_callback,
+        let executor: Arc<dyn rara_kernel::dispatcher::TaskExecutor> =
+            Arc::new(crate::task_executor::WorkerTaskExecutor::new(
+                Arc::clone(&agent_ctx),
+                session_persister,
+                job_callback,
+            ));
+        let log_store: Arc<dyn rara_kernel::dispatcher::DispatcherLogStore> =
+            Arc::new(rara_kernel::dispatcher::InMemoryLogStore::new(200));
+        let dispatcher = Arc::new(rara_kernel::dispatcher::AgentDispatcher::new(
+            executor,
             log_store,
         ));
         info!("Agent dispatcher initialized");
@@ -521,7 +525,7 @@ impl AppState {
         );
 
         // Dispatcher routes (plain axum::Router, no OpenAPI metadata).
-        router = router.merge(rara_backend_admin::dispatcher::dispatcher_router(
+        router = router.merge(crate::dispatcher_routes::dispatcher_router(
             self.dispatcher.clone(),
         ));
 
@@ -631,7 +635,7 @@ impl SettingsLlmProviderLoader {
 struct ChatServicePersister(rara_domain_chat::service::ChatService);
 
 #[async_trait]
-impl rara_agents::dispatcher::SessionPersister for ChatServicePersister {
+impl crate::task_executor::SessionPersister for ChatServicePersister {
     async fn persist_messages(
         &self,
         session_key: &str,
@@ -645,14 +649,21 @@ impl rara_agents::dispatcher::SessionPersister for ChatServicePersister {
             .map_err(|e| e.to_string())
     }
 
-    async fn persist_raw_message(
+    async fn persist_role_message(
         &self,
         session_key: &str,
-        message: &rara_sessions::types::ChatMessage,
+        role: &str,
+        text: &str,
     ) -> Result<(), String> {
         let key = rara_sessions::types::SessionKey::from_raw(session_key);
+        let msg = match role {
+            "user" => rara_sessions::types::ChatMessage::user(text),
+            "assistant" => rara_sessions::types::ChatMessage::assistant(text),
+            "system" => rara_sessions::types::ChatMessage::system(text),
+            _ => rara_sessions::types::ChatMessage::user(text),
+        };
         self.0
-            .append_message_raw(&key, message)
+            .append_message_raw(&key, &msg)
             .await
             .map_err(|e| e.to_string())
             .map(|_| ())
@@ -669,7 +680,7 @@ impl rara_agents::dispatcher::SessionPersister for ChatServicePersister {
 struct AgentSchedulerCallback(Arc<crate::agent_scheduler::AgentScheduler>);
 
 #[async_trait]
-impl rara_agents::dispatcher::ScheduledJobCallback for AgentSchedulerCallback {
+impl crate::task_executor::ScheduledJobCallback for AgentSchedulerCallback {
     async fn mark_executed(&self, job_id: &str) -> Result<(), String> {
         self.0
             .mark_executed(job_id)

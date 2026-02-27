@@ -74,13 +74,13 @@ impl AgentTool for GetJobPreferencesTool {
 
 /// Scores a job against the user's preferences using AI evaluation.
 pub struct ScoreJobTool {
-    ai_service:   rara_agents::builtin::tasks::TaskAgentService,
+    ai_service:   crate::ai_tasks::TaskAgentService,
     settings_svc: crate::settings::SettingsSvc,
 }
 
 impl ScoreJobTool {
     pub fn new(
-        ai_service: rara_agents::builtin::tasks::TaskAgentService,
+        ai_service: crate::ai_tasks::TaskAgentService,
         settings_svc: crate::settings::SettingsSvc,
     ) -> Self {
         Self {

@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use rara_kernel::{runner::UserContent, tool::ToolRegistry};
 use chrono::Utc;
-use rara_agents::builtin::chat::ChatAgent;
+use crate::agent::ChatAgent;
 use rara_domain_shared::settings::model::Settings;
 use rara_sessions::{
     repository::SessionRepository,
