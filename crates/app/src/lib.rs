@@ -14,6 +14,7 @@
 
 mod io_pipeline;
 mod resolvers;
+mod session_bridge;
 
 use std::{
     sync::{
@@ -340,8 +341,12 @@ impl AppConfig {
 
         // -- I/O Bus pipeline -------------------------------------------------
 
-        let io_pipeline =
-            io_pipeline::init_io_pipeline(telegram_adapter.clone());
+        let io_pipeline = io_pipeline::init_io_pipeline(
+            telegram_adapter.clone(),
+            app_state.session_repo.clone(),
+            app_state.llm_provider.clone(),
+            app_state.tool_registry.clone(),
+        );
 
         // Start TickLoop in the background.
         // The TickLoop drains the InboundBus and dispatches messages through
@@ -354,12 +359,19 @@ impl AppConfig {
             }
         });
 
-        // NOTE: Egress is NOT spawned yet because `Egress` holds a
-        // `Box<dyn OutboundSubscriber>` which is `Send` but not `Sync`,
-        // making it incompatible with `tokio::spawn`. This will be fixed
-        // in the kernel crate (make OutboundSubscriber Sync or restructure
-        // Egress). The `_egress` binding keeps it alive for future wiring.
-        let _egress = io_pipeline.egress;
+        // Spawn Egress — delivers outbound envelopes to channel adapters.
+        let mut egress = io_pipeline.egress;
+        tokio::spawn({
+            let token = cancellation_token.clone();
+            async move {
+                // Run until the outbound bus closes (sender dropped).
+                // Also stop early if cancellation is signalled.
+                tokio::select! {
+                    _ = egress.run() => {}
+                    _ = token.cancelled() => {}
+                }
+            }
+        });
 
         // Start Telegram adapter with the I/O Bus ingress pipeline.
         if let Some(ref tg_adapter) = telegram_adapter {
