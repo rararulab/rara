@@ -60,6 +60,9 @@ use rara_kernel::channel::types::{
     MessageContent, MessageRole, OutboundMessage, ReplyMarkup, StreamEvent,
 };
 use rara_kernel::error::KernelError;
+use rara_kernel::io::egress::{EgressAdapter, EgressError, Endpoint, EndpointAddress, PlatformOutbound};
+use rara_kernel::io::ingress::{InboundSink, RawPlatformMessage};
+use rara_kernel::io::types::{IngestError, InteractionType, ReplyContext as IoReplyContext};
 use teloxide::payloads::{
     EditMessageTextSetters, GetUpdatesSetters, SendMessageSetters, SendPhotoSetters,
 };
@@ -267,6 +270,172 @@ impl TelegramAdapter {
     /// if the chat ID is explicitly listed.
     fn is_allowed(&self, chat_id: i64) -> bool {
         self.allowed_chat_ids.is_empty() || self.allowed_chat_ids.contains(&chat_id)
+    }
+
+    // -----------------------------------------------------------------
+    // I/O Bus model — InboundSink + EgressAdapter support
+    // -----------------------------------------------------------------
+
+    /// Start the adapter with an [`InboundSink`] (I/O Bus model).
+    ///
+    /// Similar to [`start`](ChannelAdapter::start), but uses the new fire-and-forget
+    /// ingress model. Inbound messages are converted to [`RawPlatformMessage`] and
+    /// handed to the sink. The adapter does **not** wait for a response — egress
+    /// delivers replies through [`EgressAdapter::send`].
+    ///
+    /// This method coexists with the legacy [`start`] for a transition period.
+    /// Once `rara-app` is migrated to the I/O Bus model, the old `start()` can
+    /// be removed.
+    pub async fn start_with_sink(
+        &self,
+        sink: Arc<dyn InboundSink>,
+    ) -> Result<(), KernelError> {
+        // Delete any existing webhook so getUpdates works.
+        self.bot
+            .delete_webhook()
+            .await
+            .map_err(|e| KernelError::Other {
+                message: format!("failed to delete webhook: {e}").into(),
+            })?;
+
+        // Verify the bot token via getMe.
+        let me = self.bot.get_me().await.map_err(|e| KernelError::Other {
+            message: format!("failed to verify bot token via getMe: {e}").into(),
+        })?;
+        info!(
+            bot_id = me.id.0,
+            bot_username = ?me.username,
+            "telegram adapter (sink mode): bot identity verified"
+        );
+
+        // Store bot username for metadata enrichment.
+        if let Some(ref username) = me.username {
+            *self.bot_username.write().await = Some(username.clone());
+        }
+
+        let bot = self.bot.clone();
+        let allowed_chat_ids = self.allowed_chat_ids.clone();
+        let polling_timeout = self.polling_timeout;
+        let mut shutdown_rx = self.shutdown_rx.clone();
+        let bot_username = Arc::clone(&self.bot_username);
+        let config = Arc::clone(&self.config);
+        let contact_tracker = self.contact_tracker.clone();
+
+        tokio::spawn(async move {
+            sink_polling_loop(
+                bot,
+                sink,
+                allowed_chat_ids,
+                polling_timeout,
+                &mut shutdown_rx,
+                bot_username,
+                config,
+                contact_tracker,
+            )
+            .await;
+        });
+
+        info!("telegram adapter (sink mode) started");
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EgressAdapter implementation
+// ---------------------------------------------------------------------------
+
+#[async_trait]
+impl EgressAdapter for TelegramAdapter {
+    fn channel_type(&self) -> ChannelType {
+        ChannelType::Telegram
+    }
+
+    async fn send(
+        &self,
+        endpoint: &Endpoint,
+        msg: PlatformOutbound,
+    ) -> Result<(), EgressError> {
+        let (chat_id, _thread_id) = match &endpoint.address {
+            EndpointAddress::Telegram { chat_id, thread_id } => (*chat_id, *thread_id),
+            _ => {
+                return Err(EgressError::DeliveryFailed {
+                    message: "not a telegram endpoint".to_string(),
+                });
+            }
+        };
+
+        match msg {
+            PlatformOutbound::Reply {
+                content,
+                reply_context,
+                ..
+            } => {
+                let html = crate::telegram::markdown::markdown_to_telegram_html(&content);
+                let chunks = crate::telegram::markdown::chunk_message(&html, 4096);
+
+                for (i, chunk) in chunks.iter().enumerate() {
+                    let mut req = self
+                        .bot
+                        .send_message(ChatId(chat_id), chunk)
+                        .parse_mode(ParseMode::Html);
+
+                    // Attach reply-to on the first chunk if available.
+                    if i == 0 {
+                        if let Some(ref ctx) = reply_context {
+                            if let Some(ref reply_id) = ctx.reply_to_platform_msg_id {
+                                if let Ok(msg_id) = parse_message_id(reply_id) {
+                                    req = req.reply_parameters(ReplyParameters::new(msg_id));
+                                }
+                            }
+                        }
+                    }
+
+                    req.await.map_err(|e| EgressError::DeliveryFailed {
+                        message: format!("failed to send telegram message: {e}"),
+                    })?;
+                }
+            }
+            PlatformOutbound::StreamChunk {
+                delta,
+                edit_target,
+                ..
+            } => {
+                if let Some(ref target_id) = edit_target {
+                    // Edit an existing message with accumulated text.
+                    if let Ok(msg_id) = parse_message_id(target_id) {
+                        let html =
+                            crate::telegram::markdown::markdown_to_telegram_html(&delta);
+                        let _ = self
+                            .bot
+                            .edit_message_text(ChatId(chat_id), msg_id, &html)
+                            .parse_mode(ParseMode::Html)
+                            .await;
+                    }
+                } else {
+                    // No edit target — send as a new message.
+                    let _ = self
+                        .bot
+                        .send_message(ChatId(chat_id), &delta)
+                        .await;
+                }
+            }
+            PlatformOutbound::Progress { text, .. } => {
+                // Send a typing indicator for progress updates.
+                let _ = self
+                    .bot
+                    .send_chat_action(ChatId(chat_id), ChatAction::Typing)
+                    .await;
+                // If there's progress text, send it as a message.
+                if !text.is_empty() {
+                    let _ = self
+                        .bot
+                        .send_message(ChatId(chat_id), &text)
+                        .await;
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -542,6 +711,342 @@ async fn polling_loop(
     }
 
     info!("telegram adapter: polling loop stopped");
+}
+
+// ---------------------------------------------------------------------------
+// Sink-based polling loop (I/O Bus model)
+// ---------------------------------------------------------------------------
+
+/// The getUpdates long-polling loop for the I/O Bus model.
+///
+/// Similar to [`polling_loop`], but instead of calling `bridge.dispatch()` and
+/// waiting for a response, it converts each update to a [`RawPlatformMessage`]
+/// and hands it to the [`InboundSink`] in a fire-and-forget fashion.
+///
+/// Commands and callbacks are **not** handled in this mode — they will be
+/// routed through the kernel like regular messages. The adapter only
+/// performs authorization checks, contact tracking, and group-chat filtering.
+async fn sink_polling_loop(
+    bot: teloxide::Bot,
+    sink: Arc<dyn InboundSink>,
+    allowed_chat_ids: Vec<i64>,
+    polling_timeout: u32,
+    shutdown_rx: &mut watch::Receiver<bool>,
+    bot_username: Arc<RwLock<Option<String>>>,
+    config: Arc<StdRwLock<TelegramConfig>>,
+    contact_tracker: Option<Arc<dyn ContactTracker>>,
+) {
+    let mut offset: Option<i32> = None;
+    let mut retry_delay = INITIAL_RETRY_DELAY;
+
+    info!("telegram adapter (sink): starting getUpdates polling loop");
+
+    loop {
+        // Check for shutdown before each poll.
+        if *shutdown_rx.borrow() {
+            info!("telegram adapter (sink): shutdown received");
+            break;
+        }
+
+        let mut request = bot
+            .get_updates()
+            .timeout(polling_timeout)
+            .allowed_updates(vec![
+                AllowedUpdate::Message,
+                AllowedUpdate::EditedMessage,
+                AllowedUpdate::CallbackQuery,
+            ]);
+
+        if let Some(off) = offset {
+            request = request.offset(off);
+        }
+
+        // Use select to allow shutdown during the long poll.
+        let result = tokio::select! {
+            _ = shutdown_rx.changed() => {
+                info!("telegram adapter (sink): shutdown during getUpdates wait");
+                break;
+            }
+            result = request.send() => result,
+        };
+
+        match result {
+            Ok(updates) => {
+                // Reset retry delay on success.
+                retry_delay = INITIAL_RETRY_DELAY;
+
+                for update in updates {
+                    // Advance offset past this update.
+                    #[allow(clippy::cast_possible_wrap)]
+                    let next_offset = update.id.0 as i32 + 1;
+                    offset = Some(next_offset);
+
+                    // Spawn handler as a separate task.
+                    let sink = Arc::clone(&sink);
+                    let bot = bot.clone();
+                    let allowed = allowed_chat_ids.clone();
+                    let bot_username = Arc::clone(&bot_username);
+                    let config = Arc::clone(&config);
+                    let tracker = contact_tracker.clone();
+                    tokio::spawn(async move {
+                        handle_sink_update(
+                            update,
+                            &sink,
+                            &bot,
+                            &allowed,
+                            &bot_username,
+                            &config,
+                            tracker.as_ref(),
+                        )
+                        .await;
+                    });
+                }
+            }
+            Err(teloxide::RequestError::Api(ref api_err)) => {
+                let err_str = format!("{api_err}");
+                if err_str.contains("terminated by other getUpdates request") {
+                    warn!("telegram adapter (sink): another bot instance detected — exiting");
+                    break;
+                }
+                error!(error = %api_err, "telegram adapter (sink): API error in getUpdates");
+                tokio::time::sleep(retry_delay).await;
+                retry_delay = (retry_delay * 2).min(MAX_RETRY_DELAY);
+            }
+            Err(e) => {
+                error!(error = %e, "telegram adapter (sink): getUpdates request failed");
+                tokio::time::sleep(retry_delay).await;
+                retry_delay = (retry_delay * 2).min(MAX_RETRY_DELAY);
+            }
+        }
+    }
+
+    info!("telegram adapter (sink): polling loop stopped");
+}
+
+/// Handle a single Telegram update in sink mode.
+///
+/// Performs authorization, contact tracking, and group-chat filtering,
+/// then converts the message to a [`RawPlatformMessage`] and hands it
+/// to the sink. On `IngestError::SystemBusy`, replies with a "system busy"
+/// message to the user.
+async fn handle_sink_update(
+    update: Update,
+    sink: &Arc<dyn InboundSink>,
+    bot: &teloxide::Bot,
+    allowed_chat_ids: &[i64],
+    bot_username: &Arc<RwLock<Option<String>>>,
+    config: &Arc<StdRwLock<TelegramConfig>>,
+    contact_tracker: Option<&Arc<dyn ContactTracker>>,
+) {
+    // Read a snapshot of the runtime config for this update.
+    let cfg = match config.read() {
+        Ok(g) => g.clone(),
+        Err(e) => e.into_inner().clone(),
+    };
+
+    // Skip callback queries for now in sink mode — they need special handling.
+    if matches!(&update.kind, UpdateKind::CallbackQuery(_)) {
+        // TODO: Convert callbacks to RawPlatformMessage with InteractionType::Callback
+        return;
+    }
+
+    let msg = match &update.kind {
+        UpdateKind::Message(msg) | UpdateKind::EditedMessage(msg) => msg,
+        _ => return,
+    };
+
+    let chat_id = msg.chat.id.0;
+
+    // Track contact if username is available.
+    if let Some(tracker) = contact_tracker {
+        if let Some(ref user) = msg.from {
+            if let Some(ref username) = user.username {
+                tracker.track(username, chat_id).await;
+            }
+        }
+    }
+
+    // Check if this chat is allowed.
+    if !allowed_chat_ids.is_empty() && !allowed_chat_ids.contains(&chat_id) {
+        warn!(chat_id, "telegram adapter (sink): dropping message from unauthorized chat");
+        return;
+    }
+
+    // --- Group chat authorization ---
+    let group_chat = is_group_chat(msg);
+
+    if group_chat {
+        let trigger_text = msg.text().or_else(|| msg.caption()).unwrap_or_default();
+        let username_guard = bot_username.read().await;
+        let username_ref = username_guard.as_deref();
+
+        let is_small = matches!(
+            bot.get_chat_member_count(msg.chat.id).await,
+            Ok(n) if n <= SMALL_GROUP_THRESHOLD
+        );
+
+        if !is_small {
+            let should_respond = is_group_mention(msg, trigger_text, username_ref)
+                || contains_rara_keyword(trigger_text);
+            if !should_respond {
+                return;
+            }
+        }
+
+        // Check allowed group chat authorization.
+        if let Some(allowed_id) = cfg.allowed_group_chat_id {
+            if chat_id != allowed_id {
+                warn!(
+                    chat_id,
+                    allowed_group_chat_id = allowed_id,
+                    "telegram adapter (sink): dropping group message from unauthorized group"
+                );
+                let _ = bot
+                    .send_message(
+                        ChatId(chat_id),
+                        "This group is not authorized. Please configure the allowed group \
+                         chat ID in the adapter settings.",
+                    )
+                    .await;
+                return;
+            }
+        }
+
+        drop(username_guard);
+    }
+
+    // Convert to RawPlatformMessage.
+    let username_guard = bot_username.read().await;
+    let username_ref = username_guard.as_deref().unwrap_or("");
+    let raw = match telegram_to_raw_platform_message(msg, username_ref) {
+        Some(raw) => raw,
+        None => return,
+    };
+    drop(username_guard);
+
+    // Fire-and-forget ingest.
+    if let Err(e) = sink.ingest(raw).await {
+        match e {
+            IngestError::SystemBusy => {
+                let _ = bot
+                    .send_message(
+                        ChatId(chat_id),
+                        "\u{26a0}\u{fe0f} \u{7cfb}\u{7edf}\u{7e41}\u{5fd9}\u{ff0c}\u{8bf7}\u{7a0d}\u{540e}\u{518d}\u{8bd5}\u{3002}",
+                    )
+                    .await;
+            }
+            other => {
+                error!(error = %other, "telegram adapter (sink): ingest failed");
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RawPlatformMessage conversion
+// ---------------------------------------------------------------------------
+
+/// Convert a Telegram message to a [`RawPlatformMessage`].
+///
+/// Extracts user ID, chat ID, text/caption content, and reply context from
+/// the Telegram message. Returns `None` if the message has no text content
+/// (e.g. stickers, voice notes without caption).
+pub fn telegram_to_raw_platform_message(
+    msg: &teloxide::types::Message,
+    bot_username: &str,
+) -> Option<RawPlatformMessage> {
+    // Extract text — try text first, then caption (for photos/documents).
+    let raw_text = msg.text().or_else(|| msg.caption())?;
+    if raw_text.trim().is_empty() {
+        return None;
+    }
+
+    // Strip @mention from text in group chats.
+    let text = if is_group_chat(msg) {
+        let username = if bot_username.is_empty() {
+            None
+        } else {
+            Some(bot_username)
+        };
+        strip_group_mention(raw_text, username)
+    } else {
+        raw_text.to_owned()
+    };
+
+    if text.trim().is_empty() {
+        return None;
+    }
+
+    let platform_user_id = msg
+        .from
+        .as_ref()
+        .map(|u| u.id.0.to_string())
+        .unwrap_or_else(|| "unknown".to_owned());
+
+    // Determine the interaction type.
+    let interaction_type = if text.starts_with('/') {
+        // Extract command name (strip leading '/' and any @botname suffix).
+        let cmd_part = text.split_whitespace().next().unwrap_or(&text);
+        let cmd_name = cmd_part
+            .trim_start_matches('/')
+            .split('@')
+            .next()
+            .unwrap_or("")
+            .to_lowercase();
+        if cmd_name.is_empty() {
+            InteractionType::Message
+        } else {
+            InteractionType::Command(cmd_name)
+        }
+    } else {
+        InteractionType::Message
+    };
+
+    // Build reply context.
+    let reply_context = Some(IoReplyContext {
+        thread_id: msg.thread_id.map(|t| t.to_string()),
+        reply_to_platform_msg_id: msg
+            .reply_to_message()
+            .map(|r| r.id.0.to_string()),
+        interaction_type,
+    });
+
+    // Build metadata (adapter-specific).
+    let mut metadata = HashMap::new();
+    if let Some(ref user) = msg.from {
+        if let Some(ref username) = user.username {
+            metadata.insert(
+                "telegram_username".to_owned(),
+                serde_json::Value::String(username.clone()),
+            );
+        }
+        // Include display name for downstream enrichment.
+        let display_name = if let Some(ref last) = user.last_name {
+            format!("{} {last}", user.first_name)
+        } else {
+            user.first_name.clone()
+        };
+        metadata.insert(
+            "telegram_display_name".to_owned(),
+            serde_json::Value::String(display_name),
+        );
+    }
+    if !bot_username.is_empty() {
+        metadata.insert(
+            "telegram_bot_username".to_owned(),
+            serde_json::Value::String(bot_username.to_owned()),
+        );
+    }
+
+    Some(RawPlatformMessage {
+        channel_type: ChannelType::Telegram,
+        platform_message_id: Some(msg.id.0.to_string()),
+        platform_user_id,
+        platform_chat_id: Some(msg.chat.id.0.to_string()),
+        content: MessageContent::Text(text),
+        reply_context,
+        metadata,
+    })
 }
 
 /// Handle a single Telegram update.
@@ -1659,7 +2164,10 @@ mod tests {
     fn channel_type_is_telegram() {
         let bot = teloxide::Bot::new("fake_token");
         let adapter = TelegramAdapter::new(bot, vec![]);
-        assert_eq!(adapter.channel_type(), ChannelType::Telegram);
+        assert_eq!(
+            <TelegramAdapter as ChannelAdapter>::channel_type(&adapter),
+            ChannelType::Telegram
+        );
     }
 
     #[test]
@@ -2087,5 +2595,156 @@ mod tests {
         let bot = teloxide::Bot::new("fake_token");
         let adapter = TelegramAdapter::new(bot, vec![]);
         assert!(adapter.contact_tracker.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // I/O Bus model tests
+    // -----------------------------------------------------------------------
+
+    /// Build a minimal teloxide Message from JSON for testing.
+    fn make_test_message(text: &str, user_id: u64, chat_id: i64) -> teloxide::types::Message {
+        let json = serde_json::json!({
+            "message_id": 42,
+            "date": 1700000000,
+            "chat": {
+                "id": chat_id,
+                "type": "private",
+                "first_name": "Test"
+            },
+            "from": {
+                "id": user_id,
+                "is_bot": false,
+                "first_name": "Test",
+                "last_name": "User",
+                "username": "testuser"
+            },
+            "text": text
+        });
+        serde_json::from_value(json).expect("valid test message JSON")
+    }
+
+    /// Build a minimal group chat message for testing.
+    fn make_test_group_message(
+        text: &str,
+        user_id: u64,
+        chat_id: i64,
+    ) -> teloxide::types::Message {
+        let json = serde_json::json!({
+            "message_id": 42,
+            "date": 1700000000,
+            "chat": {
+                "id": chat_id,
+                "type": "supergroup",
+                "title": "Test Group"
+            },
+            "from": {
+                "id": user_id,
+                "is_bot": false,
+                "first_name": "Test",
+                "last_name": "User",
+                "username": "testuser"
+            },
+            "text": text
+        });
+        serde_json::from_value(json).expect("valid test group message JSON")
+    }
+
+    #[test]
+    fn test_telegram_to_raw_platform_message_basic() {
+        let msg = make_test_message("Hello world", 12345, 67890);
+        let raw = telegram_to_raw_platform_message(&msg, "mybot").unwrap();
+
+        assert_eq!(raw.channel_type, ChannelType::Telegram);
+        assert_eq!(raw.platform_user_id, "12345");
+        assert_eq!(raw.platform_chat_id, Some("67890".to_string()));
+        assert_eq!(raw.platform_message_id, Some("42".to_string()));
+        assert_eq!(raw.content.as_text(), "Hello world");
+
+        // Check reply context.
+        let ctx = raw.reply_context.unwrap();
+        assert!(matches!(ctx.interaction_type, InteractionType::Message));
+        assert!(ctx.thread_id.is_none());
+        assert!(ctx.reply_to_platform_msg_id.is_none());
+
+        // Check metadata.
+        assert_eq!(
+            raw.metadata.get("telegram_username"),
+            Some(&serde_json::Value::String("testuser".to_owned()))
+        );
+        assert_eq!(
+            raw.metadata.get("telegram_display_name"),
+            Some(&serde_json::Value::String("Test User".to_owned()))
+        );
+        assert_eq!(
+            raw.metadata.get("telegram_bot_username"),
+            Some(&serde_json::Value::String("mybot".to_owned()))
+        );
+    }
+
+    #[test]
+    fn test_telegram_to_raw_platform_message_command() {
+        let msg = make_test_message("/search rust developer", 12345, 67890);
+        let raw = telegram_to_raw_platform_message(&msg, "mybot").unwrap();
+
+        assert_eq!(raw.content.as_text(), "/search rust developer");
+        let ctx = raw.reply_context.unwrap();
+        assert!(matches!(
+            ctx.interaction_type,
+            InteractionType::Command(ref name) if name == "search"
+        ));
+    }
+
+    #[test]
+    fn test_telegram_to_raw_platform_message_empty_text() {
+        let msg = make_test_message("", 12345, 67890);
+        let raw = telegram_to_raw_platform_message(&msg, "mybot");
+        assert!(raw.is_none());
+    }
+
+    #[test]
+    fn test_telegram_to_raw_platform_message_whitespace_only() {
+        let msg = make_test_message("   ", 12345, 67890);
+        let raw = telegram_to_raw_platform_message(&msg, "mybot");
+        assert!(raw.is_none());
+    }
+
+    #[test]
+    fn test_telegram_to_raw_platform_message_group_strips_mention() {
+        let msg = make_test_group_message("@mybot hello there", 12345, -100_999);
+        let raw = telegram_to_raw_platform_message(&msg, "mybot").unwrap();
+
+        // The @mention should be stripped in group chats.
+        assert_eq!(raw.content.as_text(), "hello there");
+    }
+
+    #[test]
+    fn test_telegram_to_raw_platform_message_no_bot_username() {
+        let msg = make_test_message("Hello", 12345, 67890);
+        let raw = telegram_to_raw_platform_message(&msg, "").unwrap();
+
+        assert_eq!(raw.content.as_text(), "Hello");
+        // No bot username in metadata.
+        assert!(!raw.metadata.contains_key("telegram_bot_username"));
+    }
+
+    #[test]
+    fn test_telegram_to_raw_platform_message_command_with_bot_mention() {
+        let msg = make_test_message("/search@mybot keywords", 12345, 67890);
+        let raw = telegram_to_raw_platform_message(&msg, "mybot").unwrap();
+
+        let ctx = raw.reply_context.unwrap();
+        assert!(matches!(
+            ctx.interaction_type,
+            InteractionType::Command(ref name) if name == "search"
+        ));
+    }
+
+    #[test]
+    fn test_egress_adapter_channel_type() {
+        let bot = teloxide::Bot::new("fake_token");
+        let adapter = TelegramAdapter::new(bot, vec![]);
+        // Disambiguate: call EgressAdapter's channel_type explicitly.
+        let egress_ct = <TelegramAdapter as EgressAdapter>::channel_type(&adapter);
+        assert_eq!(egress_ct, ChannelType::Telegram);
     }
 }

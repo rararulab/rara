@@ -20,3 +20,4 @@ pub mod markdown;
 
 pub use adapter::TelegramAdapter;
 pub use adapter::TelegramConfig;
+pub use adapter::telegram_to_raw_platform_message;
