@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Kernel bootstrap — initializes trait-object components for `Kernel::new()`.
+//! Factory functions for SessionScheduler.
 
-pub mod bus;
-pub mod components;
-pub mod error;
-pub mod manifests;
-pub mod mcp;
-pub mod scheduler;
-pub mod session;
-pub mod skills;
-pub mod stream;
+use std::sync::Arc;
+
+use rara_kernel::io::scheduler::SessionScheduler;
+
+/// Create a default SessionScheduler with the given per-session queue limit.
+pub fn default_session_scheduler(max_pending_per_session: usize) -> Arc<SessionScheduler> {
+    Arc::new(SessionScheduler::new(max_pending_per_session))
+}

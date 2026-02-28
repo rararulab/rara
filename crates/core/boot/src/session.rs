@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Kernel bootstrap — initializes trait-object components for `Kernel::new()`.
+//! Factory functions for SessionManager.
 
-pub mod bus;
-pub mod components;
-pub mod error;
-pub mod manifests;
-pub mod mcp;
-pub mod scheduler;
-pub mod session;
-pub mod skills;
-pub mod stream;
+use std::sync::Arc;
+
+use rara_kernel::io::session_manager::{SessionManager, SessionRepository};
+
+/// Create a SessionManager with the given repository implementation.
+pub fn default_session_manager(repo: Arc<dyn SessionRepository>) -> Arc<SessionManager> {
+    Arc::new(SessionManager::new(repo))
+}

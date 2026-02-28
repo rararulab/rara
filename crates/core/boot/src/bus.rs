@@ -12,14 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Kernel bootstrap — initializes trait-object components for `Kernel::new()`.
+//! Factory functions for I/O bus components.
 
-pub mod bus;
-pub mod components;
-pub mod error;
-pub mod manifests;
-pub mod mcp;
-pub mod scheduler;
-pub mod session;
-pub mod skills;
-pub mod stream;
+use std::sync::Arc;
+
+use rara_kernel::io::bus::{InboundBus, OutboundBus};
+use rara_kernel::io::memory_bus::{InMemoryInboundBus, InMemoryOutboundBus};
+
+/// Create a default in-memory inbound bus with the given capacity.
+pub fn default_inbound_bus(capacity: usize) -> Arc<dyn InboundBus> {
+    Arc::new(InMemoryInboundBus::new(capacity))
+}
+
+/// Create a default in-memory outbound bus with the given capacity.
+pub fn default_outbound_bus(capacity: usize) -> Arc<dyn OutboundBus> {
+    Arc::new(InMemoryOutboundBus::new(capacity))
+}
