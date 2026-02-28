@@ -14,8 +14,8 @@
 
 //! In-memory implementations of the bus traits.
 //!
-//! - [`InMemoryInboundBus`]: `Mutex<VecDeque>` + `Notify` + `AtomicUsize`
-//! - [`InMemoryOutboundBus`]: `tokio::sync::broadcast`
+//! - [`InMemoryInboundBus`] — `Mutex<VecDeque>` + `Notify` + `AtomicUsize`
+//! - [`InMemoryOutboundBus`] — `tokio::sync::broadcast`
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};

@@ -37,7 +37,7 @@ use crate::process::SessionId;
 #[derive(Debug)]
 pub enum ScheduleResult {
     /// Message is ready for immediate execution.
-    Ready(InboundMessage),
+    Ready(Box<InboundMessage>),
     /// Message was queued behind a running execution.
     Queued,
     /// Message was rejected because the session queue is full.
@@ -98,7 +98,7 @@ impl SessionScheduler {
 
         if !slot.running {
             slot.running = true;
-            ScheduleResult::Ready(msg)
+            ScheduleResult::Ready(Box::new(msg))
         } else if slot.pending.len() < self.max_pending_per_session {
             slot.pending.push_back(msg);
             ScheduleResult::Queued

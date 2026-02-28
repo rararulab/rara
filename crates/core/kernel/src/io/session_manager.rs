@@ -143,52 +143,10 @@ impl SessionManager {
     }
 }
 
-// ---------------------------------------------------------------------------
-// NoopSessionRepository
-// ---------------------------------------------------------------------------
-
-/// A no-op session repository for testing.
-///
-/// All operations succeed immediately without actually persisting anything.
-pub struct NoopSessionRepository;
-
-#[async_trait]
-impl SessionRepository for NoopSessionRepository {
-    async fn ensure_session(
-        &self,
-        _id: &SessionId,
-        _user: &UserId,
-    ) -> Result<(), SessionManagerError> {
-        Ok(())
-    }
-
-    async fn get_history(
-        &self,
-        _id: &SessionId,
-    ) -> Result<Vec<ChatMessage>, SessionManagerError> {
-        Ok(vec![])
-    }
-
-    async fn append_user_message(
-        &self,
-        _id: &SessionId,
-        _content: &str,
-    ) -> Result<(), SessionManagerError> {
-        Ok(())
-    }
-
-    async fn append_assistant_message(
-        &self,
-        _id: &SessionId,
-        _content: &str,
-    ) -> Result<(), SessionManagerError> {
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::defaults::noop::NoopSessionRepository;
 
     #[tokio::test]
     async fn test_session_manager_noop() {

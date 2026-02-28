@@ -21,6 +21,12 @@ use uuid::Uuid;
 
 use crate::event::{EventBus, EventFilter, EventStream, KernelEvent};
 use crate::guard::{Guard, GuardContext, Verdict};
+use crate::io::bus::OutboxStore;
+use crate::io::session_manager::{SessionManagerError, SessionRepository};
+use crate::io::types::{BusError, MessageId, OutboundEnvelope};
+use crate::llm::ChatMessage;
+use crate::process::SessionId;
+use crate::process::principal::UserId;
 use crate::memory::knowledge::KnowledgeMemory;
 use crate::memory::learning::LearningMemory;
 use crate::memory::state::StateMemory;
@@ -207,5 +213,64 @@ impl LearningMemory for NoopMemory {
         _query: &str,
     ) -> MemResult<String> {
         Ok(String::new())
+    }
+}
+
+// ---- NoopOutboxStore ----
+
+/// A no-op outbox store for testing — all operations succeed without persisting.
+pub struct NoopOutboxStore;
+
+#[async_trait]
+impl OutboxStore for NoopOutboxStore {
+    async fn append(&self, _envelope: OutboundEnvelope) -> Result<(), BusError> {
+        Ok(())
+    }
+
+    async fn drain_pending(&self, _max: usize) -> Vec<OutboundEnvelope> {
+        vec![]
+    }
+
+    async fn mark_delivered(&self, _id: &MessageId) -> Result<(), BusError> {
+        Ok(())
+    }
+}
+
+// ---- NoopSessionRepository ----
+
+/// A no-op session repository for testing — all operations succeed without persisting.
+pub struct NoopSessionRepository;
+
+#[async_trait]
+impl SessionRepository for NoopSessionRepository {
+    async fn ensure_session(
+        &self,
+        _id: &SessionId,
+        _user: &UserId,
+    ) -> Result<(), SessionManagerError> {
+        Ok(())
+    }
+
+    async fn get_history(
+        &self,
+        _id: &SessionId,
+    ) -> Result<Vec<ChatMessage>, SessionManagerError> {
+        Ok(vec![])
+    }
+
+    async fn append_user_message(
+        &self,
+        _id: &SessionId,
+        _content: &str,
+    ) -> Result<(), SessionManagerError> {
+        Ok(())
+    }
+
+    async fn append_assistant_message(
+        &self,
+        _id: &SessionId,
+        _content: &str,
+    ) -> Result<(), SessionManagerError> {
+        Ok(())
     }
 }

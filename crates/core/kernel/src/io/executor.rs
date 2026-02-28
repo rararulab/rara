@@ -158,23 +158,30 @@ impl AgentExecutor {
         };
         self.process_table.insert(process);
 
-        // 3. Load history + persist current message
-        let _ensure_result = self
+        // 3. Ensure session exists + persist current message
+        if let Err(e) = self
             .session_manager
             .ensure_session(&session_id, &msg.user)
-            .await;
-
-        let _history = self
-            .session_manager
-            .get_history(&session_id)
             .await
-            .unwrap_or_default();
+        {
+            warn!(
+                session_id = %session_id,
+                error = %e,
+                "failed to ensure session, continuing without persistence"
+            );
+        }
 
-        // Persist the current message (convention: history snapshot does NOT include it)
-        let _append_result = self
+        if let Err(e) = self
             .session_manager
             .append_message(&session_id, &msg)
-            .await;
+            .await
+        {
+            warn!(
+                session_id = %session_id,
+                error = %e,
+                "failed to persist inbound message"
+            );
+        }
 
         // 4. Open StreamHandle
         let stream_handle = self.stream_hub.open(session_id.clone());
@@ -259,10 +266,17 @@ impl AgentExecutor {
         // 7. Handle success result
         if got_done || !final_text.is_empty() {
             // Persist the assistant reply
-            let _ = self
+            if let Err(e) = self
                 .session_manager
                 .append_assistant_message(&session_id, &final_text)
-                .await;
+                .await
+            {
+                warn!(
+                    session_id = %session_id,
+                    error = %e,
+                    "failed to persist assistant reply"
+                );
+            }
 
             // Set process result
             let agent_result = AgentResult {
@@ -373,34 +387,6 @@ impl AgentExecutor {
     }
 }
 
-// ---------------------------------------------------------------------------
-// NoopOutboxStore
-// ---------------------------------------------------------------------------
-
-/// A no-op outbox store for testing.
-pub struct NoopOutboxStore;
-
-#[async_trait::async_trait]
-impl OutboxStore for NoopOutboxStore {
-    async fn append(
-        &self,
-        _envelope: OutboundEnvelope,
-    ) -> Result<(), crate::io::types::BusError> {
-        Ok(())
-    }
-
-    async fn drain_pending(&self, _max: usize) -> Vec<OutboundEnvelope> {
-        vec![]
-    }
-
-    async fn mark_delivered(
-        &self,
-        _id: &MessageId,
-    ) -> Result<(), crate::io::types::BusError> {
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -408,7 +394,8 @@ mod tests {
     use super::*;
     use crate::channel::types::ChannelType;
     use crate::io::memory_bus::{InMemoryInboundBus, InMemoryOutboundBus};
-    use crate::io::session_manager::{NoopSessionRepository, SessionManager};
+    use crate::defaults::noop::{NoopOutboxStore, NoopSessionRepository};
+    use crate::io::session_manager::SessionManager;
     use crate::io::types::ChannelSource;
     use crate::process::principal::UserId;
     use crate::provider::EnvLlmProviderLoader;

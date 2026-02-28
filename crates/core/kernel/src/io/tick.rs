@@ -72,6 +72,7 @@ impl TickLoop {
     }
 
     /// Create a new tick loop with a custom batch size.
+    #[must_use]
     pub fn with_batch_size(mut self, batch_size: usize) -> Self {
         self.batch_size = batch_size;
         self
@@ -109,7 +110,7 @@ impl TickLoop {
             ScheduleResult::Ready(ready_msg) => {
                 let executor = self.executor.clone();
                 tokio::spawn(async move {
-                    executor.run(ready_msg).await;
+                    executor.run(*ready_msg).await;
                 });
             }
             ScheduleResult::Queued => {
@@ -133,9 +134,10 @@ mod tests {
 
     use super::*;
     use crate::channel::types::{ChannelType, MessageContent};
-    use crate::io::executor::{AgentExecutor, NoopOutboxStore};
+    use crate::defaults::noop::{NoopOutboxStore, NoopSessionRepository};
+    use crate::io::executor::AgentExecutor;
     use crate::io::memory_bus::{InMemoryInboundBus, InMemoryOutboundBus};
-    use crate::io::session_manager::{NoopSessionRepository, SessionManager};
+    use crate::io::session_manager::SessionManager;
     use crate::io::stream::StreamHub;
     use crate::io::types::{ChannelSource, MessageId};
     use crate::process::principal::UserId;

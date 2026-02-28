@@ -41,25 +41,20 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use jiff::Timestamp;
-use tokio::sync::{oneshot, Semaphore};
+use tokio::sync::Semaphore;
 use tracing::info;
 
 use crate::error::{KernelError, Result};
 use crate::event::EventBus;
 use crate::guard::Guard;
-use crate::handle::scoped::{KernelInner, ScopedKernelHandle};
+use crate::handle::scoped::KernelInner;
 use crate::handle::AgentHandle;
 use crate::memory::Memory;
 use crate::process::manifest_loader::ManifestLoader;
 use crate::process::principal::Principal;
 use crate::process::user::UserStore;
-use crate::process::{
-    AgentEnv, AgentId, AgentManifest, AgentProcess, AgentResult, ProcessState,
-    ProcessTable, SessionId,
-};
+use crate::process::{AgentId, AgentManifest, ProcessTable, SessionId};
 use crate::provider::LlmProviderLoaderRef;
-use crate::runner::{AgentRunner, UserContent};
 use crate::tool::ToolRegistry;
 
 /// Kernel configuration.
@@ -154,7 +149,7 @@ impl Kernel {
         self.inner.validate_principal(&principal).await?;
 
         // Acquire global semaphore
-        let _global_permit =
+        let global_permit =
             self.inner
                 .global_semaphore
                 .clone()
@@ -163,121 +158,31 @@ impl Kernel {
                     message: "global concurrency limit reached".to_string(),
                 })?;
 
-        // Create AgentProcess
-        let agent_id = AgentId::new();
-        let max_iterations = manifest
-            .max_iterations
-            .unwrap_or(self.config.default_max_iterations);
+        // Build tool registry for this agent
+        let agent_tools = self.inner.tool_registry.filtered(&manifest.tools);
         let child_limit = manifest
             .max_children
             .unwrap_or(self.config.default_child_limit);
 
-        let process = AgentProcess {
-            agent_id,
-            parent_id,
-            session_id: session_id.clone(),
-            manifest: manifest.clone(),
-            principal: principal.clone(),
-            env: AgentEnv::default(),
-            state: ProcessState::Running,
-            created_at: Timestamp::now(),
-            finished_at: None,
-            result: None,
-        };
-        self.inner.process_table.insert(process);
+        // Delegate to shared spawn logic
+        use crate::handle::scoped::{SpawnParams, SpawnPermits};
+        let handle = KernelInner::spawn_process(
+            Arc::clone(&self.inner),
+            SpawnParams {
+                manifest,
+                input,
+                principal,
+                session_id,
+                parent_id,
+                agent_tools,
+            },
+            child_limit,
+            SpawnPermits::TopLevel {
+                _global: global_permit,
+            },
+        );
 
-        // Build tool registry for this agent
-        let agent_tools = self.inner.tool_registry.filtered(&manifest.tools);
-        let tool_names: Vec<String> = agent_tools.tool_names();
-
-        // Create ScopedKernelHandle for the agent
-        let scoped_handle = Arc::new(ScopedKernelHandle {
-            agent_id,
-            session_id,
-            principal,
-            allowed_tools: tool_names,
-            child_semaphore: Arc::new(Semaphore::new(child_limit)),
-            inner: Arc::clone(&self.inner),
-        });
-
-        // Build AgentRunner
-        let model_name = manifest.model.clone();
-        let system_prompt = manifest.system_prompt.clone();
-        let provider_hint = manifest.provider_hint.clone().unwrap_or_default();
-        let llm_provider = Arc::clone(&self.inner.llm_provider);
-
-        let runner = AgentRunner::builder()
-            .llm_provider(llm_provider)
-            .provider_hint(provider_hint)
-            .model_name(model_name)
-            .system_prompt(system_prompt)
-            .user_content(UserContent::Text(input))
-            .max_iterations(max_iterations)
-            .build();
-
-        // Create oneshot channel for result
-        let (result_tx, result_rx) = oneshot::channel();
-        let inner_ref = Arc::clone(&self.inner);
-
-        // Spawn tokio task
-        tokio::spawn(async move {
-            let _global_permit = _global_permit;
-            let _scoped_handle = scoped_handle;
-
-            let run_result = runner.run(&agent_tools, None).await;
-
-            match run_result {
-                Ok(response) => {
-                    let agent_result = AgentResult {
-                        output: response.response_text(),
-                        iterations: response.iterations,
-                        tool_calls: response.tool_calls_made,
-                    };
-
-                    let _ = inner_ref
-                        .process_table
-                        .set_state(agent_id, ProcessState::Completed);
-                    let _ = inner_ref
-                        .process_table
-                        .set_result(agent_id, agent_result.clone());
-
-                    info!(
-                        agent_id = %agent_id,
-                        iterations = agent_result.iterations,
-                        tool_calls = agent_result.tool_calls,
-                        "agent process completed"
-                    );
-
-                    let _ = result_tx.send(agent_result);
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        agent_id = %agent_id,
-                        error = %err,
-                        "agent process failed"
-                    );
-
-                    let _ = inner_ref
-                        .process_table
-                        .set_state(agent_id, ProcessState::Failed);
-
-                    let error_result = AgentResult {
-                        output: format!("Error: {err}"),
-                        iterations: 0,
-                        tool_calls: 0,
-                    };
-                    let _ = inner_ref
-                        .process_table
-                        .set_result(agent_id, error_result.clone());
-                    let _ = result_tx.send(error_result);
-                }
-            }
-        });
-
-        Ok(AgentHandle {
-            agent_id,
-            result_rx,
-        })
+        Ok(handle)
     }
 
     /// Spawn a named agent by looking up its manifest.

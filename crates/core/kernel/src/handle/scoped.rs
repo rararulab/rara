@@ -101,6 +101,17 @@ pub(crate) struct KernelInner {
     pub user_store: Arc<dyn crate::process::user::UserStore>,
 }
 
+/// Parameters for spawning an agent process via [`KernelInner::spawn_process`].
+pub(crate) struct SpawnParams {
+    pub manifest: AgentManifest,
+    pub input: String,
+    pub principal: Principal,
+    pub session_id: SessionId,
+    pub parent_id: Option<AgentId>,
+    /// Pre-filtered tool registry for this agent.
+    pub agent_tools: ToolRegistry,
+}
+
 impl KernelInner {
     /// Validate that the principal's user exists, is enabled, and has Spawn
     /// permission.
@@ -124,6 +135,146 @@ impl KernelInner {
         }
         Ok(())
     }
+
+    /// Core spawn logic shared by `Kernel::spawn()` and `ScopedKernelHandle::spawn()`.
+    ///
+    /// Creates the agent process, builds and runs the AgentRunner in a tokio task,
+    /// and returns an `AgentHandle`. The caller is responsible for acquiring
+    /// semaphore permits and passing in the pre-filtered tool registry.
+    ///
+    /// # Arguments
+    /// - `self_ref` — `Arc<KernelInner>` for the spawned task to hold
+    /// - `params` — spawn parameters (manifest, input, principal, etc.)
+    /// - `child_limit` — max children for the spawned agent
+    /// - `permits` — semaphore permits to hold for the lifetime of the task
+    pub(crate) fn spawn_process(
+        self_ref: Arc<KernelInner>,
+        params: SpawnParams,
+        child_limit: usize,
+        permits: SpawnPermits,
+    ) -> AgentHandle {
+        let agent_id = AgentId::new();
+        let max_iterations = params
+            .manifest
+            .max_iterations
+            .unwrap_or(self_ref.default_max_iterations);
+
+        let process = AgentProcess {
+            agent_id,
+            parent_id: params.parent_id,
+            session_id: params.session_id.clone(),
+            manifest: params.manifest.clone(),
+            principal: params.principal.clone(),
+            env: AgentEnv::default(),
+            state: ProcessState::Running,
+            created_at: Timestamp::now(),
+            finished_at: None,
+            result: None,
+        };
+        self_ref.process_table.insert(process);
+
+        let tool_names: Vec<String> = params.agent_tools.tool_names();
+
+        let _scoped_handle = Arc::new(ScopedKernelHandle {
+            agent_id,
+            session_id: params.session_id,
+            principal: params.principal,
+            allowed_tools: tool_names,
+            child_semaphore: Arc::new(Semaphore::new(child_limit)),
+            inner: Arc::clone(&self_ref),
+        });
+
+        let model_name = params.manifest.model.clone();
+        let system_prompt = params.manifest.system_prompt.clone();
+        let provider_hint = params.manifest.provider_hint.clone().unwrap_or_default();
+        let llm_provider = Arc::clone(&self_ref.llm_provider);
+
+        let runner = AgentRunner::builder()
+            .llm_provider(llm_provider)
+            .provider_hint(provider_hint)
+            .model_name(model_name)
+            .system_prompt(system_prompt)
+            .user_content(UserContent::Text(params.input))
+            .max_iterations(max_iterations)
+            .build();
+
+        let (result_tx, result_rx) = oneshot::channel();
+
+        tokio::spawn(async move {
+            let _permits = permits;
+            let _scoped_handle = _scoped_handle;
+
+            let run_result = runner.run(&params.agent_tools, None).await;
+
+            match run_result {
+                Ok(response) => {
+                    let agent_result = AgentResult {
+                        output: response.response_text(),
+                        iterations: response.iterations,
+                        tool_calls: response.tool_calls_made,
+                    };
+
+                    let _ = self_ref
+                        .process_table
+                        .set_state(agent_id, ProcessState::Completed);
+                    let _ = self_ref
+                        .process_table
+                        .set_result(agent_id, agent_result.clone());
+
+                    info!(
+                        agent_id = %agent_id,
+                        iterations = agent_result.iterations,
+                        tool_calls = agent_result.tool_calls,
+                        "agent process completed"
+                    );
+
+                    let _ = result_tx.send(agent_result);
+                }
+                Err(err) => {
+                    warn!(
+                        agent_id = %agent_id,
+                        error = %err,
+                        "agent process failed"
+                    );
+
+                    let _ = self_ref
+                        .process_table
+                        .set_state(agent_id, ProcessState::Failed);
+
+                    let error_result = AgentResult {
+                        output: format!("Error: {err}"),
+                        iterations: 0,
+                        tool_calls: 0,
+                    };
+                    let _ = self_ref
+                        .process_table
+                        .set_result(agent_id, error_result.clone());
+                    let _ = result_tx.send(error_result);
+                }
+            }
+        });
+
+        AgentHandle {
+            agent_id,
+            result_rx,
+        }
+    }
+}
+
+/// Semaphore permits that must be held for the lifetime of the spawned task.
+///
+/// This enum accommodates both top-level spawns (global permit only) and
+/// child spawns (global + child permit).
+pub(crate) enum SpawnPermits {
+    /// Top-level spawn — only a global permit.
+    TopLevel {
+        _global: tokio::sync::OwnedSemaphorePermit,
+    },
+    /// Child spawn — both a child and global permit.
+    Child {
+        _child: tokio::sync::OwnedSemaphorePermit,
+        _global: tokio::sync::OwnedSemaphorePermit,
+    },
 }
 
 impl ScopedKernelHandle {
@@ -212,7 +363,7 @@ impl ProcessOps for ScopedKernelHandle {
         self.inner.validate_principal(&self.principal).await?;
 
         // 2. Acquire per-agent child semaphore (non-blocking try)
-        let _child_permit = self.child_semaphore.clone().try_acquire_owned().map_err(|_| {
+        let child_permit = self.child_semaphore.clone().try_acquire_owned().map_err(|_| {
             KernelError::SpawnLimitReached {
                 message: format!(
                     "agent {} reached max child limit",
@@ -222,7 +373,7 @@ impl ProcessOps for ScopedKernelHandle {
         })?;
 
         // 3. Acquire global semaphore (non-blocking try)
-        let _global_permit =
+        let global_permit =
             self.inner
                 .global_semaphore
                 .clone()
@@ -231,122 +382,31 @@ impl ProcessOps for ScopedKernelHandle {
                     message: "global concurrency limit reached".to_string(),
                 })?;
 
-        // 4. Create AgentProcess
-        let child_id = AgentId::new();
-        let max_iterations = manifest
-            .max_iterations
-            .unwrap_or(self.inner.default_max_iterations);
+        // 4. Build filtered ToolRegistry
+        let agent_tools = self.build_child_tool_registry(&manifest.tools);
         let child_limit = manifest
             .max_children
             .unwrap_or(self.inner.default_child_limit);
 
-        let process = AgentProcess {
-            agent_id: child_id,
-            parent_id: Some(self.agent_id),
-            session_id: self.session_id.clone(),
-            manifest: manifest.clone(),
-            principal: self.principal.clone(),
-            env: AgentEnv::default(),
-            state: ProcessState::Running,
-            created_at: Timestamp::now(),
-            finished_at: None,
-            result: None,
-        };
-        self.inner.process_table.insert(process);
+        // 5. Delegate to shared spawn logic
+        let handle = KernelInner::spawn_process(
+            Arc::clone(&self.inner),
+            SpawnParams {
+                manifest,
+                input,
+                principal: self.principal.clone(),
+                session_id: self.session_id.clone(),
+                parent_id: Some(self.agent_id),
+                agent_tools,
+            },
+            child_limit,
+            SpawnPermits::Child {
+                _child: child_permit,
+                _global: global_permit,
+            },
+        );
 
-        // 5. Build filtered ToolRegistry
-        let child_tools = self.build_child_tool_registry(&manifest.tools);
-        let child_tool_names: Vec<String> = child_tools.tool_names();
-
-        // 6. Create child ScopedKernelHandle
-        let child_handle = Arc::new(ScopedKernelHandle {
-            agent_id: child_id,
-            session_id: self.session_id.clone(),
-            principal: self.principal.clone(),
-            allowed_tools: child_tool_names,
-            child_semaphore: Arc::new(Semaphore::new(child_limit)),
-            inner: Arc::clone(&self.inner),
-        });
-
-        // 7. Build AgentRunner
-        let model_name = manifest.model.clone();
-        let system_prompt = manifest.system_prompt.clone();
-        let provider_hint = manifest.provider_hint.clone().unwrap_or_default();
-        let llm_provider = Arc::clone(&self.inner.llm_provider);
-
-        let runner = AgentRunner::builder()
-            .llm_provider(llm_provider)
-            .provider_hint(provider_hint)
-            .model_name(model_name)
-            .system_prompt(system_prompt)
-            .user_content(UserContent::Text(input))
-            .max_iterations(max_iterations)
-            .build();
-
-        // 8. Create oneshot channel for result
-        let (result_tx, result_rx) = oneshot::channel();
-        let process_table = Arc::clone(&self.inner);
-
-        // 9. Spawn tokio task
-        tokio::spawn(async move {
-            let _child_permit = _child_permit;
-            let _global_permit = _global_permit;
-            let _child_handle = child_handle;
-
-            let run_result = runner.run(&child_tools, None).await;
-
-            match run_result {
-                Ok(response) => {
-                    let agent_result = AgentResult {
-                        output: response.response_text(),
-                        iterations: response.iterations,
-                        tool_calls: response.tool_calls_made,
-                    };
-
-                    let _ = process_table
-                        .process_table
-                        .set_state(child_id, ProcessState::Completed);
-                    let _ = process_table
-                        .process_table
-                        .set_result(child_id, agent_result.clone());
-
-                    info!(
-                        agent_id = %child_id,
-                        iterations = agent_result.iterations,
-                        tool_calls = agent_result.tool_calls,
-                        "agent process completed"
-                    );
-
-                    let _ = result_tx.send(agent_result);
-                }
-                Err(err) => {
-                    warn!(
-                        agent_id = %child_id,
-                        error = %err,
-                        "agent process failed"
-                    );
-
-                    let _ = process_table
-                        .process_table
-                        .set_state(child_id, ProcessState::Failed);
-
-                    let error_result = AgentResult {
-                        output: format!("Error: {err}"),
-                        iterations: 0,
-                        tool_calls: 0,
-                    };
-                    let _ = process_table
-                        .process_table
-                        .set_result(child_id, error_result.clone());
-                    let _ = result_tx.send(error_result);
-                }
-            }
-        });
-
-        Ok(AgentHandle {
-            agent_id: child_id,
-            result_rx,
-        })
+        Ok(handle)
     }
 
     async fn send(&self, _agent_id: AgentId, _message: String) -> Result<String> {
