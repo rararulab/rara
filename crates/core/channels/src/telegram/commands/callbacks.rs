@@ -180,7 +180,7 @@ mod tests {
     use super::*;
     use crate::telegram::commands::client::{
         BotServiceError, ChannelBinding, CodingTask, CodingTaskSummary, DiscoveryJob,
-        McpServerInfo, McpServerStatus, SessionDetail, SessionListItem,
+        McpServerInfo, SessionDetail, SessionListItem,
     };
 
     struct MockCallbackClient;
