@@ -25,7 +25,7 @@ use rara_memory::{
     },
 };
 use serde_json::json;
-use tool_core::AgentTool;
+use rara_kernel::tool::AgentTool;
 
 /// Search unified memory layer (mem0 + Hindsight, fused with RRF).
 pub struct MemorySearchTool {

@@ -193,7 +193,7 @@ enum SpawnParams {
 }
 
 #[async_trait]
-impl tool_core::AgentTool for SpawnTool {
+impl crate::tool::AgentTool for SpawnTool {
     fn name(&self) -> &str {
         "spawn_agent"
     }
@@ -277,7 +277,7 @@ mod tests {
     use crate::error::KernelError;
     use crate::handle::AgentHandle;
     use crate::process::{AgentId, AgentManifest, AgentResult, ProcessInfo};
-    use tool_core::AgentTool;
+    use crate::tool::AgentTool;
     use tokio::sync::oneshot;
 
     /// Mock ProcessOps that spawns agents and immediately returns results.

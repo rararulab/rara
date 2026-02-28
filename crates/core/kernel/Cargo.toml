@@ -22,14 +22,13 @@ dashmap = "6"
 futures.workspace = true
 jiff.workspace = true
 opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"] }
-serde.workspace = true
 prometheus.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
 snafu.workspace = true
 tokio.workspace = true
 tokio-util = { workspace = true }
-tool-core.workspace = true
 tracing.workspace = true
 tracing-opentelemetry = "0.32.0"
 ulid.workspace = true

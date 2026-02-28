@@ -23,7 +23,7 @@ use async_trait::async_trait;
 use rara_composio::{ComposioAuthProvider, ComposioClient};
 use serde_json::json;
 
-use crate::AgentTool;
+use rara_kernel::tool::AgentTool;
 
 /// Layer 1 primitive: call Composio managed tools.
 pub struct ComposioTool {

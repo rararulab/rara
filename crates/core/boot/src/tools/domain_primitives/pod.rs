@@ -28,7 +28,7 @@ use rara_k8s::k8s_types::*;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::AgentTool;
+use rara_kernel::tool::AgentTool;
 
 /// Agent-callable tool for managing Kubernetes pods.
 pub struct PodTool {

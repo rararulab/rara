@@ -12,42 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Core trait for agent-callable tools.
+//! Primitive tool implementations (core + domain) and factory functions.
 //!
-//! This crate defines the [`AgentTool`] trait and [`AgentToolRef`] type alias
-//! used by the agent runtime and tool implementations across the workspace.
-//!
-//! It also houses all **primitive tool** implementations (core + domain) and
+//! This module houses all **primitive tool** implementations and
 //! provides [`default_primitives`] to obtain them in one call.
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use rara_domain_shared::settings::model::Settings;
+use rara_kernel::tool::AgentToolRef;
 use tokio::sync::watch;
 
-/// Reference-counted handle to an agent tool.
-pub type AgentToolRef = Arc<dyn AgentTool>;
-
-pub mod contact_lookup;
 pub mod core_primitives;
 pub mod domain_primitives;
-
-/// Agent-callable tool.
-#[async_trait]
-pub trait AgentTool: Send + Sync {
-    /// Unique name of the tool.
-    fn name(&self) -> &str;
-
-    /// Human-readable description of the tool's purpose.
-    fn description(&self) -> &str;
-
-    /// JSON Schema describing the accepted parameters.
-    fn parameters_schema(&self) -> serde_json::Value;
-
-    /// Execute the tool with the given parameters.
-    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value>;
-}
 
 /// Dependencies required to construct domain-level primitive tools.
 pub struct PrimitiveDeps {
@@ -56,7 +33,7 @@ pub struct PrimitiveDeps {
     pub settings_rx:            watch::Receiver<Settings>,
     pub object_store:           opendal::Operator,
     pub composio_auth_provider: Arc<dyn rara_composio::ComposioAuthProvider>,
-    pub contact_lookup:         Arc<dyn contact_lookup::ContactLookup>,
+    pub contact_lookup:         Arc<dyn rara_kernel::contact_lookup::ContactLookup>,
 }
 
 /// Returns all primitive tools (core + domain), ready for registration.

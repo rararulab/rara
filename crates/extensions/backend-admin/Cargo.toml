@@ -8,8 +8,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-rara-kernel = { workspace = true }
 anyhow = { workspace = true }
+async-openai = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 bon = { workspace = true }
@@ -20,18 +20,19 @@ git2 = { workspace = true }
 jiff = { workspace = true }
 jobspy-sys = { workspace = true }
 llmfit-core = { workspace = true }
-async-openai = { workspace = true }
 opendal = { workspace = true }
+opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"] }
+rara-channels = { workspace = true }
 rara-codex-oauth = { workspace = true }
 rara-coding-task = { workspace = true }
 rara-composio = { workspace = true }
 rara-domain-shared = { workspace = true }
 rara-git = { workspace = true }
+rara-kernel = { workspace = true }
 rara-mcp = { workspace = true }
 rara-paths = { workspace = true }
 rara-sessions = { workspace = true }
 rara-skills = { workspace = true }
-rara-channels = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -41,9 +42,8 @@ strum = { workspace = true }
 strum_macros = { workspace = true }
 tokio = { workspace = true, features = ["sync", "fs", "rt"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
-tool-core = { workspace = true }
+rara-boot = { workspace = true }
 tracing = { workspace = true }
-opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"] }
 tracing-opentelemetry = "0.32.0"
 utoipa = { workspace = true }
 utoipa-axum = { workspace = true }

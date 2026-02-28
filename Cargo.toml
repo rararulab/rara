@@ -128,7 +128,7 @@ members = [
     "crates/core/boot",
     "crates/core/channels",
     "crates/core/kernel",
-    "crates/core/tool-core",
+
     "crates/integrations/k8s",
     "crates/integrations/composio",
     "crates/extensions/workspace",
@@ -247,7 +247,7 @@ rara-sessions = { path = "crates/sessions" }
 rara-skills = { path = "crates/skills" }
 rara-workers = { path = "crates/workers" }
 rara-workspace = { path = "crates/extensions/workspace" }
-tool-core = { path = "crates/core/tool-core" }
+
 yunara-store = { path = "crates/common/yunara-store" }
 
 # Config for 'cargo dist'

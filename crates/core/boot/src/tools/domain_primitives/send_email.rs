@@ -28,7 +28,7 @@ use rara_domain_shared::settings::model::Settings;
 use serde_json::json;
 use tokio::sync::watch;
 
-use crate::AgentTool;
+use rara_kernel::tool::AgentTool;
 
 /// Layer 1 primitive: send an email via Gmail SMTP.
 pub struct SendEmailTool {

@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use serde_json::json;
 use sqlx::{PgPool, Row};
 
-use crate::AgentTool;
+use rara_kernel::tool::AgentTool;
 
 /// Allowed tables and their mutable columns.
 ///

@@ -25,7 +25,7 @@ use rara_domain_shared::notify::{
     types::{NotificationPriority, SendTelegramNotificationRequest},
 };
 use serde_json::json;
-use tool_core::AgentTool;
+use rara_kernel::tool::AgentTool;
 use tracing::warn;
 
 use crate::settings::SettingsSvc;

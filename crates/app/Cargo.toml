@@ -12,6 +12,7 @@ categories.workspace = true
 description = "Application orchestration and lifecycle management for job"
 
 [dependencies]
+async-trait = { workspace = true }
 axum = { workspace = true }
 base = { workspace = true }
 common-runtime = { workspace = true }
@@ -20,17 +21,16 @@ config = { workspace = true }
 object-store = { workspace = true }
 opendal = { workspace = true }
 rara-boot = { workspace = true }
+rara-channels = { workspace = true }
 rara-consul = { workspace = true }
 rara-domain-shared = { workspace = true }
-rara-server = { workspace = true }
-rara-channels = { workspace = true }
 rara-kernel = { workspace = true }
+rara-server = { workspace = true }
 rara-sessions = { workspace = true }
 rara-workers = { workspace = true }
-async-trait = { workspace = true }
-teloxide = { workspace = true }
 serde = { workspace = true }
 snafu = { workspace = true }
+teloxide = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }

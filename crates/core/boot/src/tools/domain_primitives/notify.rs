@@ -32,7 +32,7 @@ use rara_domain_shared::{
 use serde_json::json;
 use tokio::sync::watch;
 
-use crate::{AgentTool, contact_lookup::ContactLookup};
+use rara_kernel::{contact_lookup::ContactLookup, tool::AgentTool};
 
 /// Layer 1 primitive: send a Telegram message.
 ///

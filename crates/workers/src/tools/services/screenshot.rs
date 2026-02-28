@@ -26,7 +26,7 @@ use rara_domain_shared::{
 };
 use serde_json::json;
 use tokio::sync::watch;
-use tool_core::AgentTool;
+use rara_kernel::tool::AgentTool;
 use tracing::{info, warn};
 use uuid::Uuid;
 
