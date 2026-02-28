@@ -26,6 +26,7 @@
 
 pub mod manifest_loader;
 pub mod principal;
+pub mod user;
 
 use std::collections::HashMap;
 
