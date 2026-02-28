@@ -12,12 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::{collections::HashMap, sync::Arc, time::Duration};
+
 use clap::{Args, Parser, Subcommand};
-use snafu::{ResultExt, Whatever};
+use snafu::{ResultExt, Whatever, whatever};
 
 mod build_info;
 
-use rara_app::AppConfig;
+use rara_app::{AppConfig, StartOptions};
+use rara_channels::terminal::{CliEvent, TerminalAdapter};
+use rara_kernel::{
+    channel::types::{ChannelType, MessageContent},
+    io::{
+        egress::{Endpoint, EndpointAddress},
+        ingress::{InboundSink as _, RawPlatformMessage},
+        stream::StreamEvent,
+        types::{InteractionType, ReplyContext as IoReplyContext},
+    },
+    process::{SessionId, principal::UserId},
+};
 
 #[derive(Debug, Parser)]
 #[clap(
@@ -34,6 +47,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     Server(ServerArgs),
+    Chat(ChatArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -85,10 +99,276 @@ impl ServerArgs {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Chat command
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Args)]
+#[command(about = "Start interactive chat with an agent")]
+struct ChatArgs {
+    /// Session key for conversation continuity.
+    #[arg(long, default_value = "default")]
+    session: String,
+
+    /// User identifier.
+    #[arg(long, default_value = "local")]
+    user_id: String,
+}
+
+impl ChatArgs {
+    async fn run(self) -> Result<(), Whatever> {
+        let config = AppConfig::new()
+            .await
+            .whatever_context("Failed to load config")?;
+
+        // Minimal telemetry for CLI mode (no OTLP, console only).
+        let _guards = common_telemetry::logging::init_global_logging(
+            "rara-cli",
+            &common_telemetry::logging::LoggingOptions::default(),
+            &common_telemetry::logging::TracingOptions::default(),
+            None,
+        );
+
+        // Create the terminal adapter.
+        let (adapter, event_rx) = TerminalAdapter::new();
+        let adapter = Arc::new(adapter);
+
+        // Start the app with the CLI adapter injected.
+        let mut app_handle = config
+            .start_with_options(StartOptions {
+                cli_adapter: Some(adapter.clone()),
+            })
+            .await
+            .whatever_context("Failed to start application")?;
+
+        let ingress_pipeline = match app_handle.ingress_pipeline.take() {
+            Some(p) => p,
+            None => whatever!("ingress pipeline not available"),
+        };
+        let endpoint_registry = match app_handle.endpoint_registry.take() {
+            Some(r) => r,
+            None => whatever!("endpoint registry not available"),
+        };
+        let stream_hub = match app_handle.stream_hub.take() {
+            Some(h) => h,
+            None => whatever!("stream hub not available"),
+        };
+
+        // Compute the session ID and user ID the same way AppSessionResolver
+        // and AppIdentityResolver would.
+        let session_key = self.session.clone();
+        let user_id_str = self.user_id.clone();
+        let resolved_user_id = UserId(format!("cli:{}", user_id_str));
+        let resolved_session_id = SessionId::new(format!("cli:{}", session_key));
+
+        // Register CLI endpoint in the EndpointRegistry.
+        let cli_endpoint = Endpoint {
+            channel_type: ChannelType::Cli,
+            address:      EndpointAddress::Cli {
+                session_id: session_key.clone(),
+            },
+        };
+        endpoint_registry.register(&resolved_user_id, cli_endpoint);
+
+        // Spawn StreamHub forwarder task.
+        let forwarder_event_tx = adapter.clone();
+        let forwarder_session_id = resolved_session_id.clone();
+        let forwarder_hub = stream_hub.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(100));
+            let mut active_streams: std::collections::HashSet<
+                rara_kernel::io::stream::StreamId,
+            > = std::collections::HashSet::new();
+            loop {
+                interval.tick().await;
+                let subs = forwarder_hub.subscribe_session(&forwarder_session_id);
+                for (stream_id, mut rx) in subs {
+                    if active_streams.contains(&stream_id) {
+                        // Already have a forwarder for this stream, just drain.
+                        while let Ok(event) = rx.try_recv() {
+                            let cli_event = stream_event_to_cli_event(event);
+                            let _ = forwarder_event_tx.send_cli_event(cli_event);
+                        }
+                    } else {
+                        // New stream — spawn a dedicated forwarder task.
+                        active_streams.insert(stream_id.clone());
+                        let tx = forwarder_event_tx.clone();
+                        tokio::spawn(async move {
+                            while let Ok(event) = rx.recv().await {
+                                let cli_event = stream_event_to_cli_event(event);
+                                let _ = tx.send_cli_event(cli_event);
+                            }
+                            // Stream closed — send Done.
+                            let _ = tx.send_cli_event(CliEvent::Done);
+                        });
+                    }
+                }
+            }
+        });
+
+        // Print welcome banner.
+        eprintln!("=== Job Interactive Chat ===");
+        eprintln!("Session: {}  User: {}", session_key, user_id_str);
+        eprintln!("Type your message and press Enter. Ctrl+C to exit.\n");
+
+        // Run the REPL loop.
+        run_repl(
+            event_rx,
+            ingress_pipeline,
+            session_key,
+            user_id_str,
+        )
+        .await;
+
+        // Cleanup.
+        app_handle.shutdown();
+        // Give a moment for graceful shutdown.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        Ok(())
+    }
+}
+
+/// Convert a [`StreamEvent`] into a [`CliEvent`].
+fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
+    match event {
+        StreamEvent::TextDelta(t) => CliEvent::TextDelta { text: t },
+        StreamEvent::ReasoningDelta(t) => CliEvent::ReasoningDelta { text: t },
+        StreamEvent::ToolCallStart { name, .. } => CliEvent::ToolCallStart { name },
+        StreamEvent::ToolCallEnd { .. } => CliEvent::ToolCallEnd,
+        StreamEvent::Progress { stage } => CliEvent::Progress { text: stage },
+    }
+}
+
+/// Build a [`RawPlatformMessage`] for the CLI channel.
+fn build_cli_raw_message(session_key: &str, user_id: &str, content: &str) -> RawPlatformMessage {
+    RawPlatformMessage {
+        channel_type:        ChannelType::Cli,
+        platform_message_id: Some(ulid::Ulid::new().to_string()),
+        platform_user_id:    user_id.to_owned(),
+        platform_chat_id:    Some(session_key.to_owned()),
+        content:             MessageContent::Text(content.to_owned()),
+        reply_context:       Some(IoReplyContext {
+            thread_id:                None,
+            reply_to_platform_msg_id: None,
+            interaction_type:         InteractionType::Message,
+        }),
+        metadata:            HashMap::new(),
+    }
+}
+
+/// Run the interactive REPL loop.
+async fn run_repl(
+    mut event_rx: tokio::sync::mpsc::UnboundedReceiver<CliEvent>,
+    ingress_pipeline: Arc<rara_kernel::io::ingress::IngressPipeline>,
+    session_key: String,
+    user_id: String,
+) {
+    use std::io::Write;
+
+    // Spawn a blocking stdin reader thread.
+    let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::channel::<String>(16);
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match stdin.read_line(&mut line) {
+                Ok(0) => break, // EOF
+                Ok(_) => {
+                    let trimmed = line.trim().to_owned();
+                    if !trimmed.is_empty() {
+                        if stdin_tx.blocking_send(trimmed).is_err() {
+                            break;
+                        }
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let mut in_stream = false;
+
+    loop {
+        // Print prompt when not in a streaming response.
+        if !in_stream {
+            eprint!("> ");
+            let _ = std::io::stderr().flush();
+        }
+
+        tokio::select! {
+            line = stdin_rx.recv() => {
+                match line {
+                    Some(text) => {
+                        let raw = build_cli_raw_message(&session_key, &user_id, &text);
+                        if let Err(e) = ingress_pipeline.ingest(raw).await {
+                            eprintln!("[error] Failed to send message: {}", e);
+                        } else {
+                            in_stream = true;
+                        }
+                    }
+                    None => {
+                        // stdin closed
+                        break;
+                    }
+                }
+            }
+            event = event_rx.recv() => {
+                match event {
+                    Some(CliEvent::Reply { content }) => {
+                        if in_stream {
+                            // End the streaming line.
+                            println!();
+                        }
+                        println!("{}", content);
+                        in_stream = false;
+                    }
+                    Some(CliEvent::TextDelta { text }) => {
+                        print!("{}", text);
+                        let _ = std::io::stdout().flush();
+                    }
+                    Some(CliEvent::ReasoningDelta { text }) => {
+                        // Show reasoning in dimmed text.
+                        eprint!("\x1b[2m{}\x1b[0m", text);
+                        let _ = std::io::stderr().flush();
+                    }
+                    Some(CliEvent::ToolCallStart { name }) => {
+                        eprintln!("\x1b[33m[tool] {}\x1b[0m", name);
+                    }
+                    Some(CliEvent::ToolCallEnd) => {
+                        eprintln!("\x1b[33m[tool] done\x1b[0m");
+                    }
+                    Some(CliEvent::Progress { text }) => {
+                        if !text.is_empty() {
+                            eprintln!("\x1b[36m[{}]\x1b[0m", text);
+                        }
+                    }
+                    Some(CliEvent::Error { message }) => {
+                        eprintln!("\x1b[31m[error] {}\x1b[0m", message);
+                        in_stream = false;
+                    }
+                    Some(CliEvent::Done) => {
+                        if in_stream {
+                            println!();
+                        }
+                        in_stream = false;
+                    }
+                    None => {
+                        // Event channel closed.
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Whatever> {
     let cli = Cli::parse();
     match cli.commands {
         Commands::Server(_) => ServerArgs::run().await,
+        Commands::Chat(args) => args.run().await,
     }
 }
