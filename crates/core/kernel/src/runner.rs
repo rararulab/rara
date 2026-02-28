@@ -45,13 +45,13 @@ pub struct AgentRunResponse {
     /// Raw provider response for the terminal assistant turn.
     pub provider_response: CreateChatCompletionResponse,
     /// Number of loop iterations consumed before termination.
-    pub iterations:        usize,
+    pub iterations: usize,
     /// Total number of tool calls executed across all iterations.
-    pub tool_calls_made:   usize,
+    pub tool_calls_made: usize,
     /// `true` when the agent loop hit the max-iterations ceiling before the
     /// model produced a terminal (non-tool-call) response. The response still
     /// contains all work completed so far, but the task may be incomplete.
-    pub truncated:         bool,
+    pub truncated: bool,
 }
 
 impl AgentRunResponse {
@@ -76,16 +76,16 @@ pub enum RunnerEvent {
     ThinkingDone,
     Iteration(usize),
     ToolCallStart {
-        id:        String,
-        name:      String,
+        id: String,
+        name: String,
         arguments: serde_json::Value,
     },
     ToolCallEnd {
-        id:      String,
-        name:    String,
+        id: String,
+        name: String,
         success: bool,
-        error:   Option<String>,
-        result:  Option<serde_json::Value>,
+        error: Option<String>,
+        result: Option<serde_json::Value>,
     },
     /// Incremental text content from a streaming LLM response.
     TextDelta(String),
@@ -93,8 +93,8 @@ pub enum RunnerEvent {
     ReasoningDelta(String),
     /// The agent loop completed successfully.
     Done {
-        text:            String,
-        iterations:      usize,
+        text: String,
+        iterations: usize,
         tool_calls_made: usize,
     },
     /// The agent loop failed with an error.
@@ -111,7 +111,7 @@ pub enum UserContent {
     Text(String),
     /// Multimodal content with text and image URLs.
     Multimodal {
-        text:       String,
+        text: String,
         image_urls: Vec<String>,
     },
 }
@@ -127,27 +127,31 @@ impl UserContent {
 }
 
 impl From<String> for UserContent {
-    fn from(text: String) -> Self { UserContent::Text(text) }
+    fn from(text: String) -> Self {
+        UserContent::Text(text)
+    }
 }
 
 impl From<&str> for UserContent {
-    fn from(text: &str) -> Self { UserContent::Text(text.to_owned()) }
+    fn from(text: &str) -> Self {
+        UserContent::Text(text.to_owned())
+    }
 }
 
 #[derive(Builder)]
 #[builder(on(SharedString, into))]
 pub struct AgentRunner {
-    llm_provider:    LlmProviderLoaderRef,
+    llm_provider: LlmProviderLoaderRef,
     #[builder(default)]
-    provider_hint:   SharedString,
-    model_name:      SharedString,
-    system_prompt:   SharedString,
-    user_content:    UserContent,
-    history:         Option<Vec<ChatCompletionRequestMessage>>,
+    provider_hint: SharedString,
+    model_name: SharedString,
+    system_prompt: SharedString,
+    user_content: UserContent,
+    history: Option<Vec<ChatCompletionRequestMessage>>,
     #[builder(default = MAX_ITERATIONS)]
-    max_iterations:  usize,
+    max_iterations: usize,
     /// Optional session ID for Langfuse session tracking.
-    session_id:      Option<String>,
+    session_id: Option<String>,
     /// Fallback models to try (in order) when the primary model fails with a
     /// fallback-eligible error. Empty means no fallback.
     #[builder(default)]
@@ -441,11 +445,11 @@ impl AgentRunner {
                         let error_message = format!("invalid tool arguments: {err}");
                         if let Some(cb) = on_event {
                             cb(RunnerEvent::ToolCallEnd {
-                                id:      tool_id.clone(),
-                                name:    tool_name.clone(),
+                                id: tool_id.clone(),
+                                name: tool_name.clone(),
                                 success: false,
-                                error:   Some(error_message.clone()),
-                                result:  None,
+                                error: Some(error_message.clone()),
+                                result: None,
                             });
                         }
                         messages.push(build_tool_response_message(
@@ -459,8 +463,8 @@ impl AgentRunner {
                 // Emit start event.
                 if let Some(cb) = on_event {
                     cb(RunnerEvent::ToolCallStart {
-                        id:        tool_id.clone(),
-                        name:      tool_name.clone(),
+                        id: tool_id.clone(),
+                        name: tool_name.clone(),
                         arguments: tool_arguments.clone(),
                     });
                 }
@@ -471,11 +475,11 @@ impl AgentRunner {
                         Ok(result) => {
                             if let Some(cb) = on_event {
                                 cb(RunnerEvent::ToolCallEnd {
-                                    id:      tool_id.clone(),
-                                    name:    tool_name.clone(),
+                                    id: tool_id.clone(),
+                                    name: tool_name.clone(),
                                     success: true,
-                                    error:   None,
-                                    result:  Some(result.clone()),
+                                    error: None,
+                                    result: Some(result.clone()),
                                 });
                             }
                             result
@@ -484,11 +488,11 @@ impl AgentRunner {
                             let error_message = err.to_string();
                             if let Some(cb) = on_event {
                                 cb(RunnerEvent::ToolCallEnd {
-                                    id:      tool_id.clone(),
-                                    name:    tool_name.clone(),
+                                    id: tool_id.clone(),
+                                    name: tool_name.clone(),
                                     success: false,
-                                    error:   Some(error_message.clone()),
-                                    result:  None,
+                                    error: Some(error_message.clone()),
+                                    result: None,
                                 });
                             }
                             serde_json::json!({ "error": error_message })
@@ -498,11 +502,11 @@ impl AgentRunner {
                     let error_message = format!("tool not found: {tool_name}");
                     if let Some(cb) = on_event {
                         cb(RunnerEvent::ToolCallEnd {
-                            id:      tool_id.clone(),
-                            name:    tool_name.clone(),
+                            id: tool_id.clone(),
+                            name: tool_name.clone(),
                             success: false,
-                            error:   Some(error_message.clone()),
-                            result:  None,
+                            error: Some(error_message.clone()),
+                            result: None,
                         });
                     }
                     serde_json::json!({ "error": error_message })
@@ -704,8 +708,8 @@ impl AgentRunner {
                             pending_tool_calls
                                 .entry(idx)
                                 .or_insert_with(|| PendingToolCall {
-                                    id:            String::new(),
-                                    name:          String::new(),
+                                    id: String::new(),
+                                    name: String::new(),
                                     arguments_buf: String::new(),
                                 });
                         if let Some(ref id) = tc.id {
@@ -762,25 +766,20 @@ impl AgentRunner {
             let mut sorted_indices: Vec<u32> = pending_tool_calls.keys().copied().collect();
             sorted_indices.sort_unstable();
 
-            let tool_call_list: Vec<(String, String, serde_json::Value)> = sorted_indices
+            let tool_call_list: Vec<PendingToolCall> = sorted_indices
                 .into_iter()
                 .filter_map(|idx| pending_tool_calls.remove(&idx))
-                .map(|ptc| {
-                    let args = serde_json::from_str::<serde_json::Value>(&ptc.arguments_buf)
-                        .unwrap_or(serde_json::json!({}));
-                    (ptc.id, ptc.name, args)
-                })
                 .collect();
 
             // Reconstruct the assistant message with tool_calls for message history.
             let openai_tool_calls: Vec<ChatCompletionMessageToolCalls> = tool_call_list
                 .iter()
-                .map(|(id, name, args)| {
+                .map(|tool_call| {
                     ChatCompletionMessageToolCalls::Function(ChatCompletionMessageToolCall {
-                        id:       id.clone(),
+                        id: tool_call.id.clone(),
                         function: FunctionCall {
-                            name:      name.clone(),
-                            arguments: serde_json::to_string(args).unwrap_or_default(),
+                            name: tool_call.name.clone(),
+                            arguments: tool_call.arguments_buf.clone(),
                         },
                     })
                 })
@@ -795,20 +794,43 @@ impl AgentRunner {
                 })?;
             messages.push(assistant_msg.into());
 
-            // Emit ToolCallStart events.
-            for (id, name, args) in &tool_call_list {
+            let mut valid_tool_calls = Vec::new();
+            for tool_call in tool_call_list {
                 tool_calls_made += 1;
+                let args = match serde_json::from_str::<serde_json::Value>(&tool_call.arguments_buf)
+                {
+                    Ok(args) => args,
+                    Err(err) => {
+                        let error_message = format!("invalid tool arguments: {err}");
+                        let _ = tx
+                            .send(RunnerEvent::ToolCallEnd {
+                                id: tool_call.id.clone(),
+                                name: tool_call.name.clone(),
+                                success: false,
+                                error: Some(error_message.clone()),
+                                result: None,
+                            })
+                            .await;
+                        messages.push(build_tool_response_message(
+                            &tool_call.id,
+                            &serde_json::json!({ "error": error_message }).to_string(),
+                        )?);
+                        continue;
+                    }
+                };
+
                 let _ = tx
                     .send(RunnerEvent::ToolCallStart {
-                        id:        id.clone(),
-                        name:      name.clone(),
+                        id: tool_call.id.clone(),
+                        name: tool_call.name.clone(),
                         arguments: args.clone(),
                     })
                     .await;
+                valid_tool_calls.push((tool_call.id, tool_call.name, args));
             }
 
             // Execute all tool calls concurrently.
-            let tool_futures: Vec<_> = tool_call_list
+            let tool_futures: Vec<_> = valid_tool_calls
                 .iter()
                 .map(|(_id, name, args)| {
                     let tool = tools.get(name);
@@ -835,7 +857,8 @@ impl AgentRunner {
             let results = futures::future::join_all(tool_futures).await;
 
             // Emit ToolCallEnd events and append tool response messages.
-            for ((id, name, _args), (success, result, err)) in tool_call_list.iter().zip(results) {
+            for ((id, name, _args), (success, result, err)) in valid_tool_calls.iter().zip(results)
+            {
                 let _ = tx
                     .send(RunnerEvent::ToolCallEnd {
                         id: id.clone(),
@@ -870,11 +893,107 @@ impl AgentRunner {
 /// A tool call being incrementally assembled from streaming SSE chunks.
 struct PendingToolCall {
     /// Unique tool call identifier assigned by the model (e.g. "call_abc123").
-    id:            String,
+    id: String,
     /// Tool function name (e.g. "web_search").
-    name:          String,
+    name: String,
     /// Accumulated JSON argument string, built by concatenating fragments.
     arguments_buf: String,
+}
+
+fn user_content_from_message_content(
+    content: &crate::channel::types::MessageContent,
+) -> UserContent {
+    match content {
+        crate::channel::types::MessageContent::Text(text) => UserContent::Text(text.clone()),
+        crate::channel::types::MessageContent::Multimodal(blocks) => {
+            let mut text_parts = Vec::new();
+            let mut image_urls = Vec::new();
+
+            for block in blocks {
+                match block {
+                    crate::channel::types::ContentBlock::Text { text } => {
+                        text_parts.push(text.clone());
+                    }
+                    crate::channel::types::ContentBlock::ImageUrl { url } => {
+                        image_urls.push(url.clone());
+                    }
+                }
+            }
+
+            UserContent::Multimodal {
+                text: text_parts.join("\n"),
+                image_urls,
+            }
+        }
+    }
+}
+
+/// Convert persisted chat history into provider request messages.
+pub(crate) fn build_history_messages(
+    history: &[crate::channel::types::ChatMessage],
+) -> Result<Vec<ChatCompletionRequestMessage>> {
+    history
+        .iter()
+        .map(|message| match message.role {
+            crate::channel::types::MessageRole::System => {
+                ChatCompletionRequestSystemMessageArgs::default()
+                    .content(message.content.as_text())
+                    .build()
+                    .map(Into::into)
+                    .map_err(|e| KernelError::Other {
+                        message: format!("failed to build system history message: {e}").into(),
+                    })
+            }
+            crate::channel::types::MessageRole::User => {
+                build_user_message(&user_content_from_message_content(&message.content))
+            }
+            crate::channel::types::MessageRole::Assistant => {
+                let mut builder = ChatCompletionRequestAssistantMessageArgs::default();
+                builder.content(message.content.as_text());
+
+                if !message.tool_calls.is_empty() {
+                    let tool_calls: Vec<ChatCompletionMessageToolCalls> = message
+                        .tool_calls
+                        .iter()
+                        .map(|tool_call| {
+                            ChatCompletionMessageToolCalls::Function(
+                                ChatCompletionMessageToolCall {
+                                    id: tool_call.id.to_string(),
+                                    function: FunctionCall {
+                                        name: tool_call.name.to_string(),
+                                        arguments: tool_call.arguments.to_string(),
+                                    },
+                                },
+                            )
+                        })
+                        .collect();
+                    builder.tool_calls(tool_calls);
+                }
+
+                builder
+                    .build()
+                    .map(Into::into)
+                    .map_err(|e| KernelError::Other {
+                        message: format!("failed to build assistant history message: {e}").into(),
+                    })
+            }
+            crate::channel::types::MessageRole::Tool
+            | crate::channel::types::MessageRole::ToolResult => {
+                let tool_call_id =
+                    message
+                        .tool_call_id
+                        .as_deref()
+                        .ok_or_else(|| KernelError::Other {
+                            message: format!(
+                                "history message '{}' is missing tool_call_id",
+                                message.role
+                            )
+                            .into(),
+                        })?;
+                build_tool_response_message(tool_call_id, &message.content.as_text())
+            }
+        })
+        .collect()
 }
 
 /// Build a user message from [`UserContent`].
@@ -940,22 +1059,38 @@ fn build_tool_response_message(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
 
+    use async_openai::types::chat::{
+        ChatChoiceStream, ChatCompletionMessageToolCallChunk, ChatCompletionResponseStream,
+        ChatCompletionStreamResponseDelta, CreateChatCompletionRequest,
+        CreateChatCompletionStreamResponse, FunctionCallStream, FunctionType,
+    };
     use async_trait::async_trait;
+    use futures::stream;
     use test_case::test_case;
 
     use super::*;
-    use crate::provider::EnvLlmProviderLoader;
+    use crate::{
+        error::KernelError,
+        provider::{EnvLlmProviderLoader, LlmProvider, LlmProviderLoader},
+    };
 
     /// Simple echo tool for testing.
     struct EchoTool;
 
     #[async_trait]
     impl crate::tool::AgentTool for EchoTool {
-        fn name(&self) -> &str { "echo_tool" }
+        fn name(&self) -> &str {
+            "echo_tool"
+        }
 
-        fn description(&self) -> &str { "Echoes input" }
+        fn description(&self) -> &str {
+            "Echoes input"
+        }
 
         fn parameters_schema(&self) -> serde_json::Value {
             serde_json::json!({"type": "object", "properties": {"text": {"type": "string"}}})
@@ -964,6 +1099,137 @@ mod tests {
         async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
             Ok(params)
         }
+    }
+
+    struct CountingTool {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl crate::tool::AgentTool for CountingTool {
+        fn name(&self) -> &str {
+            "counting_tool"
+        }
+
+        fn description(&self) -> &str {
+            "Counts tool executions"
+        }
+
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+
+        async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(params)
+        }
+    }
+
+    struct StaticStreamingProvider {
+        chunk: CreateChatCompletionStreamResponse,
+    }
+
+    #[async_trait]
+    impl LlmProvider for StaticStreamingProvider {
+        async fn chat_completion(
+            &self,
+            _request: CreateChatCompletionRequest,
+        ) -> Result<CreateChatCompletionResponse> {
+            Err(KernelError::Other {
+                message: "non-streaming request not supported in test".into(),
+            })
+        }
+
+        async fn chat_completion_stream(
+            &self,
+            _request: CreateChatCompletionRequest,
+        ) -> Result<ChatCompletionResponseStream> {
+            Ok(Box::pin(stream::iter(vec![Ok(self.chunk.clone())])))
+        }
+    }
+
+    #[derive(Clone)]
+    struct StaticProviderLoader {
+        provider: Arc<dyn LlmProvider>,
+    }
+
+    #[async_trait]
+    impl LlmProviderLoader for StaticProviderLoader {
+        async fn acquire_provider(&self) -> Result<Arc<dyn LlmProvider>> {
+            Ok(Arc::clone(&self.provider))
+        }
+    }
+
+    #[allow(deprecated)]
+    fn invalid_tool_call_chunk() -> CreateChatCompletionStreamResponse {
+        CreateChatCompletionStreamResponse {
+            id: "resp_1".to_string(),
+            choices: vec![ChatChoiceStream {
+                index: 0,
+                delta: ChatCompletionStreamResponseDelta {
+                    content: None,
+                    function_call: None,
+                    tool_calls: Some(vec![ChatCompletionMessageToolCallChunk {
+                        index: 0,
+                        id: Some("call_1".to_string()),
+                        r#type: Some(FunctionType::Function),
+                        function: Some(FunctionCallStream {
+                            name: Some("counting_tool".to_string()),
+                            arguments: Some("{".to_string()),
+                        }),
+                    }]),
+                    role: None,
+                    refusal: None,
+                },
+                finish_reason: Some(FinishReason::ToolCalls),
+                logprobs: None,
+            }],
+            created: 0,
+            model: "test-model".to_string(),
+            service_tier: None,
+            system_fingerprint: None,
+            object: "chat.completion.chunk".to_string(),
+            usage: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn streaming_invalid_tool_arguments_do_not_execute_tools() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut tools = ToolRegistry::default();
+        tools.register_builtin(Arc::new(CountingTool {
+            calls: Arc::clone(&calls),
+        }));
+
+        let provider: Arc<dyn LlmProvider> = Arc::new(StaticStreamingProvider {
+            chunk: invalid_tool_call_chunk(),
+        });
+        let runner = AgentRunner::builder()
+            .llm_provider(Arc::new(StaticProviderLoader { provider }) as LlmProviderLoaderRef)
+            .model_name("test-model")
+            .system_prompt("You are a test assistant.")
+            .user_content(UserContent::Text("hello".to_string()))
+            .max_iterations(1)
+            .build();
+
+        let mut events = runner.run_streaming(Arc::new(tools));
+        let mut saw_invalid_args = false;
+
+        while let Some(event) = events.recv().await {
+            if let RunnerEvent::ToolCallEnd {
+                success,
+                error: Some(error),
+                ..
+            } = event
+            {
+                if !success && error.contains("invalid tool arguments") {
+                    saw_invalid_args = true;
+                }
+            }
+        }
+
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(saw_invalid_args);
     }
 
     #[test_case(
