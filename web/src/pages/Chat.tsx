@@ -42,7 +42,6 @@ import type {
   ChatMessageData,
   ChatModel,
   ChatSession,
-  ChatStreamEvent,
 } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -83,35 +82,21 @@ function createSession(body: {
   return api.post<ChatSession>("/api/v1/chat/sessions", body);
 }
 
-/** Parse an SSE chunk buffer into events. Returns [parsedEvents, remainingBuffer]. */
-function parseSSEChunk(
-  buffer: string,
-): [ChatStreamEvent[], string] {
-  const events: ChatStreamEvent[] = [];
-  // SSE events are separated by double newlines
-  const parts = buffer.split("\n\n");
-  // Last part may be incomplete — keep it in the buffer
-  const remaining = parts.pop() ?? "";
+// ---------------------------------------------------------------------------
+// WebSocket event types (matches Rust WebEvent enum)
+// ---------------------------------------------------------------------------
 
-  for (const part of parts) {
-    if (!part.trim()) continue;
-    let data = "";
-    for (const line of part.split("\n")) {
-      if (line.startsWith("data:")) {
-        data += line.slice(5).trim();
-      }
-      // We don't need the event: field since type is in the JSON payload
-    }
-    if (data) {
-      try {
-        events.push(JSON.parse(data) as ChatStreamEvent);
-      } catch {
-        // Ignore malformed events
-      }
-    }
-  }
-  return [events, remaining];
-}
+type WebEvent =
+  | { type: "message"; content: string }
+  | { type: "typing" }
+  | { type: "phase"; phase: string }
+  | { type: "error"; message: string }
+  | { type: "text_delta"; text: string }
+  | { type: "reasoning_delta"; text: string }
+  | { type: "tool_call_start"; name: string; id: string }
+  | { type: "tool_call_end"; id: string }
+  | { type: "progress"; stage: string }
+  | { type: "done" };
 
 interface ActiveToolCall {
   id: string;
@@ -1118,7 +1103,7 @@ function ChatThread({
   const [imageInputValue, setImageInputValue] = useState("");
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const [stream, setStream] = useState<StreamState>(INITIAL_STREAM_STATE);
-  const abortRef = useRef<AbortController | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -1151,170 +1136,154 @@ function ChatThread({
     },
   });
 
-  // SSE streaming send
-  const sendMessage = useCallback(async (text: string, urls?: string[]) => {
-    const trimmed = text.trim();
-    if (!trimmed || stream.isStreaming || !isOnline) return;
+  // WebSocket connection management
+  useEffect(() => {
+    if (!sessionKey) return;
 
-    setInput("");
-    setImageUrls([]);
-    setImageInputVisible(false);
-    setImageInputValue("");
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const baseUrl = import.meta.env.VITE_API_URL || "";
+    const host = baseUrl ? new URL(baseUrl).host : window.location.host;
+    const url = `${protocol}//${host}/api/v1/kernel/chat/ws?session_key=${encodeURIComponent(sessionKey)}&user_id=web-user`;
 
-    // Optimistically add user message to the cache
-    const previous = queryClient.getQueryData<ChatMessageData[]>([
-      "chat-messages",
-      sessionKey,
-    ]);
-    const content: ChatContentBlock[] | string = urls?.length
-      ? [
-          { type: "text" as const, text: trimmed },
-          ...urls.map((url) => ({ type: "image_url" as const, url })),
-        ]
-      : trimmed;
-    const optimisticMsg: ChatMessageData = {
-      seq: (previous?.length ?? 0) + 1,
-      role: "user",
-      content,
-      created_at: new Date().toISOString(),
-    };
-    queryClient.setQueryData<ChatMessageData[]>(
-      ["chat-messages", sessionKey],
-      (old) => [...(old ?? []), optimisticMsg],
-    );
+    const ws = new WebSocket(url);
+    wsRef.current = ws;
 
-    // Reset streaming state
-    setStream({ ...INITIAL_STREAM_STATE, isStreaming: true });
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    try {
-      const body: { text: string; image_urls?: string[] } = { text: trimmed };
-      if (urls) body.image_urls = urls;
-
-      const BASE_URL = import.meta.env.VITE_API_URL || "";
-      const res = await fetch(
-        `${BASE_URL}/api/v1/chat/sessions/${encodeURIComponent(sessionKey)}/stream`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        },
-      );
-
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(errText || `HTTP ${res.status}`);
-      }
-
-      const reader = res.body?.getReader();
-      if (!reader) throw new Error("No response body");
-
-      const decoder = new TextDecoder();
-      let sseBuffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        sseBuffer += decoder.decode(value, { stream: true });
-        const [events, remaining] = parseSSEChunk(sseBuffer);
-        sseBuffer = remaining;
-
-        for (const event of events) {
-          switch (event.type) {
-            case "text_delta":
-              setStream((s) => ({ ...s, text: s.text + event.text }));
-              break;
-            case "reasoning_delta":
-              setStream((s) => ({ ...s, reasoning: s.reasoning + event.text }));
-              break;
-            case "thinking":
-              setStream((s) => ({ ...s, isThinking: true }));
-              break;
-            case "thinking_done":
-              setStream((s) => ({ ...s, isThinking: false }));
-              break;
-            case "tool_call_start":
-              setStream((s) => ({
-                ...s,
-                activeTools: [
-                  ...s.activeTools,
-                  { id: event.id, name: event.name },
-                ],
-              }));
-              break;
-            case "tool_call_end":
-              setStream((s) => ({
-                ...s,
-                activeTools: s.activeTools.filter((t) => t.id !== event.id),
-              }));
-              break;
-            case "done":
-              // Reset stream state — the final assistant message will
-              // appear from the server-refetched message list.
-              setStream(INITIAL_STREAM_STATE);
-              queryClient.invalidateQueries({
-                queryKey: ["chat-messages", sessionKey],
-              });
-              // Update session metadata locally instead of refetching
-              // the entire sessions list.
-              queryClient.setQueryData<ChatSession[]>(
-                ["chat-sessions"],
-                (old) =>
-                  old?.map((s) =>
-                    s.key === sessionKey
-                      ? {
-                          ...s,
-                          message_count: s.message_count + 2,
-                          updated_at: new Date().toISOString(),
-                        }
-                      : s,
-                  ),
-              );
-              break;
-            case "error":
-              setStream((s) => ({
-                ...s,
-                isStreaming: false,
-                error: event.message,
-              }));
-              queryClient.invalidateQueries({
-                queryKey: ["chat-messages", sessionKey],
-              });
-              break;
-          }
+    ws.onmessage = (e) => {
+      try {
+        const event = JSON.parse(e.data) as WebEvent;
+        switch (event.type) {
+          case "text_delta":
+            setStream((s) => ({ ...s, text: s.text + event.text }));
+            break;
+          case "reasoning_delta":
+            setStream((s) => ({
+              ...s,
+              reasoning: s.reasoning + event.text,
+            }));
+            break;
+          case "typing":
+            setStream((s) => ({ ...s, isThinking: true }));
+            break;
+          case "tool_call_start":
+            setStream((s) => ({
+              ...s,
+              activeTools: [
+                ...s.activeTools,
+                { id: event.id, name: event.name },
+              ],
+            }));
+            break;
+          case "tool_call_end":
+            setStream((s) => ({
+              ...s,
+              activeTools: s.activeTools.filter((t) => t.id !== event.id),
+            }));
+            break;
+          case "progress":
+            setStream((s) => ({
+              ...s,
+              isThinking: event.stage === "thinking",
+            }));
+            break;
+          case "done":
+          case "message":
+            setStream(INITIAL_STREAM_STATE);
+            queryClient.invalidateQueries({
+              queryKey: ["chat-messages", sessionKey],
+            });
+            queryClient.setQueryData<ChatSession[]>(
+              ["chat-sessions"],
+              (old) =>
+                old?.map((s) =>
+                  s.key === sessionKey
+                    ? {
+                        ...s,
+                        message_count: s.message_count + 2,
+                        updated_at: new Date().toISOString(),
+                      }
+                    : s,
+                ),
+            );
+            break;
+          case "error":
+            setStream((s) => ({
+              ...s,
+              isStreaming: false,
+              error: event.message,
+            }));
+            queryClient.invalidateQueries({
+              queryKey: ["chat-messages", sessionKey],
+            });
+            break;
         }
+      } catch {
+        // Ignore non-JSON messages
       }
-    } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") return;
+    };
+
+    ws.onerror = () => {
       setStream((s) => ({
         ...s,
         isStreaming: false,
-        error: err instanceof Error ? err.message : "Stream failed",
+        error: "WebSocket connection error",
       }));
-      // Rollback optimistic update on connection error
-      if (previous) {
-        queryClient.setQueryData(["chat-messages", sessionKey], previous);
-      }
-    } finally {
-      abortRef.current = null;
-    }
-  }, [stream.isStreaming, isOnline, sessionKey, queryClient]);
-
-  const handleSend = useCallback(async () => {
-    const urls = imageUrls.length > 0 ? [...imageUrls] : undefined;
-    await sendMessage(input, urls);
-  }, [imageUrls, input, sendMessage]);
-
-  // Cleanup abort on unmount
-  useEffect(() => {
-    return () => {
-      abortRef.current?.abort();
     };
-  }, []);
+
+    ws.onclose = () => {
+      wsRef.current = null;
+    };
+
+    return () => {
+      ws.close();
+      wsRef.current = null;
+    };
+  }, [sessionKey, queryClient]);
+
+  // WebSocket send
+  const sendMessage = useCallback(
+    (text: string, urls?: string[]) => {
+      const trimmed = text.trim();
+      if (!trimmed || stream.isStreaming || !isOnline) return;
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+
+      setInput("");
+      setImageUrls([]);
+      setImageInputVisible(false);
+      setImageInputValue("");
+
+      // Optimistically add user message to the cache
+      const content: ChatContentBlock[] | string = urls?.length
+        ? [
+            { type: "text" as const, text: trimmed },
+            ...urls.map((url) => ({ type: "image_url" as const, url })),
+          ]
+        : trimmed;
+      const previous = queryClient.getQueryData<ChatMessageData[]>([
+        "chat-messages",
+        sessionKey,
+      ]);
+      const optimisticMsg: ChatMessageData = {
+        seq: (previous?.length ?? 0) + 1,
+        role: "user",
+        content,
+        created_at: new Date().toISOString(),
+      };
+      queryClient.setQueryData<ChatMessageData[]>(
+        ["chat-messages", sessionKey],
+        (old) => [...(old ?? []), optimisticMsg],
+      );
+
+      // Reset streaming state and send
+      setStream({ ...INITIAL_STREAM_STATE, isStreaming: true });
+      wsRef.current.send(trimmed);
+    },
+    [stream.isStreaming, isOnline, sessionKey, queryClient],
+  );
+
+  const handleSend = useCallback(() => {
+    const urls = imageUrls.length > 0 ? [...imageUrls] : undefined;
+    sendMessage(input, urls);
+  }, [imageUrls, input, sendMessage]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
