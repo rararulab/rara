@@ -27,6 +27,7 @@
 
 use std::sync::Arc;
 
+use chrono::Utc;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
@@ -43,7 +44,7 @@ use crate::{
     },
     provider::LlmProviderLoaderRef,
     runner::{AgentRunner, RunnerEvent, UserContent, build_history_messages},
-    session_manager::SessionManager,
+    session::{SessionEntry, SessionError, SessionRepository},
     tool::ToolRegistry,
 };
 
@@ -60,7 +61,7 @@ pub async fn process_loop(
     manifest: AgentManifest,
     mut mailbox: mpsc::Receiver<ProcessMessage>,
     process_table: Arc<ProcessTable>,
-    session_manager: Arc<SessionManager>,
+    session_repo: Arc<dyn SessionRepository>,
     stream_hub: Arc<StreamHub>,
     outbound_bus: Arc<dyn OutboundBus>,
     llm_provider: LlmProviderLoaderRef,
@@ -76,15 +77,12 @@ pub async fn process_loop(
                 let _ = process_table.set_state(agent_id, ProcessState::Running);
 
                 // 1. Ensure the session exists before any persistence reads/writes.
-                if let Err(e) = session_manager
-                    .ensure_session(&session_id, &inbound.user)
-                    .await
-                {
+                if let Err(e) = ensure_session(&*session_repo, &session_id).await {
                     warn!(error = %e, "failed to ensure session");
                 }
 
                 // 2. Load prior history (excluding the current inbound turn).
-                let history = match session_manager.get_history(&session_id).await {
+                let history = match session_repo.read_messages(&session_id, None, None).await {
                     Ok(history) => match build_history_messages(&history) {
                         Ok(history) => Some(history),
                         Err(e) => {
@@ -99,7 +97,9 @@ pub async fn process_loop(
                 };
 
                 // 3. Persist the current user message after reading history.
-                if let Err(e) = session_manager.append_message(&session_id, &inbound).await {
+                let user_text = inbound.content.as_text();
+                let user_msg = crate::channel::types::ChatMessage::user(&user_text);
+                if let Err(e) = session_repo.append_message(&session_id, &user_msg).await {
                     warn!(error = %e, "failed to persist inbound message");
                 }
 
@@ -107,7 +107,6 @@ pub async fn process_loop(
                 let stream_handle = stream_hub.open(session_id.clone());
 
                 // 5. Build Runner
-                let user_text = inbound.content.as_text();
                 let runner = {
                     let b = AgentRunner::builder()
                         .llm_provider(Arc::clone(&llm_provider))
@@ -201,8 +200,10 @@ pub async fn process_loop(
                 // 8. Handle result
                 if got_done || !final_text.is_empty() {
                     // Persist reply
-                    if let Err(e) = session_manager
-                        .append_assistant_message(&session_id, &final_text)
+                    let assistant_msg =
+                        crate::channel::types::ChatMessage::assistant(&final_text);
+                    if let Err(e) = session_repo
+                        .append_message(&session_id, &assistant_msg)
                         .await
                     {
                         warn!(error = %e, "failed to persist assistant reply");
@@ -275,6 +276,31 @@ pub async fn process_loop(
     info!(agent_id = %agent_id, session_id = %session_id, "process loop ended");
 }
 
+/// Ensure a session exists, creating one if it doesn't.
+async fn ensure_session(
+    repo: &dyn SessionRepository,
+    session_id: &SessionId,
+) -> Result<(), SessionError> {
+    match repo.get_session(session_id).await? {
+        Some(_) => Ok(()),
+        None => {
+            let now = Utc::now();
+            let entry = SessionEntry {
+                key:           session_id.clone(),
+                title:         None,
+                model:         None,
+                system_prompt: None,
+                message_count: 0,
+                preview:       None,
+                metadata:      None,
+                created_at:    now,
+                updated_at:    now,
+            };
+            repo.create_session(&entry).await.map(|_| ())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -290,6 +316,7 @@ mod tests {
         CreateChatCompletionRequest, CreateChatCompletionStreamResponse, FinishReason,
     };
     use async_trait::async_trait;
+    use chrono::Utc;
     use futures::stream;
     use tokio::sync::mpsc;
 
@@ -307,7 +334,9 @@ mod tests {
             principal::{Principal, UserId},
         },
         provider::{LlmProvider, LlmProviderLoader, LlmProviderLoaderRef},
-        session_manager::{SessionManager, SessionManagerError, SessionRepository},
+        session::{
+            ChannelBinding, SessionEntry, SessionError, SessionKey, SessionRepository,
+        },
     };
 
     fn test_manifest() -> AgentManifest {
@@ -342,6 +371,7 @@ mod tests {
         }
     }
 
+    /// A session repository that records calls for testing the process loop.
     struct RecordingSessionRepository {
         history:             Vec<ChatMessage>,
         session_ready:       AtomicBool,
@@ -366,59 +396,149 @@ mod tests {
 
     #[async_trait]
     impl SessionRepository for RecordingSessionRepository {
-        async fn ensure_session(
+        async fn create_session(
             &self,
-            _id: &SessionId,
-            _user: &UserId,
-        ) -> Result<(), SessionManagerError> {
+            _entry: &SessionEntry,
+        ) -> Result<SessionEntry, SessionError> {
             self.ensure_calls.fetch_add(1, Ordering::SeqCst);
             self.session_ready.store(true, Ordering::SeqCst);
+            let now = Utc::now();
+            Ok(SessionEntry {
+                key:           SessionKey::new("test"),
+                title:         None,
+                model:         None,
+                system_prompt: None,
+                message_count: 0,
+                preview:       None,
+                metadata:      None,
+                created_at:    now,
+                updated_at:    now,
+            })
+        }
+
+        async fn get_session(
+            &self,
+            _key: &SessionKey,
+        ) -> Result<Option<SessionEntry>, SessionError> {
+            if self.session_ready.load(Ordering::SeqCst) {
+                let now = Utc::now();
+                Ok(Some(SessionEntry {
+                    key:           SessionKey::new("test"),
+                    title:         None,
+                    model:         None,
+                    system_prompt: None,
+                    message_count: 0,
+                    preview:       None,
+                    metadata:      None,
+                    created_at:    now,
+                    updated_at:    now,
+                }))
+            } else {
+                Ok(None)
+            }
+        }
+
+        async fn list_sessions(
+            &self,
+            _limit: i64,
+            _offset: i64,
+        ) -> Result<Vec<SessionEntry>, SessionError> {
+            Ok(vec![])
+        }
+
+        async fn update_session(
+            &self,
+            entry: &SessionEntry,
+        ) -> Result<SessionEntry, SessionError> {
+            Ok(entry.clone())
+        }
+
+        async fn delete_session(&self, _key: &SessionKey) -> Result<(), SessionError> {
             Ok(())
         }
 
-        async fn get_history(
+        async fn append_message(
             &self,
-            id: &SessionId,
-        ) -> Result<Vec<ChatMessage>, SessionManagerError> {
+            _session_key: &SessionKey,
+            message: &ChatMessage,
+        ) -> Result<ChatMessage, SessionError> {
             if !self.session_ready.load(Ordering::SeqCst) {
-                return Err(SessionManagerError::NotFound { id: id.to_string() });
+                return Err(SessionError::NotFound {
+                    key: "not ensured".to_string(),
+                });
+            }
+            let text = message.content.as_text();
+            match message.role {
+                crate::channel::types::MessageRole::User => {
+                    self.appended_users
+                        .lock()
+                        .expect("user message lock poisoned")
+                        .push(text);
+                }
+                crate::channel::types::MessageRole::Assistant => {
+                    self.appended_assistants
+                        .lock()
+                        .expect("assistant message lock poisoned")
+                        .push(text);
+                }
+                _ => {}
+            }
+            Ok(message.clone())
+        }
+
+        async fn read_messages(
+            &self,
+            session_key: &SessionKey,
+            _after_seq: Option<i64>,
+            _limit: Option<i64>,
+        ) -> Result<Vec<ChatMessage>, SessionError> {
+            if !self.session_ready.load(Ordering::SeqCst) {
+                return Err(SessionError::NotFound {
+                    key: session_key.to_string(),
+                });
             }
             self.history_calls.fetch_add(1, Ordering::SeqCst);
             Ok(self.history.clone())
         }
 
-        async fn append_user_message(
-            &self,
-            _id: &SessionId,
-            content: &str,
-        ) -> Result<(), SessionManagerError> {
-            if !self.session_ready.load(Ordering::SeqCst) {
-                return Err(SessionManagerError::Repository {
-                    message: "session not ensured".to_string(),
-                });
-            }
-            self.appended_users
-                .lock()
-                .expect("user message lock poisoned")
-                .push(content.to_string());
+        async fn clear_messages(&self, _session_key: &SessionKey) -> Result<(), SessionError> {
             Ok(())
         }
 
-        async fn append_assistant_message(
+        async fn fork_session(
             &self,
-            _id: &SessionId,
-            content: &str,
-        ) -> Result<(), SessionManagerError> {
-            if !self.session_ready.load(Ordering::SeqCst) {
-                return Err(SessionManagerError::Repository {
-                    message: "session not ensured".to_string(),
-                });
-            }
-            self.appended_assistants
-                .lock()
-                .expect("assistant message lock poisoned")
-                .push(content.to_string());
-            Ok(())
+            _source_key: &SessionKey,
+            _target_key: &SessionKey,
+            _fork_at_seq: i64,
+        ) -> Result<SessionEntry, SessionError> {
+            let now = Utc::now();
+            Ok(SessionEntry {
+                key:           SessionKey::new("fork"),
+                title:         None,
+                model:         None,
+                system_prompt: None,
+                message_count: 0,
+                preview:       None,
+                metadata:      None,
+                created_at:    now,
+                updated_at:    now,
+            })
+        }
+
+        async fn bind_channel(
+            &self,
+            binding: &ChannelBinding,
+        ) -> Result<ChannelBinding, SessionError> {
+            Ok(binding.clone())
+        }
+
+        async fn get_channel_binding(
+            &self,
+            _channel_type: &str,
+            _account: &str,
+            _chat_id: &str,
+        ) -> Result<Option<ChannelBinding>, SessionError> {
+            Ok(None)
         }
     }
 
@@ -519,9 +639,6 @@ mod tests {
             ChatMessage::user("previous question"),
             ChatMessage::assistant("previous answer"),
         ]));
-        let session_manager = Arc::new(SessionManager::new(
-            session_repo.clone() as Arc<dyn SessionRepository>
-        ));
         let stream_hub = Arc::new(StreamHub::new(16));
         let outbound_bus = Arc::new(InMemoryOutboundBus::new(64));
         let provider = Arc::new(RecordingStreamingProvider::default());
@@ -539,7 +656,7 @@ mod tests {
             manifest,
             rx,
             pt,
-            session_manager,
+            session_repo.clone() as Arc<dyn SessionRepository>,
             stream_hub,
             outbound_bus as Arc<dyn OutboundBus>,
             llm_provider,
@@ -620,7 +737,7 @@ mod tests {
         };
         process_table.insert(process);
 
-        let session_manager = Arc::new(SessionManager::new(Arc::new(NoopSessionRepository)));
+        let session_repo: Arc<dyn SessionRepository> = Arc::new(NoopSessionRepository);
         let stream_hub = Arc::new(StreamHub::new(16));
         let outbound_bus = Arc::new(InMemoryOutboundBus::new(64));
         let llm_provider = Arc::new(crate::provider::EnvLlmProviderLoader::default())
@@ -636,7 +753,7 @@ mod tests {
             manifest,
             rx,
             pt,
-            session_manager,
+            session_repo,
             stream_hub,
             outbound_bus as Arc<dyn OutboundBus>,
             llm_provider,
@@ -678,7 +795,7 @@ mod tests {
         };
         process_table.insert(process);
 
-        let session_manager = Arc::new(SessionManager::new(Arc::new(NoopSessionRepository)));
+        let session_repo: Arc<dyn SessionRepository> = Arc::new(NoopSessionRepository);
         let stream_hub = Arc::new(StreamHub::new(16));
         let outbound_bus = Arc::new(InMemoryOutboundBus::new(64));
         let llm_provider = Arc::new(crate::provider::EnvLlmProviderLoader::default())
@@ -694,7 +811,7 @@ mod tests {
             manifest,
             rx,
             pt,
-            session_manager,
+            session_repo,
             stream_hub,
             outbound_bus as Arc<dyn OutboundBus>,
             llm_provider,
@@ -735,7 +852,7 @@ mod tests {
         };
         process_table.insert(process);
 
-        let session_manager = Arc::new(SessionManager::new(Arc::new(NoopSessionRepository)));
+        let session_repo: Arc<dyn SessionRepository> = Arc::new(NoopSessionRepository);
         let stream_hub = Arc::new(StreamHub::new(16));
         let outbound_bus = Arc::new(InMemoryOutboundBus::new(64));
         let llm_provider = Arc::new(crate::provider::EnvLlmProviderLoader::default())
@@ -751,7 +868,7 @@ mod tests {
             manifest,
             rx,
             pt,
-            session_manager,
+            session_repo,
             stream_hub,
             outbound_bus as Arc<dyn OutboundBus>,
             llm_provider,

@@ -14,15 +14,12 @@ description = "Chat session persistence — sessions, messages, and channel bind
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
-jiff.workspace = true
 rara-kernel = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
-snafu.workspace = true
 sqlx = { workspace = true }
 tokio = { workspace = true }
 tracing.workspace = true
-uuid.workspace = true
 
 [dev-dependencies]
 tempfile = { workspace = true }

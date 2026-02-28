@@ -74,7 +74,7 @@ pub struct IoBusPipeline {
 /// 2. StreamHub
 /// 3. Identity + Session resolvers
 /// 4. IngressPipeline (implements InboundSink)
-/// 5. Kernel with IO context (session_manager, stream_hub, outbound_bus)
+/// 5. Kernel with IO context (session_repo, stream_hub, outbound_bus)
 /// 6. TickLoop (drains bus, routes to Kernel processes)
 /// 7. Egress (delivers responses to adapters)
 ///
@@ -83,7 +83,7 @@ pub struct IoBusPipeline {
 pub fn init_io_pipeline(
     telegram_adapter: Option<Arc<rara_channels::telegram::TelegramAdapter>>,
     web_adapter: Option<Arc<rara_channels::web::WebAdapter>>,
-    session_repo: Arc<dyn rara_kernel::session_manager::SessionRepository>,
+    session_repo: Arc<dyn rara_kernel::session::SessionRepository>,
     mut kernel: Kernel,
 ) -> IoBusPipeline {
     // 1. Create buses
@@ -102,11 +102,8 @@ pub fn init_io_pipeline(
         inbound_bus.clone(),
     ));
 
-    // 4. Create SessionManager with real PG-backed session repository (direct impl)
-    let session_manager = rara_boot::session::default_session_manager(session_repo);
-
-    // 5. Set IO context on kernel
-    kernel.set_io_context(session_manager, stream_hub.clone(), outbound_bus.clone());
+    // 4. Set IO context on kernel (session_repo used directly, no SessionManager wrapper)
+    kernel.set_io_context(session_repo, stream_hub.clone(), outbound_bus.clone());
     let kernel = Arc::new(kernel);
 
     // 6. Create TickLoop

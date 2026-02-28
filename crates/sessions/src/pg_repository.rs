@@ -58,7 +58,6 @@ pub(crate) struct ChannelBindingRow {
 
 use crate::{
     error::SessionError,
-    repository::SessionRepository as _,
     store::SessionStore,
     types::{ChannelBinding, ChatMessage, SessionEntry, SessionKey},
 };
@@ -349,99 +348,6 @@ impl crate::repository::SessionRepository for PgSessionRepository {
         .await?;
 
         Ok(row.map(Into::into))
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Kernel SessionRepository implementation
-// ---------------------------------------------------------------------------
-
-/// Implement the kernel's
-/// [`SessionRepository`](rara_kernel::session_manager::SessionRepository)
-/// directly so that `PgSessionRepository` can be used as
-/// `Arc<dyn rara_kernel::session_manager::SessionRepository>` without a bridge
-/// adapter.
-#[async_trait]
-impl rara_kernel::session_manager::SessionRepository for PgSessionRepository {
-    async fn ensure_session(
-        &self,
-        id: &rara_kernel::process::SessionId,
-        _user: &rara_kernel::process::principal::UserId,
-    ) -> Result<(), rara_kernel::session_manager::SessionManagerError> {
-        let key = SessionKey::from_raw(&id.0);
-        match self.get_session(&key).await {
-            Ok(Some(_)) => Ok(()),
-            Ok(None) => {
-                let now = Utc::now();
-                let entry = SessionEntry {
-                    key,
-                    title: None,
-                    model: None,
-                    system_prompt: None,
-                    message_count: 0,
-                    preview: None,
-                    metadata: None,
-                    created_at: now,
-                    updated_at: now,
-                };
-                self.create_session(&entry).await.map(|_| ()).map_err(|e| {
-                    rara_kernel::session_manager::SessionManagerError::Repository {
-                        message: e.to_string(),
-                    }
-                })
-            }
-            Err(e) => Err(
-                rara_kernel::session_manager::SessionManagerError::Repository {
-                    message: e.to_string(),
-                },
-            ),
-        }
-    }
-
-    async fn get_history(
-        &self,
-        id: &rara_kernel::process::SessionId,
-    ) -> Result<Vec<ChatMessage>, rara_kernel::session_manager::SessionManagerError> {
-        let key = SessionKey::from_raw(&id.0);
-        self.read_messages(&key, None, None).await.map_err(|e| {
-            rara_kernel::session_manager::SessionManagerError::Repository {
-                message: e.to_string(),
-            }
-        })
-    }
-
-    async fn append_user_message(
-        &self,
-        id: &rara_kernel::process::SessionId,
-        content: &str,
-    ) -> Result<(), rara_kernel::session_manager::SessionManagerError> {
-        let key = SessionKey::from_raw(&id.0);
-        let msg = ChatMessage::user(content);
-        self.append_message(&key, &msg)
-            .await
-            .map(|_| ())
-            .map_err(
-                |e| rara_kernel::session_manager::SessionManagerError::Repository {
-                    message: e.to_string(),
-                },
-            )
-    }
-
-    async fn append_assistant_message(
-        &self,
-        id: &rara_kernel::process::SessionId,
-        content: &str,
-    ) -> Result<(), rara_kernel::session_manager::SessionManagerError> {
-        let key = SessionKey::from_raw(&id.0);
-        let msg = ChatMessage::assistant(content);
-        self.append_message(&key, &msg)
-            .await
-            .map(|_| ())
-            .map_err(
-                |e| rara_kernel::session_manager::SessionManagerError::Repository {
-                    message: e.to_string(),
-                },
-            )
     }
 }
 

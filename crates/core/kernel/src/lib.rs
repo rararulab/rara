@@ -24,7 +24,7 @@
 //! | LLM         | [`LlmApi`]       | Chat completion requests         |
 //! | Tool        | [`ToolRegistry`] | Tool registration + dispatch     |
 //! | Memory      | [`Memory`]       | 3-layer memory (State/Knowledge/Learning) |
-//! | Session     | [`SessionStore`] | Conversation history persistence |
+//! | Session     | [`SessionRepository`] | Conversation history persistence |
 //! | Prompt      | [`PromptRepo`]   | System prompt templates          |
 //! | Guard       | [`Guard`]        | Tool approval + output moderation |
 //! | Event Bus   | [`EventBus`]     | Inter-component event broadcasting |
@@ -49,7 +49,6 @@ pub mod prompt;
 pub mod provider;
 pub mod runner;
 pub mod session;
-pub mod session_manager;
 pub mod tick;
 pub mod tool;
 

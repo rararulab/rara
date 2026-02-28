@@ -63,17 +63,11 @@ impl std::fmt::Display for AgentId {
 ///
 /// A session groups related conversations and memory. Multiple agent processes
 /// can share the same session (e.g., a chat session that spawns sub-agents).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct SessionId(pub String);
-
-impl SessionId {
-    /// Create a new session ID from any string-like value.
-    pub fn new(id: impl Into<String>) -> Self { Self(id.into()) }
-}
-
-impl std::fmt::Display for SessionId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.0) }
-}
+///
+/// This is a type alias for [`SessionKey`](crate::session::SessionKey) to
+/// minimize churn — existing code using `SessionId::new("...")` still
+/// compiles because `SessionKey` provides the same constructor.
+pub type SessionId = crate::session::SessionKey;
 
 /// Agent "binary" — static definition, loadable from YAML or constructed
 /// dynamically.
@@ -484,7 +478,7 @@ mod tests {
     fn test_session_id() {
         let sid = SessionId::new("my-session");
         assert_eq!(sid.to_string(), "my-session");
-        assert_eq!(sid.0, "my-session");
+        assert_eq!(sid.as_str(), "my-session");
     }
 
     #[test]

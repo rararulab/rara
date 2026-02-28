@@ -98,8 +98,8 @@ pub(crate) struct KernelInner {
     pub shared_kv:              DashMap<String, serde_json::Value>,
     /// User store for user management and permission validation.
     pub user_store:             Arc<dyn crate::process::user::UserStore>,
-    /// Session manager for conversation history (used by process_loop).
-    pub session_manager:        Option<Arc<crate::session_manager::SessionManager>>,
+    /// Session repository for conversation history (used by process_loop).
+    pub session_repo:           Option<Arc<dyn crate::session::SessionRepository>>,
     /// Stream hub for real-time streaming events (used by process_loop).
     pub stream_hub:             Option<Arc<crate::io::stream::StreamHub>>,
     /// Outbound bus for publishing final responses (used by process_loop).
@@ -548,7 +548,7 @@ mod tests {
             manifest_loader:        ManifestLoader::new(),
             shared_kv:              DashMap::new(),
             user_store:             Arc::new(NoopUserStore),
-            session_manager:        None,
+            session_repo:           None,
             stream_hub:             None,
             outbound_bus:           None,
         })
