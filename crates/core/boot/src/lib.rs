@@ -19,3 +19,4 @@ pub mod error;
 pub mod manifests;
 pub mod mcp;
 pub mod skills;
+pub mod user_store;

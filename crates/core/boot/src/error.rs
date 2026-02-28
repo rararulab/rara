@@ -20,6 +20,9 @@ use snafu::Snafu;
 pub enum BootError {
     #[snafu(display("failed to load MCP registry: {message}"))]
     McpRegistry { message: String },
+
+    #[snafu(display("user store error: {message}"))]
+    UserStore { message: String },
 }
 
 pub type Result<T> = std::result::Result<T, BootError>;
