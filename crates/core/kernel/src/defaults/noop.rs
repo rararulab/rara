@@ -22,7 +22,7 @@ use uuid::Uuid;
 use crate::event::{EventBus, EventFilter, EventStream, KernelEvent};
 use crate::guard::{Guard, GuardContext, Verdict};
 use crate::io::bus::OutboxStore;
-use crate::io::session_manager::{SessionManagerError, SessionRepository};
+use crate::session_manager::{SessionManagerError, SessionRepository};
 use crate::io::types::{BusError, MessageId, OutboundEnvelope};
 use crate::llm::ChatMessage;
 use crate::process::SessionId;

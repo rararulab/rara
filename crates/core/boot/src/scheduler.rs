@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use rara_kernel::io::scheduler::SessionScheduler;
+use rara_kernel::scheduler::SessionScheduler;
 
 /// Create a default SessionScheduler with the given per-session queue limit.
 pub fn default_session_scheduler(max_pending_per_session: usize) -> Arc<SessionScheduler> {

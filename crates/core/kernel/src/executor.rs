@@ -16,7 +16,7 @@
 //! agent pipeline: session management, process registration, LLM execution,
 //! streaming, and outbound publishing.
 //!
-//! This is the core execution unit spawned by the [`TickLoop`](super::tick::TickLoop)
+//! This is the core execution unit spawned by the [`TickLoop`](crate::tick::TickLoop)
 //! for each scheduled message.
 
 use std::sync::Arc;
@@ -25,9 +25,9 @@ use tokio::sync::Semaphore;
 use tracing::{error, info, warn};
 
 use crate::io::bus::{InboundBus, OutboundBus, OutboxStore};
-use crate::io::scheduler::SessionScheduler;
-use crate::io::session_manager::SessionManager;
 use crate::io::stream::{StreamEvent, StreamHub};
+use crate::scheduler::SessionScheduler;
+use crate::session_manager::SessionManager;
 use crate::io::types::{
     InboundMessage, MessageId, OutboundEnvelope, OutboundPayload, OutboundRouting,
 };
@@ -395,8 +395,8 @@ mod tests {
     use crate::channel::types::ChannelType;
     use crate::io::memory_bus::{InMemoryInboundBus, InMemoryOutboundBus};
     use crate::defaults::noop::{NoopOutboxStore, NoopSessionRepository};
-    use crate::io::session_manager::SessionManager;
     use crate::io::types::ChannelSource;
+    use crate::session_manager::SessionManager;
     use crate::process::principal::UserId;
     use crate::provider::EnvLlmProviderLoader;
 
@@ -455,12 +455,12 @@ mod tests {
         // Schedule first message (becomes Ready, marks slot as running)
         let msg1 = test_inbound("s1", "first");
         let result = scheduler.schedule(msg1);
-        assert!(matches!(result, crate::io::scheduler::ScheduleResult::Ready(_)));
+        assert!(matches!(result, crate::scheduler::ScheduleResult::Ready(_)));
 
         // Schedule second message (becomes Queued)
         let msg2 = test_inbound("s1", "second");
         let result = scheduler.schedule(msg2);
-        assert!(matches!(result, crate::io::scheduler::ScheduleResult::Queued));
+        assert!(matches!(result, crate::scheduler::ScheduleResult::Queued));
 
         // Release session — should re-publish the next message
         executor.release_session(&session_id);

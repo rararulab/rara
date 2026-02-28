@@ -35,6 +35,7 @@ pub mod channel;
 pub mod defaults;
 pub mod error;
 pub mod event;
+pub mod executor;
 pub mod guard;
 pub mod handle;
 pub mod io;
@@ -47,7 +48,10 @@ pub mod process;
 pub mod prompt;
 pub mod provider;
 pub mod runner;
+pub mod scheduler;
 pub mod session;
+pub mod session_manager;
+pub mod tick;
 pub mod tool;
 
 pub use error::{KernelError, Result};

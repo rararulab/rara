@@ -15,7 +15,7 @@
 //! SessionManager — conversation history management for the I/O pipeline.
 //!
 //! Wraps a [`SessionRepository`] to provide session lifecycle operations
-//! needed by the [`AgentExecutor`](super::executor::AgentExecutor):
+//! needed by the [`AgentExecutor`](crate::executor::AgentExecutor):
 //! - Ensure a session exists (get or create)
 //! - Load conversation history
 //! - Persist inbound and assistant messages
@@ -92,7 +92,7 @@ pub enum SessionManagerError {
 /// Manages conversation sessions for the I/O pipeline.
 ///
 /// Delegates to a [`SessionRepository`] implementation for actual persistence.
-/// Used by [`AgentExecutor`](super::executor::AgentExecutor) to load history
+/// Used by [`AgentExecutor`](crate::executor::AgentExecutor) to load history
 /// and persist messages during agent execution.
 pub struct SessionManager {
     session_repo: Arc<dyn SessionRepository>,

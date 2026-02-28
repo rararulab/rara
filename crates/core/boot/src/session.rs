@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use rara_kernel::io::session_manager::{SessionManager, SessionRepository};
+use rara_kernel::session_manager::{SessionManager, SessionRepository};
 
 /// Create a SessionManager with the given repository implementation.
 pub fn default_session_manager(repo: Arc<dyn SessionRepository>) -> Arc<SessionManager> {

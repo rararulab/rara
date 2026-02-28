@@ -29,10 +29,10 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+use crate::executor::AgentExecutor;
 use crate::io::bus::InboundBus;
-use crate::io::executor::AgentExecutor;
-use crate::io::scheduler::{ScheduleResult, SessionScheduler};
 use crate::io::types::InboundMessage;
+use crate::scheduler::{ScheduleResult, SessionScheduler};
 
 // ---------------------------------------------------------------------------
 // TickLoop
@@ -135,10 +135,10 @@ mod tests {
     use super::*;
     use crate::channel::types::{ChannelType, MessageContent};
     use crate::defaults::noop::{NoopOutboxStore, NoopSessionRepository};
-    use crate::io::executor::AgentExecutor;
+    use crate::executor::AgentExecutor;
     use crate::io::memory_bus::{InMemoryInboundBus, InMemoryOutboundBus};
-    use crate::io::session_manager::SessionManager;
     use crate::io::stream::StreamHub;
+    use crate::session_manager::SessionManager;
     use crate::io::types::{ChannelSource, MessageId};
     use crate::process::principal::UserId;
     use crate::process::{ProcessTable, SessionId};

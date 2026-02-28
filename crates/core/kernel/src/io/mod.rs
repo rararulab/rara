@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! I/O Bus — unified message pipeline for inbound and outbound communication.
+//! I/O Bus — transport primitives for inbound and outbound communication.
 //!
-//! This module implements the kernel's I/O layer, inspired by OS I/O buses:
+//! This module implements the kernel's I/O transport layer:
 //!
 //! - **Inbound**: channel adapters publish messages to a single-consumer queue;
 //!   the kernel tick loop drains them at its own pace.
@@ -22,8 +22,9 @@
 //!   multiple egress subscribers deliver to their respective channels.
 //! - **Streaming**: ephemeral real-time events (token deltas, tool progress)
 //!   flow through the [`StreamHub`](stream::StreamHub) for connected frontends.
-//! - **Scheduling**: per-session serial execution via
-//!   [`SessionScheduler`](scheduler::SessionScheduler).
+//!
+//! Execution-related modules (scheduler, executor, tick loop, session manager)
+//! live at the kernel crate top level.
 //!
 //! ## Architecture
 //!
@@ -37,11 +38,7 @@
 
 pub mod bus;
 pub mod egress;
-pub mod executor;
 pub mod ingress;
 pub mod memory_bus;
-pub mod scheduler;
-pub mod session_manager;
 pub mod stream;
-pub mod tick;
 pub mod types;
