@@ -349,6 +349,7 @@ impl AppState {
             rara_boot::components::default_event_bus(),
             rara_boot::components::default_guard(),
             manifest_loader,
+            rara_boot::components::default_user_store(),
         ));
         info!("Kernel initialized");
 

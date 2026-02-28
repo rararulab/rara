@@ -53,6 +53,7 @@ use crate::handle::AgentHandle;
 use crate::memory::Memory;
 use crate::process::manifest_loader::ManifestLoader;
 use crate::process::principal::Principal;
+use crate::process::user::UserStore;
 use crate::process::{
     AgentEnv, AgentId, AgentManifest, AgentProcess, AgentResult, ProcessState,
     ProcessTable, SessionId,
@@ -103,6 +104,7 @@ impl Kernel {
         event_bus: Arc<dyn EventBus>,
         guard: Arc<dyn Guard>,
         manifest_loader: ManifestLoader,
+        user_store: Arc<dyn UserStore>,
     ) -> Self {
         info!(
             max_concurrency = config.max_concurrency,
@@ -123,6 +125,7 @@ impl Kernel {
             guard,
             manifest_loader,
             shared_kv: DashMap::new(),
+            user_store,
         });
 
         Self { inner, config }
@@ -339,6 +342,7 @@ impl Kernel {
 mod tests {
     use super::*;
     use crate::defaults::noop::{NoopEventBus, NoopGuard, NoopMemory};
+    use crate::defaults::noop_user_store::NoopUserStore;
     use crate::process::principal::Principal;
     use crate::provider::EnvLlmProviderLoader;
 
@@ -360,6 +364,7 @@ mod tests {
             Arc::new(NoopEventBus),
             Arc::new(NoopGuard),
             loader,
+            Arc::new(NoopUserStore),
         )
     }
 

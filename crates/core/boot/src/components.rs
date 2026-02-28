@@ -38,3 +38,8 @@ pub fn default_event_bus() -> Arc<dyn EventBus> {
 pub fn default_guard() -> Arc<dyn Guard> {
     Arc::new(NoopGuard)
 }
+
+/// Default UserStore — `NoopUserStore` (all users permitted, for testing).
+pub fn default_user_store() -> Arc<dyn rara_kernel::process::user::UserStore> {
+    Arc::new(rara_kernel::defaults::noop_user_store::NoopUserStore)
+}

@@ -97,6 +97,33 @@ pub(crate) struct KernelInner {
     pub manifest_loader: ManifestLoader,
     /// Cross-agent shared key-value store (simple DashMap).
     pub shared_kv: DashMap<String, serde_json::Value>,
+    /// User store for user management and permission validation.
+    pub user_store: Arc<dyn crate::process::user::UserStore>,
+}
+
+impl KernelInner {
+    /// Validate that the principal's user exists, is enabled, and has Spawn
+    /// permission.
+    ///
+    /// Called by both `Kernel::spawn()` and `ScopedKernelHandle::spawn()`.
+    pub(crate) async fn validate_principal(&self, principal: &Principal) -> Result<()> {
+        let user = self
+            .user_store
+            .get_by_name(&principal.user_id.0)
+            .await?
+            .ok_or(KernelError::UserNotFound {
+                name: principal.user_id.0.clone(),
+            })?;
+        if !user.enabled {
+            return Err(KernelError::UserDisabled { name: user.name });
+        }
+        if !user.has_permission(&crate::process::user::Permission::Spawn) {
+            return Err(KernelError::PermissionDenied {
+                reason: format!("user '{}' lacks Spawn permission", user.name),
+            });
+        }
+        Ok(())
+    }
 }
 
 impl ScopedKernelHandle {
@@ -404,6 +431,7 @@ mod tests {
 
     fn make_kernel_inner() -> Arc<KernelInner> {
         use crate::defaults::noop::{NoopEventBus, NoopGuard, NoopMemory};
+        use crate::defaults::noop_user_store::NoopUserStore;
         use crate::provider::EnvLlmProviderLoader;
 
         Arc::new(KernelInner {
@@ -418,6 +446,7 @@ mod tests {
             guard: Arc::new(NoopGuard),
             manifest_loader: ManifestLoader::new(),
             shared_kv: DashMap::new(),
+            user_store: Arc::new(NoopUserStore),
         })
     }
 
