@@ -418,6 +418,10 @@ impl AppConfig {
         // Start WebAdapter with the I/O Bus ingress pipeline.
         {
             use rara_kernel::channel::adapter::ChannelAdapter as _;
+            // Inject StreamHub so WebSocket handler can forward token deltas.
+            web_adapter
+                .set_stream_hub(io_pipeline.stream_hub.clone())
+                .await;
             match web_adapter.start(io_pipeline.ingress_pipeline.clone()).await {
                 Ok(()) => info!("WebAdapter started (I/O Bus)"),
                 Err(e) => warn!(
