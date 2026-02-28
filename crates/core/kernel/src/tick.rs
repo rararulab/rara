@@ -104,26 +104,30 @@ impl TickLoop {
         let user_id = msg.user.0.clone();
 
         // Try to find an existing process for this session
-        if let Some(tx) = self
+        let msg = if let Some(tx) = self
             .kernel
             .process_table()
             .find_by_session(&session_id)
             .and_then(|p| self.kernel.process_table().get_mailbox(&p.agent_id))
         {
             // Deliver to existing process via mailbox
-            if let Err(e) = tx.send(ProcessMessage::UserMessage(msg)).await {
-                warn!(
-                    session_id = %session_id,
-                    error = %e,
-                    "mailbox send failed — process terminated, will spawn new one"
-                );
-                // Mailbox closed — the process has terminated.
-                // We lost the message. The sender should retry.
-            } else {
-                return;
+            match tx.send(ProcessMessage::UserMessage(msg)).await {
+                Ok(()) => return,
+                Err(e) => {
+                    warn!(
+                        session_id = %session_id,
+                        "mailbox send failed — process terminated, spawning new one"
+                    );
+                    // Recover the message from the SendError and fall through to spawn
+                    match e.0 {
+                        ProcessMessage::UserMessage(m) => m,
+                        _ => return,
+                    }
+                }
             }
-            return;
-        }
+        } else {
+            msg
+        };
 
         // No existing process — spawn a new one
         let manifest = self.default_manifest();
