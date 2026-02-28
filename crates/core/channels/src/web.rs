@@ -58,6 +58,7 @@ use rara_kernel::{
     },
     error::KernelError,
     io::{
+        egress::{EgressAdapter, EgressError, Endpoint, PlatformOutbound},
         ingress::{InboundSink, RawPlatformMessage},
         types::{InteractionType, ReplyContext as IoReplyContext},
     },
@@ -510,6 +511,38 @@ impl ChannelAdapter for WebAdapter {
             &WebEvent::Phase {
                 phase: phase.to_string(),
             },
+        );
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EgressAdapter trait implementation
+// ---------------------------------------------------------------------------
+
+#[async_trait]
+impl EgressAdapter for WebAdapter {
+    fn channel_type(&self) -> ChannelType { ChannelType::Web }
+
+    async fn send(&self, _endpoint: &Endpoint, msg: PlatformOutbound) -> Result<(), EgressError> {
+        let (session_key, content) = match msg {
+            PlatformOutbound::Reply {
+                session_key,
+                content,
+                ..
+            } => (session_key, content),
+            PlatformOutbound::StreamChunk {
+                session_key,
+                delta,
+                ..
+            } => (session_key, delta),
+            PlatformOutbound::Progress { session_key, text } => (session_key, text),
+        };
+
+        WebAdapter::broadcast_event(
+            &self.sessions,
+            &session_key,
+            &WebEvent::Message { content },
         );
         Ok(())
     }
