@@ -51,6 +51,9 @@ pub mod session;
 pub mod tick;
 pub mod tool;
 
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
+
 pub use error::{KernelError, Result};
 // New process model re-exports
 pub use handle::{AgentHandle, EventOps, GuardOps, KernelHandle, MemoryOps, ProcessOps};

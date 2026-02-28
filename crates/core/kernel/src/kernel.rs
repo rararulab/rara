@@ -712,6 +712,14 @@ impl Kernel {
     /// Access the shared KernelInner (for constructing ScopedKernelHandles
     /// externally).
     pub(crate) fn inner(&self) -> &Arc<KernelInner> { &self.inner }
+
+    /// Construct a `Kernel` from a pre-built `KernelInner` and config.
+    ///
+    /// Used by [`crate::testing::TestKernelBuilder`] to assemble kernels in
+    /// tests without going through the public `new()` constructor.
+    pub(crate) fn from_inner(inner: Arc<KernelInner>, config: KernelConfig) -> Self {
+        Self { inner, config }
+    }
 }
 
 #[cfg(test)]

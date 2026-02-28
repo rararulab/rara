@@ -69,6 +69,56 @@ pub trait LlmProviderLoader: Send + Sync {
 /// Convenience alias used across the codebase.
 pub type LlmProviderLoaderRef = Arc<dyn LlmProviderLoader>;
 
+/// [`LlmProviderLoader`] that connects to an Ollama instance via its
+/// OpenAI-compatible API endpoint.
+///
+/// Ollama does not require authentication, but `async_openai` requires a
+/// non-empty API key — we use the literal `"ollama"`.
+pub struct OllamaProviderLoader {
+    base_url: String,
+    provider: Arc<tokio::sync::OnceCell<Arc<dyn LlmProvider>>>,
+}
+
+impl OllamaProviderLoader {
+    /// Create a new loader pointing at the given Ollama base URL.
+    ///
+    /// The URL should include the `/v1` path suffix, e.g.
+    /// `"https://ollama.rara.local/v1"`.
+    pub fn new(base_url: impl Into<String>) -> Self {
+        Self {
+            base_url: base_url.into(),
+            provider: Arc::new(tokio::sync::OnceCell::new()),
+        }
+    }
+}
+
+impl std::fmt::Debug for OllamaProviderLoader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OllamaProviderLoader")
+            .field("base_url", &self.base_url)
+            .field("initialized", &self.provider.initialized())
+            .finish()
+    }
+}
+
+#[async_trait]
+impl LlmProviderLoader for OllamaProviderLoader {
+    async fn acquire_provider(&self) -> Result<Arc<dyn LlmProvider>> {
+        let provider_ref = self
+            .provider
+            .get_or_try_init(|| async {
+                let config = async_openai::config::OpenAIConfig::new()
+                    .with_api_key("ollama")
+                    .with_api_base(&self.base_url);
+                let provider: Arc<dyn LlmProvider> =
+                    Arc::new(OpenAiProvider::with_config(config));
+                Ok::<_, crate::error::KernelError>(provider)
+            })
+            .await?;
+        Ok(Arc::clone(provider_ref))
+    }
+}
+
 /// [`LlmProviderLoader`] that reads the API key from the `OPENROUTER_KEY`
 /// environment variable.  Since env vars don't change at runtime this loader
 /// caches the provider after the first successful initialisation.

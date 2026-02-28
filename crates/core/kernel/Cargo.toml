@@ -11,6 +11,10 @@ keywords.workspace = true
 categories.workspace = true
 description = "Unified agent orchestrator: lifecycle, memory, LLM execution, tool dispatch"
 
+[features]
+default = []
+testing = []
+
 [dependencies]
 anyhow.workspace = true
 async-openai.workspace = true
@@ -38,6 +42,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 common-telemetry.workspace = true
+rara-kernel = { path = ".", features = ["testing"] }
 test-case = "^3"
 
 [lints]
