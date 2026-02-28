@@ -35,7 +35,10 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use tokio::sync::mpsc;
+
 use crate::error::Result;
+use crate::io::types::InboundMessage;
 
 /// Unique identifier for a running agent process.
 ///
@@ -132,6 +135,8 @@ pub struct AgentManifest {
 pub enum ProcessState {
     /// Agent is actively running (LLM loop in progress).
     Running,
+    /// Agent is waiting for child agent results (mailbox still open).
+    Waiting,
     /// Agent completed successfully.
     Completed,
     /// Agent failed with an error.
@@ -170,6 +175,33 @@ impl Default for AgentEnv {
             vars: HashMap::new(),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// ProcessMessage / Signal — mailbox message types
+// ---------------------------------------------------------------------------
+
+/// Messages delivered to a long-lived agent process via its mailbox.
+#[derive(Debug)]
+pub enum ProcessMessage {
+    /// A new user message to process.
+    UserMessage(InboundMessage),
+    /// Result from a spawned child agent.
+    ChildResult {
+        child_id: AgentId,
+        result: AgentResult,
+    },
+    /// Control signal.
+    Signal(Signal),
+}
+
+/// Control signals for agent processes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Signal {
+    /// Interrupt the current operation (cancel in-flight LLM call).
+    Interrupt,
+    /// Kill the process immediately.
+    Kill,
 }
 
 /// A running agent instance in the process table.
@@ -230,8 +262,16 @@ impl From<&AgentProcess> for ProcessInfo {
 ///
 /// Thread-safe via `DashMap`. Supports concurrent reads and writes from
 /// multiple tokio tasks (e.g., kernel spawn + agent tool calls).
+///
+/// Includes a session index for fast `SessionId -> AgentId` lookups and
+/// a mailbox registry for sending messages to long-lived processes.
 pub struct ProcessTable {
     processes: DashMap<AgentId, AgentProcess>,
+    /// Maps a session to its currently active agent process.
+    session_index: DashMap<SessionId, AgentId>,
+    /// Mailbox senders for long-lived processes (kept separate because
+    /// `mpsc::Sender` doesn't derive `Clone` for `AgentProcess`'s derive).
+    mailboxes: DashMap<AgentId, mpsc::Sender<ProcessMessage>>,
 }
 
 impl ProcessTable {
@@ -239,11 +279,18 @@ impl ProcessTable {
     pub fn new() -> Self {
         Self {
             processes: DashMap::new(),
+            session_index: DashMap::new(),
+            mailboxes: DashMap::new(),
         }
     }
 
     /// Insert a process into the table.
+    ///
+    /// Automatically updates the session index so `find_by_session` can
+    /// locate this process.
     pub fn insert(&self, process: AgentProcess) {
+        self.session_index
+            .insert(process.session_id.clone(), process.agent_id);
         self.processes.insert(process.agent_id, process);
     }
 
@@ -261,11 +308,13 @@ impl ProcessTable {
             .get_mut(&id)
             .ok_or(crate::error::KernelError::AgentNotFound { id: id.0 })?;
         entry.state = state;
-        if matches!(
-            state,
-            ProcessState::Completed | ProcessState::Failed | ProcessState::Cancelled
-        ) {
-            entry.finished_at = Some(Timestamp::now());
+        match state {
+            ProcessState::Completed | ProcessState::Failed | ProcessState::Cancelled => {
+                entry.finished_at = Some(Timestamp::now());
+            }
+            ProcessState::Running | ProcessState::Waiting => {
+                // Non-terminal states: do not set finished_at.
+            }
         }
         Ok(())
     }
@@ -281,8 +330,15 @@ impl ProcessTable {
     }
 
     /// Remove a process from the table, returning it if it existed.
+    ///
+    /// Also cleans up the session index and mailbox entries.
     pub fn remove(&self, id: AgentId) -> Option<AgentProcess> {
-        self.processes.remove(&id).map(|(_, p)| p)
+        let removed = self.processes.remove(&id).map(|(_, p)| p);
+        if let Some(ref process) = removed {
+            self.session_index.remove_if(&process.session_id, |_, agent_id| *agent_id == id);
+            self.mailboxes.remove(&id);
+        }
+        removed
     }
 
     /// List all children of a given parent.
@@ -308,6 +364,59 @@ impl ProcessTable {
             .iter()
             .filter(|p| p.state == ProcessState::Running)
             .count()
+    }
+
+    // ----- Session index methods -----
+
+    /// Find the active agent process for a session.
+    pub fn find_by_session(&self, session_id: &SessionId) -> Option<AgentProcess> {
+        let agent_id = self.session_index.get(session_id)?;
+        self.get(*agent_id)
+    }
+
+    /// Bind a session to a specific agent process (overwrites any existing binding).
+    pub fn bind_session(&self, session_id: SessionId, agent_id: AgentId) {
+        self.session_index.insert(session_id, agent_id);
+    }
+
+    // ----- Mailbox methods -----
+
+    /// Register a mailbox sender for a process.
+    pub fn set_mailbox(&self, id: AgentId, tx: mpsc::Sender<ProcessMessage>) {
+        self.mailboxes.insert(id, tx);
+    }
+
+    /// Get a clone of the mailbox sender for a process.
+    pub fn get_mailbox(&self, id: &AgentId) -> Option<mpsc::Sender<ProcessMessage>> {
+        self.mailboxes.get(id).map(|tx| tx.value().clone())
+    }
+
+    /// Send a message to the agent process handling a given session.
+    ///
+    /// Returns `Ok(())` if the message was sent, or an error if no agent
+    /// is bound to the session or the mailbox is closed.
+    pub async fn send_to_session(
+        &self,
+        session_id: &SessionId,
+        msg: ProcessMessage,
+    ) -> Result<()> {
+        let agent_id = self
+            .session_index
+            .get(session_id)
+            .map(|r| *r)
+            .ok_or_else(|| crate::error::KernelError::ProcessNotFound {
+                id: format!("no agent for session {session_id}"),
+            })?;
+        let tx = self
+            .get_mailbox(&agent_id)
+            .ok_or_else(|| crate::error::KernelError::ProcessNotFound {
+                id: format!("no mailbox for agent {agent_id}"),
+            })?;
+        tx.send(msg).await.map_err(|_| {
+            crate::error::KernelError::ProcessNotFound {
+                id: format!("mailbox closed for agent {agent_id}"),
+            }
+        })
     }
 }
 
@@ -574,5 +683,97 @@ system_prompt: "Hello"
         table.insert(p);
         table.set_state(id, ProcessState::Cancelled).unwrap();
         assert!(table.get(id).unwrap().finished_at.is_some());
+    }
+
+    #[test]
+    fn test_process_state_waiting_does_not_set_finished_at() {
+        let table = ProcessTable::new();
+        let p = test_process("waiter", None);
+        let id = p.agent_id;
+        table.insert(p);
+
+        table.set_state(id, ProcessState::Waiting).unwrap();
+
+        let process = table.get(id).unwrap();
+        assert_eq!(process.state, ProcessState::Waiting);
+        assert!(
+            process.finished_at.is_none(),
+            "Waiting state should not set finished_at"
+        );
+    }
+
+    #[test]
+    fn test_process_table_session_index() {
+        let table = ProcessTable::new();
+
+        // Insert creates a session index entry
+        let p = test_process("agent-a", None);
+        let agent_id = p.agent_id;
+        let session_id = p.session_id.clone();
+        table.insert(p);
+
+        // find_by_session should return the process
+        let found = table.find_by_session(&session_id);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().agent_id, agent_id);
+
+        // bind_session overwrites
+        let new_id = AgentId::new();
+        let new_process = AgentProcess {
+            agent_id: new_id,
+            parent_id: None,
+            session_id: session_id.clone(),
+            manifest: test_manifest("agent-b"),
+            principal: Principal::user("test-user"),
+            env: AgentEnv::default(),
+            state: ProcessState::Running,
+            created_at: Timestamp::now(),
+            finished_at: None,
+            result: None,
+        };
+        table.insert(new_process);
+        table.bind_session(session_id.clone(), new_id);
+
+        let found = table.find_by_session(&session_id);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().agent_id, new_id);
+    }
+
+    #[test]
+    fn test_process_table_remove_clears_session_index() {
+        let table = ProcessTable::new();
+        let p = test_process("removable", None);
+        let agent_id = p.agent_id;
+        let session_id = p.session_id.clone();
+        table.insert(p);
+
+        // Session index should have an entry
+        assert!(table.find_by_session(&session_id).is_some());
+
+        // Remove should clear the session index
+        table.remove(agent_id);
+        assert!(table.find_by_session(&session_id).is_none());
+    }
+
+    #[test]
+    fn test_process_table_mailbox() {
+        let table = ProcessTable::new();
+        let p = test_process("mailbox-test", None);
+        let agent_id = p.agent_id;
+        table.insert(p);
+
+        // Initially no mailbox
+        assert!(table.get_mailbox(&agent_id).is_none());
+
+        // Set mailbox
+        let (tx, _rx) = mpsc::channel(16);
+        table.set_mailbox(agent_id, tx);
+
+        // Now we should get it
+        assert!(table.get_mailbox(&agent_id).is_some());
+
+        // Remove clears mailbox too
+        table.remove(agent_id);
+        assert!(table.get_mailbox(&agent_id).is_none());
     }
 }

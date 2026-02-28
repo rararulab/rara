@@ -77,7 +77,7 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
 
             match state
                 .kernel
-                .spawn(manifest, job.message.clone(), principal, session_id, None)
+                .spawn_with_input(manifest, job.message.clone(), principal, session_id, None)
                 .await
             {
                 Ok(handle) => {

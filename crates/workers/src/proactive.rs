@@ -107,7 +107,7 @@ impl FallibleWorker<AppState> for ProactiveAgentWorker {
 
         match state
             .kernel
-            .spawn(manifest, user_prompt, principal, session_id, None)
+            .spawn_with_input(manifest, user_prompt, principal, session_id, None)
             .await
         {
             Ok(handle) => {

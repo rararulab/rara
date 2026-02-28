@@ -341,16 +341,38 @@ impl AppConfig {
 
         // -- I/O Bus pipeline -------------------------------------------------
 
+        // Construct Kernel for the I/O pipeline.
+        let kernel = {
+            use rara_kernel::kernel::{Kernel, KernelConfig};
+            use rara_kernel::defaults::noop::{NoopEventBus, NoopGuard, NoopMemory};
+            use rara_kernel::defaults::noop_user_store::NoopUserStore;
+            use rara_kernel::process::manifest_loader::ManifestLoader;
+
+            let config = KernelConfig::default();
+            let mut loader = ManifestLoader::new();
+            loader.load_bundled();
+
+            Kernel::new(
+                config,
+                app_state.llm_provider.clone(),
+                app_state.tool_registry.clone(),
+                Arc::new(NoopMemory),
+                Arc::new(NoopEventBus),
+                Arc::new(NoopGuard),
+                loader,
+                Arc::new(NoopUserStore),
+            )
+        };
+
         let io_pipeline = io_pipeline::init_io_pipeline(
             telegram_adapter.clone(),
             app_state.session_repo.clone(),
-            app_state.llm_provider.clone(),
-            app_state.tool_registry.clone(),
+            kernel,
         );
 
         // Start TickLoop in the background.
-        // The TickLoop drains the InboundBus and dispatches messages through
-        // the SessionScheduler to the AgentExecutor.
+        // The TickLoop drains the InboundBus and routes messages to
+        // long-lived agent processes via their mailboxes.
         let tick_loop = io_pipeline.tick_loop;
         tokio::spawn({
             let token = cancellation_token.clone();

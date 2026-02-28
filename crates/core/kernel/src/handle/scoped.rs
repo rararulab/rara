@@ -76,7 +76,7 @@ pub struct ScopedKernelHandle {
 /// This struct holds the "real" kernel state shared by all handles via `Arc`.
 pub(crate) struct KernelInner {
     /// The global process table tracking all running agents.
-    pub process_table: ProcessTable,
+    pub process_table: Arc<ProcessTable>,
     /// Global semaphore limiting total concurrent agent processes.
     pub global_semaphore: Arc<Semaphore>,
     /// Default maximum number of children per agent.
@@ -99,6 +99,12 @@ pub(crate) struct KernelInner {
     pub shared_kv: DashMap<String, serde_json::Value>,
     /// User store for user management and permission validation.
     pub user_store: Arc<dyn crate::process::user::UserStore>,
+    /// Session manager for conversation history (used by process_loop).
+    pub session_manager: Option<Arc<crate::session_manager::SessionManager>>,
+    /// Stream hub for real-time streaming events (used by process_loop).
+    pub stream_hub: Option<Arc<crate::io::stream::StreamHub>>,
+    /// Outbound bus for publishing final responses (used by process_loop).
+    pub outbound_bus: Option<Arc<dyn crate::io::bus::OutboundBus>>,
 }
 
 /// Parameters for spawning an agent process via [`KernelInner::spawn_process`].
@@ -199,6 +205,9 @@ impl KernelInner {
             .build();
 
         let (result_tx, result_rx) = oneshot::channel();
+        // Create a mailbox channel. For child (short-lived) spawns, the
+        // receiver is not used — the agent runs once and completes.
+        let (mailbox_tx, _mailbox_rx) = tokio::sync::mpsc::channel(16);
 
         tokio::spawn(async move {
             let _permits = permits;
@@ -256,6 +265,7 @@ impl KernelInner {
 
         AgentHandle {
             agent_id,
+            mailbox: mailbox_tx,
             result_rx,
         }
     }
@@ -498,7 +508,7 @@ mod tests {
         use crate::provider::EnvLlmProviderLoader;
 
         Arc::new(KernelInner {
-            process_table: ProcessTable::new(),
+            process_table: Arc::new(ProcessTable::new()),
             global_semaphore: Arc::new(Semaphore::new(10)),
             default_child_limit: 5,
             default_max_iterations: 25,
@@ -510,6 +520,9 @@ mod tests {
             manifest_loader: ManifestLoader::new(),
             shared_kv: DashMap::new(),
             user_store: Arc::new(NoopUserStore),
+            session_manager: None,
+            stream_hub: None,
+            outbound_bus: None,
         })
     }
 
