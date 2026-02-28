@@ -131,6 +131,27 @@ pub struct InboundMessage {
     pub metadata:      HashMap<String, Value>,
 }
 
+impl InboundMessage {
+    /// Create a synthetic internal message (for workers, SpawnTool, etc.).
+    pub fn synthetic(text: String, user: UserId, session_id: SessionId) -> Self {
+        Self {
+            id:            MessageId::new(),
+            source:        ChannelSource {
+                channel_type:        ChannelType::Internal,
+                platform_message_id: None,
+                platform_user_id:    user.0.clone(),
+                platform_chat_id:    None,
+            },
+            user,
+            session_id,
+            content:       MessageContent::Text(text),
+            reply_context: None,
+            timestamp:     jiff::Timestamp::now(),
+            metadata:      HashMap::new(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Attachment
 // ---------------------------------------------------------------------------

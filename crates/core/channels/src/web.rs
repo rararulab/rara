@@ -58,10 +58,14 @@ use rara_kernel::{
     },
     error::KernelError,
     io::{
-        egress::{EgressAdapter, EgressError, Endpoint, PlatformOutbound},
+        egress::{
+            EgressAdapter, EgressError, Endpoint, EndpointAddress, EndpointRegistry,
+            PlatformOutbound,
+        },
         ingress::{InboundSink, RawPlatformMessage},
         types::{InteractionType, ReplyContext as IoReplyContext},
     },
+    process::principal::UserId,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, broadcast, watch};
@@ -148,15 +152,17 @@ pub struct SendMessageResponse {
 /// ```
 pub struct WebAdapter {
     /// Active sessions: session_key -> broadcast sender for outbound events.
-    sessions:    Arc<DashMap<String, broadcast::Sender<String>>>,
+    sessions:          Arc<DashMap<String, broadcast::Sender<String>>>,
     /// InboundSink handle (set during `start`).
-    sink:        Arc<RwLock<Option<Arc<dyn InboundSink>>>>,
+    sink:              Arc<RwLock<Option<Arc<dyn InboundSink>>>>,
     /// StreamHub for subscribing to real-time token deltas.
-    stream_hub:  Arc<RwLock<Option<Arc<rara_kernel::io::stream::StreamHub>>>>,
+    stream_hub:        Arc<RwLock<Option<Arc<rara_kernel::io::stream::StreamHub>>>>,
+    /// EndpointRegistry for tracking connected users (set during startup).
+    endpoint_registry: Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
     /// Shutdown signal sender.
-    shutdown_tx: watch::Sender<bool>,
+    shutdown_tx:       watch::Sender<bool>,
     /// Shutdown signal receiver (cloneable).
-    shutdown_rx: watch::Receiver<bool>,
+    shutdown_rx:       watch::Receiver<bool>,
 }
 
 impl WebAdapter {
@@ -167,6 +173,7 @@ impl WebAdapter {
             sessions: Arc::new(DashMap::new()),
             sink: Arc::new(RwLock::new(None)),
             stream_hub: Arc::new(RwLock::new(None)),
+            endpoint_registry: Arc::new(RwLock::new(None)),
             shutdown_tx,
             shutdown_rx,
         }
@@ -178,6 +185,12 @@ impl WebAdapter {
         *guard = Some(hub);
     }
 
+    /// Set the EndpointRegistry for tracking connected users.
+    pub async fn set_endpoint_registry(&self, registry: Arc<EndpointRegistry>) {
+        let mut guard = self.endpoint_registry.write().await;
+        *guard = Some(registry);
+    }
+
     /// Returns an [`axum::Router`] with WebSocket, SSE, and message endpoints.
     ///
     /// Mount this into your application:
@@ -186,10 +199,11 @@ impl WebAdapter {
     /// ```
     pub fn router(&self) -> Router {
         let state = WebAdapterState {
-            sessions:    Arc::clone(&self.sessions),
-            sink:        Arc::clone(&self.sink),
-            stream_hub:  Arc::clone(&self.stream_hub),
-            shutdown_rx: self.shutdown_rx.clone(),
+            sessions:          Arc::clone(&self.sessions),
+            sink:              Arc::clone(&self.sink),
+            stream_hub:        Arc::clone(&self.stream_hub),
+            endpoint_registry: Arc::clone(&self.endpoint_registry),
+            shutdown_rx:       self.shutdown_rx.clone(),
         };
 
         Router::new()
@@ -240,10 +254,48 @@ impl WebAdapter {
 /// Shared state passed to axum route handlers.
 #[derive(Clone)]
 struct WebAdapterState {
-    sessions:    Arc<DashMap<String, broadcast::Sender<String>>>,
-    sink:        Arc<RwLock<Option<Arc<dyn InboundSink>>>>,
-    stream_hub:  Arc<RwLock<Option<Arc<rara_kernel::io::stream::StreamHub>>>>,
-    shutdown_rx: watch::Receiver<bool>,
+    sessions:          Arc<DashMap<String, broadcast::Sender<String>>>,
+    sink:              Arc<RwLock<Option<Arc<dyn InboundSink>>>>,
+    stream_hub:        Arc<RwLock<Option<Arc<rara_kernel::io::stream::StreamHub>>>>,
+    endpoint_registry: Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
+    shutdown_rx:       watch::Receiver<bool>,
+}
+
+// ---------------------------------------------------------------------------
+// Helper: build endpoint for a Web connection
+// ---------------------------------------------------------------------------
+
+/// Build a Web endpoint and its associated UserId for endpoint registration.
+///
+/// The `UserId` format matches [`AppIdentityResolver`] (`"web:{user_id}"`).
+fn web_endpoint_for(session_key: &str) -> Endpoint {
+    Endpoint {
+        channel_type: ChannelType::Web,
+        address:      EndpointAddress::Web {
+            connection_id: session_key.to_owned(),
+        },
+    }
+}
+
+/// Compute the UserId as the identity resolver would.
+///
+/// Mirrors `AppIdentityResolver`: `"web:{platform_user_id}"`.
+fn web_user_id(user_id: &str) -> UserId { UserId(format!("web:{user_id}")) }
+
+/// Register a web endpoint in the registry (if available).
+async fn register_endpoint(registry: &RwLock<Option<Arc<EndpointRegistry>>>, user_id: &str, session_key: &str) {
+    let guard = registry.read().await;
+    if let Some(ref reg) = *guard {
+        reg.register(&web_user_id(user_id), web_endpoint_for(session_key));
+    }
+}
+
+/// Unregister a web endpoint from the registry (if available).
+async fn unregister_endpoint(registry: &RwLock<Option<Arc<EndpointRegistry>>>, user_id: &str, session_key: &str) {
+    let guard = registry.read().await;
+    if let Some(ref reg) = *guard {
+        reg.unregister(&web_user_id(user_id), &web_endpoint_for(session_key));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -296,6 +348,9 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
 
     let session_key = params.session_key.clone();
     let mut shutdown_rx = state.shutdown_rx.clone();
+
+    // Register this connection in the EndpointRegistry.
+    register_endpoint(&state.endpoint_registry, &params.user_id, &session_key).await;
 
     // Task: forward broadcast events to the WebSocket client.
     let send_task = {
@@ -394,6 +449,9 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
         _ = recv_task => {}
     }
 
+    // Unregister this connection from the EndpointRegistry.
+    unregister_endpoint(&state.endpoint_registry, &params.user_id, &session_key).await;
+
     info!(session_key, "WebSocket connection closed");
 }
 
@@ -473,9 +531,15 @@ async fn sse_handler(
 ) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
     info!(session_key = %params.session_key, "SSE connection opened");
 
+    // Register this connection in the EndpointRegistry.
+    register_endpoint(&state.endpoint_registry, &params.user_id, &params.session_key).await;
+
     let tx = WebAdapter::get_or_create_session(&state.sessions, &params.session_key);
     let rx = tx.subscribe();
     let shutdown_rx = state.shutdown_rx.clone();
+    let registry_for_cleanup = Arc::clone(&state.endpoint_registry);
+    let user_for_cleanup = params.user_id.clone();
+    let key_for_cleanup = params.session_key.clone();
 
     let stream = futures::stream::unfold(
         (rx, shutdown_rx, params.session_key.clone()),
@@ -514,7 +578,39 @@ async fn sse_handler(
         },
     );
 
+    // Use a oneshot to signal when the SSE stream ends so we can unregister.
+    let (cleanup_tx, cleanup_rx) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(async move {
+        // Wait for stream to end (sender dropped when stream completes).
+        let _ = cleanup_rx.await;
+        unregister_endpoint(&registry_for_cleanup, &user_for_cleanup, &key_for_cleanup).await;
+    });
+
+    // Chain the stream to drop the cleanup sender when done.
+    let stream = CleanupStream {
+        inner:    Box::pin(stream),
+        _cleanup: cleanup_tx,
+    };
+
     Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+/// Wrapper that holds a oneshot sender — when this stream is dropped, the
+/// sender drops too, which signals the cleanup task to unregister.
+struct CleanupStream<S> {
+    inner:    std::pin::Pin<Box<S>>,
+    _cleanup: tokio::sync::oneshot::Sender<()>,
+}
+
+impl<S: Stream> Stream for CleanupStream<S> {
+    type Item = S::Item;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -628,26 +724,22 @@ impl ChannelAdapter for WebAdapter {
 impl EgressAdapter for WebAdapter {
     fn channel_type(&self) -> ChannelType { ChannelType::Web }
 
-    async fn send(&self, _endpoint: &Endpoint, msg: PlatformOutbound) -> Result<(), EgressError> {
-        let (session_key, content) = match msg {
-            PlatformOutbound::Reply {
-                session_key,
-                content,
-                ..
-            } => (session_key, content),
-            PlatformOutbound::StreamChunk {
-                session_key,
-                delta,
-                ..
-            } => (session_key, delta),
-            PlatformOutbound::Progress { session_key, text } => (session_key, text),
+    async fn send(&self, endpoint: &Endpoint, msg: PlatformOutbound) -> Result<(), EgressError> {
+        // Extract the broadcast key from the endpoint's connection_id (the
+        // original session_key the client connected with). This avoids the
+        // double-prefix issue with PlatformOutbound::session_key.
+        let broadcast_key = match &endpoint.address {
+            EndpointAddress::Web { connection_id } => connection_id.as_str(),
+            _ => return Ok(()),
         };
 
-        WebAdapter::broadcast_event(
-            &self.sessions,
-            &session_key,
-            &WebEvent::Message { content },
-        );
+        let event = match msg {
+            PlatformOutbound::Reply { content, .. } => WebEvent::Message { content },
+            PlatformOutbound::StreamChunk { delta, .. } => WebEvent::TextDelta { text: delta },
+            PlatformOutbound::Progress { text, .. } => WebEvent::Progress { stage: text },
+        };
+
+        WebAdapter::broadcast_event(&self.sessions, broadcast_key, &event);
         Ok(())
     }
 }
@@ -848,5 +940,138 @@ mod tests {
         let received = rx.try_recv().unwrap();
         assert!(received.contains("\"type\":\"phase\""));
         assert!(received.contains("\"phase\":\"thinking\""));
+    }
+
+    // -----------------------------------------------------------------------
+    // EndpointRegistry integration tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn set_endpoint_registry_injects_registry() {
+        let adapter = WebAdapter::new();
+        assert!(adapter.endpoint_registry.read().await.is_none());
+
+        let registry = Arc::new(EndpointRegistry::new());
+        adapter.set_endpoint_registry(registry).await;
+        assert!(adapter.endpoint_registry.read().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn register_unregister_endpoint_lifecycle() {
+        let registry = Arc::new(EndpointRegistry::new());
+        let registry_lock: Arc<RwLock<Option<Arc<EndpointRegistry>>>> =
+            Arc::new(RwLock::new(Some(registry.clone())));
+
+        let user_id = "user-42";
+        let session_key = "my-session";
+
+        // Register
+        register_endpoint(&registry_lock, user_id, session_key).await;
+        let uid = web_user_id(user_id);
+        assert!(registry.is_online(&uid));
+        let endpoints = registry.get_endpoints(&uid);
+        assert_eq!(endpoints.len(), 1);
+        assert_eq!(endpoints[0].channel_type, ChannelType::Web);
+        match &endpoints[0].address {
+            EndpointAddress::Web { connection_id } => {
+                assert_eq!(connection_id, session_key);
+            }
+            _ => panic!("expected Web endpoint"),
+        }
+
+        // Unregister
+        unregister_endpoint(&registry_lock, user_id, session_key).await;
+        assert!(!registry.is_online(&uid));
+        assert_eq!(registry.get_endpoints(&uid).len(), 0);
+    }
+
+    #[tokio::test]
+    async fn register_endpoint_noop_when_no_registry() {
+        let registry_lock: Arc<RwLock<Option<Arc<EndpointRegistry>>>> =
+            Arc::new(RwLock::new(None));
+
+        // Should not panic when registry is None.
+        register_endpoint(&registry_lock, "user-1", "sess-1").await;
+        unregister_endpoint(&registry_lock, "user-1", "sess-1").await;
+    }
+
+    #[tokio::test]
+    async fn egress_send_routes_via_endpoint_connection_id() {
+        let adapter = WebAdapter::new();
+
+        // Create a session broadcast and subscribe.
+        let tx = WebAdapter::get_or_create_session(&adapter.sessions, "my-chat");
+        let mut rx = tx.subscribe();
+
+        // Build endpoint with connection_id = "my-chat".
+        let endpoint = Endpoint {
+            channel_type: ChannelType::Web,
+            address:      EndpointAddress::Web {
+                connection_id: "my-chat".to_owned(),
+            },
+        };
+
+        let msg = PlatformOutbound::Reply {
+            session_key:   "web:web:my-chat".to_owned(), // wrong double-prefix
+            content:       "hello via egress".to_owned(),
+            attachments:   vec![],
+            reply_context: None,
+        };
+
+        // EgressAdapter::send should use the endpoint's connection_id,
+        // NOT the PlatformOutbound session_key.
+        EgressAdapter::send(&adapter, &endpoint, msg).await.unwrap();
+
+        let received = rx.try_recv().unwrap();
+        assert!(received.contains("hello via egress"));
+    }
+
+    #[tokio::test]
+    async fn egress_send_ignores_non_web_endpoint() {
+        let adapter = WebAdapter::new();
+
+        let endpoint = Endpoint {
+            channel_type: ChannelType::Telegram,
+            address:      EndpointAddress::Telegram {
+                chat_id:   123,
+                thread_id: None,
+            },
+        };
+
+        let msg = PlatformOutbound::Reply {
+            session_key:   "tg:123".to_owned(),
+            content:       "should be ignored".to_owned(),
+            attachments:   vec![],
+            reply_context: None,
+        };
+
+        // Should return Ok without panicking.
+        EgressAdapter::send(&adapter, &endpoint, msg).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn egress_send_stream_chunk() {
+        let adapter = WebAdapter::new();
+        let tx = WebAdapter::get_or_create_session(&adapter.sessions, "stream-sess");
+        let mut rx = tx.subscribe();
+
+        let endpoint = Endpoint {
+            channel_type: ChannelType::Web,
+            address:      EndpointAddress::Web {
+                connection_id: "stream-sess".to_owned(),
+            },
+        };
+
+        let msg = PlatformOutbound::StreamChunk {
+            session_key: "ignored".to_owned(),
+            delta:       "token".to_owned(),
+            edit_target: None,
+        };
+
+        EgressAdapter::send(&adapter, &endpoint, msg).await.unwrap();
+
+        let received = rx.try_recv().unwrap();
+        assert!(received.contains("\"type\":\"text_delta\""));
+        assert!(received.contains("token"));
     }
 }

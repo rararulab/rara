@@ -422,6 +422,10 @@ impl AppConfig {
             web_adapter
                 .set_stream_hub(io_pipeline.stream_hub.clone())
                 .await;
+            // Inject EndpointRegistry so WS/SSE handlers can register connections.
+            web_adapter
+                .set_endpoint_registry(io_pipeline.endpoint_registry.clone())
+                .await;
             match web_adapter.start(io_pipeline.ingress_pipeline.clone()).await {
                 Ok(()) => info!("WebAdapter started (I/O Bus)"),
                 Err(e) => warn!(

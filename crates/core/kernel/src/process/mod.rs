@@ -34,6 +34,7 @@ use dashmap::DashMap;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{error::Result, io::types::InboundMessage};
@@ -185,8 +186,6 @@ pub enum ProcessMessage {
 pub enum Signal {
     /// Interrupt the current operation (cancel in-flight LLM call).
     Interrupt,
-    /// Kill the process immediately.
-    Kill,
 }
 
 /// A running agent instance in the process table.
@@ -257,8 +256,9 @@ pub struct ProcessTable {
     /// Mailbox senders for long-lived processes (kept separate because
     /// `mpsc::Sender` doesn't derive `Clone` for `AgentProcess`'s derive).
     mailboxes:     DashMap<AgentId, mpsc::Sender<ProcessMessage>>,
-    /// Abort handles for spawned tasks (used when no mailbox exists).
-    abort_handles: DashMap<AgentId, tokio::task::AbortHandle>,
+    /// Cancellation tokens for graceful process termination.
+    /// Parent token cancel → all child tokens cancel automatically.
+    cancellation_tokens: DashMap<AgentId, CancellationToken>,
 }
 
 impl ProcessTable {
@@ -268,7 +268,7 @@ impl ProcessTable {
             processes:     DashMap::new(),
             session_index: DashMap::new(),
             mailboxes:     DashMap::new(),
-            abort_handles: DashMap::new(),
+            cancellation_tokens: DashMap::new(),
         }
     }
 
@@ -326,7 +326,7 @@ impl ProcessTable {
             self.session_index
                 .remove_if(&process.session_id, |_, agent_id| *agent_id == id);
             self.mailboxes.remove(&id);
-            self.abort_handles.remove(&id);
+            self.cancellation_tokens.remove(&id);
         }
         removed
     }
@@ -382,22 +382,19 @@ impl ProcessTable {
         self.mailboxes.get(id).map(|tx| tx.value().clone())
     }
 
-    /// Register an abort handle for a spawned task.
-    pub fn set_abort_handle(&self, id: AgentId, abort_handle: tokio::task::AbortHandle) {
-        self.abort_handles.insert(id, abort_handle);
+    /// Register a cancellation token for a process.
+    pub fn set_cancellation_token(&self, id: AgentId, token: CancellationToken) {
+        self.cancellation_tokens.insert(id, token);
     }
 
-    /// Remove the abort handle for a task that ended naturally.
-    pub fn clear_abort_handle(&self, id: &AgentId) { self.abort_handles.remove(id); }
+    /// Get a clone of the cancellation token for a process.
+    pub fn get_cancellation_token(&self, id: &AgentId) -> Option<CancellationToken> {
+        self.cancellation_tokens.get(id).map(|t| t.value().clone())
+    }
 
-    /// Abort a spawned task if one is registered.
-    pub fn abort(&self, id: &AgentId) -> bool {
-        self.abort_handles
-            .remove(id)
-            .map(|(_, handle)| {
-                handle.abort();
-            })
-            .is_some()
+    /// Remove the cancellation token for a process that ended naturally.
+    pub fn clear_cancellation_token(&self, id: &AgentId) {
+        self.cancellation_tokens.remove(id);
     }
 
     /// Send a message to the agent process handling a given session.

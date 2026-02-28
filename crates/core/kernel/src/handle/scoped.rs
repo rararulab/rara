@@ -25,23 +25,20 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use dashmap::DashMap;
 use jiff::Timestamp;
-use tokio::sync::{Semaphore, oneshot};
-use tracing::{info, warn};
-
+use tokio::sync::Semaphore;
 use super::{AgentHandle, EventOps, GuardOps, MemoryOps, ProcessOps};
 use crate::{
     error::{KernelError, Result},
-    event::{EventBus, KernelEvent},
-    guard::{Guard, GuardContext},
-    memory::Memory,
+    event::KernelEvent,
+    guard::GuardContext,
+    io::types::InboundMessage,
+    kernel::{KernelInner, SpawnPermits},
     process::{
-        AgentEnv, AgentId, AgentManifest, AgentProcess, AgentResult, ProcessInfo, ProcessState,
-        ProcessTable, SessionId, manifest_loader::ManifestLoader, principal::Principal,
+        AgentId, AgentManifest, ProcessInfo, ProcessState, SessionId,
+        principal::Principal,
     },
     provider::LlmProviderLoaderRef,
-    runner::{AgentRunner, UserContent},
     tool::ToolRegistry,
 };
 
@@ -62,238 +59,16 @@ pub struct ScopedKernelHandle {
     pub(crate) session_id:      SessionId,
     /// The identity under which this agent runs.
     pub(crate) principal:       Principal,
+    /// The manifest describing this agent (model, system_prompt, etc.).
+    pub(crate) manifest:        AgentManifest,
     /// Tools this agent is allowed to use (children can only subset these).
     pub(crate) allowed_tools:   Vec<String>,
+    /// Effective tool registry for this agent (filtered from global for children).
+    pub(crate) tool_registry:   Arc<ToolRegistry>,
     /// Per-agent semaphore limiting concurrent child processes.
     pub(crate) child_semaphore: Arc<Semaphore>,
     /// Shared kernel internals (process table, global limits, etc.).
     pub(crate) inner:           Arc<KernelInner>,
-}
-
-/// Shared kernel state that `ScopedKernelHandle` delegates to.
-///
-/// This struct holds the "real" kernel state shared by all handles via `Arc`.
-pub(crate) struct KernelInner {
-    /// The global process table tracking all running agents.
-    pub process_table:          Arc<ProcessTable>,
-    /// Global semaphore limiting total concurrent agent processes.
-    pub global_semaphore:       Arc<Semaphore>,
-    /// Default maximum number of children per agent.
-    pub default_child_limit:    usize,
-    /// Default max LLM iterations for spawned agents.
-    pub default_max_iterations: usize,
-    /// LLM provider loader for acquiring providers.
-    pub llm_provider:           LlmProviderLoaderRef,
-    /// Global tool registry (spawned agents get filtered subsets).
-    pub tool_registry:          Arc<ToolRegistry>,
-    /// 3-layer memory (not used for cross-agent KV — see shared_kv).
-    pub memory:                 Arc<dyn Memory>,
-    /// Event bus for publishing kernel events.
-    pub event_bus:              Arc<dyn EventBus>,
-    /// Guard for tool approval checks.
-    pub guard:                  Arc<dyn Guard>,
-    /// Manifest loader for looking up named agent definitions.
-    pub manifest_loader:        ManifestLoader,
-    /// Cross-agent shared key-value store (simple DashMap).
-    pub shared_kv:              DashMap<String, serde_json::Value>,
-    /// User store for user management and permission validation.
-    pub user_store:             Arc<dyn crate::process::user::UserStore>,
-    /// Session repository for conversation history (used by process_loop).
-    pub session_repo:           Option<Arc<dyn crate::session::SessionRepository>>,
-    /// Stream hub for real-time streaming events (used by process_loop).
-    pub stream_hub:             Option<Arc<crate::io::stream::StreamHub>>,
-    /// Outbound bus for publishing final responses (used by process_loop).
-    pub outbound_bus:           Option<Arc<dyn crate::io::bus::OutboundBus>>,
-}
-
-/// Parameters for spawning an agent process via [`KernelInner::spawn_process`].
-pub(crate) struct SpawnParams {
-    pub manifest:    AgentManifest,
-    pub input:       String,
-    pub principal:   Principal,
-    pub session_id:  SessionId,
-    pub parent_id:   Option<AgentId>,
-    /// Pre-filtered tool registry for this agent.
-    pub agent_tools: ToolRegistry,
-}
-
-impl KernelInner {
-    /// Validate that the principal's user exists, is enabled, and has Spawn
-    /// permission.
-    ///
-    /// Called by both `Kernel::spawn()` and `ScopedKernelHandle::spawn()`.
-    pub(crate) async fn validate_principal(&self, principal: &Principal) -> Result<()> {
-        let user = self
-            .user_store
-            .get_by_name(&principal.user_id.0)
-            .await?
-            .ok_or(KernelError::UserNotFound {
-                name: principal.user_id.0.clone(),
-            })?;
-        if !user.enabled {
-            return Err(KernelError::UserDisabled { name: user.name });
-        }
-        if !user.has_permission(&crate::process::user::Permission::Spawn) {
-            return Err(KernelError::PermissionDenied {
-                reason: format!("user '{}' lacks Spawn permission", user.name),
-            });
-        }
-        Ok(())
-    }
-
-    /// Core spawn logic shared by `Kernel::spawn()` and
-    /// `ScopedKernelHandle::spawn()`.
-    ///
-    /// Creates the agent process, builds and runs the AgentRunner in a tokio
-    /// task, and returns an `AgentHandle`. The caller is responsible for
-    /// acquiring semaphore permits and passing in the pre-filtered tool
-    /// registry.
-    ///
-    /// # Arguments
-    /// - `self_ref` — `Arc<KernelInner>` for the spawned task to hold
-    /// - `params` — spawn parameters (manifest, input, principal, etc.)
-    /// - `child_limit` — max children for the spawned agent
-    /// - `permits` — semaphore permits to hold for the lifetime of the task
-    pub(crate) fn spawn_process(
-        self_ref: Arc<KernelInner>,
-        params: SpawnParams,
-        child_limit: usize,
-        permits: SpawnPermits,
-    ) -> AgentHandle {
-        let agent_id = AgentId::new();
-        let max_iterations = params
-            .manifest
-            .max_iterations
-            .unwrap_or(self_ref.default_max_iterations);
-
-        let process = AgentProcess {
-            agent_id,
-            parent_id: params.parent_id,
-            session_id: params.session_id.clone(),
-            manifest: params.manifest.clone(),
-            principal: params.principal.clone(),
-            env: AgentEnv::default(),
-            state: ProcessState::Running,
-            created_at: Timestamp::now(),
-            finished_at: None,
-            result: None,
-        };
-        self_ref.process_table.insert(process);
-
-        let tool_names: Vec<String> = params.agent_tools.tool_names();
-
-        let _scoped_handle = Arc::new(ScopedKernelHandle {
-            agent_id,
-            session_id: params.session_id,
-            principal: params.principal,
-            allowed_tools: tool_names,
-            child_semaphore: Arc::new(Semaphore::new(child_limit)),
-            inner: Arc::clone(&self_ref),
-        });
-
-        let model_name = params.manifest.model.clone();
-        let system_prompt = params.manifest.system_prompt.clone();
-        let provider_hint = params.manifest.provider_hint.clone().unwrap_or_default();
-        let llm_provider = Arc::clone(&self_ref.llm_provider);
-
-        let runner = AgentRunner::builder()
-            .llm_provider(llm_provider)
-            .provider_hint(provider_hint)
-            .model_name(model_name)
-            .system_prompt(system_prompt)
-            .user_content(UserContent::Text(params.input))
-            .max_iterations(max_iterations)
-            .build();
-
-        let (result_tx, result_rx) = oneshot::channel();
-        // Create a mailbox channel. For child (short-lived) spawns, the
-        // receiver is not used — the agent runs once and completes.
-        let (mailbox_tx, _mailbox_rx) = tokio::sync::mpsc::channel(16);
-        let process_table = Arc::clone(&self_ref.process_table);
-        let task_inner = Arc::clone(&self_ref);
-
-        let join_handle = tokio::spawn(async move {
-            let _permits = permits;
-            let _scoped_handle = _scoped_handle;
-
-            let run_result = runner.run(&params.agent_tools, None).await;
-
-            match run_result {
-                Ok(response) => {
-                    let agent_result = AgentResult {
-                        output:     response.response_text(),
-                        iterations: response.iterations,
-                        tool_calls: response.tool_calls_made,
-                    };
-
-                    let _ = task_inner
-                        .process_table
-                        .set_state(agent_id, ProcessState::Completed);
-                    let _ = task_inner
-                        .process_table
-                        .set_result(agent_id, agent_result.clone());
-
-                    info!(
-                        agent_id = %agent_id,
-                        iterations = agent_result.iterations,
-                        tool_calls = agent_result.tool_calls,
-                        "agent process completed"
-                    );
-
-                    let _ = result_tx.send(agent_result);
-                }
-                Err(err) => {
-                    warn!(
-                        agent_id = %agent_id,
-                        error = %err,
-                        "agent process failed"
-                    );
-
-                    let _ = task_inner
-                        .process_table
-                        .set_state(agent_id, ProcessState::Failed);
-
-                    let error_result = AgentResult {
-                        output:     format!("Error: {err}"),
-                        iterations: 0,
-                        tool_calls: 0,
-                    };
-                    let _ = task_inner
-                        .process_table
-                        .set_result(agent_id, error_result.clone());
-                    let _ = result_tx.send(error_result);
-                }
-            }
-
-            process_table.clear_abort_handle(&agent_id);
-        });
-
-        self_ref
-            .process_table
-            .set_abort_handle(agent_id, join_handle.abort_handle());
-
-        AgentHandle {
-            agent_id,
-            mailbox: mailbox_tx,
-            result_rx,
-        }
-    }
-}
-
-/// Semaphore permits that must be held for the lifetime of the spawned task.
-///
-/// This enum accommodates both top-level spawns (global permit only) and
-/// child spawns (global + child permit).
-pub(crate) enum SpawnPermits {
-    /// Top-level spawn — only a global permit.
-    TopLevel {
-        _global: tokio::sync::OwnedSemaphorePermit,
-    },
-    /// Child spawn — both a child and global permit.
-    Child {
-        _child:  tokio::sync::OwnedSemaphorePermit,
-        _global: tokio::sync::OwnedSemaphorePermit,
-    },
 }
 
 impl ScopedKernelHandle {
@@ -305,6 +80,20 @@ impl ScopedKernelHandle {
 
     /// The tools this agent is allowed to use.
     pub fn allowed_tools(&self) -> &[String] { &self.allowed_tools }
+
+    // ---- Agent execution accessors (used by run_agent_turn) ----
+
+    /// The manifest for this agent.
+    pub(crate) fn manifest(&self) -> &AgentManifest { &self.manifest }
+
+    /// The session ID this agent belongs to.
+    pub(crate) fn session_id(&self) -> &SessionId { &self.session_id }
+
+    /// The LLM provider loader.
+    pub(crate) fn llm_provider(&self) -> &LlmProviderLoaderRef { &self.inner.llm_provider }
+
+    /// The effective tool registry for this agent.
+    pub(crate) fn tool_registry(&self) -> &Arc<ToolRegistry> { &self.tool_registry }
 
     /// Validate that all requested child tools are a subset of this agent's
     /// tools.
@@ -320,53 +109,35 @@ impl ScopedKernelHandle {
         Ok(())
     }
 
-    /// Build a filtered ToolRegistry for a child based on manifest tools.
-    fn build_child_tool_registry(&self, manifest_tools: &[String]) -> ToolRegistry {
+    /// Compute the effective allowed_tools for a child agent.
+    fn effective_child_tools(&self, manifest_tools: &[String]) -> Vec<String> {
         if manifest_tools.is_empty() {
             // Inherit parent's tools
-            self.inner.tool_registry.filtered(&self.allowed_tools)
+            self.allowed_tools.clone()
+        } else if self.allowed_tools.is_empty() {
+            // Parent has no restriction
+            manifest_tools.to_vec()
         } else {
             // Intersect manifest tools with parent's allowed tools
-            let effective_tools: Vec<String> = if self.allowed_tools.is_empty() {
-                manifest_tools.to_vec()
-            } else {
-                manifest_tools
-                    .iter()
-                    .filter(|t| self.allowed_tools.iter().any(|a| a == *t))
-                    .cloned()
-                    .collect()
-            };
-            self.inner.tool_registry.filtered(&effective_tools)
+            manifest_tools
+                .iter()
+                .filter(|t| self.allowed_tools.iter().any(|a| a == *t))
+                .cloned()
+                .collect()
         }
     }
 
-    /// Recursively kill a process and all its children.
-    fn kill_recursive(&self, target_id: AgentId) -> Result<()> {
-        // First kill all children
-        let children = self.inner.process_table.children_of(target_id);
-        for child in children {
-            self.kill_recursive(child.agent_id)?;
+    /// Cancel a process via its CancellationToken.
+    ///
+    /// Child tokens are automatically cancelled by tokio_util's hierarchy,
+    /// so there is no need to recurse the process tree.
+    fn cancel_process(&self, target_id: AgentId) -> Result<()> {
+        if let Some(token) = self.inner.process_table.get_cancellation_token(&target_id) {
+            token.cancel();
         }
-        // Prefer a graceful mailbox shutdown for long-lived processes.
-        let mut delivered_signal = false;
-        if let Some(tx) = self.inner.process_table.get_mailbox(&target_id) {
-            match tx.try_send(crate::process::ProcessMessage::Signal(
-                crate::process::Signal::Kill,
-            )) {
-                Ok(()) => {
-                    delivered_signal = true;
-                }
-                Err(tokio::sync::mpsc::error::TrySendError::Closed(_))
-                | Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {}
-            }
-        }
-
-        // Short-lived processes have no mailbox loop, so abort the task directly.
-        if !delivered_signal {
-            let _ = self.inner.process_table.abort(&target_id);
-        }
-
-        // Then mark the target
+        // Mark state immediately for callers that check right after kill().
+        // The process loop will also set Cancelled when it detects the token,
+        // but this ensures immediate visibility.
         self.inner
             .process_table
             .set_state(target_id, ProcessState::Cancelled)?;
@@ -381,10 +152,8 @@ impl ProcessOps for ScopedKernelHandle {
     /// - Validates child tools are a subset of parent's tools
     /// - Acquires per-agent child semaphore (limits concurrent children)
     /// - Acquires global semaphore (limits total concurrent agents)
-    /// - Creates AgentProcess in process table
-    /// - Builds filtered ToolRegistry for the child
-    /// - Spawns tokio task running AgentRunner
-    /// - Returns AgentHandle with oneshot receiver
+    /// - Wraps input as InboundMessage::synthetic
+    /// - Delegates to `KernelInner::spawn_process()`
     async fn spawn(&self, manifest: AgentManifest, input: String) -> Result<AgentHandle> {
         // 1. Validate tool subset
         if !manifest.tools.is_empty() {
@@ -413,31 +182,35 @@ impl ProcessOps for ScopedKernelHandle {
                 message: "global concurrency limit reached".to_string(),
             })?;
 
-        // 4. Build filtered ToolRegistry
-        let agent_tools = self.build_child_tool_registry(&manifest.tools);
+        // 4. Compute effective child tools
+        let allowed_tools = self.effective_child_tools(&manifest.tools);
         let child_limit = manifest
             .max_children
             .unwrap_or(self.inner.default_child_limit);
 
-        // 5. Delegate to shared spawn logic
-        let handle = KernelInner::spawn_process(
+        // 5. Wrap input as InboundMessage
+        let inbound = InboundMessage::synthetic(
+            input,
+            self.principal.user_id.clone(),
+            self.session_id.clone(),
+        );
+
+        // 6. Delegate to unified spawn
+        KernelInner::spawn_process(
             Arc::clone(&self.inner),
-            SpawnParams {
-                manifest,
-                input,
-                principal: self.principal.clone(),
-                session_id: self.session_id.clone(),
-                parent_id: Some(self.agent_id),
-                agent_tools,
-            },
+            manifest,
+            inbound,
+            self.principal.clone(),
+            self.session_id.clone(),
+            Some(self.agent_id),
             child_limit,
+            allowed_tools,
             SpawnPermits::Child {
                 _child:  child_permit,
                 _global: global_permit,
             },
-        );
-
-        Ok(handle)
+        )
+        .await
     }
 
     async fn send(&self, _agent_id: AgentId, _message: String) -> Result<String> {
@@ -456,7 +229,7 @@ impl ProcessOps for ScopedKernelHandle {
             })
     }
 
-    fn kill(&self, agent_id: AgentId) -> Result<()> { self.kill_recursive(agent_id) }
+    fn kill(&self, agent_id: AgentId) -> Result<()> { self.cancel_process(agent_id) }
 
     fn children(&self) -> Vec<ProcessInfo> { self.inner.process_table.children_of(self.agent_id) }
 }
@@ -520,18 +293,24 @@ impl GuardOps for ScopedKernelHandle {
 
 #[cfg(test)]
 mod tests {
-    use tokio::sync::mpsc;
+    use dashmap::DashMap;
+    use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::process::{ProcessMessage, Signal, principal::Principal};
+    use crate::process::{
+        AgentEnv, AgentProcess, ProcessTable,
+        manifest_loader::ManifestLoader, principal::Principal,
+    };
 
     fn make_kernel_inner() -> Arc<KernelInner> {
         use crate::{
             defaults::{
-                noop::{NoopEventBus, NoopGuard, NoopMemory},
+                noop::{NoopEventBus, NoopGuard, NoopMemory, NoopSessionRepository},
                 noop_user_store::NoopUserStore,
             },
+            io::{memory_bus::InMemoryOutboundBus, stream::StreamHub},
             provider::EnvLlmProviderLoader,
+            session::SessionRepository,
         };
 
         Arc::new(KernelInner {
@@ -548,9 +327,10 @@ mod tests {
             manifest_loader:        ManifestLoader::new(),
             shared_kv:              DashMap::new(),
             user_store:             Arc::new(NoopUserStore),
-            session_repo:           None,
-            stream_hub:             None,
-            outbound_bus:           None,
+            session_repo:           Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
+            stream_hub:             Arc::new(StreamHub::new(1)),
+            outbound_bus:           Arc::new(InMemoryOutboundBus::new(1))
+                as Arc<dyn crate::io::bus::OutboundBus>,
         })
     }
 
@@ -564,7 +344,9 @@ mod tests {
             agent_id,
             session_id: SessionId::new("test-session"),
             principal: principal.clone(),
+            manifest: test_manifest("test"),
             allowed_tools: tools.clone(),
+            tool_registry: Arc::new(ToolRegistry::new()),
             child_semaphore: Arc::new(Semaphore::new(5)),
             inner: make_kernel_inner(),
         };
@@ -583,7 +365,9 @@ mod tests {
             agent_id:        AgentId::new(),
             session_id:      SessionId::new("session-1"),
             principal:       Principal::user("user-1"),
+            manifest:        test_manifest("test-1"),
             allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
             child_semaphore: Arc::new(Semaphore::new(3)),
             inner:           Arc::clone(&inner),
         };
@@ -592,7 +376,9 @@ mod tests {
             agent_id:        AgentId::new(),
             session_id:      SessionId::new("session-2"),
             principal:       Principal::admin("admin-1"),
+            manifest:        test_manifest("test-2"),
             allowed_tools:   vec!["bash".to_string()],
+            tool_registry:   Arc::new(ToolRegistry::new()),
             child_semaphore: Arc::new(Semaphore::new(3)),
             inner:           Arc::clone(&inner),
         };
@@ -610,11 +396,13 @@ mod tests {
             agent_id:        AgentId::new(),
             session_id:      SessionId::new("test"),
             principal:       Principal::user("test"),
+            manifest:        test_manifest("test"),
             allowed_tools:   vec![
                 "read_file".to_string(),
                 "grep".to_string(),
                 "bash".to_string(),
             ],
+            tool_registry:   Arc::new(ToolRegistry::new()),
             child_semaphore: Arc::new(Semaphore::new(5)),
             inner:           make_kernel_inner(),
         };
@@ -626,8 +414,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_kill_sends_kill_signal_to_mailbox() {
+    #[test]
+    fn test_kill_cancels_token() {
         let inner = make_kernel_inner();
         let agent_id = AgentId::new();
 
@@ -635,7 +423,7 @@ mod tests {
             agent_id,
             parent_id: None,
             session_id: SessionId::new("test"),
-            manifest: test_manifest("mailbox-agent"),
+            manifest: test_manifest("token-agent"),
             principal: Principal::user("test"),
             env: AgentEnv::default(),
             state: ProcessState::Running,
@@ -644,27 +432,29 @@ mod tests {
             result: None,
         });
 
-        let (tx, mut rx) = mpsc::channel(1);
-        inner.process_table.set_mailbox(agent_id, tx);
+        let token = CancellationToken::new();
+        inner
+            .process_table
+            .set_cancellation_token(agent_id, token.clone());
 
         let handle = ScopedKernelHandle {
             agent_id:        AgentId::new(),
             session_id:      SessionId::new("test"),
             principal:       Principal::user("test"),
+            manifest:        test_manifest("test"),
             allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
             child_semaphore: Arc::new(Semaphore::new(5)),
             inner:           Arc::clone(&inner),
         };
 
+        assert!(!token.is_cancelled());
         handle.kill(agent_id).unwrap();
-
-        let received = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
-            .await
-            .expect("kill should deliver promptly");
-        assert!(matches!(
-            received,
-            Some(ProcessMessage::Signal(Signal::Kill))
-        ));
+        assert!(token.is_cancelled());
+        assert_eq!(
+            inner.process_table.get(agent_id).unwrap().state,
+            ProcessState::Cancelled
+        );
     }
 
     #[test]
@@ -673,7 +463,9 @@ mod tests {
             agent_id:        AgentId::new(),
             session_id:      SessionId::new("test"),
             principal:       Principal::user("test"),
+            manifest:        test_manifest("test"),
             allowed_tools:   vec!["read_file".to_string()],
+            tool_registry:   Arc::new(ToolRegistry::new()),
             child_semaphore: Arc::new(Semaphore::new(5)),
             inner:           make_kernel_inner(),
         };
@@ -688,7 +480,9 @@ mod tests {
             agent_id:        AgentId::new(),
             session_id:      SessionId::new("test"),
             principal:       Principal::user("test"),
+            manifest:        test_manifest("test"),
             allowed_tools:   vec![], // empty = no restriction
+            tool_registry:   Arc::new(ToolRegistry::new()),
             child_semaphore: Arc::new(Semaphore::new(5)),
             inner:           make_kernel_inner(),
         };
@@ -707,7 +501,9 @@ mod tests {
             agent_id:        AgentId::new(),
             session_id:      SessionId::new("test"),
             principal:       Principal::user("test"),
+            manifest:        test_manifest("test"),
             allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
             child_semaphore: Arc::new(Semaphore::new(5)),
             inner:           Arc::clone(&inner),
         };
@@ -732,7 +528,9 @@ mod tests {
             agent_id:        AgentId::new(),
             session_id:      SessionId::new("test"),
             principal:       Principal::user("user-1"),
+            manifest:        test_manifest("test"),
             allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
             child_semaphore: Arc::new(Semaphore::new(5)),
             inner:           Arc::clone(&inner),
         };
@@ -741,7 +539,9 @@ mod tests {
             agent_id:        AgentId::new(),
             session_id:      SessionId::new("test"),
             principal:       Principal::user("user-2"),
+            manifest:        test_manifest("test"),
             allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
             child_semaphore: Arc::new(Semaphore::new(5)),
             inner:           Arc::clone(&inner),
         };
@@ -754,14 +554,33 @@ mod tests {
     }
 
     #[test]
-    fn test_kill_recursive() {
+    fn test_kill_cascades_via_cancellation_token() {
         let inner = make_kernel_inner();
         let parent_id = AgentId::new();
         let child1_id = AgentId::new();
         let child2_id = AgentId::new();
         let grandchild_id = AgentId::new();
 
-        // Insert parent
+        // Build token hierarchy: parent → child1/child2, child1 → grandchild
+        let parent_token = CancellationToken::new();
+        let child1_token = parent_token.child_token();
+        let child2_token = parent_token.child_token();
+        let grandchild_token = child1_token.child_token();
+
+        inner
+            .process_table
+            .set_cancellation_token(parent_id, parent_token.clone());
+        inner
+            .process_table
+            .set_cancellation_token(child1_id, child1_token.clone());
+        inner
+            .process_table
+            .set_cancellation_token(child2_id, child2_token.clone());
+        inner
+            .process_table
+            .set_cancellation_token(grandchild_id, grandchild_token.clone());
+
+        // Insert processes
         inner.process_table.insert(AgentProcess {
             agent_id:    parent_id,
             parent_id:   None,
@@ -775,7 +594,6 @@ mod tests {
             result:      None,
         });
 
-        // Insert children
         inner.process_table.insert(AgentProcess {
             agent_id:    child1_id,
             parent_id:   Some(parent_id),
@@ -802,7 +620,6 @@ mod tests {
             result:      None,
         });
 
-        // Insert grandchild
         inner.process_table.insert(AgentProcess {
             agent_id:    grandchild_id,
             parent_id:   Some(child1_id),
@@ -817,31 +634,28 @@ mod tests {
         });
 
         let handle = ScopedKernelHandle {
-            agent_id:        AgentId::new(), // some external caller
+            agent_id:        AgentId::new(),
             session_id:      SessionId::new("test"),
             principal:       Principal::user("test"),
+            manifest:        test_manifest("test"),
             allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
             child_semaphore: Arc::new(Semaphore::new(5)),
             inner:           Arc::clone(&inner),
         };
 
-        // Kill parent — should cascade to children and grandchild
-        handle.kill_recursive(parent_id).unwrap();
+        // Kill parent — CancellationToken hierarchy cascades automatically
+        handle.kill(parent_id).unwrap();
 
+        // All tokens should be cancelled
+        assert!(parent_token.is_cancelled());
+        assert!(child1_token.is_cancelled());
+        assert!(child2_token.is_cancelled());
+        assert!(grandchild_token.is_cancelled());
+
+        // Parent state set immediately by kill()
         assert_eq!(
             inner.process_table.get(parent_id).unwrap().state,
-            ProcessState::Cancelled
-        );
-        assert_eq!(
-            inner.process_table.get(child1_id).unwrap().state,
-            ProcessState::Cancelled
-        );
-        assert_eq!(
-            inner.process_table.get(child2_id).unwrap().state,
-            ProcessState::Cancelled
-        );
-        assert_eq!(
-            inner.process_table.get(grandchild_id).unwrap().state,
             ProcessState::Cancelled
         );
     }
@@ -868,7 +682,9 @@ mod tests {
             agent_id: AgentId::new(),
             session_id: SessionId::new("test"),
             principal: Principal::user("test"),
+            manifest: test_manifest("test"),
             allowed_tools: vec![],
+            tool_registry: Arc::new(ToolRegistry::new()),
             child_semaphore: Arc::new(Semaphore::new(5)),
             inner,
         };
@@ -885,7 +701,9 @@ mod tests {
             agent_id: AgentId::new(),
             session_id: SessionId::new("test"),
             principal: Principal::user("test"),
+            manifest: test_manifest("test"),
             allowed_tools: vec![],
+            tool_registry: Arc::new(ToolRegistry::new()),
             child_semaphore: Arc::new(Semaphore::new(5)),
             inner,
         };
@@ -900,7 +718,9 @@ mod tests {
             agent_id: AgentId::new(),
             session_id: SessionId::new("test"),
             principal: Principal::user("test"),
+            manifest: test_manifest("test"),
             allowed_tools: vec![],
+            tool_registry: Arc::new(ToolRegistry::new()),
             child_semaphore: Arc::new(Semaphore::new(5)),
             inner,
         };
@@ -915,7 +735,9 @@ mod tests {
             agent_id: AgentId::new(),
             session_id: SessionId::new("test"),
             principal: Principal::user("test"),
+            manifest: test_manifest("test"),
             allowed_tools: vec![],
+            tool_registry: Arc::new(ToolRegistry::new()),
             child_semaphore: Arc::new(Semaphore::new(5)),
             inner,
         };
@@ -935,7 +757,9 @@ mod tests {
             agent_id: AgentId::new(),
             session_id: SessionId::new("test"),
             principal: Principal::user("test"),
+            manifest: test_manifest("test"),
             allowed_tools: vec![],
+            tool_registry: Arc::new(ToolRegistry::new()),
             child_semaphore: Arc::new(Semaphore::new(5)),
             inner,
         };

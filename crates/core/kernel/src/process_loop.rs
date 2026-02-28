@@ -12,331 +12,150 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! process_loop — the long-lived event loop for a single agent process.
+//! Agent execution — the "user-space" program that runs inside a kernel
+//! process.
 //!
-//! Each agent process runs a `process_loop` that receives messages from
-//! its mailbox (`mpsc::Receiver<ProcessMessage>`), processes them through
-//! the LLM pipeline, and publishes results to the outbound bus.
-//!
-//! The loop continues until:
-//! - A `Signal::Kill` is received
-//! - The mailbox sender is dropped (all handles gone)
-//!
-//! This replaces the short-lived per-message `AgentExecutor` model with
-//! a long-lived per-session process model.
+//! [`run_agent_turn`] is the agent's main function for processing a single
+//! message. It builds an [`AgentRunner`], executes the LLM loop, forwards
+//! stream events, and returns the result. It knows nothing about process
+//! lifecycle, state management, persistence, or outbound publishing — those
+//! are the kernel's responsibilities.
 
 use std::sync::Arc;
 
-use chrono::Utc;
-use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use async_openai::types::chat::ChatCompletionRequestMessage;
 
 use crate::{
-    channel::types::MessageContent,
-    io::{
-        bus::OutboundBus,
-        stream::{StreamEvent, StreamHub},
-        types::{MessageId, OutboundEnvelope, OutboundPayload, OutboundRouting},
-    },
-    process::{
-        AgentId, AgentManifest, AgentResult, ProcessMessage, ProcessState, ProcessTable, SessionId,
-        Signal,
-    },
-    provider::LlmProviderLoaderRef,
-    runner::{AgentRunner, RunnerEvent, UserContent, build_history_messages},
-    session::{SessionEntry, SessionError, SessionRepository},
-    tool::ToolRegistry,
+    handle::scoped::ScopedKernelHandle,
+    io::stream::{StreamEvent, StreamHandle},
+    runner::{AgentRunner, RunnerEvent, UserContent},
 };
 
-/// Run the long-lived process loop for an agent.
+/// Result of a single agent turn.
+pub(crate) struct AgentTurnResult {
+    /// The final text produced by the agent.
+    pub text:       String,
+    /// Number of LLM iterations consumed.
+    pub iterations: usize,
+    /// Number of tool calls executed.
+    pub tool_calls: usize,
+}
+
+/// Execute a single agent turn: build the LLM runner, stream events, and
+/// return the result.
 ///
-/// This function receives messages from the mailbox and processes each one
-/// through the full LLM pipeline (history loading, streaming execution,
-/// result publishing). It runs until a Kill signal is received or the
-/// mailbox sender is dropped.
-#[allow(clippy::too_many_arguments)]
-pub async fn process_loop(
-    agent_id: AgentId,
-    session_id: SessionId,
-    manifest: AgentManifest,
-    mut mailbox: mpsc::Receiver<ProcessMessage>,
-    process_table: Arc<ProcessTable>,
-    session_repo: Arc<dyn SessionRepository>,
-    stream_hub: Arc<StreamHub>,
-    outbound_bus: Arc<dyn OutboundBus>,
-    llm_provider: LlmProviderLoaderRef,
-    tool_registry: Arc<ToolRegistry>,
-) {
-    info!(agent_id = %agent_id, session_id = %session_id, "process loop started");
-    let mut killed = false;
+/// This is the agent's "program" — it only knows how to run the LLM loop
+/// with the manifest's configuration. All kernel concerns (state, persistence,
+/// streams lifecycle, outbound) are handled by the caller.
+pub(crate) async fn run_agent_turn(
+    handle: &ScopedKernelHandle,
+    user_text: String,
+    history: Option<Vec<ChatCompletionRequestMessage>>,
+    stream_handle: &StreamHandle,
+) -> Result<AgentTurnResult, String> {
+    let runner = {
+        let b = AgentRunner::builder()
+            .llm_provider(Arc::clone(handle.llm_provider()))
+            .model_name(handle.manifest().model.clone())
+            .system_prompt(handle.manifest().system_prompt.clone())
+            .user_content(UserContent::Text(user_text))
+            .max_iterations(handle.manifest().max_iterations.unwrap_or(25))
+            .maybe_provider_hint(handle.manifest().provider_hint.clone())
+            .maybe_history(history);
+        b.build()
+    };
+    let tools = Arc::clone(handle.tool_registry());
+    let mut rx = runner.run_streaming(tools);
 
-    while let Some(msg) = mailbox.recv().await {
-        match msg {
-            ProcessMessage::UserMessage(inbound) => {
-                // Mark as Running
-                let _ = process_table.set_state(agent_id, ProcessState::Running);
+    let mut final_text = String::new();
+    let mut got_done = false;
+    let mut iterations = 0usize;
+    let mut tool_calls = 0usize;
 
-                // 1. Ensure the session exists before any persistence reads/writes.
-                if let Err(e) = ensure_session(&*session_repo, &session_id).await {
-                    warn!(error = %e, "failed to ensure session");
-                }
-
-                // 2. Load prior history (excluding the current inbound turn).
-                let history = match session_repo.read_messages(&session_id, None, None).await {
-                    Ok(history) => match build_history_messages(&history) {
-                        Ok(history) => Some(history),
-                        Err(e) => {
-                            warn!(error = %e, "failed to convert session history");
-                            None
-                        }
-                    },
-                    Err(e) => {
-                        warn!(error = %e, "failed to load session history");
-                        None
-                    }
-                };
-
-                // 3. Persist the current user message after reading history.
-                let user_text = inbound.content.as_text();
-                let user_msg = crate::channel::types::ChatMessage::user(&user_text);
-                if let Err(e) = session_repo.append_message(&session_id, &user_msg).await {
-                    warn!(error = %e, "failed to persist inbound message");
-                }
-
-                // 4. Open stream
-                let stream_handle = stream_hub.open(session_id.clone());
-
-                // 5. Build Runner
-                let runner = {
-                    let b = AgentRunner::builder()
-                        .llm_provider(Arc::clone(&llm_provider))
-                        .model_name(manifest.model.clone())
-                        .system_prompt(manifest.system_prompt.clone())
-                        .user_content(UserContent::Text(user_text))
-                        .max_iterations(manifest.max_iterations.unwrap_or(25))
-                        .maybe_provider_hint(manifest.provider_hint.clone())
-                        .maybe_history(history);
-                    b.build()
-                };
-                let tools = Arc::clone(&tool_registry);
-                let mut rx = runner.run_streaming(tools);
-
-                // 6. Consume RunnerEvent stream
-                let mut final_text = String::new();
-                let mut got_done = false;
-                let mut iterations = 0usize;
-                let mut tool_calls_made = 0usize;
-                let mut had_error = false;
-
-                while let Some(event) = rx.recv().await {
-                    match event {
-                        RunnerEvent::TextDelta(delta) => {
-                            stream_handle.emit(StreamEvent::TextDelta(delta.clone()));
-                            final_text.push_str(&delta);
-                        }
-                        RunnerEvent::ReasoningDelta(delta) => {
-                            stream_handle.emit(StreamEvent::ReasoningDelta(delta));
-                        }
-                        RunnerEvent::ToolCallStart { id, name, .. } => {
-                            stream_handle.emit(StreamEvent::ToolCallStart {
-                                name: name.clone(),
-                                id:   id.clone(),
-                            });
-                        }
-                        RunnerEvent::ToolCallEnd { id, .. } => {
-                            stream_handle.emit(StreamEvent::ToolCallEnd { id });
-                        }
-                        RunnerEvent::Thinking => {
-                            stream_handle.emit(StreamEvent::Progress {
-                                stage: "thinking".to_string(),
-                            });
-                        }
-                        RunnerEvent::Done {
-                            text,
-                            iterations: iters,
-                            tool_calls_made: tcs,
-                        } => {
-                            final_text = text;
-                            iterations = iters;
-                            tool_calls_made = tcs;
-                            got_done = true;
-                        }
-                        RunnerEvent::Error(err_msg) => {
-                            stream_hub.close(stream_handle.stream_id());
-                            let _ = process_table.set_state(agent_id, ProcessState::Failed);
-                            // Publish error to outbound
-                            let envelope = OutboundEnvelope {
-                                id:          MessageId::new(),
-                                in_reply_to: inbound.id.clone(),
-                                user:        inbound.user.clone(),
-                                session_id:  session_id.clone(),
-                                routing:     OutboundRouting::BroadcastAll,
-                                payload:     OutboundPayload::Error {
-                                    code:    "agent_error".to_string(),
-                                    message: err_msg,
-                                },
-                                timestamp:   jiff::Timestamp::now(),
-                            };
-                            if let Err(e) = outbound_bus.publish(envelope).await {
-                                error!(%e, "failed to publish error");
-                            }
-                            had_error = true;
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-
-                if had_error {
-                    // Reset state to Waiting so the process stays alive for
-                    // the next message.
-                    let _ = process_table.set_state(agent_id, ProcessState::Waiting);
-                    continue;
-                }
-
-                // 7. Close stream
-                stream_hub.close(stream_handle.stream_id());
-
-                // 8. Handle result
-                if got_done || !final_text.is_empty() {
-                    // Persist reply
-                    let assistant_msg =
-                        crate::channel::types::ChatMessage::assistant(&final_text);
-                    if let Err(e) = session_repo
-                        .append_message(&session_id, &assistant_msg)
-                        .await
-                    {
-                        warn!(error = %e, "failed to persist assistant reply");
-                    }
-
-                    // Update process result
-                    let result = AgentResult {
-                        output: final_text.clone(),
-                        iterations,
-                        tool_calls: tool_calls_made,
-                    };
-                    let _ = process_table.set_result(agent_id, result);
-
-                    // Publish reply
-                    let envelope = OutboundEnvelope {
-                        id:          MessageId::new(),
-                        in_reply_to: inbound.id.clone(),
-                        user:        inbound.user.clone(),
-                        session_id:  session_id.clone(),
-                        routing:     OutboundRouting::BroadcastAll,
-                        payload:     OutboundPayload::Reply {
-                            content:     MessageContent::Text(final_text),
-                            attachments: vec![],
-                        },
-                        timestamp:   jiff::Timestamp::now(),
-                    };
-                    if let Err(e) = outbound_bus.publish(envelope).await {
-                        error!(%e, "failed to publish reply");
-                    }
-
-                    info!(
-                        agent_id = %agent_id,
-                        iterations,
-                        tool_calls = tool_calls_made,
-                        "message processed"
-                    );
-                }
-
-                // Return to Waiting state for next message
-                let _ = process_table.set_state(agent_id, ProcessState::Waiting);
+    while let Some(event) = rx.recv().await {
+        match event {
+            RunnerEvent::TextDelta(delta) => {
+                stream_handle.emit(StreamEvent::TextDelta(delta.clone()));
+                final_text.push_str(&delta);
             }
-            ProcessMessage::ChildResult { child_id, result } => {
-                info!(
-                    agent_id = %agent_id,
-                    child_id = %child_id,
-                    output_len = result.output.len(),
-                    "child result received"
-                );
-                // TODO: integrate child result into current context
+            RunnerEvent::ReasoningDelta(delta) => {
+                stream_handle.emit(StreamEvent::ReasoningDelta(delta));
             }
-            ProcessMessage::Signal(Signal::Interrupt) => {
-                warn!(agent_id = %agent_id, "interrupt received");
-                // TODO: cancel current LLM call
+            RunnerEvent::ToolCallStart { id, name, .. } => {
+                stream_handle.emit(StreamEvent::ToolCallStart {
+                    name: name.clone(),
+                    id:   id.clone(),
+                });
             }
-            ProcessMessage::Signal(Signal::Kill) => {
-                info!(agent_id = %agent_id, "kill signal received");
-                killed = true;
-                break;
+            RunnerEvent::ToolCallEnd { id, .. } => {
+                stream_handle.emit(StreamEvent::ToolCallEnd { id });
             }
+            RunnerEvent::Thinking => {
+                stream_handle.emit(StreamEvent::Progress {
+                    stage: "thinking".to_string(),
+                });
+            }
+            RunnerEvent::Done {
+                text,
+                iterations: iters,
+                tool_calls_made: tcs,
+            } => {
+                final_text = text;
+                iterations = iters;
+                tool_calls = tcs;
+                got_done = true;
+            }
+            RunnerEvent::Error(err_msg) => {
+                return Err(err_msg);
+            }
+            _ => {}
         }
     }
 
-    // Process ended — set terminal state
-    let final_state = if killed {
-        ProcessState::Cancelled
+    if got_done || !final_text.is_empty() {
+        Ok(AgentTurnResult {
+            text: final_text,
+            iterations,
+            tool_calls,
+        })
     } else {
-        ProcessState::Completed
-    };
-    let _ = process_table.set_state(agent_id, final_state);
-    info!(agent_id = %agent_id, session_id = %session_id, "process loop ended");
-}
-
-/// Ensure a session exists, creating one if it doesn't.
-async fn ensure_session(
-    repo: &dyn SessionRepository,
-    session_id: &SessionId,
-) -> Result<(), SessionError> {
-    match repo.get_session(session_id).await? {
-        Some(_) => Ok(()),
-        None => {
-            let now = Utc::now();
-            let entry = SessionEntry {
-                key:           session_id.clone(),
-                title:         None,
-                model:         None,
-                system_prompt: None,
-                message_count: 0,
-                preview:       None,
-                metadata:      None,
-                created_at:    now,
-                updated_at:    now,
-            };
-            repo.create_session(&entry).await.map(|_| ())
-        }
+        Ok(AgentTurnResult {
+            text:       String::new(),
+            iterations: 0,
+            tool_calls: 0,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::HashMap,
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicBool, AtomicUsize, Ordering},
-        },
-    };
+    use std::sync::{Arc, Mutex};
 
     use async_openai::types::chat::{
         ChatChoiceStream, ChatCompletionResponseStream, ChatCompletionStreamResponseDelta,
         CreateChatCompletionRequest, CreateChatCompletionStreamResponse, FinishReason,
     };
     use async_trait::async_trait;
-    use chrono::Utc;
+    use dashmap::DashMap;
     use futures::stream;
-    use tokio::sync::mpsc;
+    use tokio::sync::Semaphore;
 
     use super::*;
     use crate::{
-        channel::types::{ChannelType, ChatMessage, MessageContent},
-        defaults::noop::NoopSessionRepository,
-        io::{
-            memory_bus::InMemoryOutboundBus,
-            stream::StreamHub,
-            types::{ChannelSource, InboundMessage, MessageId},
+        defaults::{
+            noop::{NoopEventBus, NoopGuard, NoopMemory, NoopSessionRepository},
+            noop_user_store::NoopUserStore,
         },
+        io::{memory_bus::InMemoryOutboundBus, stream::StreamHub},
+        kernel::KernelInner,
         process::{
-            AgentEnv, AgentManifest, AgentProcess, ProcessState, ProcessTable, SessionId,
-            principal::{Principal, UserId},
+            AgentEnv, AgentId, AgentManifest, AgentProcess, ProcessState, ProcessTable, SessionId,
+            manifest_loader::ManifestLoader,
+            principal::Principal,
         },
         provider::{LlmProvider, LlmProviderLoader, LlmProviderLoaderRef},
-        session::{
-            ChannelBinding, SessionEntry, SessionError, SessionKey, SessionRepository,
-        },
+        session::SessionRepository,
+        tool::ToolRegistry,
     };
 
     fn test_manifest() -> AgentManifest {
@@ -353,209 +172,71 @@ mod tests {
         }
     }
 
-    fn test_inbound(session: &str, text: &str) -> InboundMessage {
-        InboundMessage {
-            id:            MessageId::new(),
-            source:        ChannelSource {
-                channel_type:        ChannelType::Telegram,
-                platform_message_id: None,
-                platform_user_id:    "tg-user".to_string(),
-                platform_chat_id:    None,
-            },
-            user:          UserId("u1".to_string()),
-            session_id:    SessionId::new(session),
-            content:       MessageContent::Text(text.to_string()),
-            reply_context: None,
-            timestamp:     jiff::Timestamp::now(),
-            metadata:      HashMap::new(),
-        }
+    fn make_test_inner(llm_provider: LlmProviderLoaderRef) -> Arc<KernelInner> {
+        Arc::new(KernelInner {
+            process_table:          Arc::new(ProcessTable::new()),
+            global_semaphore:       Arc::new(Semaphore::new(10)),
+            default_child_limit:    5,
+            default_max_iterations: 25,
+            llm_provider,
+            tool_registry:          Arc::new(ToolRegistry::new()),
+            memory:                 Arc::new(NoopMemory),
+            event_bus:              Arc::new(NoopEventBus),
+            guard:                  Arc::new(NoopGuard),
+            manifest_loader:        ManifestLoader::new(),
+            shared_kv:              DashMap::new(),
+            user_store:             Arc::new(NoopUserStore),
+            session_repo:           Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
+            stream_hub:             Arc::new(StreamHub::new(16)),
+            outbound_bus:           Arc::new(InMemoryOutboundBus::new(64))
+                as Arc<dyn crate::io::bus::OutboundBus>,
+        })
     }
 
-    /// A session repository that records calls for testing the process loop.
-    struct RecordingSessionRepository {
-        history:             Vec<ChatMessage>,
-        session_ready:       AtomicBool,
-        ensure_calls:        AtomicUsize,
-        history_calls:       AtomicUsize,
-        appended_users:      Mutex<Vec<String>>,
-        appended_assistants: Mutex<Vec<String>>,
-    }
+    fn setup_handle(inner: &Arc<KernelInner>) -> Arc<ScopedKernelHandle> {
+        let agent_id = AgentId::new();
+        let session_id = SessionId::new("test-session");
+        let manifest = test_manifest();
 
-    impl RecordingSessionRepository {
-        fn new(history: Vec<ChatMessage>) -> Self {
-            Self {
-                history,
-                session_ready: AtomicBool::new(false),
-                ensure_calls: AtomicUsize::new(0),
-                history_calls: AtomicUsize::new(0),
-                appended_users: Mutex::new(Vec::new()),
-                appended_assistants: Mutex::new(Vec::new()),
-            }
-        }
-    }
+        let process = AgentProcess {
+            agent_id,
+            parent_id:   None,
+            session_id:  session_id.clone(),
+            manifest:    manifest.clone(),
+            principal:   Principal::user("test-user"),
+            env:         AgentEnv::default(),
+            state:       ProcessState::Running,
+            created_at:  jiff::Timestamp::now(),
+            finished_at: None,
+            result:      None,
+        };
+        inner.process_table.insert(process);
 
-    #[async_trait]
-    impl SessionRepository for RecordingSessionRepository {
-        async fn create_session(
-            &self,
-            _entry: &SessionEntry,
-        ) -> Result<SessionEntry, SessionError> {
-            self.ensure_calls.fetch_add(1, Ordering::SeqCst);
-            self.session_ready.store(true, Ordering::SeqCst);
-            let now = Utc::now();
-            Ok(SessionEntry {
-                key:           SessionKey::new("test"),
-                title:         None,
-                model:         None,
-                system_prompt: None,
-                message_count: 0,
-                preview:       None,
-                metadata:      None,
-                created_at:    now,
-                updated_at:    now,
-            })
-        }
-
-        async fn get_session(
-            &self,
-            _key: &SessionKey,
-        ) -> Result<Option<SessionEntry>, SessionError> {
-            if self.session_ready.load(Ordering::SeqCst) {
-                let now = Utc::now();
-                Ok(Some(SessionEntry {
-                    key:           SessionKey::new("test"),
-                    title:         None,
-                    model:         None,
-                    system_prompt: None,
-                    message_count: 0,
-                    preview:       None,
-                    metadata:      None,
-                    created_at:    now,
-                    updated_at:    now,
-                }))
-            } else {
-                Ok(None)
-            }
-        }
-
-        async fn list_sessions(
-            &self,
-            _limit: i64,
-            _offset: i64,
-        ) -> Result<Vec<SessionEntry>, SessionError> {
-            Ok(vec![])
-        }
-
-        async fn update_session(
-            &self,
-            entry: &SessionEntry,
-        ) -> Result<SessionEntry, SessionError> {
-            Ok(entry.clone())
-        }
-
-        async fn delete_session(&self, _key: &SessionKey) -> Result<(), SessionError> {
-            Ok(())
-        }
-
-        async fn append_message(
-            &self,
-            _session_key: &SessionKey,
-            message: &ChatMessage,
-        ) -> Result<ChatMessage, SessionError> {
-            if !self.session_ready.load(Ordering::SeqCst) {
-                return Err(SessionError::NotFound {
-                    key: "not ensured".to_string(),
-                });
-            }
-            let text = message.content.as_text();
-            match message.role {
-                crate::channel::types::MessageRole::User => {
-                    self.appended_users
-                        .lock()
-                        .expect("user message lock poisoned")
-                        .push(text);
-                }
-                crate::channel::types::MessageRole::Assistant => {
-                    self.appended_assistants
-                        .lock()
-                        .expect("assistant message lock poisoned")
-                        .push(text);
-                }
-                _ => {}
-            }
-            Ok(message.clone())
-        }
-
-        async fn read_messages(
-            &self,
-            session_key: &SessionKey,
-            _after_seq: Option<i64>,
-            _limit: Option<i64>,
-        ) -> Result<Vec<ChatMessage>, SessionError> {
-            if !self.session_ready.load(Ordering::SeqCst) {
-                return Err(SessionError::NotFound {
-                    key: session_key.to_string(),
-                });
-            }
-            self.history_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(self.history.clone())
-        }
-
-        async fn clear_messages(&self, _session_key: &SessionKey) -> Result<(), SessionError> {
-            Ok(())
-        }
-
-        async fn fork_session(
-            &self,
-            _source_key: &SessionKey,
-            _target_key: &SessionKey,
-            _fork_at_seq: i64,
-        ) -> Result<SessionEntry, SessionError> {
-            let now = Utc::now();
-            Ok(SessionEntry {
-                key:           SessionKey::new("fork"),
-                title:         None,
-                model:         None,
-                system_prompt: None,
-                message_count: 0,
-                preview:       None,
-                metadata:      None,
-                created_at:    now,
-                updated_at:    now,
-            })
-        }
-
-        async fn bind_channel(
-            &self,
-            binding: &ChannelBinding,
-        ) -> Result<ChannelBinding, SessionError> {
-            Ok(binding.clone())
-        }
-
-        async fn get_channel_binding(
-            &self,
-            _channel_type: &str,
-            _account: &str,
-            _chat_id: &str,
-        ) -> Result<Option<ChannelBinding>, SessionError> {
-            Ok(None)
-        }
+        Arc::new(ScopedKernelHandle {
+            agent_id,
+            session_id,
+            principal:       Principal::user("test-user"),
+            manifest,
+            allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner:           Arc::clone(inner),
+        })
     }
 
     #[derive(Default)]
-    struct RecordingStreamingProvider {
-        message_counts:      Mutex<Vec<usize>>,
-        serialized_messages: Mutex<Vec<String>>,
+    struct StubStreamingProvider {
+        message_counts: Mutex<Vec<usize>>,
     }
 
     #[async_trait]
-    impl LlmProvider for RecordingStreamingProvider {
+    impl LlmProvider for StubStreamingProvider {
         async fn chat_completion(
             &self,
             _request: CreateChatCompletionRequest,
         ) -> crate::error::Result<async_openai::types::chat::CreateChatCompletionResponse> {
             Err(crate::error::KernelError::Other {
-                message: "non-streaming request not supported in test".into(),
+                message: "not supported".into(),
             })
         }
 
@@ -566,22 +247,15 @@ mod tests {
         ) -> crate::error::Result<ChatCompletionResponseStream> {
             self.message_counts
                 .lock()
-                .expect("message_counts lock poisoned")
+                .expect("lock")
                 .push(request.messages.len());
-            self.serialized_messages
-                .lock()
-                .expect("serialized_messages lock poisoned")
-                .push(
-                    serde_json::to_string(&request.messages)
-                        .expect("request messages should serialize"),
-                );
 
             let chunk = CreateChatCompletionStreamResponse {
                 id:                 "resp_1".to_string(),
                 choices:            vec![ChatChoiceStream {
                     index:         0,
                     delta:         ChatCompletionStreamResponseDelta {
-                        content:       Some("stub reply".to_string()),
+                        content:       Some("test reply".to_string()),
                         function_call: None,
                         tool_calls:    None,
                         role:          None,
@@ -603,296 +277,70 @@ mod tests {
     }
 
     #[derive(Clone)]
-    struct RecordingProviderLoader {
+    struct StubProviderLoader {
         provider: Arc<dyn LlmProvider>,
     }
 
     #[async_trait]
-    impl LlmProviderLoader for RecordingProviderLoader {
+    impl LlmProviderLoader for StubProviderLoader {
         async fn acquire_provider(&self) -> crate::error::Result<Arc<dyn LlmProvider>> {
             Ok(Arc::clone(&self.provider))
         }
     }
 
     #[tokio::test]
-    async fn test_process_loop_ensures_session_and_uses_history() {
-        let agent_id = AgentId::new();
-        let session_id = SessionId::new("test-session");
-        let manifest = test_manifest();
-
-        let process_table = Arc::new(ProcessTable::new());
-        let process = AgentProcess {
-            agent_id,
-            parent_id: None,
-            session_id: session_id.clone(),
-            manifest: manifest.clone(),
-            principal: Principal::user("test-user"),
-            env: AgentEnv::default(),
-            state: ProcessState::Running,
-            created_at: jiff::Timestamp::now(),
-            finished_at: None,
-            result: None,
-        };
-        process_table.insert(process);
-
-        let session_repo = Arc::new(RecordingSessionRepository::new(vec![
-            ChatMessage::user("previous question"),
-            ChatMessage::assistant("previous answer"),
-        ]));
-        let stream_hub = Arc::new(StreamHub::new(16));
-        let outbound_bus = Arc::new(InMemoryOutboundBus::new(64));
-        let provider = Arc::new(RecordingStreamingProvider::default());
-        let llm_provider = Arc::new(RecordingProviderLoader {
+    async fn test_run_agent_turn_basic() {
+        let provider = Arc::new(StubStreamingProvider::default());
+        let llm_provider = Arc::new(StubProviderLoader {
             provider: provider.clone() as Arc<dyn LlmProvider>,
         }) as LlmProviderLoaderRef;
-        let tool_registry = Arc::new(ToolRegistry::new());
+        let inner = make_test_inner(llm_provider);
+        let handle = setup_handle(&inner);
 
-        let (tx, rx) = mpsc::channel(16);
+        let stream_handle = inner.stream_hub.open(SessionId::new("test-session"));
 
-        let pt = process_table.clone();
-        let handle = tokio::spawn(process_loop(
-            agent_id,
-            session_id.clone(),
-            manifest,
-            rx,
-            pt,
-            session_repo.clone() as Arc<dyn SessionRepository>,
-            stream_hub,
-            outbound_bus as Arc<dyn OutboundBus>,
-            llm_provider,
-            tool_registry,
-        ));
+        let result = run_agent_turn(&handle, "hello".to_string(), None, &stream_handle).await;
 
-        tx.send(ProcessMessage::UserMessage(test_inbound(
-            "test-session",
-            "current message",
-        )))
-        .await
-        .unwrap();
-        tx.send(ProcessMessage::Signal(Signal::Kill)).await.unwrap();
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.text, "test reply");
+    }
 
-        let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
+    #[tokio::test]
+    async fn test_run_agent_turn_with_history() {
+        use async_openai::types::chat::ChatCompletionRequestUserMessageArgs;
 
-        assert!(
-            result.is_ok(),
-            "process loop should complete after processing"
-        );
-        assert!(result.unwrap().is_ok());
-        assert_eq!(session_repo.ensure_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(session_repo.history_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            session_repo
-                .appended_users
-                .lock()
-                .expect("user message lock poisoned")
-                .as_slice(),
-            ["current message"]
-        );
-        assert_eq!(
-            session_repo
-                .appended_assistants
-                .lock()
-                .expect("assistant message lock poisoned")
-                .as_slice(),
-            ["stub reply"]
-        );
+        let provider = Arc::new(StubStreamingProvider::default());
+        let llm_provider = Arc::new(StubProviderLoader {
+            provider: provider.clone() as Arc<dyn LlmProvider>,
+        }) as LlmProviderLoaderRef;
+        let inner = make_test_inner(llm_provider);
+        let handle = setup_handle(&inner);
+
+        let stream_handle = inner.stream_hub.open(SessionId::new("test-session"));
+
+        let history = vec![
+            ChatCompletionRequestUserMessageArgs::default()
+                .content("previous question")
+                .build()
+                .unwrap()
+                .into(),
+        ];
+
+        let result =
+            run_agent_turn(&handle, "new question".to_string(), Some(history), &stream_handle)
+                .await;
+
+        assert!(result.is_ok());
+
+        // LLM should receive 3 messages: system + 1 history + 1 current.
         assert_eq!(
             provider
                 .message_counts
                 .lock()
-                .expect("message_counts lock poisoned")
+                .expect("lock")
                 .as_slice(),
-            [4]
+            [3]
         );
-        let serialized_messages = provider
-            .serialized_messages
-            .lock()
-            .expect("serialized_messages lock poisoned");
-        let first_request = serialized_messages
-            .first()
-            .expect("expected one recorded request");
-        assert!(first_request.contains("previous question"));
-        assert!(first_request.contains("previous answer"));
-        assert!(first_request.contains("current message"));
-    }
-
-    #[tokio::test]
-    async fn test_process_loop_kill_signal() {
-        let agent_id = AgentId::new();
-        let session_id = SessionId::new("test-session");
-        let manifest = test_manifest();
-
-        let process_table = Arc::new(ProcessTable::new());
-        let process = AgentProcess {
-            agent_id,
-            parent_id: None,
-            session_id: session_id.clone(),
-            manifest: manifest.clone(),
-            principal: Principal::user("test-user"),
-            env: AgentEnv::default(),
-            state: ProcessState::Running,
-            created_at: jiff::Timestamp::now(),
-            finished_at: None,
-            result: None,
-        };
-        process_table.insert(process);
-
-        let session_repo: Arc<dyn SessionRepository> = Arc::new(NoopSessionRepository);
-        let stream_hub = Arc::new(StreamHub::new(16));
-        let outbound_bus = Arc::new(InMemoryOutboundBus::new(64));
-        let llm_provider = Arc::new(crate::provider::EnvLlmProviderLoader::default())
-            as crate::provider::LlmProviderLoaderRef;
-        let tool_registry = Arc::new(ToolRegistry::new());
-
-        let (tx, rx) = mpsc::channel(16);
-
-        let pt = process_table.clone();
-        let handle = tokio::spawn(process_loop(
-            agent_id,
-            session_id.clone(),
-            manifest,
-            rx,
-            pt,
-            session_repo,
-            stream_hub,
-            outbound_bus as Arc<dyn OutboundBus>,
-            llm_provider,
-            tool_registry,
-        ));
-
-        // Send a Kill signal
-        tx.send(ProcessMessage::Signal(Signal::Kill)).await.unwrap();
-
-        // The loop should exit
-        let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
-
-        assert!(result.is_ok(), "process loop should exit on Kill signal");
-        assert!(result.unwrap().is_ok());
-
-        // Process should be Cancelled
-        let p = process_table.get(agent_id).unwrap();
-        assert_eq!(p.state, ProcessState::Cancelled);
-    }
-
-    #[tokio::test]
-    async fn test_process_loop_mailbox_dropped() {
-        let agent_id = AgentId::new();
-        let session_id = SessionId::new("test-session");
-        let manifest = test_manifest();
-
-        let process_table = Arc::new(ProcessTable::new());
-        let process = AgentProcess {
-            agent_id,
-            parent_id: None,
-            session_id: session_id.clone(),
-            manifest: manifest.clone(),
-            principal: Principal::user("test-user"),
-            env: AgentEnv::default(),
-            state: ProcessState::Running,
-            created_at: jiff::Timestamp::now(),
-            finished_at: None,
-            result: None,
-        };
-        process_table.insert(process);
-
-        let session_repo: Arc<dyn SessionRepository> = Arc::new(NoopSessionRepository);
-        let stream_hub = Arc::new(StreamHub::new(16));
-        let outbound_bus = Arc::new(InMemoryOutboundBus::new(64));
-        let llm_provider = Arc::new(crate::provider::EnvLlmProviderLoader::default())
-            as crate::provider::LlmProviderLoaderRef;
-        let tool_registry = Arc::new(ToolRegistry::new());
-
-        let (tx, rx) = mpsc::channel(16);
-
-        let pt = process_table.clone();
-        let handle = tokio::spawn(process_loop(
-            agent_id,
-            session_id.clone(),
-            manifest,
-            rx,
-            pt,
-            session_repo,
-            stream_hub,
-            outbound_bus as Arc<dyn OutboundBus>,
-            llm_provider,
-            tool_registry,
-        ));
-
-        // Drop the sender — mailbox closes
-        drop(tx);
-
-        // The loop should exit
-        let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
-
-        assert!(
-            result.is_ok(),
-            "process loop should exit when mailbox is dropped"
-        );
-        assert!(result.unwrap().is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_process_loop_child_result() {
-        let agent_id = AgentId::new();
-        let session_id = SessionId::new("test-session");
-        let manifest = test_manifest();
-
-        let process_table = Arc::new(ProcessTable::new());
-        let process = AgentProcess {
-            agent_id,
-            parent_id: None,
-            session_id: session_id.clone(),
-            manifest: manifest.clone(),
-            principal: Principal::user("test-user"),
-            env: AgentEnv::default(),
-            state: ProcessState::Running,
-            created_at: jiff::Timestamp::now(),
-            finished_at: None,
-            result: None,
-        };
-        process_table.insert(process);
-
-        let session_repo: Arc<dyn SessionRepository> = Arc::new(NoopSessionRepository);
-        let stream_hub = Arc::new(StreamHub::new(16));
-        let outbound_bus = Arc::new(InMemoryOutboundBus::new(64));
-        let llm_provider = Arc::new(crate::provider::EnvLlmProviderLoader::default())
-            as crate::provider::LlmProviderLoaderRef;
-        let tool_registry = Arc::new(ToolRegistry::new());
-
-        let (tx, rx) = mpsc::channel(16);
-
-        let pt = process_table.clone();
-        let handle = tokio::spawn(process_loop(
-            agent_id,
-            session_id.clone(),
-            manifest,
-            rx,
-            pt,
-            session_repo,
-            stream_hub,
-            outbound_bus as Arc<dyn OutboundBus>,
-            llm_provider,
-            tool_registry,
-        ));
-
-        // Send a child result followed by kill
-        let child_id = AgentId::new();
-        tx.send(ProcessMessage::ChildResult {
-            child_id,
-            result: AgentResult {
-                output:     "child done".to_string(),
-                iterations: 1,
-                tool_calls: 0,
-            },
-        })
-        .await
-        .unwrap();
-
-        tx.send(ProcessMessage::Signal(Signal::Kill)).await.unwrap();
-
-        let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
-
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_ok());
     }
 }
