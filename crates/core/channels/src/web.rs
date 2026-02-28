@@ -23,8 +23,7 @@
 //! SSE connections.
 //!
 //! Inbound messages are handed to the [`InboundSink`] in a fire-and-forget
-//! fashion. Outbound delivery is handled separately via
-//! [`send`](ChannelAdapter::send).
+//! fashion. Outbound delivery is handled separately via [`EgressAdapter`].
 //!
 //! # Endpoints
 //!
@@ -54,7 +53,7 @@ use futures::{SinkExt, StreamExt, stream::Stream};
 use rara_kernel::{
     channel::{
         adapter::ChannelAdapter,
-        types::{AgentPhase, ChannelType, MessageContent, OutboundMessage},
+        types::{AgentPhase, ChannelType, MessageContent},
     },
     error::KernelError,
     io::{
@@ -676,17 +675,6 @@ impl ChannelAdapter for WebAdapter {
         Ok(())
     }
 
-    async fn send(&self, message: OutboundMessage) -> Result<(), KernelError> {
-        WebAdapter::broadcast_event(
-            &self.sessions,
-            &message.session_key,
-            &WebEvent::Message {
-                content: message.content,
-            },
-        );
-        Ok(())
-    }
-
     async fn stop(&self) -> Result<(), KernelError> {
         info!("WebAdapter stopping — clearing sessions");
         // Signal shutdown to all SSE/WS connections.
@@ -890,28 +878,6 @@ mod tests {
         adapter.stop().await.unwrap();
         assert!(adapter.sessions.is_empty());
         assert!(adapter.sink.read().await.is_none());
-    }
-
-    #[tokio::test]
-    async fn send_broadcasts_to_session() {
-        let adapter = WebAdapter::new();
-        let tx = WebAdapter::get_or_create_session(&adapter.sessions, "sess-x");
-        let mut rx = tx.subscribe();
-
-        let outbound = OutboundMessage {
-            channel_type:        ChannelType::Web,
-            session_key:         "sess-x".to_owned(),
-            content:             "hello from agent".to_owned(),
-            metadata:            HashMap::new(),
-            photo:               None,
-            reply_markup:        None,
-            edit_message_id:     None,
-            reply_to_message_id: None,
-        };
-        ChannelAdapter::send(&adapter, outbound).await.unwrap();
-
-        let received = rx.try_recv().unwrap();
-        assert!(received.contains("hello from agent"));
     }
 
     #[tokio::test]
