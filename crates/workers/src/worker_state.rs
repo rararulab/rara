@@ -337,6 +337,13 @@ impl AppState {
 
         let manifest_loader = rara_boot::manifests::load_default_manifests();
 
+        // User store — PgUserStore backed by the shared pool
+        let user_store: Arc<dyn rara_kernel::process::user::UserStore> =
+            Arc::new(rara_boot::user_store::PgUserStore::new(pool.clone()));
+        rara_boot::user_store::ensure_default_users(&pool)
+            .await
+            .whatever_context("Failed to ensure default users")?;
+
         let kernel = Arc::new(rara_kernel::Kernel::new(
             rara_kernel::KernelConfig {
                 max_concurrency: 16,
@@ -349,7 +356,7 @@ impl AppState {
             rara_boot::components::default_event_bus(),
             rara_boot::components::default_guard(),
             manifest_loader,
-            rara_boot::components::default_user_store(),
+            user_store,
         ));
         info!("Kernel initialized");
 
