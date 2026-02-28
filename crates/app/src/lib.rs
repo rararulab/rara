@@ -411,6 +411,7 @@ impl AppConfig {
         let bridge: Arc<dyn rara_kernel::channel::bridge::ChannelBridge> =
             Arc::new(ChatServiceBridge {
                 chat_service: state.chat_service.clone(),
+                user_store: state.user_store.clone(),
             });
 
         // Build contact tracker from the contact repository.
@@ -538,6 +539,7 @@ async fn shutdown_signal(shutdown_rx: oneshot::Receiver<()>) {
 /// Telegram adapter already formats it as `tg:<chat_id>`.
 struct ChatServiceBridge {
     chat_service: rara_domain_chat::service::ChatService,
+    user_store: std::sync::Arc<dyn rara_kernel::process::user::UserStore>,
 }
 
 #[async_trait::async_trait]
@@ -546,6 +548,17 @@ impl rara_kernel::channel::bridge::ChannelBridge for ChatServiceBridge {
         &self,
         message: rara_kernel::channel::types::ChannelMessage,
     ) -> Result<String, rara_kernel::error::KernelError> {
+        // Validate that the platform user is registered.
+        let platform = message.channel_type.label();
+        let platform_user_id = &message.user.platform_id;
+        let _user = self
+            .user_store
+            .get_by_platform(platform, platform_user_id)
+            .await?
+            .ok_or(rara_kernel::error::KernelError::UserNotFound {
+                name: format!("{platform}:{platform_user_id}"),
+            })?;
+
         let text = message.content.as_text();
 
         if text.is_empty() {

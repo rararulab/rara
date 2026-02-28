@@ -114,6 +114,14 @@ pub enum KernelError {
     /// Agent process was cancelled or failed before producing a result.
     #[snafu(display("spawn failed: {message}"))]
     SpawnFailed { message: String },
+
+    /// User not found in user store.
+    #[snafu(display("user not found: {name}"))]
+    UserNotFound { name: String },
+
+    /// User account is disabled.
+    #[snafu(display("user disabled: {name}"))]
+    UserDisabled { name: String },
 }
 
 impl From<crate::memory::MemoryError> for KernelError {

@@ -12,16 +12,20 @@ categories.workspace = true
 description = "Kernel bootstrap: manifests, skills, MCP, kernel construction"
 
 [dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+jiff.workspace = true
 rara-kernel.workspace = true
 rara-mcp.workspace = true
 rara-paths.workspace = true
 rara-skills.workspace = true
-tool-core.workspace = true
+serde_json.workspace = true
 snafu.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
+tool-core.workspace = true
 tracing.workspace = true
-serde_json.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

@@ -75,6 +75,9 @@ pub struct AppState {
     // -- kernel --
     pub kernel: Arc<rara_kernel::Kernel>,
 
+    // -- user store --
+    pub user_store: Arc<dyn rara_kernel::process::user::UserStore>,
+
     // -- prompt repo --
     pub prompt_repo: Arc<dyn rara_kernel::prompt::PromptRepo>,
 
@@ -337,6 +340,13 @@ impl AppState {
 
         let manifest_loader = rara_boot::manifests::load_default_manifests();
 
+        // User store — PgUserStore backed by the shared pool
+        let user_store: Arc<dyn rara_kernel::process::user::UserStore> =
+            Arc::new(rara_boot::user_store::PgUserStore::new(pool.clone()));
+        rara_boot::user_store::ensure_default_users(&pool)
+            .await
+            .whatever_context("Failed to ensure default users")?;
+
         let kernel = Arc::new(rara_kernel::Kernel::new(
             rara_kernel::KernelConfig {
                 max_concurrency: 16,
@@ -349,6 +359,7 @@ impl AppState {
             rara_boot::components::default_event_bus(),
             rara_boot::components::default_guard(),
             manifest_loader,
+            user_store.clone(),
         ));
         info!("Kernel initialized");
 
@@ -374,6 +385,7 @@ impl AppState {
             pipeline_service,
             coding_task_service,
             kernel,
+            user_store,
             prompt_repo,
             proactive_notify: Arc::new(RwLock::new(None)),
         })
