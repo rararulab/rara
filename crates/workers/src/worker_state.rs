@@ -90,6 +90,31 @@ pub struct AppState {
     pub proactive_notify: Arc<RwLock<Option<IntervalOrNotifyHandle>>>,
 }
 
+/// Build the system prompt for background worker agents.
+///
+/// Reads `workers/agent_policy.md` and `agent/soul.md` from the prompt repo
+/// and combines them. Replaces `AgentContext::build_worker_policy()`.
+pub async fn build_worker_policy(
+    prompt_repo: &dyn rara_kernel::prompt::PromptRepo,
+) -> String {
+    let policy = prompt_repo
+        .get("workers/agent_policy.md")
+        .await
+        .map(|e| e.content)
+        .unwrap_or_default();
+    let soul = prompt_repo
+        .get("agent/soul.md")
+        .await
+        .map(|e| e.content)
+        .unwrap_or_default();
+
+    if soul.trim().is_empty() {
+        policy
+    } else {
+        format!("{soul}\n\n# Operational Policy\n{policy}")
+    }
+}
+
 impl AppState {
     /// Initialize all domain services and build the shared application state.
     pub async fn init(
