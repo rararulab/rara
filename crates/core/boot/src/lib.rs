@@ -12,13 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Kernel bootstrap — initializes trait-object components for `Kernel::new()`.
+//! Kernel bootstrap — assembles a production-ready `Kernel` from external
+//! dependencies.
+//!
+//! The primary entry point is [`kernel::boot()`], which creates a
+//! fully-configured `Kernel` with its I/O subsystem (buses, stream hub,
+//! endpoint registry, ingress pipeline).
 
 pub mod bus;
 pub mod components;
 pub mod error;
+pub mod kernel;
 pub mod manifests;
 pub mod mcp;
+pub mod resolvers;
 pub mod skills;
 pub mod stream;
 pub mod tools;

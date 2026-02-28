@@ -21,17 +21,19 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::{
-    channel::types::ChatMessage,
+    channel::types::{ChannelType, ChatMessage},
     event::{EventBus, EventFilter, EventStream, KernelEvent},
     guard::{Guard, GuardContext, Verdict},
     io::{
         bus::OutboxStore,
-        types::{BusError, MessageId, OutboundEnvelope},
+        ingress::{IdentityResolver, SessionResolver},
+        types::{BusError, IngestError, MessageId, OutboundEnvelope},
     },
     memory::{
         Result as MemResult, knowledge::KnowledgeMemory, learning::LearningMemory,
         state::StateMemory, types::*,
     },
+    process::{SessionId, principal::UserId},
     session::{
         ChannelBinding, SessionEntry, SessionError, SessionKey, SessionRepository,
     },
@@ -318,5 +320,42 @@ impl SessionRepository for NoopSessionRepository {
         _chat_id: &str,
     ) -> Result<Option<ChannelBinding>, SessionError> {
         Ok(None)
+    }
+}
+
+// ---- NoopIdentityResolver ----
+
+/// A no-op identity resolver for testing — maps to
+/// `"{channel_type}:{platform_user_id}"`.
+pub struct NoopIdentityResolver;
+
+#[async_trait]
+impl IdentityResolver for NoopIdentityResolver {
+    async fn resolve(
+        &self,
+        channel_type: ChannelType,
+        platform_user_id: &str,
+        _platform_chat_id: Option<&str>,
+    ) -> Result<UserId, IngestError> {
+        Ok(UserId(format!("{}:{}", channel_type, platform_user_id)))
+    }
+}
+
+// ---- NoopSessionResolver ----
+
+/// A no-op session resolver for testing — maps to
+/// `"{channel_type}:{platform_chat_id}"`.
+pub struct NoopSessionResolver;
+
+#[async_trait]
+impl SessionResolver for NoopSessionResolver {
+    async fn resolve(
+        &self,
+        _user: &UserId,
+        channel_type: ChannelType,
+        platform_chat_id: Option<&str>,
+    ) -> Result<SessionId, IngestError> {
+        let chat_id = platform_chat_id.unwrap_or("default");
+        Ok(SessionId::new(format!("{}:{}", channel_type, chat_id)))
     }
 }
