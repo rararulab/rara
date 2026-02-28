@@ -27,8 +27,6 @@ use crate::worker_state::AppState;
 /// Fixed session key for all proactive agent interactions.
 const PROACTIVE_SESSION_KEY: &str = "agent:proactive";
 
-/// Maximum number of historical messages loaded for context.
-const PROACTIVE_HISTORY_LIMIT: i64 = 50;
 
 /// Background worker that reviews recent chat sessions and spawns a
 /// proactive agent via the Kernel.
@@ -61,15 +59,32 @@ impl FallibleWorker<AppState> for ProactiveAgentWorker {
 
         // 2. Ensure proactive session exists
         let session_key = SessionKey::from_raw(PROACTIVE_SESSION_KEY);
-        let _ = state
-            .chat_service
-            .ensure_session(&session_key, Some("Proactive Agent"), None, None)
-            .await;
+        if state
+            .session_repo
+            .get_session(&session_key)
+            .await
+            .ok()
+            .flatten()
+            .is_none()
+        {
+            let now = chrono::Utc::now();
+            let entry = rara_sessions::types::SessionEntry {
+                key: session_key.clone(),
+                title: Some("Proactive Agent".to_string()),
+                model: None,
+                system_prompt: None,
+                message_count: 0,
+                preview: None,
+                metadata: None,
+                created_at: now,
+                updated_at: now,
+            };
+            let _ = state.session_repo.create_session(&entry).await;
+        }
 
         // 3. Build user prompt from activity summary
-        let user_prompt = crate::builtin_agents::proactive::ProactiveAgent::build_user_prompt(
-            &activity_summary,
-        );
+        let user_prompt =
+            crate::builtin_agents::proactive::build_user_prompt(&activity_summary);
 
         // 4. Build manifest and spawn via Kernel (fire-and-forget)
         let policy = state.agent_ctx.build_worker_policy().await;
@@ -114,8 +129,8 @@ impl FallibleWorker<AppState> for ProactiveAgentWorker {
 /// Collect a summary of recent chat activity (last 24 hours).
 async fn collect_activity_summary(state: &AppState) -> Result<String, WorkError> {
     let sessions = state
-        .chat_service
-        .list_sessions(Some(20), None)
+        .session_repo
+        .list_sessions(20, 0)
         .await
         .map_err(|e| WorkError::transient(format!("list sessions: {e}")))?;
 
@@ -139,8 +154,8 @@ async fn collect_activity_summary(state: &AppState) -> Result<String, WorkError>
         let after_seq = (count - 20).max(0);
 
         let messages = match state
-            .chat_service
-            .get_messages(key, Some(after_seq), None)
+            .session_repo
+            .read_messages(key, Some(after_seq), None)
             .await
         {
             Ok(msgs) => msgs,

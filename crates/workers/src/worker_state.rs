@@ -40,6 +40,7 @@ pub struct AppState {
     pub analytics_service:   rara_backend_admin::analytics::service::AnalyticsService,
     pub job_service:         rara_backend_admin::job::service::JobService,
     pub chat_service:        rara_domain_chat::service::ChatService,
+    pub session_repo:        Arc<dyn rara_sessions::repository::SessionRepository>,
     // -- shared --
     pub settings_svc:        rara_backend_admin::settings::SettingsSvc,
     pub notify_client:       rara_domain_shared::notify::client::NotifyClient,
@@ -327,8 +328,9 @@ impl AppState {
         );
 
         let chat_agent = rara_domain_chat::agent::ChatAgent::new(Arc::clone(&agent_ctx));
+        let session_repo: Arc<dyn rara_sessions::repository::SessionRepository> = session_repo;
         let chat_service = rara_domain_chat::service::ChatService::new(
-            session_repo,
+            session_repo.clone(),
             Arc::new(settings_svc.clone())
                 as Arc<dyn rara_domain_shared::settings::SettingsUpdater>,
             settings_svc.subscribe(),
@@ -372,6 +374,7 @@ impl AppState {
             analytics_service,
             job_service,
             chat_service,
+            session_repo,
             settings_svc,
             notify_client,
             contact_repo,
