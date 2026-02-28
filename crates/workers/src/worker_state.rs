@@ -75,6 +75,9 @@ pub struct AppState {
     // -- kernel --
     pub kernel: Arc<rara_kernel::Kernel>,
 
+    // -- user store --
+    pub user_store: Arc<dyn rara_kernel::process::user::UserStore>,
+
     // -- prompt repo --
     pub prompt_repo: Arc<dyn rara_kernel::prompt::PromptRepo>,
 
@@ -356,7 +359,7 @@ impl AppState {
             rara_boot::components::default_event_bus(),
             rara_boot::components::default_guard(),
             manifest_loader,
-            user_store,
+            user_store.clone(),
         ));
         info!("Kernel initialized");
 
@@ -382,6 +385,7 @@ impl AppState {
             pipeline_service,
             coding_task_service,
             kernel,
+            user_store,
             prompt_repo,
             proactive_notify: Arc::new(RwLock::new(None)),
         })
