@@ -37,6 +37,7 @@ pub mod error;
 pub mod event;
 pub mod guard;
 pub mod handle;
+pub mod io;
 pub mod kernel;
 pub mod llm;
 pub mod memory;
