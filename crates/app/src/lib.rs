@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod io_pipeline;
+mod resolvers;
+
 use std::{
     sync::{
         Arc,
@@ -335,6 +338,52 @@ impl AppConfig {
                 None
             }
         };
+
+        // -- I/O Bus pipeline (new path, alongside ChatService) ---------------
+
+        let io_pipeline =
+            io_pipeline::init_io_pipeline(telegram_adapter.clone());
+
+        // Start TickLoop in the background.
+        // The TickLoop drains the InboundBus and dispatches messages through
+        // the SessionScheduler to the AgentExecutor.
+        let tick_loop = io_pipeline.tick_loop;
+        tokio::spawn({
+            let token = cancellation_token.clone();
+            async move {
+                tick_loop.run(token).await;
+            }
+        });
+
+        // NOTE: Egress is NOT spawned yet because `Egress` holds a
+        // `Box<dyn OutboundSubscriber>` which is `Send` but not `Sync`,
+        // making it incompatible with `tokio::spawn`. This will be fixed
+        // in the kernel crate (make OutboundSubscriber Sync or restructure
+        // Egress). For now, outbound delivery is handled by the legacy
+        // ChatService path. The `_egress` binding keeps it alive for
+        // future wiring.
+        let _egress = io_pipeline.egress;
+
+        // If Telegram is running, also start the sink-mode polling alongside
+        // the legacy bridge-mode polling.  Messages will flow into the
+        // InboundBus (new path) in parallel with the ChatService path.
+        if let Some(ref tg_adapter) = telegram_adapter {
+            match tg_adapter
+                .start_with_sink(io_pipeline.ingress_pipeline.clone())
+                .await
+            {
+                Ok(()) => info!("Telegram adapter sink-mode (I/O Bus) started"),
+                Err(e) => warn!(
+                    error = %e,
+                    "Failed to start Telegram adapter in sink-mode, I/O Bus ingress inactive"
+                ),
+            }
+        }
+
+        info!(
+            inbound_pending = io_pipeline.inbound_bus.pending_count(),
+            "I/O Bus pipeline running"
+        );
 
         info!("Application started successfully");
 

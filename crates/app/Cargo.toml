@@ -19,6 +19,7 @@ common-worker = { workspace = true }
 config = { workspace = true }
 object-store = { workspace = true }
 opendal = { workspace = true }
+rara-boot = { workspace = true }
 rara-consul = { workspace = true }
 rara-domain-shared = { workspace = true }
 rara-server = { workspace = true }
