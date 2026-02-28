@@ -82,7 +82,7 @@ const BROADCAST_CAPACITY: usize = 256;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WebEvent {
-    /// Agent response message.
+    /// Agent response message (final reply).
     Message { content: String },
     /// Typing indicator.
     Typing,
@@ -90,6 +90,18 @@ pub enum WebEvent {
     Phase { phase: String },
     /// Error notification.
     Error { message: String },
+    /// Incremental text output from LLM.
+    TextDelta { text: String },
+    /// Incremental reasoning/thinking text.
+    ReasoningDelta { text: String },
+    /// A tool call has started.
+    ToolCallStart { name: String, id: String },
+    /// A tool call has finished.
+    ToolCallEnd { id: String },
+    /// Progress stage update.
+    Progress { stage: String },
+    /// Stream completed (no more deltas).
+    Done,
 }
 
 // ---------------------------------------------------------------------------
@@ -139,6 +151,8 @@ pub struct WebAdapter {
     sessions:    Arc<DashMap<String, broadcast::Sender<String>>>,
     /// InboundSink handle (set during `start`).
     sink:        Arc<RwLock<Option<Arc<dyn InboundSink>>>>,
+    /// StreamHub for subscribing to real-time token deltas.
+    stream_hub:  Arc<RwLock<Option<Arc<rara_kernel::io::stream::StreamHub>>>>,
     /// Shutdown signal sender.
     shutdown_tx: watch::Sender<bool>,
     /// Shutdown signal receiver (cloneable).
@@ -152,9 +166,16 @@ impl WebAdapter {
         Self {
             sessions: Arc::new(DashMap::new()),
             sink: Arc::new(RwLock::new(None)),
+            stream_hub: Arc::new(RwLock::new(None)),
             shutdown_tx,
             shutdown_rx,
         }
+    }
+
+    /// Set the StreamHub for real-time token streaming.
+    pub async fn set_stream_hub(&self, hub: Arc<rara_kernel::io::stream::StreamHub>) {
+        let mut guard = self.stream_hub.write().await;
+        *guard = Some(hub);
     }
 
     /// Returns an [`axum::Router`] with WebSocket, SSE, and message endpoints.
@@ -167,6 +188,7 @@ impl WebAdapter {
         let state = WebAdapterState {
             sessions:    Arc::clone(&self.sessions),
             sink:        Arc::clone(&self.sink),
+            stream_hub:  Arc::clone(&self.stream_hub),
             shutdown_rx: self.shutdown_rx.clone(),
         };
 
@@ -220,6 +242,7 @@ impl WebAdapter {
 struct WebAdapterState {
     sessions:    Arc<DashMap<String, broadcast::Sender<String>>>,
     sink:        Arc<RwLock<Option<Arc<dyn InboundSink>>>>,
+    stream_hub:  Arc<RwLock<Option<Arc<rara_kernel::io::stream::StreamHub>>>>,
     shutdown_rx: watch::Receiver<bool>,
 }
 
@@ -309,6 +332,7 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
     // Task: read messages from the WebSocket client, dispatch to sink.
     let recv_task = {
         let sink = Arc::clone(&state.sink);
+        let stream_hub = Arc::clone(&state.stream_hub);
         let sessions = Arc::clone(&state.sessions);
         let session_key = session_key.clone();
         let user_id = params.user_id.clone();
@@ -342,6 +366,13 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
                                 message: e.to_string(),
                             },
                         );
+                    } else {
+                        // Spawn a stream forwarder to bridge StreamHub → WebSocket.
+                        spawn_stream_forwarder(
+                            Arc::clone(&stream_hub),
+                            Arc::clone(&sessions),
+                            session_key.clone(),
+                        );
                     }
                 } else {
                     warn!(session_key, "sink not set, cannot dispatch message");
@@ -364,6 +395,72 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
     }
 
     info!(session_key, "WebSocket connection closed");
+}
+
+// ---------------------------------------------------------------------------
+// StreamHub → WebSocket forwarder
+// ---------------------------------------------------------------------------
+
+/// Spawn a background task that subscribes to StreamHub for the given session
+/// and forwards `StreamEvent`s as `WebEvent`s through the session broadcast.
+///
+/// The process_loop opens streams asynchronously, so we poll
+/// `subscribe_session()` with a short delay until streams appear.
+fn spawn_stream_forwarder(
+    stream_hub: Arc<RwLock<Option<Arc<rara_kernel::io::stream::StreamHub>>>>,
+    sessions: Arc<DashMap<String, broadcast::Sender<String>>>,
+    session_key: String,
+) {
+    use rara_kernel::io::stream::StreamEvent;
+
+    tokio::spawn(async move {
+        let hub = {
+            let guard = stream_hub.read().await;
+            match guard.as_ref() {
+                Some(hub) => Arc::clone(hub),
+                None => return, // No StreamHub configured
+            }
+        };
+
+        let session_id = rara_kernel::process::SessionId::new(&session_key);
+
+        // Poll until stream appears (process_loop opens it asynchronously).
+        let mut attempts = 0;
+        let subs = loop {
+            let s = hub.subscribe_session(&session_id);
+            if !s.is_empty() || attempts > 50 {
+                break s;
+            }
+            attempts += 1;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        };
+
+        if subs.is_empty() {
+            debug!(session_key, "no streams found after polling");
+            return;
+        }
+
+        for (_stream_id, mut rx) in subs {
+            let sessions = Arc::clone(&sessions);
+            let session_key = session_key.clone();
+            tokio::spawn(async move {
+                while let Ok(event) = rx.recv().await {
+                    let web_event = match event {
+                        StreamEvent::TextDelta(t) => WebEvent::TextDelta { text: t },
+                        StreamEvent::ReasoningDelta(t) => WebEvent::ReasoningDelta { text: t },
+                        StreamEvent::ToolCallStart { name, id } => {
+                            WebEvent::ToolCallStart { name, id }
+                        }
+                        StreamEvent::ToolCallEnd { id } => WebEvent::ToolCallEnd { id },
+                        StreamEvent::Progress { stage } => WebEvent::Progress { stage },
+                    };
+                    WebAdapter::broadcast_event(&sessions, &session_key, &web_event);
+                }
+                // Stream closed — send Done event.
+                WebAdapter::broadcast_event(&sessions, &session_key, &WebEvent::Done);
+            });
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -446,7 +543,14 @@ async fn send_message_handler(
             WebAdapter::broadcast_event(&state.sessions, &body.session_key, &WebEvent::Typing);
 
             match sink.ingest(raw).await {
-                Ok(()) => axum::Json(SendMessageResponse { accepted: true }).into_response(),
+                Ok(()) => {
+                    spawn_stream_forwarder(
+                        Arc::clone(&state.stream_hub),
+                        Arc::clone(&state.sessions),
+                        body.session_key.clone(),
+                    );
+                    axum::Json(SendMessageResponse { accepted: true }).into_response()
+                }
                 Err(e) => {
                     error!(session_key = %body.session_key, error = %e, "ingest failed");
                     let status = axum::http::StatusCode::INTERNAL_SERVER_ERROR;
