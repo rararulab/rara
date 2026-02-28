@@ -263,6 +263,8 @@ pub struct ProcessTable {
     /// Mailbox senders for long-lived processes (kept separate because
     /// `mpsc::Sender` doesn't derive `Clone` for `AgentProcess`'s derive).
     mailboxes:     DashMap<AgentId, mpsc::Sender<ProcessMessage>>,
+    /// Abort handles for spawned tasks (used when no mailbox exists).
+    abort_handles: DashMap<AgentId, tokio::task::AbortHandle>,
 }
 
 impl ProcessTable {
@@ -272,6 +274,7 @@ impl ProcessTable {
             processes:     DashMap::new(),
             session_index: DashMap::new(),
             mailboxes:     DashMap::new(),
+            abort_handles: DashMap::new(),
         }
     }
 
@@ -329,6 +332,7 @@ impl ProcessTable {
             self.session_index
                 .remove_if(&process.session_id, |_, agent_id| *agent_id == id);
             self.mailboxes.remove(&id);
+            self.abort_handles.remove(&id);
         }
         removed
     }
@@ -382,6 +386,24 @@ impl ProcessTable {
     /// Get a clone of the mailbox sender for a process.
     pub fn get_mailbox(&self, id: &AgentId) -> Option<mpsc::Sender<ProcessMessage>> {
         self.mailboxes.get(id).map(|tx| tx.value().clone())
+    }
+
+    /// Register an abort handle for a spawned task.
+    pub fn set_abort_handle(&self, id: AgentId, abort_handle: tokio::task::AbortHandle) {
+        self.abort_handles.insert(id, abort_handle);
+    }
+
+    /// Remove the abort handle for a task that ended naturally.
+    pub fn clear_abort_handle(&self, id: &AgentId) { self.abort_handles.remove(id); }
+
+    /// Abort a spawned task if one is registered.
+    pub fn abort(&self, id: &AgentId) -> bool {
+        self.abort_handles
+            .remove(id)
+            .map(|(_, handle)| {
+                handle.abort();
+            })
+            .is_some()
     }
 
     /// Send a message to the agent process handling a given session.

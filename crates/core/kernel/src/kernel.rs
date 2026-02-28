@@ -283,10 +283,11 @@ impl Kernel {
 
         // Spawn the process loop
         let process_table = Arc::clone(&self.inner.process_table);
+        let process_table_cleanup = Arc::clone(&process_table);
         let llm_provider = Arc::clone(&self.inner.llm_provider);
         let tool_registry = Arc::clone(&self.inner.tool_registry);
 
-        tokio::spawn(async move {
+        let join_handle = tokio::spawn(async move {
             let _permit = _global_permit; // Hold semaphore permit for lifetime
 
             crate::process_loop::process_loop(
@@ -309,7 +310,13 @@ impl Kernel {
                 iterations: 0,
                 tool_calls: 0,
             });
+
+            process_table_cleanup.clear_abort_handle(&agent_id);
         });
+
+        self.inner
+            .process_table
+            .set_abort_handle(agent_id, join_handle.abort_handle());
 
         Ok(AgentHandle {
             agent_id,

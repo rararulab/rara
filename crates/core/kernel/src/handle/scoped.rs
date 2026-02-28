@@ -209,8 +209,10 @@ impl KernelInner {
         // Create a mailbox channel. For child (short-lived) spawns, the
         // receiver is not used — the agent runs once and completes.
         let (mailbox_tx, _mailbox_rx) = tokio::sync::mpsc::channel(16);
+        let process_table = Arc::clone(&self_ref.process_table);
+        let task_inner = Arc::clone(&self_ref);
 
-        tokio::spawn(async move {
+        let join_handle = tokio::spawn(async move {
             let _permits = permits;
             let _scoped_handle = _scoped_handle;
 
@@ -224,10 +226,10 @@ impl KernelInner {
                         tool_calls: response.tool_calls_made,
                     };
 
-                    let _ = self_ref
+                    let _ = task_inner
                         .process_table
                         .set_state(agent_id, ProcessState::Completed);
-                    let _ = self_ref
+                    let _ = task_inner
                         .process_table
                         .set_result(agent_id, agent_result.clone());
 
@@ -247,7 +249,7 @@ impl KernelInner {
                         "agent process failed"
                     );
 
-                    let _ = self_ref
+                    let _ = task_inner
                         .process_table
                         .set_state(agent_id, ProcessState::Failed);
 
@@ -256,13 +258,19 @@ impl KernelInner {
                         iterations: 0,
                         tool_calls: 0,
                     };
-                    let _ = self_ref
+                    let _ = task_inner
                         .process_table
                         .set_result(agent_id, error_result.clone());
                     let _ = result_tx.send(error_result);
                 }
             }
+
+            process_table.clear_abort_handle(&agent_id);
         });
+
+        self_ref
+            .process_table
+            .set_abort_handle(agent_id, join_handle.abort_handle());
 
         AgentHandle {
             agent_id,
@@ -339,7 +347,26 @@ impl ScopedKernelHandle {
         for child in children {
             self.kill_recursive(child.agent_id)?;
         }
-        // Then kill the target
+        // Prefer a graceful mailbox shutdown for long-lived processes.
+        let mut delivered_signal = false;
+        if let Some(tx) = self.inner.process_table.get_mailbox(&target_id) {
+            match tx.try_send(crate::process::ProcessMessage::Signal(
+                crate::process::Signal::Kill,
+            )) {
+                Ok(()) => {
+                    delivered_signal = true;
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_))
+                | Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {}
+            }
+        }
+
+        // Short-lived processes have no mailbox loop, so abort the task directly.
+        if !delivered_signal {
+            let _ = self.inner.process_table.abort(&target_id);
+        }
+
+        // Then mark the target
         self.inner
             .process_table
             .set_state(target_id, ProcessState::Cancelled)?;
@@ -493,8 +520,10 @@ impl GuardOps for ScopedKernelHandle {
 
 #[cfg(test)]
 mod tests {
+    use tokio::sync::mpsc;
+
     use super::*;
-    use crate::process::principal::Principal;
+    use crate::process::{ProcessMessage, Signal, principal::Principal};
 
     fn make_kernel_inner() -> Arc<KernelInner> {
         use crate::{
@@ -595,6 +624,47 @@ mod tests {
                 .validate_tool_subset(&["read_file".to_string(), "grep".to_string()])
                 .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn test_kill_sends_kill_signal_to_mailbox() {
+        let inner = make_kernel_inner();
+        let agent_id = AgentId::new();
+
+        inner.process_table.insert(AgentProcess {
+            agent_id,
+            parent_id: None,
+            session_id: SessionId::new("test"),
+            manifest: test_manifest("mailbox-agent"),
+            principal: Principal::user("test"),
+            env: AgentEnv::default(),
+            state: ProcessState::Running,
+            created_at: Timestamp::now(),
+            finished_at: None,
+            result: None,
+        });
+
+        let (tx, mut rx) = mpsc::channel(1);
+        inner.process_table.set_mailbox(agent_id, tx);
+
+        let handle = ScopedKernelHandle {
+            agent_id:        AgentId::new(),
+            session_id:      SessionId::new("test"),
+            principal:       Principal::user("test"),
+            allowed_tools:   vec![],
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner:           Arc::clone(&inner),
+        };
+
+        handle.kill(agent_id).unwrap();
+
+        let received = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+            .await
+            .expect("kill should deliver promptly");
+        assert!(matches!(
+            received,
+            Some(ProcessMessage::Signal(Signal::Kill))
+        ));
     }
 
     #[test]
