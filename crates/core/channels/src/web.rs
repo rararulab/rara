@@ -22,13 +22,16 @@
 //! [`tokio::sync::broadcast`] channels for fan-out to multiple WebSocket and
 //! SSE connections.
 //!
+//! Inbound messages are handed to the [`InboundSink`] in a fire-and-forget
+//! fashion. Outbound delivery is handled separately via [`send`](ChannelAdapter::send).
+//!
 //! # Endpoints
 //!
 //! | Method | Path        | Description                          |
 //! |--------|-------------|--------------------------------------|
 //! | GET    | `/ws`       | WebSocket upgrade (bidirectional)    |
 //! | GET    | `/events`   | SSE stream (server-push)             |
-//! | POST   | `/messages` | Send message (SSE companion)         |
+//! | POST   | `/messages` | Send message (fire-and-forget)       |
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -44,12 +47,13 @@ use dashmap::DashMap;
 use futures::stream::Stream;
 use futures::{SinkExt, StreamExt};
 use rara_kernel::channel::adapter::ChannelAdapter;
-use rara_kernel::channel::bridge::ChannelBridge;
 use rara_kernel::channel::types::{
-    AgentPhase, ChannelMessage, ChannelType, ChannelUser, MessageContent, MessageRole,
+    AgentPhase, ChannelType, MessageContent,
     OutboundMessage,
 };
 use rara_kernel::error::KernelError;
+use rara_kernel::io::ingress::{InboundSink, RawPlatformMessage};
+use rara_kernel::io::types::{InteractionType, ReplyContext as IoReplyContext};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, broadcast, watch};
 use tracing::{debug, error, info, warn};
@@ -106,7 +110,7 @@ pub struct SendMessageRequest {
 /// JSON response for POST /messages.
 #[derive(Debug, Serialize)]
 pub struct SendMessageResponse {
-    pub response: String,
+    pub accepted: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -126,8 +130,8 @@ pub struct SendMessageResponse {
 pub struct WebAdapter {
     /// Active sessions: session_key -> broadcast sender for outbound events.
     sessions: Arc<DashMap<String, broadcast::Sender<String>>>,
-    /// Bridge handle (set during `start`).
-    bridge: Arc<RwLock<Option<Arc<dyn ChannelBridge>>>>,
+    /// InboundSink handle (set during `start`).
+    sink: Arc<RwLock<Option<Arc<dyn InboundSink>>>>,
     /// Shutdown signal sender.
     shutdown_tx: watch::Sender<bool>,
     /// Shutdown signal receiver (cloneable).
@@ -140,7 +144,7 @@ impl WebAdapter {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         Self {
             sessions: Arc::new(DashMap::new()),
-            bridge: Arc::new(RwLock::new(None)),
+            sink: Arc::new(RwLock::new(None)),
             shutdown_tx,
             shutdown_rx,
         }
@@ -155,7 +159,7 @@ impl WebAdapter {
     pub fn router(&self) -> Router {
         let state = WebAdapterState {
             sessions: Arc::clone(&self.sessions),
-            bridge: Arc::clone(&self.bridge),
+            sink: Arc::clone(&self.sink),
             shutdown_rx: self.shutdown_rx.clone(),
         };
 
@@ -208,28 +212,26 @@ impl WebAdapter {
 #[derive(Clone)]
 struct WebAdapterState {
     sessions: Arc<DashMap<String, broadcast::Sender<String>>>,
-    bridge: Arc<RwLock<Option<Arc<dyn ChannelBridge>>>>,
+    sink: Arc<RwLock<Option<Arc<dyn InboundSink>>>>,
     shutdown_rx: watch::Receiver<bool>,
 }
 
 // ---------------------------------------------------------------------------
-// Helper: build a ChannelMessage from request data
+// Helper: build a RawPlatformMessage from request data
 // ---------------------------------------------------------------------------
 
-fn build_channel_message(session_key: &str, user_id: &str, content: &str) -> ChannelMessage {
-    ChannelMessage {
-        id: ulid::Ulid::new().to_string(),
+fn build_raw_platform_message(session_key: &str, user_id: &str, content: &str) -> RawPlatformMessage {
+    RawPlatformMessage {
         channel_type: ChannelType::Web,
-        user: ChannelUser {
-            platform_id: user_id.to_owned(),
-            display_name: None,
-        },
-        session_key: session_key.to_owned(),
-        role: MessageRole::User,
+        platform_message_id: Some(ulid::Ulid::new().to_string()),
+        platform_user_id: user_id.to_owned(),
+        platform_chat_id: Some(session_key.to_owned()),
         content: MessageContent::Text(content.to_owned()),
-        tool_call_id: None,
-        tool_name: None,
-        timestamp: jiff::Timestamp::now(),
+        reply_context: Some(IoReplyContext {
+            thread_id: None,
+            reply_to_platform_msg_id: None,
+            interaction_type: InteractionType::Message,
+        }),
         metadata: HashMap::new(),
     }
 }
@@ -293,9 +295,9 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
         })
     };
 
-    // Task: read messages from the WebSocket client, dispatch to bridge.
+    // Task: read messages from the WebSocket client, dispatch to sink.
     let recv_task = {
-        let bridge = Arc::clone(&state.bridge);
+        let sink = Arc::clone(&state.sink);
         let sessions = Arc::clone(&state.sessions);
         let session_key = session_key.clone();
         let user_id = params.user_id.clone();
@@ -314,39 +316,28 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
                     continue;
                 }
 
-                let channel_msg = build_channel_message(&session_key, &user_id, &text);
+                let raw = build_raw_platform_message(&session_key, &user_id, &text);
 
-                let guard = bridge.read().await;
-                if let Some(ref b) = *guard {
+                let guard = sink.read().await;
+                if let Some(ref s) = *guard {
                     // Send typing indicator before processing.
                     WebAdapter::broadcast_event(
                         &sessions,
                         &session_key,
                         &WebEvent::Typing,
                     );
-                    match b.dispatch(channel_msg).await {
-                        Ok(response) => {
-                            WebAdapter::broadcast_event(
-                                &sessions,
-                                &session_key,
-                                &WebEvent::Message {
-                                    content: response,
-                                },
-                            );
-                        }
-                        Err(e) => {
-                            error!(session_key, error = %e, "bridge dispatch failed");
-                            WebAdapter::broadcast_event(
-                                &sessions,
-                                &session_key,
-                                &WebEvent::Error {
-                                    message: e.to_string(),
-                                },
-                            );
-                        }
+                    if let Err(e) = s.ingest(raw).await {
+                        error!(session_key, error = %e, "sink ingest failed");
+                        WebAdapter::broadcast_event(
+                            &sessions,
+                            &session_key,
+                            &WebEvent::Error {
+                                message: e.to_string(),
+                            },
+                        );
                     }
                 } else {
-                    warn!(session_key, "bridge not set, cannot dispatch message");
+                    warn!(session_key, "sink not set, cannot dispatch message");
                     WebAdapter::broadcast_event(
                         &sessions,
                         &session_key,
@@ -439,11 +430,11 @@ async fn send_message_handler(
     // Ensure session broadcast exists.
     WebAdapter::get_or_create_session(&state.sessions, &body.session_key);
 
-    let channel_msg = build_channel_message(&body.session_key, &body.user_id, &body.content);
+    let raw = build_raw_platform_message(&body.session_key, &body.user_id, &body.content);
 
-    let guard = state.bridge.read().await;
+    let guard = state.sink.read().await;
     match &*guard {
-        Some(bridge) => {
+        Some(sink) => {
             // Broadcast typing indicator.
             WebAdapter::broadcast_event(
                 &state.sessions,
@@ -451,20 +442,12 @@ async fn send_message_handler(
                 &WebEvent::Typing,
             );
 
-            match bridge.dispatch(channel_msg).await {
-                Ok(response) => {
-                    // Also broadcast the response to SSE/WS listeners.
-                    WebAdapter::broadcast_event(
-                        &state.sessions,
-                        &body.session_key,
-                        &WebEvent::Message {
-                            content: response.clone(),
-                        },
-                    );
-                    axum::Json(SendMessageResponse { response }).into_response()
+            match sink.ingest(raw).await {
+                Ok(()) => {
+                    axum::Json(SendMessageResponse { accepted: true }).into_response()
                 }
                 Err(e) => {
-                    error!(session_key = %body.session_key, error = %e, "dispatch failed");
+                    error!(session_key = %body.session_key, error = %e, "ingest failed");
                     let status = axum::http::StatusCode::INTERNAL_SERVER_ERROR;
                     (status, e.to_string()).into_response()
                 }
@@ -489,11 +472,11 @@ impl ChannelAdapter for WebAdapter {
 
     async fn start(
         &self,
-        bridge: Arc<dyn ChannelBridge>,
+        sink: Arc<dyn InboundSink>,
     ) -> Result<(), KernelError> {
-        info!("WebAdapter started — bridge registered");
-        let mut guard = self.bridge.write().await;
-        *guard = Some(bridge);
+        info!("WebAdapter started — sink registered");
+        let mut guard = self.sink.write().await;
+        *guard = Some(sink);
         Ok(())
     }
 
@@ -512,8 +495,8 @@ impl ChannelAdapter for WebAdapter {
         info!("WebAdapter stopping — clearing sessions");
         // Signal shutdown to all SSE/WS connections.
         let _ = self.shutdown_tx.send(true);
-        // Clear bridge reference.
-        let mut guard = self.bridge.write().await;
+        // Clear sink reference.
+        let mut guard = self.sink.write().await;
         *guard = None;
         // Clear session map.
         self.sessions.clear();
@@ -548,18 +531,16 @@ impl ChannelAdapter for WebAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rara_kernel::io::types::IngestError;
 
     #[test]
-    fn build_channel_message_fields() {
-        let msg = build_channel_message("sess-1", "user-42", "hello world");
-        assert_eq!(msg.session_key, "sess-1");
-        assert_eq!(msg.user.platform_id, "user-42");
+    fn build_raw_platform_message_fields() {
+        let msg = build_raw_platform_message("sess-1", "user-42", "hello world");
+        assert_eq!(msg.platform_chat_id, Some("sess-1".to_owned()));
+        assert_eq!(msg.platform_user_id, "user-42");
         assert_eq!(msg.content.as_text(), "hello world");
         assert_eq!(msg.channel_type, ChannelType::Web);
-        assert_eq!(msg.role, MessageRole::User);
-        assert!(msg.tool_call_id.is_none());
-        assert!(msg.tool_name.is_none());
-        assert!(!msg.id.is_empty());
+        assert!(msg.platform_message_id.is_some());
     }
 
     #[test]
@@ -660,41 +641,38 @@ mod tests {
         let adapter = WebAdapter::new();
         let router = adapter.router();
         // Verify the router can be created without panic.
-        // The actual route matching is validated via integration tests.
         drop(router);
     }
 
     #[tokio::test]
-    async fn adapter_start_sets_bridge() {
-        use rara_kernel::channel::types::ChannelMessage;
-
-        struct MockBridge;
+    async fn adapter_start_sets_sink() {
+        struct MockSink;
         #[async_trait]
-        impl ChannelBridge for MockBridge {
-            async fn dispatch(&self, _msg: ChannelMessage) -> Result<String, KernelError> {
-                Ok("mock response".to_owned())
+        impl InboundSink for MockSink {
+            async fn ingest(&self, _msg: RawPlatformMessage) -> Result<(), IngestError> {
+                Ok(())
             }
         }
 
         let adapter = WebAdapter::new();
-        assert!(adapter.bridge.read().await.is_none());
+        assert!(adapter.sink.read().await.is_none());
 
-        adapter.start(Arc::new(MockBridge)).await.unwrap();
-        assert!(adapter.bridge.read().await.is_some());
+        adapter.start(Arc::new(MockSink)).await.unwrap();
+        assert!(adapter.sink.read().await.is_some());
     }
 
     #[tokio::test]
     async fn adapter_stop_clears_state() {
-        struct MockBridge;
+        struct MockSink;
         #[async_trait]
-        impl ChannelBridge for MockBridge {
-            async fn dispatch(&self, _msg: ChannelMessage) -> Result<String, KernelError> {
-                Ok(String::new())
+        impl InboundSink for MockSink {
+            async fn ingest(&self, _msg: RawPlatformMessage) -> Result<(), IngestError> {
+                Ok(())
             }
         }
 
         let adapter = WebAdapter::new();
-        adapter.start(Arc::new(MockBridge)).await.unwrap();
+        adapter.start(Arc::new(MockSink)).await.unwrap();
 
         // Create a session.
         WebAdapter::get_or_create_session(&adapter.sessions, "s1");
@@ -702,7 +680,7 @@ mod tests {
 
         adapter.stop().await.unwrap();
         assert!(adapter.sessions.is_empty());
-        assert!(adapter.bridge.read().await.is_none());
+        assert!(adapter.sink.read().await.is_none());
     }
 
     #[tokio::test]

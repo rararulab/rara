@@ -28,14 +28,8 @@
 //!      │               │              │
 //!      ▼               ▼              ▼
 //!  ┌──────────────────────────────────────┐
-//!  │         ChannelBridge                │  dispatch()
-//!  │   (policies, rate-limit, RBAC)       │
-//!  └────────────────┬─────────────────────┘
-//!                   │
-//!                   ▼
-//!  ┌──────────────────────────────────────┐
-//!  │         ChannelRouter                │  route() → agent name
-//!  │   (bindings, defaults, ML)           │
+//!  │         InboundSink (I/O Bus)       │  ingest()
+//!  │   (identity, session, bus)          │
 //!  └────────────────┬─────────────────────┘
 //!                   │
 //!                   ▼
@@ -52,11 +46,7 @@
 //! ## Core Traits
 //!
 //! - [`ChannelAdapter`](adapter::ChannelAdapter) — platform adapter interface
-//! - [`ChannelBridge`](bridge::ChannelBridge) — kernel-side dispatch interface
-//! - [`ChannelRouter`](router::ChannelRouter) — message → agent routing
 
 pub mod adapter;
-pub mod bridge;
 pub mod command;
-pub mod router;
 pub mod types;

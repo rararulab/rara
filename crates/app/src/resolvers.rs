@@ -66,8 +66,8 @@ impl IdentityResolver for AppIdentityResolver {
 /// Simple session resolver that maps each platform chat to its own session
 /// using the format `"{channel_type}:{platform_chat_id}"`.
 ///
-/// This mirrors the existing `tg:<chat_id>` convention used by the legacy
-/// ChatService path.
+/// This mirrors the `tg:<chat_id>` convention used by the Telegram
+/// adapter.
 pub struct AppSessionResolver;
 
 impl AppSessionResolver {

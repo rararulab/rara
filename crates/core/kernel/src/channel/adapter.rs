@@ -25,6 +25,7 @@ use async_trait::async_trait;
 
 use super::types::{AgentPhase, ChannelType, OutboundMessage};
 use crate::error::KernelError;
+use crate::io::ingress::InboundSink;
 
 /// A pluggable adapter for a single communication channel.
 ///
@@ -32,7 +33,7 @@ use crate::error::KernelError;
 ///
 /// 1. **start** — The adapter begins listening for inbound messages (long
 ///    polling, WebSocket, etc.) and pushes them to the kernel via the
-///    [`ChannelBridge`](super::bridge::ChannelBridge).
+///    [`InboundSink`] (I/O Bus model).
 /// 2. **send** — The kernel calls this to deliver outbound messages back to
 ///    the platform.
 /// 3. **stop** — Graceful shutdown.
@@ -47,11 +48,11 @@ pub trait ChannelAdapter: Send + Sync {
     /// Which channel type this adapter serves.
     fn channel_type(&self) -> ChannelType;
 
-    /// Start the adapter, receiving a bridge handle for dispatching inbound
-    /// messages to the kernel.
+    /// Start the adapter with an [`InboundSink`] for dispatching inbound
+    /// messages into the I/O Bus pipeline.
     async fn start(
         &self,
-        bridge: Arc<dyn super::bridge::ChannelBridge>,
+        sink: Arc<dyn InboundSink>,
     ) -> Result<(), KernelError>;
 
     /// Send an outbound message through this channel.

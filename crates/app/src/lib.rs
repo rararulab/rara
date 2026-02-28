@@ -34,7 +34,6 @@ use snafu::{ResultExt, Whatever};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
-use rara_kernel::channel::adapter::ChannelAdapter as _;
 use yunara_store::{config::DatabaseConfig, db::DBStore};
 
 // ---------------------------------------------------------------------------
@@ -324,9 +323,9 @@ impl AppConfig {
 
         // -- telegram adapter (optional) --------------------------------------
 
-        let telegram_adapter = match Self::try_start_telegram(&app_state).await {
+        let telegram_adapter = match Self::try_build_telegram(&app_state).await {
             Ok(Some(adapter)) => {
-                info!("Telegram adapter started");
+                info!("Telegram adapter built");
                 Some(adapter)
             }
             Ok(None) => {
@@ -334,12 +333,12 @@ impl AppConfig {
                 None
             }
             Err(e) => {
-                warn!(error = %e, "Failed to start Telegram adapter, skipping");
+                warn!(error = %e, "Failed to build Telegram adapter, skipping");
                 None
             }
         };
 
-        // -- I/O Bus pipeline (new path, alongside ChatService) ---------------
+        // -- I/O Bus pipeline -------------------------------------------------
 
         let io_pipeline =
             io_pipeline::init_io_pipeline(telegram_adapter.clone());
@@ -359,23 +358,20 @@ impl AppConfig {
         // `Box<dyn OutboundSubscriber>` which is `Send` but not `Sync`,
         // making it incompatible with `tokio::spawn`. This will be fixed
         // in the kernel crate (make OutboundSubscriber Sync or restructure
-        // Egress). For now, outbound delivery is handled by the legacy
-        // ChatService path. The `_egress` binding keeps it alive for
-        // future wiring.
+        // Egress). The `_egress` binding keeps it alive for future wiring.
         let _egress = io_pipeline.egress;
 
-        // If Telegram is running, also start the sink-mode polling alongside
-        // the legacy bridge-mode polling.  Messages will flow into the
-        // InboundBus (new path) in parallel with the ChatService path.
+        // Start Telegram adapter with the I/O Bus ingress pipeline.
         if let Some(ref tg_adapter) = telegram_adapter {
+            use rara_kernel::channel::adapter::ChannelAdapter as _;
             match tg_adapter
-                .start_with_sink(io_pipeline.ingress_pipeline.clone())
+                .start(io_pipeline.ingress_pipeline.clone())
                 .await
             {
-                Ok(()) => info!("Telegram adapter sink-mode (I/O Bus) started"),
+                Ok(()) => info!("Telegram adapter started (I/O Bus)"),
                 Err(e) => warn!(
                     error = %e,
-                    "Failed to start Telegram adapter in sink-mode, I/O Bus ingress inactive"
+                    "Failed to start Telegram adapter, I/O Bus ingress inactive"
                 ),
             }
         }
@@ -420,6 +416,7 @@ impl AppConfig {
             }
 
             if let Some(adapter) = telegram_adapter {
+                use rara_kernel::channel::adapter::ChannelAdapter as _;
                 info!("Shutting down Telegram adapter");
                 let _ = adapter.stop().await;
             }
@@ -434,11 +431,14 @@ impl AppConfig {
         Ok(app_handle)
     }
 
-    /// Try to start the Telegram adapter using shared infrastructure.
+    /// Try to build the Telegram adapter using shared infrastructure.
     ///
-    /// Returns `Ok(Some(adapter))` if the adapter started successfully,
+    /// Returns `Ok(Some(adapter))` if the adapter was built successfully,
     /// `Ok(None)` if Telegram is not configured, or `Err` on failure.
-    async fn try_start_telegram(
+    ///
+    /// The adapter is NOT started here — the caller is responsible for
+    /// calling `adapter.start(sink)` after the I/O pipeline is ready.
+    async fn try_build_telegram(
         state: &rara_workers::worker_state::AppState,
     ) -> Result<Option<Arc<rara_channels::telegram::TelegramAdapter>>, Whatever> {
         let token = match std::env::var("TELEGRAM_BOT_TOKEN") {
@@ -456,13 +456,6 @@ impl AppConfig {
         tg_config.primary_chat_id = tg.chat_id;
         tg_config.allowed_group_chat_id = tg.allowed_group_chat_id;
 
-        // Build the bridge that routes messages to the chat service.
-        let bridge: Arc<dyn rara_kernel::channel::bridge::ChannelBridge> =
-            Arc::new(ChatServiceBridge {
-                chat_service: state.chat_service.clone(),
-                user_store: state.user_store.clone(),
-            });
-
         // Build contact tracker from the contact repository.
         let contact_tracker: Arc<dyn rara_channels::telegram::contacts::ContactTracker> =
             Arc::new(ContactRepoTracker {
@@ -474,12 +467,6 @@ impl AppConfig {
                 .with_config(tg_config)
                 .with_contact_tracker(contact_tracker),
         );
-
-        // Start long-polling.
-        adapter
-            .start(bridge)
-            .await
-            .whatever_context("Failed to start Telegram adapter")?;
 
         // Spawn a background task to hot-reload config from settings.
         let config_handle = adapter.config_handle();
@@ -574,83 +561,6 @@ async fn shutdown_signal(shutdown_rx: oneshot::Receiver<()>) {
         () = ctrl_c => { info!("Received Ctrl+C signal"); },
         () = terminate => { info!("Received terminate signal"); },
         _ = shutdown_rx => { info!("Received shutdown signal"); },
-    }
-}
-
-// ---------------------------------------------------------------------------
-// ChatServiceBridge — routes ChannelMessages to the ChatService
-// ---------------------------------------------------------------------------
-
-/// Bridge implementation that dispatches inbound channel messages to the
-/// [`ChatService`](rara_domain_chat::service::ChatService).
-///
-/// The session key from the [`ChannelMessage`] is used directly — the
-/// Telegram adapter already formats it as `tg:<chat_id>`.
-struct ChatServiceBridge {
-    chat_service: rara_domain_chat::service::ChatService,
-    user_store: std::sync::Arc<dyn rara_kernel::process::user::UserStore>,
-}
-
-#[async_trait::async_trait]
-impl rara_kernel::channel::bridge::ChannelBridge for ChatServiceBridge {
-    async fn dispatch(
-        &self,
-        message: rara_kernel::channel::types::ChannelMessage,
-    ) -> Result<String, rara_kernel::error::KernelError> {
-        // Validate that the platform user is registered.
-        let platform = message.channel_type.label();
-        let platform_user_id = &message.user.platform_id;
-        let _user = self
-            .user_store
-            .get_by_platform(platform, platform_user_id)
-            .await?
-            .ok_or(rara_kernel::error::KernelError::UserNotFound {
-                name: format!("{platform}:{platform_user_id}"),
-            })?;
-
-        let text = message.content.as_text();
-
-        if text.is_empty() {
-            return Ok(String::new());
-        }
-
-        let session_key = rara_sessions::types::SessionKey::from_raw(message.session_key.clone());
-
-        // Extract image URLs for multimodal messages.
-        let image_urls = match &message.content {
-            rara_kernel::channel::types::MessageContent::Multimodal(blocks) => {
-                let urls: Vec<String> = blocks
-                    .iter()
-                    .filter_map(|b| match b {
-                        rara_kernel::channel::types::ContentBlock::ImageUrl { url } => {
-                            Some(url.clone())
-                        }
-                        _ => None,
-                    })
-                    .collect();
-                if urls.is_empty() { None } else { Some(urls) }
-            }
-            _ => None,
-        };
-
-        // Ensure session exists (creates on first message).
-        let _ = self
-            .chat_service
-            .ensure_session(&session_key, None, None, None)
-            .await
-            .map_err(|e| rara_kernel::error::KernelError::Other {
-                message: format!("session error: {e}").into(),
-            })?;
-
-        let response = self
-            .chat_service
-            .send_message(&session_key, text, image_urls)
-            .await
-            .map_err(|e| rara_kernel::error::KernelError::Other {
-                message: format!("chat error: {e}").into(),
-            })?;
-
-        Ok(response.content.as_text())
     }
 }
 

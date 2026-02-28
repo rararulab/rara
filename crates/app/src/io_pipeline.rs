@@ -18,8 +18,8 @@
 //! TickLoop, Egress) and provides the [`IoBusPipeline`] struct that holds
 //! all components needed to run the new message pipeline.
 //!
-//! The pipeline runs **alongside** the existing ChatService path during the
-//! transition period. Once validated, ChatService will be removed (#366).
+//! The pipeline is now the sole message path — the legacy ChatService bridge
+//! has been removed (#366).
 
 use std::collections::HashMap;
 use std::sync::Arc;
