@@ -32,15 +32,18 @@ use async_trait::async_trait;
 use tokio::sync::oneshot;
 
 use crate::error::Result;
-use crate::process::{AgentId, AgentManifest, AgentResult, ProcessInfo};
+use crate::process::{AgentId, AgentManifest, AgentResult, ProcessInfo, ProcessMessage};
 
 /// Handle returned from spawn — allows waiting for agent completion.
 ///
-/// Holds the spawned agent's ID and a oneshot receiver that resolves when
-/// the agent finishes execution (successfully or with failure).
+/// Holds the spawned agent's ID, a mailbox sender for delivering messages
+/// to the process, and a oneshot receiver that resolves when the agent
+/// finishes execution (successfully or with failure).
 pub struct AgentHandle {
     /// The ID of the spawned agent process.
     pub agent_id: AgentId,
+    /// Mailbox sender for delivering messages to the process.
+    pub mailbox: tokio::sync::mpsc::Sender<ProcessMessage>,
     /// Receiver for the agent's result. Resolves when the agent finishes.
     pub result_rx: oneshot::Receiver<AgentResult>,
 }
@@ -49,6 +52,7 @@ impl std::fmt::Debug for AgentHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentHandle")
             .field("agent_id", &self.agent_id)
+            .field("mailbox", &"<mpsc::Sender>")
             .field("result_rx", &"<oneshot::Receiver>")
             .finish()
     }
@@ -129,11 +133,13 @@ mod tests {
 
     #[test]
     fn test_agent_handle_creation() {
-        let (tx, rx) = oneshot::channel();
+        let (result_tx, result_rx) = oneshot::channel();
+        let (mailbox_tx, _mailbox_rx) = tokio::sync::mpsc::channel(16);
         let id = AgentId::new();
         let handle = AgentHandle {
             agent_id: id,
-            result_rx: rx,
+            mailbox: mailbox_tx,
+            result_rx,
         };
         assert_eq!(handle.agent_id, id);
 
@@ -143,7 +149,7 @@ mod tests {
             iterations: 3,
             tool_calls: 1,
         };
-        tx.send(result).unwrap();
+        result_tx.send(result).unwrap();
 
         // We can't easily test the receiver in a sync test without tokio,
         // but we can verify the handle was created correctly

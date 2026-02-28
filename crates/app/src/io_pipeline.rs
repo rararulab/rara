@@ -18,26 +18,21 @@
 //! TickLoop, Egress) and provides the [`IoBusPipeline`] struct that holds
 //! all components needed to run the new message pipeline.
 //!
-//! The pipeline is now the sole message path — the legacy ChatService bridge
-//! has been removed (#366).
+//! The pipeline uses the Kernel's long-lived process model — the TickLoop
+//! routes messages to existing processes via mailbox or spawns new ones.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tokio::sync::Semaphore;
 use tracing::info;
 
 use rara_kernel::channel::types::ChannelType;
 use rara_kernel::io::bus::{InboundBus, OutboundBus};
 use rara_kernel::io::egress::{EgressAdapter, Egress, EndpointRegistry};
-use rara_kernel::defaults::noop::NoopOutboxStore;
-use rara_kernel::executor::AgentExecutor;
 use rara_kernel::io::ingress::{IdentityResolver, IngressPipeline, SessionResolver};
 use rara_kernel::io::stream::StreamHub;
 use rara_kernel::tick::TickLoop;
-use rara_kernel::process::ProcessTable;
-use rara_kernel::provider::LlmProviderLoaderRef;
-use rara_kernel::tool::ToolRegistry;
+use rara_kernel::kernel::Kernel;
 
 use crate::resolvers::{AppIdentityResolver, AppSessionResolver};
 
@@ -52,29 +47,31 @@ use crate::resolvers::{AppIdentityResolver, AppSessionResolver};
 pub struct IoBusPipeline {
     /// The inbound message bus (shared with IngressPipeline and TickLoop).
     pub inbound_bus: Arc<dyn InboundBus>,
-    /// The outbound message bus (shared with AgentExecutor and Egress).
+    /// The outbound message bus (shared with process_loop and Egress).
     pub outbound_bus: Arc<dyn OutboundBus>,
     /// Ephemeral stream hub for real-time token deltas.
     pub stream_hub: Arc<StreamHub>,
     /// The ingress pipeline (implements InboundSink for adapters).
     pub ingress_pipeline: Arc<IngressPipeline>,
-    /// The kernel tick loop (drains InboundBus, dispatches to executor).
+    /// The kernel tick loop (drains InboundBus, routes to processes).
     pub tick_loop: TickLoop,
     /// The egress engine (delivers outbound envelopes to adapters).
     pub egress: Egress,
     /// Per-user endpoint registry (tracks connected channels).
     pub endpoint_registry: Arc<EndpointRegistry>,
+    /// The kernel (owns the process table).
+    pub kernel: Arc<Kernel>,
 }
 
 /// Initialize the full I/O Bus pipeline.
 ///
 /// This creates all components needed for the new message pipeline:
 /// 1. InboundBus + OutboundBus (via rara-boot factories)
-/// 2. StreamHub + SessionScheduler
+/// 2. StreamHub
 /// 3. Identity + Session resolvers
 /// 4. IngressPipeline (implements InboundSink)
-/// 5. AgentExecutor (processes messages through LLM)
-/// 6. TickLoop (drains bus, dispatches to executor)
+/// 5. Kernel with IO context (session_manager, stream_hub, outbound_bus)
+/// 6. TickLoop (drains bus, routes to Kernel processes)
 /// 7. Egress (delivers responses to adapters)
 ///
 /// The `telegram_adapter` is optional — if provided, it is registered as
@@ -82,14 +79,12 @@ pub struct IoBusPipeline {
 pub fn init_io_pipeline(
     telegram_adapter: Option<Arc<rara_channels::telegram::TelegramAdapter>>,
     session_repo: Arc<dyn rara_kernel::session_manager::SessionRepository>,
-    llm_provider: LlmProviderLoaderRef,
-    tool_registry: Arc<ToolRegistry>,
+    mut kernel: Kernel,
 ) -> IoBusPipeline {
     // 1. Create buses
     let inbound_bus = rara_boot::bus::default_inbound_bus(1024);
     let outbound_bus = rara_boot::bus::default_outbound_bus(256);
     let stream_hub = rara_boot::stream::default_stream_hub(64);
-    let session_scheduler = rara_boot::scheduler::default_session_scheduler(16);
 
     // 2. Create resolvers
     let identity_resolver: Arc<dyn IdentityResolver> = Arc::new(AppIdentityResolver::new());
@@ -105,25 +100,18 @@ pub fn init_io_pipeline(
     // 4. Create SessionManager with real PG-backed session repository (direct impl)
     let session_manager = rara_boot::session::default_session_manager(session_repo);
 
-    // 5. Create AgentExecutor
-    let executor = Arc::new(AgentExecutor::new(
-        ProcessTable::new(),
-        Arc::new(Semaphore::new(16)), // global concurrency limit
-        session_scheduler.clone(),
-        inbound_bus.clone(),
-        outbound_bus.clone(),
-        Arc::new(NoopOutboxStore),
-        stream_hub.clone(),
+    // 5. Set IO context on kernel
+    kernel.set_io_context(
         session_manager,
-        llm_provider,
-        tool_registry,
-    ));
+        stream_hub.clone(),
+        outbound_bus.clone(),
+    );
+    let kernel = Arc::new(kernel);
 
     // 6. Create TickLoop
     let tick_loop = TickLoop::new(
         inbound_bus.clone(),
-        session_scheduler,
-        executor,
+        kernel.clone(),
     );
 
     // 7. Create Egress
@@ -141,7 +129,6 @@ pub fn init_io_pipeline(
         inbound_capacity = 1024,
         outbound_capacity = 256,
         stream_capacity = 64,
-        max_pending_per_session = 16,
         adapters = if telegram_adapter.is_some() { "telegram" } else { "none" },
         "I/O Bus pipeline initialized"
     );
@@ -154,5 +141,6 @@ pub fn init_io_pipeline(
         tick_loop,
         egress,
         endpoint_registry,
+        kernel,
     }
 }

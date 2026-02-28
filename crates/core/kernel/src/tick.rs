@@ -13,26 +13,25 @@
 // limitations under the License.
 
 //! TickLoop — the kernel's main event loop that drains the [`InboundBus`]
-//! and dispatches messages through the [`SessionScheduler`] to the
-//! [`AgentExecutor`].
+//! and routes messages to long-lived agent processes.
 //!
 //! The tick loop is woken by the bus's `wait_for_messages()` mechanism
 //! (no polling fallback). On each tick, it drains up to a configurable
-//! batch size and dispatches each message through the scheduler:
+//! batch size and dispatches each message:
 //!
-//! - `Ready` messages are spawned into the executor immediately.
-//! - `Queued` messages wait until their session's current execution completes.
-//! - `Rejected` messages are dropped with a warning (session queue full).
+//! - If a process already exists for the session → send via mailbox
+//! - If not → spawn a new long-lived process via `Kernel::spawn()`
 
 use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
-use crate::executor::AgentExecutor;
 use crate::io::bus::InboundBus;
 use crate::io::types::InboundMessage;
-use crate::scheduler::{ScheduleResult, SessionScheduler};
+use crate::kernel::Kernel;
+use crate::process::principal::Principal;
+use crate::process::{AgentManifest, ProcessMessage};
 
 // ---------------------------------------------------------------------------
 // TickLoop
@@ -40,18 +39,15 @@ use crate::scheduler::{ScheduleResult, SessionScheduler};
 
 /// The kernel's main event loop.
 ///
-/// Drains the [`InboundBus`] in batches, schedules messages through the
-/// [`SessionScheduler`], and dispatches ready messages to the
-/// [`AgentExecutor`] as concurrent tasks.
+/// Drains the [`InboundBus`] in batches and routes messages to existing
+/// agent processes (via mailbox) or spawns new ones via the [`Kernel`].
 ///
 /// Stops gracefully when the [`CancellationToken`] is cancelled.
 pub struct TickLoop {
     /// The inbound message bus to drain.
     inbound_bus: Arc<dyn InboundBus>,
-    /// Per-session serial execution scheduler.
-    session_scheduler: Arc<SessionScheduler>,
-    /// The executor that processes individual messages.
-    executor: Arc<AgentExecutor>,
+    /// The kernel for spawning new processes and accessing the process table.
+    kernel: Arc<Kernel>,
     /// Maximum number of messages to drain per tick.
     batch_size: usize,
 }
@@ -60,13 +56,11 @@ impl TickLoop {
     /// Create a new tick loop.
     pub fn new(
         inbound_bus: Arc<dyn InboundBus>,
-        session_scheduler: Arc<SessionScheduler>,
-        executor: Arc<AgentExecutor>,
+        kernel: Arc<Kernel>,
     ) -> Self {
         Self {
             inbound_bus,
-            session_scheduler,
-            executor,
+            kernel,
             batch_size: 32,
         }
     }
@@ -100,27 +94,79 @@ impl TickLoop {
     pub async fn tick(&self) {
         let messages = self.inbound_bus.drain(self.batch_size).await;
         for msg in messages {
-            self.dispatch(msg);
+            self.dispatch(msg).await;
         }
     }
 
-    /// Dispatch a single message through the session scheduler.
-    fn dispatch(&self, msg: InboundMessage) {
-        match self.session_scheduler.schedule(msg) {
-            ScheduleResult::Ready(ready_msg) => {
-                let executor = self.executor.clone();
-                tokio::spawn(async move {
-                    executor.run(*ready_msg).await;
-                });
+    /// Dispatch a single message: route to existing process or spawn new one.
+    async fn dispatch(&self, msg: InboundMessage) {
+        let session_id = msg.session_id.clone();
+        let user_id = msg.user.0.clone();
+
+        // Try to find an existing process for this session
+        let msg = if let Some(tx) = self
+            .kernel
+            .process_table()
+            .find_by_session(&session_id)
+            .and_then(|p| self.kernel.process_table().get_mailbox(&p.agent_id))
+        {
+            // Deliver to existing process via mailbox
+            match tx.send(ProcessMessage::UserMessage(msg)).await {
+                Ok(()) => return,
+                Err(e) => {
+                    warn!(
+                        session_id = %session_id,
+                        "mailbox send failed — process terminated, spawning new one"
+                    );
+                    // Recover the message from the SendError and fall through to spawn
+                    match e.0 {
+                        ProcessMessage::UserMessage(m) => m,
+                        _ => return,
+                    }
+                }
             }
-            ScheduleResult::Queued => {
-                // Message is waiting in the session queue; it will be
-                // re-published to the InboundBus when the current execution
-                // completes (via AgentExecutor::release_session).
+        } else {
+            msg
+        };
+
+        // No existing process — spawn a new one
+        let manifest = self.default_manifest();
+        let principal = Principal::user(user_id);
+
+        match self
+            .kernel
+            .spawn(manifest, msg, principal, session_id.clone(), None)
+            .await
+        {
+            Ok(handle) => {
+                info!(
+                    session_id = %session_id,
+                    agent_id = %handle.agent_id,
+                    "spawned new process for session"
+                );
             }
-            ScheduleResult::Rejected => {
-                warn!("message rejected: session queue full");
+            Err(e) => {
+                error!(
+                    session_id = %session_id,
+                    error = %e,
+                    "failed to spawn process"
+                );
             }
+        }
+    }
+
+    /// Default manifest for auto-spawned agents.
+    fn default_manifest(&self) -> AgentManifest {
+        AgentManifest {
+            name: "io-agent".to_string(),
+            description: "I/O bus agent".to_string(),
+            model: "default".to_string(),
+            system_prompt: "You are a helpful assistant.".to_string(),
+            provider_hint: None,
+            max_iterations: Some(25),
+            tools: vec![],
+            max_children: None,
+            metadata: serde_json::Value::Null,
         }
     }
 }
@@ -130,18 +176,16 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use tokio::sync::Semaphore;
-
     use super::*;
     use crate::channel::types::{ChannelType, MessageContent};
-    use crate::defaults::noop::{NoopOutboxStore, NoopSessionRepository};
-    use crate::executor::AgentExecutor;
-    use crate::io::memory_bus::{InMemoryInboundBus, InMemoryOutboundBus};
-    use crate::io::stream::StreamHub;
-    use crate::session_manager::SessionManager;
+    use crate::defaults::noop::{NoopEventBus, NoopGuard, NoopMemory};
+    use crate::defaults::noop_user_store::NoopUserStore;
+    use crate::io::memory_bus::InMemoryInboundBus;
     use crate::io::types::{ChannelSource, MessageId};
+    use crate::kernel::{Kernel, KernelConfig};
+    use crate::process::manifest_loader::ManifestLoader;
     use crate::process::principal::UserId;
-    use crate::process::{ProcessTable, SessionId};
+    use crate::process::SessionId;
     use crate::provider::EnvLlmProviderLoader;
     use crate::provider::LlmProviderLoaderRef;
     use crate::tool::ToolRegistry;
@@ -165,33 +209,25 @@ mod tests {
         }
     }
 
-    /// Helper: create test components and a TickLoop.
-    fn make_test_tick_loop(
-        inbound_bus: Arc<InMemoryInboundBus>,
-    ) -> (TickLoop, Arc<SessionScheduler>) {
-        let scheduler = Arc::new(SessionScheduler::new(5));
-        let executor = Arc::new(AgentExecutor::new(
-            ProcessTable::new(),
-            Arc::new(Semaphore::new(16)),
-            scheduler.clone(),
-            inbound_bus.clone() as Arc<dyn InboundBus>,
-            Arc::new(InMemoryOutboundBus::new(64)),
-            Arc::new(NoopOutboxStore),
-            Arc::new(StreamHub::new(64)),
-            Arc::new(SessionManager::new(
-                Arc::new(NoopSessionRepository),
-            )),
+    fn make_test_kernel() -> Arc<Kernel> {
+        let config = KernelConfig {
+            max_concurrency: 16,
+            default_child_limit: 5,
+            default_max_iterations: 5,
+        };
+        let mut loader = ManifestLoader::new();
+        loader.load_bundled();
+
+        Arc::new(Kernel::new(
+            config,
             Arc::new(EnvLlmProviderLoader::default()) as LlmProviderLoaderRef,
             Arc::new(ToolRegistry::new()),
-        ));
-
-        let tick_loop = TickLoop::new(
-            inbound_bus as Arc<dyn InboundBus>,
-            scheduler.clone(),
-            executor,
-        );
-
-        (tick_loop, scheduler)
+            Arc::new(NoopMemory),
+            Arc::new(NoopEventBus),
+            Arc::new(NoopGuard),
+            loader,
+            Arc::new(NoopUserStore),
+        ))
     }
 
     #[tokio::test]
@@ -212,7 +248,11 @@ mod tests {
             .await
             .unwrap();
 
-        let (tick_loop, scheduler) = make_test_tick_loop(inbound_bus.clone());
+        let kernel = make_test_kernel();
+        let tick_loop = TickLoop::new(
+            inbound_bus.clone() as Arc<dyn InboundBus>,
+            kernel.clone(),
+        );
 
         // Run one tick
         tick_loop.tick().await;
@@ -220,19 +260,18 @@ mod tests {
         // All 3 messages should have been drained
         assert_eq!(inbound_bus.pending_count(), 0);
 
-        // The scheduler should have processed them. Since all are different
-        // sessions, all become Ready and are dispatched. The slots should be
-        // in running state (they won't complete since there's no real LLM).
-        // We can verify this by trying to schedule another message for s1
-        // which should be Queued (since s1 is still "running").
-        let result = scheduler.schedule(test_inbound("s1", "second for s1"));
-        assert!(matches!(result, ScheduleResult::Queued));
+        // 3 processes should have been spawned (one per session)
+        assert_eq!(kernel.process_table().list().len(), 3);
     }
 
     #[tokio::test]
     async fn test_tick_loop_shutdown() {
         let inbound_bus = Arc::new(InMemoryInboundBus::new(100));
-        let (tick_loop, _scheduler) = make_test_tick_loop(inbound_bus);
+        let kernel = make_test_kernel();
+        let tick_loop = TickLoop::new(
+            inbound_bus as Arc<dyn InboundBus>,
+            kernel,
+        );
 
         let shutdown = CancellationToken::new();
         let shutdown_clone = shutdown.clone();
@@ -257,33 +296,5 @@ mod tests {
             result.unwrap().is_ok(),
             "tick loop task should complete successfully"
         );
-    }
-
-    #[tokio::test]
-    async fn test_tick_loop_same_session_queued() {
-        let inbound_bus = Arc::new(InMemoryInboundBus::new(100));
-
-        // Publish 2 messages for the same session
-        inbound_bus
-            .publish(test_inbound("s1", "first"))
-            .await
-            .unwrap();
-        inbound_bus
-            .publish(test_inbound("s1", "second"))
-            .await
-            .unwrap();
-
-        let (tick_loop, _scheduler) = make_test_tick_loop(inbound_bus.clone());
-
-        // Run one tick
-        tick_loop.tick().await;
-
-        // Both messages should have been drained from the bus
-        assert_eq!(inbound_bus.pending_count(), 0);
-
-        // The first message for s1 is Ready (dispatched to executor).
-        // The second message for s1 is Queued (waiting for the first to complete).
-        // We can't easily inspect the scheduler's internal state, but the
-        // test passes if no panics occur and the bus is drained.
     }
 }

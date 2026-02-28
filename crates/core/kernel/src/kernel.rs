@@ -49,12 +49,16 @@ use crate::event::EventBus;
 use crate::guard::Guard;
 use crate::handle::scoped::KernelInner;
 use crate::handle::AgentHandle;
+use crate::io::bus::OutboundBus;
+use crate::io::stream::StreamHub;
+use crate::io::types::InboundMessage;
 use crate::memory::Memory;
 use crate::process::manifest_loader::ManifestLoader;
 use crate::process::principal::Principal;
 use crate::process::user::UserStore;
-use crate::process::{AgentId, AgentManifest, ProcessTable, SessionId};
+use crate::process::{AgentId, AgentManifest, ProcessMessage, ProcessTable, SessionId};
 use crate::provider::LlmProviderLoaderRef;
+use crate::session_manager::SessionManager;
 use crate::tool::ToolRegistry;
 
 /// Kernel configuration.
@@ -91,6 +95,7 @@ pub struct Kernel {
 
 impl Kernel {
     /// Create a new Kernel with the given configuration and components.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: KernelConfig,
         llm_provider: LlmProviderLoaderRef,
@@ -109,7 +114,7 @@ impl Kernel {
         );
 
         let inner = Arc::new(KernelInner {
-            process_table: ProcessTable::new(),
+            process_table: Arc::new(ProcessTable::new()),
             global_semaphore: Arc::new(Semaphore::new(config.max_concurrency)),
             default_child_limit: config.default_child_limit,
             default_max_iterations: config.default_max_iterations,
@@ -121,23 +126,201 @@ impl Kernel {
             manifest_loader,
             shared_kv: DashMap::new(),
             user_store,
+            session_manager: None,
+            stream_hub: None,
+            outbound_bus: None,
         });
 
         Self { inner, config }
     }
 
-    /// Spawn a top-level agent process (no parent).
+    /// Set the I/O pipeline components needed for long-lived process loops.
     ///
-    /// This is the primary entry point for external callers (workers, channel
-    /// adapters, HTTP handlers) to create a new agent.
+    /// These are optional — if not set, `spawn()` falls back to the legacy
+    /// short-lived execution model via `KernelInner::spawn_process`.
+    pub fn set_io_context(
+        &mut self,
+        session_manager: Arc<SessionManager>,
+        stream_hub: Arc<StreamHub>,
+        outbound_bus: Arc<dyn OutboundBus>,
+    ) {
+        let inner = Arc::get_mut(&mut self.inner)
+            .expect("set_io_context must be called before any Arc clones");
+        inner.session_manager = Some(session_manager);
+        inner.stream_hub = Some(stream_hub);
+        inner.outbound_bus = Some(outbound_bus);
+    }
+
+    /// Spawn a long-lived agent process for a session.
+    ///
+    /// If I/O context is configured (session_manager, stream_hub, outbound_bus),
+    /// spawns a long-lived process_loop that receives messages via a mailbox.
+    /// The first message (from `inbound`) is automatically delivered.
+    ///
+    /// If I/O context is NOT configured, falls back to the legacy short-lived
+    /// model where the agent runs once and completes.
     ///
     /// # Arguments
     /// - `manifest` — the agent definition to run
-    /// - `input` — the user message / task description
+    /// - `inbound` — the first inbound message to process
     /// - `principal` — the identity under which the agent runs
     /// - `session_id` — the session this agent belongs to
     /// - `parent_id` — optional parent agent ID (for process tree)
     pub async fn spawn(
+        &self,
+        manifest: AgentManifest,
+        inbound: InboundMessage,
+        principal: Principal,
+        session_id: SessionId,
+        parent_id: Option<AgentId>,
+    ) -> Result<AgentHandle> {
+        // Validate user exists, is enabled, and has Spawn permission
+        self.inner.validate_principal(&principal).await?;
+
+        // Acquire global semaphore
+        let _global_permit =
+            self.inner
+                .global_semaphore
+                .clone()
+                .try_acquire_owned()
+                .map_err(|_| KernelError::SpawnLimitReached {
+                    message: "global concurrency limit reached".to_string(),
+                })?;
+
+        // Check if we have IO context for long-lived process
+        if let (Some(session_manager), Some(stream_hub), Some(outbound_bus)) = (
+            self.inner.session_manager.as_ref(),
+            self.inner.stream_hub.as_ref(),
+            self.inner.outbound_bus.as_ref(),
+        ) {
+            return self.spawn_long_lived(
+                manifest,
+                inbound,
+                principal,
+                session_id,
+                parent_id,
+                session_manager.clone(),
+                stream_hub.clone(),
+                outbound_bus.clone(),
+                _global_permit,
+            );
+        }
+
+        // Fallback: legacy short-lived spawn
+        let agent_tools = self.inner.tool_registry.filtered(&manifest.tools);
+        let child_limit = manifest
+            .max_children
+            .unwrap_or(self.config.default_child_limit);
+
+        use crate::handle::scoped::{SpawnParams, SpawnPermits};
+        let handle = KernelInner::spawn_process(
+            Arc::clone(&self.inner),
+            SpawnParams {
+                manifest,
+                input: inbound.content.as_text(),
+                principal,
+                session_id,
+                parent_id,
+                agent_tools,
+            },
+            child_limit,
+            SpawnPermits::TopLevel {
+                _global: _global_permit,
+            },
+        );
+
+        Ok(handle)
+    }
+
+    /// Spawn a long-lived process with a mailbox-driven event loop.
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_long_lived(
+        &self,
+        manifest: AgentManifest,
+        inbound: InboundMessage,
+        principal: Principal,
+        session_id: SessionId,
+        parent_id: Option<AgentId>,
+        session_manager: Arc<SessionManager>,
+        stream_hub: Arc<StreamHub>,
+        outbound_bus: Arc<dyn OutboundBus>,
+        _global_permit: tokio::sync::OwnedSemaphorePermit,
+    ) -> Result<AgentHandle> {
+        use crate::process::{AgentEnv, AgentProcess, ProcessState};
+        use jiff::Timestamp;
+
+        let agent_id = AgentId::new();
+        let (mailbox_tx, mailbox_rx) = tokio::sync::mpsc::channel::<ProcessMessage>(64);
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+
+        // Register process in table
+        let process = AgentProcess {
+            agent_id,
+            parent_id,
+            session_id: session_id.clone(),
+            manifest: manifest.clone(),
+            principal,
+            env: AgentEnv::default(),
+            state: ProcessState::Running,
+            created_at: Timestamp::now(),
+            finished_at: None,
+            result: None,
+        };
+        self.inner.process_table.insert(process);
+        self.inner
+            .process_table
+            .set_mailbox(agent_id, mailbox_tx.clone());
+
+        // Deliver the first message
+        let first_msg = ProcessMessage::UserMessage(inbound);
+        // Use try_send since we just created the channel (guaranteed capacity)
+        mailbox_tx
+            .try_send(first_msg)
+            .map_err(|_| KernelError::SpawnFailed {
+                message: "failed to deliver initial message".to_string(),
+            })?;
+
+        // Spawn the process loop
+        let process_table = Arc::clone(&self.inner.process_table);
+        let llm_provider = Arc::clone(&self.inner.llm_provider);
+        let tool_registry = Arc::clone(&self.inner.tool_registry);
+
+        tokio::spawn(async move {
+            let _permit = _global_permit; // Hold semaphore permit for lifetime
+
+            crate::process_loop::process_loop(
+                agent_id,
+                session_id,
+                manifest,
+                mailbox_rx,
+                process_table,
+                session_manager,
+                stream_hub,
+                outbound_bus,
+                llm_provider,
+                tool_registry,
+            )
+            .await;
+
+            // Send a terminal result (the last result stored in process table)
+            let _ = result_tx.send(crate::process::AgentResult {
+                output: "process loop ended".to_string(),
+                iterations: 0,
+                tool_calls: 0,
+            });
+        });
+
+        Ok(AgentHandle {
+            agent_id,
+            mailbox: mailbox_tx,
+            result_rx,
+        })
+    }
+
+    /// Legacy spawn with string input (for backward compatibility / child spawns).
+    ///
+    /// This always uses the short-lived execution model regardless of IO context.
+    pub async fn spawn_with_input(
         &self,
         manifest: AgentManifest,
         input: String,
@@ -158,13 +341,11 @@ impl Kernel {
                     message: "global concurrency limit reached".to_string(),
                 })?;
 
-        // Build tool registry for this agent
         let agent_tools = self.inner.tool_registry.filtered(&manifest.tools);
         let child_limit = manifest
             .max_children
             .unwrap_or(self.config.default_child_limit);
 
-        // Delegate to shared spawn logic
         use crate::handle::scoped::{SpawnParams, SpawnPermits};
         let handle = KernelInner::spawn_process(
             Arc::clone(&self.inner),
@@ -185,10 +366,9 @@ impl Kernel {
         Ok(handle)
     }
 
-    /// Spawn a named agent by looking up its manifest.
+    /// Spawn a named agent by looking up its manifest (legacy string input).
     ///
-    /// Convenience method that resolves a manifest name to an `AgentManifest`
-    /// and delegates to [`spawn`](Self::spawn).
+    /// Uses the short-lived execution model (`spawn_with_input`).
     pub async fn spawn_named(
         &self,
         agent_name: &str,
@@ -206,7 +386,7 @@ impl Kernel {
             })?
             .clone();
 
-        self.spawn(manifest, input, principal, session_id, parent_id)
+        self.spawn_with_input(manifest, input, principal, session_id, parent_id)
             .await
     }
 
@@ -322,10 +502,10 @@ mod tests {
         let principal = Principal::user("test-user");
         let session_id = SessionId::new("test-session");
 
-        // spawn will fail because there's no real LLM provider,
+        // spawn_with_input will fail because there's no real LLM provider,
         // but the process should be created in the table
         let handle = kernel
-            .spawn(manifest, "hello".to_string(), principal, session_id, None)
+            .spawn_with_input(manifest, "hello".to_string(), principal, session_id, None)
             .await;
 
         // The spawn itself should succeed (it just launches a task)
@@ -337,7 +517,6 @@ mod tests {
         assert!(process.is_some());
         let process = process.unwrap();
         assert_eq!(process.manifest.name, "test-agent");
-        // It's running (or may have already failed due to no LLM, but was created as Running)
     }
 
     #[tokio::test]
@@ -348,7 +527,7 @@ mod tests {
 
         // Spawn 2 agents (global limit is 2)
         let h1 = kernel
-            .spawn(
+            .spawn_with_input(
                 test_manifest("a1"),
                 "task 1".to_string(),
                 principal.clone(),
@@ -359,7 +538,7 @@ mod tests {
         assert!(h1.is_ok());
 
         let h2 = kernel
-            .spawn(
+            .spawn_with_input(
                 test_manifest("a2"),
                 "task 2".to_string(),
                 principal.clone(),
@@ -371,7 +550,7 @@ mod tests {
 
         // Third spawn should fail (global limit reached)
         let h3 = kernel
-            .spawn(
+            .spawn_with_input(
                 test_manifest("a3"),
                 "task 3".to_string(),
                 principal,
@@ -432,7 +611,7 @@ mod tests {
         let session_id = SessionId::new("test-session");
 
         let parent_handle = kernel
-            .spawn(
+            .spawn_with_input(
                 test_manifest("parent"),
                 "parent task".to_string(),
                 principal.clone(),
@@ -443,7 +622,7 @@ mod tests {
             .unwrap();
 
         let child_handle = kernel
-            .spawn(
+            .spawn_with_input(
                 test_manifest("child"),
                 "child task".to_string(),
                 principal,
