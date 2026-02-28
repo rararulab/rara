@@ -18,7 +18,7 @@
 //! it calls [`ContactTracker::track`] to record the username-to-chat_id
 //! mapping. This enables outbound notification routing: given a username,
 //! the application can look up the corresponding chat ID and send a
-//! notification via [`ChannelAdapter::send`].
+//! notification via [`EgressAdapter::send`].
 //!
 //! The trait is defined here (in the channels crate) so that it has no
 //! database dependencies. Implementors typically persist the mapping in

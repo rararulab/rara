@@ -36,7 +36,6 @@
 //! │              │     │                    │
 //! │              │     └── loop             │
 //! │              │                          │
-//! │  send()  ─► bot.send_message() (HTML)   │
 //! │  stop()  ─► shutdown signal             │
 //! └─────────────────────────────────────────┘
 //! ```
@@ -52,7 +51,7 @@ use rara_kernel::{
         adapter::ChannelAdapter,
         command::{CallbackHandler, CommandHandler},
         types::{
-            AgentPhase, ChannelType, InlineButton, MessageContent, OutboundMessage, ReplyMarkup,
+            AgentPhase, ChannelType, InlineButton, MessageContent, ReplyMarkup,
         },
     },
     error::KernelError,
@@ -63,11 +62,11 @@ use rara_kernel::{
     },
 };
 use teloxide::{
-    payloads::{EditMessageTextSetters, GetUpdatesSetters, SendMessageSetters, SendPhotoSetters},
+    payloads::{EditMessageTextSetters, GetUpdatesSetters, SendMessageSetters},
     requests::{Request, Requester},
     types::{
-        AllowedUpdate, ChatAction, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile,
-        MessageId, ParseMode, ReplyParameters, Update, UpdateKind,
+        AllowedUpdate, ChatAction, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, MessageId,
+        ParseMode, ReplyParameters, Update, UpdateKind,
     },
 };
 use tokio::sync::{RwLock, watch};
@@ -406,81 +405,6 @@ impl ChannelAdapter for TelegramAdapter {
         });
 
         info!("telegram adapter started");
-        Ok(())
-    }
-
-    async fn send(&self, message: OutboundMessage) -> Result<(), KernelError> {
-        let chat_id = parse_chat_id(&message.session_key)?;
-
-        // Case 1: Edit an existing message.
-        if let Some(ref edit_id) = message.edit_message_id {
-            let msg_id = parse_message_id(edit_id)?;
-            let html = crate::telegram::markdown::markdown_to_telegram_html(&message.content);
-            let mut req = self
-                .bot
-                .edit_message_text(ChatId(chat_id), msg_id, &html)
-                .parse_mode(ParseMode::Html);
-            if let Some(keyboard) = convert_reply_markup(&message.reply_markup) {
-                req = req.reply_markup(keyboard);
-            }
-            req.await.map_err(|e| KernelError::Other {
-                message: format!("failed to edit telegram message: {e}").into(),
-            })?;
-            return Ok(());
-        }
-
-        // Case 2: Send a photo.
-        if let Some(ref photo) = message.photo {
-            let file_name = mime_to_filename(&photo.mime_type);
-            let input_file = InputFile::memory(photo.data.clone()).file_name(file_name);
-            let mut req = self.bot.send_photo(ChatId(chat_id), input_file);
-            if let Some(ref caption) = photo.caption {
-                req = req.caption(caption).parse_mode(ParseMode::Html);
-            }
-            if let Some(ref reply_id) = message.reply_to_message_id {
-                if let Ok(msg_id) = parse_message_id(reply_id) {
-                    req = req.reply_parameters(ReplyParameters::new(msg_id));
-                }
-            }
-            if let Some(keyboard) = convert_reply_markup(&message.reply_markup) {
-                req = req.reply_markup(keyboard);
-            }
-            req.await.map_err(|e| KernelError::Other {
-                message: format!("failed to send telegram photo: {e}").into(),
-            })?;
-            return Ok(());
-        }
-
-        // Case 3: Send text message (with optional reply-to and keyboard).
-        let html = crate::telegram::markdown::markdown_to_telegram_html(&message.content);
-        let chunks = crate::telegram::markdown::chunk_message(&html, 4096);
-
-        for (i, chunk) in chunks.iter().enumerate() {
-            let mut req = self
-                .bot
-                .send_message(ChatId(chat_id), chunk)
-                .parse_mode(ParseMode::Html);
-
-            // Attach reply-to only on the first chunk.
-            if i == 0 {
-                if let Some(ref reply_id) = message.reply_to_message_id {
-                    if let Ok(msg_id) = parse_message_id(reply_id) {
-                        req = req.reply_parameters(ReplyParameters::new(msg_id));
-                    }
-                }
-            }
-
-            // Attach keyboard only on the last chunk.
-            if i == chunks.len() - 1 {
-                if let Some(keyboard) = convert_reply_markup(&message.reply_markup) {
-                    req = req.reply_markup(keyboard);
-                }
-            }
-
-            req.await.map_err(|e| KernelError::Other {
-                message: format!("failed to send telegram message: {e}").into(),
-            })?;
-        }
         Ok(())
     }
 
