@@ -30,7 +30,6 @@ rara-codex-oauth = { workspace = true }
 rara-coding-task = { workspace = true }
 rara-kernel = { workspace = true }
 rara-composio = { workspace = true }
-rara-domain-chat = { workspace = true }
 rara-domain-shared = { workspace = true }
 rara-mcp = { workspace = true }
 rara-memory = { workspace = true, features = ["k8s"] }

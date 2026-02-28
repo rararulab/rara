@@ -11,7 +11,7 @@ use rara_kernel::{
 };
 use rara_sessions::types::ChatMessage;
 
-use crate::message_utils::to_chat_message;
+use crate::chat::message_utils::to_chat_message;
 
 /// Effect returned when compaction occurs, so the caller can persist.
 pub struct CompactionEffect {

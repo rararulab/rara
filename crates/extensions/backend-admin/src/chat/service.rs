@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use rara_kernel::{runner::UserContent, tool::ToolRegistry};
 use chrono::Utc;
-use crate::agent::ChatAgent;
+use crate::chat::agent::ChatAgent;
 use rara_domain_shared::settings::model::Settings;
 use rara_sessions::{
     repository::SessionRepository,
@@ -36,7 +36,7 @@ use tokio::sync::{mpsc, watch};
 use tracing::{info, instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::{
+use crate::chat::{
     error::ChatError,
     model_catalog::{ChatModel, ModelCatalog},
     stream::ChatStreamEvent,
