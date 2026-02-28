@@ -36,6 +36,8 @@
 //! ```
 
 pub mod bus;
+pub mod egress;
+pub mod ingress;
 pub mod memory_bus;
 pub mod scheduler;
 pub mod stream;
