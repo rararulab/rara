@@ -39,7 +39,6 @@
 //! ## Core Types
 //!
 //! - [`ChannelMessage`](types::ChannelMessage) — unified inbound message
-//! - [`OutboundMessage`](types::OutboundMessage) — response to send back
 //! - [`ChannelType`](types::ChannelType) — platform identifier
 //! - [`AgentPhase`](types::AgentPhase) — lifecycle phase for UX feedback
 //!

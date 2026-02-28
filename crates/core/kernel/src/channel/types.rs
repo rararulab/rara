@@ -334,34 +334,6 @@ pub struct ChannelMessage {
 }
 
 // ---------------------------------------------------------------------------
-// OutboundMessage
-// ---------------------------------------------------------------------------
-
-/// A message to send back through a channel.
-///
-/// The adapter is responsible for formatting the content appropriately
-/// for its platform (e.g. Telegram HTML, Slack mrkdwn, plain text).
-#[derive(Debug, Clone)]
-pub struct OutboundMessage {
-    /// Target channel.
-    pub channel_type:        ChannelType,
-    /// Target session.
-    pub session_key:         String,
-    /// Response content (markdown-ish, adapter formats for platform).
-    pub content:             String,
-    /// Optional metadata for platform-specific features.
-    pub metadata:            HashMap<String, serde_json::Value>,
-    /// Optional photo to attach (bytes + MIME type).
-    pub photo:               Option<PhotoAttachment>,
-    /// Optional inline keyboard / buttons.
-    pub reply_markup:        Option<ReplyMarkup>,
-    /// Edit an existing message instead of sending a new one.
-    pub edit_message_id:     Option<String>,
-    /// Reply to a specific message.
-    pub reply_to_message_id: Option<String>,
-}
-
-// ---------------------------------------------------------------------------
 // AgentPhase
 // ---------------------------------------------------------------------------
 
@@ -593,22 +565,6 @@ mod tests {
             raw:  "/search rust developer @ remote".to_owned(),
         };
         assert_eq!(cmd.name, "search");
-    }
-
-    #[test]
-    fn outbound_message_defaults() {
-        let msg = OutboundMessage {
-            channel_type:        ChannelType::Telegram,
-            session_key:         "tg:123".to_owned(),
-            content:             "hello".to_owned(),
-            metadata:            Default::default(),
-            photo:               None,
-            reply_markup:        None,
-            edit_message_id:     None,
-            reply_to_message_id: None,
-        };
-        assert!(msg.photo.is_none());
-        assert!(msg.reply_markup.is_none());
     }
 
     #[test]
