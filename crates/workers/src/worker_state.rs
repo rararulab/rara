@@ -65,9 +65,6 @@ pub struct AppState {
     // -- MCP --
     pub mcp_manager: rara_mcp::manager::mgr::McpManager,
 
-    // -- agent context --
-    pub agent_ctx: std::sync::Arc<dyn rara_kernel::agent_context::AgentContext>,
-
     // -- pipeline --
     pub pipeline_service: rara_backend_admin::pipeline::service::PipelineService,
 
@@ -337,18 +334,6 @@ impl AppState {
 
         let tools = Arc::new(tool_registry);
 
-        let agent_ctx: Arc<dyn rara_kernel::agent_context::AgentContext> =
-            Arc::new(crate::orchestrator::AgentContextImpl::new(
-                llm_provider.clone(),
-                tools.clone(),
-                mcp_manager.clone(),
-                skill_registry.clone(),
-                Some(Arc::clone(&memory_manager)),
-                Some(recall_engine),
-                settings_svc.subscribe(),
-                prompt_repo.clone(),
-            ));
-
         let kernel_session_repo: Arc<dyn rara_kernel::session_manager::SessionRepository> =
             session_repo.clone();
         let session_repo: Arc<dyn rara_sessions::repository::SessionRepository> = session_repo;
@@ -407,7 +392,6 @@ impl AppState {
             agent_scheduler,
             skill_registry,
             mcp_manager,
-            agent_ctx,
             pipeline_service,
             coding_task_service,
             kernel,
