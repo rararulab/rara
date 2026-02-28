@@ -1,3 +1,17 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! Chat agent -- interactive conversation agent with memory and MCP tools.
 
 use std::sync::Arc;
@@ -125,10 +139,7 @@ impl ChatAgent {
         let (effective_history, compaction) =
             if self.ctx.needs_compaction(history_tokens, context_length) {
                 let history_text = format_history_as_text(history);
-                let summary_text = self
-                    .ctx
-                    .summarize_history(&history_text, model)
-                    .await?;
+                let summary_text = self.ctx.summarize_history(&history_text, model).await?;
                 let summary_msg =
                     ChatMessage::assistant(format!("[Conversation Summary]\n{summary_text}"));
                 let effect = CompactionEffect {
@@ -177,12 +188,9 @@ impl ChatAgent {
 
         // 5. Convert history and build runner
         let chat_history = effective_history.iter().map(to_chat_message).collect();
-        let runner = self.ctx.build_runner(
-            model.to_owned(),
-            system_prompt,
-            user_content,
-            chat_history,
-        );
+        let runner =
+            self.ctx
+                .build_runner(model.to_owned(), system_prompt, user_content, chat_history);
 
         Ok(PrepareResult {
             runner,

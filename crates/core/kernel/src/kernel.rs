@@ -44,30 +44,29 @@ use dashmap::DashMap;
 use tokio::sync::Semaphore;
 use tracing::info;
 
-use crate::error::{KernelError, Result};
-use crate::event::EventBus;
-use crate::guard::Guard;
-use crate::handle::scoped::KernelInner;
-use crate::handle::AgentHandle;
-use crate::io::bus::OutboundBus;
-use crate::io::stream::StreamHub;
-use crate::io::types::InboundMessage;
-use crate::memory::Memory;
-use crate::process::manifest_loader::ManifestLoader;
-use crate::process::principal::Principal;
-use crate::process::user::UserStore;
-use crate::process::{AgentId, AgentManifest, ProcessMessage, ProcessTable, SessionId};
-use crate::provider::LlmProviderLoaderRef;
-use crate::session_manager::SessionManager;
-use crate::tool::ToolRegistry;
+use crate::{
+    error::{KernelError, Result},
+    event::EventBus,
+    guard::Guard,
+    handle::{AgentHandle, scoped::KernelInner},
+    io::{bus::OutboundBus, stream::StreamHub, types::InboundMessage},
+    memory::Memory,
+    process::{
+        AgentId, AgentManifest, ProcessMessage, ProcessTable, SessionId,
+        manifest_loader::ManifestLoader, principal::Principal, user::UserStore,
+    },
+    provider::LlmProviderLoaderRef,
+    session_manager::SessionManager,
+    tool::ToolRegistry,
+};
 
 /// Kernel configuration.
 #[derive(Debug, Clone)]
 pub struct KernelConfig {
     /// Maximum number of concurrent agent processes globally.
-    pub max_concurrency: usize,
+    pub max_concurrency:        usize,
     /// Default maximum number of children per agent.
-    pub default_child_limit: usize,
+    pub default_child_limit:    usize,
     /// Default max LLM iterations for spawned agents.
     pub default_max_iterations: usize,
 }
@@ -75,8 +74,8 @@ pub struct KernelConfig {
 impl Default for KernelConfig {
     fn default() -> Self {
         Self {
-            max_concurrency: 16,
-            default_child_limit: 8,
+            max_concurrency:        16,
+            default_child_limit:    8,
             default_max_iterations: 25,
         }
     }
@@ -88,7 +87,7 @@ impl Default for KernelConfig {
 /// concurrency limits, and provides `spawn()` as the primary entry point.
 pub struct Kernel {
     /// Shared kernel internals (process table, components, etc.).
-    inner: Arc<KernelInner>,
+    inner:  Arc<KernelInner>,
     /// Kernel configuration.
     config: KernelConfig,
 }
@@ -153,9 +152,10 @@ impl Kernel {
 
     /// Spawn a long-lived agent process for a session.
     ///
-    /// If I/O context is configured (session_manager, stream_hub, outbound_bus),
-    /// spawns a long-lived process_loop that receives messages via a mailbox.
-    /// The first message (from `inbound`) is automatically delivered.
+    /// If I/O context is configured (session_manager, stream_hub,
+    /// outbound_bus), spawns a long-lived process_loop that receives
+    /// messages via a mailbox. The first message (from `inbound`) is
+    /// automatically delivered.
     ///
     /// If I/O context is NOT configured, falls back to the legacy short-lived
     /// model where the agent runs once and completes.
@@ -178,14 +178,14 @@ impl Kernel {
         self.inner.validate_principal(&principal).await?;
 
         // Acquire global semaphore
-        let _global_permit =
-            self.inner
-                .global_semaphore
-                .clone()
-                .try_acquire_owned()
-                .map_err(|_| KernelError::SpawnLimitReached {
-                    message: "global concurrency limit reached".to_string(),
-                })?;
+        let _global_permit = self
+            .inner
+            .global_semaphore
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| KernelError::SpawnLimitReached {
+                message: "global concurrency limit reached".to_string(),
+            })?;
 
         // Check if we have IO context for long-lived process
         if let (Some(session_manager), Some(stream_hub), Some(outbound_bus)) = (
@@ -246,8 +246,9 @@ impl Kernel {
         outbound_bus: Arc<dyn OutboundBus>,
         _global_permit: tokio::sync::OwnedSemaphorePermit,
     ) -> Result<AgentHandle> {
-        use crate::process::{AgentEnv, AgentProcess, ProcessState};
         use jiff::Timestamp;
+
+        use crate::process::{AgentEnv, AgentProcess, ProcessState};
 
         let agent_id = AgentId::new();
         let (mailbox_tx, mailbox_rx) = tokio::sync::mpsc::channel::<ProcessMessage>(64);
@@ -304,7 +305,7 @@ impl Kernel {
 
             // Send a terminal result (the last result stored in process table)
             let _ = result_tx.send(crate::process::AgentResult {
-                output: "process loop ended".to_string(),
+                output:     "process loop ended".to_string(),
                 iterations: 0,
                 tool_calls: 0,
             });
@@ -317,9 +318,11 @@ impl Kernel {
         })
     }
 
-    /// Legacy spawn with string input (for backward compatibility / child spawns).
+    /// Legacy spawn with string input (for backward compatibility / child
+    /// spawns).
     ///
-    /// This always uses the short-lived execution model regardless of IO context.
+    /// This always uses the short-lived execution model regardless of IO
+    /// context.
     pub async fn spawn_with_input(
         &self,
         manifest: AgentManifest,
@@ -332,14 +335,14 @@ impl Kernel {
         self.inner.validate_principal(&principal).await?;
 
         // Acquire global semaphore
-        let global_permit =
-            self.inner
-                .global_semaphore
-                .clone()
-                .try_acquire_owned()
-                .map_err(|_| KernelError::SpawnLimitReached {
-                    message: "global concurrency limit reached".to_string(),
-                })?;
+        let global_permit = self
+            .inner
+            .global_semaphore
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| KernelError::SpawnLimitReached {
+                message: "global concurrency limit reached".to_string(),
+            })?;
 
         let agent_tools = self.inner.tool_registry.filtered(&manifest.tools);
         let child_limit = manifest
@@ -391,48 +394,39 @@ impl Kernel {
     }
 
     /// Access the process table for querying.
-    pub fn process_table(&self) -> &ProcessTable {
-        &self.inner.process_table
-    }
+    pub fn process_table(&self) -> &ProcessTable { &self.inner.process_table }
 
     /// Access the manifest loader for looking up named manifests.
-    pub fn manifest_loader(&self) -> &ManifestLoader {
-        &self.inner.manifest_loader
-    }
+    pub fn manifest_loader(&self) -> &ManifestLoader { &self.inner.manifest_loader }
 
     /// Access the tool registry.
-    pub fn tool_registry(&self) -> &Arc<ToolRegistry> {
-        &self.inner.tool_registry
-    }
+    pub fn tool_registry(&self) -> &Arc<ToolRegistry> { &self.inner.tool_registry }
 
     /// Access the event bus.
-    pub fn event_bus(&self) -> &Arc<dyn EventBus> {
-        &self.inner.event_bus
-    }
+    pub fn event_bus(&self) -> &Arc<dyn EventBus> { &self.inner.event_bus }
 
     /// Access the memory subsystem.
-    pub fn memory(&self) -> &Arc<dyn Memory> {
-        &self.inner.memory
-    }
+    pub fn memory(&self) -> &Arc<dyn Memory> { &self.inner.memory }
 
     /// Access the kernel config.
-    pub fn config(&self) -> &KernelConfig {
-        &self.config
-    }
+    pub fn config(&self) -> &KernelConfig { &self.config }
 
-    /// Access the shared KernelInner (for constructing ScopedKernelHandles externally).
-    pub(crate) fn inner(&self) -> &Arc<KernelInner> {
-        &self.inner
-    }
+    /// Access the shared KernelInner (for constructing ScopedKernelHandles
+    /// externally).
+    pub(crate) fn inner(&self) -> &Arc<KernelInner> { &self.inner }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::defaults::noop::{NoopEventBus, NoopGuard, NoopMemory};
-    use crate::defaults::noop_user_store::NoopUserStore;
-    use crate::process::principal::Principal;
-    use crate::provider::EnvLlmProviderLoader;
+    use crate::{
+        defaults::{
+            noop::{NoopEventBus, NoopGuard, NoopMemory},
+            noop_user_store::NoopUserStore,
+        },
+        process::principal::Principal,
+        provider::EnvLlmProviderLoader,
+    };
 
     fn make_test_kernel(max_concurrency: usize, child_limit: usize) -> Kernel {
         let config = KernelConfig {
@@ -458,15 +452,15 @@ mod tests {
 
     fn test_manifest(name: &str) -> AgentManifest {
         AgentManifest {
-            name: name.to_string(),
-            description: format!("Test agent: {name}"),
-            model: "test-model".to_string(),
-            system_prompt: "You are a test agent.".to_string(),
-            provider_hint: None,
+            name:           name.to_string(),
+            description:    format!("Test agent: {name}"),
+            model:          "test-model".to_string(),
+            system_prompt:  "You are a test agent.".to_string(),
+            provider_hint:  None,
             max_iterations: Some(5),
-            tools: vec![],
-            max_children: None,
-            metadata: serde_json::Value::Null,
+            tools:          vec![],
+            max_children:   None,
+            metadata:       serde_json::Value::Null,
         }
     }
 
@@ -601,7 +595,12 @@ mod tests {
             )
             .await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("manifest not found"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("manifest not found")
+        );
     }
 
     #[tokio::test]
@@ -635,9 +634,7 @@ mod tests {
         let child_process = kernel.process_table().get(child_handle.agent_id).unwrap();
         assert_eq!(child_process.parent_id, Some(parent_handle.agent_id));
 
-        let children = kernel
-            .process_table()
-            .children_of(parent_handle.agent_id);
+        let children = kernel.process_table().children_of(parent_handle.agent_id);
         assert_eq!(children.len(), 1);
         assert_eq!(children[0].agent_id, child_handle.agent_id);
     }

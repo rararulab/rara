@@ -26,19 +26,19 @@
 //! Channel adapters only need to implement [`InboundSink::ingest`] — all
 //! coordination lives here.
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::channel::types::{ChannelType, MessageContent};
-use crate::io::bus::InboundBus;
-use crate::io::types::{
-    BusError, ChannelSource, InboundMessage, IngestError, MessageId, ReplyContext,
+use crate::{
+    channel::types::{ChannelType, MessageContent},
+    io::{
+        bus::InboundBus,
+        types::{BusError, ChannelSource, InboundMessage, IngestError, MessageId, ReplyContext},
+    },
+    process::{SessionId, principal::UserId},
 };
-use crate::process::principal::UserId;
-use crate::process::SessionId;
 
 // ---------------------------------------------------------------------------
 // RawPlatformMessage
@@ -52,19 +52,19 @@ use crate::process::SessionId;
 #[derive(Debug)]
 pub struct RawPlatformMessage {
     /// Which channel this message arrived from.
-    pub channel_type: ChannelType,
+    pub channel_type:        ChannelType,
     /// Platform-specific message ID (for dedup / reply mapping).
     pub platform_message_id: Option<String>,
     /// Platform-specific user identifier.
-    pub platform_user_id: String,
+    pub platform_user_id:    String,
     /// Platform-specific chat/thread identifier.
-    pub platform_chat_id: Option<String>,
+    pub platform_chat_id:    Option<String>,
     /// Message content (text or multimodal).
-    pub content: MessageContent,
+    pub content:             MessageContent,
     /// Optional reply/thread context for egress routing.
-    pub reply_context: Option<ReplyContext>,
+    pub reply_context:       Option<ReplyContext>,
     /// Arbitrary adapter-specific metadata.
-    pub metadata: HashMap<String, Value>,
+    pub metadata:            HashMap<String, Value>,
 }
 
 // ---------------------------------------------------------------------------
@@ -131,8 +131,8 @@ pub trait SessionResolver: Send + Sync + 'static {
 /// publisher.
 pub struct IngressPipeline {
     identity_resolver: Arc<dyn IdentityResolver>,
-    session_resolver: Arc<dyn SessionResolver>,
-    publisher: Arc<dyn InboundBus>,
+    session_resolver:  Arc<dyn SessionResolver>,
+    publisher:         Arc<dyn InboundBus>,
 }
 
 impl IngressPipeline {
@@ -173,10 +173,10 @@ impl InboundSink for IngressPipeline {
         let msg = InboundMessage {
             id: MessageId::new(),
             source: ChannelSource {
-                channel_type: raw.channel_type,
+                channel_type:        raw.channel_type,
                 platform_message_id: raw.platform_message_id,
-                platform_user_id: raw.platform_user_id,
-                platform_chat_id: raw.platform_chat_id,
+                platform_user_id:    raw.platform_user_id,
+                platform_chat_id:    raw.platform_chat_id,
             },
             user: user_id,
             session_id,
@@ -209,21 +209,21 @@ mod tests {
 
     struct MockIdentityResolver {
         result: Mutex<Result<UserId, IngestError>>,
-        calls: Mutex<Vec<(ChannelType, String, Option<String>)>>,
+        calls:  Mutex<Vec<(ChannelType, String, Option<String>)>>,
     }
 
     impl MockIdentityResolver {
         fn succeeding(user_id: &str) -> Self {
             Self {
                 result: Mutex::new(Ok(UserId(user_id.to_string()))),
-                calls: Mutex::new(Vec::new()),
+                calls:  Mutex::new(Vec::new()),
             }
         }
 
         fn failing(err: IngestError) -> Self {
             Self {
                 result: Mutex::new(Err(err)),
-                calls: Mutex::new(Vec::new()),
+                calls:  Mutex::new(Vec::new()),
             }
         }
     }
@@ -291,13 +291,13 @@ mod tests {
 
     fn raw_message(text: &str) -> RawPlatformMessage {
         RawPlatformMessage {
-            channel_type: ChannelType::Telegram,
+            channel_type:        ChannelType::Telegram,
             platform_message_id: Some("msg-42".to_string()),
-            platform_user_id: "tg-user-1".to_string(),
-            platform_chat_id: Some("tg-chat-1".to_string()),
-            content: MessageContent::Text(text.to_string()),
-            reply_context: None,
-            metadata: HashMap::new(),
+            platform_user_id:    "tg-user-1".to_string(),
+            platform_chat_id:    Some("tg-chat-1".to_string()),
+            content:             MessageContent::Text(text.to_string()),
+            reply_context:       None,
+            metadata:            HashMap::new(),
         }
     }
 
@@ -326,10 +326,7 @@ mod tests {
         assert_eq!(messages[0].user, UserId("user-1".to_string()));
         assert_eq!(messages[0].session_id, SessionId::new("session-1"));
         assert_eq!(messages[0].source.channel_type, ChannelType::Telegram);
-        assert_eq!(
-            messages[0].source.platform_user_id,
-            "tg-user-1".to_string()
-        );
+        assert_eq!(messages[0].source.platform_user_id, "tg-user-1".to_string());
 
         // Verify identity resolver was called correctly
         let calls = identity.calls.lock().unwrap();

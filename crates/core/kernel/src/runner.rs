@@ -30,7 +30,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info, trace, warn};
 
 use crate::{
-    error::{is_fallback_eligible, is_retryable_provider_error, KernelError, Result},
+    error::{KernelError, Result, is_fallback_eligible, is_retryable_provider_error},
     model::ModelCapabilities,
     provider::LlmProviderLoaderRef,
     tool::ToolRegistry,
@@ -547,9 +547,10 @@ impl AgentRunner {
         })
     }
 
-    /// Streaming variant of [`Self::run`]. Spawns the agent loop in a background
-    /// task and returns a channel receiver yielding [`RunnerEvent`]s in
-    /// real-time, including incremental text/reasoning deltas.
+    /// Streaming variant of [`Self::run`]. Spawns the agent loop in a
+    /// background task and returns a channel receiver yielding
+    /// [`RunnerEvent`]s in real-time, including incremental text/reasoning
+    /// deltas.
     pub fn run_streaming(self, tools: Arc<ToolRegistry>) -> mpsc::Receiver<RunnerEvent> {
         let (tx, rx) = mpsc::channel(128);
         tokio::spawn(async move {

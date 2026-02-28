@@ -30,18 +30,22 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
-use crate::channel::types::MessageContent;
-use crate::io::bus::OutboundBus;
-use crate::io::stream::{StreamEvent, StreamHub};
-use crate::io::types::{MessageId, OutboundEnvelope, OutboundPayload, OutboundRouting};
-use crate::process::{
-    AgentId, AgentManifest, AgentResult, ProcessMessage, ProcessState, ProcessTable, SessionId,
-    Signal,
+use crate::{
+    channel::types::MessageContent,
+    io::{
+        bus::OutboundBus,
+        stream::{StreamEvent, StreamHub},
+        types::{MessageId, OutboundEnvelope, OutboundPayload, OutboundRouting},
+    },
+    process::{
+        AgentId, AgentManifest, AgentResult, ProcessMessage, ProcessState, ProcessTable, SessionId,
+        Signal,
+    },
+    provider::LlmProviderLoaderRef,
+    runner::{AgentRunner, RunnerEvent, UserContent},
+    session_manager::SessionManager,
+    tool::ToolRegistry,
 };
-use crate::provider::LlmProviderLoaderRef;
-use crate::runner::{AgentRunner, RunnerEvent, UserContent};
-use crate::session_manager::SessionManager;
-use crate::tool::ToolRegistry;
 
 /// Run the long-lived process loop for an agent.
 ///
@@ -71,10 +75,7 @@ pub async fn process_loop(
                 let _ = process_table.set_state(agent_id, ProcessState::Running);
 
                 // 1. Persist user message
-                if let Err(e) = session_manager
-                    .append_message(&session_id, &inbound)
-                    .await
-                {
+                if let Err(e) = session_manager.append_message(&session_id, &inbound).await {
                     warn!(error = %e, "failed to persist inbound message");
                 }
 
@@ -121,7 +122,7 @@ pub async fn process_loop(
                         RunnerEvent::ToolCallStart { id, name, .. } => {
                             stream_handle.emit(StreamEvent::ToolCallStart {
                                 name: name.clone(),
-                                id: id.clone(),
+                                id:   id.clone(),
                             });
                         }
                         RunnerEvent::ToolCallEnd { id, .. } => {
@@ -144,20 +145,19 @@ pub async fn process_loop(
                         }
                         RunnerEvent::Error(err_msg) => {
                             stream_hub.close(stream_handle.stream_id());
-                            let _ =
-                                process_table.set_state(agent_id, ProcessState::Failed);
+                            let _ = process_table.set_state(agent_id, ProcessState::Failed);
                             // Publish error to outbound
                             let envelope = OutboundEnvelope {
-                                id: MessageId::new(),
+                                id:          MessageId::new(),
                                 in_reply_to: inbound.id.clone(),
-                                user: inbound.user.clone(),
-                                session_id: session_id.clone(),
-                                routing: OutboundRouting::BroadcastAll,
-                                payload: OutboundPayload::Error {
-                                    code: "agent_error".to_string(),
+                                user:        inbound.user.clone(),
+                                session_id:  session_id.clone(),
+                                routing:     OutboundRouting::BroadcastAll,
+                                payload:     OutboundPayload::Error {
+                                    code:    "agent_error".to_string(),
                                     message: err_msg,
                                 },
-                                timestamp: jiff::Timestamp::now(),
+                                timestamp:   jiff::Timestamp::now(),
                             };
                             if let Err(e) = outbound_bus.publish(envelope).await {
                                 error!(%e, "failed to publish error");
@@ -199,16 +199,16 @@ pub async fn process_loop(
 
                     // Publish reply
                     let envelope = OutboundEnvelope {
-                        id: MessageId::new(),
+                        id:          MessageId::new(),
                         in_reply_to: inbound.id.clone(),
-                        user: inbound.user.clone(),
-                        session_id: session_id.clone(),
-                        routing: OutboundRouting::BroadcastAll,
-                        payload: OutboundPayload::Reply {
-                            content: MessageContent::Text(final_text),
+                        user:        inbound.user.clone(),
+                        session_id:  session_id.clone(),
+                        routing:     OutboundRouting::BroadcastAll,
+                        payload:     OutboundPayload::Reply {
+                            content:     MessageContent::Text(final_text),
                             attachments: vec![],
                         },
-                        timestamp: jiff::Timestamp::now(),
+                        timestamp:   jiff::Timestamp::now(),
                     };
                     if let Err(e) = outbound_bus.publish(envelope).await {
                         error!(%e, "failed to publish reply");
@@ -252,53 +252,55 @@ pub async fn process_loop(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::{collections::HashMap, sync::Arc};
 
     use tokio::sync::mpsc;
 
     use super::*;
-    use crate::channel::types::{ChannelType, MessageContent};
-    use crate::defaults::noop::{NoopSessionRepository};
-    use crate::io::memory_bus::InMemoryOutboundBus;
-    use crate::io::stream::StreamHub;
-    use crate::io::types::{ChannelSource, InboundMessage, MessageId};
-    use crate::process::principal::UserId;
-    use crate::process::{
-        AgentEnv, AgentManifest, AgentProcess, ProcessState, ProcessTable, SessionId,
+    use crate::{
+        channel::types::{ChannelType, MessageContent},
+        defaults::noop::NoopSessionRepository,
+        io::{
+            memory_bus::InMemoryOutboundBus,
+            stream::StreamHub,
+            types::{ChannelSource, InboundMessage, MessageId},
+        },
+        process::{
+            AgentEnv, AgentManifest, AgentProcess, ProcessState, ProcessTable, SessionId,
+            principal::{Principal, UserId},
+        },
+        session_manager::SessionManager,
     };
-    use crate::process::principal::Principal;
-    use crate::session_manager::SessionManager;
 
     fn test_manifest() -> AgentManifest {
         AgentManifest {
-            name: "test-agent".to_string(),
-            description: "Test agent".to_string(),
-            model: "test-model".to_string(),
-            system_prompt: "You are a test agent.".to_string(),
-            provider_hint: None,
+            name:           "test-agent".to_string(),
+            description:    "Test agent".to_string(),
+            model:          "test-model".to_string(),
+            system_prompt:  "You are a test agent.".to_string(),
+            provider_hint:  None,
             max_iterations: Some(5),
-            tools: vec![],
-            max_children: None,
-            metadata: serde_json::Value::Null,
+            tools:          vec![],
+            max_children:   None,
+            metadata:       serde_json::Value::Null,
         }
     }
 
     fn test_inbound(session: &str, text: &str) -> InboundMessage {
         InboundMessage {
-            id: MessageId::new(),
-            source: ChannelSource {
-                channel_type: ChannelType::Telegram,
+            id:            MessageId::new(),
+            source:        ChannelSource {
+                channel_type:        ChannelType::Telegram,
                 platform_message_id: None,
-                platform_user_id: "tg-user".to_string(),
-                platform_chat_id: None,
+                platform_user_id:    "tg-user".to_string(),
+                platform_chat_id:    None,
             },
-            user: UserId("u1".to_string()),
-            session_id: SessionId::new(session),
-            content: MessageContent::Text(text.to_string()),
+            user:          UserId("u1".to_string()),
+            session_id:    SessionId::new(session),
+            content:       MessageContent::Text(text.to_string()),
             reply_context: None,
-            timestamp: jiff::Timestamp::now(),
-            metadata: HashMap::new(),
+            timestamp:     jiff::Timestamp::now(),
+            metadata:      HashMap::new(),
         }
     }
 
@@ -323,9 +325,7 @@ mod tests {
         };
         process_table.insert(process);
 
-        let session_manager = Arc::new(SessionManager::new(
-            Arc::new(NoopSessionRepository),
-        ));
+        let session_manager = Arc::new(SessionManager::new(Arc::new(NoopSessionRepository)));
         let stream_hub = Arc::new(StreamHub::new(16));
         let outbound_bus = Arc::new(InMemoryOutboundBus::new(64));
         let llm_provider = Arc::new(crate::provider::EnvLlmProviderLoader::default())
@@ -349,16 +349,10 @@ mod tests {
         ));
 
         // Send a Kill signal
-        tx.send(ProcessMessage::Signal(Signal::Kill))
-            .await
-            .unwrap();
+        tx.send(ProcessMessage::Signal(Signal::Kill)).await.unwrap();
 
         // The loop should exit
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            handle,
-        )
-        .await;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
 
         assert!(result.is_ok(), "process loop should exit on Kill signal");
         assert!(result.unwrap().is_ok());
@@ -389,9 +383,7 @@ mod tests {
         };
         process_table.insert(process);
 
-        let session_manager = Arc::new(SessionManager::new(
-            Arc::new(NoopSessionRepository),
-        ));
+        let session_manager = Arc::new(SessionManager::new(Arc::new(NoopSessionRepository)));
         let stream_hub = Arc::new(StreamHub::new(16));
         let outbound_bus = Arc::new(InMemoryOutboundBus::new(64));
         let llm_provider = Arc::new(crate::provider::EnvLlmProviderLoader::default())
@@ -418,13 +410,12 @@ mod tests {
         drop(tx);
 
         // The loop should exit
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            handle,
-        )
-        .await;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
 
-        assert!(result.is_ok(), "process loop should exit when mailbox is dropped");
+        assert!(
+            result.is_ok(),
+            "process loop should exit when mailbox is dropped"
+        );
         assert!(result.unwrap().is_ok());
     }
 
@@ -449,9 +440,7 @@ mod tests {
         };
         process_table.insert(process);
 
-        let session_manager = Arc::new(SessionManager::new(
-            Arc::new(NoopSessionRepository),
-        ));
+        let session_manager = Arc::new(SessionManager::new(Arc::new(NoopSessionRepository)));
         let stream_hub = Arc::new(StreamHub::new(16));
         let outbound_bus = Arc::new(InMemoryOutboundBus::new(64));
         let llm_provider = Arc::new(crate::provider::EnvLlmProviderLoader::default())
@@ -479,7 +468,7 @@ mod tests {
         tx.send(ProcessMessage::ChildResult {
             child_id,
             result: AgentResult {
-                output: "child done".to_string(),
+                output:     "child done".to_string(),
                 iterations: 1,
                 tool_calls: 0,
             },
@@ -487,15 +476,9 @@ mod tests {
         .await
         .unwrap();
 
-        tx.send(ProcessMessage::Signal(Signal::Kill))
-            .await
-            .unwrap();
+        tx.send(ProcessMessage::Signal(Signal::Kill)).await.unwrap();
 
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            handle,
-        )
-        .await;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
 
         assert!(result.is_ok());
         assert!(result.unwrap().is_ok());

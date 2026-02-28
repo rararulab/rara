@@ -16,28 +16,22 @@
 
 use std::sync::Arc;
 
-use rara_kernel::defaults::broadcast_bus::BroadcastEventBus;
-use rara_kernel::defaults::noop::NoopMemory;
-use rara_kernel::defaults::noop_guard::NoopGuard;
-use rara_kernel::event::EventBus;
-use rara_kernel::guard::Guard;
-use rara_kernel::memory::Memory;
+use rara_kernel::{
+    defaults::{broadcast_bus::BroadcastEventBus, noop::NoopMemory, noop_guard::NoopGuard},
+    event::EventBus,
+    guard::Guard,
+    memory::Memory,
+};
 
 /// Default Memory implementation — `NoopMemory` (kernel layer does not persist;
 /// agents access memory through tools).
-pub fn default_memory() -> Arc<dyn Memory> {
-    Arc::new(NoopMemory)
-}
+pub fn default_memory() -> Arc<dyn Memory> { Arc::new(NoopMemory) }
 
 /// Default EventBus — `BroadcastEventBus` (tokio broadcast channel).
-pub fn default_event_bus() -> Arc<dyn EventBus> {
-    Arc::new(BroadcastEventBus::default())
-}
+pub fn default_event_bus() -> Arc<dyn EventBus> { Arc::new(BroadcastEventBus::default()) }
 
 /// Default Guard — `NoopGuard` (allows all operations, no approval).
-pub fn default_guard() -> Arc<dyn Guard> {
-    Arc::new(NoopGuard)
-}
+pub fn default_guard() -> Arc<dyn Guard> { Arc::new(NoopGuard) }
 
 /// Default UserStore — `NoopUserStore` (all users permitted, for testing).
 pub fn default_user_store() -> Arc<dyn rara_kernel::process::user::UserStore> {

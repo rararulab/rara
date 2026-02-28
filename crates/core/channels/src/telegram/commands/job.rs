@@ -14,15 +14,16 @@
 
 //! Job discovery commands: `/search` and `/jd`.
 
-use std::fmt::Write;
-use std::sync::Arc;
+use std::{fmt::Write, sync::Arc};
 
 use async_trait::async_trait;
-use rara_kernel::channel::command::{
-    CommandContext, CommandDefinition, CommandHandler, CommandInfo, CommandResult,
+use rara_kernel::{
+    channel::{
+        command::{CommandContext, CommandDefinition, CommandHandler, CommandInfo, CommandResult},
+        types::InlineButton,
+    },
+    error::KernelError,
 };
-use rara_kernel::channel::types::InlineButton;
-use rara_kernel::error::KernelError;
 
 use super::client::{BotServiceClient, DiscoveryJob};
 
@@ -32,9 +33,7 @@ pub struct JobCommandHandler {
 }
 
 impl JobCommandHandler {
-    pub fn new(client: Arc<dyn BotServiceClient>) -> Self {
-        Self { client }
-    }
+    pub fn new(client: Arc<dyn BotServiceClient>) -> Self { Self { client } }
 }
 
 #[async_trait]
@@ -42,14 +41,14 @@ impl CommandHandler for JobCommandHandler {
     fn commands(&self) -> Vec<CommandDefinition> {
         vec![
             CommandDefinition {
-                name: "search".to_owned(),
+                name:        "search".to_owned(),
                 description: "Search for jobs".to_owned(),
-                usage: Some("/search <keywords> [@ location]".to_owned()),
+                usage:       Some("/search <keywords> [@ location]".to_owned()),
             },
             CommandDefinition {
-                name: "jd".to_owned(),
+                name:        "jd".to_owned(),
                 description: "Parse a Job Description".to_owned(),
-                usage: Some("/jd <text>".to_owned()),
+                usage:       Some("/jd <text>".to_owned()),
             },
         ]
     }
@@ -84,8 +83,7 @@ impl JobCommandHandler {
         let args = args.trim();
         if args.is_empty() {
             return Ok(CommandResult::Text(
-                "Usage: /search <keywords> [@ location]\n\
-                 Example: /search rust engineer @ beijing"
+                "Usage: /search <keywords> [@ location]\nExample: /search rust engineer @ beijing"
                     .to_owned(),
             ));
         }
@@ -123,9 +121,9 @@ impl JobCommandHandler {
         let text = format_job_results(&jobs, &keywords, location.as_deref());
         let encoded = encode_search_params(&keywords, location.as_deref());
         let keyboard = vec![vec![InlineButton {
-            text: "Load More".to_owned(),
+            text:          "Load More".to_owned(),
             callback_data: Some(format!("search_more:{}:{encoded}", jobs.len())),
-            url: None,
+            url:           None,
         }]];
 
         Ok(CommandResult::HtmlWithKeyboard {
@@ -264,6 +262,7 @@ mod tests {
         ) -> Result<Option<ChannelBinding>, BotServiceError> {
             Ok(None)
         }
+
         async fn bind_channel(
             &self,
             _: &str,
@@ -275,20 +274,23 @@ mod tests {
                 session_key: k.to_owned(),
             })
         }
+
         async fn create_session(&self, _: &str, _: Option<&str>) -> Result<(), BotServiceError> {
             Ok(())
         }
-        async fn clear_session_messages(&self, _: &str) -> Result<(), BotServiceError> {
-            Ok(())
-        }
+
+        async fn clear_session_messages(&self, _: &str) -> Result<(), BotServiceError> { Ok(()) }
+
         async fn list_sessions(&self, _: u32) -> Result<Vec<SessionListItem>, BotServiceError> {
             Ok(vec![])
         }
+
         async fn get_session(&self, _: &str) -> Result<SessionDetail, BotServiceError> {
             Err(BotServiceError::Service {
                 message: "n/a".into(),
             })
         }
+
         async fn update_session(
             &self,
             _: &str,
@@ -298,6 +300,7 @@ mod tests {
                 message: "n/a".into(),
             })
         }
+
         async fn discover_jobs(
             &self,
             _keywords: Vec<String>,
@@ -306,36 +309,38 @@ mod tests {
         ) -> Result<Vec<DiscoveryJob>, BotServiceError> {
             Ok(vec![
                 DiscoveryJob {
-                    title: "Rust Engineer".to_owned(),
-                    company: "Acme Corp".to_owned(),
-                    location: Some("Remote".to_owned()),
-                    url: Some("https://example.com/job1".to_owned()),
-                    salary_min: Some(100_000),
-                    salary_max: Some(150_000),
+                    title:           "Rust Engineer".to_owned(),
+                    company:         "Acme Corp".to_owned(),
+                    location:        Some("Remote".to_owned()),
+                    url:             Some("https://example.com/job1".to_owned()),
+                    salary_min:      Some(100_000),
+                    salary_max:      Some(150_000),
                     salary_currency: Some("USD".to_owned()),
                 },
                 DiscoveryJob {
-                    title: "Go Developer".to_owned(),
-                    company: "Beta Inc".to_owned(),
-                    location: None,
-                    url: None,
-                    salary_min: None,
-                    salary_max: None,
+                    title:           "Go Developer".to_owned(),
+                    company:         "Beta Inc".to_owned(),
+                    location:        None,
+                    url:             None,
+                    salary_min:      None,
+                    salary_max:      None,
                     salary_currency: None,
                 },
             ])
         }
-        async fn submit_jd_parse(&self, _: &str) -> Result<(), BotServiceError> {
-            Ok(())
-        }
+
+        async fn submit_jd_parse(&self, _: &str) -> Result<(), BotServiceError> { Ok(()) }
+
         async fn list_mcp_servers(&self) -> Result<Vec<McpServerInfo>, BotServiceError> {
             Ok(vec![])
         }
+
         async fn get_mcp_server(&self, _: &str) -> Result<McpServerInfo, BotServiceError> {
             Err(BotServiceError::Service {
                 message: "n/a".into(),
             })
         }
+
         async fn add_mcp_server(
             &self,
             _: &str,
@@ -346,12 +351,11 @@ mod tests {
                 message: "n/a".into(),
             })
         }
-        async fn start_mcp_server(&self, _: &str) -> Result<(), BotServiceError> {
-            Ok(())
-        }
-        async fn remove_mcp_server(&self, _: &str) -> Result<(), BotServiceError> {
-            Ok(())
-        }
+
+        async fn start_mcp_server(&self, _: &str) -> Result<(), BotServiceError> { Ok(()) }
+
+        async fn remove_mcp_server(&self, _: &str) -> Result<(), BotServiceError> { Ok(()) }
+
         async fn dispatch_coding_task(
             &self,
             _: &str,
@@ -361,6 +365,7 @@ mod tests {
                 message: "n/a".into(),
             })
         }
+
         async fn list_coding_tasks(&self) -> Result<Vec<CodingTaskSummary>, BotServiceError> {
             Ok(vec![])
         }
@@ -374,7 +379,7 @@ mod tests {
             channel_type: ChannelType::Telegram,
             session_key: "tg:123".to_owned(),
             user: ChannelUser {
-                platform_id: "123".to_owned(),
+                platform_id:  "123".to_owned(),
                 display_name: Some("Test".to_owned()),
             },
             metadata,
@@ -387,7 +392,7 @@ mod tests {
         let cmd = CommandInfo {
             name: "search".to_owned(),
             args: "rust engineer @ remote".to_owned(),
-            raw: "/search rust engineer @ remote".to_owned(),
+            raw:  "/search rust engineer @ remote".to_owned(),
         };
         let result = handler.handle(&cmd, &make_context()).await;
         match result {
@@ -397,11 +402,13 @@ mod tests {
                 assert!(html.contains("Go Developer"));
                 // Load More button.
                 assert_eq!(keyboard.len(), 1);
-                assert!(keyboard[0][0]
-                    .callback_data
-                    .as_ref()
-                    .unwrap()
-                    .starts_with("search_more:"));
+                assert!(
+                    keyboard[0][0]
+                        .callback_data
+                        .as_ref()
+                        .unwrap()
+                        .starts_with("search_more:")
+                );
             }
             other => panic!("expected HtmlWithKeyboard, got {other:?}"),
         }
@@ -413,7 +420,7 @@ mod tests {
         let cmd = CommandInfo {
             name: "search".to_owned(),
             args: String::new(),
-            raw: "/search".to_owned(),
+            raw:  "/search".to_owned(),
         };
         let result = handler.handle(&cmd, &make_context()).await;
         match result {
@@ -430,13 +437,11 @@ mod tests {
         let cmd = CommandInfo {
             name: "search".to_owned(),
             args: "rust".to_owned(),
-            raw: "/search rust".to_owned(),
+            raw:  "/search rust".to_owned(),
         };
         let mut ctx = make_context();
-        ctx.metadata.insert(
-            "is_primary_chat".to_owned(),
-            serde_json::json!(false),
-        );
+        ctx.metadata
+            .insert("is_primary_chat".to_owned(), serde_json::json!(false));
         let result = handler.handle(&cmd, &ctx).await;
         match result {
             Ok(CommandResult::Text(text)) => {
@@ -452,7 +457,7 @@ mod tests {
         let cmd = CommandInfo {
             name: "jd".to_owned(),
             args: "We are looking for a Rust engineer...".to_owned(),
-            raw: "/jd We are looking for a Rust engineer...".to_owned(),
+            raw:  "/jd We are looking for a Rust engineer...".to_owned(),
         };
         let result = handler.handle(&cmd, &make_context()).await;
         match result {

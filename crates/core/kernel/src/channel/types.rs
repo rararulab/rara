@@ -66,9 +66,7 @@ impl ChannelType {
 }
 
 impl std::fmt::Display for ChannelType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.label())
-    }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(self.label()) }
 }
 
 // ---------------------------------------------------------------------------
@@ -343,21 +341,21 @@ pub struct ChannelMessage {
 #[derive(Debug, Clone)]
 pub struct OutboundMessage {
     /// Target channel.
-    pub channel_type:          ChannelType,
+    pub channel_type:        ChannelType,
     /// Target session.
-    pub session_key:           String,
+    pub session_key:         String,
     /// Response content (markdown-ish, adapter formats for platform).
-    pub content:               String,
+    pub content:             String,
     /// Optional metadata for platform-specific features.
-    pub metadata:              HashMap<String, serde_json::Value>,
+    pub metadata:            HashMap<String, serde_json::Value>,
     /// Optional photo to attach (bytes + MIME type).
-    pub photo:                 Option<PhotoAttachment>,
+    pub photo:               Option<PhotoAttachment>,
     /// Optional inline keyboard / buttons.
-    pub reply_markup:          Option<ReplyMarkup>,
+    pub reply_markup:        Option<ReplyMarkup>,
     /// Edit an existing message instead of sending a new one.
-    pub edit_message_id:       Option<String>,
+    pub edit_message_id:     Option<String>,
     /// Reply to a specific message.
-    pub reply_to_message_id:   Option<String>,
+    pub reply_to_message_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -473,7 +471,8 @@ pub struct CommandInfo {
 /// Callback data from an interactive element (e.g. inline keyboard button).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CallbackInfo {
-    /// The callback data string (e.g. "switch:session-123", "search_more:3:rust@remote").
+    /// The callback data string (e.g. "switch:session-123",
+    /// "search_more:3:rust@remote").
     pub data:       String,
     /// Platform-specific message ID that originated the callback.
     pub message_id: Option<String>,

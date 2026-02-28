@@ -24,8 +24,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use super::types::{AgentPhase, ChannelType, OutboundMessage};
-use crate::error::KernelError;
-use crate::io::ingress::InboundSink;
+use crate::{error::KernelError, io::ingress::InboundSink};
 
 /// A pluggable adapter for a single communication channel.
 ///
@@ -34,8 +33,8 @@ use crate::io::ingress::InboundSink;
 /// 1. **start** — The adapter begins listening for inbound messages (long
 ///    polling, WebSocket, etc.) and pushes them to the kernel via the
 ///    [`InboundSink`] (I/O Bus model).
-/// 2. **send** — The kernel calls this to deliver outbound messages back to
-///    the platform.
+/// 2. **send** — The kernel calls this to deliver outbound messages back to the
+///    platform.
 /// 3. **stop** — Graceful shutdown.
 ///
 /// # Optional UX hooks
@@ -50,10 +49,7 @@ pub trait ChannelAdapter: Send + Sync {
 
     /// Start the adapter with an [`InboundSink`] for dispatching inbound
     /// messages into the I/O Bus pipeline.
-    async fn start(
-        &self,
-        sink: Arc<dyn InboundSink>,
-    ) -> Result<(), KernelError>;
+    async fn start(&self, sink: Arc<dyn InboundSink>) -> Result<(), KernelError>;
 
     /// Send an outbound message through this channel.
     async fn send(&self, message: OutboundMessage) -> Result<(), KernelError>;
@@ -69,11 +65,7 @@ pub trait ChannelAdapter: Send + Sync {
     /// Signal an agent phase change for UX feedback (e.g. emoji reactions).
     ///
     /// No-op by default; override for platforms that support reactions.
-    async fn set_phase(
-        &self,
-        _session_key: &str,
-        _phase: AgentPhase,
-    ) -> Result<(), KernelError> {
+    async fn set_phase(&self, _session_key: &str, _phase: AgentPhase) -> Result<(), KernelError> {
         Ok(())
     }
 }

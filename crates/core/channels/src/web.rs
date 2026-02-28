@@ -23,7 +23,8 @@
 //! SSE connections.
 //!
 //! Inbound messages are handed to the [`InboundSink`] in a fire-and-forget
-//! fashion. Outbound delivery is handled separately via [`send`](ChannelAdapter::send).
+//! fashion. Outbound delivery is handled separately via
+//! [`send`](ChannelAdapter::send).
 //!
 //! # Endpoints
 //!
@@ -33,27 +34,34 @@
 //! | GET    | `/events`   | SSE stream (server-push)             |
 //! | POST   | `/messages` | Send message (fire-and-forget)       |
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
-use axum::Router;
-use axum::extract::{Query, State, WebSocketUpgrade};
-use axum::extract::ws::{Message, WebSocket};
-use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
-use dashmap::DashMap;
-use futures::stream::Stream;
-use futures::{SinkExt, StreamExt};
-use rara_kernel::channel::adapter::ChannelAdapter;
-use rara_kernel::channel::types::{
-    AgentPhase, ChannelType, MessageContent,
-    OutboundMessage,
+use axum::{
+    Router,
+    extract::{
+        Query, State, WebSocketUpgrade,
+        ws::{Message, WebSocket},
+    },
+    response::{
+        IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
+    routing::{get, post},
 };
-use rara_kernel::error::KernelError;
-use rara_kernel::io::ingress::{InboundSink, RawPlatformMessage};
-use rara_kernel::io::types::{InteractionType, ReplyContext as IoReplyContext};
+use dashmap::DashMap;
+use futures::{SinkExt, StreamExt, stream::Stream};
+use rara_kernel::{
+    channel::{
+        adapter::ChannelAdapter,
+        types::{AgentPhase, ChannelType, MessageContent, OutboundMessage},
+    },
+    error::KernelError,
+    io::{
+        ingress::{InboundSink, RawPlatformMessage},
+        types::{InteractionType, ReplyContext as IoReplyContext},
+    },
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, broadcast, watch};
 use tracing::{debug, error, info, warn};
@@ -92,19 +100,17 @@ pub enum WebEvent {
 pub struct SessionQuery {
     pub session_key: String,
     #[serde(default = "default_user_id")]
-    pub user_id: String,
+    pub user_id:     String,
 }
 
-fn default_user_id() -> String {
-    "anonymous".to_owned()
-}
+fn default_user_id() -> String { "anonymous".to_owned() }
 
 /// JSON body for POST /messages.
 #[derive(Debug, Deserialize)]
 pub struct SendMessageRequest {
     pub session_key: String,
-    pub user_id: String,
-    pub content: String,
+    pub user_id:     String,
+    pub content:     String,
 }
 
 /// JSON response for POST /messages.
@@ -129,9 +135,9 @@ pub struct SendMessageResponse {
 /// ```
 pub struct WebAdapter {
     /// Active sessions: session_key -> broadcast sender for outbound events.
-    sessions: Arc<DashMap<String, broadcast::Sender<String>>>,
+    sessions:    Arc<DashMap<String, broadcast::Sender<String>>>,
     /// InboundSink handle (set during `start`).
-    sink: Arc<RwLock<Option<Arc<dyn InboundSink>>>>,
+    sink:        Arc<RwLock<Option<Arc<dyn InboundSink>>>>,
     /// Shutdown signal sender.
     shutdown_tx: watch::Sender<bool>,
     /// Shutdown signal receiver (cloneable).
@@ -158,8 +164,8 @@ impl WebAdapter {
     /// ```
     pub fn router(&self) -> Router {
         let state = WebAdapterState {
-            sessions: Arc::clone(&self.sessions),
-            sink: Arc::clone(&self.sink),
+            sessions:    Arc::clone(&self.sessions),
+            sink:        Arc::clone(&self.sink),
             shutdown_rx: self.shutdown_rx.clone(),
         };
 
@@ -211,8 +217,8 @@ impl WebAdapter {
 /// Shared state passed to axum route handlers.
 #[derive(Clone)]
 struct WebAdapterState {
-    sessions: Arc<DashMap<String, broadcast::Sender<String>>>,
-    sink: Arc<RwLock<Option<Arc<dyn InboundSink>>>>,
+    sessions:    Arc<DashMap<String, broadcast::Sender<String>>>,
+    sink:        Arc<RwLock<Option<Arc<dyn InboundSink>>>>,
     shutdown_rx: watch::Receiver<bool>,
 }
 
@@ -220,19 +226,23 @@ struct WebAdapterState {
 // Helper: build a RawPlatformMessage from request data
 // ---------------------------------------------------------------------------
 
-fn build_raw_platform_message(session_key: &str, user_id: &str, content: &str) -> RawPlatformMessage {
+fn build_raw_platform_message(
+    session_key: &str,
+    user_id: &str,
+    content: &str,
+) -> RawPlatformMessage {
     RawPlatformMessage {
-        channel_type: ChannelType::Web,
+        channel_type:        ChannelType::Web,
         platform_message_id: Some(ulid::Ulid::new().to_string()),
-        platform_user_id: user_id.to_owned(),
-        platform_chat_id: Some(session_key.to_owned()),
-        content: MessageContent::Text(content.to_owned()),
-        reply_context: Some(IoReplyContext {
-            thread_id: None,
+        platform_user_id:    user_id.to_owned(),
+        platform_chat_id:    Some(session_key.to_owned()),
+        content:             MessageContent::Text(content.to_owned()),
+        reply_context:       Some(IoReplyContext {
+            thread_id:                None,
             reply_to_platform_msg_id: None,
-            interaction_type: InteractionType::Message,
+            interaction_type:         InteractionType::Message,
         }),
-        metadata: HashMap::new(),
+        metadata:            HashMap::new(),
     }
 }
 
@@ -321,11 +331,7 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
                 let guard = sink.read().await;
                 if let Some(ref s) = *guard {
                     // Send typing indicator before processing.
-                    WebAdapter::broadcast_event(
-                        &sessions,
-                        &session_key,
-                        &WebEvent::Typing,
-                    );
+                    WebAdapter::broadcast_event(&sessions, &session_key, &WebEvent::Typing);
                     if let Err(e) = s.ingest(raw).await {
                         error!(session_key, error = %e, "sink ingest failed");
                         WebAdapter::broadcast_event(
@@ -436,16 +442,10 @@ async fn send_message_handler(
     match &*guard {
         Some(sink) => {
             // Broadcast typing indicator.
-            WebAdapter::broadcast_event(
-                &state.sessions,
-                &body.session_key,
-                &WebEvent::Typing,
-            );
+            WebAdapter::broadcast_event(&state.sessions, &body.session_key, &WebEvent::Typing);
 
             match sink.ingest(raw).await {
-                Ok(()) => {
-                    axum::Json(SendMessageResponse { accepted: true }).into_response()
-                }
+                Ok(()) => axum::Json(SendMessageResponse { accepted: true }).into_response(),
                 Err(e) => {
                     error!(session_key = %body.session_key, error = %e, "ingest failed");
                     let status = axum::http::StatusCode::INTERNAL_SERVER_ERROR;
@@ -466,14 +466,9 @@ async fn send_message_handler(
 
 #[async_trait]
 impl ChannelAdapter for WebAdapter {
-    fn channel_type(&self) -> ChannelType {
-        ChannelType::Web
-    }
+    fn channel_type(&self) -> ChannelType { ChannelType::Web }
 
-    async fn start(
-        &self,
-        sink: Arc<dyn InboundSink>,
-    ) -> Result<(), KernelError> {
+    async fn start(&self, sink: Arc<dyn InboundSink>) -> Result<(), KernelError> {
         info!("WebAdapter started — sink registered");
         let mut guard = self.sink.write().await;
         *guard = Some(sink);
@@ -508,11 +503,7 @@ impl ChannelAdapter for WebAdapter {
         Ok(())
     }
 
-    async fn set_phase(
-        &self,
-        session_key: &str,
-        phase: AgentPhase,
-    ) -> Result<(), KernelError> {
+    async fn set_phase(&self, session_key: &str, phase: AgentPhase) -> Result<(), KernelError> {
         WebAdapter::broadcast_event(
             &self.sessions,
             session_key,
@@ -530,8 +521,9 @@ impl ChannelAdapter for WebAdapter {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rara_kernel::io::types::IngestError;
+
+    use super::*;
 
     #[test]
     fn build_raw_platform_message_fields() {
@@ -612,22 +604,14 @@ mod tests {
         let _tx = WebAdapter::get_or_create_session(&sessions, "orphan");
 
         // Broadcasting with no active receivers should not panic.
-        WebAdapter::broadcast_event(
-            &sessions,
-            "orphan",
-            &WebEvent::Typing,
-        );
+        WebAdapter::broadcast_event(&sessions, "orphan", &WebEvent::Typing);
     }
 
     #[test]
     fn broadcast_to_nonexistent_session_is_noop() {
         let sessions: DashMap<String, broadcast::Sender<String>> = DashMap::new();
         // No session "ghost" exists — should silently do nothing.
-        WebAdapter::broadcast_event(
-            &sessions,
-            "ghost",
-            &WebEvent::Typing,
-        );
+        WebAdapter::broadcast_event(&sessions, "ghost", &WebEvent::Typing);
     }
 
     #[test]
@@ -649,9 +633,7 @@ mod tests {
         struct MockSink;
         #[async_trait]
         impl InboundSink for MockSink {
-            async fn ingest(&self, _msg: RawPlatformMessage) -> Result<(), IngestError> {
-                Ok(())
-            }
+            async fn ingest(&self, _msg: RawPlatformMessage) -> Result<(), IngestError> { Ok(()) }
         }
 
         let adapter = WebAdapter::new();
@@ -666,9 +648,7 @@ mod tests {
         struct MockSink;
         #[async_trait]
         impl InboundSink for MockSink {
-            async fn ingest(&self, _msg: RawPlatformMessage) -> Result<(), IngestError> {
-                Ok(())
-            }
+            async fn ingest(&self, _msg: RawPlatformMessage) -> Result<(), IngestError> { Ok(()) }
         }
 
         let adapter = WebAdapter::new();
@@ -723,7 +703,10 @@ mod tests {
         let tx = WebAdapter::get_or_create_session(&adapter.sessions, "sess-p");
         let mut rx = tx.subscribe();
 
-        adapter.set_phase("sess-p", AgentPhase::Thinking).await.unwrap();
+        adapter
+            .set_phase("sess-p", AgentPhase::Thinking)
+            .await
+            .unwrap();
 
         let received = rx.try_recv().unwrap();
         assert!(received.contains("\"type\":\"phase\""));

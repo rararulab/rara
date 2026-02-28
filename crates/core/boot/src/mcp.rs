@@ -17,10 +17,11 @@
 use std::sync::Arc;
 
 use rara_kernel::tool::ToolRegistry;
-use rara_mcp::manager::mgr::McpManager;
-use rara_mcp::manager::registry::FSMcpRegistry;
-use rara_mcp::oauth::OAuthCredentialsStoreMode;
-use rara_mcp::tool_bridge::McpToolBridge;
+use rara_mcp::{
+    manager::{mgr::McpManager, registry::FSMcpRegistry},
+    oauth::OAuthCredentialsStoreMode,
+    tool_bridge::McpToolBridge,
+};
 use tracing::info;
 
 use crate::error::{BootError, Result};

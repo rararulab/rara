@@ -31,8 +31,10 @@ pub mod spawn_tool;
 use async_trait::async_trait;
 use tokio::sync::oneshot;
 
-use crate::error::Result;
-use crate::process::{AgentId, AgentManifest, AgentResult, ProcessInfo, ProcessMessage};
+use crate::{
+    error::Result,
+    process::{AgentId, AgentManifest, AgentResult, ProcessInfo, ProcessMessage},
+};
 
 /// Handle returned from spawn — allows waiting for agent completion.
 ///
@@ -41,9 +43,9 @@ use crate::process::{AgentId, AgentManifest, AgentResult, ProcessInfo, ProcessMe
 /// finishes execution (successfully or with failure).
 pub struct AgentHandle {
     /// The ID of the spawned agent process.
-    pub agent_id: AgentId,
+    pub agent_id:  AgentId,
     /// Mailbox sender for delivering messages to the process.
-    pub mailbox: tokio::sync::mpsc::Sender<ProcessMessage>,
+    pub mailbox:   tokio::sync::mpsc::Sender<ProcessMessage>,
     /// Receiver for the agent's result. Resolves when the agent finishes.
     pub result_rx: oneshot::Receiver<AgentResult>,
 }
@@ -145,7 +147,7 @@ mod tests {
 
         // Send a result through the channel
         let result = AgentResult {
-            output: "done".to_string(),
+            output:     "done".to_string(),
             iterations: 3,
             tool_calls: 1,
         };

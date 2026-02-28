@@ -19,12 +19,14 @@
 //! resolver can look up registered users via the database.
 
 use async_trait::async_trait;
-
-use rara_kernel::channel::types::ChannelType;
-use rara_kernel::io::ingress::{IdentityResolver, SessionResolver};
-use rara_kernel::io::types::IngestError;
-use rara_kernel::process::principal::UserId;
-use rara_kernel::process::SessionId;
+use rara_kernel::{
+    channel::types::ChannelType,
+    io::{
+        ingress::{IdentityResolver, SessionResolver},
+        types::IngestError,
+    },
+    process::{SessionId, principal::UserId},
+};
 
 // ---------------------------------------------------------------------------
 // AppIdentityResolver
@@ -39,9 +41,7 @@ pub struct AppIdentityResolver;
 
 impl AppIdentityResolver {
     /// Create a new resolver.
-    pub fn new() -> Self {
-        Self
-    }
+    pub fn new() -> Self { Self }
 }
 
 #[async_trait]
@@ -72,9 +72,7 @@ pub struct AppSessionResolver;
 
 impl AppSessionResolver {
     /// Create a new resolver.
-    pub fn new() -> Self {
-        Self
-    }
+    pub fn new() -> Self { Self }
 }
 
 #[async_trait]

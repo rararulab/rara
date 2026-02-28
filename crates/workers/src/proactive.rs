@@ -27,7 +27,6 @@ use crate::worker_state::AppState;
 /// Fixed session key for all proactive agent interactions.
 const PROACTIVE_SESSION_KEY: &str = "agent:proactive";
 
-
 /// Background worker that reviews recent chat sessions and spawns a
 /// proactive agent via the Kernel.
 pub struct ProactiveAgentWorker;
@@ -69,22 +68,21 @@ impl FallibleWorker<AppState> for ProactiveAgentWorker {
         {
             let now = chrono::Utc::now();
             let entry = rara_sessions::types::SessionEntry {
-                key: session_key.clone(),
-                title: Some("Proactive Agent".to_string()),
-                model: None,
+                key:           session_key.clone(),
+                title:         Some("Proactive Agent".to_string()),
+                model:         None,
                 system_prompt: None,
                 message_count: 0,
-                preview: None,
-                metadata: None,
-                created_at: now,
-                updated_at: now,
+                preview:       None,
+                metadata:      None,
+                created_at:    now,
+                updated_at:    now,
             };
             let _ = state.session_repo.create_session(&entry).await;
         }
 
         // 3. Build user prompt from activity summary
-        let user_prompt =
-            crate::builtin_agents::proactive::build_user_prompt(&activity_summary);
+        let user_prompt = crate::builtin_agents::proactive::build_user_prompt(&activity_summary);
 
         // 4. Build manifest and spawn via Kernel (fire-and-forget)
         let policy = state.agent_ctx.build_worker_policy().await;

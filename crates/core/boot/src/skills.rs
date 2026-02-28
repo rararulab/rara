@@ -27,6 +27,4 @@ pub fn init_skill_registry(pool: PgPool) -> InMemoryRegistry {
 }
 
 /// Create an empty skill registry without background sync (for testing).
-pub fn empty_skill_registry() -> InMemoryRegistry {
-    InMemoryRegistry::new()
-}
+pub fn empty_skill_registry() -> InMemoryRegistry { InMemoryRegistry::new() }

@@ -41,7 +41,7 @@ pub struct AppState {
     pub job_service:         rara_backend_admin::job::service::JobService,
     pub chat_service:        rara_backend_admin::chat::service::ChatService,
     pub session_repo:        Arc<dyn rara_sessions::repository::SessionRepository>,
-    pub kernel_session_repo:  Arc<dyn rara_kernel::session_manager::SessionRepository>,
+    pub kernel_session_repo: Arc<dyn rara_kernel::session_manager::SessionRepository>,
     // -- shared --
     pub settings_svc:        rara_backend_admin::settings::SettingsSvc,
     pub notify_client:       rara_domain_shared::notify::client::NotifyClient,
@@ -318,8 +318,8 @@ impl AppState {
 
         let tools = Arc::new(tool_registry);
 
-        let agent_ctx: Arc<dyn rara_kernel::agent_context::AgentContext> = Arc::new(
-            crate::orchestrator::AgentContextImpl::new(
+        let agent_ctx: Arc<dyn rara_kernel::agent_context::AgentContext> =
+            Arc::new(crate::orchestrator::AgentContextImpl::new(
                 llm_provider.clone(),
                 tools.clone(),
                 mcp_manager.clone(),
@@ -328,8 +328,7 @@ impl AppState {
                 Some(recall_engine),
                 settings_svc.subscribe(),
                 prompt_repo.clone(),
-            ),
-        );
+            ));
 
         let chat_agent = rara_backend_admin::chat::agent::ChatAgent::new(Arc::clone(&agent_ctx));
         let kernel_session_repo: Arc<dyn rara_kernel::session_manager::SessionRepository> =
@@ -357,8 +356,8 @@ impl AppState {
 
         let kernel = Arc::new(rara_kernel::Kernel::new(
             rara_kernel::KernelConfig {
-                max_concurrency: 16,
-                default_child_limit: 4,
+                max_concurrency:        16,
+                default_child_limit:    4,
                 default_max_iterations: 25,
             },
             llm_provider.clone(),
@@ -486,9 +485,10 @@ impl AppState {
         api.merge(pipeline_api);
 
         // Model admin routes (OpenAPI).
-        let model_repo: std::sync::Arc<dyn rara_kernel::model_repo::ModelRepo> = std::sync::Arc::new(
-            rara_backend_admin::models::SettingsModelRepo::new(self.settings_svc.clone()),
-        );
+        let model_repo: std::sync::Arc<dyn rara_kernel::model_repo::ModelRepo> =
+            std::sync::Arc::new(rara_backend_admin::models::SettingsModelRepo::new(
+                self.settings_svc.clone(),
+            ));
         merge_openapi_router(
             &mut router,
             &mut api,
@@ -608,9 +608,9 @@ impl rara_kernel::provider::LlmProviderLoader for SettingsLlmProviderLoader {
                 let config = async_openai::config::OpenAIConfig::new()
                     .with_api_base(format!("{}/v1", base_url))
                     .with_api_key("ollama");
-                Ok(Arc::new(rara_kernel::provider::OpenAiProvider::with_config(
-                    config,
-                )))
+                Ok(Arc::new(
+                    rara_kernel::provider::OpenAiProvider::with_config(config),
+                ))
             }
             "codex" => {
                 // Token persistence and refresh rules live in integration layer.
@@ -628,7 +628,9 @@ impl rara_kernel::provider::LlmProviderLoader for SettingsLlmProviderLoader {
                     if rara_codex_oauth::should_refresh_token(tokens.expires_at_unix) {
                         let refreshed_tokens = rara_codex_oauth::refresh_tokens(&tokens)
                             .await
-                            .map_err(|e| rara_kernel::KernelError::Provider { message: e.into() })?;
+                            .map_err(|e| rara_kernel::KernelError::Provider {
+                                message: e.into(),
+                            })?;
                         rara_codex_oauth::save_tokens(&refreshed_tokens).map_err(|e| {
                             rara_kernel::KernelError::Provider {
                                 message: format!("failed to persist refreshed codex token: {e}")
@@ -641,9 +643,9 @@ impl rara_kernel::provider::LlmProviderLoader for SettingsLlmProviderLoader {
 
                 let config =
                     async_openai::config::OpenAIConfig::new().with_api_key(tokens.access_token);
-                Ok(Arc::new(rara_kernel::provider::OpenAiProvider::with_config(
-                    config,
-                )))
+                Ok(Arc::new(
+                    rara_kernel::provider::OpenAiProvider::with_config(config),
+                ))
             }
             _ => {
                 let api_key = settings
@@ -651,7 +653,9 @@ impl rara_kernel::provider::LlmProviderLoader for SettingsLlmProviderLoader {
                     .openrouter_api_key
                     .clone()
                     .ok_or(rara_kernel::error::ProviderNotConfiguredSnafu.build())?;
-                Ok(Arc::new(rara_kernel::provider::OpenAiProvider::new(api_key)))
+                Ok(Arc::new(rara_kernel::provider::OpenAiProvider::new(
+                    api_key,
+                )))
             }
         }
     }

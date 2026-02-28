@@ -37,8 +37,8 @@ pub mod resume_optimizer;
 
 use std::sync::Arc;
 
-use rara_kernel::{provider::LlmProviderLoaderRef, tool::ToolRegistry};
 use rara_domain_shared::settings::model::Settings;
+use rara_kernel::{provider::LlmProviderLoaderRef, tool::ToolRegistry};
 use tokio::sync::watch;
 
 use crate::ai_tasks::{

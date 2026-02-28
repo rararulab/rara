@@ -20,15 +20,13 @@
 //! types: [`SessionKey`], [`DmScope`], [`SessionEntry`], [`ChannelBinding`].
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-
 // ---------------------------------------------------------------------------
 // Re-exports from rara-kernel (canonical ChatMessage types)
 // ---------------------------------------------------------------------------
-
 pub use rara_kernel::channel::types::{
     ChatMessage, ContentBlock, MessageContent, MessageRole, ToolCall,
 };
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // SessionKey

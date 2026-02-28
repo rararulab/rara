@@ -27,13 +27,13 @@
 
 use std::sync::Arc;
 
-use rara_kernel::model_repo::ModelRepo;
 use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
     routing::get,
 };
+use rara_kernel::model_repo::ModelRepo;
 use serde::{Deserialize, Serialize};
 use utoipa_axum::router::OpenApiRouter;
 

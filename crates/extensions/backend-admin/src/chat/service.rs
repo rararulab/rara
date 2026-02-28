@@ -21,10 +21,9 @@
 
 use std::sync::Arc;
 
-use rara_kernel::{runner::UserContent, tool::ToolRegistry};
 use chrono::Utc;
-use crate::chat::agent::ChatAgent;
 use rara_domain_shared::settings::model::Settings;
+use rara_kernel::{runner::UserContent, tool::ToolRegistry};
 use rara_sessions::{
     repository::SessionRepository,
     types::{
@@ -37,6 +36,7 @@ use tracing::{info, instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::chat::{
+    agent::ChatAgent,
     error::ChatError,
     model_catalog::{ChatModel, ModelCatalog},
     stream::ChatStreamEvent,
@@ -98,9 +98,7 @@ impl ChatService {
     }
 
     /// Read the current default model from runtime settings.
-    fn current_default_model(&self) -> String {
-        self.chat_agent.ctx().current_default_model()
-    }
+    fn current_default_model(&self) -> String { self.chat_agent.ctx().current_default_model() }
 
     /// Read the current system prompt from runtime settings, falling back
     /// to a built-in default when no custom prompt is configured.
@@ -386,9 +384,7 @@ impl ChatService {
                         idle_minutes = elapsed.num_minutes(),
                         "session inactivity detected, consolidating previous exchanges"
                     );
-                    self.chat_agent
-                        .ctx()
-                        .spawn_session_consolidation(exchanges);
+                    self.chat_agent.ctx().spawn_session_consolidation(exchanges);
                 }
             }
         }

@@ -16,36 +16,39 @@
 //! initialization.
 
 use async_trait::async_trait;
+use rara_kernel::{
+    error::{KernelError, Result},
+    process::{
+        principal::Role,
+        user::{
+            KernelUser, Permission, PlatformIdentity, ROOT_USER_NAME, SYSTEM_USER_NAME, UserStore,
+        },
+    },
+};
 use sqlx::PgPool;
 use tracing::info;
-
-use rara_kernel::error::{KernelError, Result};
-use rara_kernel::process::principal::Role;
-use rara_kernel::process::user::{
-    KernelUser, Permission, PlatformIdentity, UserStore, ROOT_USER_NAME, SYSTEM_USER_NAME,
-};
 
 // -- DB row types (chrono at DB boundary) ------------------------------------
 
 #[derive(sqlx::FromRow)]
 struct UserRow {
-    id: uuid::Uuid,
-    name: String,
-    role: i16,
+    id:          uuid::Uuid,
+    name:        String,
+    role:        i16,
     permissions: serde_json::Value,
-    enabled: bool,
-    created_at: chrono::DateTime<chrono::Utc>,
-    updated_at: chrono::DateTime<chrono::Utc>,
+    enabled:     bool,
+    created_at:  chrono::DateTime<chrono::Utc>,
+    updated_at:  chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(sqlx::FromRow)]
 struct PlatformRow {
-    id: uuid::Uuid,
-    user_id: uuid::Uuid,
-    platform: String,
+    id:               uuid::Uuid,
+    user_id:          uuid::Uuid,
+    platform:         String,
     platform_user_id: String,
-    display_name: Option<String>,
-    linked_at: chrono::DateTime<chrono::Utc>,
+    display_name:     Option<String>,
+    linked_at:        chrono::DateTime<chrono::Utc>,
 }
 
 // -- Conversion helpers ------------------------------------------------------
@@ -75,8 +78,7 @@ fn jiff_to_chrono(ts: jiff::Timestamp) -> chrono::DateTime<chrono::Utc> {
 }
 
 fn row_to_user(row: UserRow) -> KernelUser {
-    let permissions: Vec<Permission> =
-        serde_json::from_value(row.permissions).unwrap_or_default();
+    let permissions: Vec<Permission> = serde_json::from_value(row.permissions).unwrap_or_default();
     KernelUser {
         id: row.id,
         name: row.name,
@@ -90,12 +92,12 @@ fn row_to_user(row: UserRow) -> KernelUser {
 
 fn row_to_platform(row: PlatformRow) -> PlatformIdentity {
     PlatformIdentity {
-        id: row.id,
-        user_id: row.user_id,
-        platform: row.platform,
+        id:               row.id,
+        user_id:          row.user_id,
+        platform:         row.platform,
         platform_user_id: row.platform_user_id,
-        display_name: row.display_name,
-        linked_at: chrono_to_jiff(row.linked_at),
+        display_name:     row.display_name,
+        linked_at:        chrono_to_jiff(row.linked_at),
     }
 }
 
@@ -107,9 +109,7 @@ pub struct PgUserStore {
 }
 
 impl PgUserStore {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
+    pub fn new(pool: PgPool) -> Self { Self { pool } }
 }
 
 #[async_trait]
@@ -142,8 +142,7 @@ impl UserStore for PgUserStore {
         platform_user_id: &str,
     ) -> Result<Option<KernelUser>> {
         let row = sqlx::query_as::<_, UserRow>(
-            "SELECT u.* FROM kernel_users u \
-             JOIN user_platform_identities p ON u.id = p.user_id \
+            "SELECT u.* FROM kernel_users u JOIN user_platform_identities p ON u.id = p.user_id \
              WHERE p.platform = $1 AND p.platform_user_id = $2",
         )
         .bind(platform)
@@ -160,8 +159,8 @@ impl UserStore for PgUserStore {
         let perms =
             serde_json::to_value(&user.permissions).unwrap_or(serde_json::Value::Array(vec![]));
         sqlx::query(
-            "INSERT INTO kernel_users (id, name, role, permissions, enabled, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            "INSERT INTO kernel_users (id, name, role, permissions, enabled, created_at, \
+             updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(user.id)
         .bind(&user.name)
@@ -182,8 +181,8 @@ impl UserStore for PgUserStore {
         let perms =
             serde_json::to_value(&user.permissions).unwrap_or(serde_json::Value::Array(vec![]));
         sqlx::query(
-            "UPDATE kernel_users SET name = $1, role = $2, permissions = $3, \
-             enabled = $4, updated_at = now() WHERE id = $5",
+            "UPDATE kernel_users SET name = $1, role = $2, permissions = $3, enabled = $4, \
+             updated_at = now() WHERE id = $5",
         )
         .bind(&user.name)
         .bind(role_to_i16(user.role))
@@ -210,22 +209,19 @@ impl UserStore for PgUserStore {
     }
 
     async fn list(&self) -> Result<Vec<KernelUser>> {
-        let rows = sqlx::query_as::<_, UserRow>(
-            "SELECT * FROM kernel_users ORDER BY created_at",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| KernelError::Other {
-            message: format!("user store list: {e}").into(),
-        })?;
+        let rows = sqlx::query_as::<_, UserRow>("SELECT * FROM kernel_users ORDER BY created_at")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| KernelError::Other {
+                message: format!("user store list: {e}").into(),
+            })?;
         Ok(rows.into_iter().map(row_to_user).collect())
     }
 
     async fn link_platform(&self, identity: &PlatformIdentity) -> Result<()> {
         sqlx::query(
-            "INSERT INTO user_platform_identities \
-             (id, user_id, platform, platform_user_id, display_name, linked_at) \
-             VALUES ($1, $2, $3, $4, $5, $6)",
+            "INSERT INTO user_platform_identities (id, user_id, platform, platform_user_id, \
+             display_name, linked_at) VALUES ($1, $2, $3, $4, $5, $6)",
         )
         .bind(identity.id)
         .bind(identity.user_id)
@@ -273,7 +269,9 @@ impl UserStore for PgUserStore {
 /// - `root` — `Role::Root` + `Permission::All`
 /// - `system` — `Role::Admin` + `Permission::All` (used by background workers
 ///   via `Principal::admin("system")`)
-pub async fn ensure_default_users(pool: &PgPool) -> std::result::Result<(), crate::error::BootError> {
+pub async fn ensure_default_users(
+    pool: &PgPool,
+) -> std::result::Result<(), crate::error::BootError> {
     let store = PgUserStore::new(pool.clone());
 
     if store
@@ -284,12 +282,11 @@ pub async fn ensure_default_users(pool: &PgPool) -> std::result::Result<(), crat
         })?
         .is_none()
     {
-        store
-            .create(&KernelUser::root())
-            .await
-            .map_err(|e| crate::error::BootError::UserStore {
+        store.create(&KernelUser::root()).await.map_err(|e| {
+            crate::error::BootError::UserStore {
                 message: e.to_string(),
-            })?;
+            }
+        })?;
         info!("kernel: root user created");
     }
 
@@ -301,12 +298,11 @@ pub async fn ensure_default_users(pool: &PgPool) -> std::result::Result<(), crat
         })?
         .is_none()
     {
-        store
-            .create(&KernelUser::system())
-            .await
-            .map_err(|e| crate::error::BootError::UserStore {
+        store.create(&KernelUser::system()).await.map_err(|e| {
+            crate::error::BootError::UserStore {
                 message: e.to_string(),
-            })?;
+            }
+        })?;
         info!("kernel: system user created");
     }
 

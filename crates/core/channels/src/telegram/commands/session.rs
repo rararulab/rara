@@ -12,17 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Session management commands: `/new`, `/clear`, `/sessions`, `/usage`, `/model`.
+//! Session management commands: `/new`, `/clear`, `/sessions`, `/usage`,
+//! `/model`.
 
-use std::fmt::Write;
-use std::sync::Arc;
+use std::{fmt::Write, sync::Arc};
 
 use async_trait::async_trait;
-use rara_kernel::channel::command::{
-    CommandContext, CommandDefinition, CommandHandler, CommandInfo, CommandResult,
+use rara_kernel::{
+    channel::{
+        command::{CommandContext, CommandDefinition, CommandHandler, CommandInfo, CommandResult},
+        types::InlineButton,
+    },
+    error::KernelError,
 };
-use rara_kernel::channel::types::InlineButton;
-use rara_kernel::error::KernelError;
 
 use super::client::BotServiceClient;
 
@@ -35,9 +37,7 @@ pub struct SessionCommandHandler {
 }
 
 impl SessionCommandHandler {
-    pub fn new(client: Arc<dyn BotServiceClient>) -> Self {
-        Self { client }
-    }
+    pub fn new(client: Arc<dyn BotServiceClient>) -> Self { Self { client } }
 }
 
 #[async_trait]
@@ -45,29 +45,29 @@ impl CommandHandler for SessionCommandHandler {
     fn commands(&self) -> Vec<CommandDefinition> {
         vec![
             CommandDefinition {
-                name: "new".to_owned(),
+                name:        "new".to_owned(),
                 description: "Start a new chat session".to_owned(),
-                usage: Some("/new".to_owned()),
+                usage:       Some("/new".to_owned()),
             },
             CommandDefinition {
-                name: "clear".to_owned(),
+                name:        "clear".to_owned(),
                 description: "Clear current session history".to_owned(),
-                usage: Some("/clear".to_owned()),
+                usage:       Some("/clear".to_owned()),
             },
             CommandDefinition {
-                name: "sessions".to_owned(),
+                name:        "sessions".to_owned(),
                 description: "List and switch chat sessions".to_owned(),
-                usage: Some("/sessions".to_owned()),
+                usage:       Some("/sessions".to_owned()),
             },
             CommandDefinition {
-                name: "usage".to_owned(),
+                name:        "usage".to_owned(),
                 description: "Show current session info".to_owned(),
-                usage: Some("/usage".to_owned()),
+                usage:       Some("/usage".to_owned()),
             },
             CommandDefinition {
-                name: "model".to_owned(),
+                name:        "model".to_owned(),
                 description: "Show or switch the AI model".to_owned(),
-                usage: Some("/model [name]".to_owned()),
+                usage:       Some("/model [name]".to_owned()),
             },
         ]
     }
@@ -90,10 +90,7 @@ impl CommandHandler for SessionCommandHandler {
 
 impl SessionCommandHandler {
     /// `/new` — create a new session and bind the channel to it.
-    async fn handle_new(
-        &self,
-        context: &CommandContext,
-    ) -> Result<CommandResult, KernelError> {
+    async fn handle_new(&self, context: &CommandContext) -> Result<CommandResult, KernelError> {
         let chat_id = extract_chat_id(context);
         let account = extract_bot_username(context);
 
@@ -103,7 +100,11 @@ impl SessionCommandHandler {
             .as_secs();
         let key = format!("tg-{chat_id}-{now}");
 
-        match self.client.create_session(&key, Some("Telegram Chat")).await {
+        match self
+            .client
+            .create_session(&key, Some("Telegram Chat"))
+            .await
+        {
             Ok(()) => {
                 let _ = self
                     .client
@@ -118,27 +119,18 @@ impl SessionCommandHandler {
     }
 
     /// `/clear` — clear all messages in the current session.
-    async fn handle_clear(
-        &self,
-        context: &CommandContext,
-    ) -> Result<CommandResult, KernelError> {
+    async fn handle_clear(&self, context: &CommandContext) -> Result<CommandResult, KernelError> {
         let chat_id = extract_chat_id(context);
         let account = extract_bot_username(context);
 
-        match self
-            .client
-            .get_channel_session(&account, &chat_id)
-            .await
-        {
+        match self.client.get_channel_session(&account, &chat_id).await {
             Ok(Some(binding)) => {
                 match self
                     .client
                     .clear_session_messages(&binding.session_key)
                     .await
                 {
-                    Ok(()) => Ok(CommandResult::Text(
-                        "Session history cleared.".to_owned(),
-                    )),
+                    Ok(()) => Ok(CommandResult::Text("Session history cleared.".to_owned())),
                     Err(e) => Ok(CommandResult::Text(format!("Failed to clear: {e}"))),
                 }
             }
@@ -158,11 +150,7 @@ impl SessionCommandHandler {
         let account = extract_bot_username(context);
 
         // Find the currently active session key.
-        let active_key = match self
-            .client
-            .get_channel_session(&account, &chat_id)
-            .await
-        {
+        let active_key = match self.client.get_channel_session(&account, &chat_id).await {
             Ok(Some(binding)) => Some(binding.session_key),
             Ok(None) => None,
             Err(e) => {
@@ -175,9 +163,7 @@ impl SessionCommandHandler {
         let sessions = match self.client.list_sessions(SESSIONS_LIST_LIMIT).await {
             Ok(s) => s,
             Err(e) => {
-                return Ok(CommandResult::Text(format!(
-                    "Failed to list sessions: {e}"
-                )));
+                return Ok(CommandResult::Text(format!("Failed to list sessions: {e}")));
             }
         };
 
@@ -208,9 +194,9 @@ impl SessionCommandHandler {
                 let label = format!("Switch to: {}", truncate_str(title, 30));
                 let cb_data = format!("switch:{}", truncate_str(&s.key, 56));
                 keyboard_rows.push(vec![InlineButton {
-                    text: label,
+                    text:          label,
                     callback_data: Some(cb_data),
-                    url: None,
+                    url:           None,
                 }]);
             }
         }
@@ -219,25 +205,18 @@ impl SessionCommandHandler {
             Ok(CommandResult::Html(text))
         } else {
             Ok(CommandResult::HtmlWithKeyboard {
-                html: text,
+                html:     text,
                 keyboard: keyboard_rows,
             })
         }
     }
 
     /// `/usage` — show details about the current session.
-    async fn handle_usage(
-        &self,
-        context: &CommandContext,
-    ) -> Result<CommandResult, KernelError> {
+    async fn handle_usage(&self, context: &CommandContext) -> Result<CommandResult, KernelError> {
         let chat_id = extract_chat_id(context);
         let account = extract_bot_username(context);
 
-        let session_key = match self
-            .client
-            .get_channel_session(&account, &chat_id)
-            .await
-        {
+        let session_key = match self.client.get_channel_session(&account, &chat_id).await {
             Ok(Some(binding)) => binding.session_key,
             Ok(None) => {
                 return Ok(CommandResult::Text(
@@ -277,11 +256,7 @@ impl SessionCommandHandler {
                 );
                 if let Some(ref preview) = detail.preview {
                     let truncated = truncate_str(preview, 200);
-                    let _ = writeln!(
-                        text,
-                        "\n<b>Last message:</b>\n{}",
-                        html_escape(truncated)
-                    );
+                    let _ = writeln!(text, "\n<b>Last message:</b>\n{}", html_escape(truncated));
                 }
                 Ok(CommandResult::Html(text))
             }
@@ -300,11 +275,7 @@ impl SessionCommandHandler {
         let chat_id = extract_chat_id(context);
         let account = extract_bot_username(context);
 
-        let session_key = match self
-            .client
-            .get_channel_session(&account, &chat_id)
-            .await
-        {
+        let session_key = match self.client.get_channel_session(&account, &chat_id).await {
             Ok(Some(binding)) => binding.session_key,
             Ok(None) => {
                 return Ok(CommandResult::Text(
@@ -326,8 +297,8 @@ impl SessionCommandHandler {
                 Ok(detail) => {
                     let model = detail.model.as_deref().unwrap_or("(default)");
                     Ok(CommandResult::Html(format!(
-                        "Session <code>{}</code>\nModel: <b>{}</b>\n\n\
-                         Switch: <code>/model model-name</code>",
+                        "Session <code>{}</code>\nModel: <b>{}</b>\n\nSwitch: <code>/model \
+                         model-name</code>",
                         html_escape(&detail.key),
                         html_escape(model),
                     )))
@@ -351,9 +322,7 @@ impl SessionCommandHandler {
                         html_escape(model),
                     )))
                 }
-                Err(e) => Ok(CommandResult::Text(format!(
-                    "Failed to update model: {e}"
-                ))),
+                Err(e) => Ok(CommandResult::Text(format!("Failed to update model: {e}"))),
             }
         }
     }
@@ -466,10 +435,7 @@ mod tests {
             Ok(())
         }
 
-        async fn clear_session_messages(
-            &self,
-            _session_key: &str,
-        ) -> Result<(), BotServiceError> {
+        async fn clear_session_messages(&self, _session_key: &str) -> Result<(), BotServiceError> {
             Ok(())
         }
 
@@ -479,32 +445,29 @@ mod tests {
         ) -> Result<Vec<SessionListItem>, BotServiceError> {
             Ok(vec![
                 SessionListItem {
-                    key: "tg-123-100".to_owned(),
-                    title: Some("Session A".to_owned()),
+                    key:           "tg-123-100".to_owned(),
+                    title:         Some("Session A".to_owned()),
                     message_count: 5,
-                    updated_at: "2026-01-01T00:00:00Z".to_owned(),
+                    updated_at:    "2026-01-01T00:00:00Z".to_owned(),
                 },
                 SessionListItem {
-                    key: "tg-123-200".to_owned(),
-                    title: Some("Session B".to_owned()),
+                    key:           "tg-123-200".to_owned(),
+                    title:         Some("Session B".to_owned()),
                     message_count: 3,
-                    updated_at: "2026-01-02T00:00:00Z".to_owned(),
+                    updated_at:    "2026-01-02T00:00:00Z".to_owned(),
                 },
             ])
         }
 
-        async fn get_session(
-            &self,
-            key: &str,
-        ) -> Result<SessionDetail, BotServiceError> {
+        async fn get_session(&self, key: &str) -> Result<SessionDetail, BotServiceError> {
             Ok(SessionDetail {
-                key: key.to_owned(),
-                title: Some("Test Session".to_owned()),
-                model: Some("gpt-4o".to_owned()),
+                key:           key.to_owned(),
+                title:         Some("Test Session".to_owned()),
+                model:         Some("gpt-4o".to_owned()),
                 message_count: 42,
-                preview: Some("Hello world".to_owned()),
-                created_at: "2026-01-01T00:00:00Z".to_owned(),
-                updated_at: "2026-01-02T12:30:00Z".to_owned(),
+                preview:       Some("Hello world".to_owned()),
+                created_at:    "2026-01-01T00:00:00Z".to_owned(),
+                updated_at:    "2026-01-02T12:30:00Z".to_owned(),
             })
         }
 
@@ -514,13 +477,13 @@ mod tests {
             model: Option<&str>,
         ) -> Result<SessionDetail, BotServiceError> {
             Ok(SessionDetail {
-                key: key.to_owned(),
-                title: Some("Test Session".to_owned()),
-                model: model.map(String::from),
+                key:           key.to_owned(),
+                title:         Some("Test Session".to_owned()),
+                model:         model.map(String::from),
                 message_count: 42,
-                preview: None,
-                created_at: "2026-01-01T00:00:00Z".to_owned(),
-                updated_at: "2026-01-02T12:30:00Z".to_owned(),
+                preview:       None,
+                created_at:    "2026-01-01T00:00:00Z".to_owned(),
+                updated_at:    "2026-01-02T12:30:00Z".to_owned(),
             })
         }
 
@@ -533,18 +496,13 @@ mod tests {
             Ok(vec![])
         }
 
-        async fn submit_jd_parse(&self, _text: &str) -> Result<(), BotServiceError> {
-            Ok(())
-        }
+        async fn submit_jd_parse(&self, _text: &str) -> Result<(), BotServiceError> { Ok(()) }
 
         async fn list_mcp_servers(&self) -> Result<Vec<McpServerInfo>, BotServiceError> {
             Ok(vec![])
         }
 
-        async fn get_mcp_server(
-            &self,
-            _name: &str,
-        ) -> Result<McpServerInfo, BotServiceError> {
+        async fn get_mcp_server(&self, _name: &str) -> Result<McpServerInfo, BotServiceError> {
             Err(BotServiceError::Service {
                 message: "not found".to_owned(),
             })
@@ -561,13 +519,9 @@ mod tests {
             })
         }
 
-        async fn start_mcp_server(&self, _name: &str) -> Result<(), BotServiceError> {
-            Ok(())
-        }
+        async fn start_mcp_server(&self, _name: &str) -> Result<(), BotServiceError> { Ok(()) }
 
-        async fn remove_mcp_server(&self, _name: &str) -> Result<(), BotServiceError> {
-            Ok(())
-        }
+        async fn remove_mcp_server(&self, _name: &str) -> Result<(), BotServiceError> { Ok(()) }
 
         async fn dispatch_coding_task(
             &self,
@@ -579,9 +533,7 @@ mod tests {
             })
         }
 
-        async fn list_coding_tasks(
-            &self,
-        ) -> Result<Vec<CodingTaskSummary>, BotServiceError> {
+        async fn list_coding_tasks(&self) -> Result<Vec<CodingTaskSummary>, BotServiceError> {
             Ok(vec![])
         }
     }
@@ -592,10 +544,7 @@ mod tests {
 
     fn make_context() -> CommandContext {
         let mut metadata = HashMap::new();
-        metadata.insert(
-            "telegram_chat_id".to_owned(),
-            serde_json::json!(123),
-        );
+        metadata.insert("telegram_chat_id".to_owned(), serde_json::json!(123));
         metadata.insert(
             "telegram_bot_username".to_owned(),
             serde_json::json!("test_bot"),
@@ -604,7 +553,7 @@ mod tests {
             channel_type: ChannelType::Telegram,
             session_key: "tg:123".to_owned(),
             user: ChannelUser {
-                platform_id: "123".to_owned(),
+                platform_id:  "123".to_owned(),
                 display_name: Some("Test".to_owned()),
             },
             metadata,
@@ -615,7 +564,7 @@ mod tests {
         CommandInfo {
             name: name.to_owned(),
             args: args.to_owned(),
-            raw: if args.is_empty() {
+            raw:  if args.is_empty() {
                 format!("/{name}")
             } else {
                 format!("/{name} {args}")

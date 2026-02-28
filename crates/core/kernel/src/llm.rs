@@ -20,10 +20,9 @@ use async_trait::async_trait;
 use futures::Stream;
 use serde::{Deserialize, Serialize};
 
-use crate::model::ModelCapabilities;
-
 // Re-export ToolCall from channel::types for backward compatibility.
 pub use crate::channel::types::ToolCall;
+use crate::model::ModelCapabilities;
 
 // ---------------------------------------------------------------------------
 // Request / Response types

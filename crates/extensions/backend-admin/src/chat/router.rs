@@ -44,12 +44,13 @@ use axum::{
     response::sse::{Event, KeepAlive, Sse},
 };
 use futures::stream::StreamExt;
-use crate::chat::{error::ChatError, model_catalog::ChatModel, service::ChatService};
 use rara_sessions::types::{ChannelBinding, ChatMessage, SessionEntry, SessionKey};
 use serde::{Deserialize, Serialize};
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::instrument;
 use utoipa_axum::{router::OpenApiRouter, routes};
+
+use crate::chat::{error::ChatError, model_catalog::ChatModel, service::ChatService};
 
 // ---------------------------------------------------------------------------
 // Request / Response types

@@ -61,8 +61,8 @@ pub struct LazyMem0Client {
 }
 
 impl LazyMem0Client {
-    /// Create a new lazy client. No pod is created until [`Self::ensure_ready`] is
-    /// called.
+    /// Create a new lazy client. No pod is created until [`Self::ensure_ready`]
+    /// is called.
     pub fn new(
         pod_manager: Mem0PodManager,
         chroma_host: String,

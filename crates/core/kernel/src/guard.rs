@@ -57,17 +57,8 @@ impl Verdict {
 #[async_trait]
 pub trait Guard: Send + Sync {
     /// Check whether a tool call should be allowed.
-    async fn check_tool(
-        &self,
-        ctx: &GuardContext,
-        tool_name: &str,
-        args: &Value,
-    ) -> Verdict;
+    async fn check_tool(&self, ctx: &GuardContext, tool_name: &str, args: &Value) -> Verdict;
 
     /// Check whether model output should be allowed (content moderation).
-    async fn check_output(
-        &self,
-        ctx: &GuardContext,
-        content: &str,
-    ) -> Verdict;
+    async fn check_output(&self, ctx: &GuardContext, content: &str) -> Verdict;
 }

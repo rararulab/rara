@@ -60,14 +60,10 @@ impl ServerArgs {
                 )
             } else if let Some(ref endpoint) = config.telemetry.otlp_endpoint {
                 use common_telemetry::logging::{LoggingOptions, OtlpExportProtocol};
-                let protocol = config
-                    .telemetry
-                    .otlp_protocol
-                    .as_deref()
-                    .map(|p| match p {
-                        "grpc" => OtlpExportProtocol::Grpc,
-                        _ => OtlpExportProtocol::Http,
-                    });
+                let protocol = config.telemetry.otlp_protocol.as_deref().map(|p| match p {
+                    "grpc" => OtlpExportProtocol::Grpc,
+                    _ => OtlpExportProtocol::Http,
+                });
                 LoggingOptions {
                     enable_otlp_tracing: true,
                     otlp_endpoint: Some(endpoint.clone()),

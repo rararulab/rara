@@ -14,7 +14,8 @@
 
 //! Telegram bot command handler implementations.
 //!
-//! Each module implements [`CommandHandler`](rara_kernel::channel::command::CommandHandler)
+//! Each module implements
+//! [`CommandHandler`](rara_kernel::channel::command::CommandHandler)
 //! or [`CallbackHandler`](rara_kernel::channel::command::CallbackHandler) for a
 //! group of related bot commands.
 //!

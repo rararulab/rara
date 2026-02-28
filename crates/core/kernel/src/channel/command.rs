@@ -39,18 +39,18 @@ pub struct CommandInfo {
     /// Raw argument string after the command name.
     pub args: String,
     /// The complete raw text including the command prefix.
-    pub raw: String,
+    pub raw:  String,
 }
 
 /// Definition of a supported command (for help text generation).
 #[derive(Debug, Clone)]
 pub struct CommandDefinition {
     /// Command name without slash (e.g. "search").
-    pub name: String,
+    pub name:        String,
     /// Human-readable description (e.g. "Search for jobs").
     pub description: String,
     /// Usage example (e.g. "/search <keywords> [@ location]").
-    pub usage: Option<String>,
+    pub usage:       Option<String>,
 }
 
 /// Context available to command handlers.
@@ -59,11 +59,11 @@ pub struct CommandContext {
     /// Which channel the command came from.
     pub channel_type: ChannelType,
     /// Session key for the conversation.
-    pub session_key: String,
+    pub session_key:  String,
     /// User who issued the command.
-    pub user: ChannelUser,
+    pub user:         ChannelUser,
     /// Adapter-specific metadata from the original message.
-    pub metadata: HashMap<String, serde_json::Value>,
+    pub metadata:     HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -78,7 +78,7 @@ pub enum CommandResult {
     /// The adapter should render the keyboard as platform-specific interactive
     /// elements (e.g. Telegram inline keyboard).
     HtmlWithKeyboard {
-        html: String,
+        html:     String,
         keyboard: Vec<Vec<InlineButton>>,
     },
     /// No visible response needed (handler sent its own messages).
@@ -138,15 +138,15 @@ pub struct CallbackContext {
     /// Which channel the callback came from.
     pub channel_type: ChannelType,
     /// Session key.
-    pub session_key: String,
+    pub session_key:  String,
     /// User who triggered the callback.
-    pub user: ChannelUser,
+    pub user:         ChannelUser,
     /// The callback data string.
-    pub data: String,
+    pub data:         String,
     /// Platform-specific message ID that originated the callback.
-    pub message_id: Option<String>,
+    pub message_id:   Option<String>,
     /// Adapter-specific metadata.
-    pub metadata: HashMap<String, serde_json::Value>,
+    pub metadata:     HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -174,10 +174,7 @@ pub trait CallbackHandler: Send + Sync {
     fn prefix(&self) -> &str;
 
     /// Handle the callback and return a result.
-    async fn handle(
-        &self,
-        context: &CallbackContext,
-    ) -> Result<CallbackResult, KernelError>;
+    async fn handle(&self, context: &CallbackContext) -> Result<CallbackResult, KernelError>;
 }
 
 #[cfg(test)]
@@ -189,7 +186,7 @@ mod tests {
         let cmd = CommandInfo {
             name: "search".to_owned(),
             args: "rust @ remote".to_owned(),
-            raw: "/search rust @ remote".to_owned(),
+            raw:  "/search rust @ remote".to_owned(),
         };
         assert_eq!(cmd.name, "search");
         assert_eq!(cmd.args, "rust @ remote");
@@ -198,9 +195,9 @@ mod tests {
     #[test]
     fn command_definition_creation() {
         let def = CommandDefinition {
-            name: "help".to_owned(),
+            name:        "help".to_owned(),
             description: "Show help".to_owned(),
-            usage: Some("/help".to_owned()),
+            usage:       Some("/help".to_owned()),
         };
         assert_eq!(def.name, "help");
     }

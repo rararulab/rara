@@ -15,9 +15,8 @@
 //! Telegram channel adapter and support modules.
 
 pub mod adapter;
-pub mod commands;pub mod contacts;
+pub mod commands;
+pub mod contacts;
 pub mod markdown;
 
-pub use adapter::TelegramAdapter;
-pub use adapter::TelegramConfig;
-pub use adapter::telegram_to_raw_platform_message;
+pub use adapter::{TelegramAdapter, TelegramConfig, telegram_to_raw_platform_message};

@@ -19,6 +19,4 @@ use std::sync::Arc;
 use rara_kernel::io::stream::StreamHub;
 
 /// Create a default StreamHub with the given per-stream broadcast capacity.
-pub fn default_stream_hub(capacity: usize) -> Arc<StreamHub> {
-    Arc::new(StreamHub::new(capacity))
-}
+pub fn default_stream_hub(capacity: usize) -> Arc<StreamHub> { Arc::new(StreamHub::new(capacity)) }

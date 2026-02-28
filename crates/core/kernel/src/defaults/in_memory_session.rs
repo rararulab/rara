@@ -1,3 +1,17 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::collections::HashMap;
 
 use async_trait::async_trait;
@@ -47,7 +61,7 @@ impl SessionStore for InMemorySessionStore {
         let data = sessions.entry(session_id).or_insert_with(|| {
             let now = Timestamp::now();
             SessionData {
-                meta: SessionMeta {
+                meta:     SessionMeta {
                     id:         session_id,
                     title:      None,
                     created_at: now,
@@ -67,7 +81,7 @@ impl SessionStore for InMemorySessionStore {
         let data = sessions.entry(session_id).or_insert_with(|| {
             let now = Timestamp::now();
             SessionData {
-                meta: SessionMeta {
+                meta:     SessionMeta {
                     id:         session_id,
                     title:      None,
                     created_at: now,
@@ -83,8 +97,9 @@ impl SessionStore for InMemorySessionStore {
         let mut sessions = self.sessions.write().await;
         if let Some(data) = sessions.get_mut(&session_id) {
             data.messages.clear();
-            data.messages
-                .push(ChatMessage::system(format!("[Compacted summary] {summary}")));
+            data.messages.push(ChatMessage::system(format!(
+                "[Compacted summary] {summary}"
+            )));
             data.meta.updated_at = Timestamp::now();
         }
         Ok(())

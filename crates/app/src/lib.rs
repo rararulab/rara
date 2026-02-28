@@ -342,10 +342,14 @@ impl AppConfig {
 
         // Construct Kernel for the I/O pipeline.
         let kernel = {
-            use rara_kernel::kernel::{Kernel, KernelConfig};
-            use rara_kernel::defaults::noop::{NoopEventBus, NoopGuard, NoopMemory};
-            use rara_kernel::defaults::noop_user_store::NoopUserStore;
-            use rara_kernel::process::manifest_loader::ManifestLoader;
+            use rara_kernel::{
+                defaults::{
+                    noop::{NoopEventBus, NoopGuard, NoopMemory},
+                    noop_user_store::NoopUserStore,
+                },
+                kernel::{Kernel, KernelConfig},
+                process::manifest_loader::ManifestLoader,
+            };
 
             let config = KernelConfig::default();
             let mut loader = ManifestLoader::new();
@@ -397,10 +401,7 @@ impl AppConfig {
         // Start Telegram adapter with the I/O Bus ingress pipeline.
         if let Some(ref tg_adapter) = telegram_adapter {
             use rara_kernel::channel::adapter::ChannelAdapter as _;
-            match tg_adapter
-                .start(io_pipeline.ingress_pipeline.clone())
-                .await
-            {
+            match tg_adapter.start(io_pipeline.ingress_pipeline.clone()).await {
                 Ok(()) => info!("Telegram adapter started (I/O Bus)"),
                 Err(e) => warn!(
                     error = %e,

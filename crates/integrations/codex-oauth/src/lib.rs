@@ -48,8 +48,8 @@ pub const CODEX_SCOPES: &str = "openid profile email offline_access";
 pub const CODEX_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
 /// Local port that the ephemeral callback server binds to.
 pub const CODEX_CALLBACK_PORT: u16 = 1455;
-/// Environment variable for the frontend base URL used for post-OAuth redirects.
-/// Falls back to `http://localhost:5173`.
+/// Environment variable for the frontend base URL used for post-OAuth
+/// redirects. Falls back to `http://localhost:5173`.
 pub const FRONTEND_BASE_URL_ENV: &str = "RARA_FRONTEND_URL";
 /// Environment variable used to override OAuth client id.
 pub const CODEX_CLIENT_ID_ENV: &str = "RARA_CODEX_CLIENT_ID";
@@ -91,10 +91,7 @@ struct TokenResponse {
 ///
 /// Uses the fixed redirect URI `http://localhost:1455/auth/callback` that is
 /// pre-registered with the Codex public OAuth client.
-pub fn build_auth_url(
-    state: &str,
-    code_challenge: &str,
-) -> Result<String, String> {
+pub fn build_auth_url(state: &str, code_challenge: &str) -> Result<String, String> {
     let client_id = codex_client_id();
     let mut url = reqwest::Url::parse(CODEX_AUTH_ENDPOINT).map_err(|e| e.to_string())?;
     url.query_pairs_mut()
@@ -290,10 +287,7 @@ pub fn frontend_base_url() -> String {
 /// that the port is freed. This makes repeated `/start` calls safe.
 pub async fn start_callback_server() -> Result<(), String> {
     // Shut down any previous callback server.
-    let old_cancel = CALLBACK_SHUTDOWN
-        .lock()
-        .ok()
-        .and_then(|mut g| g.take());
+    let old_cancel = CALLBACK_SHUTDOWN.lock().ok().and_then(|mut g| g.take());
     if let Some(old) = old_cancel {
         old.cancel();
         // Give the old server a moment to release the socket.
@@ -374,8 +368,7 @@ async fn handle_callback_inner(query: &CallbackQuery) -> Result<(), String> {
         return Err(format!("provider returned error: {oauth_err}"));
     }
 
-    let pending = load_pending_oauth()?
-        .ok_or_else(|| "no pending oauth state found".to_owned())?;
+    let pending = load_pending_oauth()?.ok_or_else(|| "no pending oauth state found".to_owned())?;
 
     validate_state(&pending.state, query.state.as_deref())?;
 

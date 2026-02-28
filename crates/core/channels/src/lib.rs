@@ -14,7 +14,8 @@
 
 //! Channel adapter implementations for the rara platform.
 //!
-//! This crate provides concrete [`ChannelAdapter`](rara_kernel::channel::adapter::ChannelAdapter)
+//! This crate provides concrete
+//! [`ChannelAdapter`](rara_kernel::channel::adapter::ChannelAdapter)
 //! implementations for different communication platforms.
 //!
 //! ## Available adapters

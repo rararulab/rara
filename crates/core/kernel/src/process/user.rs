@@ -52,28 +52,28 @@ pub enum Permission {
 /// The `name` field is the primary lookup key used by [`Principal::from_user`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KernelUser {
-    pub id: uuid::Uuid,
-    pub name: String,
-    pub role: Role,
+    pub id:          uuid::Uuid,
+    pub name:        String,
+    pub role:        Role,
     pub permissions: Vec<Permission>,
-    pub enabled: bool,
-    pub created_at: jiff::Timestamp,
-    pub updated_at: jiff::Timestamp,
+    pub enabled:     bool,
+    pub created_at:  jiff::Timestamp,
+    pub updated_at:  jiff::Timestamp,
 }
 
 /// Platform identity binding — one kernel user can have multiple platform
 /// identities (e.g. Telegram, Web, CLI).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlatformIdentity {
-    pub id: uuid::Uuid,
-    pub user_id: uuid::Uuid,
+    pub id:               uuid::Uuid,
+    pub user_id:          uuid::Uuid,
     /// Platform name: "telegram", "web", "cli", etc.
-    pub platform: String,
+    pub platform:         String,
     /// Platform-specific user identifier.
     pub platform_user_id: String,
     /// Human-readable display name, if available.
-    pub display_name: Option<String>,
-    pub linked_at: jiff::Timestamp,
+    pub display_name:     Option<String>,
+    pub linked_at:        jiff::Timestamp,
 }
 
 /// Well-known user name for the root superuser.
@@ -85,13 +85,13 @@ impl KernelUser {
     /// Create the root superuser — `Role::Root` + `Permission::All`.
     pub fn root() -> Self {
         Self {
-            id: uuid::Uuid::new_v4(),
-            name: ROOT_USER_NAME.to_string(),
-            role: Role::Root,
+            id:          uuid::Uuid::new_v4(),
+            name:        ROOT_USER_NAME.to_string(),
+            role:        Role::Root,
             permissions: vec![Permission::All],
-            enabled: true,
-            created_at: jiff::Timestamp::now(),
-            updated_at: jiff::Timestamp::now(),
+            enabled:     true,
+            created_at:  jiff::Timestamp::now(),
+            updated_at:  jiff::Timestamp::now(),
         }
     }
 
@@ -100,13 +100,13 @@ impl KernelUser {
     /// Used by background workers via `Principal::admin("system")`.
     pub fn system() -> Self {
         Self {
-            id: uuid::Uuid::new_v4(),
-            name: SYSTEM_USER_NAME.to_string(),
-            role: Role::Admin,
+            id:          uuid::Uuid::new_v4(),
+            name:        SYSTEM_USER_NAME.to_string(),
+            role:        Role::Admin,
             permissions: vec![Permission::All],
-            enabled: true,
-            created_at: jiff::Timestamp::now(),
-            updated_at: jiff::Timestamp::now(),
+            enabled:     true,
+            created_at:  jiff::Timestamp::now(),
+            updated_at:  jiff::Timestamp::now(),
         }
     }
 
@@ -175,13 +175,13 @@ mod tests {
     #[test]
     fn regular_user_only_has_granted_permissions() {
         let user = KernelUser {
-            id: uuid::Uuid::new_v4(),
-            name: "alice".to_string(),
-            role: Role::User,
+            id:          uuid::Uuid::new_v4(),
+            name:        "alice".to_string(),
+            role:        Role::User,
             permissions: vec![Permission::Spawn],
-            enabled: true,
-            created_at: jiff::Timestamp::now(),
-            updated_at: jiff::Timestamp::now(),
+            enabled:     true,
+            created_at:  jiff::Timestamp::now(),
+            updated_at:  jiff::Timestamp::now(),
         };
         assert!(user.has_permission(&Permission::Spawn));
         assert!(!user.has_permission(&Permission::ManageUsers));
@@ -198,13 +198,13 @@ mod tests {
     #[test]
     fn can_use_tool_with_use_all_tools() {
         let user = KernelUser {
-            id: uuid::Uuid::new_v4(),
-            name: "bob".to_string(),
-            role: Role::User,
+            id:          uuid::Uuid::new_v4(),
+            name:        "bob".to_string(),
+            role:        Role::User,
             permissions: vec![Permission::UseAllTools],
-            enabled: true,
-            created_at: jiff::Timestamp::now(),
-            updated_at: jiff::Timestamp::now(),
+            enabled:     true,
+            created_at:  jiff::Timestamp::now(),
+            updated_at:  jiff::Timestamp::now(),
         };
         assert!(user.can_use_tool("bash"));
         assert!(user.can_use_tool("read_file"));
@@ -213,13 +213,13 @@ mod tests {
     #[test]
     fn can_use_tool_with_specific_tool() {
         let user = KernelUser {
-            id: uuid::Uuid::new_v4(),
-            name: "carol".to_string(),
-            role: Role::User,
+            id:          uuid::Uuid::new_v4(),
+            name:        "carol".to_string(),
+            role:        Role::User,
             permissions: vec![Permission::UseTool("bash".to_string())],
-            enabled: true,
-            created_at: jiff::Timestamp::now(),
-            updated_at: jiff::Timestamp::now(),
+            enabled:     true,
+            created_at:  jiff::Timestamp::now(),
+            updated_at:  jiff::Timestamp::now(),
         };
         assert!(user.can_use_tool("bash"));
         assert!(!user.can_use_tool("read_file"));

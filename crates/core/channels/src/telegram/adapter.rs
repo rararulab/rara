@@ -41,34 +41,39 @@
 //! └─────────────────────────────────────────┘
 //! ```
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::RwLock as StdRwLock;
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock as StdRwLock},
+};
 
 use async_trait::async_trait;
-use rara_kernel::channel::adapter::ChannelAdapter;
-use rara_kernel::channel::command::{
-    CallbackHandler, CommandHandler,
+use rara_kernel::{
+    channel::{
+        adapter::ChannelAdapter,
+        command::{CallbackHandler, CommandHandler},
+        types::{
+            AgentPhase, ChannelType, InlineButton, MessageContent, OutboundMessage, ReplyMarkup,
+        },
+    },
+    error::KernelError,
+    io::{
+        egress::{EgressAdapter, EgressError, Endpoint, EndpointAddress, PlatformOutbound},
+        ingress::{InboundSink, RawPlatformMessage},
+        types::{IngestError, InteractionType, ReplyContext as IoReplyContext},
+    },
 };
-use crate::telegram::contacts::ContactTracker;
-use rara_kernel::channel::types::{
-    AgentPhase, ChannelType, InlineButton,
-    MessageContent, OutboundMessage, ReplyMarkup,
+use teloxide::{
+    payloads::{EditMessageTextSetters, GetUpdatesSetters, SendMessageSetters, SendPhotoSetters},
+    requests::{Request, Requester},
+    types::{
+        AllowedUpdate, ChatAction, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile,
+        MessageId, ParseMode, ReplyParameters, Update, UpdateKind,
+    },
 };
-use rara_kernel::error::KernelError;
-use rara_kernel::io::egress::{EgressAdapter, EgressError, Endpoint, EndpointAddress, PlatformOutbound};
-use rara_kernel::io::ingress::{InboundSink, RawPlatformMessage};
-use rara_kernel::io::types::{IngestError, InteractionType, ReplyContext as IoReplyContext};
-use teloxide::payloads::{
-    EditMessageTextSetters, GetUpdatesSetters, SendMessageSetters, SendPhotoSetters,
-};
-use teloxide::requests::{Request, Requester};
-use teloxide::types::{
-    AllowedUpdate, ChatAction, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile,
-    MessageId, ParseMode, ReplyParameters, Update, UpdateKind,
-};
-use tokio::sync::{watch, RwLock};
+use tokio::sync::{RwLock, watch};
 use tracing::{error, info, warn};
+
+use crate::telegram::contacts::ContactTracker;
 
 /// Long-polling timeout in seconds (Telegram server-side wait).
 const POLL_TIMEOUT_SECS: u32 = 30;
@@ -93,15 +98,16 @@ const MAX_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(60);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TelegramConfig {
     /// Primary chat ID for privileged commands (e.g. /search, /jd).
-    pub primary_chat_id: Option<i64>,
-    /// Allowed group chat ID. Only this group is authorized for bot interaction.
+    pub primary_chat_id:       Option<i64>,
+    /// Allowed group chat ID. Only this group is authorized for bot
+    /// interaction.
     pub allowed_group_chat_id: Option<i64>,
 }
 
 impl Default for TelegramConfig {
     fn default() -> Self {
         Self {
-            primary_chat_id: None,
+            primary_chat_id:       None,
             allowed_group_chat_id: None,
         }
     }
@@ -111,42 +117,43 @@ impl Default for TelegramConfig {
 ///
 /// # Configuration
 ///
-/// - `allowed_chat_ids` — when non-empty, only messages from these chat IDs
-///   are processed. Messages from other chats are silently dropped. When empty,
-///   all messages are accepted.
+/// - `allowed_chat_ids` — when non-empty, only messages from these chat IDs are
+///   processed. Messages from other chats are silently dropped. When empty, all
+///   messages are accepted.
 ///
 /// - `polling_timeout` — long-poll timeout in seconds (default: 30). The HTTP
 ///   client timeout is set 15 seconds higher to avoid premature disconnects.
 ///
-/// - `config` — runtime-updatable settings (primary chat ID, allowed group
-///   chat ID). Obtain a shared handle via [`config_handle`](Self::config_handle)
-///   and mutate through `std::sync::RwLock::write()`.
+/// - `config` — runtime-updatable settings (primary chat ID, allowed group chat
+///   ID). Obtain a shared handle via [`config_handle`](Self::config_handle) and
+///   mutate through `std::sync::RwLock::write()`.
 ///
 /// # Lifecycle
 ///
 /// 1. Call [`start`](ChannelAdapter::start) with an [`InboundSink`]. This
 ///    spawns a background tokio task that polls for updates.
-/// 2. For each inbound message, the adapter converts the Telegram
-///    [`Update`] to a [`RawPlatformMessage`] and hands it to the sink.
-///    Outbound delivery is handled separately via [`EgressAdapter::send`].
+/// 2. For each inbound message, the adapter converts the Telegram [`Update`] to
+///    a [`RawPlatformMessage`] and hands it to the sink. Outbound delivery is
+///    handled separately via [`EgressAdapter::send`].
 /// 3. Call [`stop`](ChannelAdapter::stop) to signal the polling loop to exit
 ///    gracefully.
 pub struct TelegramAdapter {
-    bot: teloxide::Bot,
-    allowed_chat_ids: Vec<i64>,
-    polling_timeout: u32,
-    shutdown_tx: watch::Sender<bool>,
-    shutdown_rx: watch::Receiver<bool>,
+    bot:               teloxide::Bot,
+    allowed_chat_ids:  Vec<i64>,
+    polling_timeout:   u32,
+    shutdown_tx:       watch::Sender<bool>,
+    shutdown_rx:       watch::Receiver<bool>,
     /// Bot username from getMe (set during start).
-    bot_username: Arc<RwLock<Option<String>>>,
+    bot_username:      Arc<RwLock<Option<String>>>,
     /// Registered command handlers for slash commands.
-    command_handlers: Vec<Arc<dyn CommandHandler>>,
+    command_handlers:  Vec<Arc<dyn CommandHandler>>,
     /// Registered callback handlers for interactive elements.
     callback_handlers: Vec<Arc<dyn CallbackHandler>>,
-    /// Runtime-updatable configuration (primary chat ID, allowed group chat ID).
-    config: Arc<StdRwLock<TelegramConfig>>,
+    /// Runtime-updatable configuration (primary chat ID, allowed group chat
+    /// ID).
+    config:            Arc<StdRwLock<TelegramConfig>>,
     /// Optional contact tracker for recording username-to-chat_id mappings.
-    contact_tracker: Option<Arc<dyn ContactTracker>>,
+    contact_tracker:   Option<Arc<dyn ContactTracker>>,
 }
 
 impl TelegramAdapter {
@@ -233,9 +240,7 @@ impl TelegramAdapter {
     /// Callers can use this to update configuration at runtime (e.g. change the
     /// primary chat ID) without restarting the adapter. The polling loop reads
     /// the config on every update, so changes take effect immediately.
-    pub fn config_handle(&self) -> Arc<StdRwLock<TelegramConfig>> {
-        Arc::clone(&self.config)
-    }
+    pub fn config_handle(&self) -> Arc<StdRwLock<TelegramConfig>> { Arc::clone(&self.config) }
 
     /// Read a snapshot of the current config.
     ///
@@ -272,15 +277,9 @@ impl TelegramAdapter {
 
 #[async_trait]
 impl EgressAdapter for TelegramAdapter {
-    fn channel_type(&self) -> ChannelType {
-        ChannelType::Telegram
-    }
+    fn channel_type(&self) -> ChannelType { ChannelType::Telegram }
 
-    async fn send(
-        &self,
-        endpoint: &Endpoint,
-        msg: PlatformOutbound,
-    ) -> Result<(), EgressError> {
+    async fn send(&self, endpoint: &Endpoint, msg: PlatformOutbound) -> Result<(), EgressError> {
         let (chat_id, _thread_id) = match &endpoint.address {
             EndpointAddress::Telegram { chat_id, thread_id } => (*chat_id, *thread_id),
             _ => {
@@ -322,15 +321,12 @@ impl EgressAdapter for TelegramAdapter {
                 }
             }
             PlatformOutbound::StreamChunk {
-                delta,
-                edit_target,
-                ..
+                delta, edit_target, ..
             } => {
                 if let Some(ref target_id) = edit_target {
                     // Edit an existing message with accumulated text.
                     if let Ok(msg_id) = parse_message_id(target_id) {
-                        let html =
-                            crate::telegram::markdown::markdown_to_telegram_html(&delta);
+                        let html = crate::telegram::markdown::markdown_to_telegram_html(&delta);
                         let _ = self
                             .bot
                             .edit_message_text(ChatId(chat_id), msg_id, &html)
@@ -339,10 +335,7 @@ impl EgressAdapter for TelegramAdapter {
                     }
                 } else {
                     // No edit target — send as a new message.
-                    let _ = self
-                        .bot
-                        .send_message(ChatId(chat_id), &delta)
-                        .await;
+                    let _ = self.bot.send_message(ChatId(chat_id), &delta).await;
                 }
             }
             PlatformOutbound::Progress { text, .. } => {
@@ -353,10 +346,7 @@ impl EgressAdapter for TelegramAdapter {
                     .await;
                 // If there's progress text, send it as a message.
                 if !text.is_empty() {
-                    let _ = self
-                        .bot
-                        .send_message(ChatId(chat_id), &text)
-                        .await;
+                    let _ = self.bot.send_message(ChatId(chat_id), &text).await;
                 }
             }
         }
@@ -367,14 +357,9 @@ impl EgressAdapter for TelegramAdapter {
 
 #[async_trait]
 impl ChannelAdapter for TelegramAdapter {
-    fn channel_type(&self) -> ChannelType {
-        ChannelType::Telegram
-    }
+    fn channel_type(&self) -> ChannelType { ChannelType::Telegram }
 
-    async fn start(
-        &self,
-        sink: Arc<dyn InboundSink>,
-    ) -> Result<(), KernelError> {
+    async fn start(&self, sink: Arc<dyn InboundSink>) -> Result<(), KernelError> {
         // Delete any existing webhook so getUpdates works.
         self.bot
             .delete_webhook()
@@ -516,11 +501,7 @@ impl ChannelAdapter for TelegramAdapter {
         Ok(())
     }
 
-    async fn set_phase(
-        &self,
-        _session_key: &str,
-        _phase: AgentPhase,
-    ) -> Result<(), KernelError> {
+    async fn set_phase(&self, _session_key: &str, _phase: AgentPhase) -> Result<(), KernelError> {
         // No-op for now. Could be implemented as emoji reactions in the future.
         Ok(())
     }
@@ -676,7 +657,10 @@ async fn handle_update(
 
     // Check if this chat is allowed.
     if !allowed_chat_ids.is_empty() && !allowed_chat_ids.contains(&chat_id) {
-        warn!(chat_id, "telegram adapter: dropping message from unauthorized chat");
+        warn!(
+            chat_id,
+            "telegram adapter: dropping message from unauthorized chat"
+        );
         return;
     }
 
@@ -712,8 +696,8 @@ async fn handle_update(
                 let _ = bot
                     .send_message(
                         ChatId(chat_id),
-                        "This group is not authorized. Please configure the allowed group \
-                         chat ID in the adapter settings.",
+                        "This group is not authorized. Please configure the allowed group chat ID \
+                         in the adapter settings.",
                     )
                     .await;
                 return;
@@ -739,7 +723,10 @@ async fn handle_update(
                 let _ = bot
                     .send_message(
                         ChatId(chat_id),
-                        "\u{26a0}\u{fe0f} \u{7cfb}\u{7edf}\u{7e41}\u{5fd9}\u{ff0c}\u{8bf7}\u{7a0d}\u{540e}\u{518d}\u{8bd5}\u{3002}",
+                        "\u{26a0}\u{fe0f} \
+                         \u{7cfb}\u{7edf}\u{7e41}\u{5fd9}\u{ff0c}\u{8bf7}\u{7a0d}\u{540e}\u{518d}\\
+                         \
+                         u{8bd5}\u{3002}",
                     )
                     .await;
             }
@@ -813,9 +800,7 @@ pub fn telegram_to_raw_platform_message(
     // Build reply context.
     let reply_context = Some(IoReplyContext {
         thread_id: msg.thread_id.map(|t| t.to_string()),
-        reply_to_platform_msg_id: msg
-            .reply_to_message()
-            .map(|r| r.id.0.to_string()),
+        reply_to_platform_msg_id: msg.reply_to_message().map(|r| r.id.0.to_string()),
         interaction_type,
     });
 
@@ -857,9 +842,7 @@ pub fn telegram_to_raw_platform_message(
     })
 }
 
-pub fn format_session_key(chat_id: i64) -> String {
-    format!("tg:{chat_id}")
-}
+pub fn format_session_key(chat_id: i64) -> String { format!("tg:{chat_id}") }
 
 /// Parse a chat ID from a session key.
 ///
@@ -926,7 +909,6 @@ fn mime_to_filename(mime: &str) -> String {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Group chat helpers
 // ---------------------------------------------------------------------------
@@ -950,15 +932,8 @@ fn is_group_mention(
     // Check structured entities first (most reliable).
     if let Some(entities) = msg.parse_entities() {
         for entity in entities {
-            if matches!(
-                entity.kind(),
-                teloxide::types::MessageEntityKind::Mention
-            ) {
-                let mention = entity
-                    .text()
-                    .trim()
-                    .trim_start_matches('@')
-                    .to_lowercase();
+            if matches!(entity.kind(), teloxide::types::MessageEntityKind::Mention) {
+                let mention = entity.text().trim().trim_start_matches('@').to_lowercase();
                 if mention == expected {
                     return true;
                 }
@@ -993,7 +968,6 @@ fn strip_group_mention(text: &str, bot_username: Option<&str>) -> String {
     let mention = format!("@{username}");
     text.replace(&mention, "").trim().to_owned()
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1077,9 +1051,13 @@ mod tests {
         assert!(contains_rara_keyword("RARA please"));
         assert!(contains_rara_keyword("hello rara!"));
         // Japanese hiragana.
-        assert!(contains_rara_keyword("\u{3053}\u{3093}\u{306b}\u{3061}\u{306f}\u{3001}\u{3089}\u{3089}"));
+        assert!(contains_rara_keyword(
+            "\u{3053}\u{3093}\u{306b}\u{3061}\u{306f}\u{3001}\u{3089}\u{3089}"
+        ));
         // Japanese katakana.
-        assert!(contains_rara_keyword("\u{30e9}\u{30e9}\u{306b}\u{805e}\u{3044}\u{3066}"));
+        assert!(contains_rara_keyword(
+            "\u{30e9}\u{30e9}\u{306b}\u{805e}\u{3044}\u{3066}"
+        ));
         // Chinese characters.
         assert!(contains_rara_keyword("\u{62c9}\u{62c9}\u{4f60}\u{597d}"));
         // No match.
@@ -1121,8 +1099,7 @@ mod tests {
     #[test]
     fn test_with_allowed_group_chat_id() {
         let bot = teloxide::Bot::new("fake_token");
-        let adapter =
-            TelegramAdapter::new(bot, vec![]).with_allowed_group_chat_id(-100_999_888);
+        let adapter = TelegramAdapter::new(bot, vec![]).with_allowed_group_chat_id(-100_999_888);
         assert_eq!(
             adapter.current_config().allowed_group_chat_id,
             Some(-100_999_888)
@@ -1142,7 +1119,7 @@ mod tests {
     fn test_with_config() {
         let bot = teloxide::Bot::new("fake_token");
         let config = TelegramConfig {
-            primary_chat_id: Some(111),
+            primary_chat_id:       Some(111),
             allowed_group_chat_id: Some(-100_222),
         };
         let adapter = TelegramAdapter::new(bot, vec![]).with_config(config.clone());
@@ -1251,14 +1228,14 @@ mod tests {
         let markup = Some(ReplyMarkup::InlineKeyboard {
             rows: vec![vec![
                 InlineButton {
-                    text: "Yes".to_owned(),
+                    text:          "Yes".to_owned(),
                     callback_data: Some("yes".to_owned()),
-                    url: None,
+                    url:           None,
                 },
                 InlineButton {
-                    text: "No".to_owned(),
+                    text:          "No".to_owned(),
                     callback_data: Some("no".to_owned()),
-                    url: None,
+                    url:           None,
                 },
             ]],
         });
@@ -1273,9 +1250,9 @@ mod tests {
     fn test_convert_reply_markup_url_button() {
         let markup = Some(ReplyMarkup::InlineKeyboard {
             rows: vec![vec![InlineButton {
-                text: "Open".to_owned(),
+                text:          "Open".to_owned(),
                 callback_data: None,
-                url: Some("https://example.com".to_owned()),
+                url:           Some("https://example.com".to_owned()),
             }]],
         });
         let result = convert_reply_markup(&markup).unwrap();
@@ -1286,9 +1263,9 @@ mod tests {
     fn test_convert_reply_markup_fallback_button() {
         let markup = Some(ReplyMarkup::InlineKeyboard {
             rows: vec![vec![InlineButton {
-                text: "Click".to_owned(),
+                text:          "Click".to_owned(),
                 callback_data: None,
-                url: None,
+                url:           None,
             }]],
         });
         let result = convert_reply_markup(&markup).unwrap();
@@ -1300,20 +1277,20 @@ mod tests {
         let markup = Some(ReplyMarkup::InlineKeyboard {
             rows: vec![
                 vec![InlineButton {
-                    text: "A".to_owned(),
+                    text:          "A".to_owned(),
                     callback_data: Some("a".to_owned()),
-                    url: None,
+                    url:           None,
                 }],
                 vec![
                     InlineButton {
-                        text: "B".to_owned(),
+                        text:          "B".to_owned(),
                         callback_data: Some("b".to_owned()),
-                        url: None,
+                        url:           None,
                     },
                     InlineButton {
-                        text: "C".to_owned(),
+                        text:          "C".to_owned(),
                         callback_data: Some("c".to_owned()),
-                        url: None,
+                        url:           None,
                     },
                 ],
             ],
@@ -1381,11 +1358,7 @@ mod tests {
     }
 
     /// Build a minimal group chat message for testing.
-    fn make_test_group_message(
-        text: &str,
-        user_id: u64,
-        chat_id: i64,
-    ) -> teloxide::types::Message {
+    fn make_test_group_message(text: &str, user_id: u64, chat_id: i64) -> teloxide::types::Message {
         let json = serde_json::json!({
             "message_id": 42,
             "date": 1700000000,

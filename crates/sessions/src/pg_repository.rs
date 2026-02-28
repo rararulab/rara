@@ -356,9 +356,11 @@ impl crate::repository::SessionRepository for PgSessionRepository {
 // Kernel SessionRepository implementation
 // ---------------------------------------------------------------------------
 
-/// Implement the kernel's [`SessionRepository`](rara_kernel::session_manager::SessionRepository)
+/// Implement the kernel's
+/// [`SessionRepository`](rara_kernel::session_manager::SessionRepository)
 /// directly so that `PgSessionRepository` can be used as
-/// `Arc<dyn rara_kernel::session_manager::SessionRepository>` without a bridge adapter.
+/// `Arc<dyn rara_kernel::session_manager::SessionRepository>` without a bridge
+/// adapter.
 #[async_trait]
 impl rara_kernel::session_manager::SessionRepository for PgSessionRepository {
     async fn ensure_session(
@@ -373,25 +375,26 @@ impl rara_kernel::session_manager::SessionRepository for PgSessionRepository {
                 let now = Utc::now();
                 let entry = SessionEntry {
                     key,
-                    title:         None,
-                    model:         None,
+                    title: None,
+                    model: None,
                     system_prompt: None,
                     message_count: 0,
-                    preview:       None,
-                    metadata:      None,
-                    created_at:    now,
-                    updated_at:    now,
+                    preview: None,
+                    metadata: None,
+                    created_at: now,
+                    updated_at: now,
                 };
-                self.create_session(&entry)
-                    .await
-                    .map(|_| ())
-                    .map_err(|e| rara_kernel::session_manager::SessionManagerError::Repository {
+                self.create_session(&entry).await.map(|_| ()).map_err(|e| {
+                    rara_kernel::session_manager::SessionManagerError::Repository {
                         message: e.to_string(),
-                    })
+                    }
+                })
             }
-            Err(e) => Err(rara_kernel::session_manager::SessionManagerError::Repository {
-                message: e.to_string(),
-            }),
+            Err(e) => Err(
+                rara_kernel::session_manager::SessionManagerError::Repository {
+                    message: e.to_string(),
+                },
+            ),
         }
     }
 
@@ -400,11 +403,11 @@ impl rara_kernel::session_manager::SessionRepository for PgSessionRepository {
         id: &rara_kernel::process::SessionId,
     ) -> Result<Vec<ChatMessage>, rara_kernel::session_manager::SessionManagerError> {
         let key = SessionKey::from_raw(&id.0);
-        self.read_messages(&key, None, None)
-            .await
-            .map_err(|e| rara_kernel::session_manager::SessionManagerError::Repository {
+        self.read_messages(&key, None, None).await.map_err(|e| {
+            rara_kernel::session_manager::SessionManagerError::Repository {
                 message: e.to_string(),
-            })
+            }
+        })
     }
 
     async fn append_user_message(
@@ -417,9 +420,11 @@ impl rara_kernel::session_manager::SessionRepository for PgSessionRepository {
         self.append_message(&key, &msg)
             .await
             .map(|_| ())
-            .map_err(|e| rara_kernel::session_manager::SessionManagerError::Repository {
-                message: e.to_string(),
-            })
+            .map_err(
+                |e| rara_kernel::session_manager::SessionManagerError::Repository {
+                    message: e.to_string(),
+                },
+            )
     }
 
     async fn append_assistant_message(
@@ -432,9 +437,11 @@ impl rara_kernel::session_manager::SessionRepository for PgSessionRepository {
         self.append_message(&key, &msg)
             .await
             .map(|_| ())
-            .map_err(|e| rara_kernel::session_manager::SessionManagerError::Repository {
-                message: e.to_string(),
-            })
+            .map_err(
+                |e| rara_kernel::session_manager::SessionManagerError::Repository {
+                    message: e.to_string(),
+                },
+            )
     }
 }
 

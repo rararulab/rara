@@ -61,15 +61,15 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
 
         for job in &due_jobs {
             let manifest = AgentManifest {
-                name: format!("scheduled:{}", job.id),
-                description: format!("Scheduled job: {}", job.id),
-                model: model.clone(),
-                system_prompt: policy.clone(),
-                provider_hint: state.agent_ctx.provider_hint(),
+                name:           format!("scheduled:{}", job.id),
+                description:    format!("Scheduled job: {}", job.id),
+                model:          model.clone(),
+                system_prompt:  policy.clone(),
+                provider_hint:  state.agent_ctx.provider_hint(),
                 max_iterations: Some(state.agent_ctx.max_iterations("scheduled")),
-                tools: vec![], // inherit all tools
-                max_children: None,
-                metadata: serde_json::json!({ "job_id": job.id }),
+                tools:          vec![], // inherit all tools
+                max_children:   None,
+                metadata:       serde_json::json!({ "job_id": job.id }),
             };
 
             let session_id = SessionId::new(job.session_key.clone());

@@ -21,8 +21,8 @@
 //! Key design points:
 //! - Streams are keyed by [`StreamId`] (ULID), not `SessionId` — supports
 //!   concurrent runs on the same session.
-//! - [`StreamEvent`] has no `Done`/`Error` variants — those go through
-//!   the `OutboundBus` for durability.
+//! - [`StreamEvent`] has no `Done`/`Error` variants — those go through the
+//!   `OutboundBus` for durability.
 //! - [`StreamHandle`] is held by the agent executor; dropping it does NOT
 //!   auto-close (use explicit `close` on `StreamHub`).
 
@@ -45,21 +45,15 @@ pub struct StreamId(pub String);
 
 impl StreamId {
     /// Generate a new ULID-based stream ID.
-    pub fn new() -> Self {
-        Self(ulid::Ulid::new().to_string())
-    }
+    pub fn new() -> Self { Self(ulid::Ulid::new().to_string()) }
 }
 
 impl Default for StreamId {
-    fn default() -> Self {
-        Self::new()
-    }
+    fn default() -> Self { Self::new() }
 }
 
 impl std::fmt::Display for StreamId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(&self.0) }
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +86,7 @@ pub enum StreamEvent {
 /// Internal entry in the stream table.
 struct StreamEntry {
     session_id: SessionId,
-    tx: broadcast::Sender<StreamEvent>,
+    tx:         broadcast::Sender<StreamEvent>,
 }
 
 // ---------------------------------------------------------------------------
@@ -105,19 +99,15 @@ struct StreamEntry {
 /// [`emit`](Self::emit).
 pub struct StreamHandle {
     stream_id: StreamId,
-    tx: broadcast::Sender<StreamEvent>,
+    tx:        broadcast::Sender<StreamEvent>,
 }
 
 impl StreamHandle {
     /// Get the stream ID.
-    pub fn stream_id(&self) -> &StreamId {
-        &self.stream_id
-    }
+    pub fn stream_id(&self) -> &StreamId { &self.stream_id }
 
     /// Emit a stream event. Silently drops if no subscribers.
-    pub fn emit(&self, event: StreamEvent) {
-        let _ = self.tx.send(event);
-    }
+    pub fn emit(&self, event: StreamEvent) { let _ = self.tx.send(event); }
 }
 
 // ---------------------------------------------------------------------------
@@ -129,7 +119,7 @@ impl StreamHandle {
 /// Manages the lifecycle of per-execution streams and provides
 /// subscription endpoints for egress/frontends.
 pub struct StreamHub {
-    streams: DashMap<StreamId, StreamEntry>,
+    streams:  DashMap<StreamId, StreamEntry>,
     capacity: usize,
 }
 
@@ -160,9 +150,7 @@ impl StreamHub {
     ///
     /// This is precise — only the specified stream is removed, not other
     /// streams on the same session.
-    pub fn close(&self, stream_id: &StreamId) {
-        self.streams.remove(stream_id);
-    }
+    pub fn close(&self, stream_id: &StreamId) { self.streams.remove(stream_id); }
 
     /// Subscribe to all active streams for a given session.
     ///
@@ -259,7 +247,7 @@ mod tests {
         handle.emit(StreamEvent::TextDelta("ignored".to_string()));
         handle.emit(StreamEvent::ToolCallStart {
             name: "read_file".to_string(),
-            id: "tc-1".to_string(),
+            id:   "tc-1".to_string(),
         });
         handle.emit(StreamEvent::ToolCallEnd {
             id: "tc-1".to_string(),

@@ -17,15 +17,21 @@
 //! - [`InMemoryInboundBus`] — `Mutex<VecDeque>` + `Notify` + `AtomicUsize`
 //! - [`InMemoryOutboundBus`] — `tokio::sync::broadcast`
 
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::VecDeque,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use async_trait::async_trait;
 use tokio::sync;
 
-use crate::io::bus::{InboundBus, OutboundBus, OutboundSubscriber};
-use crate::io::types::{BusError, InboundMessage, OutboundEnvelope};
+use crate::io::{
+    bus::{InboundBus, OutboundBus, OutboundSubscriber},
+    types::{BusError, InboundMessage, OutboundEnvelope},
+};
 
 // ---------------------------------------------------------------------------
 // InMemoryInboundBus
@@ -37,9 +43,9 @@ use crate::io::types::{BusError, InboundMessage, OutboundEnvelope};
 /// (push/pop on a `VecDeque`). `tokio::sync::Notify` provides the async
 /// wakeup mechanism.
 pub struct InMemoryInboundBus {
-    queue: Mutex<VecDeque<InboundMessage>>,
-    notify: Arc<sync::Notify>,
-    pending: AtomicUsize,
+    queue:    Mutex<VecDeque<InboundMessage>>,
+    notify:   Arc<sync::Notify>,
+    pending:  AtomicUsize,
     capacity: usize,
 }
 
@@ -85,9 +91,7 @@ impl InboundBus for InMemoryInboundBus {
         self.notify.notified().await;
     }
 
-    fn pending_count(&self) -> usize {
-        self.pending.load(Ordering::Acquire)
-    }
+    fn pending_count(&self) -> usize { self.pending.load(Ordering::Acquire) }
 }
 
 // ---------------------------------------------------------------------------
@@ -154,47 +158,45 @@ impl OutboundSubscriber for BroadcastSubscriber {
 mod tests {
     use std::collections::HashMap;
 
-    use crate::channel::types::{ChannelType, MessageContent};
-    use crate::io::types::{
-        ChannelSource, MessageId, OutboundPayload, OutboundRouting,
-    };
-    use crate::process::principal::UserId;
-    use crate::process::SessionId;
-
     use super::*;
+    use crate::{
+        channel::types::{ChannelType, MessageContent},
+        io::types::{ChannelSource, MessageId, OutboundPayload, OutboundRouting},
+        process::{SessionId, principal::UserId},
+    };
 
     /// Helper: build a test InboundMessage.
     fn test_inbound(text: &str) -> InboundMessage {
         InboundMessage {
-            id: MessageId::new(),
-            source: ChannelSource {
-                channel_type: ChannelType::Telegram,
+            id:            MessageId::new(),
+            source:        ChannelSource {
+                channel_type:        ChannelType::Telegram,
                 platform_message_id: None,
-                platform_user_id: "tg-user".to_string(),
-                platform_chat_id: None,
+                platform_user_id:    "tg-user".to_string(),
+                platform_chat_id:    None,
             },
-            user: UserId("u1".to_string()),
-            session_id: SessionId::new("s1"),
-            content: MessageContent::Text(text.to_string()),
+            user:          UserId("u1".to_string()),
+            session_id:    SessionId::new("s1"),
+            content:       MessageContent::Text(text.to_string()),
             reply_context: None,
-            timestamp: jiff::Timestamp::now(),
-            metadata: HashMap::new(),
+            timestamp:     jiff::Timestamp::now(),
+            metadata:      HashMap::new(),
         }
     }
 
     /// Helper: build a test OutboundEnvelope.
     fn test_outbound(text: &str) -> OutboundEnvelope {
         OutboundEnvelope {
-            id: MessageId::new(),
+            id:          MessageId::new(),
             in_reply_to: MessageId::new(),
-            user: UserId("u1".to_string()),
-            session_id: SessionId::new("s1"),
-            routing: OutboundRouting::BroadcastAll,
-            payload: OutboundPayload::Reply {
-                content: MessageContent::Text(text.to_string()),
+            user:        UserId("u1".to_string()),
+            session_id:  SessionId::new("s1"),
+            routing:     OutboundRouting::BroadcastAll,
+            payload:     OutboundPayload::Reply {
+                content:     MessageContent::Text(text.to_string()),
                 attachments: vec![],
             },
-            timestamp: jiff::Timestamp::now(),
+            timestamp:   jiff::Timestamp::now(),
         }
     }
 

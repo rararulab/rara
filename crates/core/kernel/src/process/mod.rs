@@ -33,12 +33,10 @@ use std::collections::HashMap;
 use dashmap::DashMap;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use tokio::sync::mpsc;
-
-use crate::error::Result;
-use crate::io::types::InboundMessage;
+use crate::{error::Result, io::types::InboundMessage};
 
 /// Unique identifier for a running agent process.
 ///
@@ -50,21 +48,15 @@ pub struct AgentId(pub Uuid);
 
 impl AgentId {
     /// Generate a new random agent ID.
-    pub fn new() -> Self {
-        Self(Uuid::new_v4())
-    }
+    pub fn new() -> Self { Self(Uuid::new_v4()) }
 }
 
 impl Default for AgentId {
-    fn default() -> Self {
-        Self::new()
-    }
+    fn default() -> Self { Self::new() }
 }
 
 impl std::fmt::Display for AgentId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.0) }
 }
 
 /// Persistent session identifier (survives across agent process restarts).
@@ -76,21 +68,19 @@ pub struct SessionId(pub String);
 
 impl SessionId {
     /// Create a new session ID from any string-like value.
-    pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
-    }
+    pub fn new(id: impl Into<String>) -> Self { Self(id.into()) }
 }
 
 impl std::fmt::Display for SessionId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.0) }
 }
 
-/// Agent "binary" — static definition, loadable from YAML or constructed dynamically.
+/// Agent "binary" — static definition, loadable from YAML or constructed
+/// dynamically.
 ///
-/// An `AgentManifest` defines *what* an agent is (its model, tools, prompt, limits)
-/// but not *who* runs it or *when*. It is analogous to an executable file on disk.
+/// An `AgentManifest` defines *what* an agent is (its model, tools, prompt,
+/// limits) but not *who* runs it or *when*. It is analogous to an executable
+/// file on disk.
 ///
 /// # YAML example
 /// ```yaml
@@ -106,28 +96,29 @@ impl std::fmt::Display for SessionId {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentManifest {
     /// Unique name identifying this agent definition.
-    pub name: String,
+    pub name:           String,
     /// Human-readable description.
-    pub description: String,
+    pub description:    String,
     /// LLM model identifier (e.g., "deepseek/deepseek-chat", "gpt-4").
-    pub model: String,
+    pub model:          String,
     /// System prompt defining agent behavior.
-    pub system_prompt: String,
+    pub system_prompt:  String,
     /// Optional hint for provider selection.
     #[serde(default)]
-    pub provider_hint: Option<String>,
+    pub provider_hint:  Option<String>,
     /// Maximum LLM iterations before forced completion.
     #[serde(default)]
     pub max_iterations: Option<usize>,
-    /// Tool names this agent is allowed to use (empty = inherit parent's tools).
+    /// Tool names this agent is allowed to use (empty = inherit parent's
+    /// tools).
     #[serde(default)]
-    pub tools: Vec<String>,
+    pub tools:          Vec<String>,
     /// Maximum number of concurrent child agents this agent can spawn.
     #[serde(default)]
-    pub max_children: Option<usize>,
+    pub max_children:   Option<usize>,
     /// Arbitrary metadata for extension.
     #[serde(default)]
-    pub metadata: serde_json::Value,
+    pub metadata:       serde_json::Value,
 }
 
 /// Runtime state of an agent process.
@@ -149,7 +140,7 @@ pub enum ProcessState {
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentResult {
     /// The agent's final output text.
-    pub output: String,
+    pub output:     String,
     /// Number of LLM iterations consumed.
     pub iterations: usize,
     /// Number of tool calls made.
@@ -165,14 +156,14 @@ pub struct AgentEnv {
     /// Optional workspace directory for file operations.
     pub workspace: Option<String>,
     /// Key-value environment variables.
-    pub vars: HashMap<String, String>,
+    pub vars:      HashMap<String, String>,
 }
 
 impl Default for AgentEnv {
     fn default() -> Self {
         Self {
             workspace: None,
-            vars: HashMap::new(),
+            vars:      HashMap::new(),
         }
     }
 }
@@ -189,7 +180,7 @@ pub enum ProcessMessage {
     /// Result from a spawned child agent.
     ChildResult {
         child_id: AgentId,
-        result: AgentResult,
+        result:   AgentResult,
     },
     /// Control signal.
     Signal(Signal),
@@ -212,25 +203,25 @@ pub enum Signal {
 #[derive(Debug, Clone)]
 pub struct AgentProcess {
     /// Unique identifier for this process.
-    pub agent_id: AgentId,
+    pub agent_id:    AgentId,
     /// Parent process (None for root-level agents).
-    pub parent_id: Option<AgentId>,
+    pub parent_id:   Option<AgentId>,
     /// Session this process belongs to.
-    pub session_id: SessionId,
+    pub session_id:  SessionId,
     /// The agent definition driving this process.
-    pub manifest: AgentManifest,
+    pub manifest:    AgentManifest,
     /// The identity under which this process runs.
-    pub principal: principal::Principal,
+    pub principal:   principal::Principal,
     /// Per-process environment.
-    pub env: AgentEnv,
+    pub env:         AgentEnv,
     /// Current lifecycle state.
-    pub state: ProcessState,
+    pub state:       ProcessState,
     /// When this process was created.
-    pub created_at: Timestamp,
+    pub created_at:  Timestamp,
     /// When this process finished (if terminal).
     pub finished_at: Option<Timestamp>,
     /// Result of execution (set on completion/failure).
-    pub result: Option<AgentResult>,
+    pub result:      Option<AgentResult>,
 }
 
 /// Summary info for listing processes.
@@ -239,20 +230,20 @@ pub struct AgentProcess {
 /// process listings without exposing full internal state.
 #[derive(Debug, Clone, Serialize)]
 pub struct ProcessInfo {
-    pub agent_id: AgentId,
-    pub parent_id: Option<AgentId>,
-    pub name: String,
-    pub state: ProcessState,
+    pub agent_id:   AgentId,
+    pub parent_id:  Option<AgentId>,
+    pub name:       String,
+    pub state:      ProcessState,
     pub created_at: Timestamp,
 }
 
 impl From<&AgentProcess> for ProcessInfo {
     fn from(p: &AgentProcess) -> Self {
         Self {
-            agent_id: p.agent_id,
-            parent_id: p.parent_id,
-            name: p.manifest.name.clone(),
-            state: p.state,
+            agent_id:   p.agent_id,
+            parent_id:  p.parent_id,
+            name:       p.manifest.name.clone(),
+            state:      p.state,
             created_at: p.created_at,
         }
     }
@@ -266,21 +257,21 @@ impl From<&AgentProcess> for ProcessInfo {
 /// Includes a session index for fast `SessionId -> AgentId` lookups and
 /// a mailbox registry for sending messages to long-lived processes.
 pub struct ProcessTable {
-    processes: DashMap<AgentId, AgentProcess>,
+    processes:     DashMap<AgentId, AgentProcess>,
     /// Maps a session to its currently active agent process.
     session_index: DashMap<SessionId, AgentId>,
     /// Mailbox senders for long-lived processes (kept separate because
     /// `mpsc::Sender` doesn't derive `Clone` for `AgentProcess`'s derive).
-    mailboxes: DashMap<AgentId, mpsc::Sender<ProcessMessage>>,
+    mailboxes:     DashMap<AgentId, mpsc::Sender<ProcessMessage>>,
 }
 
 impl ProcessTable {
     /// Create an empty process table.
     pub fn new() -> Self {
         Self {
-            processes: DashMap::new(),
+            processes:     DashMap::new(),
             session_index: DashMap::new(),
-            mailboxes: DashMap::new(),
+            mailboxes:     DashMap::new(),
         }
     }
 
@@ -335,7 +326,8 @@ impl ProcessTable {
     pub fn remove(&self, id: AgentId) -> Option<AgentProcess> {
         let removed = self.processes.remove(&id).map(|(_, p)| p);
         if let Some(ref process) = removed {
-            self.session_index.remove_if(&process.session_id, |_, agent_id| *agent_id == id);
+            self.session_index
+                .remove_if(&process.session_id, |_, agent_id| *agent_id == id);
             self.mailboxes.remove(&id);
         }
         removed
@@ -374,7 +366,8 @@ impl ProcessTable {
         self.get(*agent_id)
     }
 
-    /// Bind a session to a specific agent process (overwrites any existing binding).
+    /// Bind a session to a specific agent process (overwrites any existing
+    /// binding).
     pub fn bind_session(&self, session_id: SessionId, agent_id: AgentId) {
         self.session_index.insert(session_id, agent_id);
     }
@@ -395,11 +388,7 @@ impl ProcessTable {
     ///
     /// Returns `Ok(())` if the message was sent, or an error if no agent
     /// is bound to the session or the mailbox is closed.
-    pub async fn send_to_session(
-        &self,
-        session_id: &SessionId,
-        msg: ProcessMessage,
-    ) -> Result<()> {
+    pub async fn send_to_session(&self, session_id: &SessionId, msg: ProcessMessage) -> Result<()> {
         let agent_id = self
             .session_index
             .get(session_id)
@@ -407,23 +396,21 @@ impl ProcessTable {
             .ok_or_else(|| crate::error::KernelError::ProcessNotFound {
                 id: format!("no agent for session {session_id}"),
             })?;
-        let tx = self
-            .get_mailbox(&agent_id)
-            .ok_or_else(|| crate::error::KernelError::ProcessNotFound {
-                id: format!("no mailbox for agent {agent_id}"),
-            })?;
-        tx.send(msg).await.map_err(|_| {
+        let tx = self.get_mailbox(&agent_id).ok_or_else(|| {
             crate::error::KernelError::ProcessNotFound {
-                id: format!("mailbox closed for agent {agent_id}"),
+                id: format!("no mailbox for agent {agent_id}"),
             }
-        })
+        })?;
+        tx.send(msg)
+            .await
+            .map_err(|_| crate::error::KernelError::ProcessNotFound {
+                id: format!("mailbox closed for agent {agent_id}"),
+            })
     }
 }
 
 impl Default for ProcessTable {
-    fn default() -> Self {
-        Self::new()
-    }
+    fn default() -> Self { Self::new() }
 }
 
 #[cfg(test)]
@@ -434,15 +421,15 @@ mod tests {
     /// Helper to create a test manifest.
     fn test_manifest(name: &str) -> AgentManifest {
         AgentManifest {
-            name: name.to_string(),
-            description: format!("Test agent: {name}"),
-            model: "test-model".to_string(),
-            system_prompt: "You are a test agent.".to_string(),
-            provider_hint: None,
+            name:           name.to_string(),
+            description:    format!("Test agent: {name}"),
+            model:          "test-model".to_string(),
+            system_prompt:  "You are a test agent.".to_string(),
+            provider_hint:  None,
             max_iterations: Some(10),
-            tools: vec!["read_file".to_string()],
-            max_children: None,
-            metadata: serde_json::Value::Null,
+            tools:          vec!["read_file".to_string()],
+            max_children:   None,
+            metadata:       serde_json::Value::Null,
         }
     }
 
@@ -528,7 +515,7 @@ mod tests {
         table.insert(process);
 
         let result = AgentResult {
-            output: "done".to_string(),
+            output:     "done".to_string(),
             iterations: 5,
             tool_calls: 3,
         };
@@ -720,16 +707,16 @@ system_prompt: "Hello"
         // bind_session overwrites
         let new_id = AgentId::new();
         let new_process = AgentProcess {
-            agent_id: new_id,
-            parent_id: None,
-            session_id: session_id.clone(),
-            manifest: test_manifest("agent-b"),
-            principal: Principal::user("test-user"),
-            env: AgentEnv::default(),
-            state: ProcessState::Running,
-            created_at: Timestamp::now(),
+            agent_id:    new_id,
+            parent_id:   None,
+            session_id:  session_id.clone(),
+            manifest:    test_manifest("agent-b"),
+            principal:   Principal::user("test-user"),
+            env:         AgentEnv::default(),
+            state:       ProcessState::Running,
+            created_at:  Timestamp::now(),
             finished_at: None,
-            result: None,
+            result:      None,
         };
         table.insert(new_process);
         table.bind_session(session_id.clone(), new_id);

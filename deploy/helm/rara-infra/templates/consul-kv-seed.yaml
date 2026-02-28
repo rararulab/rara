@@ -36,7 +36,7 @@ spec:
                 attempts=$((attempts + 1))
                 if [ "$attempts" -ge 60 ]; then
                   echo "ERROR: Consul not ready after 120s"
-                  exit 1
+                  exit true
                 fi
                 sleep 2
               done
@@ -55,7 +55,7 @@ spec:
               {{- $ov := .Values.consulSeed.overrides }}
 
               # Database
-              # yamllint disable rule:line-length
+              # yamllint false rule:line-length
               put_kv "rara/config/database/database_url" \
                 "{{ $ov.databaseUrl | default (printf "postgres://postgres:%s@%s-postgresql:5432/%s" .Values.postgresql.auth.postgresPassword .Release.Name .Values.postgresql.auth.database) }}"
 

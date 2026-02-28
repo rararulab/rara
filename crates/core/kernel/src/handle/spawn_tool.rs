@@ -17,8 +17,9 @@
 //! Supports two modes:
 //! - **Single**: `{"agent": "scout", "task": "Find auth code"}` — spawn a named
 //!   manifest and wait for its result.
-//! - **Parallel**: `{"parallel": [{"agent": "...", "task": "..."}], "max_concurrency": 4}`
-//!   — spawn multiple agents concurrently and collect all results.
+//! - **Parallel**: `{"parallel": [{"agent": "...", "task": "..."}],
+//!   "max_concurrency": 4}` — spawn multiple agents concurrently and collect
+//!   all results.
 
 use std::sync::Arc;
 
@@ -26,10 +27,8 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use tracing::{info, warn};
 
-use crate::process::manifest_loader::ManifestLoader;
-use crate::process::AgentManifest;
-
-use super::{ProcessOps, AgentHandle};
+use super::{AgentHandle, ProcessOps};
+use crate::process::{AgentManifest, manifest_loader::ManifestLoader};
 
 /// An `AgentTool` implementation that allows LLMs to spawn child agents.
 ///
@@ -37,7 +36,7 @@ use super::{ProcessOps, AgentHandle};
 /// the `ManifestLoader` for resolving agent names to manifests.
 pub struct SpawnTool {
     /// Process operations handle for spawning children.
-    process_ops: Arc<dyn ProcessOps>,
+    process_ops:     Arc<dyn ProcessOps>,
     /// Manifest loader for looking up named agent definitions.
     manifest_loader: Arc<ManifestLoader>,
 }
@@ -62,16 +61,13 @@ impl SpawnTool {
 
     /// Resolve a manifest by name from the loader.
     fn resolve_manifest(&self, name: &str) -> Result<AgentManifest, anyhow::Error> {
-        self.manifest_loader
-            .get(name)
-            .cloned()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "unknown agent: '{}'. Available agents: {:?}",
-                    name,
-                    self.available_agents()
-                )
-            })
+        self.manifest_loader.get(name).cloned().ok_or_else(|| {
+            anyhow::anyhow!(
+                "unknown agent: '{}'. Available agents: {:?}",
+                name,
+                self.available_agents()
+            )
+        })
     }
 
     /// Spawn a single agent and wait for its result.
@@ -82,7 +78,11 @@ impl SpawnTool {
     ) -> Result<serde_json::Value, anyhow::Error> {
         let manifest = self.resolve_manifest(agent_name)?;
 
-        info!(agent = agent_name, task = task, "SpawnTool: spawning single agent");
+        info!(
+            agent = agent_name,
+            task = task,
+            "SpawnTool: spawning single agent"
+        );
 
         let handle = self
             .process_ops
@@ -93,10 +93,9 @@ impl SpawnTool {
         let agent_id = handle.agent_id;
 
         // Wait for completion
-        let result = handle
-            .result_rx
-            .await
-            .map_err(|_| anyhow::anyhow!("agent {} was dropped without producing a result", agent_id))?;
+        let result = handle.result_rx.await.map_err(|_| {
+            anyhow::anyhow!("agent {} was dropped without producing a result", agent_id)
+        })?;
 
         Ok(serde_json::json!({
             "agent_id": agent_id.to_string(),
@@ -172,7 +171,7 @@ impl SpawnTool {
 #[derive(Debug, Deserialize)]
 struct SpawnRequest {
     agent: String,
-    task: String,
+    task:  String,
 }
 
 /// Top-level parameters for the spawn_agent tool.
@@ -181,28 +180,22 @@ struct SpawnRequest {
 enum SpawnParams {
     /// Parallel mode: spawn multiple agents concurrently.
     Parallel {
-        parallel: Vec<SpawnRequest>,
+        parallel:        Vec<SpawnRequest>,
         #[serde(default)]
         max_concurrency: Option<usize>,
     },
     /// Single mode: spawn one named agent.
-    Single {
-        agent: String,
-        task: String,
-    },
+    Single { agent: String, task: String },
 }
 
 #[async_trait]
 impl tool_core::AgentTool for SpawnTool {
-    fn name(&self) -> &str {
-        "spawn_agent"
-    }
+    fn name(&self) -> &str { "spawn_agent" }
 
     fn description(&self) -> &str {
-        "Spawn one or more child agents to perform tasks. \
-         Single mode: {\"agent\": \"<name>\", \"task\": \"<description>\"}. \
-         Parallel mode: {\"parallel\": [{\"agent\": \"<name>\", \"task\": \"...\"}], \"max_concurrency\": 4}. \
-         Returns the agent's output when complete."
+        "Spawn one or more child agents to perform tasks. Single mode: {\"agent\": \"<name>\", \
+         \"task\": \"<description>\"}. Parallel mode: {\"parallel\": [{\"agent\": \"<name>\", \
+         \"task\": \"...\"}], \"max_concurrency\": 4}. Returns the agent's output when complete."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -273,12 +266,15 @@ impl tool_core::AgentTool for SpawnTool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::error::KernelError;
-    use crate::handle::AgentHandle;
-    use crate::process::{AgentId, AgentManifest, AgentResult, ProcessInfo};
-    use tool_core::AgentTool;
     use tokio::sync::oneshot;
+    use tool_core::AgentTool;
+
+    use super::*;
+    use crate::{
+        error::KernelError,
+        handle::AgentHandle,
+        process::{AgentId, AgentManifest, AgentResult, ProcessInfo},
+    };
 
     /// Mock ProcessOps that spawns agents and immediately returns results.
     struct MockProcessOps {
@@ -305,7 +301,7 @@ mod tests {
 
             // Immediately send a result
             let _ = tx.send(AgentResult {
-                output: format!("Result from {}: processed '{}'", manifest.name, input),
+                output:     format!("Result from {}: processed '{}'", manifest.name, input),
                 iterations: 1,
                 tool_calls: 0,
             });
@@ -317,11 +313,7 @@ mod tests {
             })
         }
 
-        async fn send(
-            &self,
-            _agent_id: AgentId,
-            _message: String,
-        ) -> crate::error::Result<String> {
+        async fn send(&self, _agent_id: AgentId, _message: String) -> crate::error::Result<String> {
             Err(KernelError::Other {
                 message: "not implemented".into(),
             })
@@ -333,13 +325,9 @@ mod tests {
             })
         }
 
-        fn kill(&self, _agent_id: AgentId) -> crate::error::Result<()> {
-            Ok(())
-        }
+        fn kill(&self, _agent_id: AgentId) -> crate::error::Result<()> { Ok(()) }
 
-        fn children(&self) -> Vec<ProcessInfo> {
-            vec![]
-        }
+        fn children(&self) -> Vec<ProcessInfo> { vec![] }
     }
 
     fn make_test_manifest_loader() -> Arc<ManifestLoader> {
@@ -360,10 +348,12 @@ mod tests {
         });
 
         let result = tool.execute(params).await.unwrap();
-        assert!(result["output"]
-            .as_str()
-            .unwrap()
-            .contains("Result from scout"));
+        assert!(
+            result["output"]
+                .as_str()
+                .unwrap()
+                .contains("Result from scout")
+        );
         assert!(result["agent_id"].as_str().is_some());
         assert_eq!(result["iterations"], 1);
         assert_eq!(result["tool_calls"], 0);
@@ -406,10 +396,7 @@ mod tests {
 
         let result = tool.execute(params).await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("unknown agent"));
+        assert!(result.unwrap_err().to_string().contains("unknown agent"));
     }
 
     #[tokio::test]

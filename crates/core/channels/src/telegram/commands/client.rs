@@ -46,40 +46,40 @@ pub struct ChannelBinding {
 /// Summary of a chat session (used in list views).
 #[derive(Debug, Clone, Deserialize)]
 pub struct SessionListItem {
-    pub key: String,
-    pub title: Option<String>,
+    pub key:           String,
+    pub title:         Option<String>,
     pub message_count: i64,
-    pub updated_at: String,
+    pub updated_at:    String,
 }
 
 /// Detailed information about a single chat session.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SessionDetail {
-    pub key: String,
-    pub title: Option<String>,
-    pub model: Option<String>,
+    pub key:           String,
+    pub title:         Option<String>,
+    pub model:         Option<String>,
     pub message_count: i64,
-    pub preview: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
+    pub preview:       Option<String>,
+    pub created_at:    String,
+    pub updated_at:    String,
 }
 
 /// A job discovered through the search API.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DiscoveryJob {
-    pub title: String,
-    pub company: String,
-    pub location: Option<String>,
-    pub url: Option<String>,
-    pub salary_min: Option<i32>,
-    pub salary_max: Option<i32>,
+    pub title:           String,
+    pub company:         String,
+    pub location:        Option<String>,
+    pub url:             Option<String>,
+    pub salary_min:      Option<i32>,
+    pub salary_max:      Option<i32>,
     pub salary_currency: Option<String>,
 }
 
 /// Information about a configured MCP server.
 #[derive(Debug, Clone, Deserialize)]
 pub struct McpServerInfo {
-    pub name: String,
+    pub name:   String,
     pub status: McpServerStatus,
 }
 
@@ -96,21 +96,21 @@ pub enum McpServerStatus {
 /// Response from dispatching a coding task.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CodingTask {
-    pub id: String,
-    pub branch: String,
+    pub id:           String,
+    pub branch:       String,
     pub tmux_session: String,
-    pub status: String,
+    pub status:       String,
 }
 
 /// Summary of a coding task (used in list views).
 #[derive(Debug, Clone, Deserialize)]
 pub struct CodingTaskSummary {
-    pub id: String,
-    pub status: String,
+    pub id:         String,
+    pub status:     String,
     pub agent_type: String,
-    pub branch: String,
-    pub prompt: String,
-    pub pr_url: Option<String>,
+    pub branch:     String,
+    pub prompt:     String,
+    pub pr_url:     Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -142,29 +142,16 @@ pub trait BotServiceClient: Send + Sync {
     ) -> Result<ChannelBinding, BotServiceError>;
 
     /// Create a new chat session.
-    async fn create_session(
-        &self,
-        key: &str,
-        title: Option<&str>,
-    ) -> Result<(), BotServiceError>;
+    async fn create_session(&self, key: &str, title: Option<&str>) -> Result<(), BotServiceError>;
 
     /// Delete all messages from a session.
-    async fn clear_session_messages(
-        &self,
-        session_key: &str,
-    ) -> Result<(), BotServiceError>;
+    async fn clear_session_messages(&self, session_key: &str) -> Result<(), BotServiceError>;
 
     /// List recent sessions.
-    async fn list_sessions(
-        &self,
-        limit: u32,
-    ) -> Result<Vec<SessionListItem>, BotServiceError>;
+    async fn list_sessions(&self, limit: u32) -> Result<Vec<SessionListItem>, BotServiceError>;
 
     /// Get detailed information about a session.
-    async fn get_session(
-        &self,
-        key: &str,
-    ) -> Result<SessionDetail, BotServiceError>;
+    async fn get_session(&self, key: &str) -> Result<SessionDetail, BotServiceError>;
 
     /// Update session fields (e.g. model).
     async fn update_session(
@@ -192,10 +179,7 @@ pub trait BotServiceClient: Send + Sync {
     async fn list_mcp_servers(&self) -> Result<Vec<McpServerInfo>, BotServiceError>;
 
     /// Get a single MCP server's info.
-    async fn get_mcp_server(
-        &self,
-        name: &str,
-    ) -> Result<McpServerInfo, BotServiceError>;
+    async fn get_mcp_server(&self, name: &str) -> Result<McpServerInfo, BotServiceError>;
 
     /// Add a new MCP server configuration.
     async fn add_mcp_server(

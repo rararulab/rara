@@ -1,26 +1,36 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::sync::Arc;
 
+use async_openai::types::chat::ChatCompletionRequestMessage;
+use async_trait::async_trait;
+use base::shared_string::SharedString;
+use rara_domain_shared::settings::model::Settings;
 use rara_kernel::{
     agent_context::{
-        self as context, CompletionFeatures, PromptFeatures, SessionFeatures,
-        SettingsFeatures, ToolFeatures,
+        self as context, CompletionFeatures, PromptFeatures, SessionFeatures, SettingsFeatures,
+        ToolFeatures,
     },
     provider::LlmProviderLoaderRef,
     runner::{AgentRunner, MAX_ITERATIONS, UserContent},
     tool::ToolRegistry,
 };
-use async_openai::types::chat::ChatCompletionRequestMessage;
-use async_trait::async_trait;
-use base::shared_string::SharedString;
-use rara_domain_shared::settings::model::Settings;
 use rara_mcp::{manager::mgr::McpManager, tool_bridge::McpToolBridge};
-use rara_memory::{
-    MemoryManager, RecallStrategyEngine,
-    recall_engine as mem_recall,
-};
+use rara_memory::{MemoryManager, RecallStrategyEngine, recall_engine as mem_recall};
 use tokio::sync::watch;
 use tracing::info;
-
 
 // ---------------------------------------------------------------------------
 // Conversions between rara_kernel::context types and rara_memory types
@@ -114,9 +124,7 @@ impl AgentContextImpl {
     }
 
     /// Return a watch::Receiver clone for settings (used by ChatService).
-    pub fn settings_rx(&self) -> watch::Receiver<Settings> {
-        self.settings_rx.clone()
-    }
+    pub fn settings_rx(&self) -> watch::Receiver<Settings> { self.settings_rx.clone() }
 
     // -- legacy helpers (kept for backward compat) --------------------------
 
@@ -205,7 +213,8 @@ impl CompletionFeatures for AgentContextImpl {
         // Run the recall engine if available, otherwise fall back to legacy
         // hardcoded behavior.
         if let Some(ctx) = recall_ctx {
-            let payloads = rara_kernel::agent_context::AgentContext::run_recall_engine(self, ctx).await;
+            let payloads =
+                rara_kernel::agent_context::AgentContext::run_recall_engine(self, ctx).await;
             for payload in &payloads {
                 if matches!(payload.target, context::InjectTarget::SystemPrompt) {
                     system_prompt.push_str(&format!(
@@ -318,9 +327,7 @@ impl CompletionFeatures for AgentContextImpl {
             .build();
 
         let empty_tools = ToolRegistry::default();
-        let result = runner
-            .run(&empty_tools, None)
-            .await?;
+        let result = runner.run(&empty_tools, None).await?;
 
         let summary = result
             .provider_response
@@ -416,15 +423,11 @@ impl rara_kernel::agent_context::AgentContext for AgentContextImpl {
 // ---------------------------------------------------------------------------
 
 impl SettingsFeatures for AgentContextImpl {
-    fn model_for_key(&self, key: &str) -> String {
-        self.settings_rx.borrow().ai.model_for_key(key)
-    }
+    fn model_for_key(&self, key: &str) -> String { self.settings_rx.borrow().ai.model_for_key(key) }
 
     fn current_default_model(&self) -> String { self.model_for_key("chat") }
 
-    fn provider_hint(&self) -> Option<String> {
-        self.settings_rx.borrow().ai.provider.clone()
-    }
+    fn provider_hint(&self) -> Option<String> { self.settings_rx.borrow().ai.provider.clone() }
 
     fn max_iterations(&self, _key: &str) -> usize {
         self.settings_rx
@@ -486,7 +489,10 @@ impl SessionFeatures for AgentContextImpl {
 impl std::fmt::Debug for AgentContextImpl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentContextImpl")
-            .field("default_model", &SettingsFeatures::current_default_model(self))
+            .field(
+                "default_model",
+                &SettingsFeatures::current_default_model(self),
+            )
             .finish_non_exhaustive()
     }
 }

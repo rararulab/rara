@@ -17,9 +17,13 @@
 
 use async_trait::async_trait;
 
-use crate::error::Result;
-use crate::process::principal::Role;
-use crate::process::user::{KernelUser, Permission, PlatformIdentity, UserStore};
+use crate::{
+    error::Result,
+    process::{
+        principal::Role,
+        user::{KernelUser, Permission, PlatformIdentity, UserStore},
+    },
+};
 
 /// A no-op user store for tests.
 ///
@@ -29,19 +33,17 @@ pub struct NoopUserStore;
 
 #[async_trait]
 impl UserStore for NoopUserStore {
-    async fn get_by_id(&self, _id: uuid::Uuid) -> Result<Option<KernelUser>> {
-        Ok(None)
-    }
+    async fn get_by_id(&self, _id: uuid::Uuid) -> Result<Option<KernelUser>> { Ok(None) }
 
     async fn get_by_name(&self, name: &str) -> Result<Option<KernelUser>> {
         Ok(Some(KernelUser {
-            id: uuid::Uuid::nil(),
-            name: name.to_string(),
-            role: Role::Admin,
+            id:          uuid::Uuid::nil(),
+            name:        name.to_string(),
+            role:        Role::Admin,
             permissions: vec![Permission::All],
-            enabled: true,
-            created_at: jiff::Timestamp::now(),
-            updated_at: jiff::Timestamp::now(),
+            enabled:     true,
+            created_at:  jiff::Timestamp::now(),
+            updated_at:  jiff::Timestamp::now(),
         }))
     }
 
@@ -53,29 +55,17 @@ impl UserStore for NoopUserStore {
         Ok(None)
     }
 
-    async fn create(&self, _user: &KernelUser) -> Result<()> {
-        Ok(())
-    }
+    async fn create(&self, _user: &KernelUser) -> Result<()> { Ok(()) }
 
-    async fn update(&self, _user: &KernelUser) -> Result<()> {
-        Ok(())
-    }
+    async fn update(&self, _user: &KernelUser) -> Result<()> { Ok(()) }
 
-    async fn delete(&self, _id: uuid::Uuid) -> Result<()> {
-        Ok(())
-    }
+    async fn delete(&self, _id: uuid::Uuid) -> Result<()> { Ok(()) }
 
-    async fn list(&self) -> Result<Vec<KernelUser>> {
-        Ok(vec![])
-    }
+    async fn list(&self) -> Result<Vec<KernelUser>> { Ok(vec![]) }
 
-    async fn link_platform(&self, _identity: &PlatformIdentity) -> Result<()> {
-        Ok(())
-    }
+    async fn link_platform(&self, _identity: &PlatformIdentity) -> Result<()> { Ok(()) }
 
-    async fn unlink_platform(&self, _id: uuid::Uuid) -> Result<()> {
-        Ok(())
-    }
+    async fn unlink_platform(&self, _id: uuid::Uuid) -> Result<()> { Ok(()) }
 
     async fn list_platforms(&self, _user_id: uuid::Uuid) -> Result<Vec<PlatformIdentity>> {
         Ok(vec![])

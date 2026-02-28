@@ -17,10 +17,12 @@
 use std::fmt::Write;
 
 use async_trait::async_trait;
-use rara_kernel::channel::command::{
-    CommandContext, CommandDefinition, CommandHandler, CommandInfo, CommandResult,
+use rara_kernel::{
+    channel::command::{
+        CommandContext, CommandDefinition, CommandHandler, CommandInfo, CommandResult,
+    },
+    error::KernelError,
 };
-use rara_kernel::error::KernelError;
 
 /// Handles `/start` and `/help` commands.
 ///
@@ -32,9 +34,7 @@ pub struct BasicCommandHandler {
 
 impl BasicCommandHandler {
     /// Create a new handler with the full list of available commands.
-    pub fn new(all_commands: Vec<CommandDefinition>) -> Self {
-        Self { all_commands }
-    }
+    pub fn new(all_commands: Vec<CommandDefinition>) -> Self { Self { all_commands } }
 }
 
 #[async_trait]
@@ -42,14 +42,14 @@ impl CommandHandler for BasicCommandHandler {
     fn commands(&self) -> Vec<CommandDefinition> {
         vec![
             CommandDefinition {
-                name: "start".to_owned(),
+                name:        "start".to_owned(),
                 description: "Start the bot".to_owned(),
-                usage: Some("/start".to_owned()),
+                usage:       Some("/start".to_owned()),
             },
             CommandDefinition {
-                name: "help".to_owned(),
+                name:        "help".to_owned(),
                 description: "Show available commands".to_owned(),
-                usage: Some("/help".to_owned()),
+                usage:       Some("/help".to_owned()),
             },
         ]
     }
@@ -61,9 +61,8 @@ impl CommandHandler for BasicCommandHandler {
     ) -> Result<CommandResult, KernelError> {
         match command.name.as_str() {
             "start" => Ok(CommandResult::Text(
-                "Welcome! I'm the Job Assistant bot.\n\
-                 Send me any message to start a conversation.\n\n\
-                 Use /help to see all available commands."
+                "Welcome! I'm the Job Assistant bot.\nSend me any message to start a \
+                 conversation.\n\nUse /help to see all available commands."
                     .to_owned(),
             )),
             "help" => {
@@ -102,12 +101,12 @@ mod tests {
     fn make_context() -> CommandContext {
         CommandContext {
             channel_type: ChannelType::Telegram,
-            session_key: "test-session".to_owned(),
-            user: ChannelUser {
-                platform_id: "123".to_owned(),
+            session_key:  "test-session".to_owned(),
+            user:         ChannelUser {
+                platform_id:  "123".to_owned(),
                 display_name: Some("Test User".to_owned()),
             },
-            metadata: HashMap::new(),
+            metadata:     HashMap::new(),
         }
     }
 
@@ -115,26 +114,26 @@ mod tests {
         CommandInfo {
             name: name.to_owned(),
             args: String::new(),
-            raw: format!("/{name}"),
+            raw:  format!("/{name}"),
         }
     }
 
     fn sample_commands() -> Vec<CommandDefinition> {
         vec![
             CommandDefinition {
-                name: "start".to_owned(),
+                name:        "start".to_owned(),
                 description: "Start the bot".to_owned(),
-                usage: Some("/start".to_owned()),
+                usage:       Some("/start".to_owned()),
             },
             CommandDefinition {
-                name: "help".to_owned(),
+                name:        "help".to_owned(),
                 description: "Show available commands".to_owned(),
-                usage: Some("/help".to_owned()),
+                usage:       Some("/help".to_owned()),
             },
             CommandDefinition {
-                name: "search".to_owned(),
+                name:        "search".to_owned(),
                 description: "Search for jobs".to_owned(),
-                usage: Some("/search <keywords> [@ location]".to_owned()),
+                usage:       Some("/search <keywords> [@ location]".to_owned()),
             },
         ]
     }
@@ -142,7 +141,9 @@ mod tests {
     #[tokio::test]
     async fn start_returns_welcome_text() {
         let handler = BasicCommandHandler::new(sample_commands());
-        let result = handler.handle(&make_command("start"), &make_context()).await;
+        let result = handler
+            .handle(&make_command("start"), &make_context())
+            .await;
         match result {
             Ok(CommandResult::Text(text)) => {
                 assert!(text.contains("Welcome"));

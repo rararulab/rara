@@ -19,19 +19,21 @@ use serde_json::Value;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::event::{EventBus, EventFilter, EventStream, KernelEvent};
-use crate::guard::{Guard, GuardContext, Verdict};
-use crate::io::bus::OutboxStore;
-use crate::session_manager::{SessionManagerError, SessionRepository};
-use crate::io::types::{BusError, MessageId, OutboundEnvelope};
-use crate::channel::types::ChatMessage;
-use crate::process::SessionId;
-use crate::process::principal::UserId;
-use crate::memory::knowledge::KnowledgeMemory;
-use crate::memory::learning::LearningMemory;
-use crate::memory::state::StateMemory;
-use crate::memory::types::*;
-use crate::memory::Result as MemResult;
+use crate::{
+    channel::types::ChatMessage,
+    event::{EventBus, EventFilter, EventStream, KernelEvent},
+    guard::{Guard, GuardContext, Verdict},
+    io::{
+        bus::OutboxStore,
+        types::{BusError, MessageId, OutboundEnvelope},
+    },
+    memory::{
+        Result as MemResult, knowledge::KnowledgeMemory, learning::LearningMemory,
+        state::StateMemory, types::*,
+    },
+    process::{SessionId, principal::UserId},
+    session_manager::{SessionManagerError, SessionRepository},
+};
 
 // ---- NoopGuard ----
 
@@ -40,18 +42,11 @@ pub struct NoopGuard;
 
 #[async_trait]
 impl Guard for NoopGuard {
-    async fn check_tool(
-        &self,
-        _ctx: &GuardContext,
-        _tool_name: &str,
-        _args: &Value,
-    ) -> Verdict {
+    async fn check_tool(&self, _ctx: &GuardContext, _tool_name: &str, _args: &Value) -> Verdict {
         Verdict::Allow
     }
 
-    async fn check_output(&self, _ctx: &GuardContext, _content: &str) -> Verdict {
-        Verdict::Allow
-    }
+    async fn check_output(&self, _ctx: &GuardContext, _content: &str) -> Verdict { Verdict::Allow }
 }
 
 // ---- NoopEventBus ----
@@ -73,7 +68,8 @@ impl EventBus for NoopEventBus {
 
 // ---- NoopMemory ----
 
-/// A memory implementation that does nothing — all ops succeed with empty results.
+/// A memory implementation that does nothing — all ops succeed with empty
+/// results.
 pub struct NoopMemory;
 
 #[async_trait]
@@ -129,9 +125,7 @@ impl StateMemory for NoopMemory {
         Ok(())
     }
 
-    async fn delete_all(&self, _ctx: &MemoryContext, _scope: Scope) -> MemResult<()> {
-        Ok(())
-    }
+    async fn delete_all(&self, _ctx: &MemoryContext, _scope: Scope) -> MemResult<()> { Ok(()) }
 
     async fn history(
         &self,
@@ -153,9 +147,9 @@ impl KnowledgeMemory for NoopMemory {
         _tags: &[&str],
     ) -> MemResult<KnowledgeNote> {
         Ok(KnowledgeNote {
-            id: Uuid::new_v4(),
-            content: String::new(),
-            tags: vec![],
+            id:         Uuid::new_v4(),
+            content:    String::new(),
+            tags:       vec![],
             created_at: jiff::Timestamp::now(),
             updated_at: jiff::Timestamp::now(),
         })
@@ -187,12 +181,7 @@ impl KnowledgeMemory for NoopMemory {
 
 #[async_trait]
 impl LearningMemory for NoopMemory {
-    async fn retain(
-        &self,
-        _ctx: &MemoryContext,
-        _scope: Scope,
-        _content: &str,
-    ) -> MemResult<()> {
+    async fn retain(&self, _ctx: &MemoryContext, _scope: Scope, _content: &str) -> MemResult<()> {
         Ok(())
     }
 
@@ -218,27 +207,23 @@ impl LearningMemory for NoopMemory {
 
 // ---- NoopOutboxStore ----
 
-/// A no-op outbox store for testing — all operations succeed without persisting.
+/// A no-op outbox store for testing — all operations succeed without
+/// persisting.
 pub struct NoopOutboxStore;
 
 #[async_trait]
 impl OutboxStore for NoopOutboxStore {
-    async fn append(&self, _envelope: OutboundEnvelope) -> Result<(), BusError> {
-        Ok(())
-    }
+    async fn append(&self, _envelope: OutboundEnvelope) -> Result<(), BusError> { Ok(()) }
 
-    async fn drain_pending(&self, _max: usize) -> Vec<OutboundEnvelope> {
-        vec![]
-    }
+    async fn drain_pending(&self, _max: usize) -> Vec<OutboundEnvelope> { vec![] }
 
-    async fn mark_delivered(&self, _id: &MessageId) -> Result<(), BusError> {
-        Ok(())
-    }
+    async fn mark_delivered(&self, _id: &MessageId) -> Result<(), BusError> { Ok(()) }
 }
 
 // ---- NoopSessionRepository ----
 
-/// A no-op session repository for testing — all operations succeed without persisting.
+/// A no-op session repository for testing — all operations succeed without
+/// persisting.
 pub struct NoopSessionRepository;
 
 #[async_trait]
@@ -251,10 +236,7 @@ impl SessionRepository for NoopSessionRepository {
         Ok(())
     }
 
-    async fn get_history(
-        &self,
-        _id: &SessionId,
-    ) -> Result<Vec<ChatMessage>, SessionManagerError> {
+    async fn get_history(&self, _id: &SessionId) -> Result<Vec<ChatMessage>, SessionManagerError> {
         Ok(vec![])
     }
 

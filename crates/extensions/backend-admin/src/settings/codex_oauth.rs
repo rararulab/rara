@@ -14,9 +14,8 @@
 
 use axum::{Json, extract::State, http::StatusCode};
 use rara_codex_oauth::{
-    PendingCodexOAuth, build_auth_url, clear_pending_oauth, clear_tokens,
-    generate_code_challenge, generate_code_verifier, generate_nonce, load_tokens,
-    save_pending_oauth, start_callback_server,
+    PendingCodexOAuth, build_auth_url, clear_pending_oauth, clear_tokens, generate_code_challenge,
+    generate_code_verifier, generate_nonce, load_tokens, save_pending_oauth, start_callback_server,
 };
 use serde::Serialize;
 use tracing::warn;
@@ -51,7 +50,6 @@ pub struct OAuthStatusResponse {
     pub expires_at_unix: Option<u64>,
 }
 
-
 #[utoipa::path(
     post,
     path = "/start",
@@ -77,12 +75,10 @@ async fn oauth_start(
     // Start ephemeral callback server on localhost:1455 (OpenAI's
     // pre-registered redirect_uri). It handles a single callback then
     // shuts itself down.
-    start_callback_server()
-        .await
-        .map_err(|e| {
-            warn!(error = %e, "failed to start codex oauth callback server");
-            (StatusCode::INTERNAL_SERVER_ERROR, e)
-        })?;
+    start_callback_server().await.map_err(|e| {
+        warn!(error = %e, "failed to start codex oauth callback server");
+        (StatusCode::INTERNAL_SERVER_ERROR, e)
+    })?;
 
     Ok(Json(OAuthStartResponse { auth_url }))
 }

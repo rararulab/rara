@@ -16,8 +16,10 @@
 
 use std::sync::Arc;
 
-use rara_kernel::io::bus::{InboundBus, OutboundBus};
-use rara_kernel::io::memory_bus::{InMemoryInboundBus, InMemoryOutboundBus};
+use rara_kernel::io::{
+    bus::{InboundBus, OutboundBus},
+    memory_bus::{InMemoryInboundBus, InMemoryOutboundBus},
+};
 
 /// Create a default in-memory inbound bus with the given capacity.
 pub fn default_inbound_bus(capacity: usize) -> Arc<dyn InboundBus> {

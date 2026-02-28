@@ -21,18 +21,20 @@
 //! The pipeline uses the Kernel's long-lived process model — the TickLoop
 //! routes messages to existing processes via mailbox or spawns new ones.
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
+use rara_kernel::{
+    channel::types::ChannelType,
+    io::{
+        bus::{InboundBus, OutboundBus},
+        egress::{Egress, EgressAdapter, EndpointRegistry},
+        ingress::{IdentityResolver, IngressPipeline, SessionResolver},
+        stream::StreamHub,
+    },
+    kernel::Kernel,
+    tick::TickLoop,
+};
 use tracing::info;
-
-use rara_kernel::channel::types::ChannelType;
-use rara_kernel::io::bus::{InboundBus, OutboundBus};
-use rara_kernel::io::egress::{EgressAdapter, Egress, EndpointRegistry};
-use rara_kernel::io::ingress::{IdentityResolver, IngressPipeline, SessionResolver};
-use rara_kernel::io::stream::StreamHub;
-use rara_kernel::tick::TickLoop;
-use rara_kernel::kernel::Kernel;
 
 use crate::resolvers::{AppIdentityResolver, AppSessionResolver};
 
@@ -46,21 +48,21 @@ use crate::resolvers::{AppIdentityResolver, AppSessionResolver};
 /// background tasks (TickLoop, Egress).
 pub struct IoBusPipeline {
     /// The inbound message bus (shared with IngressPipeline and TickLoop).
-    pub inbound_bus: Arc<dyn InboundBus>,
+    pub inbound_bus:       Arc<dyn InboundBus>,
     /// The outbound message bus (shared with process_loop and Egress).
-    pub outbound_bus: Arc<dyn OutboundBus>,
+    pub outbound_bus:      Arc<dyn OutboundBus>,
     /// Ephemeral stream hub for real-time token deltas.
-    pub stream_hub: Arc<StreamHub>,
+    pub stream_hub:        Arc<StreamHub>,
     /// The ingress pipeline (implements InboundSink for adapters).
-    pub ingress_pipeline: Arc<IngressPipeline>,
+    pub ingress_pipeline:  Arc<IngressPipeline>,
     /// The kernel tick loop (drains InboundBus, routes to processes).
-    pub tick_loop: TickLoop,
+    pub tick_loop:         TickLoop,
     /// The egress engine (delivers outbound envelopes to adapters).
-    pub egress: Egress,
+    pub egress:            Egress,
     /// Per-user endpoint registry (tracks connected channels).
     pub endpoint_registry: Arc<EndpointRegistry>,
     /// The kernel (owns the process table).
-    pub kernel: Arc<Kernel>,
+    pub kernel:            Arc<Kernel>,
 }
 
 /// Initialize the full I/O Bus pipeline.
@@ -101,18 +103,11 @@ pub fn init_io_pipeline(
     let session_manager = rara_boot::session::default_session_manager(session_repo);
 
     // 5. Set IO context on kernel
-    kernel.set_io_context(
-        session_manager,
-        stream_hub.clone(),
-        outbound_bus.clone(),
-    );
+    kernel.set_io_context(session_manager, stream_hub.clone(), outbound_bus.clone());
     let kernel = Arc::new(kernel);
 
     // 6. Create TickLoop
-    let tick_loop = TickLoop::new(
-        inbound_bus.clone(),
-        kernel.clone(),
-    );
+    let tick_loop = TickLoop::new(inbound_bus.clone(), kernel.clone());
 
     // 7. Create Egress
     let endpoint_registry = Arc::new(EndpointRegistry::new());
@@ -129,7 +124,11 @@ pub fn init_io_pipeline(
         inbound_capacity = 1024,
         outbound_capacity = 256,
         stream_capacity = 64,
-        adapters = if telegram_adapter.is_some() { "telegram" } else { "none" },
+        adapters = if telegram_adapter.is_some() {
+            "telegram"
+        } else {
+            "none"
+        },
         "I/O Bus pipeline initialized"
     );
 

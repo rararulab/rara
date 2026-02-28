@@ -16,8 +16,8 @@
 
 use std::collections::HashMap;
 
-use rara_kernel::model_repo::{HARDCODED_DEFAULT_MODEL, ModelEntry, ModelRepo, ModelRepoError};
 use rara_domain_shared::settings::model::{AiRuntimeSettingsPatch, UpdateRequest};
+use rara_kernel::model_repo::{HARDCODED_DEFAULT_MODEL, ModelEntry, ModelRepo, ModelRepoError};
 
 use crate::settings::SettingsSvc;
 

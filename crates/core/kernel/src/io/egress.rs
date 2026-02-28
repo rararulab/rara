@@ -14,10 +14,10 @@
 
 //! Egress — outbound message delivery to channel adapters.
 //!
-//! The egress layer consumes [`OutboundEnvelope`](crate::io::types::OutboundEnvelope)
-//! messages from the [`OutboundBus`](crate::io::bus::OutboundBus) and delivers
-//! them to the appropriate channel adapters based on the user's connected
-//! [`Endpoint`]s.
+//! The egress layer consumes
+//! [`OutboundEnvelope`](crate::io::types::OutboundEnvelope) messages from the
+//! [`OutboundBus`](crate::io::bus::OutboundBus) and delivers them to the
+//! appropriate channel adapters based on the user's connected [`Endpoint`]s.
 //!
 //! Key components:
 //! - [`Endpoint`] / [`EndpointAddress`] — concrete delivery targets
@@ -25,17 +25,23 @@
 //! - [`EgressAdapter`] — send-only adapter interface for egress
 //! - [`Egress`] — main loop consuming the outbound bus and fanning out
 
-use std::collections::{HashMap, HashSet};
-use std::time::Duration;
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use dashmap::DashMap;
 use snafu::Snafu;
 
-use crate::channel::types::ChannelType;
-use crate::io::bus::OutboundSubscriber;
-use crate::io::types::{Attachment, OutboundEnvelope, OutboundPayload, OutboundRouting, ReplyContext};
-use crate::process::principal::UserId;
+use crate::{
+    channel::types::ChannelType,
+    io::{
+        bus::OutboundSubscriber,
+        types::{Attachment, OutboundEnvelope, OutboundPayload, OutboundRouting, ReplyContext},
+    },
+    process::principal::UserId,
+};
 
 // ---------------------------------------------------------------------------
 // Endpoint / EndpointAddress
@@ -51,7 +57,7 @@ pub struct Endpoint {
     /// The channel type of this endpoint.
     pub channel_type: ChannelType,
     /// Platform-specific address details.
-    pub address: EndpointAddress,
+    pub address:      EndpointAddress,
 }
 
 /// Platform-specific addressing for an [`Endpoint`].
@@ -60,7 +66,7 @@ pub enum EndpointAddress {
     /// Telegram chat endpoint.
     Telegram {
         /// Telegram chat ID.
-        chat_id: i64,
+        chat_id:   i64,
         /// Optional thread ID within the chat.
         thread_id: Option<i64>,
     },
@@ -133,9 +139,7 @@ impl EndpointRegistry {
 }
 
 impl Default for EndpointRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
+    fn default() -> Self { Self::new() }
 }
 
 // ---------------------------------------------------------------------------
@@ -151,11 +155,11 @@ pub enum PlatformOutbound {
     /// A complete reply message.
     Reply {
         /// Session key for routing (e.g. "telegram:chat-123").
-        session_key: String,
+        session_key:   String,
         /// Text content to deliver.
-        content: String,
+        content:       String,
         /// Binary attachments.
-        attachments: Vec<Attachment>,
+        attachments:   Vec<Attachment>,
         /// Optional reply context for threading.
         reply_context: Option<ReplyContext>,
     },
@@ -164,7 +168,7 @@ pub enum PlatformOutbound {
         /// Session key for routing.
         session_key: String,
         /// Incremental text delta.
-        delta: String,
+        delta:       String,
         /// Platform message ID to edit (for progressive updates).
         edit_target: Option<String>,
     },
@@ -173,7 +177,7 @@ pub enum PlatformOutbound {
         /// Session key for routing.
         session_key: String,
         /// Progress text.
-        text: String,
+        text:        String,
     },
 }
 
@@ -216,13 +220,13 @@ pub enum EgressError {
 
 /// Outbound delivery engine.
 ///
-/// Consumes [`OutboundEnvelope`]s from the [`OutboundBus`](crate::io::bus::OutboundBus)
-/// via an [`OutboundSubscriber`] and delivers to the appropriate
-/// [`EgressAdapter`]s based on the user's connected endpoints and
-/// routing rules.
+/// Consumes [`OutboundEnvelope`]s from the
+/// [`OutboundBus`](crate::io::bus::OutboundBus) via an [`OutboundSubscriber`]
+/// and delivers to the appropriate [`EgressAdapter`]s based on the user's
+/// connected endpoints and routing rules.
 pub struct Egress {
-    adapters: HashMap<ChannelType, Arc<dyn EgressAdapter>>,
-    endpoints: Arc<EndpointRegistry>,
+    adapters:     HashMap<ChannelType, Arc<dyn EgressAdapter>>,
+    endpoints:    Arc<EndpointRegistry>,
     outbound_sub: Box<dyn OutboundSubscriber>,
 }
 
@@ -297,10 +301,7 @@ impl Egress {
     }
 
     /// Resolve which endpoints should receive this envelope.
-    fn resolve_targets(
-        endpoints: &EndpointRegistry,
-        envelope: &OutboundEnvelope,
-    ) -> Vec<Endpoint> {
+    fn resolve_targets(endpoints: &EndpointRegistry, envelope: &OutboundEnvelope) -> Vec<Endpoint> {
         let connected = endpoints.get_endpoints(&envelope.user);
         match &envelope.routing {
             OutboundRouting::BroadcastAll => connected,
@@ -317,10 +318,7 @@ impl Egress {
 
     /// Convert an [`OutboundPayload`] into a [`PlatformOutbound`] for
     /// a specific endpoint.
-    fn format_for_endpoint(
-        endpoint: &Endpoint,
-        envelope: &OutboundEnvelope,
-    ) -> PlatformOutbound {
+    fn format_for_endpoint(endpoint: &Endpoint, envelope: &OutboundEnvelope) -> PlatformOutbound {
         let session_key = format!("{}:{}", endpoint.channel_type, envelope.session_id);
 
         match &envelope.payload {
@@ -360,9 +358,11 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
-    use crate::channel::types::MessageContent;
-    use crate::io::types::{MessageId, OutboundRouting};
-    use crate::process::SessionId;
+    use crate::{
+        channel::types::MessageContent,
+        io::types::{MessageId, OutboundRouting},
+        process::SessionId,
+    };
 
     // -----------------------------------------------------------------------
     // EndpointRegistry tests
@@ -371,7 +371,7 @@ mod tests {
     fn tg_endpoint(chat_id: i64) -> Endpoint {
         Endpoint {
             channel_type: ChannelType::Telegram,
-            address: EndpointAddress::Telegram {
+            address:      EndpointAddress::Telegram {
                 chat_id,
                 thread_id: None,
             },
@@ -381,7 +381,7 @@ mod tests {
     fn web_endpoint(conn_id: &str) -> Endpoint {
         Endpoint {
             channel_type: ChannelType::Web,
-            address: EndpointAddress::Web {
+            address:      EndpointAddress::Web {
                 connection_id: conn_id.to_string(),
             },
         }
@@ -447,22 +447,20 @@ mod tests {
             session_id: SessionId::new("session-1"),
             routing,
             payload: OutboundPayload::Reply {
-                content: MessageContent::Text("hello".to_string()),
+                content:     MessageContent::Text("hello".to_string()),
                 attachments: vec![],
             },
             timestamp: jiff::Timestamp::now(),
         }
     }
 
-    /// Helper: build an Egress with a registry (no real adapters or subscriber needed for
-    /// resolve_targets tests, so we use a dummy subscriber).
+    /// Helper: build an Egress with a registry (no real adapters or subscriber
+    /// needed for resolve_targets tests, so we use a dummy subscriber).
     struct DummySubscriber;
 
     #[async_trait]
     impl OutboundSubscriber for DummySubscriber {
-        async fn recv(&mut self) -> Option<OutboundEnvelope> {
-            None
-        }
+        async fn recv(&mut self) -> Option<OutboundEnvelope> { None }
     }
 
     fn egress_with_registry(registry: Arc<EndpointRegistry>) -> Egress {
@@ -509,7 +507,7 @@ mod tests {
             &user,
             Endpoint {
                 channel_type: ChannelType::Cli,
-                address: EndpointAddress::Cli {
+                address:      EndpointAddress::Cli {
                     session_id: "cli-1".to_string(),
                 },
             },
@@ -533,7 +531,7 @@ mod tests {
 
     struct MockEgressAdapter {
         channel: ChannelType,
-        sent: Mutex<Vec<(Endpoint, PlatformOutbound)>>,
+        sent:    Mutex<Vec<(Endpoint, PlatformOutbound)>>,
     }
 
     impl MockEgressAdapter {
@@ -544,26 +542,19 @@ mod tests {
             }
         }
 
-        fn sent_count(&self) -> usize {
-            self.sent.lock().unwrap().len()
-        }
+        fn sent_count(&self) -> usize { self.sent.lock().unwrap().len() }
     }
 
     #[async_trait]
     impl EgressAdapter for MockEgressAdapter {
-        fn channel_type(&self) -> ChannelType {
-            self.channel
-        }
+        fn channel_type(&self) -> ChannelType { self.channel }
 
         async fn send(
             &self,
             endpoint: &Endpoint,
             msg: PlatformOutbound,
         ) -> Result<(), EgressError> {
-            self.sent
-                .lock()
-                .unwrap()
-                .push((endpoint.clone(), msg));
+            self.sent.lock().unwrap().push((endpoint.clone(), msg));
             Ok(())
         }
     }
@@ -624,16 +615,16 @@ mod tests {
         adapters.insert(ChannelType::Telegram, tg_adapter.clone());
 
         let envelope = OutboundEnvelope {
-            id: MessageId::new(),
+            id:          MessageId::new(),
             in_reply_to: MessageId::new(),
-            user: UserId("user-1".to_string()),
-            session_id: SessionId::new("session-1"),
-            routing: OutboundRouting::BroadcastAll,
-            payload: OutboundPayload::Error {
-                code: "E001".to_string(),
+            user:        UserId("user-1".to_string()),
+            session_id:  SessionId::new("session-1"),
+            routing:     OutboundRouting::BroadcastAll,
+            payload:     OutboundPayload::Error {
+                code:    "E001".to_string(),
                 message: "something broke".to_string(),
             },
-            timestamp: jiff::Timestamp::now(),
+            timestamp:   jiff::Timestamp::now(),
         };
         Egress::deliver(&adapters, &registry, envelope).await;
 

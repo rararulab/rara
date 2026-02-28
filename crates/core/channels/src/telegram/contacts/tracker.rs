@@ -54,8 +54,9 @@ impl ContactTracker for NoopContactTracker {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
 
     struct CountingTracker {
         count: AtomicUsize,
@@ -68,9 +69,7 @@ mod tests {
             }
         }
 
-        fn count(&self) -> usize {
-            self.count.load(Ordering::Relaxed)
-        }
+        fn count(&self) -> usize { self.count.load(Ordering::Relaxed) }
     }
 
     #[async_trait]

@@ -14,17 +14,23 @@
 
 //! Callback handlers for inline keyboard interactions.
 //!
-//! - [`SessionSwitchCallbackHandler`]: handles `switch:{session_key}` callbacks.
-//! - [`SearchPaginationCallbackHandler`]: handles `search_more:{count}:{params}` callbacks.
+//! - [`SessionSwitchCallbackHandler`]: handles `switch:{session_key}`
+//!   callbacks.
+//! - [`SearchPaginationCallbackHandler`]: handles
+//!   `search_more:{count}:{params}` callbacks.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rara_kernel::channel::command::{CallbackContext, CallbackHandler, CallbackResult};
-use rara_kernel::error::KernelError;
+use rara_kernel::{
+    channel::command::{CallbackContext, CallbackHandler, CallbackResult},
+    error::KernelError,
+};
 
-use super::client::BotServiceClient;
-use super::job::{decode_search_params, encode_search_params, format_job_results};
+use super::{
+    client::BotServiceClient,
+    job::{decode_search_params, encode_search_params, format_job_results},
+};
 
 // ---------------------------------------------------------------------------
 // SessionSwitchCallbackHandler
@@ -37,21 +43,14 @@ pub struct SessionSwitchCallbackHandler {
 }
 
 impl SessionSwitchCallbackHandler {
-    pub fn new(client: Arc<dyn BotServiceClient>) -> Self {
-        Self { client }
-    }
+    pub fn new(client: Arc<dyn BotServiceClient>) -> Self { Self { client } }
 }
 
 #[async_trait]
 impl CallbackHandler for SessionSwitchCallbackHandler {
-    fn prefix(&self) -> &str {
-        "switch:"
-    }
+    fn prefix(&self) -> &str { "switch:" }
 
-    async fn handle(
-        &self,
-        context: &CallbackContext,
-    ) -> Result<CallbackResult, KernelError> {
+    async fn handle(&self, context: &CallbackContext) -> Result<CallbackResult, KernelError> {
         let session_key = &context.data["switch:".len()..];
         let chat_id = extract_chat_id(context);
         let account = extract_bot_username(context);
@@ -85,21 +84,14 @@ pub struct SearchPaginationCallbackHandler {
 }
 
 impl SearchPaginationCallbackHandler {
-    pub fn new(client: Arc<dyn BotServiceClient>) -> Self {
-        Self { client }
-    }
+    pub fn new(client: Arc<dyn BotServiceClient>) -> Self { Self { client } }
 }
 
 #[async_trait]
 impl CallbackHandler for SearchPaginationCallbackHandler {
-    fn prefix(&self) -> &str {
-        "search_more:"
-    }
+    fn prefix(&self) -> &str { "search_more:" }
 
-    async fn handle(
-        &self,
-        context: &CallbackContext,
-    ) -> Result<CallbackResult, KernelError> {
+    async fn handle(&self, context: &CallbackContext) -> Result<CallbackResult, KernelError> {
         // Parse: "search_more:{count}:{encoded_params}"
         let payload = &context.data["search_more:".len()..];
         let parts: Vec<&str> = payload.splitn(2, ':').collect();
@@ -138,8 +130,8 @@ impl CallbackHandler for SearchPaginationCallbackHandler {
             // The adapter cannot render a new keyboard from EditMessage alone.
             // We include the "Load More" hint in the text instead.
             text.push_str(&format!(
-                "\n<i>Use the button below to load more results.</i>\n\
-                 <!-- search_more:{}:{encoded} -->",
+                "\n<i>Use the button below to load more results.</i>\n<!-- \
+                 search_more:{}:{encoded} -->",
                 jobs.len(),
             ));
         }
@@ -202,6 +194,7 @@ mod tests {
         ) -> Result<Option<ChannelBinding>, BotServiceError> {
             Ok(None)
         }
+
         async fn bind_channel(
             &self,
             _: &str,
@@ -213,20 +206,23 @@ mod tests {
                 session_key: k.to_owned(),
             })
         }
+
         async fn create_session(&self, _: &str, _: Option<&str>) -> Result<(), BotServiceError> {
             Ok(())
         }
-        async fn clear_session_messages(&self, _: &str) -> Result<(), BotServiceError> {
-            Ok(())
-        }
+
+        async fn clear_session_messages(&self, _: &str) -> Result<(), BotServiceError> { Ok(()) }
+
         async fn list_sessions(&self, _: u32) -> Result<Vec<SessionListItem>, BotServiceError> {
             Ok(vec![])
         }
+
         async fn get_session(&self, _: &str) -> Result<SessionDetail, BotServiceError> {
             Err(BotServiceError::Service {
                 message: "n/a".into(),
             })
         }
+
         async fn update_session(
             &self,
             _: &str,
@@ -236,6 +232,7 @@ mod tests {
                 message: "n/a".into(),
             })
         }
+
         async fn discover_jobs(
             &self,
             _: Vec<String>,
@@ -246,28 +243,30 @@ mod tests {
             let mut jobs = Vec::new();
             for i in 0..max {
                 jobs.push(DiscoveryJob {
-                    title: format!("Job {i}"),
-                    company: format!("Company {i}"),
-                    location: Some("Remote".to_owned()),
-                    url: None,
-                    salary_min: None,
-                    salary_max: None,
+                    title:           format!("Job {i}"),
+                    company:         format!("Company {i}"),
+                    location:        Some("Remote".to_owned()),
+                    url:             None,
+                    salary_min:      None,
+                    salary_max:      None,
                     salary_currency: None,
                 });
             }
             Ok(jobs)
         }
-        async fn submit_jd_parse(&self, _: &str) -> Result<(), BotServiceError> {
-            Ok(())
-        }
+
+        async fn submit_jd_parse(&self, _: &str) -> Result<(), BotServiceError> { Ok(()) }
+
         async fn list_mcp_servers(&self) -> Result<Vec<McpServerInfo>, BotServiceError> {
             Ok(vec![])
         }
+
         async fn get_mcp_server(&self, _: &str) -> Result<McpServerInfo, BotServiceError> {
             Err(BotServiceError::Service {
                 message: "n/a".into(),
             })
         }
+
         async fn add_mcp_server(
             &self,
             _: &str,
@@ -278,12 +277,11 @@ mod tests {
                 message: "n/a".into(),
             })
         }
-        async fn start_mcp_server(&self, _: &str) -> Result<(), BotServiceError> {
-            Ok(())
-        }
-        async fn remove_mcp_server(&self, _: &str) -> Result<(), BotServiceError> {
-            Ok(())
-        }
+
+        async fn start_mcp_server(&self, _: &str) -> Result<(), BotServiceError> { Ok(()) }
+
+        async fn remove_mcp_server(&self, _: &str) -> Result<(), BotServiceError> { Ok(()) }
+
         async fn dispatch_coding_task(
             &self,
             _: &str,
@@ -293,6 +291,7 @@ mod tests {
                 message: "n/a".into(),
             })
         }
+
         async fn list_coding_tasks(&self) -> Result<Vec<CodingTaskSummary>, BotServiceError> {
             Ok(vec![])
         }
@@ -309,7 +308,7 @@ mod tests {
             channel_type: ChannelType::Telegram,
             session_key: "tg:123".to_owned(),
             user: ChannelUser {
-                platform_id: "123".to_owned(),
+                platform_id:  "123".to_owned(),
                 display_name: Some("Test".to_owned()),
             },
             data: data.to_owned(),
@@ -335,8 +334,7 @@ mod tests {
 
     #[tokio::test]
     async fn search_pagination_loads_more() {
-        let handler =
-            SearchPaginationCallbackHandler::new(Arc::new(MockCallbackClient));
+        let handler = SearchPaginationCallbackHandler::new(Arc::new(MockCallbackClient));
         assert_eq!(handler.prefix(), "search_more:");
 
         let ctx = make_callback_context("search_more:3:rust+engineer@remote");
@@ -353,8 +351,7 @@ mod tests {
 
     #[tokio::test]
     async fn search_pagination_invalid_data() {
-        let handler =
-            SearchPaginationCallbackHandler::new(Arc::new(MockCallbackClient));
+        let handler = SearchPaginationCallbackHandler::new(Arc::new(MockCallbackClient));
         let ctx = make_callback_context("search_more:invalid");
         let result = handler.handle(&ctx).await;
         match result {

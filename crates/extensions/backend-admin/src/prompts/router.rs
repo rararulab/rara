@@ -27,13 +27,13 @@
 
 use std::sync::Arc;
 
-use rara_kernel::prompt::PromptRepo;
 use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
     routing::get,
 };
+use rara_kernel::prompt::PromptRepo;
 use serde::Serialize;
 use utoipa_axum::router::OpenApiRouter;
 

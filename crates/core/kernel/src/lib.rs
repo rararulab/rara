@@ -54,12 +54,13 @@ pub mod tick;
 pub mod tool;
 
 pub use error::{KernelError, Result};
-pub use kernel::{Kernel, KernelConfig};
-
 // New process model re-exports
-pub use handle::{AgentHandle, ProcessOps, MemoryOps, EventOps, GuardOps, KernelHandle};
-pub use handle::scoped::ScopedKernelHandle;
-pub use handle::spawn_tool::SpawnTool;
-pub use process::{AgentId, SessionId, AgentProcess, ProcessState, ProcessInfo, ProcessTable, ProcessMessage, Signal};
-pub use process::principal::{Principal, UserId, Role};
-pub use process::manifest_loader::ManifestLoader;
+pub use handle::{AgentHandle, EventOps, GuardOps, KernelHandle, MemoryOps, ProcessOps};
+pub use handle::{scoped::ScopedKernelHandle, spawn_tool::SpawnTool};
+pub use kernel::{Kernel, KernelConfig};
+pub use process::{
+    AgentId, AgentProcess, ProcessInfo, ProcessMessage, ProcessState, ProcessTable, SessionId,
+    Signal,
+    manifest_loader::ManifestLoader,
+    principal::{Principal, Role, UserId},
+};

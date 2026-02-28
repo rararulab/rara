@@ -22,9 +22,8 @@ use std::path::Path;
 
 use tracing::warn;
 
-use crate::error::{KernelError, Result};
-
 use super::AgentManifest;
+use crate::error::{KernelError, Result};
 
 /// Loads [`AgentManifest`] definitions from YAML files.
 ///
@@ -69,7 +68,7 @@ impl ManifestLoader {
         }
         let mut count = 0;
         let entries = std::fs::read_dir(dir).map_err(|e| KernelError::IO {
-            source: e,
+            source:   e,
             location: snafu::Location::new(file!(), line!(), 0),
         })?;
         for entry in entries.flatten() {
@@ -79,7 +78,7 @@ impl ManifestLoader {
                 .is_some_and(|ext| ext == "yaml" || ext == "yml")
             {
                 let content = std::fs::read_to_string(&path).map_err(|e| KernelError::IO {
-                    source: e,
+                    source:   e,
                     location: snafu::Location::new(file!(), line!(), 0),
                 })?;
                 match serde_yaml::from_str::<AgentManifest>(&content) {
@@ -108,21 +107,18 @@ impl ManifestLoader {
     }
 
     /// List all loaded manifests.
-    pub fn list(&self) -> &[AgentManifest] {
-        &self.manifests
-    }
+    pub fn list(&self) -> &[AgentManifest] { &self.manifests }
 }
 
 impl Default for ManifestLoader {
-    fn default() -> Self {
-        Self::new()
-    }
+    fn default() -> Self { Self::new() }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
+
+    use super::*;
 
     #[test]
     fn test_manifest_loader_bundled() {

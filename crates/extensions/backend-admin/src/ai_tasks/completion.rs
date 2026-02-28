@@ -21,7 +21,6 @@
 //! Both include retry-on-empty: if the LLM returns an empty response, the
 //! function retries once with a nudge message.
 
-use rara_kernel::{provider::LlmProvider, tool::ToolRegistry};
 use async_openai::types::chat::{
     ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
     ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
@@ -29,6 +28,7 @@ use async_openai::types::chat::{
     ChatCompletionRequestUserMessageArgs, ChatCompletionToolChoiceOption, ChatCompletionTools,
     CreateChatCompletionRequestArgs, ToolChoiceOptions,
 };
+use rara_kernel::{provider::LlmProvider, tool::ToolRegistry};
 use tracing::{info, warn};
 
 use crate::ai_tasks::error::TaskAgentError;

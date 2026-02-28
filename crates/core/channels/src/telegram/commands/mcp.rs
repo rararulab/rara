@@ -14,14 +14,15 @@
 
 //! MCP server management command: `/mcp`.
 
-use std::fmt::Write;
-use std::sync::Arc;
+use std::{fmt::Write, sync::Arc};
 
 use async_trait::async_trait;
-use rara_kernel::channel::command::{
-    CommandContext, CommandDefinition, CommandHandler, CommandInfo, CommandResult,
+use rara_kernel::{
+    channel::command::{
+        CommandContext, CommandDefinition, CommandHandler, CommandInfo, CommandResult,
+    },
+    error::KernelError,
 };
-use rara_kernel::error::KernelError;
 
 use super::client::{BotServiceClient, McpServerStatus};
 
@@ -31,18 +32,16 @@ pub struct McpCommandHandler {
 }
 
 impl McpCommandHandler {
-    pub fn new(client: Arc<dyn BotServiceClient>) -> Self {
-        Self { client }
-    }
+    pub fn new(client: Arc<dyn BotServiceClient>) -> Self { Self { client } }
 }
 
 #[async_trait]
 impl CommandHandler for McpCommandHandler {
     fn commands(&self) -> Vec<CommandDefinition> {
         vec![CommandDefinition {
-            name: "mcp".to_owned(),
+            name:        "mcp".to_owned(),
             description: "List MCP servers or install a new one".to_owned(),
-            usage: Some("/mcp [url|name]".to_owned()),
+            usage:       Some("/mcp [url|name]".to_owned()),
         }]
     }
 
@@ -74,9 +73,7 @@ impl McpCommandHandler {
         };
 
         if servers.is_empty() {
-            return Ok(CommandResult::Text(
-                "No MCP servers configured.".to_owned(),
-            ));
+            return Ok(CommandResult::Text("No MCP servers configured.".to_owned()));
         }
 
         let mut text = format!("<b>MCP Servers</b> ({})\n\n", servers.len());
@@ -106,10 +103,7 @@ impl McpCommandHandler {
     }
 
     /// Install a new MCP server or restart an existing one.
-    async fn install_or_restart(
-        &self,
-        input: &str,
-    ) -> Result<CommandResult, KernelError> {
+    async fn install_or_restart(&self, input: &str) -> Result<CommandResult, KernelError> {
         let package_name = extract_mcp_package_name(input);
 
         // Check if already installed.
@@ -247,9 +241,6 @@ mod tests {
 
     #[test]
     fn extract_package_passthrough() {
-        assert_eq!(
-            extract_mcp_package_name("mcp-server-foo"),
-            "mcp-server-foo"
-        );
+        assert_eq!(extract_mcp_package_name("mcp-server-foo"), "mcp-server-foo");
     }
 }

@@ -27,11 +27,11 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-use crate::io::bus::InboundBus;
-use crate::io::types::InboundMessage;
-use crate::kernel::Kernel;
-use crate::process::principal::Principal;
-use crate::process::{AgentManifest, ProcessMessage};
+use crate::{
+    io::{bus::InboundBus, types::InboundMessage},
+    kernel::Kernel,
+    process::{AgentManifest, ProcessMessage, principal::Principal},
+};
 
 // ---------------------------------------------------------------------------
 // TickLoop
@@ -47,17 +47,14 @@ pub struct TickLoop {
     /// The inbound message bus to drain.
     inbound_bus: Arc<dyn InboundBus>,
     /// The kernel for spawning new processes and accessing the process table.
-    kernel: Arc<Kernel>,
+    kernel:      Arc<Kernel>,
     /// Maximum number of messages to drain per tick.
-    batch_size: usize,
+    batch_size:  usize,
 }
 
 impl TickLoop {
     /// Create a new tick loop.
-    pub fn new(
-        inbound_bus: Arc<dyn InboundBus>,
-        kernel: Arc<Kernel>,
-    ) -> Self {
+    pub fn new(inbound_bus: Arc<dyn InboundBus>, kernel: Arc<Kernel>) -> Self {
         Self {
             inbound_bus,
             kernel,
@@ -158,61 +155,63 @@ impl TickLoop {
     /// Default manifest for auto-spawned agents.
     fn default_manifest(&self) -> AgentManifest {
         AgentManifest {
-            name: "io-agent".to_string(),
-            description: "I/O bus agent".to_string(),
-            model: "default".to_string(),
-            system_prompt: "You are a helpful assistant.".to_string(),
-            provider_hint: None,
+            name:           "io-agent".to_string(),
+            description:    "I/O bus agent".to_string(),
+            model:          "default".to_string(),
+            system_prompt:  "You are a helpful assistant.".to_string(),
+            provider_hint:  None,
             max_iterations: Some(25),
-            tools: vec![],
-            max_children: None,
-            metadata: serde_json::Value::Null,
+            tools:          vec![],
+            max_children:   None,
+            metadata:       serde_json::Value::Null,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::{collections::HashMap, sync::Arc};
 
     use super::*;
-    use crate::channel::types::{ChannelType, MessageContent};
-    use crate::defaults::noop::{NoopEventBus, NoopGuard, NoopMemory};
-    use crate::defaults::noop_user_store::NoopUserStore;
-    use crate::io::memory_bus::InMemoryInboundBus;
-    use crate::io::types::{ChannelSource, MessageId};
-    use crate::kernel::{Kernel, KernelConfig};
-    use crate::process::manifest_loader::ManifestLoader;
-    use crate::process::principal::UserId;
-    use crate::process::SessionId;
-    use crate::provider::EnvLlmProviderLoader;
-    use crate::provider::LlmProviderLoaderRef;
-    use crate::tool::ToolRegistry;
+    use crate::{
+        channel::types::{ChannelType, MessageContent},
+        defaults::{
+            noop::{NoopEventBus, NoopGuard, NoopMemory},
+            noop_user_store::NoopUserStore,
+        },
+        io::{
+            memory_bus::InMemoryInboundBus,
+            types::{ChannelSource, MessageId},
+        },
+        kernel::{Kernel, KernelConfig},
+        process::{SessionId, manifest_loader::ManifestLoader, principal::UserId},
+        provider::{EnvLlmProviderLoader, LlmProviderLoaderRef},
+        tool::ToolRegistry,
+    };
 
     /// Helper: build a test InboundMessage.
     fn test_inbound(session: &str, text: &str) -> InboundMessage {
         InboundMessage {
-            id: MessageId::new(),
-            source: ChannelSource {
-                channel_type: ChannelType::Telegram,
+            id:            MessageId::new(),
+            source:        ChannelSource {
+                channel_type:        ChannelType::Telegram,
                 platform_message_id: None,
-                platform_user_id: "tg-user".to_string(),
-                platform_chat_id: None,
+                platform_user_id:    "tg-user".to_string(),
+                platform_chat_id:    None,
             },
-            user: UserId("u1".to_string()),
-            session_id: SessionId::new(session),
-            content: MessageContent::Text(text.to_string()),
+            user:          UserId("u1".to_string()),
+            session_id:    SessionId::new(session),
+            content:       MessageContent::Text(text.to_string()),
             reply_context: None,
-            timestamp: jiff::Timestamp::now(),
-            metadata: HashMap::new(),
+            timestamp:     jiff::Timestamp::now(),
+            metadata:      HashMap::new(),
         }
     }
 
     fn make_test_kernel() -> Arc<Kernel> {
         let config = KernelConfig {
-            max_concurrency: 16,
-            default_child_limit: 5,
+            max_concurrency:        16,
+            default_child_limit:    5,
             default_max_iterations: 5,
         };
         let mut loader = ManifestLoader::new();
@@ -249,10 +248,7 @@ mod tests {
             .unwrap();
 
         let kernel = make_test_kernel();
-        let tick_loop = TickLoop::new(
-            inbound_bus.clone() as Arc<dyn InboundBus>,
-            kernel.clone(),
-        );
+        let tick_loop = TickLoop::new(inbound_bus.clone() as Arc<dyn InboundBus>, kernel.clone());
 
         // Run one tick
         tick_loop.tick().await;
@@ -268,10 +264,7 @@ mod tests {
     async fn test_tick_loop_shutdown() {
         let inbound_bus = Arc::new(InMemoryInboundBus::new(100));
         let kernel = make_test_kernel();
-        let tick_loop = TickLoop::new(
-            inbound_bus as Arc<dyn InboundBus>,
-            kernel,
-        );
+        let tick_loop = TickLoop::new(inbound_bus as Arc<dyn InboundBus>, kernel);
 
         let shutdown = CancellationToken::new();
         let shutdown_clone = shutdown.clone();
@@ -285,11 +278,7 @@ mod tests {
         shutdown.cancel();
 
         // The loop should exit within a reasonable time
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            handle,
-        )
-        .await;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
 
         assert!(result.is_ok(), "tick loop should have exited on shutdown");
         assert!(

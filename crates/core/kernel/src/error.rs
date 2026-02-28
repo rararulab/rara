@@ -56,7 +56,6 @@ pub enum KernelError {
     Boot { message: String },
 
     // -- Provider-related errors (moved from agent-core) -----------------------
-
     #[snafu(display("LLM provider error: {message}"))]
     Provider { message: SharedString },
 

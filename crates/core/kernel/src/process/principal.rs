@@ -23,9 +23,7 @@ use super::user::{KernelUser, Permission};
 pub struct UserId(pub String);
 
 impl std::fmt::Display for UserId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.0) }
 }
 
 /// User role determining permission level.
@@ -45,8 +43,8 @@ pub enum Role {
 /// [`UserStore::get_by_name`](super::user::UserStore::get_by_name).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Principal {
-    pub user_id: UserId,
-    pub role: Role,
+    pub user_id:     UserId,
+    pub role:        Role,
     pub permissions: Vec<Permission>,
 }
 
@@ -57,8 +55,8 @@ impl Principal {
     /// `UserStore::get_by_name()` can look it up consistently.
     pub fn from_user(user: &KernelUser) -> Self {
         Self {
-            user_id: UserId(user.name.clone()),
-            role: user.role,
+            user_id:     UserId(user.name.clone()),
+            role:        user.role,
             permissions: user.permissions.clone(),
         }
     }
@@ -76,8 +74,8 @@ impl Principal {
     /// Create an admin principal (backward-compatible).
     pub fn admin(user_id: impl Into<String>) -> Self {
         Self {
-            user_id: UserId(user_id.into()),
-            role: Role::Admin,
+            user_id:     UserId(user_id.into()),
+            role:        Role::Admin,
             permissions: vec![],
         }
     }
@@ -85,16 +83,14 @@ impl Principal {
     /// Create a regular user principal (backward-compatible).
     pub fn user(user_id: impl Into<String>) -> Self {
         Self {
-            user_id: UserId(user_id.into()),
-            role: Role::User,
+            user_id:     UserId(user_id.into()),
+            role:        Role::User,
             permissions: vec![],
         }
     }
 
     /// Whether this principal has admin privileges.
-    pub fn is_admin(&self) -> bool {
-        self.role == Role::Admin || self.role == Role::Root
-    }
+    pub fn is_admin(&self) -> bool { self.role == Role::Admin || self.role == Role::Root }
 }
 
 #[cfg(test)]
@@ -148,8 +144,8 @@ mod tests {
     #[test]
     fn test_root_bypasses_all_checks() {
         let p = Principal {
-            user_id: UserId("root".to_string()),
-            role: Role::Root,
+            user_id:     UserId("root".to_string()),
+            role:        Role::Root,
             permissions: vec![], // no explicit permissions, but Root bypasses
         };
         assert!(p.has_permission(&Permission::Spawn));
@@ -160,8 +156,8 @@ mod tests {
     #[test]
     fn test_has_permission_with_all() {
         let p = Principal {
-            user_id: UserId("system".to_string()),
-            role: Role::Admin,
+            user_id:     UserId("system".to_string()),
+            role:        Role::Admin,
             permissions: vec![Permission::All],
         };
         assert!(p.has_permission(&Permission::Spawn));
@@ -171,8 +167,8 @@ mod tests {
     #[test]
     fn test_has_permission_specific() {
         let p = Principal {
-            user_id: UserId("alice".to_string()),
-            role: Role::User,
+            user_id:     UserId("alice".to_string()),
+            role:        Role::User,
             permissions: vec![Permission::Spawn],
         };
         assert!(p.has_permission(&Permission::Spawn));

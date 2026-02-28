@@ -25,10 +25,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use snafu::Snafu;
 
-use crate::channel::types::ChatMessage;
-use crate::io::types::InboundMessage;
-use crate::process::principal::UserId;
-use crate::process::SessionId;
+use crate::{
+    channel::types::ChatMessage,
+    io::types::InboundMessage,
+    process::{SessionId, principal::UserId},
+};
 
 // ---------------------------------------------------------------------------
 // SessionRepository trait
@@ -49,10 +50,7 @@ pub trait SessionRepository: Send + Sync + 'static {
     ) -> Result<(), SessionManagerError>;
 
     /// Load message history for a session (without the current message).
-    async fn get_history(
-        &self,
-        id: &SessionId,
-    ) -> Result<Vec<ChatMessage>, SessionManagerError>;
+    async fn get_history(&self, id: &SessionId) -> Result<Vec<ChatMessage>, SessionManagerError>;
 
     /// Persist an inbound (user) message to the session.
     async fn append_user_message(
@@ -100,9 +98,7 @@ pub struct SessionManager {
 
 impl SessionManager {
     /// Create a new SessionManager with the given repository.
-    pub fn new(session_repo: Arc<dyn SessionRepository>) -> Self {
-        Self { session_repo }
-    }
+    pub fn new(session_repo: Arc<dyn SessionRepository>) -> Self { Self { session_repo } }
 
     /// Ensure a session exists for the given ID and user.
     pub async fn ensure_session(
@@ -157,35 +153,29 @@ mod tests {
         let user_id = UserId("test-user".to_string());
 
         // All operations should succeed without panicking.
-        manager
-            .ensure_session(&session_id, &user_id)
-            .await
-            .unwrap();
+        manager.ensure_session(&session_id, &user_id).await.unwrap();
 
         let history = manager.get_history(&session_id).await.unwrap();
         assert!(history.is_empty());
 
         // Create a minimal InboundMessage for append_message.
         let msg = InboundMessage {
-            id: crate::io::types::MessageId::new(),
-            source: crate::io::types::ChannelSource {
-                channel_type: crate::channel::types::ChannelType::Telegram,
+            id:            crate::io::types::MessageId::new(),
+            source:        crate::io::types::ChannelSource {
+                channel_type:        crate::channel::types::ChannelType::Telegram,
                 platform_message_id: None,
-                platform_user_id: "tg-user".to_string(),
-                platform_chat_id: None,
+                platform_user_id:    "tg-user".to_string(),
+                platform_chat_id:    None,
             },
-            user: user_id.clone(),
-            session_id: session_id.clone(),
-            content: crate::channel::types::MessageContent::Text("hello".to_string()),
+            user:          user_id.clone(),
+            session_id:    session_id.clone(),
+            content:       crate::channel::types::MessageContent::Text("hello".to_string()),
             reply_context: None,
-            timestamp: jiff::Timestamp::now(),
-            metadata: std::collections::HashMap::new(),
+            timestamp:     jiff::Timestamp::now(),
+            metadata:      std::collections::HashMap::new(),
         };
 
-        manager
-            .append_message(&session_id, &msg)
-            .await
-            .unwrap();
+        manager.append_message(&session_id, &msg).await.unwrap();
 
         manager
             .append_assistant_message(&session_id, "response")
@@ -203,6 +193,9 @@ mod tests {
         let err = SessionManagerError::Repository {
             message: "connection failed".to_string(),
         };
-        assert_eq!(err.to_string(), "session repository error: connection failed");
+        assert_eq!(
+            err.to_string(),
+            "session repository error: connection failed"
+        );
     }
 }

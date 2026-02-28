@@ -58,13 +58,7 @@ pub trait StateMemory: Send + Sync {
     ) -> Result<Vec<StateFact>>;
 
     /// Update the content of a single fact.
-    async fn update(
-        &self,
-        ctx: &MemoryContext,
-        scope: Scope,
-        id: Uuid,
-        data: &str,
-    ) -> Result<()>;
+    async fn update(&self, ctx: &MemoryContext, scope: Scope, id: Uuid, data: &str) -> Result<()>;
 
     /// Delete a single fact.
     async fn delete(&self, ctx: &MemoryContext, scope: Scope, id: Uuid) -> Result<()>;

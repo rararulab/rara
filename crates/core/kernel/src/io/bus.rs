@@ -37,10 +37,12 @@ use crate::io::types::{BusError, InboundMessage, MessageId, OutboundEnvelope};
 /// blocks until new messages are available.
 #[async_trait]
 pub trait InboundBus: Send + Sync + 'static {
-    /// Publish a message into the bus. Returns [`BusError::Full`] if at capacity.
+    /// Publish a message into the bus. Returns [`BusError::Full`] if at
+    /// capacity.
     async fn publish(&self, msg: InboundMessage) -> Result<(), BusError>;
 
-    /// Drain up to `max` messages from the bus (exclusive consume, removes on read).
+    /// Drain up to `max` messages from the bus (exclusive consume, removes on
+    /// read).
     async fn drain(&self, max: usize) -> Vec<InboundMessage>;
 
     /// Block until new messages are available (encapsulates wakeup mechanism).
