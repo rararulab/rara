@@ -65,6 +65,8 @@ pub struct IoBusPipeline {
     pub kernel:            Arc<Kernel>,
     /// The web adapter (if created).
     pub web_adapter:       Option<Arc<rara_channels::web::WebAdapter>>,
+    /// The CLI terminal adapter (if created).
+    pub cli_adapter:       Option<Arc<rara_channels::terminal::TerminalAdapter>>,
 }
 
 /// Initialize the full I/O Bus pipeline.
@@ -83,6 +85,7 @@ pub struct IoBusPipeline {
 pub fn init_io_pipeline(
     telegram_adapter: Option<Arc<rara_channels::telegram::TelegramAdapter>>,
     web_adapter: Option<Arc<rara_channels::web::WebAdapter>>,
+    cli_adapter: Option<Arc<rara_channels::terminal::TerminalAdapter>>,
     session_repo: Arc<dyn rara_kernel::session::SessionRepository>,
     mut kernel: Kernel,
 ) -> IoBusPipeline {
@@ -120,6 +123,9 @@ pub fn init_io_pipeline(
     if let Some(ref web) = web_adapter {
         adapters.insert(ChannelType::Web, web.clone() as Arc<dyn EgressAdapter>);
     }
+    if let Some(ref cli) = cli_adapter {
+        adapters.insert(ChannelType::Cli, cli.clone() as Arc<dyn EgressAdapter>);
+    }
 
     let egress = Egress::new(adapters, endpoint_registry.clone(), outbound_sub);
 
@@ -130,6 +136,9 @@ pub fn init_io_pipeline(
         }
         if web_adapter.is_some() {
             adapter_names.push("web");
+        }
+        if cli_adapter.is_some() {
+            adapter_names.push("cli");
         }
         let adapters_str = if adapter_names.is_empty() {
             "none".to_owned()
@@ -155,5 +164,6 @@ pub fn init_io_pipeline(
         endpoint_registry,
         kernel,
         web_adapter,
+        cli_adapter,
     }
 }

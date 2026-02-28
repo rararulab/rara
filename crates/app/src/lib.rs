@@ -23,6 +23,8 @@ use std::{
     time::Duration,
 };
 
+use rara_kernel::io::{egress::EndpointRegistry, ingress::IngressPipeline, stream::StreamHub};
+
 use opendal::Operator;
 use rara_domain_shared::notify::client::NotifyClient;
 use rara_server::{
@@ -148,6 +150,21 @@ impl Default for TelemetryConfig {
     }
 }
 
+// ---------------------------------------------------------------------------
+// StartOptions
+// ---------------------------------------------------------------------------
+
+/// Options for starting the application with custom adapters.
+///
+/// Used by `start_with_options` to inject pre-created adapters
+/// (e.g. a [`TerminalAdapter`](rara_channels::terminal::TerminalAdapter)
+/// for the CLI chat command).
+#[derive(Default)]
+pub struct StartOptions {
+    /// CLI terminal adapter (if running in interactive CLI mode).
+    pub cli_adapter: Option<Arc<rara_channels::terminal::TerminalAdapter>>,
+}
+
 impl AppConfig {
     /// Load config from Consul KV or environment variables.
     ///
@@ -194,6 +211,14 @@ impl AppConfig {
     /// Initialize infrastructure, wire services, start servers & workers,
     /// and return a handle for controlling the running application.
     pub async fn start(self) -> Result<AppHandle, Whatever> {
+        self.start_with_options(StartOptions::default()).await
+    }
+
+    /// Initialize infrastructure, wire services, start servers & workers,
+    /// and return a handle for controlling the running application.
+    ///
+    /// Accepts [`StartOptions`] for injecting pre-created adapters.
+    pub async fn start_with_options(self, options: StartOptions) -> Result<AppHandle, Whatever> {
         info!("Initializing job application");
 
         // -- infrastructure --------------------------------------------------
@@ -240,12 +265,6 @@ impl AppConfig {
         let cancellation_token = CancellationToken::new();
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-
-        let app_handle = AppHandle {
-            shutdown_tx:        Some(shutdown_tx),
-            running:            Arc::clone(&running),
-            cancellation_token: cancellation_token.clone(),
-        };
 
         let mut grpc_handle = start_grpc_server(&self.grpc, &[Arc::new(HelloService)])
             .whatever_context("Failed to start gRPC server")?;
@@ -374,6 +393,7 @@ impl AppConfig {
         let io_pipeline = io_pipeline::init_io_pipeline(
             telegram_adapter.clone(),
             Some(web_adapter.clone()),
+            options.cli_adapter.clone(),
             app_state.session_repo.clone(),
             kernel,
         );
@@ -441,6 +461,17 @@ impl AppConfig {
         );
 
         info!("Application started successfully");
+
+        // -- build app handle ------------------------------------------------
+
+        let app_handle = AppHandle {
+            shutdown_tx:        Some(shutdown_tx),
+            running:            Arc::clone(&running),
+            cancellation_token: cancellation_token.clone(),
+            ingress_pipeline:   Some(io_pipeline.ingress_pipeline.clone()),
+            endpoint_registry:  Some(io_pipeline.endpoint_registry.clone()),
+            stream_hub:         Some(io_pipeline.stream_hub.clone()),
+        };
 
         // -- shutdown loop ---------------------------------------------------
 
@@ -581,6 +612,12 @@ pub struct AppHandle {
     shutdown_tx:        Option<oneshot::Sender<()>>,
     running:            Arc<AtomicBool>,
     cancellation_token: CancellationToken,
+    /// The ingress pipeline (for injecting inbound messages).
+    pub ingress_pipeline:  Option<Arc<IngressPipeline>>,
+    /// Per-user endpoint registry (for registering CLI endpoints).
+    pub endpoint_registry: Option<Arc<EndpointRegistry>>,
+    /// Ephemeral stream hub (for subscribing to real-time deltas).
+    pub stream_hub:        Option<Arc<StreamHub>>,
 }
 
 #[allow(dead_code)]

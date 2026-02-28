@@ -25,4 +25,5 @@
 //! - [`WebAdapter`](web::WebAdapter) — WebSocket + SSE for web chat UI.
 
 pub mod telegram;
+pub mod terminal;
 pub mod web;

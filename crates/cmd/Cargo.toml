@@ -28,9 +28,13 @@ path = "src/main.rs"
 clap = { workspace = true }
 common-telemetry.workspace = true
 rara-app = { workspace = true }
+rara-channels = { workspace = true }
+rara-kernel = { workspace = true }
 shadow-rs = { workspace = true }
 snafu.workspace = true
 tokio.workspace = true
+tracing.workspace = true
+ulid.workspace = true
 
 [build-dependencies]
 shadow-rs = { workspace = true }
