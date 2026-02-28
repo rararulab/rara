@@ -37,8 +37,11 @@
 
 pub mod bus;
 pub mod egress;
+pub mod executor;
 pub mod ingress;
 pub mod memory_bus;
 pub mod scheduler;
+pub mod session_manager;
 pub mod stream;
+pub mod tick;
 pub mod types;
