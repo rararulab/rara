@@ -41,6 +41,7 @@ pub struct AppState {
     pub job_service:         rara_backend_admin::job::service::JobService,
     pub chat_service:        rara_backend_admin::chat::service::ChatService,
     pub session_repo:        Arc<dyn rara_sessions::repository::SessionRepository>,
+    pub kernel_session_repo:  Arc<dyn rara_kernel::session_manager::SessionRepository>,
     // -- shared --
     pub settings_svc:        rara_backend_admin::settings::SettingsSvc,
     pub notify_client:       rara_domain_shared::notify::client::NotifyClient,
@@ -331,6 +332,8 @@ impl AppState {
         );
 
         let chat_agent = rara_backend_admin::chat::agent::ChatAgent::new(Arc::clone(&agent_ctx));
+        let kernel_session_repo: Arc<dyn rara_kernel::session_manager::SessionRepository> =
+            session_repo.clone();
         let session_repo: Arc<dyn rara_sessions::repository::SessionRepository> = session_repo;
         let chat_service = rara_backend_admin::chat::service::ChatService::new(
             session_repo.clone(),
@@ -378,6 +381,7 @@ impl AppState {
             job_service,
             chat_service,
             session_repo,
+            kernel_session_repo,
             settings_svc,
             notify_client,
             contact_repo,

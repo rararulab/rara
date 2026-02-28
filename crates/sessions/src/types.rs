@@ -14,12 +14,21 @@
 
 //! Core types for the sessions crate.
 //!
-//! This module defines the data model for chat sessions, messages, content
-//! blocks, and channel bindings. All types derive `Serialize`/`Deserialize`
-//! for JSON API transport and database (JSONB) storage.
+//! Chat message types ([`ChatMessage`], [`MessageRole`], [`MessageContent`],
+//! [`ContentBlock`], [`ToolCall`]) are re-exported from `rara-kernel` which
+//! is the single canonical source of truth. This module keeps session-specific
+//! types: [`SessionKey`], [`DmScope`], [`SessionEntry`], [`ChannelBinding`].
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+
+// ---------------------------------------------------------------------------
+// Re-exports from rara-kernel (canonical ChatMessage types)
+// ---------------------------------------------------------------------------
+
+pub use rara_kernel::channel::types::{
+    ChatMessage, ContentBlock, MessageContent, MessageRole, ToolCall,
+};
 
 // ---------------------------------------------------------------------------
 // SessionKey
@@ -160,192 +169,6 @@ pub struct SessionEntry {
     /// When the session was last modified (message appended, metadata
     /// changed, etc.).
     pub updated_at:    DateTime<Utc>,
-}
-
-// ---------------------------------------------------------------------------
-// ChatMessage
-// ---------------------------------------------------------------------------
-
-/// The role of the entity that produced a [`ChatMessage`].
-///
-/// Roles are stored as lowercase strings in the database (`"system"`,
-/// `"user"`, `"assistant"`, `"tool"`, `"tool_result"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MessageRole {
-    System,
-    User,
-    Assistant,
-    Tool,
-    ToolResult,
-}
-
-impl std::fmt::Display for MessageRole {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::System => write!(f, "system"),
-            Self::User => write!(f, "user"),
-            Self::Assistant => write!(f, "assistant"),
-            Self::Tool => write!(f, "tool"),
-            Self::ToolResult => write!(f, "tool_result"),
-        }
-    }
-}
-
-/// A single message in a session's conversation history.
-///
-/// Messages are ordered by `seq` (1-based, monotonically increasing per
-/// session). The sequence number is assigned by the repository on
-/// [`append_message`](crate::repository::SessionRepository::append_message);
-/// convenience constructors set `seq` to `0` as a placeholder.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatMessage {
-    /// Sequence number within the session (1-based, monotonically increasing).
-    /// Set to `0` before persistence; the repository assigns the real value.
-    pub seq:          i64,
-    /// The role that produced this message.
-    pub role:         MessageRole,
-    /// Message content — either plain text or a list of multimodal blocks.
-    pub content:      MessageContent,
-    /// Identifier linking a tool invocation to its result. Present on
-    /// [`MessageRole::Tool`] and [`MessageRole::ToolResult`] messages.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_call_id: Option<String>,
-    /// Name of the tool that was invoked.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_name:    Option<String>,
-    /// Timestamp when the message was persisted.
-    pub created_at:   DateTime<Utc>,
-}
-
-/// Content payload for a [`ChatMessage`].
-///
-/// Uses `#[serde(untagged)]` so that a plain string serializes as `"hello"`
-/// while a multimodal message serializes as `[{"type":"text","text":"..."},
-/// {"type":"image_url","url":"..."}]`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum MessageContent {
-    /// Plain UTF-8 text.
-    Text(String),
-    /// Structured / multimodal content consisting of text and image blocks.
-    Multimodal(Vec<ContentBlock>),
-}
-
-impl MessageContent {
-    /// Extract a plain-text representation.
-    ///
-    /// - For [`Text`](Self::Text), returns the inner string.
-    /// - For [`Multimodal`](Self::Multimodal), concatenates all text blocks
-    ///   separated by newlines, ignoring image blocks.
-    #[must_use]
-    pub fn as_text(&self) -> String {
-        match self {
-            Self::Text(t) => t.clone(),
-            Self::Multimodal(blocks) => blocks
-                .iter()
-                .filter_map(|b| match b {
-                    ContentBlock::Text { text } => Some(text.as_str()),
-                    ContentBlock::ImageUrl { .. } => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n"),
-        }
-    }
-}
-
-/// A single block within a [`MessageContent::Multimodal`] payload.
-///
-/// Internally tagged by `"type"` for JSON (de)serialization:
-/// - `{"type": "text", "text": "..."}`
-/// - `{"type": "image_url", "url": "..."}`
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ContentBlock {
-    /// A text fragment.
-    Text { text: String },
-    /// A reference to an image by URL.
-    ImageUrl { url: String },
-}
-
-// -- convenience constructors ------------------------------------------------
-
-impl ChatMessage {
-    /// Create a user message with plain text content.
-    ///
-    /// The `seq` field is set to `0` — it will be assigned by the repository
-    /// when the message is persisted.
-    #[must_use]
-    pub fn user(text: impl Into<String>) -> Self {
-        Self {
-            seq:          0, // assigned by repository
-            role:         MessageRole::User,
-            content:      MessageContent::Text(text.into()),
-            tool_call_id: None,
-            tool_name:    None,
-            created_at:   Utc::now(),
-        }
-    }
-
-    /// Create an assistant message with plain text content.
-    #[must_use]
-    pub fn assistant(text: impl Into<String>) -> Self {
-        Self {
-            seq:          0,
-            role:         MessageRole::Assistant,
-            content:      MessageContent::Text(text.into()),
-            tool_call_id: None,
-            tool_name:    None,
-            created_at:   Utc::now(),
-        }
-    }
-
-    /// Create a system message.
-    #[must_use]
-    pub fn system(text: impl Into<String>) -> Self {
-        Self {
-            seq:          0,
-            role:         MessageRole::System,
-            content:      MessageContent::Text(text.into()),
-            tool_call_id: None,
-            tool_name:    None,
-            created_at:   Utc::now(),
-        }
-    }
-
-    /// Create a tool-call message representing a tool invocation by the LLM.
-    #[must_use]
-    pub fn tool(
-        tool_call_id: impl Into<String>,
-        tool_name: impl Into<String>,
-        content: impl Into<String>,
-    ) -> Self {
-        Self {
-            seq:          0,
-            role:         MessageRole::Tool,
-            content:      MessageContent::Text(content.into()),
-            tool_call_id: Some(tool_call_id.into()),
-            tool_name:    Some(tool_name.into()),
-            created_at:   Utc::now(),
-        }
-    }
-
-    /// Create a tool-result message carrying the output of a tool execution.
-    #[must_use]
-    pub fn tool_result(
-        tool_call_id: impl Into<String>,
-        tool_name: impl Into<String>,
-        content: impl Into<String>,
-    ) -> Self {
-        Self {
-            seq:          0,
-            role:         MessageRole::ToolResult,
-            content:      MessageContent::Text(content.into()),
-            tool_call_id: Some(tool_call_id.into()),
-            tool_name:    Some(tool_name.into()),
-            created_at:   Utc::now(),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

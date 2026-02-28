@@ -17,32 +17,17 @@
 use std::pin::Pin;
 
 use async_trait::async_trait;
-use base::shared_string::SharedString;
 use futures::Stream;
 use serde::{Deserialize, Serialize};
 
 use crate::model::ModelCapabilities;
 
+// Re-export ToolCall from channel::types for backward compatibility.
+pub use crate::channel::types::ToolCall;
+
 // ---------------------------------------------------------------------------
 // Request / Response types
 // ---------------------------------------------------------------------------
-
-/// Role in a chat conversation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ChatRole {
-    System,
-    User,
-    Assistant,
-    Tool,
-}
-
-/// A tool call requested by the model.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCall {
-    pub id:        SharedString,
-    pub name:      SharedString,
-    pub arguments: serde_json::Value,
-}
 
 /// Definition of a tool the model can call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,23 +37,12 @@ pub struct ToolDefinition {
     pub parameters:  serde_json::Value,
 }
 
-/// A single message in a chat conversation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatMessage {
-    pub role:         ChatRole,
-    pub content:      Option<String>,
-    #[serde(default)]
-    pub tool_calls:   Vec<ToolCall>,
-    #[serde(default)]
-    pub tool_call_id: Option<String>,
-}
-
 /// A chat completion request.
 #[derive(Debug, Clone)]
 pub struct ChatRequest {
     pub model:         String,
     pub system_prompt: String,
-    pub messages:      Vec<ChatMessage>,
+    pub messages:      Vec<crate::channel::types::ChatMessage>,
     pub tools:         Option<Vec<ToolDefinition>>,
     pub temperature:   Option<f32>,
 }

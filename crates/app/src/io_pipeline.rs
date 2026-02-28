@@ -40,7 +40,6 @@ use rara_kernel::provider::LlmProviderLoaderRef;
 use rara_kernel::tool::ToolRegistry;
 
 use crate::resolvers::{AppIdentityResolver, AppSessionResolver};
-use crate::session_bridge::SessionRepoBridge;
 
 // ---------------------------------------------------------------------------
 // IoBusPipeline
@@ -82,7 +81,7 @@ pub struct IoBusPipeline {
 /// an [`EgressAdapter`] for outbound delivery.
 pub fn init_io_pipeline(
     telegram_adapter: Option<Arc<rara_channels::telegram::TelegramAdapter>>,
-    session_repo: Arc<dyn rara_sessions::repository::SessionRepository>,
+    session_repo: Arc<dyn rara_kernel::session_manager::SessionRepository>,
     llm_provider: LlmProviderLoaderRef,
     tool_registry: Arc<ToolRegistry>,
 ) -> IoBusPipeline {
@@ -103,10 +102,8 @@ pub fn init_io_pipeline(
         inbound_bus.clone(),
     ));
 
-    // 4. Create SessionManager with real PG-backed session repository
-    let session_manager = rara_boot::session::default_session_manager(
-        Arc::new(SessionRepoBridge::new(session_repo)),
-    );
+    // 4. Create SessionManager with real PG-backed session repository (direct impl)
+    let session_manager = rara_boot::session::default_session_manager(session_repo);
 
     // 5. Create AgentExecutor
     let executor = Arc::new(AgentExecutor::new(

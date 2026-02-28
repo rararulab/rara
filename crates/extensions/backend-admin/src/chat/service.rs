@@ -407,9 +407,10 @@ impl ChatService {
                 seq:          0,
                 role:         MessageRole::User,
                 content:      MessageContent::Multimodal(blocks),
+                tool_calls:   Vec::new(),
                 tool_call_id: None,
                 tool_name:    None,
-                created_at:   Utc::now(),
+                created_at:   jiff::Timestamp::now(),
             }
         } else {
             ChatMessage::user(user_text)

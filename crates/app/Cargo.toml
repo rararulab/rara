@@ -28,7 +28,6 @@ rara-kernel = { workspace = true }
 rara-sessions = { workspace = true }
 rara-workers = { workspace = true }
 async-trait = { workspace = true }
-chrono = { workspace = true }
 teloxide = { workspace = true }
 serde = { workspace = true }
 snafu = { workspace = true }

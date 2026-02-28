@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use jiff::Timestamp;
 use uuid::Uuid;
 
-use crate::llm::ChatMessage;
+use crate::channel::types::ChatMessage;
 
 // ---------------------------------------------------------------------------
 // Types

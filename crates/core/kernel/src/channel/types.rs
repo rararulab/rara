@@ -20,6 +20,7 @@
 
 use std::collections::HashMap;
 
+use base::shared_string::SharedString;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -154,6 +155,132 @@ impl From<String> for MessageContent {
 
 impl From<&str> for MessageContent {
     fn from(s: &str) -> Self { Self::Text(s.to_owned()) }
+}
+
+// ---------------------------------------------------------------------------
+// ToolCall
+// ---------------------------------------------------------------------------
+
+/// A tool call requested by an LLM.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id:        SharedString,
+    pub name:      SharedString,
+    pub arguments: serde_json::Value,
+}
+
+// ---------------------------------------------------------------------------
+// ChatMessage
+// ---------------------------------------------------------------------------
+
+/// A single message in a conversation history.
+///
+/// This is the canonical chat message type used throughout the kernel and
+/// persistence layers. Sequence numbers are assigned by the repository;
+/// convenience constructors set `seq` to `0` as a placeholder.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessage {
+    /// Sequence number within the session (1-based, monotonically increasing).
+    /// Set to `0` before persistence; the repository assigns the real value.
+    #[serde(default)]
+    pub seq:          i64,
+    /// The role that produced this message.
+    pub role:         MessageRole,
+    /// Message content — either plain text or a list of multimodal blocks.
+    pub content:      MessageContent,
+    /// Tool calls requested by the assistant (present on assistant messages
+    /// that invoke tools).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls:   Vec<ToolCall>,
+    /// Identifier linking a tool invocation to its result. Present on
+    /// [`MessageRole::Tool`] and [`MessageRole::ToolResult`] messages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    /// Name of the tool that was invoked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name:    Option<String>,
+    /// Timestamp when the message was created.
+    pub created_at:   jiff::Timestamp,
+}
+
+impl ChatMessage {
+    /// Create a user message with plain text content.
+    #[must_use]
+    pub fn user(text: impl Into<String>) -> Self {
+        Self {
+            seq:          0,
+            role:         MessageRole::User,
+            content:      MessageContent::Text(text.into()),
+            tool_calls:   Vec::new(),
+            tool_call_id: None,
+            tool_name:    None,
+            created_at:   jiff::Timestamp::now(),
+        }
+    }
+
+    /// Create an assistant message with plain text content.
+    #[must_use]
+    pub fn assistant(text: impl Into<String>) -> Self {
+        Self {
+            seq:          0,
+            role:         MessageRole::Assistant,
+            content:      MessageContent::Text(text.into()),
+            tool_calls:   Vec::new(),
+            tool_call_id: None,
+            tool_name:    None,
+            created_at:   jiff::Timestamp::now(),
+        }
+    }
+
+    /// Create a system message.
+    #[must_use]
+    pub fn system(text: impl Into<String>) -> Self {
+        Self {
+            seq:          0,
+            role:         MessageRole::System,
+            content:      MessageContent::Text(text.into()),
+            tool_calls:   Vec::new(),
+            tool_call_id: None,
+            tool_name:    None,
+            created_at:   jiff::Timestamp::now(),
+        }
+    }
+
+    /// Create a tool-call message representing a tool invocation by the LLM.
+    #[must_use]
+    pub fn tool(
+        tool_call_id: impl Into<String>,
+        name: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
+        Self {
+            seq:          0,
+            role:         MessageRole::Tool,
+            content:      MessageContent::Text(content.into()),
+            tool_calls:   Vec::new(),
+            tool_call_id: Some(tool_call_id.into()),
+            tool_name:    Some(name.into()),
+            created_at:   jiff::Timestamp::now(),
+        }
+    }
+
+    /// Create a tool-result message carrying the output of a tool execution.
+    #[must_use]
+    pub fn tool_result(
+        tool_call_id: impl Into<String>,
+        name: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
+        Self {
+            seq:          0,
+            role:         MessageRole::ToolResult,
+            content:      MessageContent::Text(content.into()),
+            tool_calls:   Vec::new(),
+            tool_call_id: Some(tool_call_id.into()),
+            tool_name:    Some(name.into()),
+            created_at:   jiff::Timestamp::now(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -480,5 +607,32 @@ mod tests {
         };
         assert!(msg.photo.is_none());
         assert!(msg.reply_markup.is_none());
+    }
+
+    #[test]
+    fn chat_message_constructors() {
+        let u = ChatMessage::user("hello");
+        assert_eq!(u.role, MessageRole::User);
+        assert_eq!(u.content.as_text(), "hello");
+        assert_eq!(u.seq, 0);
+        assert!(u.tool_calls.is_empty());
+        assert!(u.tool_call_id.is_none());
+
+        let a = ChatMessage::assistant("hi there");
+        assert_eq!(a.role, MessageRole::Assistant);
+        assert_eq!(a.content.as_text(), "hi there");
+
+        let s = ChatMessage::system("you are helpful");
+        assert_eq!(s.role, MessageRole::System);
+        assert_eq!(s.content.as_text(), "you are helpful");
+
+        let t = ChatMessage::tool("call-1", "search", "result");
+        assert_eq!(t.role, MessageRole::Tool);
+        assert_eq!(t.tool_call_id, Some("call-1".to_owned()));
+        assert_eq!(t.tool_name, Some("search".to_owned()));
+
+        let tr = ChatMessage::tool_result("call-2", "fetch", "data");
+        assert_eq!(tr.role, MessageRole::ToolResult);
+        assert_eq!(tr.tool_call_id, Some("call-2".to_owned()));
     }
 }

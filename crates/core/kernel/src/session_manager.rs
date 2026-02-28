@@ -25,8 +25,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use snafu::Snafu;
 
+use crate::channel::types::ChatMessage;
 use crate::io::types::InboundMessage;
-use crate::llm::ChatMessage;
 use crate::process::principal::UserId;
 use crate::process::SessionId;
 

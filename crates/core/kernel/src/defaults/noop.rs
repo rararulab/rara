@@ -24,7 +24,7 @@ use crate::guard::{Guard, GuardContext, Verdict};
 use crate::io::bus::OutboxStore;
 use crate::session_manager::{SessionManagerError, SessionRepository};
 use crate::io::types::{BusError, MessageId, OutboundEnvelope};
-use crate::llm::ChatMessage;
+use crate::channel::types::ChatMessage;
 use crate::process::SessionId;
 use crate::process::principal::UserId;
 use crate::memory::knowledge::KnowledgeMemory;

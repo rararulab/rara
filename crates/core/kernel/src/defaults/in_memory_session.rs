@@ -6,7 +6,7 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::{
-    llm::ChatMessage,
+    channel::types::ChatMessage,
     session::{Exchange, SessionMeta, SessionStore},
 };
 
@@ -83,12 +83,8 @@ impl SessionStore for InMemorySessionStore {
         let mut sessions = self.sessions.write().await;
         if let Some(data) = sessions.get_mut(&session_id) {
             data.messages.clear();
-            data.messages.push(ChatMessage {
-                role:         crate::llm::ChatRole::System,
-                content:      Some(format!("[Compacted summary] {summary}")),
-                tool_calls:   Vec::new(),
-                tool_call_id: None,
-            });
+            data.messages
+                .push(ChatMessage::system(format!("[Compacted summary] {summary}")));
             data.meta.updated_at = Timestamp::now();
         }
         Ok(())
