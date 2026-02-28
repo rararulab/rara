@@ -141,7 +141,7 @@ pub async fn process_loop(
                         RunnerEvent::ToolCallStart { id, name, .. } => {
                             stream_handle.emit(StreamEvent::ToolCallStart {
                                 name: name.clone(),
-                                id: id.clone(),
+                                id:   id.clone(),
                             });
                         }
                         RunnerEvent::ToolCallEnd { id, .. } => {
@@ -167,16 +167,16 @@ pub async fn process_loop(
                             let _ = process_table.set_state(agent_id, ProcessState::Failed);
                             // Publish error to outbound
                             let envelope = OutboundEnvelope {
-                                id: MessageId::new(),
+                                id:          MessageId::new(),
                                 in_reply_to: inbound.id.clone(),
-                                user: inbound.user.clone(),
-                                session_id: session_id.clone(),
-                                routing: OutboundRouting::BroadcastAll,
-                                payload: OutboundPayload::Error {
-                                    code: "agent_error".to_string(),
+                                user:        inbound.user.clone(),
+                                session_id:  session_id.clone(),
+                                routing:     OutboundRouting::BroadcastAll,
+                                payload:     OutboundPayload::Error {
+                                    code:    "agent_error".to_string(),
                                     message: err_msg,
                                 },
-                                timestamp: jiff::Timestamp::now(),
+                                timestamp:   jiff::Timestamp::now(),
                             };
                             if let Err(e) = outbound_bus.publish(envelope).await {
                                 error!(%e, "failed to publish error");
@@ -218,16 +218,16 @@ pub async fn process_loop(
 
                     // Publish reply
                     let envelope = OutboundEnvelope {
-                        id: MessageId::new(),
+                        id:          MessageId::new(),
                         in_reply_to: inbound.id.clone(),
-                        user: inbound.user.clone(),
-                        session_id: session_id.clone(),
-                        routing: OutboundRouting::BroadcastAll,
-                        payload: OutboundPayload::Reply {
-                            content: MessageContent::Text(final_text),
+                        user:        inbound.user.clone(),
+                        session_id:  session_id.clone(),
+                        routing:     OutboundRouting::BroadcastAll,
+                        payload:     OutboundPayload::Reply {
+                            content:     MessageContent::Text(final_text),
                             attachments: vec![],
                         },
-                        timestamp: jiff::Timestamp::now(),
+                        timestamp:   jiff::Timestamp::now(),
                     };
                     if let Err(e) = outbound_bus.publish(envelope).await {
                         error!(%e, "failed to publish reply");
@@ -312,42 +312,42 @@ mod tests {
 
     fn test_manifest() -> AgentManifest {
         AgentManifest {
-            name: "test-agent".to_string(),
-            description: "Test agent".to_string(),
-            model: "test-model".to_string(),
-            system_prompt: "You are a test agent.".to_string(),
-            provider_hint: None,
+            name:           "test-agent".to_string(),
+            description:    "Test agent".to_string(),
+            model:          "test-model".to_string(),
+            system_prompt:  "You are a test agent.".to_string(),
+            provider_hint:  None,
             max_iterations: Some(5),
-            tools: vec![],
-            max_children: None,
-            metadata: serde_json::Value::Null,
+            tools:          vec![],
+            max_children:   None,
+            metadata:       serde_json::Value::Null,
         }
     }
 
     fn test_inbound(session: &str, text: &str) -> InboundMessage {
         InboundMessage {
-            id: MessageId::new(),
-            source: ChannelSource {
-                channel_type: ChannelType::Telegram,
+            id:            MessageId::new(),
+            source:        ChannelSource {
+                channel_type:        ChannelType::Telegram,
                 platform_message_id: None,
-                platform_user_id: "tg-user".to_string(),
-                platform_chat_id: None,
+                platform_user_id:    "tg-user".to_string(),
+                platform_chat_id:    None,
             },
-            user: UserId("u1".to_string()),
-            session_id: SessionId::new(session),
-            content: MessageContent::Text(text.to_string()),
+            user:          UserId("u1".to_string()),
+            session_id:    SessionId::new(session),
+            content:       MessageContent::Text(text.to_string()),
             reply_context: None,
-            timestamp: jiff::Timestamp::now(),
-            metadata: HashMap::new(),
+            timestamp:     jiff::Timestamp::now(),
+            metadata:      HashMap::new(),
         }
     }
 
     struct RecordingSessionRepository {
-        history: Vec<ChatMessage>,
-        session_ready: AtomicBool,
-        ensure_calls: AtomicUsize,
-        history_calls: AtomicUsize,
-        appended_users: Mutex<Vec<String>>,
+        history:             Vec<ChatMessage>,
+        session_ready:       AtomicBool,
+        ensure_calls:        AtomicUsize,
+        history_calls:       AtomicUsize,
+        appended_users:      Mutex<Vec<String>>,
         appended_assistants: Mutex<Vec<String>>,
     }
 
@@ -424,7 +424,7 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingStreamingProvider {
-        message_counts: Mutex<Vec<usize>>,
+        message_counts:      Mutex<Vec<usize>>,
         serialized_messages: Mutex<Vec<String>>,
     }
 
@@ -457,25 +457,25 @@ mod tests {
                 );
 
             let chunk = CreateChatCompletionStreamResponse {
-                id: "resp_1".to_string(),
-                choices: vec![ChatChoiceStream {
-                    index: 0,
-                    delta: ChatCompletionStreamResponseDelta {
-                        content: Some("stub reply".to_string()),
+                id:                 "resp_1".to_string(),
+                choices:            vec![ChatChoiceStream {
+                    index:         0,
+                    delta:         ChatCompletionStreamResponseDelta {
+                        content:       Some("stub reply".to_string()),
                         function_call: None,
-                        tool_calls: None,
-                        role: None,
-                        refusal: None,
+                        tool_calls:    None,
+                        role:          None,
+                        refusal:       None,
                     },
                     finish_reason: Some(FinishReason::Stop),
-                    logprobs: None,
+                    logprobs:      None,
                 }],
-                created: 0,
-                model: "test-model".to_string(),
-                service_tier: None,
+                created:            0,
+                model:              "test-model".to_string(),
+                service_tier:       None,
                 system_fingerprint: None,
-                object: "chat.completion.chunk".to_string(),
-                usage: None,
+                object:             "chat.completion.chunk".to_string(),
+                usage:              None,
             };
 
             Ok(Box::pin(stream::iter(vec![Ok(chunk)])))
@@ -763,7 +763,7 @@ mod tests {
         tx.send(ProcessMessage::ChildResult {
             child_id,
             result: AgentResult {
-                output: "child done".to_string(),
+                output:     "child done".to_string(),
                 iterations: 1,
                 tool_calls: 0,
             },

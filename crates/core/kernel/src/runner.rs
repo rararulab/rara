@@ -45,13 +45,13 @@ pub struct AgentRunResponse {
     /// Raw provider response for the terminal assistant turn.
     pub provider_response: CreateChatCompletionResponse,
     /// Number of loop iterations consumed before termination.
-    pub iterations: usize,
+    pub iterations:        usize,
     /// Total number of tool calls executed across all iterations.
-    pub tool_calls_made: usize,
+    pub tool_calls_made:   usize,
     /// `true` when the agent loop hit the max-iterations ceiling before the
     /// model produced a terminal (non-tool-call) response. The response still
     /// contains all work completed so far, but the task may be incomplete.
-    pub truncated: bool,
+    pub truncated:         bool,
 }
 
 impl AgentRunResponse {
@@ -76,16 +76,16 @@ pub enum RunnerEvent {
     ThinkingDone,
     Iteration(usize),
     ToolCallStart {
-        id: String,
-        name: String,
+        id:        String,
+        name:      String,
         arguments: serde_json::Value,
     },
     ToolCallEnd {
-        id: String,
-        name: String,
+        id:      String,
+        name:    String,
         success: bool,
-        error: Option<String>,
-        result: Option<serde_json::Value>,
+        error:   Option<String>,
+        result:  Option<serde_json::Value>,
     },
     /// Incremental text content from a streaming LLM response.
     TextDelta(String),
@@ -93,8 +93,8 @@ pub enum RunnerEvent {
     ReasoningDelta(String),
     /// The agent loop completed successfully.
     Done {
-        text: String,
-        iterations: usize,
+        text:            String,
+        iterations:      usize,
         tool_calls_made: usize,
     },
     /// The agent loop failed with an error.
@@ -111,7 +111,7 @@ pub enum UserContent {
     Text(String),
     /// Multimodal content with text and image URLs.
     Multimodal {
-        text: String,
+        text:       String,
         image_urls: Vec<String>,
     },
 }
@@ -127,31 +127,27 @@ impl UserContent {
 }
 
 impl From<String> for UserContent {
-    fn from(text: String) -> Self {
-        UserContent::Text(text)
-    }
+    fn from(text: String) -> Self { UserContent::Text(text) }
 }
 
 impl From<&str> for UserContent {
-    fn from(text: &str) -> Self {
-        UserContent::Text(text.to_owned())
-    }
+    fn from(text: &str) -> Self { UserContent::Text(text.to_owned()) }
 }
 
 #[derive(Builder)]
 #[builder(on(SharedString, into))]
 pub struct AgentRunner {
-    llm_provider: LlmProviderLoaderRef,
+    llm_provider:    LlmProviderLoaderRef,
     #[builder(default)]
-    provider_hint: SharedString,
-    model_name: SharedString,
-    system_prompt: SharedString,
-    user_content: UserContent,
-    history: Option<Vec<ChatCompletionRequestMessage>>,
+    provider_hint:   SharedString,
+    model_name:      SharedString,
+    system_prompt:   SharedString,
+    user_content:    UserContent,
+    history:         Option<Vec<ChatCompletionRequestMessage>>,
     #[builder(default = MAX_ITERATIONS)]
-    max_iterations: usize,
+    max_iterations:  usize,
     /// Optional session ID for Langfuse session tracking.
-    session_id: Option<String>,
+    session_id:      Option<String>,
     /// Fallback models to try (in order) when the primary model fails with a
     /// fallback-eligible error. Empty means no fallback.
     #[builder(default)]
@@ -445,11 +441,11 @@ impl AgentRunner {
                         let error_message = format!("invalid tool arguments: {err}");
                         if let Some(cb) = on_event {
                             cb(RunnerEvent::ToolCallEnd {
-                                id: tool_id.clone(),
-                                name: tool_name.clone(),
+                                id:      tool_id.clone(),
+                                name:    tool_name.clone(),
                                 success: false,
-                                error: Some(error_message.clone()),
-                                result: None,
+                                error:   Some(error_message.clone()),
+                                result:  None,
                             });
                         }
                         messages.push(build_tool_response_message(
@@ -463,8 +459,8 @@ impl AgentRunner {
                 // Emit start event.
                 if let Some(cb) = on_event {
                     cb(RunnerEvent::ToolCallStart {
-                        id: tool_id.clone(),
-                        name: tool_name.clone(),
+                        id:        tool_id.clone(),
+                        name:      tool_name.clone(),
                         arguments: tool_arguments.clone(),
                     });
                 }
@@ -475,11 +471,11 @@ impl AgentRunner {
                         Ok(result) => {
                             if let Some(cb) = on_event {
                                 cb(RunnerEvent::ToolCallEnd {
-                                    id: tool_id.clone(),
-                                    name: tool_name.clone(),
+                                    id:      tool_id.clone(),
+                                    name:    tool_name.clone(),
                                     success: true,
-                                    error: None,
-                                    result: Some(result.clone()),
+                                    error:   None,
+                                    result:  Some(result.clone()),
                                 });
                             }
                             result
@@ -488,11 +484,11 @@ impl AgentRunner {
                             let error_message = err.to_string();
                             if let Some(cb) = on_event {
                                 cb(RunnerEvent::ToolCallEnd {
-                                    id: tool_id.clone(),
-                                    name: tool_name.clone(),
+                                    id:      tool_id.clone(),
+                                    name:    tool_name.clone(),
                                     success: false,
-                                    error: Some(error_message.clone()),
-                                    result: None,
+                                    error:   Some(error_message.clone()),
+                                    result:  None,
                                 });
                             }
                             serde_json::json!({ "error": error_message })
@@ -502,11 +498,11 @@ impl AgentRunner {
                     let error_message = format!("tool not found: {tool_name}");
                     if let Some(cb) = on_event {
                         cb(RunnerEvent::ToolCallEnd {
-                            id: tool_id.clone(),
-                            name: tool_name.clone(),
+                            id:      tool_id.clone(),
+                            name:    tool_name.clone(),
                             success: false,
-                            error: Some(error_message.clone()),
-                            result: None,
+                            error:   Some(error_message.clone()),
+                            result:  None,
                         });
                     }
                     serde_json::json!({ "error": error_message })
@@ -708,8 +704,8 @@ impl AgentRunner {
                             pending_tool_calls
                                 .entry(idx)
                                 .or_insert_with(|| PendingToolCall {
-                                    id: String::new(),
-                                    name: String::new(),
+                                    id:            String::new(),
+                                    name:          String::new(),
                                     arguments_buf: String::new(),
                                 });
                         if let Some(ref id) = tc.id {
@@ -776,9 +772,9 @@ impl AgentRunner {
                 .iter()
                 .map(|tool_call| {
                     ChatCompletionMessageToolCalls::Function(ChatCompletionMessageToolCall {
-                        id: tool_call.id.clone(),
+                        id:       tool_call.id.clone(),
                         function: FunctionCall {
-                            name: tool_call.name.clone(),
+                            name:      tool_call.name.clone(),
                             arguments: tool_call.arguments_buf.clone(),
                         },
                     })
@@ -804,11 +800,11 @@ impl AgentRunner {
                         let error_message = format!("invalid tool arguments: {err}");
                         let _ = tx
                             .send(RunnerEvent::ToolCallEnd {
-                                id: tool_call.id.clone(),
-                                name: tool_call.name.clone(),
+                                id:      tool_call.id.clone(),
+                                name:    tool_call.name.clone(),
                                 success: false,
-                                error: Some(error_message.clone()),
-                                result: None,
+                                error:   Some(error_message.clone()),
+                                result:  None,
                             })
                             .await;
                         messages.push(build_tool_response_message(
@@ -821,8 +817,8 @@ impl AgentRunner {
 
                 let _ = tx
                     .send(RunnerEvent::ToolCallStart {
-                        id: tool_call.id.clone(),
-                        name: tool_call.name.clone(),
+                        id:        tool_call.id.clone(),
+                        name:      tool_call.name.clone(),
                         arguments: args.clone(),
                     })
                     .await;
@@ -893,9 +889,9 @@ impl AgentRunner {
 /// A tool call being incrementally assembled from streaming SSE chunks.
 struct PendingToolCall {
     /// Unique tool call identifier assigned by the model (e.g. "call_abc123").
-    id: String,
+    id:            String,
     /// Tool function name (e.g. "web_search").
-    name: String,
+    name:          String,
     /// Accumulated JSON argument string, built by concatenating fragments.
     arguments_buf: String,
 }
@@ -958,9 +954,9 @@ pub(crate) fn build_history_messages(
                         .map(|tool_call| {
                             ChatCompletionMessageToolCalls::Function(
                                 ChatCompletionMessageToolCall {
-                                    id: tool_call.id.to_string(),
+                                    id:       tool_call.id.to_string(),
                                     function: FunctionCall {
-                                        name: tool_call.name.to_string(),
+                                        name:      tool_call.name.to_string(),
                                         arguments: tool_call.arguments.to_string(),
                                     },
                                 },
@@ -1084,13 +1080,9 @@ mod tests {
 
     #[async_trait]
     impl crate::tool::AgentTool for EchoTool {
-        fn name(&self) -> &str {
-            "echo_tool"
-        }
+        fn name(&self) -> &str { "echo_tool" }
 
-        fn description(&self) -> &str {
-            "Echoes input"
-        }
+        fn description(&self) -> &str { "Echoes input" }
 
         fn parameters_schema(&self) -> serde_json::Value {
             serde_json::json!({"type": "object", "properties": {"text": {"type": "string"}}})
@@ -1107,17 +1099,11 @@ mod tests {
 
     #[async_trait]
     impl crate::tool::AgentTool for CountingTool {
-        fn name(&self) -> &str {
-            "counting_tool"
-        }
+        fn name(&self) -> &str { "counting_tool" }
 
-        fn description(&self) -> &str {
-            "Counts tool executions"
-        }
+        fn description(&self) -> &str { "Counts tool executions" }
 
-        fn parameters_schema(&self) -> serde_json::Value {
-            serde_json::json!({"type": "object"})
-        }
+        fn parameters_schema(&self) -> serde_json::Value { serde_json::json!({"type": "object"}) }
 
         async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
             self.calls.fetch_add(1, Ordering::SeqCst);
@@ -1163,33 +1149,33 @@ mod tests {
     #[allow(deprecated)]
     fn invalid_tool_call_chunk() -> CreateChatCompletionStreamResponse {
         CreateChatCompletionStreamResponse {
-            id: "resp_1".to_string(),
-            choices: vec![ChatChoiceStream {
-                index: 0,
-                delta: ChatCompletionStreamResponseDelta {
-                    content: None,
+            id:                 "resp_1".to_string(),
+            choices:            vec![ChatChoiceStream {
+                index:         0,
+                delta:         ChatCompletionStreamResponseDelta {
+                    content:       None,
                     function_call: None,
-                    tool_calls: Some(vec![ChatCompletionMessageToolCallChunk {
-                        index: 0,
-                        id: Some("call_1".to_string()),
-                        r#type: Some(FunctionType::Function),
+                    tool_calls:    Some(vec![ChatCompletionMessageToolCallChunk {
+                        index:    0,
+                        id:       Some("call_1".to_string()),
+                        r#type:   Some(FunctionType::Function),
                         function: Some(FunctionCallStream {
-                            name: Some("counting_tool".to_string()),
+                            name:      Some("counting_tool".to_string()),
                             arguments: Some("{".to_string()),
                         }),
                     }]),
-                    role: None,
-                    refusal: None,
+                    role:          None,
+                    refusal:       None,
                 },
                 finish_reason: Some(FinishReason::ToolCalls),
-                logprobs: None,
+                logprobs:      None,
             }],
-            created: 0,
-            model: "test-model".to_string(),
-            service_tier: None,
+            created:            0,
+            model:              "test-model".to_string(),
+            service_tier:       None,
             system_fingerprint: None,
-            object: "chat.completion.chunk".to_string(),
-            usage: None,
+            object:             "chat.completion.chunk".to_string(),
+            usage:              None,
         }
     }
 

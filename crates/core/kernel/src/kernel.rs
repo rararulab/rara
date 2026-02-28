@@ -64,9 +64,9 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct KernelConfig {
     /// Maximum number of concurrent agent processes globally.
-    pub max_concurrency: usize,
+    pub max_concurrency:        usize,
     /// Default maximum number of children per agent.
-    pub default_child_limit: usize,
+    pub default_child_limit:    usize,
     /// Default max LLM iterations for spawned agents.
     pub default_max_iterations: usize,
 }
@@ -74,8 +74,8 @@ pub struct KernelConfig {
 impl Default for KernelConfig {
     fn default() -> Self {
         Self {
-            max_concurrency: 16,
-            default_child_limit: 8,
+            max_concurrency:        16,
+            default_child_limit:    8,
             default_max_iterations: 25,
         }
     }
@@ -87,7 +87,7 @@ impl Default for KernelConfig {
 /// concurrency limits, and provides `spawn()` as the primary entry point.
 pub struct Kernel {
     /// Shared kernel internals (process table, components, etc.).
-    inner: Arc<KernelInner>,
+    inner:  Arc<KernelInner>,
     /// Kernel configuration.
     config: KernelConfig,
 }
@@ -306,7 +306,7 @@ impl Kernel {
 
             // Send a terminal result (the last result stored in process table)
             let _ = result_tx.send(crate::process::AgentResult {
-                output: "process loop ended".to_string(),
+                output:     "process loop ended".to_string(),
                 iterations: 0,
                 tool_calls: 0,
             });
@@ -401,40 +401,26 @@ impl Kernel {
     }
 
     /// Access the process table for querying.
-    pub fn process_table(&self) -> &ProcessTable {
-        &self.inner.process_table
-    }
+    pub fn process_table(&self) -> &ProcessTable { &self.inner.process_table }
 
     /// Access the manifest loader for looking up named manifests.
-    pub fn manifest_loader(&self) -> &ManifestLoader {
-        &self.inner.manifest_loader
-    }
+    pub fn manifest_loader(&self) -> &ManifestLoader { &self.inner.manifest_loader }
 
     /// Access the tool registry.
-    pub fn tool_registry(&self) -> &Arc<ToolRegistry> {
-        &self.inner.tool_registry
-    }
+    pub fn tool_registry(&self) -> &Arc<ToolRegistry> { &self.inner.tool_registry }
 
     /// Access the event bus.
-    pub fn event_bus(&self) -> &Arc<dyn EventBus> {
-        &self.inner.event_bus
-    }
+    pub fn event_bus(&self) -> &Arc<dyn EventBus> { &self.inner.event_bus }
 
     /// Access the memory subsystem.
-    pub fn memory(&self) -> &Arc<dyn Memory> {
-        &self.inner.memory
-    }
+    pub fn memory(&self) -> &Arc<dyn Memory> { &self.inner.memory }
 
     /// Access the kernel config.
-    pub fn config(&self) -> &KernelConfig {
-        &self.config
-    }
+    pub fn config(&self) -> &KernelConfig { &self.config }
 
     /// Access the shared KernelInner (for constructing ScopedKernelHandles
     /// externally).
-    pub(crate) fn inner(&self) -> &Arc<KernelInner> {
-        &self.inner
-    }
+    pub(crate) fn inner(&self) -> &Arc<KernelInner> { &self.inner }
 }
 
 #[cfg(test)]
@@ -473,15 +459,15 @@ mod tests {
 
     fn test_manifest(name: &str) -> AgentManifest {
         AgentManifest {
-            name: name.to_string(),
-            description: format!("Test agent: {name}"),
-            model: "test-model".to_string(),
-            system_prompt: "You are a test agent.".to_string(),
-            provider_hint: None,
+            name:           name.to_string(),
+            description:    format!("Test agent: {name}"),
+            model:          "test-model".to_string(),
+            system_prompt:  "You are a test agent.".to_string(),
+            provider_hint:  None,
             max_iterations: Some(5),
-            tools: vec![],
-            max_children: None,
-            metadata: serde_json::Value::Null,
+            tools:          vec![],
+            max_children:   None,
+            metadata:       serde_json::Value::Null,
         }
     }
 
