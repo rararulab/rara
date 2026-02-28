@@ -21,7 +21,7 @@
 use async_trait::async_trait;
 use rara_coding_task::{service::CodingTaskService, types::AgentType};
 use serde_json::json;
-use tool_core::AgentTool;
+use rara_kernel::tool::AgentTool;
 
 // ---------------------------------------------------------------------------
 // CodexRunTool

@@ -20,7 +20,7 @@
 use async_trait::async_trait;
 use rara_domain_shared::settings::model::{JobPipelineRuntimeSettingsPatch, UpdateRequest};
 use serde_json::json;
-use tool_core::AgentTool;
+use rara_kernel::tool::AgentTool;
 
 use super::super::service::PipelineService;
 use crate::settings::SettingsSvc;

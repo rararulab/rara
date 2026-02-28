@@ -15,7 +15,26 @@
 use std::{collections::HashMap, sync::Arc};
 
 use async_openai::types::chat::{ChatCompletionTool, ChatCompletionTools, FunctionObjectArgs};
-pub use tool_core::{AgentTool, AgentToolRef};
+use async_trait::async_trait;
+
+/// Reference-counted handle to an agent tool.
+pub type AgentToolRef = Arc<dyn AgentTool>;
+
+/// Agent-callable tool.
+#[async_trait]
+pub trait AgentTool: Send + Sync {
+    /// Unique name of the tool.
+    fn name(&self) -> &str;
+
+    /// Human-readable description of the tool's purpose.
+    fn description(&self) -> &str;
+
+    /// JSON Schema describing the accepted parameters.
+    fn parameters_schema(&self) -> serde_json::Value;
+
+    /// Execute the tool with the given parameters.
+    async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value>;
+}
 
 use crate::error::{KernelError, Result};
 

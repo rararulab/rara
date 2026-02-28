@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Bridge between MCP server tools and the [`tool_core::AgentTool`] trait.
+//! Bridge between MCP server tools and the [`rara_kernel::tool::AgentTool`] trait.
 //!
 //! Each [`McpToolBridge`] wraps a single MCP tool from a connected server and
 //! implements [`AgentTool`] so it can be registered directly in a
@@ -20,7 +20,7 @@
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use tool_core::AgentTool;
+use rara_kernel::tool::AgentTool;
 use tracing::instrument;
 
 use crate::manager::mgr::McpManager;

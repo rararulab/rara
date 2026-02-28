@@ -16,7 +16,7 @@
 
 use snafu::{IntoError, ResultExt};
 use sqlx::PgPool;
-use tool_core::contact_lookup::{ContactLookup, ResolvedContact};
+use rara_kernel::contact_lookup::{ContactLookup, ResolvedContact};
 use uuid::Uuid;
 
 use crate::telegram::contacts::{

@@ -18,7 +18,7 @@
 use async_trait::async_trait;
 use serde_json::json;
 use sqlx::PgPool;
-use tool_core::AgentTool;
+use rara_kernel::tool::AgentTool;
 use tracing::warn;
 
 /// Pipeline agent tool that writes execution statistics (jobs found, scored,

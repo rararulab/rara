@@ -157,10 +157,10 @@ impl AppState {
             Arc::new(SettingsComposioAuthProvider::new(settings_svc.clone()));
         let contact_repo =
             rara_channels::telegram::contacts::repository::ContactRepository::new(pool.clone());
-        let contact_lookup: Arc<dyn tool_core::contact_lookup::ContactLookup> =
+        let contact_lookup: Arc<dyn rara_kernel::contact_lookup::ContactLookup> =
             Arc::new(contact_repo.clone());
         let mut tool_registry = rara_kernel::tool::ToolRegistry::new();
-        for tool in tool_core::default_primitives(tool_core::PrimitiveDeps {
+        for tool in rara_boot::tools::default_primitives(rara_boot::tools::PrimitiveDeps {
             pool:                   pool.clone(),
             notify_client:          notify_client.clone(),
             settings_rx:            settings_svc.subscribe(),

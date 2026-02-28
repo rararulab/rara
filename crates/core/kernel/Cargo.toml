@@ -29,7 +29,6 @@ serde_yaml.workspace = true
 snafu.workspace = true
 tokio.workspace = true
 tokio-util = { workspace = true }
-tool-core.workspace = true
 tracing.workspace = true
 tracing-opentelemetry = "0.32.0"
 ulid.workspace = true

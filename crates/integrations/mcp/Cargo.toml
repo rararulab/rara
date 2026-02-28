@@ -45,7 +45,7 @@ smart-default.workspace = true
 snafu.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
-tool-core.workspace = true
+rara-kernel.workspace = true
 tracing.workspace = true
 
 # K8s Pod transport (optional, behind "k8s" feature)

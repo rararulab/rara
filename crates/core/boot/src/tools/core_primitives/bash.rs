@@ -20,7 +20,7 @@
 use async_trait::async_trait;
 use serde_json::json;
 
-use crate::AgentTool;
+use rara_kernel::tool::AgentTool;
 
 /// Maximum output size in bytes (50 KB).
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;

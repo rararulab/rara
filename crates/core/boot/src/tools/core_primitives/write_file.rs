@@ -23,7 +23,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use serde_json::json;
 
-use crate::AgentTool;
+use rara_kernel::tool::AgentTool;
 
 /// Layer 1 primitive: write content to a file.
 pub struct WriteFileTool;

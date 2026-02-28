@@ -22,4 +22,5 @@ pub mod mcp;
 pub mod session;
 pub mod skills;
 pub mod stream;
+pub mod tools;
 pub mod user_store;

@@ -106,7 +106,7 @@ pub struct PipelineService {
     composio_auth:  Arc<dyn rara_composio::ComposioAuthProvider>,
     mcp_manager:    rara_mcp::manager::mgr::McpManager,
     prompt_repo:    Arc<dyn rara_kernel::prompt::PromptRepo>,
-    contact_lookup: Arc<dyn tool_core::contact_lookup::ContactLookup>,
+    contact_lookup: Arc<dyn rara_kernel::contact_lookup::ContactLookup>,
 
     /// Whether a pipeline run is currently in progress.
     running:            Arc<AtomicBool>,
@@ -132,7 +132,7 @@ impl PipelineService {
         composio_auth: Arc<dyn rara_composio::ComposioAuthProvider>,
         mcp_manager: rara_mcp::manager::mgr::McpManager,
         prompt_repo: Arc<dyn rara_kernel::prompt::PromptRepo>,
-        contact_lookup: Arc<dyn tool_core::contact_lookup::ContactLookup>,
+        contact_lookup: Arc<dyn rara_kernel::contact_lookup::ContactLookup>,
     ) -> Self {
         let (broadcast_tx, _) = tokio::sync::broadcast::channel(256);
         Self {
@@ -515,7 +515,7 @@ impl PipelineService {
         let mut registry = ToolRegistry::new();
 
         // Layer 1: Primitive tools (db, notify, email, storage, etc.)
-        let deps = tool_core::PrimitiveDeps {
+        let deps = rara_boot::tools::PrimitiveDeps {
             pool:                   self.pool.clone(),
             notify_client:          self.notify_client.clone(),
             settings_rx:            self.settings_svc.subscribe(),
@@ -525,7 +525,7 @@ impl PipelineService {
             composio_auth_provider: self.composio_auth.clone(),
             contact_lookup:         self.contact_lookup.clone(),
         };
-        for tool in tool_core::default_primitives(deps) {
+        for tool in rara_boot::tools::default_primitives(deps) {
             registry.register_primitive(tool);
         }
 

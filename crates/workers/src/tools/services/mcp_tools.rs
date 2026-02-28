@@ -22,7 +22,7 @@ use rara_mcp::manager::{
     registry::{McpServerConfig, TransportType},
 };
 use serde_json::{Value, json};
-use tool_core::AgentTool;
+use rara_kernel::tool::AgentTool;
 
 // ---------------------------------------------------------------------------
 // InstallMcpServerTool

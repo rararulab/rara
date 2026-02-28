@@ -17,7 +17,7 @@
 use async_trait::async_trait;
 use rara_skills::registry::InMemoryRegistry;
 use serde_json::{Value, json};
-use tool_core::AgentTool;
+use rara_kernel::tool::AgentTool;
 
 /// Format a SKILL.md file with YAML frontmatter (new format).
 fn format_skill_md(

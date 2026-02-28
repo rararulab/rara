@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::json;
 use sqlx::PgPool;
-use tool_core::AgentTool;
+use rara_kernel::tool::AgentTool;
 use tracing::warn;
 use uuid::Uuid;
 

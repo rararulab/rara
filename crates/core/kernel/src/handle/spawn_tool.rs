@@ -189,7 +189,7 @@ enum SpawnParams {
 }
 
 #[async_trait]
-impl tool_core::AgentTool for SpawnTool {
+impl crate::tool::AgentTool for SpawnTool {
     fn name(&self) -> &str { "spawn_agent" }
 
     fn description(&self) -> &str {
@@ -266,15 +266,12 @@ impl tool_core::AgentTool for SpawnTool {
 
 #[cfg(test)]
 mod tests {
-    use tokio::sync::oneshot;
-    use tool_core::AgentTool;
-
     use super::*;
-    use crate::{
-        error::KernelError,
-        handle::AgentHandle,
-        process::{AgentId, AgentManifest, AgentResult, ProcessInfo},
-    };
+    use crate::error::KernelError;
+    use crate::handle::AgentHandle;
+    use crate::process::{AgentId, AgentManifest, AgentResult, ProcessInfo};
+    use crate::tool::AgentTool;
+    use tokio::sync::oneshot;
 
     /// Mock ProcessOps that spawns agents and immediately returns results.
     struct MockProcessOps {

@@ -15,7 +15,7 @@
 //! Trait for looking up contacts from an allowlist.
 //!
 //! This abstracts the concrete `ContactRepository` behind a trait so that
-//! `tool-core` does not depend on the telegram-bot crate directly.
+//! tool implementations do not depend on the telegram-bot crate directly.
 
 use async_trait::async_trait;
 

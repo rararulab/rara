@@ -21,7 +21,7 @@ use anyhow::{Context, bail};
 use async_trait::async_trait;
 use serde_json::json;
 
-use crate::AgentTool;
+use rara_kernel::tool::AgentTool;
 
 /// Layer 1 primitive: edit a file by exact string replacement.
 pub struct EditFileTool;
