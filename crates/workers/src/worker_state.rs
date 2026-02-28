@@ -82,6 +82,9 @@ pub struct AppState {
     // -- prompt repo --
     pub prompt_repo: Arc<dyn rara_kernel::prompt::PromptRepo>,
 
+    // -- tool registry --
+    pub tool_registry: Arc<rara_kernel::tool::ToolRegistry>,
+
     // -- worker coordination --
     pub proactive_notify: Arc<RwLock<Option<IntervalOrNotifyHandle>>>,
 }
@@ -390,6 +393,7 @@ impl AppState {
             kernel,
             user_store,
             prompt_repo,
+            tool_registry: tools,
             proactive_notify: Arc::new(RwLock::new(None)),
         })
     }

@@ -246,20 +246,34 @@ impl Egress {
     ///
     /// Runs until the bus is closed (returns `None`). Typically spawned
     /// as a background task.
+    ///
+    /// The method borrows `outbound_sub` separately from the delivery
+    /// fields (`adapters`, `endpoints`) so that the resulting future is
+    /// `Send` — `outbound_sub` is `Send` but not `Sync`, and splitting
+    /// the borrows avoids creating `&Egress` across `.await` points.
     pub async fn run(&mut self) {
+        let adapters = &self.adapters;
+        let endpoints = &self.endpoints;
         while let Some(envelope) = self.outbound_sub.recv().await {
-            self.deliver(envelope).await;
+            Self::deliver(adapters, endpoints, envelope).await;
         }
     }
 
     /// Deliver a single outbound envelope to all resolved targets.
-    async fn deliver(&self, envelope: OutboundEnvelope) {
-        let targets = self.resolve_targets(&envelope);
+    ///
+    /// This is a free function over the needed fields so that the
+    /// `outbound_sub` is never borrowed immutably across an `.await`.
+    async fn deliver(
+        adapters: &HashMap<ChannelType, Arc<dyn EgressAdapter>>,
+        endpoints: &Arc<EndpointRegistry>,
+        envelope: OutboundEnvelope,
+    ) {
+        let targets = Self::resolve_targets(endpoints, &envelope);
 
         // Parallel delivery with per-endpoint timeout
         let futs = targets.into_iter().map(|endpoint| {
-            let adapter = self.adapters.get(&endpoint.channel_type).cloned();
-            let outbound = self.format_for_endpoint(&endpoint, &envelope);
+            let adapter = adapters.get(&endpoint.channel_type).cloned();
+            let outbound = Self::format_for_endpoint(&endpoint, &envelope);
             async move {
                 if let Some(adapter) = adapter {
                     match tokio::time::timeout(
@@ -283,8 +297,11 @@ impl Egress {
     }
 
     /// Resolve which endpoints should receive this envelope.
-    fn resolve_targets(&self, envelope: &OutboundEnvelope) -> Vec<Endpoint> {
-        let connected = self.endpoints.get_endpoints(&envelope.user);
+    fn resolve_targets(
+        endpoints: &EndpointRegistry,
+        envelope: &OutboundEnvelope,
+    ) -> Vec<Endpoint> {
+        let connected = endpoints.get_endpoints(&envelope.user);
         match &envelope.routing {
             OutboundRouting::BroadcastAll => connected,
             OutboundRouting::BroadcastExcept { exclude } => connected
@@ -301,7 +318,6 @@ impl Egress {
     /// Convert an [`OutboundPayload`] into a [`PlatformOutbound`] for
     /// a specific endpoint.
     fn format_for_endpoint(
-        &self,
         endpoint: &Endpoint,
         envelope: &OutboundEnvelope,
     ) -> PlatformOutbound {
@@ -460,10 +476,10 @@ mod tests {
         registry.register(&user, tg_endpoint(100));
         registry.register(&user, web_endpoint("conn-1"));
 
-        let egress = egress_with_registry(registry);
+        let _egress = egress_with_registry(registry.clone());
         let envelope = test_envelope(OutboundRouting::BroadcastAll);
 
-        let targets = egress.resolve_targets(&envelope);
+        let targets = Egress::resolve_targets(&registry, &envelope);
         assert_eq!(targets.len(), 2);
     }
 
@@ -474,12 +490,11 @@ mod tests {
         registry.register(&user, tg_endpoint(100));
         registry.register(&user, web_endpoint("conn-1"));
 
-        let egress = egress_with_registry(registry);
         let envelope = test_envelope(OutboundRouting::BroadcastExcept {
             exclude: ChannelType::Telegram,
         });
 
-        let targets = egress.resolve_targets(&envelope);
+        let targets = Egress::resolve_targets(&registry, &envelope);
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].channel_type, ChannelType::Web);
     }
@@ -500,12 +515,11 @@ mod tests {
             },
         );
 
-        let egress = egress_with_registry(registry);
         let envelope = test_envelope(OutboundRouting::Targeted {
             channels: vec![ChannelType::Telegram, ChannelType::Cli],
         });
 
-        let targets = egress.resolve_targets(&envelope);
+        let targets = Egress::resolve_targets(&registry, &envelope);
         assert_eq!(targets.len(), 2);
         let types: Vec<ChannelType> = targets.iter().map(|e| e.channel_type).collect();
         assert!(types.contains(&ChannelType::Telegram));
@@ -565,10 +579,8 @@ mod tests {
         let mut adapters: HashMap<ChannelType, Arc<dyn EgressAdapter>> = HashMap::new();
         adapters.insert(ChannelType::Telegram, tg_adapter.clone());
 
-        let egress = Egress::new(adapters, registry, Box::new(DummySubscriber));
-
         let envelope = test_envelope(OutboundRouting::BroadcastAll);
-        egress.deliver(envelope).await;
+        Egress::deliver(&adapters, &registry, envelope).await;
 
         assert_eq!(tg_adapter.sent_count(), 1);
     }
@@ -583,10 +595,8 @@ mod tests {
         let mut adapters: HashMap<ChannelType, Arc<dyn EgressAdapter>> = HashMap::new();
         adapters.insert(ChannelType::Telegram, tg_adapter.clone());
 
-        let egress = Egress::new(adapters, registry, Box::new(DummySubscriber));
-
         let envelope = test_envelope(OutboundRouting::BroadcastAll);
-        egress.deliver(envelope).await;
+        Egress::deliver(&adapters, &registry, envelope).await;
 
         let sent = tg_adapter.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
@@ -613,8 +623,6 @@ mod tests {
         let mut adapters: HashMap<ChannelType, Arc<dyn EgressAdapter>> = HashMap::new();
         adapters.insert(ChannelType::Telegram, tg_adapter.clone());
 
-        let egress = Egress::new(adapters, registry, Box::new(DummySubscriber));
-
         let envelope = OutboundEnvelope {
             id: MessageId::new(),
             in_reply_to: MessageId::new(),
@@ -627,7 +635,7 @@ mod tests {
             },
             timestamp: jiff::Timestamp::now(),
         };
-        egress.deliver(envelope).await;
+        Egress::deliver(&adapters, &registry, envelope).await;
 
         let sent = tg_adapter.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
