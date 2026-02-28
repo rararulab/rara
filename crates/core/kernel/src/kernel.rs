@@ -150,6 +150,9 @@ impl Kernel {
         session_id: SessionId,
         parent_id: Option<AgentId>,
     ) -> Result<AgentHandle> {
+        // Validate user exists, is enabled, and has Spawn permission
+        self.inner.validate_principal(&principal).await?;
+
         // Acquire global semaphore
         let _global_permit =
             self.inner

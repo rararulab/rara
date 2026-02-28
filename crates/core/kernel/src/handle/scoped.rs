@@ -208,6 +208,9 @@ impl ProcessOps for ScopedKernelHandle {
             self.validate_tool_subset(&manifest.tools)?;
         }
 
+        // 1.5 Validate principal (user may have been disabled after top-level spawn)
+        self.inner.validate_principal(&self.principal).await?;
+
         // 2. Acquire per-agent child semaphore (non-blocking try)
         let _child_permit = self.child_semaphore.clone().try_acquire_owned().map_err(|_| {
             KernelError::SpawnLimitReached {
