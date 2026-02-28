@@ -650,7 +650,7 @@ mod tests {
     #[test]
     fn adapter_channel_type_is_web() {
         let adapter = WebAdapter::new();
-        assert_eq!(adapter.channel_type(), ChannelType::Web);
+        assert_eq!(ChannelAdapter::channel_type(&adapter), ChannelType::Web);
     }
 
     #[test]
@@ -712,7 +712,7 @@ mod tests {
             edit_message_id:     None,
             reply_to_message_id: None,
         };
-        adapter.send(outbound).await.unwrap();
+        ChannelAdapter::send(&adapter, outbound).await.unwrap();
 
         let received = rx.try_recv().unwrap();
         assert!(received.contains("hello from agent"));
