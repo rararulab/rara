@@ -12,16 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod agent;
 pub mod error;
 pub mod message_utils;
 pub mod model_catalog;
 mod router;
 pub mod service;
-pub mod stream;
 
 pub use router::{
     BindChannelRequest, CreateSessionRequest, ForkSessionRequest, GetMessagesQuery,
-    ListSessionsQuery, SendMessageRequest, SendMessageResponse, SetFavoritesRequest,
-    UpdateSessionRequest, routes,
+    ListSessionsQuery, SetFavoritesRequest, UpdateSessionRequest, routes,
 };

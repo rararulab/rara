@@ -324,7 +324,6 @@ impl AppState {
                 prompt_repo.clone(),
             ));
 
-        let chat_agent = rara_backend_admin::chat::agent::ChatAgent::new(Arc::clone(&agent_ctx));
         let kernel_session_repo: Arc<dyn rara_kernel::session_manager::SessionRepository> =
             session_repo.clone();
         let session_repo: Arc<dyn rara_sessions::repository::SessionRepository> = session_repo;
@@ -333,7 +332,6 @@ impl AppState {
             Arc::new(settings_svc.clone())
                 as Arc<dyn rara_domain_shared::settings::SettingsUpdater>,
             settings_svc.subscribe(),
-            chat_agent,
         );
         info!("Chat service initialized");
 

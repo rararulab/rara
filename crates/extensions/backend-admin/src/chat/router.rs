@@ -29,8 +29,6 @@
 //! | `GET`    | `/api/v1/chat/sessions/{key}`                        | Get a session          |
 //! | `PATCH`  | `/api/v1/chat/sessions/{key}`                        | Update session fields  |
 //! | `DELETE` | `/api/v1/chat/sessions/{key}`                        | Delete a session       |
-//! | `POST`   | `/api/v1/chat/sessions/{key}/send`                   | Send a message         |
-//! | `POST`   | `/api/v1/chat/sessions/{key}/stream`                 | Stream a message (SSE) |
 //! | `GET`    | `/api/v1/chat/sessions/{key}/messages`               | Get message history    |
 //! | `DELETE` | `/api/v1/chat/sessions/{key}/messages`               | Clear messages         |
 //! | `POST`   | `/api/v1/chat/sessions/{key}/fork`                   | Fork a session         |
@@ -41,12 +39,9 @@ use axum::{
     Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    response::sse::{Event, KeepAlive, Sse},
 };
-use futures::stream::StreamExt;
 use rara_sessions::types::{ChannelBinding, ChatMessage, SessionEntry, SessionKey};
-use serde::{Deserialize, Serialize};
-use tokio_stream::wrappers::ReceiverStream;
+use serde::Deserialize;
 use tracing::instrument;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -76,24 +71,6 @@ pub struct ListSessionsQuery {
     pub limit:  Option<i64>,
     /// Number of sessions to skip (default: 0).
     pub offset: Option<i64>,
-}
-
-/// Request body for `POST /sessions/{key}/send`.
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub struct SendMessageRequest {
-    /// The user's message text.
-    pub text:       String,
-    /// Optional list of image URLs to include as multimodal content.
-    #[serde(default)]
-    pub image_urls: Option<Vec<String>>,
-}
-
-/// Response body for `POST /sessions/{key}/send`.
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct SendMessageResponse {
-    /// The persisted assistant response message.
-    #[schema(value_type = Object)]
-    pub message: ChatMessage,
 }
 
 /// Query parameters for `GET /sessions/{key}/messages`.
@@ -152,9 +129,7 @@ pub struct BindChannelRequest {
 /// Build an axum `Router` with all chat endpoints and the given
 /// [`ChatService`] as shared state.
 pub fn routes(service: ChatService) -> OpenApiRouter {
-    model_routes(service.clone())
-        .merge(session_routes(service.clone()))
-        .merge(message_routes(service))
+    model_routes(service.clone()).merge(session_routes(service))
 }
 
 fn model_routes(service: ChatService) -> OpenApiRouter {
@@ -168,17 +143,10 @@ fn session_routes(service: ChatService) -> OpenApiRouter {
     OpenApiRouter::new()
         .routes(routes!(create_session, list_sessions))
         .routes(routes!(get_session, update_session, delete_session))
+        .routes(routes!(get_messages, clear_messages))
         .routes(routes!(fork_session))
         .routes(routes!(bind_channel))
         .routes(routes!(get_channel_binding))
-        .with_state(service)
-}
-
-fn message_routes(service: ChatService) -> OpenApiRouter {
-    OpenApiRouter::new()
-        .routes(routes!(send_message))
-        .routes(routes!(stream_message))
-        .routes(routes!(get_messages, clear_messages))
         .with_state(service)
 }
 
@@ -334,96 +302,6 @@ async fn delete_session(
 ) -> Result<StatusCode, ChatError> {
     service.delete_session(&SessionKey::from_raw(key)).await?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-/// `POST /api/v1/chat/sessions/{key}/send` — send a user message and receive
-/// the assistant's response (synchronous, blocks until the agent loop
-/// completes).
-#[utoipa::path(
-    post,
-    path = "/api/v1/chat/sessions/{key}/send",
-    tag = "chat",
-    params(("key" = String, Path, description = "Session key")),
-    request_body = SendMessageRequest,
-    responses(
-        (status = 200, description = "Assistant response", body = SendMessageResponse),
-    )
-)]
-#[instrument(skip(service, req))]
-async fn send_message(
-    State(service): State<ChatService>,
-    Path(key): Path<String>,
-    Json(req): Json<SendMessageRequest>,
-) -> Result<Json<SendMessageResponse>, ChatError> {
-    let message = service
-        .send_message(&SessionKey::from_raw(key), req.text, req.image_urls)
-        .await?;
-    Ok(Json(SendMessageResponse { message }))
-}
-
-/// `POST /api/v1/chat/sessions/{key}/stream` — send a user message and
-/// stream the assistant's response as Server-Sent Events (SSE).
-///
-/// Each SSE event has an `event` field set to the event type name (e.g.
-/// `text_delta`, `done`) and a `data` field containing the JSON-serialized
-/// [`ChatStreamEvent`](crate::chat::stream::ChatStreamEvent).
-#[utoipa::path(
-    post,
-    path = "/api/v1/chat/sessions/{key}/stream",
-    tag = "chat",
-    params(("key" = String, Path, description = "Session key")),
-    request_body = SendMessageRequest,
-    responses(
-        (status = 200, description = "SSE event stream"),
-    )
-)]
-/// `POST /api/v1/chat/sessions/{key}/stream` — send a message and receive
-/// the assistant's response as a Server-Sent Events (SSE) stream.
-///
-/// Accepts the same `SendMessageRequest` body as the synchronous `/send`
-/// endpoint. Instead of blocking until the full response is ready, this
-/// endpoint immediately returns an SSE stream that emits typed events:
-///
-/// - `text_delta` — incremental text fragments from the LLM.
-/// - `reasoning_delta` — chain-of-thought reasoning fragments.
-/// - `thinking` / `thinking_done` — LLM processing lifecycle markers.
-/// - `iteration` — a new agent loop iteration has started.
-/// - `tool_call_start` / `tool_call_end` — tool execution progress.
-/// - `done` — terminal event containing the complete response text.
-/// - `error` — terminal event indicating the agent loop failed.
-///
-/// Each SSE event has a typed `event:` field and a JSON `data:` payload.
-///
-/// A 15-second keep-alive heartbeat prevents proxies and CDNs from
-/// closing the connection during long-running tool calls. The keep-alive
-/// also resets axum's `TimeoutLayer` timer, so the global 60-second
-/// request timeout does not apply to streaming responses.
-#[instrument(skip(service, req))]
-async fn stream_message(
-    State(service): State<ChatService>,
-    Path(key): Path<String>,
-    Json(req): Json<SendMessageRequest>,
-) -> Result<Sse<impl futures::Stream<Item = Result<Event, axum::Error>>>, ChatError> {
-    // Kick off the streaming agent loop. This returns immediately with a
-    // channel receiver — the agent runs in a background tokio task.
-    let rx = service
-        .send_message_streaming(&SessionKey::from_raw(key), req.text, req.image_urls)
-        .await?;
-
-    // Wrap the mpsc::Receiver in a Stream and map each ChatStreamEvent to
-    // an axum SSE Event with typed event name and JSON data payload.
-    let stream = ReceiverStream::new(rx).map(|event| {
-        let event_name = event.event_type_name();
-        let data = serde_json::to_string(&event).unwrap_or_default();
-        Ok(Event::default().event(event_name).data(data))
-    });
-
-    // 15-second keep-alive prevents connection drops during tool execution.
-    Ok(Sse::new(stream).keep_alive(
-        KeepAlive::new()
-            .interval(std::time::Duration::from_secs(15))
-            .text("keep-alive"),
-    ))
 }
 
 /// `GET /api/v1/chat/sessions/{key}/messages` — retrieve conversation

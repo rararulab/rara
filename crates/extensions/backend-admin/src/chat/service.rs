@@ -12,50 +12,41 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Chat domain service — session-based conversations backed by LLM agents.
+//! Chat domain service — session/message/model management.
 //!
-//! [`ChatService`] is the primary entry point for all chat operations. It
-//! holds references to the session repository, LLM provider, and tool
-//! registry, and exposes high-level methods for session management and
-//! message exchange.
+//! [`ChatService`] is the primary entry point for all chat CRUD operations.
+//! It holds references to the session repository and settings, and exposes
+//! high-level methods for session management, message persistence, model
+//! catalog queries, and channel bindings.
+//!
+//! LLM execution has moved to the kernel path via `process_loop`.
 
 use std::sync::Arc;
 
 use chrono::Utc;
 use rara_domain_shared::settings::model::Settings;
-use rara_kernel::{runner::UserContent, tool::ToolRegistry};
 use rara_sessions::{
     repository::SessionRepository,
-    types::{
-        ChannelBinding, ChatMessage, ContentBlock, MessageContent, MessageRole, SessionEntry,
-        SessionKey,
-    },
+    types::{ChannelBinding, ChatMessage, SessionEntry, SessionKey},
 };
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
 use tracing::{info, instrument};
-use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::chat::{
-    agent::ChatAgent,
     error::ChatError,
     model_catalog::{ChatModel, ModelCatalog},
-    stream::ChatStreamEvent,
 };
-
-/// Inactivity threshold after which we consider a session "ended" and
-/// consolidate its exchanges into long-term memory before continuing.
-const SESSION_INACTIVITY_THRESHOLD: chrono::Duration = chrono::Duration::minutes(30);
 
 /// Central orchestrator for session-based AI chat.
 ///
-/// `ChatService` ties together three concerns:
+/// `ChatService` ties together two concerns:
 ///
 /// 1. **Session persistence** — CRUD operations on sessions and messages,
 ///    delegated to a [`SessionRepository`] implementation.
-/// 2. **LLM execution** — Building and running an `AgentRunner` with the
-///    session's conversation history and registered tools.
-/// 3. **Channel routing** — Mapping external messaging channels to internal
+/// 2. **Channel routing** — Mapping external messaging channels to internal
 ///    session keys via channel bindings.
+///
+/// LLM execution has moved to the kernel path (`process_loop`).
 ///
 /// The service is cheaply cloneable (`Arc`-wrapped internals) and safe to
 /// share across axum handler tasks.
@@ -69,41 +60,25 @@ pub struct ChatService {
     settings_updater: Arc<dyn rara_domain_shared::settings::SettingsUpdater>,
     /// Watch receiver for runtime settings (used by list_models).
     settings_rx:      watch::Receiver<Settings>,
-    /// Built-in chat agent — encapsulates prompt assembly, tool construction,
-    /// context compaction, and memory reflection.
-    chat_agent:       ChatAgent,
 }
 
 impl ChatService {
     /// Create a new chat service with the given dependencies.
     ///
-    /// The `chat_agent` encapsulates the agent context and handles LLM
-    /// provider access, tool management, prompt assembly, and memory
-    /// reflection. The `settings_updater` is used for persisting user
-    /// preferences such as favorite models.
+    /// The `settings_updater` is used for persisting user preferences such
+    /// as favorite models.
     #[must_use]
     pub fn new(
         session_repo: Arc<dyn SessionRepository>,
         settings_updater: Arc<dyn rara_domain_shared::settings::SettingsUpdater>,
         settings_rx: watch::Receiver<Settings>,
-        chat_agent: ChatAgent,
     ) -> Self {
         Self {
             session_repo,
             model_catalog: ModelCatalog::new(),
             settings_updater,
             settings_rx,
-            chat_agent,
         }
-    }
-
-    /// Read the current default model from runtime settings.
-    fn current_default_model(&self) -> String { self.chat_agent.ctx().current_default_model() }
-
-    /// Read the current system prompt from runtime settings, falling back
-    /// to a built-in default when no custom prompt is configured.
-    async fn current_system_prompt(&self) -> String {
-        self.chat_agent.ctx().current_system_prompt().await
     }
 
     // -- model catalog ------------------------------------------------------
@@ -143,9 +118,6 @@ impl ChatService {
     // -- session CRUD -------------------------------------------------------
 
     /// Create a new session with the given key and optional overrides.
-    ///
-    /// If `model` or `system_prompt` are `None`, the service-level defaults
-    /// are used.
     #[instrument(skip(self))]
     pub async fn create_session(
         &self,
@@ -155,15 +127,11 @@ impl ChatService {
         system_prompt: Option<String>,
     ) -> Result<SessionEntry, ChatError> {
         let now = Utc::now();
-        let resolved_system_prompt = match system_prompt {
-            Some(sp) => Some(sp),
-            None => Some(self.current_system_prompt().await),
-        };
         let entry = SessionEntry {
             key,
             title,
-            model: model.or_else(|| Some(self.current_default_model())),
-            system_prompt: resolved_system_prompt,
+            model,
+            system_prompt,
             message_count: 0,
             preview: None,
             metadata: None,
@@ -316,302 +284,6 @@ impl ChatService {
         Ok(persisted)
     }
 
-    /// Return a reference to the tools registry shared by this service.
-    pub fn tools(&self) -> &Arc<ToolRegistry> { self.chat_agent.ctx().tools() }
-
-    /// Persist a compaction effect: clear old messages, store the summary.
-    async fn persist_compaction(
-        &self,
-        key: &SessionKey,
-        summary: &ChatMessage,
-    ) -> Result<(), ChatError> {
-        info!(session = %key, "persisting compaction to session store");
-        self.session_repo
-            .clear_messages(key)
-            .await
-            .map_err(|e| ChatError::SessionError {
-                message: format!("failed to clear messages during compaction: {e}"),
-            })?;
-        self.session_repo
-            .append_message(key, summary)
-            .await
-            .map_err(|e| ChatError::SessionError {
-                message: format!("failed to append summary during compaction: {e}"),
-            })?;
-        Ok(())
-    }
-
-    // -- send message (LLM) -------------------------------------------------
-
-    /// Common session-level setup for `send_message` and
-    /// `send_message_streaming`.
-    ///
-    /// Handles: session creation, history retrieval, user message persistence,
-    /// model resolution, and context length lookup. Returns the data needed
-    /// by the [`ChatAgent`] to run.
-    async fn prepare_session_data(
-        &self,
-        key: &SessionKey,
-        user_text: &str,
-        image_urls: &Option<Vec<String>>,
-    ) -> Result<SessionData, ChatError> {
-        if user_text.trim().is_empty() {
-            return Err(ChatError::InvalidRequest {
-                message: "message text cannot be empty".to_owned(),
-            });
-        }
-
-        // 1. Ensure session exists
-        let session = match self.session_repo.get_session(key).await? {
-            Some(s) => s,
-            None => self.create_session(key.clone(), None, None, None).await?,
-        };
-
-        // 2. Read existing history
-        let history = self.session_repo.read_messages(key, None, None).await?;
-
-        // 2a. Session-end detection: if the session has been inactive for
-        // longer than the threshold, consolidate the previous exchanges into
-        // long-term memory before starting a new conversational segment.
-        if !history.is_empty() {
-            let elapsed = Utc::now() - session.updated_at;
-            if elapsed > SESSION_INACTIVITY_THRESHOLD {
-                let exchanges: Vec<(String, String)> = extract_exchange_pairs(&history);
-                if !exchanges.is_empty() {
-                    info!(
-                        key = %key,
-                        pairs = exchanges.len(),
-                        idle_minutes = elapsed.num_minutes(),
-                        "session inactivity detected, consolidating previous exchanges"
-                    );
-                    self.chat_agent.ctx().spawn_session_consolidation(exchanges);
-                }
-            }
-        }
-
-        // 3. Persist user message -- multimodal if images are present
-        let has_images = image_urls.as_ref().is_some_and(|urls| !urls.is_empty());
-        let user_msg = if has_images {
-            let urls = image_urls.as_ref().unwrap();
-            let mut blocks = vec![ContentBlock::Text {
-                text: user_text.to_owned(),
-            }];
-            for url in urls {
-                blocks.push(ContentBlock::ImageUrl { url: url.clone() });
-            }
-            ChatMessage {
-                seq:          0,
-                role:         MessageRole::User,
-                content:      MessageContent::Multimodal(blocks),
-                tool_calls:   Vec::new(),
-                tool_call_id: None,
-                tool_name:    None,
-                created_at:   jiff::Timestamp::now(),
-            }
-        } else {
-            ChatMessage::user(user_text)
-        };
-        self.session_repo.append_message(key, &user_msg).await?;
-
-        // 4. Resolve model and context length
-        let model = session
-            .model
-            .clone()
-            .unwrap_or_else(|| self.current_default_model());
-        let context_length = self
-            .model_catalog
-            .get_context_length(&model)
-            .unwrap_or(128_000) as usize;
-
-        // 5. Resolve base system prompt
-        let base_system_prompt = match session.system_prompt.clone() {
-            Some(sp) => sp,
-            None => self.current_system_prompt().await,
-        };
-
-        // 6. Build UserContent
-        let user_content = if has_images {
-            let urls = image_urls.as_ref().unwrap();
-            UserContent::Multimodal {
-                text:       user_text.to_owned(),
-                image_urls: urls.clone(),
-            }
-        } else {
-            UserContent::Text(user_text.to_owned())
-        };
-
-        Ok(SessionData {
-            session,
-            history,
-            model,
-            context_length,
-            base_system_prompt,
-            user_content,
-        })
-    }
-
-    /// Send a user message and get an assistant response.
-    #[instrument(skip(self, user_text, image_urls))]
-    pub async fn send_message(
-        &self,
-        key: &SessionKey,
-        user_text: String,
-        image_urls: Option<Vec<String>>,
-    ) -> Result<ChatMessage, ChatError> {
-        let span = tracing::Span::current();
-        span.set_attribute("langfuse.session.id", key.to_string());
-
-        let SessionData {
-            mut session,
-            history,
-            model,
-            context_length,
-            base_system_prompt,
-            user_content,
-        } = self
-            .prepare_session_data(key, &user_text, &image_urls)
-            .await?;
-
-        // Delegate agent execution to ChatAgent.
-        let (output, compaction) = self
-            .chat_agent
-            .run(
-                &base_system_prompt,
-                user_content,
-                &history,
-                &model,
-                context_length,
-            )
-            .await
-            .map_err(|e| ChatError::AgentError {
-                message: e.to_string(),
-            })?;
-
-        // Persist compaction if it occurred.
-        if let Some(effect) = compaction {
-            self.persist_compaction(key, &effect.summary).await?;
-        }
-
-        // Persist assistant response
-        let assistant_msg = ChatMessage::assistant(&output.response_text);
-        let persisted = self
-            .session_repo
-            .append_message(key, &assistant_msg)
-            .await?;
-
-        // Update session metadata
-        session.message_count += 2; // user + assistant
-        if session.preview.is_none() {
-            session.preview = Some(truncate_preview(&user_text, 100));
-        }
-        let _ = self.session_repo.update_session(&session).await;
-
-        info!(
-            key = %key,
-            iterations = output.iterations,
-            tool_calls = output.tool_calls_made,
-            "message exchange complete"
-        );
-
-        Ok(persisted)
-    }
-
-    /// Streaming variant of [`send_message`](Self::send_message).
-    #[instrument(skip(self, user_text, image_urls))]
-    pub async fn send_message_streaming(
-        &self,
-        key: &SessionKey,
-        user_text: String,
-        image_urls: Option<Vec<String>>,
-    ) -> Result<mpsc::Receiver<ChatStreamEvent>, ChatError> {
-        let span = tracing::Span::current();
-        span.set_attribute("langfuse.session.id", key.to_string());
-
-        let SessionData {
-            mut session,
-            history,
-            model,
-            context_length,
-            base_system_prompt,
-            user_content,
-        } = self
-            .prepare_session_data(key, &user_text, &image_urls)
-            .await?;
-
-        // Delegate streaming setup to ChatAgent.
-        let stream_setup = self
-            .chat_agent
-            .prepare_streaming(
-                &base_system_prompt,
-                user_content,
-                &history,
-                &model,
-                context_length,
-            )
-            .await
-            .map_err(|e| ChatError::AgentError {
-                message: e.to_string(),
-            })?;
-
-        // Persist compaction if it occurred.
-        if let Some(effect) = stream_setup.compaction {
-            self.persist_compaction(key, &effect.summary).await?;
-        }
-
-        // Start the streaming agent loop.
-        let mut runner_rx = stream_setup
-            .runner
-            .run_streaming(stream_setup.effective_tools);
-
-        // Channel for ChatStreamEvents sent to the SSE handler.
-        let (tx, rx) = mpsc::channel::<ChatStreamEvent>(128);
-
-        // Spawn a task that bridges RunnerEvent -> ChatStreamEvent and
-        // handles persistence on completion.
-        let session_repo = Arc::clone(&self.session_repo);
-        let session_key = key.clone();
-
-        tokio::spawn(async move {
-            while let Some(runner_event) = runner_rx.recv().await {
-                let chat_event = ChatStreamEvent::from(runner_event.clone());
-                let is_done = matches!(chat_event, ChatStreamEvent::Done { .. });
-                let is_error = matches!(chat_event, ChatStreamEvent::Error { .. });
-
-                // On Done: persist assistant message and update session.
-                if let ChatStreamEvent::Done { ref text } = chat_event {
-                    let assistant_msg = ChatMessage::assistant(text);
-                    if let Err(e) = session_repo
-                        .append_message(&session_key, &assistant_msg)
-                        .await
-                    {
-                        tracing::error!(error = %e, "failed to persist streaming assistant message");
-                    }
-
-                    session.message_count += 2; // user + assistant
-                    if session.preview.is_none() {
-                        session.preview = Some(truncate_preview(&user_text, 100));
-                    }
-                    let _ = session_repo.update_session(&session).await;
-
-                    info!(key = %session_key, "streaming message exchange complete");
-                }
-
-                // Forward the event to the SSE stream; if the receiver is
-                // dropped (client disconnected), stop the loop.
-                if tx.send(chat_event).await.is_err() {
-                    tracing::debug!("SSE client disconnected, stopping stream bridge");
-                    break;
-                }
-
-                if is_done || is_error {
-                    break;
-                }
-            }
-        });
-
-        Ok(rx)
-    }
-
     // -- export to memory ---------------------------------------------------
 
     /// Export a session's message history to the memory directory as markdown.
@@ -756,78 +428,6 @@ impl ChatService {
 
 impl std::fmt::Debug for ChatService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ChatService")
-            .field("default_model", &self.current_default_model())
-            .finish_non_exhaustive()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-/// Bundle returned by [`ChatService::prepare_session_data`] containing
-/// session-level data needed by the [`ChatAgent`].
-struct SessionData {
-    session:            SessionEntry,
-    history:            Vec<ChatMessage>,
-    model:              String,
-    context_length:     usize,
-    base_system_prompt: String,
-    user_content:       UserContent,
-}
-
-/// Extract (user_text, assistant_text) pairs from a message history.
-///
-/// Walks the messages looking for consecutive User -> Assistant pairs,
-/// skipping tool calls and system messages. Non-paired messages are ignored.
-fn extract_exchange_pairs(messages: &[ChatMessage]) -> Vec<(String, String)> {
-    let mut pairs = Vec::new();
-    let mut i = 0;
-    while i < messages.len() {
-        if messages[i].role == MessageRole::User {
-            // Look for the next assistant message (skipping tool calls).
-            let mut j = i + 1;
-            while j < messages.len()
-                && !matches!(messages[j].role, MessageRole::Assistant | MessageRole::User)
-            {
-                j += 1;
-            }
-            if j < messages.len() && messages[j].role == MessageRole::Assistant {
-                pairs.push((messages[i].content.as_text(), messages[j].content.as_text()));
-                i = j + 1;
-                continue;
-            }
-        }
-        i += 1;
-    }
-    pairs
-}
-
-/// Truncate a string to at most `max_len` characters.
-fn truncate_preview(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_owned()
-    } else {
-        let truncated: String = s.chars().take(max_len.saturating_sub(3)).collect();
-        format!("{truncated}...")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn truncate_preview_short() {
-        assert_eq!(truncate_preview("hello", 100), "hello");
-    }
-
-    #[test]
-    fn truncate_preview_long() {
-        let long = "a".repeat(200);
-        let result = truncate_preview(&long, 50);
-        assert!(result.len() <= 50);
-        assert!(result.ends_with("..."));
+        f.debug_struct("ChatService").finish_non_exhaustive()
     }
 }

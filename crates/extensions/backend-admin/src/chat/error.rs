@@ -14,9 +14,9 @@
 
 //! Error types for the chat domain service.
 //!
-//! [`ChatError`] wraps errors from the sessions layer and the agent runner,
-//! and implements [`axum::response::IntoResponse`] so that handlers can
-//! return `Result<T, ChatError>` directly.
+//! [`ChatError`] wraps errors from the sessions layer and implements
+//! [`axum::response::IntoResponse`] so that handlers can return
+//! `Result<T, ChatError>` directly.
 
 use snafu::Snafu;
 
@@ -34,10 +34,6 @@ pub enum ChatError {
     /// Invalid request data.
     #[snafu(display("invalid request: {message}"))]
     InvalidRequest { message: String },
-
-    /// The LLM agent failed.
-    #[snafu(display("agent error: {message}"))]
-    AgentError { message: String },
 
     /// A session storage error occurred.
     #[snafu(display("session error: {message}"))]
@@ -60,22 +56,12 @@ impl From<rara_sessions::error::SessionError> for ChatError {
     }
 }
 
-/// Convert an agent-runner error into a [`ChatError::AgentError`].
-impl From<rara_kernel::error::KernelError> for ChatError {
-    fn from(err: rara_kernel::error::KernelError) -> Self {
-        Self::AgentError {
-            message: err.to_string(),
-        }
-    }
-}
-
 /// Maps [`ChatError`] variants to HTTP status codes:
 ///
 /// | Variant            | Status              |
 /// |--------------------|---------------------|
 /// | `SessionNotFound`  | `404 Not Found`     |
 /// | `InvalidRequest`   | `400 Bad Request`   |
-/// | `AgentError`       | `502 Bad Gateway`   |
 /// | `SessionError`     | `500 Internal`      |
 ///
 /// Server errors (`5xx`) are logged at the `error` level.
@@ -84,7 +70,6 @@ impl axum::response::IntoResponse for ChatError {
         let status = match &self {
             Self::SessionNotFound { .. } => axum::http::StatusCode::NOT_FOUND,
             Self::InvalidRequest { .. } => axum::http::StatusCode::BAD_REQUEST,
-            Self::AgentError { .. } => axum::http::StatusCode::BAD_GATEWAY,
             Self::SessionError { .. } => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
         };
         let message = self.to_string();
