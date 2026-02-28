@@ -18,6 +18,7 @@ async-trait.workspace = true
 backon.workspace = true
 base.workspace = true
 bon.workspace = true
+chrono.workspace = true
 dashmap = "6"
 futures.workspace = true
 jiff.workspace = true
@@ -27,6 +28,7 @@ serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
 snafu.workspace = true
+sqlx = { workspace = true }
 tokio.workspace = true
 tokio-util = { workspace = true }
 tracing.workspace = true

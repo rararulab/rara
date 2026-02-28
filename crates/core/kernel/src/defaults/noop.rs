@@ -15,6 +15,7 @@
 //! Noop implementations of kernel components for testing.
 
 use async_trait::async_trait;
+use chrono::Utc;
 use serde_json::Value;
 use tokio::sync::broadcast;
 use uuid::Uuid;
@@ -31,8 +32,9 @@ use crate::{
         Result as MemResult, knowledge::KnowledgeMemory, learning::LearningMemory,
         state::StateMemory, types::*,
     },
-    process::{SessionId, principal::UserId},
-    session_manager::{SessionManagerError, SessionRepository},
+    session::{
+        ChannelBinding, SessionEntry, SessionError, SessionKey, SessionRepository,
+    },
 };
 
 // ---- NoopGuard ----
@@ -228,31 +230,93 @@ pub struct NoopSessionRepository;
 
 #[async_trait]
 impl SessionRepository for NoopSessionRepository {
-    async fn ensure_session(
+    async fn create_session(
         &self,
-        _id: &SessionId,
-        _user: &UserId,
-    ) -> Result<(), SessionManagerError> {
-        Ok(())
+        entry: &SessionEntry,
+    ) -> Result<SessionEntry, SessionError> {
+        Ok(entry.clone())
     }
 
-    async fn get_history(&self, _id: &SessionId) -> Result<Vec<ChatMessage>, SessionManagerError> {
+    async fn get_session(
+        &self,
+        _key: &SessionKey,
+    ) -> Result<Option<SessionEntry>, SessionError> {
+        Ok(None)
+    }
+
+    async fn list_sessions(
+        &self,
+        _limit: i64,
+        _offset: i64,
+    ) -> Result<Vec<SessionEntry>, SessionError> {
         Ok(vec![])
     }
 
-    async fn append_user_message(
+    async fn update_session(
         &self,
-        _id: &SessionId,
-        _content: &str,
-    ) -> Result<(), SessionManagerError> {
+        entry: &SessionEntry,
+    ) -> Result<SessionEntry, SessionError> {
+        Ok(entry.clone())
+    }
+
+    async fn delete_session(&self, _key: &SessionKey) -> Result<(), SessionError> {
         Ok(())
     }
 
-    async fn append_assistant_message(
+    async fn append_message(
         &self,
-        _id: &SessionId,
-        _content: &str,
-    ) -> Result<(), SessionManagerError> {
+        _session_key: &SessionKey,
+        message: &ChatMessage,
+    ) -> Result<ChatMessage, SessionError> {
+        Ok(message.clone())
+    }
+
+    async fn read_messages(
+        &self,
+        _session_key: &SessionKey,
+        _after_seq: Option<i64>,
+        _limit: Option<i64>,
+    ) -> Result<Vec<ChatMessage>, SessionError> {
+        Ok(vec![])
+    }
+
+    async fn clear_messages(&self, _session_key: &SessionKey) -> Result<(), SessionError> {
         Ok(())
+    }
+
+    async fn fork_session(
+        &self,
+        _source_key: &SessionKey,
+        target_key: &SessionKey,
+        _fork_at_seq: i64,
+    ) -> Result<SessionEntry, SessionError> {
+        let now = Utc::now();
+        Ok(SessionEntry {
+            key:           target_key.clone(),
+            title:         None,
+            model:         None,
+            system_prompt: None,
+            message_count: 0,
+            preview:       None,
+            metadata:      None,
+            created_at:    now,
+            updated_at:    now,
+        })
+    }
+
+    async fn bind_channel(
+        &self,
+        binding: &ChannelBinding,
+    ) -> Result<ChannelBinding, SessionError> {
+        Ok(binding.clone())
+    }
+
+    async fn get_channel_binding(
+        &self,
+        _channel_type: &str,
+        _account: &str,
+        _chat_id: &str,
+    ) -> Result<Option<ChannelBinding>, SessionError> {
+        Ok(None)
     }
 }

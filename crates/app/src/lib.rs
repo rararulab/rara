@@ -374,7 +374,7 @@ impl AppConfig {
         let io_pipeline = io_pipeline::init_io_pipeline(
             telegram_adapter.clone(),
             Some(web_adapter.clone()),
-            app_state.kernel_session_repo.clone(),
+            app_state.session_repo.clone(),
             kernel,
         );
 

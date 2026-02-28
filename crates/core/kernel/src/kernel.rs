@@ -56,7 +56,7 @@ use crate::{
         manifest_loader::ManifestLoader, principal::Principal, user::UserStore,
     },
     provider::LlmProviderLoaderRef,
-    session_manager::SessionManager,
+    session::SessionRepository,
     tool::ToolRegistry,
 };
 
@@ -125,7 +125,7 @@ impl Kernel {
             manifest_loader,
             shared_kv: DashMap::new(),
             user_store,
-            session_manager: None,
+            session_repo: None,
             stream_hub: None,
             outbound_bus: None,
         });
@@ -139,20 +139,20 @@ impl Kernel {
     /// short-lived execution model via `KernelInner::spawn_process`.
     pub fn set_io_context(
         &mut self,
-        session_manager: Arc<SessionManager>,
+        session_repo: Arc<dyn SessionRepository>,
         stream_hub: Arc<StreamHub>,
         outbound_bus: Arc<dyn OutboundBus>,
     ) {
         let inner = Arc::get_mut(&mut self.inner)
             .expect("set_io_context must be called before any Arc clones");
-        inner.session_manager = Some(session_manager);
+        inner.session_repo = Some(session_repo);
         inner.stream_hub = Some(stream_hub);
         inner.outbound_bus = Some(outbound_bus);
     }
 
     /// Spawn a long-lived agent process for a session.
     ///
-    /// If I/O context is configured (session_manager, stream_hub,
+    /// If I/O context is configured (session_repo, stream_hub,
     /// outbound_bus), spawns a long-lived process_loop that receives
     /// messages via a mailbox. The first message (from `inbound`) is
     /// automatically delivered.
@@ -188,8 +188,8 @@ impl Kernel {
             })?;
 
         // Check if we have IO context for long-lived process
-        if let (Some(session_manager), Some(stream_hub), Some(outbound_bus)) = (
-            self.inner.session_manager.as_ref(),
+        if let (Some(session_repo), Some(stream_hub), Some(outbound_bus)) = (
+            self.inner.session_repo.as_ref(),
             self.inner.stream_hub.as_ref(),
             self.inner.outbound_bus.as_ref(),
         ) {
@@ -199,7 +199,7 @@ impl Kernel {
                 principal,
                 session_id,
                 parent_id,
-                session_manager.clone(),
+                session_repo.clone(),
                 stream_hub.clone(),
                 outbound_bus.clone(),
                 _global_permit,
@@ -241,7 +241,7 @@ impl Kernel {
         principal: Principal,
         session_id: SessionId,
         parent_id: Option<AgentId>,
-        session_manager: Arc<SessionManager>,
+        session_repo: Arc<dyn SessionRepository>,
         stream_hub: Arc<StreamHub>,
         outbound_bus: Arc<dyn OutboundBus>,
         _global_permit: tokio::sync::OwnedSemaphorePermit,
@@ -296,7 +296,7 @@ impl Kernel {
                 manifest,
                 mailbox_rx,
                 process_table,
-                session_manager,
+                session_repo,
                 stream_hub,
                 outbound_bus,
                 llm_provider,

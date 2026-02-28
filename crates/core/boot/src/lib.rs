@@ -19,7 +19,6 @@ pub mod components;
 pub mod error;
 pub mod manifests;
 pub mod mcp;
-pub mod session;
 pub mod skills;
 pub mod stream;
 pub mod tools;
