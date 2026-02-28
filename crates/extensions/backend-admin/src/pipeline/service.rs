@@ -106,7 +106,6 @@ pub struct PipelineService {
     composio_auth:  Arc<dyn rara_composio::ComposioAuthProvider>,
     mcp_manager:    rara_mcp::manager::mgr::McpManager,
     prompt_repo:    Arc<dyn rara_kernel::prompt::PromptRepo>,
-    contact_lookup: Arc<dyn rara_kernel::contact_lookup::ContactLookup>,
 
     /// Whether a pipeline run is currently in progress.
     running:            Arc<AtomicBool>,
@@ -132,7 +131,6 @@ impl PipelineService {
         composio_auth: Arc<dyn rara_composio::ComposioAuthProvider>,
         mcp_manager: rara_mcp::manager::mgr::McpManager,
         prompt_repo: Arc<dyn rara_kernel::prompt::PromptRepo>,
-        contact_lookup: Arc<dyn rara_kernel::contact_lookup::ContactLookup>,
     ) -> Self {
         let (broadcast_tx, _) = tokio::sync::broadcast::channel(256);
         Self {
@@ -145,7 +143,6 @@ impl PipelineService {
             composio_auth,
             mcp_manager,
             prompt_repo,
-            contact_lookup,
             running: Arc::new(AtomicBool::new(false)),
             cancel_flag: Arc::new(AtomicBool::new(false)),
             run_lock: Arc::new(Mutex::new(())),
@@ -516,14 +513,11 @@ impl PipelineService {
 
         // Layer 1: Primitive tools (db, notify, email, storage, etc.)
         let deps = rara_boot::tools::PrimitiveDeps {
-            pool:                   self.pool.clone(),
-            notify_client:          self.notify_client.clone(),
             settings_rx:            self.settings_svc.subscribe(),
             object_store:           opendal::Operator::new(opendal::services::Memory::default())
                 .expect("memory operator")
                 .finish(),
             composio_auth_provider: self.composio_auth.clone(),
-            contact_lookup:         self.contact_lookup.clone(),
         };
         for tool in rara_boot::tools::default_primitives(deps) {
             registry.register_primitive(tool);

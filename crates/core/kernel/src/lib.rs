@@ -32,7 +32,6 @@
 pub mod agent_context;
 pub mod agent_output;
 pub mod channel;
-pub mod contact_lookup;
 pub mod defaults;
 pub mod error;
 pub mod event;

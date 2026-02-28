@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Primitive tool implementations (core + domain) and factory functions.
+//! Primitive tool implementations and factory function.
 //!
 //! This module houses all **primitive tool** implementations and
 //! provides [`default_primitives`] to obtain them in one call.
@@ -23,55 +23,59 @@ use rara_domain_shared::settings::model::Settings;
 use rara_kernel::tool::AgentToolRef;
 use tokio::sync::watch;
 
-pub mod core_primitives;
-pub mod domain_primitives;
+mod bash;
+mod composio;
+mod edit_file;
+mod find_files;
+mod grep;
+mod http_fetch;
+mod list_directory;
+#[cfg(feature = "k8s")]
+pub mod pod;
+mod read_file;
+mod send_email;
+mod storage_read;
+mod write_file;
 
-/// Dependencies required to construct domain-level primitive tools.
+pub use bash::BashTool;
+pub use composio::ComposioTool;
+pub use edit_file::EditFileTool;
+pub use find_files::FindFilesTool;
+pub use grep::GrepTool;
+pub use http_fetch::HttpFetchTool;
+pub use list_directory::ListDirectoryTool;
+#[cfg(feature = "k8s")]
+pub use pod::PodTool;
+pub use read_file::ReadFileTool;
+pub use send_email::SendEmailTool;
+pub use storage_read::StorageReadTool;
+pub use write_file::WriteFileTool;
+
+/// Dependencies required to construct primitive tools.
 pub struct PrimitiveDeps {
-    pub pool:                   sqlx::PgPool,
-    pub notify_client:          rara_domain_shared::notify::client::NotifyClient,
     pub settings_rx:            watch::Receiver<Settings>,
     pub object_store:           opendal::Operator,
     pub composio_auth_provider: Arc<dyn rara_composio::ComposioAuthProvider>,
-    pub contact_lookup:         Arc<dyn rara_kernel::contact_lookup::ContactLookup>,
 }
 
-/// Returns all primitive tools (core + domain), ready for registration.
+/// Returns all primitive tools, ready for registration.
 pub fn default_primitives(deps: PrimitiveDeps) -> Vec<AgentToolRef> {
-    let mut tools = core_primitives_vec();
-    tools.extend(domain_primitives_vec(deps));
-    tools
-}
-
-/// Returns only the 8 core primitives (no application deps).
-pub fn core_primitives_vec() -> Vec<AgentToolRef> {
-    vec![
-        Arc::new(core_primitives::BashTool::new()),
-        Arc::new(core_primitives::ReadFileTool::new()),
-        Arc::new(core_primitives::WriteFileTool::new()),
-        Arc::new(core_primitives::EditFileTool::new()),
-        Arc::new(core_primitives::FindFilesTool::new()),
-        Arc::new(core_primitives::GrepTool::new()),
-        Arc::new(core_primitives::ListDirectoryTool::new()),
-        Arc::new(core_primitives::HttpFetchTool::new()),
-    ]
-}
-
-/// Returns domain primitives. Composio is included when configured.
-pub fn domain_primitives_vec(deps: PrimitiveDeps) -> Vec<AgentToolRef> {
     let mut tools: Vec<AgentToolRef> = vec![
-        Arc::new(domain_primitives::DbQueryTool::new(deps.pool.clone())),
-        Arc::new(domain_primitives::DbMutateTool::new(deps.pool)),
-        Arc::new(domain_primitives::NotifyTool::new(
-            deps.notify_client,
-            deps.settings_rx.clone(),
-            deps.contact_lookup,
-        )),
-        Arc::new(domain_primitives::SendEmailTool::new(deps.settings_rx)),
-        Arc::new(domain_primitives::StorageReadTool::new(deps.object_store)),
+        // Core primitives
+        Arc::new(BashTool::new()),
+        Arc::new(ReadFileTool::new()),
+        Arc::new(WriteFileTool::new()),
+        Arc::new(EditFileTool::new()),
+        Arc::new(FindFilesTool::new()),
+        Arc::new(GrepTool::new()),
+        Arc::new(ListDirectoryTool::new()),
+        Arc::new(HttpFetchTool::new()),
+        // Domain primitives
+        Arc::new(SendEmailTool::new(deps.settings_rx)),
+        Arc::new(StorageReadTool::new(deps.object_store)),
     ];
-    tools.push(Arc::new(
-        domain_primitives::ComposioTool::from_auth_provider(deps.composio_auth_provider),
-    ));
+    tools.push(Arc::new(ComposioTool::from_auth_provider(
+        deps.composio_auth_provider,
+    )));
     tools
 }

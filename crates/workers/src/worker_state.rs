@@ -157,16 +157,11 @@ impl AppState {
             Arc::new(SettingsComposioAuthProvider::new(settings_svc.clone()));
         let contact_repo =
             rara_channels::telegram::contacts::repository::ContactRepository::new(pool.clone());
-        let contact_lookup: Arc<dyn rara_kernel::contact_lookup::ContactLookup> =
-            Arc::new(contact_repo.clone());
         let mut tool_registry = rara_kernel::tool::ToolRegistry::new();
         for tool in rara_boot::tools::default_primitives(rara_boot::tools::PrimitiveDeps {
-            pool:                   pool.clone(),
-            notify_client:          notify_client.clone(),
             settings_rx:            settings_svc.subscribe(),
             object_store:           object_store.clone(),
             composio_auth_provider: composio_auth_provider.clone(),
-            contact_lookup:         contact_lookup.clone(),
         }) {
             tool_registry.register_primitive(tool);
         }
@@ -284,7 +279,6 @@ impl AppState {
             composio_auth_provider,
             mcp_manager.clone(),
             prompt_repo.clone(),
-            contact_lookup,
         );
         info!("Pipeline service initialized");
 

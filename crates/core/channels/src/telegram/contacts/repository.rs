@@ -16,7 +16,6 @@
 
 use snafu::{IntoError, ResultExt};
 use sqlx::PgPool;
-use rara_kernel::contact_lookup::{ContactLookup, ResolvedContact};
 use uuid::Uuid;
 
 use crate::telegram::contacts::{
@@ -173,21 +172,6 @@ impl ContactRepository {
         .await
         .context(RepositorySnafu)?;
         Ok(())
-    }
-}
-
-#[async_trait::async_trait]
-impl ContactLookup for ContactRepository {
-    async fn find_by_username(&self, username: &str) -> anyhow::Result<Option<ResolvedContact>> {
-        let contact = self
-            .get_by_username(username)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-        Ok(contact.map(|c| ResolvedContact {
-            username: c.telegram_username,
-            chat_id:  c.chat_id,
-            enabled:  c.enabled,
-        }))
     }
 }
 
