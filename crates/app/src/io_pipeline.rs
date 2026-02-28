@@ -63,6 +63,8 @@ pub struct IoBusPipeline {
     pub endpoint_registry: Arc<EndpointRegistry>,
     /// The kernel (owns the process table).
     pub kernel:            Arc<Kernel>,
+    /// The web adapter (if created).
+    pub web_adapter:       Option<Arc<rara_channels::web::WebAdapter>>,
 }
 
 /// Initialize the full I/O Bus pipeline.
@@ -80,6 +82,7 @@ pub struct IoBusPipeline {
 /// an [`EgressAdapter`] for outbound delivery.
 pub fn init_io_pipeline(
     telegram_adapter: Option<Arc<rara_channels::telegram::TelegramAdapter>>,
+    web_adapter: Option<Arc<rara_channels::web::WebAdapter>>,
     session_repo: Arc<dyn rara_kernel::session_manager::SessionRepository>,
     mut kernel: Kernel,
 ) -> IoBusPipeline {
@@ -117,20 +120,33 @@ pub fn init_io_pipeline(
     if let Some(ref tg) = telegram_adapter {
         adapters.insert(ChannelType::Telegram, tg.clone() as Arc<dyn EgressAdapter>);
     }
+    if let Some(ref web) = web_adapter {
+        adapters.insert(ChannelType::Web, web.clone() as Arc<dyn EgressAdapter>);
+    }
 
     let egress = Egress::new(adapters, endpoint_registry.clone(), outbound_sub);
 
-    info!(
-        inbound_capacity = 1024,
-        outbound_capacity = 256,
-        stream_capacity = 64,
-        adapters = if telegram_adapter.is_some() {
-            "telegram"
+    {
+        let mut adapter_names = Vec::new();
+        if telegram_adapter.is_some() {
+            adapter_names.push("telegram");
+        }
+        if web_adapter.is_some() {
+            adapter_names.push("web");
+        }
+        let adapters_str = if adapter_names.is_empty() {
+            "none".to_owned()
         } else {
-            "none"
-        },
-        "I/O Bus pipeline initialized"
-    );
+            adapter_names.join(", ")
+        };
+        info!(
+            inbound_capacity = 1024,
+            outbound_capacity = 256,
+            stream_capacity = 64,
+            adapters = %adapters_str,
+            "I/O Bus pipeline initialized"
+        );
+    }
 
     IoBusPipeline {
         inbound_bus,
@@ -141,5 +157,6 @@ pub fn init_io_pipeline(
         egress,
         endpoint_registry,
         kernel,
+        web_adapter,
     }
 }

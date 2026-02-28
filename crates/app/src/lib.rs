@@ -221,11 +221,15 @@ impl AppConfig {
         let (domain_routes, openapi) = app_state.routes();
         let swagger_ui =
             utoipa_swagger_ui::SwaggerUi::new("/swagger-ui").url("/api/openapi.json", openapi);
+        // Create WebAdapter early so we can mount its router into the HTTP server.
+        let web_adapter = Arc::new(rara_channels::web::WebAdapter::new());
+        let web_router = web_adapter.router();
         let routes_fn: Box<dyn Fn(axum::Router) -> axum::Router + Send + Sync> =
             Box::new(move |router| {
                 health_routes(router)
                     .merge(domain_routes.clone())
                     .merge(swagger_ui.clone())
+                    .nest("/api/v1/kernel/chat", web_router.clone())
             });
 
         info!("Application initialized successfully");
@@ -369,6 +373,7 @@ impl AppConfig {
 
         let io_pipeline = io_pipeline::init_io_pipeline(
             telegram_adapter.clone(),
+            Some(web_adapter.clone()),
             app_state.kernel_session_repo.clone(),
             kernel,
         );
@@ -406,6 +411,18 @@ impl AppConfig {
                 Err(e) => warn!(
                     error = %e,
                     "Failed to start Telegram adapter, I/O Bus ingress inactive"
+                ),
+            }
+        }
+
+        // Start WebAdapter with the I/O Bus ingress pipeline.
+        {
+            use rara_kernel::channel::adapter::ChannelAdapter as _;
+            match web_adapter.start(io_pipeline.ingress_pipeline.clone()).await {
+                Ok(()) => info!("WebAdapter started (I/O Bus)"),
+                Err(e) => warn!(
+                    error = %e,
+                    "Failed to start WebAdapter, I/O Bus web ingress inactive"
                 ),
             }
         }
@@ -453,6 +470,12 @@ impl AppConfig {
                 use rara_kernel::channel::adapter::ChannelAdapter as _;
                 info!("Shutting down Telegram adapter");
                 let _ = adapter.stop().await;
+            }
+
+            {
+                use rara_kernel::channel::adapter::ChannelAdapter as _;
+                info!("Shutting down WebAdapter");
+                let _ = web_adapter.stop().await;
             }
 
             info!("Shutting down servers");
