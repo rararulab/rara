@@ -85,16 +85,22 @@ impl FallibleWorker<AppState> for ProactiveAgentWorker {
         let user_prompt = crate::builtin_agents::proactive::build_user_prompt(&activity_summary);
 
         // 4. Build manifest and spawn via Kernel (fire-and-forget)
-        let policy = state.agent_ctx.build_worker_policy().await;
-        let model = state.agent_ctx.model_for_key("proactive");
+        let policy = crate::worker_state::build_worker_policy(state.prompt_repo.as_ref()).await;
+        let model = settings.ai.model_for_key("proactive");
+        let provider_hint = settings.ai.provider.clone();
+        let max_iterations = settings
+            .agent
+            .max_iterations
+            .map(|n| n as usize)
+            .unwrap_or(25);
 
         let manifest = AgentManifest {
             name: "proactive".to_string(),
             description: "Proactive agent reviewing recent activity".to_string(),
             model,
             system_prompt: policy,
-            provider_hint: state.agent_ctx.provider_hint(),
-            max_iterations: Some(state.agent_ctx.max_iterations("proactive")),
+            provider_hint,
+            max_iterations: Some(max_iterations),
             tools: vec![], // inherit all tools
             max_children: None,
             metadata: serde_json::Value::Null,

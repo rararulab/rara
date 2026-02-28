@@ -56,8 +56,14 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
             "agent-scheduler: spawning due jobs via kernel"
         );
 
-        let policy = state.agent_ctx.build_worker_policy().await;
-        let model = state.agent_ctx.model_for_key("scheduled");
+        let policy = crate::worker_state::build_worker_policy(state.prompt_repo.as_ref()).await;
+        let model = settings.ai.model_for_key("scheduled");
+        let provider_hint = settings.ai.provider.clone();
+        let max_iterations = settings
+            .agent
+            .max_iterations
+            .map(|n| n as usize)
+            .unwrap_or(25);
 
         for job in &due_jobs {
             let manifest = AgentManifest {
@@ -65,8 +71,8 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
                 description:    format!("Scheduled job: {}", job.id),
                 model:          model.clone(),
                 system_prompt:  policy.clone(),
-                provider_hint:  state.agent_ctx.provider_hint(),
-                max_iterations: Some(state.agent_ctx.max_iterations("scheduled")),
+                provider_hint:  provider_hint.clone(),
+                max_iterations: Some(max_iterations),
                 tools:          vec![], // inherit all tools
                 max_children:   None,
                 metadata:       serde_json::json!({ "job_id": job.id }),
