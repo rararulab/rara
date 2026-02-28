@@ -25,6 +25,7 @@ croner.workspace = true
 jiff.workspace = true
 opendal.workspace = true
 rara-backend-admin = { workspace = true }
+rara-boot = { workspace = true }
 rara-codex-oauth = { workspace = true }
 rara-coding-task = { workspace = true }
 rara-kernel = { workspace = true }

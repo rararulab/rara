@@ -235,8 +235,7 @@ impl AppState {
         )));
 
         // -- skills registry (PG cache + incremental FS sync) --------------------
-        let skill_registry = rara_skills::registry::InMemoryRegistry::new();
-        rara_skills::cache::spawn_background_sync(pool.clone(), skill_registry.clone());
+        let skill_registry = rara_boot::skills::init_skill_registry(pool.clone());
 
         tool_registry.register_service(Arc::new(crate::tools::services::ListSkillsTool::new(
             skill_registry.clone(),
@@ -250,20 +249,9 @@ impl AppState {
 
         // -- MCP manager -------------------------------------------------------
 
-        let mcp_registry_path = rara_paths::config_dir().join("mcp-servers.json");
-        let mcp_registry = rara_mcp::manager::registry::FSMcpRegistry::load(&mcp_registry_path)
+        let mcp_manager = rara_boot::mcp::init_mcp_manager()
             .await
-            .whatever_context("Failed to load MCP registry")?;
-        let mcp_manager = rara_mcp::manager::mgr::McpManager::new(
-            Arc::new(mcp_registry),
-            rara_mcp::oauth::OAuthCredentialsStoreMode::default(),
-        );
-        let started = mcp_manager.start_enabled().await;
-        if started.is_empty() {
-            info!("No MCP servers to start");
-        } else {
-            info!(servers = ?started, "MCP servers started");
-        }
+            .whatever_context("Failed to initialize MCP manager")?;
 
         // -- MCP management tools -----------------------------------------------
         tool_registry.register_service(Arc::new(
@@ -347,10 +335,7 @@ impl AppState {
 
         // -- kernel ---------------------------------------------------------------
 
-        let mut manifest_loader = rara_kernel::process::manifest_loader::ManifestLoader::new();
-        manifest_loader.load_bundled();
-        let user_agent_dir = rara_paths::data_dir().join("agents");
-        let _ = manifest_loader.load_dir(&user_agent_dir);
+        let manifest_loader = rara_boot::manifests::load_default_manifests();
 
         let kernel = Arc::new(rara_kernel::Kernel::new(
             rara_kernel::KernelConfig {
@@ -360,9 +345,9 @@ impl AppState {
             },
             llm_provider.clone(),
             tools.clone(),
-            Arc::new(rara_kernel::defaults::noop::NoopMemory) as Arc<dyn rara_kernel::memory::Memory>,
-            Arc::new(rara_kernel::defaults::broadcast_bus::BroadcastEventBus::default()) as Arc<dyn rara_kernel::event::EventBus>,
-            Arc::new(rara_kernel::defaults::noop_guard::NoopGuard) as Arc<dyn rara_kernel::guard::Guard>,
+            rara_boot::components::default_memory(),
+            rara_boot::components::default_event_bus(),
+            rara_boot::components::default_guard(),
             manifest_loader,
         ));
         info!("Kernel initialized");

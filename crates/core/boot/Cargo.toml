@@ -1,0 +1,27 @@
+[package]
+name = "rara-boot"
+version = "0.0.1"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Kernel bootstrap: manifests, skills, MCP, kernel construction"
+
+[dependencies]
+rara-kernel.workspace = true
+rara-mcp.workspace = true
+rara-paths.workspace = true
+rara-skills.workspace = true
+tool-core.workspace = true
+snafu.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
