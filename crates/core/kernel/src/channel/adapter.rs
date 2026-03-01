@@ -24,7 +24,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use super::types::{AgentPhase, ChannelType};
-use crate::{error::KernelError, io::ingress::InboundSink};
+use crate::{error::KernelError, io::ingress::IngressPipeline};
 
 /// A pluggable adapter for a single communication channel.
 ///
@@ -32,7 +32,7 @@ use crate::{error::KernelError, io::ingress::InboundSink};
 ///
 /// 1. **start** — The adapter begins listening for inbound messages (long
 ///    polling, WebSocket, etc.) and pushes them to the kernel via the
-///    [`InboundSink`] (I/O Bus model).
+///    [`IngressPipeline`] (I/O Bus model).
 /// 2. **stop** — Graceful shutdown.
 ///
 /// Outbound delivery is handled by [`EgressAdapter`](crate::io::egress::EgressAdapter),
@@ -48,9 +48,9 @@ pub trait ChannelAdapter: Send + Sync {
     /// Which channel type this adapter serves.
     fn channel_type(&self) -> ChannelType;
 
-    /// Start the adapter with an [`InboundSink`] for dispatching inbound
+    /// Start the adapter with an [`IngressPipeline`] for dispatching inbound
     /// messages into the I/O Bus pipeline.
-    async fn start(&self, sink: Arc<dyn InboundSink>) -> Result<(), KernelError>;
+    async fn start(&self, sink: Arc<IngressPipeline>) -> Result<(), KernelError>;
 
     /// Gracefully stop the adapter.
     async fn stop(&self) -> Result<(), KernelError>;

@@ -25,7 +25,7 @@ use rara_kernel::{
     channel::types::{ChannelType, MessageContent},
     io::{
         egress::{Endpoint, EndpointAddress},
-        ingress::{InboundSink as _, RawPlatformMessage},
+        ingress::RawPlatformMessage,
         stream::StreamEvent,
         types::{InteractionType, ReplyContext as IoReplyContext},
     },

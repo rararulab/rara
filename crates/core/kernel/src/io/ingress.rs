@@ -23,7 +23,7 @@
 //!    [`SessionId`](crate::process::SessionId) for this user + channel context.
 //! 3. **Bus publish** — build an [`InboundMessage`] and publish it to the bus.
 //!
-//! Channel adapters only need to implement [`InboundSink::ingest`] — all
+//! Channel adapters only need to call [`IngressPipeline::ingest`] — all
 //! coordination lives here.
 
 use std::{collections::HashMap, sync::Arc};
@@ -46,9 +46,9 @@ use crate::{
 
 /// Raw message from a channel adapter before identity/session resolution.
 ///
-/// Adapters construct this from platform-specific events and hand it to the
-/// [`InboundSink`]. The ingress pipeline then resolves identity and session
-/// before publishing to the bus.
+/// Adapters construct this from platform-specific events and hand it to
+/// [`IngressPipeline::ingest`]. The ingress pipeline then resolves identity
+/// and session before publishing to the bus.
 #[derive(Debug)]
 pub struct RawPlatformMessage {
     /// Which channel this message arrived from.
@@ -65,21 +65,6 @@ pub struct RawPlatformMessage {
     pub reply_context:       Option<ReplyContext>,
     /// Arbitrary adapter-specific metadata.
     pub metadata:            HashMap<String, Value>,
-}
-
-// ---------------------------------------------------------------------------
-// InboundSink
-// ---------------------------------------------------------------------------
-
-/// The adapter's single interface into the kernel.
-///
-/// Channel adapters call [`ingest`](Self::ingest) with a
-/// [`RawPlatformMessage`]; the implementation handles identity resolution,
-/// session resolution, and bus publishing.
-#[async_trait]
-pub trait InboundSink: Send + Sync + 'static {
-    /// Ingest a raw platform message into the kernel pipeline.
-    async fn ingest(&self, raw: RawPlatformMessage) -> Result<(), IngestError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -126,7 +111,9 @@ pub trait SessionResolver: Send + Sync + 'static {
 
 /// Orchestrates identity resolution, session resolution, and bus publishing.
 ///
-/// This is the standard [`InboundSink`] implementation. It composes an
+/// Channel adapters call [`ingest`](Self::ingest) with a
+/// [`RawPlatformMessage`]; the pipeline handles identity resolution,
+/// session resolution, and bus publishing. It composes an
 /// [`IdentityResolver`], a [`SessionResolver`], and an [`InboundBus`]
 /// publisher.
 pub struct IngressPipeline {
@@ -148,11 +135,9 @@ impl IngressPipeline {
             publisher,
         }
     }
-}
 
-#[async_trait]
-impl InboundSink for IngressPipeline {
-    async fn ingest(&self, raw: RawPlatformMessage) -> Result<(), IngestError> {
+    /// Ingest a raw platform message into the kernel pipeline.
+    pub async fn ingest(&self, raw: RawPlatformMessage) -> Result<(), IngestError> {
         // 1. Resolve identity
         let user_id = self
             .identity_resolver

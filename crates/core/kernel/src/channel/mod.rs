@@ -28,7 +28,7 @@
 //!      │               │              │
 //!      ▼               ▼              ▼
 //!  ┌──────────────────────────────────────┐
-//!  │         InboundSink (I/O Bus)       │  ingest()
+//!  │       IngressPipeline (I/O Bus)      │  ingest()
 //!  │   (identity, session, bus)          │
 //!  └────────────────┬─────────────────────┘
 //!                   │

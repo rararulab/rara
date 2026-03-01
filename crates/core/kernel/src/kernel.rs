@@ -926,7 +926,7 @@ pub struct Kernel {
     outbound_bus:      Arc<dyn OutboundBus>,
     /// Ephemeral stream hub for real-time token deltas.
     stream_hub:        Arc<StreamHub>,
-    /// Ingress pipeline (implements InboundSink for adapters).
+    /// Ingress pipeline for adapters to push inbound messages.
     ingress_pipeline:  Arc<IngressPipeline>,
     /// Per-user endpoint registry (tracks connected channels).
     endpoint_registry: Arc<EndpointRegistry>,

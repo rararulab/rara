@@ -22,7 +22,7 @@
 //! [`tokio::sync::broadcast`] channels for fan-out to multiple WebSocket and
 //! SSE connections.
 //!
-//! Inbound messages are handed to the [`InboundSink`] in a fire-and-forget
+//! Inbound messages are handed to the [`IngressPipeline`] in a fire-and-forget
 //! fashion. Outbound delivery is handled separately via [`EgressAdapter`].
 //!
 //! # Endpoints
@@ -61,7 +61,7 @@ use rara_kernel::{
             EgressAdapter, EgressError, Endpoint, EndpointAddress, EndpointRegistry,
             PlatformOutbound,
         },
-        ingress::{InboundSink, RawPlatformMessage},
+        ingress::{IngressPipeline, RawPlatformMessage},
         types::{InteractionType, ReplyContext as IoReplyContext},
     },
     process::principal::UserId,
@@ -152,8 +152,8 @@ pub struct SendMessageResponse {
 pub struct WebAdapter {
     /// Active sessions: session_key -> broadcast sender for outbound events.
     sessions:          Arc<DashMap<String, broadcast::Sender<String>>>,
-    /// InboundSink handle (set during `start`).
-    sink:              Arc<RwLock<Option<Arc<dyn InboundSink>>>>,
+    /// IngressPipeline handle (set during `start`).
+    sink:              Arc<RwLock<Option<Arc<IngressPipeline>>>>,
     /// StreamHub for subscribing to real-time token deltas.
     stream_hub:        Arc<RwLock<Option<Arc<rara_kernel::io::stream::StreamHub>>>>,
     /// EndpointRegistry for tracking connected users (set during startup).
@@ -254,7 +254,7 @@ impl WebAdapter {
 #[derive(Clone)]
 struct WebAdapterState {
     sessions:          Arc<DashMap<String, broadcast::Sender<String>>>,
-    sink:              Arc<RwLock<Option<Arc<dyn InboundSink>>>>,
+    sink:              Arc<RwLock<Option<Arc<IngressPipeline>>>>,
     stream_hub:        Arc<RwLock<Option<Arc<rara_kernel::io::stream::StreamHub>>>>,
     endpoint_registry: Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
     shutdown_rx:       watch::Receiver<bool>,
@@ -668,7 +668,7 @@ async fn send_message_handler(
 impl ChannelAdapter for WebAdapter {
     fn channel_type(&self) -> ChannelType { ChannelType::Web }
 
-    async fn start(&self, sink: Arc<dyn InboundSink>) -> Result<(), KernelError> {
+    async fn start(&self, sink: Arc<IngressPipeline>) -> Result<(), KernelError> {
         info!("WebAdapter started — sink registered");
         let mut guard = self.sink.write().await;
         *guard = Some(sink);
@@ -738,9 +738,21 @@ impl EgressAdapter for WebAdapter {
 
 #[cfg(test)]
 mod tests {
-    use rara_kernel::io::types::IngestError;
+    use rara_kernel::{
+        defaults::noop::{NoopIdentityResolver, NoopSessionResolver},
+        io::{bus::InboundBus, ingress::IdentityResolver, memory_bus::InMemoryInboundBus},
+    };
 
     use super::*;
+
+    /// Create a test `IngressPipeline` with noop resolvers and in-memory bus.
+    fn test_pipeline() -> Arc<IngressPipeline> {
+        Arc::new(IngressPipeline::new(
+            Arc::new(NoopIdentityResolver) as Arc<dyn IdentityResolver>,
+            Arc::new(NoopSessionResolver) as Arc<dyn rara_kernel::io::ingress::SessionResolver>,
+            Arc::new(InMemoryInboundBus::new(100)) as Arc<dyn InboundBus>,
+        ))
+    }
 
     #[test]
     fn build_raw_platform_message_fields() {
@@ -847,29 +859,17 @@ mod tests {
 
     #[tokio::test]
     async fn adapter_start_sets_sink() {
-        struct MockSink;
-        #[async_trait]
-        impl InboundSink for MockSink {
-            async fn ingest(&self, _msg: RawPlatformMessage) -> Result<(), IngestError> { Ok(()) }
-        }
-
         let adapter = WebAdapter::new();
         assert!(adapter.sink.read().await.is_none());
 
-        adapter.start(Arc::new(MockSink)).await.unwrap();
+        adapter.start(test_pipeline()).await.unwrap();
         assert!(adapter.sink.read().await.is_some());
     }
 
     #[tokio::test]
     async fn adapter_stop_clears_state() {
-        struct MockSink;
-        #[async_trait]
-        impl InboundSink for MockSink {
-            async fn ingest(&self, _msg: RawPlatformMessage) -> Result<(), IngestError> { Ok(()) }
-        }
-
         let adapter = WebAdapter::new();
-        adapter.start(Arc::new(MockSink)).await.unwrap();
+        adapter.start(test_pipeline()).await.unwrap();
 
         // Create a session.
         WebAdapter::get_or_create_session(&adapter.sessions, "s1");
