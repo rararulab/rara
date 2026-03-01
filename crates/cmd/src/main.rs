@@ -18,6 +18,7 @@ use clap::{Args, Parser, Subcommand};
 use snafu::{ResultExt, Whatever, whatever};
 
 mod build_info;
+mod top;
 
 use rara_app::{AppConfig, StartOptions};
 use rara_channels::terminal::{CliEvent, TerminalAdapter};
@@ -48,6 +49,7 @@ struct Cli {
 enum Commands {
     Server(ServerArgs),
     Chat(ChatArgs),
+    Top(top::TopCmd),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -370,5 +372,6 @@ async fn main() -> Result<(), Whatever> {
     match cli.commands {
         Commands::Server(_) => ServerArgs::run().await,
         Commands::Chat(args) => args.run().await,
+        Commands::Top(args) => args.run().await,
     }
 }
