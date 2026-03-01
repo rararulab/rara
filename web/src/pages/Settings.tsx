@@ -719,14 +719,14 @@ export default function Settings() {
                       <SelectValue placeholder="Select a provider" />
                     </SelectTrigger>
                     <SelectContent>
-                      {PROVIDER_DEFS
-                        .filter((p) => draft[p.enabledKey] === "true")
-                        .map((p) => (
-                          <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                        ))}
-                      {PROVIDER_DEFS.filter((p) => draft[p.enabledKey] === "true").length === 0 && (
-                        <SelectItem value="" disabled>No providers enabled</SelectItem>
-                      )}
+                      {PROVIDER_DEFS.map((p) => {
+                        const isEnabled = draft[p.enabledKey] === "true";
+                        return (
+                          <SelectItem key={p.id} value={p.id} disabled={!isEnabled}>
+                            {p.name}{!isEnabled ? " (disabled)" : ""}
+                          </SelectItem>
+                        );
+                      })}
                     </SelectContent>
                   </Select>
                 </div>
