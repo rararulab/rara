@@ -19,8 +19,10 @@
 //!
 //! - [`OpenAiProvider`] — OpenAI-compatible provider (also works with
 //!   OpenRouter)
+//! - [`ProviderRegistry`] — multi-provider registry with per-agent overrides
 
 mod openai;
+pub mod registry;
 
 use std::sync::Arc;
 
@@ -30,6 +32,7 @@ use async_openai::types::chat::{
 use async_trait::async_trait;
 
 pub use self::openai::{OPENROUTER_API_BASE, OPENROUTER_API_KEY_ENV, OpenAiProvider};
+pub use self::registry::{AgentLlmConfig, ProviderRegistry, ProviderRegistryBuilder};
 use crate::error::Result;
 
 pub type LlmProviderRef = Arc<dyn LlmProvider>;
@@ -53,27 +56,26 @@ pub trait LlmProvider: Send + Sync {
     ) -> Result<ChatCompletionResponseStream>;
 }
 
-// -- Provider loader ---------------------------------------------------------
+// -- Provider loader (legacy, used by AgentRunner) ----------------------------
 
 /// Factory trait for acquiring an [`LlmProvider`].
 ///
 /// Each call to [`acquire_provider`](LlmProviderLoader::acquire_provider)
 /// should return a provider configured with the **current** credentials.
-/// Implementations must NOT cache the provider permanently — API keys can
-/// change at runtime (e.g. via the settings UI).
+///
+/// **Note:** The kernel's new code path uses [`ProviderRegistry`] instead of
+/// `LlmProviderLoader`. This trait is retained for backward compatibility
+/// with [`AgentRunner`](crate::runner::AgentRunner).
 #[async_trait]
 pub trait LlmProviderLoader: Send + Sync {
     async fn acquire_provider(&self) -> Result<Arc<dyn LlmProvider>>;
 }
 
-/// Convenience alias used across the codebase.
+/// Convenience alias for `Arc<dyn LlmProviderLoader>`.
 pub type LlmProviderLoaderRef = Arc<dyn LlmProviderLoader>;
 
 /// [`LlmProviderLoader`] that connects to an Ollama instance via its
 /// OpenAI-compatible API endpoint.
-///
-/// Ollama does not require authentication, but `async_openai` requires a
-/// non-empty API key — we use the literal `"ollama"`.
 pub struct OllamaProviderLoader {
     base_url: String,
     provider: Arc<tokio::sync::OnceCell<Arc<dyn LlmProvider>>>,
@@ -81,9 +83,6 @@ pub struct OllamaProviderLoader {
 
 impl OllamaProviderLoader {
     /// Create a new loader pointing at the given Ollama base URL.
-    ///
-    /// The URL should include the `/v1` path suffix, e.g.
-    /// `"https://ollama.rara.local/v1"`.
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into(),
@@ -120,8 +119,7 @@ impl LlmProviderLoader for OllamaProviderLoader {
 }
 
 /// [`LlmProviderLoader`] that reads the API key from the `OPENROUTER_KEY`
-/// environment variable.  Since env vars don't change at runtime this loader
-/// caches the provider after the first successful initialisation.
+/// environment variable.
 #[derive(Clone, Default)]
 pub struct EnvLlmProviderLoader {
     provider: Arc<tokio::sync::OnceCell<Arc<dyn LlmProvider>>>,

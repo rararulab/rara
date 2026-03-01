@@ -29,7 +29,7 @@ static RARA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| {
         name: "rara".to_string(),
         role: Some(AgentRole::Chat),
         description: "Rara — personal AI assistant with personality and tools".to_string(),
-        model: "openai/gpt-4o-mini".to_string(),
+        model: None,
         system_prompt: RARA_SYSTEM_PROMPT.to_string(),
         soul_prompt: Some(RARA_SOUL_PROMPT.to_string()),
         provider_hint: None,
@@ -203,7 +203,7 @@ mod tests {
     #[test]
     fn test_rara_manifest_model() {
         let m = rara();
-        assert_eq!(m.model, "openai/gpt-4o-mini");
+        assert_eq!(m.model, None);
     }
 
     #[test]

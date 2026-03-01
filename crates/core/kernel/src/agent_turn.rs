@@ -79,13 +79,20 @@ pub(crate) async fn run_inline_agent_loop(
         .map_err(|e| format!("failed to get tool registry: {e}"))?;
 
     let max_iterations = manifest.max_iterations.unwrap_or(25);
-    let model = &manifest.model;
     // Build effective system prompt (prepend soul_prompt if present)
     let effective_prompt = match &manifest.soul_prompt {
         Some(soul) => format!("{soul}\n\n---\n\n{}", manifest.system_prompt),
         None => manifest.system_prompt.clone(),
     };
     let provider_hint = manifest.provider_hint.as_deref();
+
+    // Resolve provider + model via the ProviderRegistry syscall.
+    // This uses the resolution priority chain:
+    //   agent_overrides > manifest > global default
+    let (provider, model) = handle
+        .resolve_provider()
+        .await
+        .map_err(|e| format!("failed to resolve LLM provider: {e}"))?;
 
     // Build initial messages: system + optional history + user
     let mut messages: Vec<ChatCompletionRequestMessage> = {
@@ -109,10 +116,10 @@ pub(crate) async fn run_inline_agent_loop(
     let request_tools = if tools.is_empty() {
         None
     } else {
-        let capabilities = ModelCapabilities::detect(provider_hint, model);
+        let capabilities = ModelCapabilities::detect(provider_hint, &model);
         if !capabilities.supports_tools {
             warn!(
-                model_name = model,
+                model_name = %model,
                 provider_hint = ?provider_hint,
                 reason = capabilities.tools_disabled_reason.unwrap_or("unknown"),
                 "disabling tool calling for model without tool support"
@@ -140,13 +147,7 @@ pub(crate) async fn run_inline_agent_loop(
             "calling LLM (inline streaming)"
         );
 
-        // Acquire provider via syscall
-        let provider = handle
-            .acquire_provider()
-            .await
-            .map_err(|e| format!("failed to acquire LLM provider: {e}"))?;
-
-        // Build streaming request
+        // Build streaming request (provider already resolved above)
         let mut request_builder = CreateChatCompletionRequestArgs::default();
         request_builder
             .model(model.as_str())
@@ -411,36 +412,41 @@ mod tests {
             AgentId, AgentManifest, SessionId,
             principal::Principal,
         },
-        provider::{LlmProvider, LlmProviderLoader, LlmProviderLoaderRef},
+        provider::{LlmProvider, ProviderRegistryBuilder},
         testing::TestKernelBuilder,
     };
 
     fn test_manifest() -> AgentManifest {
         AgentManifest {
-            name:                "test-agent".to_string(),
-        role:           None,
-            description:         "Test agent".to_string(),
-            model:               "test-model".to_string(),
-            system_prompt:       "You are a test agent.".to_string(),
-            soul_prompt:    None,
-            provider_hint:       None,
-            max_iterations:      Some(5),
-            tools:               vec![],
-            max_children:        None,
-            max_context_tokens:  None,
-            priority:            crate::process::Priority::default(),
-            metadata:            serde_json::Value::Null,
-            sandbox:             None,
+            name:               "test-agent".to_string(),
+            role:               None,
+            description:        "Test agent".to_string(),
+            model:              Some("test-model".to_string()),
+            system_prompt:      "You are a test agent.".to_string(),
+            soul_prompt:        None,
+            provider_hint:      None,
+            max_iterations:     Some(5),
+            tools:              vec![],
+            max_children:       None,
+            max_context_tokens: None,
+            priority:           crate::process::Priority::default(),
+            metadata:           serde_json::Value::Null,
+            sandbox:            None,
         }
     }
 
     /// Set up a test kernel with the event loop running, spawn a process,
     /// and return the kernel + agent_id + cancel token.
     async fn setup_test_kernel_with_process(
-        llm_provider: LlmProviderLoaderRef,
+        provider: Arc<dyn LlmProvider>,
     ) -> (Arc<Kernel>, AgentId, CancellationToken) {
+        let registry = Arc::new(
+            ProviderRegistryBuilder::new("test", "test-model")
+                .provider("test", provider)
+                .build(),
+        );
         let kernel = TestKernelBuilder::new()
-            .llm_provider(llm_provider)
+            .provider_registry(registry)
             .build();
         let cancel = CancellationToken::new();
         let kernel = kernel.start(cancel.clone());
@@ -514,27 +520,12 @@ mod tests {
         }
     }
 
-    #[derive(Clone)]
-    struct StubProviderLoader {
-        provider: Arc<dyn LlmProvider>,
-    }
-
-    #[async_trait]
-    impl LlmProviderLoader for StubProviderLoader {
-        async fn acquire_provider(&self) -> crate::error::Result<Arc<dyn LlmProvider>> {
-            Ok(Arc::clone(&self.provider))
-        }
-    }
-
     #[tokio::test]
     async fn test_run_inline_agent_loop_basic() {
         let provider = Arc::new(StubStreamingProvider::default());
-        let llm_provider = Arc::new(StubProviderLoader {
-            provider: provider.clone() as Arc<dyn LlmProvider>,
-        }) as LlmProviderLoaderRef;
 
         let (kernel, _agent_id, cancel) =
-            setup_test_kernel_with_process(llm_provider).await;
+            setup_test_kernel_with_process(provider.clone() as Arc<dyn LlmProvider>).await;
 
         // Create a handle that talks to this kernel's event queue.
         let handle = ProcessHandle::new(
@@ -566,12 +557,9 @@ mod tests {
     #[tokio::test]
     async fn test_run_inline_agent_loop_with_history() {
         let provider = Arc::new(StubStreamingProvider::default());
-        let llm_provider = Arc::new(StubProviderLoader {
-            provider: provider.clone() as Arc<dyn LlmProvider>,
-        }) as LlmProviderLoaderRef;
 
         let (kernel, _agent_id, cancel) =
-            setup_test_kernel_with_process(llm_provider).await;
+            setup_test_kernel_with_process(provider.clone() as Arc<dyn LlmProvider>).await;
 
         let handle = ProcessHandle::new(
             _agent_id,
@@ -636,13 +624,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_inline_agent_loop_cancellation() {
-        let provider = Arc::new(BlockingStreamingProvider);
-        let llm_provider = Arc::new(StubProviderLoader {
-            provider: provider as Arc<dyn LlmProvider>,
-        }) as LlmProviderLoaderRef;
+        let provider = Arc::new(BlockingStreamingProvider) as Arc<dyn LlmProvider>;
 
         let (kernel, _agent_id, cancel_kernel) =
-            setup_test_kernel_with_process(llm_provider).await;
+            setup_test_kernel_with_process(provider).await;
 
         let handle = Arc::new(ProcessHandle::new(
             _agent_id,

@@ -203,7 +203,12 @@ pub struct AgentManifest {
     /// Human-readable description.
     pub description:    String,
     /// LLM model identifier (e.g., "deepseek/deepseek-chat", "gpt-4").
-    pub model:          String,
+    ///
+    /// `None` means "use the provider registry default". The kernel's
+    /// `ProviderRegistry::resolve()` will fall through to the global
+    /// default model when this is `None`.
+    #[serde(default)]
+    pub model:          Option<String>,
     /// System prompt defining agent behavior.
     pub system_prompt:  String,
     /// Optional personality/mood/voice prompt (prepended to system_prompt when building LLM messages).
@@ -834,7 +839,7 @@ mod tests {
             name:           name.to_string(),
         role:           None,
             description:    format!("Test agent: {name}"),
-            model:          "test-model".to_string(),
+            model:          Some("test-model".to_string()),
             system_prompt:  "You are a test agent.".to_string(),
             soul_prompt:    None,
             provider_hint:  None,
@@ -1072,7 +1077,7 @@ mod tests {
         let deserialized: AgentManifest = serde_yaml::from_str(&yaml).unwrap();
 
         assert_eq!(deserialized.name, "roundtrip");
-        assert_eq!(deserialized.model, "test-model");
+        assert_eq!(deserialized.model.as_deref(), Some("test-model"));
         assert_eq!(deserialized.max_iterations, Some(10));
         assert_eq!(deserialized.tools, vec!["read_file"]);
     }
@@ -1087,10 +1092,23 @@ system_prompt: "Hello"
 "#;
         let m: AgentManifest = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(m.name, "minimal");
+        assert_eq!(m.model.as_deref(), Some("gpt-4"));
         assert!(m.tools.is_empty());
         assert!(m.max_iterations.is_none());
         assert!(m.provider_hint.is_none());
         assert!(m.max_children.is_none());
+    }
+
+    #[test]
+    fn test_agent_manifest_yaml_no_model() {
+        let yaml = r#"
+name: no-model
+description: "Agent without model"
+system_prompt: "Hello"
+"#;
+        let m: AgentManifest = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(m.name, "no-model");
+        assert!(m.model.is_none());
     }
 
     #[test]

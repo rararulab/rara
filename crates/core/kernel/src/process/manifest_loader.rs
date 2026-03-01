@@ -119,65 +119,65 @@ mod tests {
     fn test_manifest_loader_load_manifests() {
         let mut loader = ManifestLoader::new();
         let manifest = AgentManifest {
-            name: "test-agent".to_string(),
-        role:           None,
-            description: "test".to_string(),
-            model: "gpt-4".to_string(),
-            system_prompt: "You are a test agent.".to_string(),
-            soul_prompt:    None,
-            provider_hint: None,
-            max_iterations: Some(5),
-            tools: vec![],
-            max_children: None,
+            name:               "test-agent".to_string(),
+            role:               None,
+            description:        "test".to_string(),
+            model:              Some("gpt-4".to_string()),
+            system_prompt:      "You are a test agent.".to_string(),
+            soul_prompt:        None,
+            provider_hint:      None,
+            max_iterations:     Some(5),
+            tools:              vec![],
+            max_children:       None,
             max_context_tokens: None,
-            priority: Default::default(),
-            metadata: Default::default(),
-            sandbox: None,
+            priority:           Default::default(),
+            metadata:           Default::default(),
+            sandbox:            None,
         };
         loader.load_manifests(std::iter::once(manifest));
         assert_eq!(loader.list().len(), 1);
-        assert_eq!(loader.get("test-agent").unwrap().model, "gpt-4");
+        assert_eq!(loader.get("test-agent").unwrap().model, Some("gpt-4".to_string()));
     }
 
     #[test]
     fn test_manifest_loader_override() {
         let mut loader = ManifestLoader::new();
         let m1 = AgentManifest {
-            name: "agent".to_string(),
-        role:           None,
-            description: "v1".to_string(),
-            model: "gpt-3.5".to_string(),
-            system_prompt: "v1".to_string(),
-            soul_prompt:    None,
-            provider_hint: None,
-            max_iterations: Some(5),
-            tools: vec![],
-            max_children: None,
+            name:               "agent".to_string(),
+            role:               None,
+            description:        "v1".to_string(),
+            model:              Some("gpt-3.5".to_string()),
+            system_prompt:      "v1".to_string(),
+            soul_prompt:        None,
+            provider_hint:      None,
+            max_iterations:     Some(5),
+            tools:              vec![],
+            max_children:       None,
             max_context_tokens: None,
-            priority: Default::default(),
-            metadata: Default::default(),
-            sandbox: None,
+            priority:           Default::default(),
+            metadata:           Default::default(),
+            sandbox:            None,
         };
         let m2 = AgentManifest {
-            name: "agent".to_string(),
-        role:           None,
-            description: "v2".to_string(),
-            model: "gpt-4".to_string(),
-            system_prompt: "v2".to_string(),
-            soul_prompt:    None,
-            provider_hint: None,
-            max_iterations: Some(10),
-            tools: vec![],
-            max_children: None,
+            name:               "agent".to_string(),
+            role:               None,
+            description:        "v2".to_string(),
+            model:              Some("gpt-4".to_string()),
+            system_prompt:      "v2".to_string(),
+            soul_prompt:        None,
+            provider_hint:      None,
+            max_iterations:     Some(10),
+            tools:              vec![],
+            max_children:       None,
             max_context_tokens: None,
-            priority: Default::default(),
-            metadata: Default::default(),
-            sandbox: None,
+            priority:           Default::default(),
+            metadata:           Default::default(),
+            sandbox:            None,
         };
         loader.load_manifests(std::iter::once(m1));
         loader.load_manifests(std::iter::once(m2));
         assert_eq!(loader.list().len(), 1);
-        assert_eq!(loader.get("agent").unwrap().model, "gpt-4");
+        assert_eq!(loader.get("agent").unwrap().model, Some("gpt-4".to_string()));
     }
 
     #[test]
@@ -207,7 +207,7 @@ max_iterations: 5
         assert_eq!(count, 1);
 
         let custom = loader.get("custom-agent").unwrap();
-        assert_eq!(custom.model, "gpt-4");
+        assert_eq!(custom.model, Some("gpt-4".to_string()));
         assert_eq!(custom.max_iterations, Some(5));
 
         let _ = fs::remove_dir_all(&dir);

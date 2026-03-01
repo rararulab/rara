@@ -33,7 +33,10 @@ use async_trait::async_trait;
 use futures::StreamExt;
 
 use rara_kernel::{
-    provider::{LlmProviderLoader, LlmProviderLoaderRef, OllamaProviderLoader},
+    provider::{
+        LlmProviderLoader, LlmProviderLoaderRef, OllamaProviderLoader,
+        ProviderRegistryBuilder,
+    },
     runner::{AgentRunner, RunnerEvent, UserContent},
     testing::TestKernelBuilder,
     tool::{AgentTool, ToolRegistry},
@@ -364,19 +367,14 @@ async fn test_kernel_builder_creates_kernel() {
         }
     }
 
-    struct StubLoader;
-
-    #[async_trait]
-    impl LlmProviderLoader for StubLoader {
-        async fn acquire_provider(
-            &self,
-        ) -> rara_kernel::Result<Arc<dyn rara_kernel::provider::LlmProvider>> {
-            Ok(Arc::new(StubProvider))
-        }
-    }
+    let registry = Arc::new(
+        ProviderRegistryBuilder::new("test", "test-model")
+            .provider("test", Arc::new(StubProvider) as Arc<dyn rara_kernel::provider::LlmProvider>)
+            .build(),
+    );
 
     let kernel = TestKernelBuilder::new()
-        .llm_provider(Arc::new(StubLoader) as LlmProviderLoaderRef)
+        .provider_registry(registry)
         .tool(Arc::new(EchoTool))
         .max_concurrency(4)
         .max_iterations(10)

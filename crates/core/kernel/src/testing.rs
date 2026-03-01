@@ -20,10 +20,15 @@
 //!
 //! ```rust,ignore
 //! use rara_kernel::testing::TestKernelBuilder;
-//! use rara_kernel::provider::OllamaProviderLoader;
+//! use rara_kernel::provider::ProviderRegistryBuilder;
 //!
+//! let registry = Arc::new(
+//!     ProviderRegistryBuilder::new("openrouter", "openai/gpt-4o-mini")
+//!         .provider("openrouter", Arc::new(my_provider))
+//!         .build(),
+//! );
 //! let kernel = TestKernelBuilder::new()
-//!     .llm_provider(Arc::new(OllamaProviderLoader::new("http://localhost:11434/v1")))
+//!     .provider_registry(registry)
 //!     .max_concurrency(4)
 //!     .build();
 //! ```
@@ -44,7 +49,7 @@ use crate::{
     io::{pipe::PipeRegistry, stream::StreamHub},
     kernel::{Kernel, KernelConfig, KernelInner},
     process::{AgentManifest, ProcessTable, agent_registry::AgentRegistry},
-    provider::LlmProviderLoaderRef,
+    provider::ProviderRegistry,
     session::SessionRepository,
     tool::{AgentToolRef, ToolRegistry},
 };
@@ -53,12 +58,12 @@ use crate::{
 ///
 /// All Noop implementations are used by default. The caller only needs to
 /// provide the components relevant to their test (typically just the LLM
-/// provider).
+/// provider registry).
 pub struct TestKernelBuilder {
-    config:          KernelConfig,
-    llm_provider:    Option<LlmProviderLoaderRef>,
-    tool_registry:   ToolRegistry,
-    agent_registry:  AgentRegistry,
+    config:            KernelConfig,
+    provider_registry: Option<Arc<ProviderRegistry>>,
+    tool_registry:     ToolRegistry,
+    agent_registry:    AgentRegistry,
 }
 
 impl TestKernelBuilder {
@@ -76,15 +81,15 @@ impl TestKernelBuilder {
                 memory_quota_per_agent: 1000,
                 ..Default::default()
             },
-            llm_provider:    None,
-            tool_registry:   ToolRegistry::new(),
+            provider_registry: None,
+            tool_registry:     ToolRegistry::new(),
             agent_registry,
         }
     }
 
-    /// Set the LLM provider loader.
-    pub fn llm_provider(mut self, provider: LlmProviderLoaderRef) -> Self {
-        self.llm_provider = Some(provider);
+    /// Set the provider registry.
+    pub fn provider_registry(mut self, registry: Arc<ProviderRegistry>) -> Self {
+        self.provider_registry = Some(registry);
         self
     }
 
@@ -116,19 +121,19 @@ impl TestKernelBuilder {
     ///
     /// # Panics
     ///
-    /// Panics if no LLM provider has been set. Use [`llm_provider`](Self::llm_provider)
-    /// to provide one.
+    /// Panics if no provider registry has been set. Use
+    /// [`provider_registry`](Self::provider_registry) to provide one.
     pub fn build(self) -> Kernel {
-        let llm_provider = self
-            .llm_provider
-            .expect("TestKernelBuilder requires an LLM provider — call .llm_provider() first");
+        let provider_registry = self.provider_registry.expect(
+            "TestKernelBuilder requires a ProviderRegistry — call .provider_registry() first",
+        );
 
         let inner = Arc::new(KernelInner {
             process_table:          Arc::new(ProcessTable::new()),
             global_semaphore:       Arc::new(Semaphore::new(self.config.max_concurrency)),
             default_child_limit:    self.config.default_child_limit,
             default_max_iterations: self.config.default_max_iterations,
-            llm_provider,
+            provider_registry,
             tool_registry:          Arc::new(self.tool_registry),
             memory:                 Arc::new(NoopMemory),
             event_bus:              Arc::new(NoopEventBus),
@@ -166,36 +171,36 @@ impl Default for TestKernelBuilder {
 pub fn test_manifests() -> Vec<AgentManifest> {
     vec![
         AgentManifest {
-            name: "rara".to_string(),
-        role:           None,
-            description: "Test chat agent".to_string(),
-            model: "openai/gpt-4o-mini".to_string(),
-            system_prompt: "You are a helpful assistant.".to_string(),
-            soul_prompt:    None,
-            provider_hint: None,
-            max_iterations: Some(25),
-            tools: vec![],
-            max_children: None,
+            name:               "rara".to_string(),
+            role:               None,
+            description:        "Test chat agent".to_string(),
+            model:              None,
+            system_prompt:      "You are a helpful assistant.".to_string(),
+            soul_prompt:        None,
+            provider_hint:      None,
+            max_iterations:     Some(25),
+            tools:              vec![],
+            max_children:       None,
             max_context_tokens: None,
-            priority: Default::default(),
-            metadata: Default::default(),
-            sandbox: None,
+            priority:           Default::default(),
+            metadata:           Default::default(),
+            sandbox:            None,
         },
         AgentManifest {
-            name: "scout".to_string(),
-        role:           None,
-            description: "Test scout agent".to_string(),
-            model: "deepseek/deepseek-chat".to_string(),
-            system_prompt: "You are a scout agent.".to_string(),
-            soul_prompt:    None,
-            provider_hint: None,
-            max_iterations: Some(15),
-            tools: vec!["read_file".to_string(), "grep".to_string()],
-            max_children: None,
+            name:               "scout".to_string(),
+            role:               None,
+            description:        "Test scout agent".to_string(),
+            model:              Some("deepseek/deepseek-chat".to_string()),
+            system_prompt:      "You are a scout agent.".to_string(),
+            soul_prompt:        None,
+            provider_hint:      None,
+            max_iterations:     Some(15),
+            tools:              vec!["read_file".to_string(), "grep".to_string()],
+            max_children:       None,
             max_context_tokens: None,
-            priority: Default::default(),
-            metadata: Default::default(),
-            sandbox: None,
+            priority:           Default::default(),
+            metadata:           Default::default(),
+            sandbox:            None,
         },
     ]
 }

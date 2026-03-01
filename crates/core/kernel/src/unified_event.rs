@@ -165,9 +165,14 @@ pub enum Syscall {
         reply_tx: oneshot::Sender<Arc<ToolRegistry>>,
     },
 
-    /// Acquire an LLM provider instance.
-    AcquireProvider {
-        reply_tx: oneshot::Sender<crate::error::Result<Arc<dyn LlmProvider>>>,
+    /// Resolve an LLM provider + model for a specific agent.
+    ///
+    /// The kernel event loop uses `ProviderRegistry::resolve()` with the
+    /// agent's name, manifest provider_hint, and manifest model to produce
+    /// the appropriate `(provider, model_name)` pair.
+    ResolveProvider {
+        agent_id: AgentId,
+        reply_tx: oneshot::Sender<crate::error::Result<(Arc<dyn LlmProvider>, String)>>,
     },
 
     // -- Event publishing --
@@ -240,7 +245,9 @@ impl std::fmt::Debug for Syscall {
                 write!(f, "Syscall::GetManifest(agent={})", agent_id)
             }
             Self::GetToolRegistry { .. } => write!(f, "Syscall::GetToolRegistry"),
-            Self::AcquireProvider { .. } => write!(f, "Syscall::AcquireProvider"),
+            Self::ResolveProvider { agent_id, .. } => {
+                write!(f, "Syscall::ResolveProvider(agent={})", agent_id)
+            }
             Self::PublishEvent { agent_id, event_type, .. } => {
                 write!(
                     f,
