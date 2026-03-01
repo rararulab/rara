@@ -47,6 +47,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Bot,
   BookOpen,
   ExternalLink,
@@ -78,9 +85,19 @@ type ToastState = { kind: "success" | "error"; message: string } | null;
 
 // Well-known setting keys (must match backend keys module)
 const KEYS = {
-  LLM_PROVIDER: "llm.provider",
-  LLM_OPENROUTER_API_KEY: "llm.openrouter.api_key",
-  LLM_OLLAMA_BASE_URL: "llm.ollama.base_url",
+  // Global defaults
+  LLM_DEFAULT_PROVIDER: "llm.default_provider",
+  LLM_DEFAULT_MODEL: "llm.default_model",
+  // Provider: OpenRouter
+  LLM_PROVIDERS_OPENROUTER_ENABLED: "llm.providers.openrouter.enabled",
+  LLM_PROVIDERS_OPENROUTER_API_KEY: "llm.providers.openrouter.api_key",
+  LLM_PROVIDERS_OPENROUTER_BASE_URL: "llm.providers.openrouter.base_url",
+  // Provider: Ollama
+  LLM_PROVIDERS_OLLAMA_ENABLED: "llm.providers.ollama.enabled",
+  LLM_PROVIDERS_OLLAMA_BASE_URL: "llm.providers.ollama.base_url",
+  // Provider: Codex
+  LLM_PROVIDERS_CODEX_ENABLED: "llm.providers.codex.enabled",
+  // Model assignments
   LLM_MODELS_DEFAULT: "llm.models.default",
   LLM_MODELS_CHAT: "llm.models.chat",
   LLM_MODELS_JOB: "llm.models.job",
@@ -110,12 +127,42 @@ const THEME_OPTIONS: Array<{ key: Theme; label: string; icon: ReactNode; descrip
 
 // Sensitive keys that should be masked by default
 const SENSITIVE_KEYS: Set<string> = new Set([
-  KEYS.LLM_OPENROUTER_API_KEY,
+  KEYS.LLM_PROVIDERS_OPENROUTER_API_KEY,
   KEYS.TELEGRAM_BOT_TOKEN,
   KEYS.GMAIL_APP_PASSWORD,
   KEYS.COMPOSIO_API_KEY,
   KEYS.MEMORY_MEMOS_TOKEN,
 ]);
+
+// Provider definitions for the multi-provider architecture
+const PROVIDER_DEFS = [
+  {
+    id: "openrouter",
+    name: "OpenRouter",
+    description: "Unified API gateway for 100+ models",
+    enabledKey: KEYS.LLM_PROVIDERS_OPENROUTER_ENABLED,
+    fields: [
+      { key: KEYS.LLM_PROVIDERS_OPENROUTER_API_KEY, label: "API Key", placeholder: "sk-or-v1-...", sensitive: true },
+      { key: KEYS.LLM_PROVIDERS_OPENROUTER_BASE_URL, label: "Base URL", placeholder: "https://openrouter.ai/api/v1" },
+    ],
+  },
+  {
+    id: "ollama",
+    name: "Ollama",
+    description: "Local model inference server",
+    enabledKey: KEYS.LLM_PROVIDERS_OLLAMA_ENABLED,
+    fields: [
+      { key: KEYS.LLM_PROVIDERS_OLLAMA_BASE_URL, label: "Base URL", placeholder: "http://localhost:11434" },
+    ],
+  },
+  {
+    id: "codex",
+    name: "Codex",
+    description: "Uses OAuth authentication. Configure via CLI.",
+    enabledKey: KEYS.LLM_PROVIDERS_CODEX_ENABLED,
+    fields: [],
+  },
+] as const;
 
 // A single KV field with optional show/hide toggle for sensitive values
 function KvField({
@@ -643,22 +690,147 @@ export default function Settings() {
         {/* ── Providers ── */}
         {activeCategory === "providers" && (
           <>
-            <KvGroup
-              title="LLM Provider"
-              description="Primary provider and API credentials"
-              icon={<Sparkles className="h-4 w-4" />}
-              fields={[
-                { key: KEYS.LLM_PROVIDER, label: "Provider", placeholder: "openrouter", description: "openrouter, ollama, or codex" },
-                { key: KEYS.LLM_OPENROUTER_API_KEY, label: "OpenRouter API Key", placeholder: "sk-or-v1-..." },
-                { key: KEYS.LLM_OLLAMA_BASE_URL, label: "Ollama Base URL", placeholder: "http://localhost:11434" },
-              ]}
-              values={draft}
-              original={original}
-              onFieldChange={handleFieldChange}
-              onSave={() => handleGroupSave([KEYS.LLM_PROVIDER, KEYS.LLM_OPENROUTER_API_KEY, KEYS.LLM_OLLAMA_BASE_URL], "llm-provider")}
-              saving={saveMutation.isPending}
-              toast={groupToasts["llm-provider"] ?? null}
-            />
+            {/* Global Defaults */}
+            <Card className="app-surface border-border/60">
+              <CardHeader className="pb-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
+                    <Sparkles className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <CardTitle className="text-base">Global Defaults</CardTitle>
+                    <CardDescription>Default provider and model used across the platform</CardDescription>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="default-provider" className="text-sm font-medium">Default Provider</Label>
+                    <span className="font-mono text-[10px] text-muted-foreground">{KEYS.LLM_DEFAULT_PROVIDER}</span>
+                  </div>
+                  <Select
+                    value={draft[KEYS.LLM_DEFAULT_PROVIDER] ?? ""}
+                    onValueChange={(v) => handleFieldChange(KEYS.LLM_DEFAULT_PROVIDER, v)}
+                  >
+                    <SelectTrigger id="default-provider" className="h-9 font-mono text-sm">
+                      <SelectValue placeholder="Select a provider" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {PROVIDER_DEFS
+                        .filter((p) => draft[p.enabledKey] === "true")
+                        .map((p) => (
+                          <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                        ))}
+                      {PROVIDER_DEFS.filter((p) => draft[p.enabledKey] === "true").length === 0 && (
+                        <SelectItem value="" disabled>No providers enabled</SelectItem>
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <KvField
+                  settingKey={KEYS.LLM_DEFAULT_MODEL}
+                  label="Default Model"
+                  value={draft[KEYS.LLM_DEFAULT_MODEL] ?? ""}
+                  placeholder="openai/gpt-4o-mini"
+                  onChange={(v) => handleFieldChange(KEYS.LLM_DEFAULT_MODEL, v)}
+                  description="Model identifier used when no specific model is configured"
+                />
+                <div className="flex items-center justify-between pt-2">
+                  <div>
+                    {groupToasts["global-defaults"] && (
+                      <p className={cn("text-sm", groupToasts["global-defaults"]!.kind === "success" ? "text-green-600" : "text-destructive")}>
+                        {groupToasts["global-defaults"]!.message}
+                      </p>
+                    )}
+                  </div>
+                  <Button
+                    onClick={() => handleGroupSave([KEYS.LLM_DEFAULT_PROVIDER, KEYS.LLM_DEFAULT_MODEL], "global-defaults")}
+                    disabled={
+                      ((draft[KEYS.LLM_DEFAULT_PROVIDER] ?? "") === (original[KEYS.LLM_DEFAULT_PROVIDER] ?? "") &&
+                       (draft[KEYS.LLM_DEFAULT_MODEL] ?? "") === (original[KEYS.LLM_DEFAULT_MODEL] ?? "")) ||
+                      saveMutation.isPending
+                    }
+                    size="sm"
+                  >
+                    <Save className="mr-1.5 h-3.5 w-3.5" />
+                    {saveMutation.isPending ? "Saving..." : "Save"}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Provider Cards */}
+            {PROVIDER_DEFS.map((provider) => {
+              const enabled = draft[provider.enabledKey] === "true";
+              const allKeys = [provider.enabledKey, ...provider.fields.map((f) => f.key)];
+              const groupId = `provider-${provider.id}`;
+              const hasChanges = allKeys.some((k) => (draft[k] ?? "") !== (original[k] ?? ""));
+
+              return (
+                <Card key={provider.id} className="app-surface border-border/60">
+                  <CardHeader className="pb-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
+                          <Sparkles className="h-4 w-4" />
+                        </div>
+                        <div>
+                          <CardTitle className="text-base">{provider.name}</CardTitle>
+                          <CardDescription>{provider.description}</CardDescription>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Label htmlFor={`${provider.id}-enabled`} className="text-sm text-muted-foreground">
+                          {enabled ? "Enabled" : "Disabled"}
+                        </Label>
+                        <Switch
+                          id={`${provider.id}-enabled`}
+                          checked={enabled}
+                          onCheckedChange={(checked) => handleFieldChange(provider.enabledKey, checked ? "true" : "false")}
+                        />
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {provider.fields.length > 0 && (
+                      <div className={cn("space-y-4", !enabled && "pointer-events-none opacity-50")}>
+                        {provider.fields.map((field) => (
+                          <KvField
+                            key={field.key}
+                            settingKey={field.key}
+                            label={field.label}
+                            value={draft[field.key] ?? ""}
+                            placeholder={field.placeholder}
+                            onChange={(v) => handleFieldChange(field.key, v)}
+                            sensitive={SENSITIVE_KEYS.has(field.key)}
+                          />
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between pt-2">
+                      <div>
+                        {groupToasts[groupId] && (
+                          <p className={cn("text-sm", groupToasts[groupId]!.kind === "success" ? "text-green-600" : "text-destructive")}>
+                            {groupToasts[groupId]!.message}
+                          </p>
+                        )}
+                      </div>
+                      <Button
+                        onClick={() => handleGroupSave(allKeys, groupId)}
+                        disabled={!hasChanges || saveMutation.isPending}
+                        size="sm"
+                      >
+                        <Save className="mr-1.5 h-3.5 w-3.5" />
+                        {saveMutation.isPending ? "Saving..." : "Save"}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+
+            {/* Model Assignments (unchanged) */}
             <KvGroup
               title="Model Assignments"
               description="Map model keys to specific model IDs. Unset keys fall back to default."
