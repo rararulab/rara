@@ -66,6 +66,7 @@ fn test_manifest(name: &str, system_prompt: &str) -> AgentManifest {
         description:    format!("E2E test agent: {name}"),
         model:          ollama_model(),
         system_prompt:  system_prompt.to_string(),
+        soul_prompt:    None,
         provider_hint:  None,
         max_iterations: Some(5),
         tools:          vec![],
