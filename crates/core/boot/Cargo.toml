@@ -17,6 +17,7 @@ k8s = ["rara-k8s"]
 
 [dependencies]
 anyhow.workspace = true
+argon2.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
 jiff.workspace = true
@@ -31,6 +32,7 @@ rara-mcp.workspace = true
 rara-paths.workspace = true
 rara-queue.workspace = true
 rara-skills.workspace = true
+rand.workspace = true
 reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

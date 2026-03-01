@@ -65,6 +65,8 @@ pub struct AppConfig {
     pub langfuse:               LangfuseConfig,
     /// General OTLP telemetry (Alloy/Tempo).
     pub telemetry:              TelemetryConfig,
+    /// JWT signing secret.  Falls back to random-per-run if not set.
+    pub jwt_secret:             Option<String>,
 }
 
 impl Default for AppConfig {
@@ -80,6 +82,7 @@ impl Default for AppConfig {
             memory: MemoryConfig::default(),
             langfuse: LangfuseConfig::default(),
             telemetry: TelemetryConfig::default(),
+            jwt_secret: None,
         }
     }
 }
@@ -243,6 +246,24 @@ impl AppConfig {
         let (domain_routes, openapi) = app_state.routes();
         let swagger_ui =
             utoipa_swagger_ui::SwaggerUi::new("/swagger-ui").url("/api/openapi.json", openapi);
+
+        // -- Auth service + routes -------------------------------------------
+        let jwt_secret = self.jwt_secret.clone().unwrap_or_else(|| {
+            use rand::Rng;
+            let secret: String = rand::rng()
+                .sample_iter(&rand::distr::Alphanumeric)
+                .take(32)
+                .map(char::from)
+                .collect();
+            warn!("JWT_SECRET not configured, using random secret (tokens will not survive restarts)");
+            secret
+        });
+        let jwt_config = rara_domain_user::jwt::JwtConfig::new(jwt_secret);
+        let auth_service =
+            rara_domain_user::service::AuthService::new(db_store.pool().clone(), jwt_config.clone());
+        let auth_routes = rara_domain_user::router::auth_routes(auth_service)
+            .layer(axum::Extension(jwt_config));
+
         // Create WebAdapter early so we can mount its router into the HTTP server.
         let web_adapter = Arc::new(rara_channels::web::WebAdapter::new());
         let web_router = web_adapter.router();
@@ -250,6 +271,7 @@ impl AppConfig {
             Box::new(move |router| {
                 health_routes(router)
                     .merge(domain_routes.clone())
+                    .merge(auth_routes.clone())
                     .merge(swagger_ui.clone())
                     .nest("/api/v1/kernel/chat", web_router.clone())
             });

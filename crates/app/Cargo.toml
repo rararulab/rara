@@ -24,7 +24,9 @@ rara-backend-admin = { workspace = true }
 rara-boot = { workspace = true }
 rara-channels = { workspace = true }
 rara-consul = { workspace = true }
+rand.workspace = true
 rara-domain-shared = { workspace = true }
+rara-domain-user = { workspace = true }
 rara-kernel = { workspace = true }
 rara-server = { workspace = true }
 rara-sessions = { workspace = true }

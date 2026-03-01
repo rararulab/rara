@@ -115,6 +115,7 @@ members = [
     "crates/common/yunara-store",
     "crates/rara-model",
     "crates/domain/shared",
+    "crates/domain/user",
     "crates/server",
     "crates/paths",
     "crates/jobspy-sys",
@@ -211,6 +212,9 @@ utoipa-axum = "0.2"
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 validator = "^0.20"
+argon2 = "0.5"
+jsonwebtoken = "9"
+rand = "0.9"
 
 # Testing
 git2 = "0.20"
@@ -238,6 +242,7 @@ rara-coding-task = { path = "crates/extensions/coding-task" }
 rara-composio = { path = "crates/integrations/composio" }
 rara-consul = { path = "crates/common/rara-consul" }
 rara-domain-shared = { path = "crates/domain/shared" }
+rara-domain-user = { path = "crates/domain/user" }
 rara-error = { path = "crates/common/error" }
 rara-git = { path = "crates/extensions/rara-git" }
 rara-k8s = { path = "crates/integrations/k8s" }

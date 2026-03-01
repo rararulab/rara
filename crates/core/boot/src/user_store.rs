@@ -15,7 +15,10 @@
 //! PostgreSQL-backed [`UserStore`] implementation and boot-time user
 //! initialization.
 
+use argon2::{Argon2, PasswordHasher, password_hash::{SaltString, rand_core::OsRng}};
 use async_trait::async_trait;
+use rand::Rng;
+use rand::distr::Alphanumeric;
 use rara_kernel::{
     error::{KernelError, Result},
     process::{
@@ -32,13 +35,14 @@ use tracing::info;
 
 #[derive(sqlx::FromRow)]
 struct UserRow {
-    id:          uuid::Uuid,
-    name:        String,
-    role:        i16,
-    permissions: serde_json::Value,
-    enabled:     bool,
-    created_at:  chrono::DateTime<chrono::Utc>,
-    updated_at:  chrono::DateTime<chrono::Utc>,
+    id:            uuid::Uuid,
+    name:          String,
+    role:          i16,
+    permissions:   serde_json::Value,
+    enabled:       bool,
+    password_hash: Option<String>,
+    created_at:    chrono::DateTime<chrono::Utc>,
+    updated_at:    chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -269,6 +273,9 @@ impl UserStore for PgUserStore {
 /// - `root` — `Role::Root` + `Permission::All`
 /// - `system` — `Role::Admin` + `Permission::All` (used by background workers
 ///   via `Principal::admin("system")`)
+///
+/// If the root user has no password set, generates a random password and prints
+/// it to stdout once.
 pub async fn ensure_default_users(
     pool: &PgPool,
 ) -> std::result::Result<(), crate::error::BootError> {
@@ -290,6 +297,9 @@ pub async fn ensure_default_users(
         info!("kernel: root user created");
     }
 
+    // 检查 root 用户是否已设置密码，如果没有则生成随机密码
+    ensure_root_password(pool).await?;
+
     if store
         .get_by_name(SYSTEM_USER_NAME)
         .await
@@ -306,5 +316,58 @@ pub async fn ensure_default_users(
         info!("kernel: system user created");
     }
 
+    Ok(())
+}
+
+/// 确保 root 用户有密码。如果没有，生成一个随机密码并打印。
+async fn ensure_root_password(
+    pool: &PgPool,
+) -> std::result::Result<(), crate::error::BootError> {
+    let hash: Option<String> = sqlx::query_scalar(
+        "SELECT password_hash FROM kernel_users WHERE name = 'root'",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| crate::error::BootError::UserStore {
+        message: e.to_string(),
+    })?
+    .flatten();
+
+    if hash.is_some() {
+        return Ok(());
+    }
+
+    // 生成 16 字符随机密码
+    let password: String = rand::rng()
+        .sample_iter(&Alphanumeric)
+        .take(16)
+        .map(char::from)
+        .collect();
+
+    // 使用 argon2 哈希密码
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::default();
+    let password_hash = argon2
+        .hash_password(password.as_bytes(), &salt)
+        .map_err(|e| crate::error::BootError::UserStore {
+            message: format!("password hash error: {e}"),
+        })?
+        .to_string();
+
+    sqlx::query("UPDATE kernel_users SET password_hash = $1 WHERE name = 'root'")
+        .bind(&password_hash)
+        .execute(pool)
+        .await
+        .map_err(|e| crate::error::BootError::UserStore {
+            message: e.to_string(),
+        })?;
+
+    println!("\u{256c}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2557}");
+    println!("\u{2551}  Root credentials (SAVE THESE!)         \u{2551}");
+    println!("\u{2551}  Username: root                         \u{2551}");
+    println!("\u{2551}  Password: {password:<28}  \u{2551}");
+    println!("\u{255a}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{255d}");
+
+    info!("kernel: root password initialized");
     Ok(())
 }
