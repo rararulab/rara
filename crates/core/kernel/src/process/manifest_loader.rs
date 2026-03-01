@@ -44,6 +44,7 @@ impl ManifestLoader {
     /// Load all bundled agent manifests (compiled into the binary).
     pub fn load_bundled(&mut self) {
         let sources = [
+            include_str!("defaults/rara.yaml"),
             include_str!("defaults/scout.yaml"),
             include_str!("defaults/planner.yaml"),
             include_str!("defaults/worker.yaml"),
@@ -125,11 +126,17 @@ mod tests {
         let mut loader = ManifestLoader::new();
         loader.load_bundled();
 
-        assert_eq!(loader.list().len(), 3);
+        assert_eq!(loader.list().len(), 4);
+        assert!(loader.get("rara").is_some());
         assert!(loader.get("scout").is_some());
         assert!(loader.get("planner").is_some());
         assert!(loader.get("worker").is_some());
         assert!(loader.get("nonexistent").is_none());
+
+        let rara = loader.get("rara").unwrap();
+        assert_eq!(rara.model, "openai/gpt-4o-mini");
+        assert_eq!(rara.max_iterations, Some(25));
+        assert!(rara.tools.is_empty());
 
         let scout = loader.get("scout").unwrap();
         assert_eq!(scout.model, "deepseek/deepseek-chat");
