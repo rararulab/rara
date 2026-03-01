@@ -552,8 +552,10 @@ impl Kernel {
     // handle_user_message
     // -----------------------------------------------------------------------
 
-    /// The default root agent name used when `target_agent` is `None`.
-    const ROOT_AGENT_NAME: &'static str = "rara";
+    /// Agent name for admin/root users.
+    const ADMIN_AGENT_NAME: &'static str = "rara";
+    /// Agent name for regular users.
+    const USER_AGENT_NAME: &'static str = "nana";
 
     /// Handle a user message with 3-path routing:
     ///
@@ -666,14 +668,15 @@ impl Kernel {
         }
 
         // ----- Path 3: Name addressing (always spawn new) -----
-        let target_name = msg
-            .target_agent
-            .as_deref()
-            .unwrap_or(Self::ROOT_AGENT_NAME);
+        let target_name = if let Some(name) = msg.target_agent.as_deref() {
+            name.to_string()
+        } else {
+            self.default_agent_for_user(&msg.user).await
+        };
 
-        let manifest = if let Some(m) = self.inner().agent_registry.get(target_name) {
+        let manifest = if let Some(m) = self.inner().agent_registry.get(&target_name) {
             m
-        } else if target_name == Self::ROOT_AGENT_NAME {
+        } else if target_name == Self::ADMIN_AGENT_NAME {
             match self.resolve_manifest_for_auto_spawn().await {
                 Some(m) => m,
                 None => {
@@ -1369,6 +1372,47 @@ impl Kernel {
                     }
                 }
             }
+        }
+    }
+
+    /// Determine the default agent name for a user based on their role.
+    ///
+    /// - Root / Admin users → "rara" (full-capability agent)
+    /// - Regular users → "nana" (chat-only companion)
+    /// - Unknown users → "nana" (safe default)
+    async fn default_agent_for_user(
+        &self,
+        user: &crate::process::principal::UserId,
+    ) -> String {
+        use crate::process::principal::Role;
+
+        let inner = self.inner();
+
+        // Try looking up the user by their raw UserId string first.
+        let user_id_str = &user.0;
+
+        let kernel_user = match inner.user_store.get_by_name(user_id_str).await {
+            Ok(Some(u)) => Some(u),
+            _ => {
+                // UserId might be in "channel:name" format (e.g. "web:web-user").
+                // Try extracting the part after ':'.
+                if let Some((_prefix, name)) = user_id_str.split_once(':') {
+                    match inner.user_store.get_by_name(name).await {
+                        Ok(found) => found,
+                        Err(_) => None,
+                    }
+                } else {
+                    None
+                }
+            }
+        };
+
+        match kernel_user {
+            Some(u) => match u.role {
+                Role::Root | Role::Admin => Self::ADMIN_AGENT_NAME.to_string(),
+                Role::User => Self::USER_AGENT_NAME.to_string(),
+            },
+            None => Self::USER_AGENT_NAME.to_string(),
         }
     }
 

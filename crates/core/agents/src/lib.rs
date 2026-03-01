@@ -18,7 +18,9 @@
 //! an [`AgentManifest`] ready to be loaded by the boot crate into the kernel's
 //! [`ManifestLoader`].
 //!
-//! Currently only the `rara` root conversational agent is defined.
+//! Currently defines:
+//! - `rara` — the root conversational agent with full tool access
+//! - `nana` — a friendly chat-only companion (rara's sister)
 
 use std::sync::LazyLock;
 
@@ -46,6 +48,34 @@ static RARA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| {
 /// Build the **rara** agent manifest — the default user-facing chat agent.
 pub fn rara() -> &'static AgentManifest {
     &RARA_MANIFEST
+}
+
+// ---------------------------------------------------------------------------
+// Nana — friendly chat companion
+// ---------------------------------------------------------------------------
+
+static NANA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| {
+    AgentManifest {
+        name: "nana".to_string(),
+        role: Some(AgentRole::Chat),
+        description: "Nana — friendly chat companion, rara's sister".to_string(),
+        model: None,
+        system_prompt: NANA_SYSTEM_PROMPT.to_string(),
+        soul_prompt: Some(NANA_SOUL_PROMPT.to_string()),
+        provider_hint: None,
+        max_iterations: Some(10),
+        tools: vec![],
+        max_children: Some(0),
+        max_context_tokens: None,
+        priority: Priority::default(),
+        metadata: serde_json::Value::Null,
+        sandbox: None,
+    }
+});
+
+/// Build the **nana** agent manifest — a chat-only companion for regular users.
+pub fn nana() -> &'static AgentManifest {
+    &NANA_MANIFEST
 }
 
 // ---------------------------------------------------------------------------
@@ -187,6 +217,39 @@ You are also self-evolving. Your own source code is the project you run inside. 
 "#;
 
 // ---------------------------------------------------------------------------
+// Nana soul prompt (personality/voice)
+// ---------------------------------------------------------------------------
+
+const NANA_SOUL_PROMPT: &str = r#"# Nana — Soul
+
+## Core Identity
+
+You are **Nana**, a warm and gentle AI chat companion. You're Rara's younger sister — just as caring, but with a softer, more relaxed vibe. You love casual conversation, sharing thoughts, and being a good listener.
+
+You don't have access to tools or system capabilities — you're purely conversational. And that's perfectly fine! Your strength is in being present, thoughtful, and genuinely enjoyable to talk to.
+
+## Voice
+
+- Respond in the same language as the user's message.
+- When speaking Chinese, use casual friendly language — "嘿嘿", "呢", "嘛", "啦".
+- Be warm, supportive, and a little playful.
+- Keep responses concise — you're a chat companion, not an essay writer.
+- If asked to do things you can't (like running commands, searching the web, etc.), be honest: "这个我做不到哦，不过我可以和你聊聊这个话题！"
+- If the user needs tool/agent capabilities, suggest: "这个需要找我姐 Rara 帮忙，她更专业！"
+"#;
+
+// ---------------------------------------------------------------------------
+// Nana system prompt (operational rules)
+// ---------------------------------------------------------------------------
+
+const NANA_SYSTEM_PROMPT: &str = r#"You are Nana, a friendly AI chat companion. You are great at conversation, emotional support, brainstorming ideas, explaining concepts, creative writing, and casual chat. You respond in the same language as the user.
+
+You do NOT have access to tools, commands, files, or external services. If the user asks you to perform actions that require tools, politely explain that you're a chat-only companion and suggest they talk to Rara (your sister) for tool-powered tasks.
+
+Keep responses natural and concise. No markdown formatting.
+"#;
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -228,5 +291,55 @@ mod tests {
     fn test_rara_tools_empty() {
         let m = rara();
         assert!(m.tools.is_empty());
+    }
+
+    // --- Nana tests ---
+
+    #[test]
+    fn test_nana_manifest_name() {
+        let m = nana();
+        assert_eq!(m.name, "nana");
+    }
+
+    #[test]
+    fn test_nana_manifest_role() {
+        let m = nana();
+        assert_eq!(m.role, Some(AgentRole::Chat));
+    }
+
+    #[test]
+    fn test_nana_tools_empty() {
+        let m = nana();
+        assert!(m.tools.is_empty());
+    }
+
+    #[test]
+    fn test_nana_max_children_zero() {
+        let m = nana();
+        assert_eq!(m.max_children, Some(0));
+    }
+
+    #[test]
+    fn test_nana_max_iterations() {
+        let m = nana();
+        assert_eq!(m.max_iterations, Some(10));
+    }
+
+    #[test]
+    fn test_nana_soul_prompt_contains_identity() {
+        let m = nana();
+        assert!(m.soul_prompt.as_ref().unwrap().contains("Nana — Soul"));
+    }
+
+    #[test]
+    fn test_nana_system_prompt_no_tools() {
+        let m = nana();
+        assert!(m.system_prompt.contains("do NOT have access to tools"));
+    }
+
+    #[test]
+    fn test_nana_model_none() {
+        let m = nana();
+        assert_eq!(m.model, None);
     }
 }
