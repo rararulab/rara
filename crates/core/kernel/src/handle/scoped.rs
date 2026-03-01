@@ -29,6 +29,7 @@ use jiff::Timestamp;
 use tokio::sync::Semaphore;
 use super::{AgentHandle, EventOps, GuardOps, MemoryOps, PipeOps, ProcessOps};
 use crate::{
+    audit::{AuditEvent, AuditEventType, MemoryOp},
     error::{KernelError, Result},
     event::KernelEvent,
     guard::GuardContext,
@@ -144,6 +145,20 @@ impl ScopedKernelHandle {
         self.inner
             .process_table
             .set_state(target_id, ProcessState::Cancelled)?;
+
+        // Audit: ProcessKilled
+        crate::audit::record_async(
+            &self.inner.audit_log,
+            AuditEvent {
+                timestamp:  Timestamp::now(),
+                agent_id:   target_id,
+                session_id: self.session_id.clone(),
+                user_id:    self.principal.user_id.clone(),
+                event_type: AuditEventType::ProcessKilled { by: self.agent_id },
+                details:    serde_json::Value::Null,
+            },
+        );
+
         Ok(())
     }
 
@@ -366,6 +381,23 @@ impl MemoryOps for ScopedKernelHandle {
             self.check_quota()?;
         }
         self.inner.shared_kv.insert(namespaced, value);
+
+        // Audit: MemoryAccess (Store)
+        crate::audit::record_async(
+            &self.inner.audit_log,
+            AuditEvent {
+                timestamp:  Timestamp::now(),
+                agent_id:   self.agent_id,
+                session_id: self.session_id.clone(),
+                user_id:    self.principal.user_id.clone(),
+                event_type: AuditEventType::MemoryAccess {
+                    operation: MemoryOp::Store,
+                    key:       key.to_string(),
+                },
+                details:    serde_json::Value::Null,
+            },
+        );
+
         Ok(())
     }
 
@@ -545,6 +577,7 @@ mod tests {
 
     fn make_kernel_inner_with_quota(quota: usize) -> Arc<KernelInner> {
         use crate::{
+            audit::InMemoryAuditLog,
             defaults::{
                 noop::{
                     NoopEventBus, NoopGuard, NoopMemory, NoopModelRepo, NoopSessionRepository,
@@ -579,6 +612,8 @@ mod tests {
                 as Arc<dyn crate::io::bus::OutboundBus>,
             pipe_registry:          Arc::new(PipeRegistry::new()),
             device_registry:        Arc::new(crate::device_registry::DeviceRegistry::new()),
+            audit_log:              Arc::new(InMemoryAuditLog::default())
+                as Arc<dyn crate::audit::AuditLog>,
         })
     }
 

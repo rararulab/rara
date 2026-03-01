@@ -47,6 +47,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::{
+    audit::{AuditEvent, AuditEventType, AuditFilter, AuditLog},
     channel::types::ChannelType,
     device_registry::DeviceRegistry,
     error::{KernelError, Result},
@@ -118,6 +119,8 @@ pub(crate) struct KernelInner {
     pub pipe_registry:          Arc<PipeRegistry>,
     /// Device registry for hot-pluggable devices (MCP servers, APIs, etc.).
     pub device_registry:        Arc<DeviceRegistry>,
+    /// Structured audit log for agent behavior tracking.
+    pub audit_log:              Arc<dyn AuditLog>,
 }
 
 impl KernelInner {
@@ -218,6 +221,25 @@ impl KernelInner {
         let (mailbox_tx, mailbox_rx) =
             tokio::sync::mpsc::channel::<crate::process::ProcessMessage>(64);
         let (result_tx, result_rx) = oneshot::channel();
+
+        // Audit: ProcessSpawned
+        crate::audit::record_async(
+            &self_ref.audit_log,
+            AuditEvent {
+                timestamp:  Timestamp::now(),
+                agent_id,
+                session_id: session_id.clone(),
+                user_id:    principal.user_id.clone(),
+                event_type: AuditEventType::ProcessSpawned {
+                    manifest_name: manifest.name.clone(),
+                    parent_id,
+                },
+                details:    serde_json::json!({
+                    "model": manifest.model,
+                    "max_iterations": manifest.max_iterations,
+                }),
+            },
+        );
 
         // Register process in table
         let process = AgentProcess {
@@ -540,6 +562,24 @@ impl KernelInner {
                                             );
                                         }
 
+                                        // Audit: ProcessCompleted
+                                        crate::audit::record_async(
+                                            &inner.audit_log,
+                                            AuditEvent {
+                                                timestamp:  jiff::Timestamp::now(),
+                                                agent_id,
+                                                session_id: session_id.clone(),
+                                                user_id:    inbound.user.clone(),
+                                                event_type: AuditEventType::ProcessCompleted {
+                                                    result: result.output.clone(),
+                                                },
+                                                details:    serde_json::json!({
+                                                    "iterations": result.iterations,
+                                                    "tool_calls": result.tool_calls,
+                                                }),
+                                            },
+                                        );
+
                                         info!(
                                             agent_id = %agent_id,
                                             iterations = result.iterations,
@@ -561,6 +601,21 @@ impl KernelInner {
                                             let _ = inner.process_table.set_state(
                                                 agent_id,
                                                 ProcessState::Failed,
+                                            );
+
+                                            // Audit: ProcessFailed
+                                            crate::audit::record_async(
+                                                &inner.audit_log,
+                                                AuditEvent {
+                                                    timestamp:  jiff::Timestamp::now(),
+                                                    agent_id,
+                                                    session_id: session_id.clone(),
+                                                    user_id:    inbound.user.clone(),
+                                                    event_type: AuditEventType::ProcessFailed {
+                                                        error: err_msg.clone(),
+                                                    },
+                                                    details:    serde_json::Value::Null,
+                                                },
                                             );
                                         }
                                         // Publish error via outbound bus.
@@ -907,6 +962,7 @@ impl Kernel {
         stream_hub: Arc<StreamHub>,
         identity_resolver: Arc<dyn IdentityResolver>,
         session_resolver: Arc<dyn SessionResolver>,
+        audit_log: Arc<dyn AuditLog>,
     ) -> Self {
         info!(
             max_concurrency = config.max_concurrency,
@@ -943,6 +999,7 @@ impl Kernel {
             outbound_bus: outbound_bus.clone(),
             pipe_registry: Arc::new(PipeRegistry::new()),
             device_registry: Arc::new(DeviceRegistry::new()),
+            audit_log,
         });
 
         let scheduler = Arc::new(Mutex::new(
@@ -1130,6 +1187,14 @@ impl Kernel {
     /// Access the device registry (for hot-plugging devices).
     pub fn device_registry(&self) -> &Arc<DeviceRegistry> { &self.inner.device_registry }
 
+    /// Access the audit log.
+    pub fn audit_log(&self) -> &Arc<dyn AuditLog> { &self.inner.audit_log }
+
+    /// Query the audit log for events matching the given filter.
+    pub async fn audit_query(&self, filter: AuditFilter) -> Vec<AuditEvent> {
+        self.inner.audit_log.query(filter).await
+    }
+
     /// Access the shared KernelInner (for constructing ScopedKernelHandles
     /// externally).
     pub(crate) fn inner(&self) -> &Arc<KernelInner> { &self.inner }
@@ -1248,6 +1313,7 @@ impl Kernel {
 mod tests {
     use super::*;
     use crate::{
+        audit::InMemoryAuditLog,
         defaults::{
             noop::{NoopEventBus, NoopGuard, NoopMemory, NoopModelRepo, NoopSessionRepository},
             noop_user_store::NoopUserStore,
@@ -1285,6 +1351,7 @@ mod tests {
             Arc::new(StreamHub::new(16)),
             Arc::new(crate::defaults::noop::NoopIdentityResolver) as Arc<dyn IdentityResolver>,
             Arc::new(crate::defaults::noop::NoopSessionResolver) as Arc<dyn SessionResolver>,
+            Arc::new(InMemoryAuditLog::default()) as Arc<dyn AuditLog>,
         )
     }
 
@@ -1616,6 +1683,8 @@ mod tests {
                 as Arc<dyn IdentityResolver>,
             Arc::new(crate::defaults::noop::NoopSessionResolver)
                 as Arc<dyn SessionResolver>,
+            Arc::new(crate::audit::InMemoryAuditLog::default())
+                as Arc<dyn crate::audit::AuditLog>,
         );
         (kernel, llm)
     }
