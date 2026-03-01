@@ -25,7 +25,7 @@
 use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{info, info_span, warn, Instrument};
 
 use crate::{
     event_loop::RuntimeTable,
@@ -64,7 +64,15 @@ impl EventProcessor {
                 _ = self.queue.wait() => {
                     let events = self.queue.drain(32);
                     for (event, wal_id) in events {
-                        kernel.handle_event(event, runtimes).await;
+                        let event_type = event.variant_name();
+                        let span = info_span!(
+                            "handle_event",
+                            processor_id = self.id,
+                            event_type,
+                        );
+                        kernel.handle_event(event, runtimes)
+                            .instrument(span)
+                            .await;
                         if let Some(id) = wal_id {
                             kernel.event_queue().mark_completed(id);
                         }

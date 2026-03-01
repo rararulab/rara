@@ -192,6 +192,27 @@ impl Syscall {
     /// For agent-less syscalls (`RequiresApproval`, `GetToolRegistry`),
     /// returns a fixed nil UUID-based `AgentId` so they always hash to the
     /// same shard.
+    /// Return a static label for this syscall variant (zero-allocation).
+    pub fn variant_name(&self) -> &'static str {
+        match self {
+            Self::QueryStatus { .. } => "query_status",
+            Self::QueryChildren { .. } => "query_children",
+            Self::MemStore { .. } => "mem_store",
+            Self::MemRecall { .. } => "mem_recall",
+            Self::SharedStore { .. } => "shared_store",
+            Self::SharedRecall { .. } => "shared_recall",
+            Self::CreatePipe { .. } => "create_pipe",
+            Self::CreateNamedPipe { .. } => "create_named_pipe",
+            Self::ConnectPipe { .. } => "connect_pipe",
+            Self::RequiresApproval { .. } => "requires_approval",
+            Self::RequestApproval { .. } => "request_approval",
+            Self::GetManifest { .. } => "get_manifest",
+            Self::GetToolRegistry { .. } => "get_tool_registry",
+            Self::ResolveProvider { .. } => "resolve_provider",
+            Self::PublishEvent { .. } => "publish_event",
+        }
+    }
+
     pub fn agent_id(&self) -> AgentId {
         match self {
             Self::QueryStatus { target, .. } => *target,
@@ -373,6 +394,21 @@ impl KernelEvent {
     /// Returns `None` for global events that are not agent-scoped
     /// (UserMessage, SpawnAgent, Timer, Shutdown, Deliver).
     /// Returns `Some(agent_id)` for events that target a specific agent.
+    /// Return a static label for this event variant (zero-allocation).
+    pub fn variant_name(&self) -> &'static str {
+        match self {
+            Self::UserMessage(_) => "user_message",
+            Self::SpawnAgent { .. } => "spawn_agent",
+            Self::SendSignal { .. } => "send_signal",
+            Self::TurnCompleted { .. } => "turn_completed",
+            Self::ChildCompleted { .. } => "child_completed",
+            Self::Deliver(_) => "deliver",
+            Self::Syscall(_) => "syscall",
+            Self::Timer { .. } => "timer",
+            Self::Shutdown => "shutdown",
+        }
+    }
+
     pub fn agent_id(&self) -> Option<AgentId> {
         match self {
             Self::SendSignal { target, .. } => Some(*target),

@@ -26,7 +26,7 @@ use dashmap::DashMap;
 use jiff::Timestamp;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{debug_span, error, info, info_span, warn, Instrument};
 
 use crate::{
     audit::{AuditEvent, AuditEventType, MemoryOp},
@@ -141,7 +141,15 @@ impl Kernel {
                 _ = self.event_queue().wait() => {
                     let events = self.event_queue().drain(32).await;
                     for (event, wal_id) in events {
-                        self.handle_event(event, runtimes).await;
+                        let event_type = event.variant_name();
+                        let span = info_span!(
+                            "handle_event",
+                            processor_id = 0u64,
+                            event_type,
+                        );
+                        self.handle_event(event, runtimes)
+                            .instrument(span)
+                            .await;
                         if let Some(id) = wal_id {
                             self.event_queue().mark_completed(id);
                         }
@@ -289,6 +297,15 @@ impl Kernel {
     ///
     /// All business logic lives here, executed by the kernel event loop.
     async fn handle_syscall(&self, syscall: Syscall) {
+        let syscall_type = syscall.variant_name();
+        let syscall_agent_id = syscall.agent_id();
+        let span = debug_span!(
+            "handle_syscall",
+            syscall_type,
+            agent_id = %syscall_agent_id,
+        );
+        let _guard = span.enter();
+
         let inner = self.inner();
 
         match syscall {
@@ -652,11 +669,21 @@ impl Kernel {
     /// 3. **Name addressing** (fallback): lookup AgentRegistry by name,
     ///    always spawn a new process (Anthropic spawn-new pattern).
     async fn handle_user_message(&self, msg: InboundMessage, runtimes: &RuntimeTable) {
+        let span = info_span!(
+            "handle_user_message",
+            session_id = %msg.session_id,
+            user_id = %msg.user.0,
+            channel = ?msg.source.channel_type,
+            routing_path = tracing::field::Empty,
+        );
+        let _guard = span.enter();
+
         let session_id = msg.session_id.clone();
         let user = msg.user.clone();
 
         // ----- Path 1: ID addressing (agent-to-agent) -----
         if let Some(target_id) = msg.target_agent_id {
+            span.record("routing_path", "id_addressing");
             match self.process_table().get(target_id) {
                 Some(process) if process.state.is_terminal() => {
                     // Terminal process — return error (A2A pattern).
@@ -720,6 +747,7 @@ impl Kernel {
 
         // ----- Path 2: Session addressing (external user) -----
         if let Some(process) = self.process_table().find_by_session(&session_id) {
+            span.record("routing_path", "session_addressing");
             let aid = process.agent_id;
 
             if process.state.is_terminal() {
@@ -753,6 +781,7 @@ impl Kernel {
         }
 
         // ----- Path 3: Name addressing (always spawn new) -----
+        span.record("routing_path", "name_addressing");
         let target_name = if let Some(name) = msg.target_agent.as_deref() {
             name.to_string()
         } else {
@@ -826,6 +855,13 @@ impl Kernel {
         msg: InboundMessage,
         runtimes: &RuntimeTable,
     ) {
+        let span = info_span!(
+            "start_llm_turn",
+            agent_id = %agent_id,
+            session_id = %msg.session_id,
+        );
+        let _guard = span.enter();
+
         let Some(mut rt) = runtimes.get_mut(&agent_id) else {
             warn!(agent_id = %agent_id, "runtime not found for LLM turn");
             return;
@@ -895,8 +931,23 @@ impl Kernel {
         // Drop the DashMap guard before spawning.
         drop(rt);
 
+        // Capture parent span for the spawned task.
+        let parent_span = tracing::Span::current();
+
         // Spawn async task for the LLM turn.
         tokio::spawn(async move {
+            let turn_span = info_span!(
+                parent: &parent_span,
+                "agent_turn",
+                agent_id = %agent_id,
+                session_id = %session_id,
+                total_ms = tracing::field::Empty,
+                iterations = tracing::field::Empty,
+                tool_calls = tracing::field::Empty,
+            );
+            let _guard = turn_span.enter();
+            let start = std::time::Instant::now();
+
             let turn_result = crate::agent_turn::run_inline_agent_loop(
                 &handle,
                 user_text,
@@ -905,6 +956,14 @@ impl Kernel {
                 &turn_cancel,
             )
             .await;
+
+            // Record timing and result metrics on the span.
+            let elapsed = start.elapsed();
+            turn_span.record("total_ms", elapsed.as_millis() as u64);
+            if let Ok(ref result) = turn_result {
+                turn_span.record("iterations", result.iterations);
+                turn_span.record("tool_calls", result.tool_calls);
+            }
 
             // Close stream.
             inner.stream_hub.close(&stream_id);
@@ -942,6 +1001,17 @@ impl Kernel {
         user: crate::process::principal::UserId,
         runtimes: &RuntimeTable,
     ) {
+        let span = info_span!(
+            "handle_turn_completed",
+            agent_id = %agent_id,
+            session_id = %session_id,
+            success = tracing::field::Empty,
+            iterations = tracing::field::Empty,
+            tool_calls = tracing::field::Empty,
+            reply_len = tracing::field::Empty,
+        );
+        let _guard = span.enter();
+
         let inner = self.inner();
 
         // Determine the egress session: use the channel_session_id if this
@@ -962,6 +1032,11 @@ impl Kernel {
 
         match result {
             Ok(turn) if !turn.text.is_empty() => {
+                span.record("success", true);
+                span.record("iterations", turn.iterations);
+                span.record("tool_calls", turn.tool_calls);
+                span.record("reply_len", turn.text.len());
+
                 // Record metrics.
                 if let Some(metrics) = inner.process_table.get_metrics(&agent_id) {
                     metrics.record_llm_call();
@@ -1029,7 +1104,8 @@ impl Kernel {
                     agent_id = %agent_id,
                     iterations = result.iterations,
                     tool_calls = result.tool_calls,
-                    "message processed"
+                    reply_len = result.output.len(),
+                    "turn completed"
                 );
 
                 if let Some(mut rt) = runtimes.get_mut(&agent_id) {
@@ -1037,6 +1113,12 @@ impl Kernel {
                 }
             }
             Ok(turn) => {
+                span.record("success", true);
+                span.record("iterations", turn.iterations);
+                span.record("tool_calls", turn.tool_calls);
+                span.record("reply_len", 0u64);
+                info!(agent_id = %agent_id, "turn completed (empty result)");
+
                 // Empty result — LLM call was made but produced no text.
                 if let Some(metrics) = inner.process_table.get_metrics(&agent_id) {
                     metrics.record_llm_call();
@@ -1044,6 +1126,9 @@ impl Kernel {
                 }
             }
             Err(err_msg) => {
+                span.record("success", false);
+                info!(agent_id = %agent_id, error = %err_msg, "turn completed (error)");
+
                 if err_msg != "interrupted by user" {
                     let _ = inner
                         .process_table
@@ -1122,6 +1207,14 @@ impl Kernel {
         parent_id: Option<AgentId>,
         runtimes: &RuntimeTable,
     ) -> Result<AgentId> {
+        let span = info_span!(
+            "handle_spawn_agent",
+            manifest_name = %manifest.name,
+            parent_id = ?parent_id,
+            agent_id = tracing::field::Empty,
+        );
+        let _guard = span.enter();
+
         let inner = self.inner();
 
         // Validate principal.
@@ -1137,6 +1230,7 @@ impl Kernel {
             })?;
 
         let agent_id = AgentId::new();
+        span.record("agent_id", tracing::field::display(&agent_id));
 
         // Each process gets its own session — context isolation.
         let session_id = SessionId::new(format!("agent:{}", agent_id));
@@ -1274,6 +1368,13 @@ impl Kernel {
         signal: Signal,
         runtimes: &RuntimeTable,
     ) {
+        let span = info_span!(
+            "handle_signal",
+            agent_id = %target,
+            signal = ?signal,
+        );
+        let _guard = span.enter();
+
         let inner = self.inner();
 
         match signal {
@@ -1378,6 +1479,14 @@ impl Kernel {
         result: AgentResult,
         runtimes: &RuntimeTable,
     ) {
+        let span = info_span!(
+            "handle_child_completed",
+            parent_id = %parent_id,
+            child_id = %child_id,
+            output_len = result.output.len(),
+        );
+        let _guard = span.enter();
+
         let inner = self.inner();
 
         info!(
@@ -1420,6 +1529,19 @@ impl Kernel {
 
     /// Handle a Deliver event — call Egress::deliver directly.
     async fn handle_deliver(&self, envelope: OutboundEnvelope) {
+        let payload_type = match &envelope.payload {
+            OutboundPayload::Reply { .. } => "reply",
+            OutboundPayload::Progress { .. } => "progress",
+            OutboundPayload::StateChange { .. } => "state_change",
+            OutboundPayload::Error { .. } => "error",
+        };
+        let span = info_span!(
+            "handle_deliver",
+            session_id = %envelope.session_id,
+            payload_type,
+        );
+        let _guard = span.enter();
+
         crate::io::egress::Egress::deliver(
             &self.egress_adapters,
             self.endpoint_registry(),

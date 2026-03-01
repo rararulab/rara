@@ -22,6 +22,7 @@
 //! cancellation via `tokio::select!` on a [`CancellationToken`].
 
 use std::collections::HashMap;
+use std::time::Instant;
 
 use async_openai::types::chat::{
     ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
@@ -31,7 +32,7 @@ use async_openai::types::chat::{
 };
 use futures::StreamExt;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{error, info, info_span, warn};
 
 use crate::{
     handle::process_handle::ProcessHandle,
@@ -94,6 +95,9 @@ pub(crate) async fn run_inline_agent_loop(
         .await
         .map_err(|e| format!("failed to resolve LLM provider: {e}"))?;
 
+    // Record model on the parent agent_turn span.
+    tracing::Span::current().record("model", model.as_str());
+
     // Build initial messages: system + optional history + user
     let mut messages: Vec<ChatCompletionRequestMessage> = {
         let sys_msg = ChatCompletionRequestSystemMessageArgs::default()
@@ -138,6 +142,17 @@ pub(crate) async fn run_inline_agent_loop(
     let mut last_accumulated_text = String::new();
 
     for iteration in 0..max_iterations {
+        let iter_span = info_span!(
+            "llm_iteration",
+            iter = iteration,
+            model = model.as_str(),
+            first_token_ms = tracing::field::Empty,
+            stream_ms = tracing::field::Empty,
+            has_tools = tracing::field::Empty,
+            tool_count = tracing::field::Empty,
+        );
+        let _iter_guard = iter_span.enter();
+
         stream_handle.emit(StreamEvent::Progress {
             stage: "thinking".to_string(),
         });
@@ -178,6 +193,8 @@ pub(crate) async fn run_inline_agent_loop(
         };
 
         // Consume streaming chunks
+        let stream_start = Instant::now();
+        let mut first_token_at: Option<Instant> = None;
         let mut accumulated_text = String::new();
         let mut pending_tool_calls: HashMap<u32, PendingToolCall> = HashMap::new();
         let mut has_tool_calls = false;
@@ -219,6 +236,13 @@ pub(crate) async fn run_inline_agent_loop(
             // Text content delta
             if let Some(ref text) = choice.delta.content {
                 if !text.is_empty() {
+                    if first_token_at.is_none() {
+                        first_token_at = Some(Instant::now());
+                        iter_span.record(
+                            "first_token_ms",
+                            first_token_at.unwrap().duration_since(stream_start).as_millis() as u64,
+                        );
+                    }
                     accumulated_text.push_str(text);
                     stream_handle.emit(StreamEvent::TextDelta(text.clone()));
                 }
@@ -268,6 +292,10 @@ pub(crate) async fn run_inline_agent_loop(
                 }
             }
         }
+
+        // Record stream duration on the iteration span.
+        iter_span.record("stream_ms", stream_start.elapsed().as_millis() as u64);
+        iter_span.record("has_tools", has_tool_calls);
 
         // Terminal response (no tool calls)
         if !has_tool_calls {
@@ -338,6 +366,8 @@ pub(crate) async fn run_inline_agent_loop(
             valid_tool_calls.push((tool_call.id, tool_call.name, args));
         }
 
+        iter_span.record("tool_count", valid_tool_calls.len());
+
         // Execute all tool calls concurrently
         let tool_futures: Vec<_> = valid_tool_calls
             .iter()
@@ -345,17 +375,30 @@ pub(crate) async fn run_inline_agent_loop(
                 let tool = tools.get(name);
                 let args = args.clone();
                 let name = name.clone();
+                let tool_span = info_span!(
+                    "tool_exec",
+                    tool_name = name.as_str(),
+                    success = tracing::field::Empty,
+                );
                 async move {
+                    let _guard = tool_span.enter();
                     if let Some(tool) = tool {
                         match tool.execute(args).await {
-                            Ok(result) => (true, result, None::<String>),
-                            Err(e) => (
-                                false,
-                                serde_json::json!({ "error": e.to_string() }),
-                                Some(e.to_string()),
-                            ),
+                            Ok(result) => {
+                                tool_span.record("success", true);
+                                (true, result, None::<String>)
+                            }
+                            Err(e) => {
+                                tool_span.record("success", false);
+                                (
+                                    false,
+                                    serde_json::json!({ "error": e.to_string() }),
+                                    Some(e.to_string()),
+                                )
+                            }
                         }
                     } else {
+                        tool_span.record("success", false);
                         let err = format!("tool not found: {name}");
                         (false, serde_json::json!({ "error": &err }), Some(err))
                     }

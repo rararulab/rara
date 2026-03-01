@@ -136,6 +136,15 @@ impl IngressPipeline {
 
     /// Ingest a raw platform message into the kernel pipeline.
     pub async fn ingest(&self, raw: RawPlatformMessage) -> Result<(), IngestError> {
+        let span = tracing::info_span!(
+            "ingress",
+            channel = ?raw.channel_type,
+            platform_user = %raw.platform_user_id,
+            session_id = tracing::field::Empty,
+            user_id = tracing::field::Empty,
+        );
+        let _guard = span.enter();
+
         // 1. Resolve identity
         let user_id = self
             .identity_resolver
@@ -145,12 +154,14 @@ impl IngressPipeline {
                 raw.platform_chat_id.as_deref(),
             )
             .await?;
+        span.record("user_id", tracing::field::display(&user_id.0));
 
         // 2. Resolve session
         let session_id = self
             .session_resolver
             .resolve(&user_id, raw.channel_type, raw.platform_chat_id.as_deref())
             .await?;
+        span.record("session_id", tracing::field::display(&session_id));
 
         // 3. Build InboundMessage
         let msg = InboundMessage {
