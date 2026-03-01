@@ -170,6 +170,7 @@ mod tests {
             },
             user:          UserId("u1".to_string()),
             session_id:    SessionId::new("s1"),
+            target_agent:  None,
             content:       MessageContent::Text(text.to_string()),
             reply_context: None,
             timestamp:     jiff::Timestamp::now(),

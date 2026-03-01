@@ -524,12 +524,28 @@ impl Kernel {
     // handle_user_message
     // -----------------------------------------------------------------------
 
-    /// Handle a user message: find or spawn a process, then start an LLM turn.
+    /// The default root agent name used when `target_agent` is `None`.
+    const ROOT_AGENT_NAME: &'static str = "rara";
+
+    /// Handle a user message: route by target agent name, find or spawn a
+    /// process, then start an LLM turn.
+    ///
+    /// Routing priority:
+    /// 1. If `target_agent` is set, look up by that name; otherwise use "rara".
+    /// 2. Find a running process with that name via `ProcessTable::find_by_name`.
+    /// 3. If not found, look up the manifest by name and auto-spawn.
+    /// 4. If no manifest exists, fall back to `resolve_manifest_for_auto_spawn`
+    ///    (model repo lookup) for the root agent, or error for unknown agents.
     async fn handle_user_message(&self, msg: InboundMessage, runtimes: &RuntimeTable) {
         let session_id = msg.session_id.clone();
         let user = msg.user.clone();
-        // 1. Find existing process for this session.
-        let agent_id = if let Some(process) = self.process_table().find_by_session(&session_id) {
+        let target_name = msg
+            .target_agent
+            .as_deref()
+            .unwrap_or(Self::ROOT_AGENT_NAME);
+
+        // 1. Try to find an existing process by agent name.
+        let agent_id = if let Some(process) = self.process_table().find_by_name(target_name) {
             let aid = process.agent_id;
 
             // Check if process is paused or already running — buffer the event.
@@ -549,17 +565,54 @@ impl Kernel {
             }
             aid
         } else {
-            // No existing process — auto-spawn one.
-            let manifest = match self.resolve_manifest_for_auto_spawn().await {
-                Some(m) => m,
-                None => {
-                    error!(
-                        session_id = %session_id,
-                        "no model configured — cannot spawn agent"
-                    );
-                    return;
+            // 2. Agent not running — try to spawn it.
+            let manifest = if let Some(m) = self.inner().manifest_loader.get(target_name) {
+                // Found a manifest by name — use it (possibly overriding model
+                // with the user's configured chat model for the root agent).
+                let mut m = m.clone();
+                if target_name == Self::ROOT_AGENT_NAME {
+                    if let Some(model) = self.resolve_chat_model().await {
+                        m.model = model;
+                    }
                 }
+                m
+            } else if target_name == Self::ROOT_AGENT_NAME {
+                // Root agent without a manifest — fall back to model repo.
+                match self.resolve_manifest_for_auto_spawn().await {
+                    Some(m) => m,
+                    None => {
+                        error!(
+                            session_id = %session_id,
+                            "no model configured — cannot spawn root agent"
+                        );
+                        return;
+                    }
+                }
+            } else {
+                // Unknown target agent — send error reply.
+                warn!(
+                    target_name = %target_name,
+                    session_id = %session_id,
+                    "unknown target agent"
+                );
+                let envelope = OutboundEnvelope {
+                    id:          MessageId::new(),
+                    in_reply_to: msg.id.clone(),
+                    user:        user.clone(),
+                    session_id:  session_id.clone(),
+                    routing:     OutboundRouting::BroadcastAll,
+                    payload:     OutboundPayload::Error {
+                        code:    "unknown_agent".to_string(),
+                        message: format!("unknown target agent: {target_name}"),
+                    },
+                    timestamp:   jiff::Timestamp::now(),
+                };
+                if let Err(e) = self.event_queue().try_push(KernelEvent::Deliver(envelope)) {
+                    error!(%e, "failed to push unknown-agent error Deliver");
+                }
+                return;
             };
+
             let principal = Principal::user(user.0.clone());
             match self
                 .handle_spawn_agent(
@@ -580,8 +633,15 @@ impl Kernel {
             }
         };
 
-        // 2. Start LLM turn for this process.
+        // 3. Start LLM turn for this process.
         self.start_llm_turn(agent_id, msg, runtimes).await;
+    }
+
+    /// Resolve the user's configured chat model from the model repo.
+    async fn resolve_chat_model(&self) -> Option<String> {
+        self.model_repo()
+            .get(crate::model_repo::model_keys::CHAT)
+            .await
     }
 
     /// Start an LLM turn for the given agent, spawning the work as an async
@@ -981,11 +1041,13 @@ impl Kernel {
         );
 
         // Now push a UserMessage event for the initial input so it gets
-        // processed by handle_user_message.
-        let inbound = InboundMessage::synthetic(
+        // processed by handle_user_message. Route to the specific agent that
+        // was just spawned (by manifest name) so the name-based router finds it.
+        let inbound = InboundMessage::synthetic_to(
             input,
             crate::process::principal::UserId("system".to_string()),
             session_id,
+            manifest.name.clone(),
         );
         if let Err(e) = self
             .event_queue()

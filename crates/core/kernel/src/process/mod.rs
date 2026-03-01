@@ -498,12 +498,16 @@ pub struct SystemStats {
 /// Thread-safe via `DashMap`. Supports concurrent reads and writes from
 /// multiple tokio tasks (e.g., kernel spawn + agent tool calls).
 ///
-/// Includes a session index for fast `SessionId -> AgentId` lookups and
+/// Includes a session index for fast `SessionId -> AgentId` lookups,
+/// a name index for fast agent name -> `AgentId` lookups, and
 /// a mailbox registry for sending messages to long-lived processes.
 pub struct ProcessTable {
     processes:     DashMap<AgentId, AgentProcess>,
     /// Maps a session to its currently active agent process.
     session_index: DashMap<SessionId, AgentId>,
+    /// Maps agent manifest name to its currently active agent process.
+    /// Used for sender-addressed message routing (target_agent → process).
+    name_index:    DashMap<String, AgentId>,
     /// Cancellation tokens for graceful process termination.
     /// Parent token cancel → all child tokens cancel automatically.
     cancellation_tokens: DashMap<AgentId, CancellationToken>,
@@ -523,6 +527,7 @@ impl ProcessTable {
         Self {
             processes:           DashMap::new(),
             session_index:       DashMap::new(),
+            name_index:          DashMap::new(),
             cancellation_tokens: DashMap::new(),
             metrics:             DashMap::new(),
             total_spawned:       AtomicU64::new(0),
@@ -534,12 +539,19 @@ impl ProcessTable {
     /// Insert a process into the table.
     ///
     /// Automatically updates the session index so `find_by_session` can
-    /// locate this process, creates a [`RuntimeMetrics`] entry, and
+    /// locate this process, updates the name index so `find_by_name` can
+    /// locate it by manifest name, creates a [`RuntimeMetrics`] entry, and
     /// increments the total spawned counter.
+    ///
+    /// If a process with the same manifest name already exists in the name
+    /// index, it is overwritten (the old entry may be stale from a process
+    /// that ended but was not cleaned up).
     pub fn insert(&self, process: AgentProcess) {
         let agent_id = process.agent_id;
         self.session_index
             .insert(process.session_id.clone(), agent_id);
+        self.name_index
+            .insert(process.manifest.name.clone(), agent_id);
         self.metrics
             .insert(agent_id, std::sync::Arc::new(RuntimeMetrics::new()));
         self.total_spawned.fetch_add(1, Ordering::Relaxed);
@@ -598,13 +610,15 @@ impl ProcessTable {
 
     /// Remove a process from the table, returning it if it existed.
     ///
-    /// Also cleans up the session index, mailbox, cancellation token, and
+    /// Also cleans up the session index, name index, cancellation token, and
     /// metrics entries.
     pub fn remove(&self, id: AgentId) -> Option<AgentProcess> {
         let removed = self.processes.remove(&id).map(|(_, p)| p);
         if let Some(ref process) = removed {
             self.session_index
                 .remove_if(&process.session_id, |_, agent_id| *agent_id == id);
+            self.name_index
+                .remove_if(&process.manifest.name, |_, agent_id| *agent_id == id);
             self.cancellation_tokens.remove(&id);
             self.metrics.remove(&id);
         }
@@ -641,6 +655,12 @@ impl ProcessTable {
     /// Find the active agent process for a session.
     pub fn find_by_session(&self, session_id: &SessionId) -> Option<AgentProcess> {
         let agent_id = self.session_index.get(session_id)?;
+        self.get(*agent_id)
+    }
+
+    /// Find the active agent process by manifest name.
+    pub fn find_by_name(&self, name: &str) -> Option<AgentProcess> {
+        let agent_id = self.name_index.get(name)?;
         self.get(*agent_id)
     }
 
@@ -1309,5 +1329,83 @@ system_prompt: "Hello"
         let json = serde_json::to_string(&stats).unwrap();
         assert!(json.contains("\"manifest_name\":\"json-test\""));
         assert!(json.contains("\"messages_received\":0"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Name index tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_find_by_name_after_insert() {
+        let table = ProcessTable::new();
+        let p = test_process("my-agent", None);
+        let id = p.agent_id;
+        table.insert(p);
+
+        let found = table.find_by_name("my-agent");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().agent_id, id);
+
+        // Non-existent name returns None.
+        assert!(table.find_by_name("no-such-agent").is_none());
+    }
+
+    #[test]
+    fn test_name_index_cleanup_on_remove() {
+        let table = ProcessTable::new();
+        let p = test_process("removable-agent", None);
+        let id = p.agent_id;
+        table.insert(p);
+
+        assert!(table.find_by_name("removable-agent").is_some());
+
+        table.remove(id);
+        assert!(table.find_by_name("removable-agent").is_none());
+    }
+
+    #[test]
+    fn test_name_index_overwrite_on_duplicate() {
+        let table = ProcessTable::new();
+
+        let p1 = test_process("dup-agent", None);
+        let id1 = p1.agent_id;
+        table.insert(p1);
+
+        assert_eq!(table.find_by_name("dup-agent").unwrap().agent_id, id1);
+
+        // Insert a second process with the same manifest name.
+        let p2 = test_process("dup-agent", None);
+        let id2 = p2.agent_id;
+        table.insert(p2);
+
+        // Name index should point to the new process.
+        assert_eq!(table.find_by_name("dup-agent").unwrap().agent_id, id2);
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn test_remove_does_not_clear_name_index_for_different_agent() {
+        let table = ProcessTable::new();
+
+        let p1 = test_process("shared-name", None);
+        let id1 = p1.agent_id;
+        table.insert(p1);
+
+        // Overwrite name index with p2
+        let p2 = test_process("shared-name", None);
+        let id2 = p2.agent_id;
+        table.insert(p2);
+
+        // Remove p1 — should NOT clear name_index because it points to p2.
+        table.remove(id1);
+        assert!(
+            table.find_by_name("shared-name").is_some(),
+            "name_index should still point to p2"
+        );
+        assert_eq!(table.find_by_name("shared-name").unwrap().agent_id, id2);
+
+        // Remove p2 — now name_index should be cleared.
+        table.remove(id2);
+        assert!(table.find_by_name("shared-name").is_none());
     }
 }

@@ -121,6 +121,8 @@ pub struct InboundMessage {
     pub user:          UserId,
     /// Session this message belongs to.
     pub session_id:    SessionId,
+    /// Target agent name. `None` means route to the default root agent ("rara").
+    pub target_agent:  Option<String>,
     /// Message content (text or multimodal).
     pub content:       MessageContent,
     /// Optional reply/thread context for egress.
@@ -144,6 +146,32 @@ impl InboundMessage {
             },
             user,
             session_id,
+            target_agent:  None,
+            content:       MessageContent::Text(text),
+            reply_context: None,
+            timestamp:     jiff::Timestamp::now(),
+            metadata:      HashMap::new(),
+        }
+    }
+
+    /// Create a synthetic internal message addressed to a specific agent.
+    pub fn synthetic_to(
+        text: String,
+        user: UserId,
+        session_id: SessionId,
+        target_agent: String,
+    ) -> Self {
+        Self {
+            id:            MessageId::new(),
+            source:        ChannelSource {
+                channel_type:        ChannelType::Internal,
+                platform_message_id: None,
+                platform_user_id:    user.0.clone(),
+                platform_chat_id:    None,
+            },
+            user,
+            session_id,
+            target_agent:  Some(target_agent),
             content:       MessageContent::Text(text),
             reply_context: None,
             timestamp:     jiff::Timestamp::now(),
