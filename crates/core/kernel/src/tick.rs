@@ -178,8 +178,9 @@ impl TickLoop {
             provider_hint:  None,
             max_iterations: Some(25),
             tools:          vec![],
-            max_children:   None,
-            metadata:       serde_json::Value::Null,
+            max_children:        None,
+            max_context_tokens:  None,
+            metadata:            serde_json::Value::Null,
         })
     }
 }

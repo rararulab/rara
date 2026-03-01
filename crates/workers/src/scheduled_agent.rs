@@ -77,8 +77,9 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
                 provider_hint:  provider_hint.clone(),
                 max_iterations: Some(max_iterations),
                 tools:          vec![], // inherit all tools
-                max_children:   None,
-                metadata:       serde_json::json!({ "job_id": job.id }),
+                max_children:        None,
+                max_context_tokens:  None,
+                metadata:            serde_json::json!({ "job_id": job.id }),
             };
 
             let session_id = SessionId::new(job.session_key.clone());
