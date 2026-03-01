@@ -125,6 +125,7 @@ members = [
     "crates/integrations/mcp",
     "crates/integrations/codex-oauth",
     "crates/integrations/keyring-store",
+    "crates/core/agents",
     "crates/core/boot",
     "crates/core/channels",
     "crates/core/kernel",
@@ -223,6 +224,7 @@ crawl4ai = { path = "crates/common/crawl4ai" }
 jobspy-sys = { path = "crates/jobspy-sys" }
 object-store = { path = "crates/common/object-store" }
 rara-api = { path = "api" }
+rara-agents = { path = "crates/core/agents" }
 rara-app = { path = "crates/app" }
 rara-backend-admin = { path = "crates/extensions/backend-admin" }
 rara-boot = { path = "crates/core/boot" }

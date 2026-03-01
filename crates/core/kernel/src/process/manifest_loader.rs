@@ -102,6 +102,18 @@ impl ManifestLoader {
         Ok(count)
     }
 
+    /// Load manifests from an external source (e.g., an agent registry).
+    ///
+    /// Each manifest is inserted by name. If a manifest with the same name
+    /// already exists, it is replaced (last-write-wins), enabling external
+    /// registries to override bundled defaults.
+    pub fn load_manifests(&mut self, manifests: impl IntoIterator<Item = AgentManifest>) {
+        for manifest in manifests {
+            self.manifests.retain(|m| m.name != manifest.name);
+            self.manifests.push(manifest);
+        }
+    }
+
     /// Get a manifest by name.
     pub fn get(&self, name: &str) -> Option<&AgentManifest> {
         self.manifests.iter().find(|m| m.name == name)
