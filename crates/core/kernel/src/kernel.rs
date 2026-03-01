@@ -441,7 +441,7 @@ impl Kernel {
         let active = pt
             .list()
             .iter()
-            .filter(|p| matches!(p.state, ProcessState::Running | ProcessState::Waiting))
+            .filter(|p| matches!(p.state, ProcessState::Running | ProcessState::Idle | ProcessState::Waiting))
             .count();
 
         let uptime_ms = Timestamp::now()

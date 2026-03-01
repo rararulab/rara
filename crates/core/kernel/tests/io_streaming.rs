@@ -155,7 +155,7 @@ async fn wait_for_result(
             );
         }
         if let Some(p) = kernel.process_table().get(agent_id) {
-            if matches!(p.state, ProcessState::Waiting | ProcessState::Completed) {
+            if matches!(p.state, ProcessState::Idle | ProcessState::Completed) {
                 if let Some(result) = p.result {
                     return result;
                 }
