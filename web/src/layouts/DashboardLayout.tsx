@@ -14,11 +14,15 @@
  * limitations under the License.
  */
 
+import { useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router';
+import { useQuery } from '@tanstack/react-query';
 import { LogOut, ShieldCheck, User } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
+import { authApi } from '@/api/client';
 import { Button } from '@/components/ui/button';
+import OnboardingModal, { isOnboardingDismissed } from '@/components/OnboardingModal';
 
 /** Routes that need zero padding in the main content area. */
 const FULL_BLEED_ROUTES = new Set(['/agent', '/jobs', '/docs']);
@@ -32,6 +36,26 @@ export default function DashboardLayout() {
   const { user, isRoot, logout } = useAuth();
   const isFullBleed = FULL_BLEED_ROUTES.has(location.pathname) || FULL_BLEED_PREFIXES.some(p => location.pathname.startsWith(p));
 
+  // 获取用户 profile（含 platforms）以判断是否需要引导
+  const profileQuery = useQuery({
+    queryKey: ['profile'],
+    queryFn: () => authApi.me(),
+    enabled: isRoot,
+  });
+
+  // 判断是否显示引导弹窗：root 用户 + 无已关联平台 + 未跳过引导
+  const shouldShowOnboarding =
+    isRoot &&
+    profileQuery.isSuccess &&
+    profileQuery.data.platforms.length === 0 &&
+    !isOnboardingDismissed();
+
+  const [onboardingOpen, setOnboardingOpen] = useState(true);
+
+  const handleOnboardingDismiss = () => {
+    setOnboardingOpen(false);
+  };
+
   const handleLogout = () => {
     logout();
     navigate('/login', { replace: true });
@@ -39,6 +63,14 @@ export default function DashboardLayout() {
 
   return (
     <div className="flex h-screen bg-transparent">
+      {/* 首次登录引导弹窗 */}
+      {shouldShowOnboarding && (
+        <OnboardingModal
+          open={onboardingOpen}
+          onDismiss={handleOnboardingDismiss}
+        />
+      )}
+
       <main className={cn('relative flex min-w-0 flex-1 flex-col', isFullBleed ? 'overflow-hidden' : 'overflow-auto')}>
         {/* Top bar with user info */}
         <div className="flex shrink-0 items-center justify-end gap-2 border-b border-border/40 bg-background/30 px-4 py-1.5 backdrop-blur-sm">
