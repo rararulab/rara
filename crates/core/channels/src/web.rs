@@ -479,7 +479,7 @@ fn spawn_stream_forwarder(
             }
         };
 
-        let session_id = rara_kernel::process::SessionId::new(&session_key);
+        let session_id = rara_kernel::process::SessionId::new(format!("web:{}", session_key));
 
         // Poll until stream appears (process_loop opens it asynchronously).
         let mut attempts = 0;
