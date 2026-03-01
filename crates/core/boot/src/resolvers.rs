@@ -14,9 +14,12 @@
 
 //! Default identity and session resolvers for the I/O Bus pipeline.
 //!
-//! These are simple pass-through implementations suitable for bootstrapping.
-//! Once a real user store is wired into the I/O Bus model, the identity
-//! resolver can look up registered users via the database.
+//! The [`DefaultIdentityResolver`] looks up platform identities in the
+//! [`UserStore`] so that linked Telegram (and other) accounts resolve to
+//! their real kernel user instead of a synthetic `"telegram:<chat_id>"` ID
+//! that would fail `validate_principal`.
+
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use rara_kernel::{
@@ -25,27 +28,37 @@ use rara_kernel::{
         ingress::{IdentityResolver, SessionResolver},
         types::IngestError,
     },
-    process::{SessionId, principal::UserId},
+    process::{SessionId, principal::UserId, user::UserStore},
 };
+use tracing::debug;
 
 // ---------------------------------------------------------------------------
 // DefaultIdentityResolver
 // ---------------------------------------------------------------------------
 
-/// Simple identity resolver that maps platform user IDs to a unified
-/// [`UserId`] using the format `"{channel_type}:{platform_user_id}"`.
+/// Identity resolver backed by a [`UserStore`].
 ///
-/// This is a pass-through implementation for the initial I/O Bus wiring.
-/// A future version will look up the user store / auto-provision users.
-pub struct DefaultIdentityResolver;
-
-impl DefaultIdentityResolver {
-    /// Create a new resolver.
-    pub fn new() -> Self { Self }
+/// Resolution strategy per channel:
+///
+/// 1. Look up `user_store.get_by_platform(channel, platform_user_id)`.
+/// 2. If a linked user is found, return `UserId(user.name)` — the real
+///    kernel username (e.g. `"root"`).
+/// 3. If **not** found:
+///    - **Web** channel: fall through to the old synthetic format
+///      `"web:<platform_user_id>"` for backward compatibility (the Web
+///      adapter already sends the real username from JWT).
+///    - All other channels (Telegram, CLI, …): return
+///      `IdentityResolutionFailed` — the user must link their platform
+///      account first.
+pub struct DefaultIdentityResolver {
+    user_store: Arc<dyn UserStore>,
 }
 
-impl Default for DefaultIdentityResolver {
-    fn default() -> Self { Self::new() }
+impl DefaultIdentityResolver {
+    /// Create a new resolver backed by the given user store.
+    pub fn new(user_store: Arc<dyn UserStore>) -> Self {
+        Self { user_store }
+    }
 }
 
 #[async_trait]
@@ -56,10 +69,54 @@ impl IdentityResolver for DefaultIdentityResolver {
         platform_user_id: &str,
         _platform_chat_id: Option<&str>,
     ) -> Result<UserId, IngestError> {
-        // Simple: use "channel_type:platform_user_id" as the UserId.
-        // This can be improved later with a real user store lookup.
-        let user_id = UserId(format!("{}:{}", channel_type, platform_user_id));
-        Ok(user_id)
+        // 1. Try platform identity lookup.
+        let platform_label = channel_type.to_string();
+        match self
+            .user_store
+            .get_by_platform(&platform_label, platform_user_id)
+            .await
+        {
+            Ok(Some(user)) => {
+                debug!(
+                    channel = %channel_type,
+                    platform_user_id,
+                    resolved_user = %user.name,
+                    "identity resolved via platform link"
+                );
+                return Ok(UserId(user.name));
+            }
+            Ok(None) => {
+                // Not linked — fall through to channel-specific handling.
+            }
+            Err(e) => {
+                // DB error — log and treat as "not found" for Web, error for
+                // others.
+                tracing::warn!(
+                    error = %e,
+                    channel = %channel_type,
+                    platform_user_id,
+                    "platform identity lookup failed"
+                );
+            }
+        }
+
+        // 2. Channel-specific fallback.
+        match channel_type {
+            // Web channel: the platform_user_id typically comes from a JWT
+            // and is already the real username.  Synthesise a UserId so
+            // existing web flows keep working.
+            ChannelType::Web => {
+                let user_id = UserId(format!("{}:{}", channel_type, platform_user_id));
+                Ok(user_id)
+            }
+            // Non-web channels require a linked platform identity.
+            _ => Err(IngestError::IdentityResolutionFailed {
+                message: format!(
+                    "no linked user for platform {}:{}  — link your account first",
+                    channel_type, platform_user_id
+                ),
+            }),
+        }
     }
 }
 
@@ -101,25 +158,123 @@ impl SessionResolver for DefaultSessionResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rara_kernel::{
+        error::Result as KResult,
+        process::user::{KernelUser, PlatformIdentity},
+    };
+
+    // -- In-memory UserStore for unit tests ---------------------------------
+
+    struct FakeUserStore {
+        users:     Vec<KernelUser>,
+        platforms: Vec<(String, String, String)>, // (platform, platform_user_id, user_name)
+    }
+
+    impl FakeUserStore {
+        fn empty() -> Self {
+            Self {
+                users:     vec![],
+                platforms: vec![],
+            }
+        }
+
+        fn with_linked(platform: &str, platform_uid: &str, user_name: &str) -> Self {
+            let user = KernelUser {
+                name: user_name.to_string(),
+                ..KernelUser::root()
+            };
+            Self {
+                users:     vec![user],
+                platforms: vec![(
+                    platform.to_string(),
+                    platform_uid.to_string(),
+                    user_name.to_string(),
+                )],
+            }
+        }
+    }
+
+    #[async_trait]
+    impl UserStore for FakeUserStore {
+        async fn get_by_id(&self, _id: uuid::Uuid) -> KResult<Option<KernelUser>> {
+            Ok(None)
+        }
+
+        async fn get_by_name(&self, name: &str) -> KResult<Option<KernelUser>> {
+            Ok(self.users.iter().find(|u| u.name == name).cloned())
+        }
+
+        async fn get_by_platform(
+            &self,
+            platform: &str,
+            platform_user_id: &str,
+        ) -> KResult<Option<KernelUser>> {
+            for (p, puid, uname) in &self.platforms {
+                if p == platform && puid == platform_user_id {
+                    return Ok(self.users.iter().find(|u| u.name == *uname).cloned());
+                }
+            }
+            Ok(None)
+        }
+
+        async fn create(&self, _user: &KernelUser) -> KResult<()> { Ok(()) }
+        async fn update(&self, _user: &KernelUser) -> KResult<()> { Ok(()) }
+        async fn delete(&self, _id: uuid::Uuid) -> KResult<()> { Ok(()) }
+        async fn list(&self) -> KResult<Vec<KernelUser>> { Ok(vec![]) }
+        async fn link_platform(&self, _identity: &PlatformIdentity) -> KResult<()> { Ok(()) }
+        async fn unlink_platform(&self, _id: uuid::Uuid) -> KResult<()> { Ok(()) }
+        async fn list_platforms(&self, _user_id: uuid::Uuid) -> KResult<Vec<PlatformIdentity>> {
+            Ok(vec![])
+        }
+    }
+
+    // -- Tests --------------------------------------------------------------
 
     #[tokio::test]
-    async fn test_identity_resolver_format() {
-        let resolver = DefaultIdentityResolver::new();
-        let user_id = resolver
+    async fn test_telegram_linked_resolves_to_real_user() {
+        let store = Arc::new(FakeUserStore::with_linked("telegram", "12345", "root"));
+        let resolver = DefaultIdentityResolver::new(store);
+        let uid = resolver
             .resolve(ChannelType::Telegram, "12345", Some("chat-1"))
             .await
             .unwrap();
-        assert_eq!(user_id.0, "telegram:12345");
+        assert_eq!(uid.0, "root");
     }
 
     #[tokio::test]
-    async fn test_identity_resolver_no_chat_id() {
-        let resolver = DefaultIdentityResolver::new();
-        let user_id = resolver
+    async fn test_telegram_unlinked_returns_error() {
+        let store = Arc::new(FakeUserStore::empty());
+        let resolver = DefaultIdentityResolver::new(store);
+        let result = resolver
+            .resolve(ChannelType::Telegram, "99999", Some("chat-1"))
+            .await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IngestError::IdentityResolutionFailed { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_web_unlinked_falls_through() {
+        let store = Arc::new(FakeUserStore::empty());
+        let resolver = DefaultIdentityResolver::new(store);
+        let uid = resolver
             .resolve(ChannelType::Web, "user-abc", None)
             .await
             .unwrap();
-        assert_eq!(user_id.0, "web:user-abc");
+        assert_eq!(uid.0, "web:user-abc");
+    }
+
+    #[tokio::test]
+    async fn test_web_linked_resolves_to_real_user() {
+        let store = Arc::new(FakeUserStore::with_linked("web", "user-abc", "alice"));
+        let resolver = DefaultIdentityResolver::new(store);
+        let uid = resolver
+            .resolve(ChannelType::Web, "user-abc", None)
+            .await
+            .unwrap();
+        assert_eq!(uid.0, "alice");
     }
 
     #[tokio::test]

@@ -129,13 +129,21 @@ impl KernelInner {
     ///
     /// Called by both `Kernel::spawn()` and `handle_syscall(SpawnAgent)`.
     pub(crate) async fn validate_principal(&self, principal: &Principal) -> Result<()> {
-        let user = self
-            .user_store
-            .get_by_name(&principal.user_id.0)
-            .await?
-            .ok_or(KernelError::UserNotFound {
-                name: principal.user_id.0.clone(),
-            })?;
+        // Try name lookup first, then fall back to UUID-based ID lookup.
+        let user = match self.user_store.get_by_name(&principal.user_id.0).await? {
+            Some(u) => u,
+            None => {
+                // The UserId might be a UUID (e.g. from older synthetic IDs).
+                if let Ok(uuid) = principal.user_id.0.parse::<uuid::Uuid>() {
+                    self.user_store.get_by_id(uuid).await?
+                } else {
+                    None
+                }
+                .ok_or(KernelError::UserNotFound {
+                    name: principal.user_id.0.clone(),
+                })?
+            }
+        };
         if !user.enabled {
             return Err(KernelError::UserDisabled { name: user.name });
         }
