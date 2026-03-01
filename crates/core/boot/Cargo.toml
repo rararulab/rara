@@ -22,6 +22,7 @@ chrono.workspace = true
 jiff.workspace = true
 lettre.workspace = true
 opendal.workspace = true
+rara-agents.workspace = true
 rara-composio.workspace = true
 rara-domain-shared.workspace = true
 rara-k8s = { workspace = true, optional = true }
