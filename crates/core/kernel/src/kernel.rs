@@ -38,7 +38,7 @@
 //! Each spawned agent receives a [`ScopedKernelHandle`] providing syscall-like
 //! access to kernel capabilities (ProcessOps, MemoryOps, EventOps, GuardOps).
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::{Arc, Mutex}};
 
 use dashmap::DashMap;
 use jiff::Timestamp;
@@ -701,6 +701,8 @@ pub struct KernelConfig {
     pub default_child_limit:    usize,
     /// Default max LLM iterations for spawned agents.
     pub default_max_iterations: usize,
+    /// Scheduler configuration (priority queue + token budgets).
+    pub scheduler:              crate::scheduler::SchedulerConfig,
 }
 
 impl Default for KernelConfig {
@@ -709,6 +711,7 @@ impl Default for KernelConfig {
             max_concurrency:        16,
             default_child_limit:    8,
             default_max_iterations: 25,
+            scheduler:              crate::scheduler::SchedulerConfig::default(),
         }
     }
 }
@@ -738,6 +741,8 @@ pub struct Kernel {
     endpoint_registry: Arc<EndpointRegistry>,
     /// Registered egress adapters (mutable before start, consumed by start).
     egress_adapters:   HashMap<ChannelType, Arc<dyn EgressAdapter>>,
+    /// Shared priority scheduler for LLM call rate limiting.
+    scheduler:         Arc<Mutex<crate::scheduler::PriorityScheduler>>,
 }
 
 impl Kernel {
@@ -799,6 +804,10 @@ impl Kernel {
             outbound_bus: outbound_bus.clone(),
         });
 
+        let scheduler = Arc::new(Mutex::new(
+            crate::scheduler::PriorityScheduler::new(config.scheduler.clone()),
+        ));
+
         Self {
             inner,
             config,
@@ -808,6 +817,7 @@ impl Kernel {
             ingress_pipeline,
             endpoint_registry,
             egress_adapters: HashMap::new(),
+            scheduler,
         }
     }
 
@@ -928,6 +938,12 @@ impl Kernel {
     /// Access the model repository for runtime model resolution.
     pub fn model_repo(&self) -> &Arc<dyn crate::model_repo::ModelRepo> { &self.inner.model_repo }
 
+    /// Access the shared priority scheduler.
+    ///
+    /// Used by the process loop to record token usage after LLM calls, and
+    /// by the tick loop to enqueue/drain messages.
+    pub fn scheduler(&self) -> &Arc<Mutex<crate::scheduler::PriorityScheduler>> { &self.scheduler }
+
     /// Access the shared KernelInner (for constructing ScopedKernelHandles
     /// externally).
     pub(crate) fn inner(&self) -> &Arc<KernelInner> { &self.inner }
@@ -955,6 +971,10 @@ impl Kernel {
         ));
         let endpoint_registry = Arc::new(EndpointRegistry::new());
 
+        let scheduler = Arc::new(Mutex::new(
+            crate::scheduler::PriorityScheduler::new(config.scheduler.clone()),
+        ));
+
         Self {
             outbound_bus: inner.outbound_bus.clone(),
             stream_hub: inner.stream_hub.clone(),
@@ -964,6 +984,7 @@ impl Kernel {
             ingress_pipeline,
             endpoint_registry,
             egress_adapters: HashMap::new(),
+            scheduler,
         }
     }
 
@@ -1054,6 +1075,7 @@ mod tests {
             max_concurrency,
             default_child_limit: child_limit,
             default_max_iterations: 5,
+            ..Default::default()
         };
 
         let mut loader = ManifestLoader::new();
@@ -1089,6 +1111,7 @@ mod tests {
             tools:          vec![],
             max_children:        None,
             max_context_tokens:  None,
+            priority:            crate::process::Priority::default(),
             metadata:            serde_json::Value::Null,
         }
     }
@@ -1376,6 +1399,7 @@ mod tests {
             max_concurrency:        16,
             default_child_limit:    5,
             default_max_iterations: 5,
+            ..Default::default()
         };
         let mut manifest_loader = ManifestLoader::new();
         manifest_loader.load_bundled();
@@ -1391,6 +1415,8 @@ mod tests {
             Arc::new(NoopUserStore),
             Arc::new(NoopSessionRepository)
                 as Arc<dyn SessionRepository>,
+            Arc::new(NoopModelRepo)
+                as Arc<dyn crate::model_repo::ModelRepo>,
             Arc::new(InMemoryInboundBus::new(128))
                 as Arc<dyn InboundBus>,
             Arc::new(InMemoryOutboundBus::new(64))

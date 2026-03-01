@@ -107,6 +107,7 @@ impl FallibleWorker<AppState> for ProactiveAgentWorker {
             tools: vec![], // inherit all tools
             max_children: None,
             max_context_tokens: None,
+            priority: Default::default(),
             metadata: serde_json::Value::Null,
         };
 

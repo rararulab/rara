@@ -358,6 +358,7 @@ impl AppState {
                 max_concurrency:        16,
                 default_child_limit:    4,
                 default_max_iterations: 25,
+                ..Default::default()
             },
             llm_provider:     llm_provider.clone(),
             tool_registry:    tools.clone(),

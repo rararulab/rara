@@ -47,6 +47,7 @@ pub mod process_loop;
 pub mod prompt;
 pub mod provider;
 pub mod runner;
+pub mod scheduler;
 pub mod session;
 pub mod tick;
 pub mod tool;
@@ -60,8 +61,8 @@ pub use handle::{AgentHandle, EventOps, GuardOps, KernelHandle, MemoryOps, Proce
 pub use handle::{scoped::ScopedKernelHandle, spawn_tool::SpawnTool};
 pub use kernel::{Kernel, KernelConfig};
 pub use process::{
-    AgentId, AgentProcess, ProcessInfo, ProcessMessage, ProcessState, ProcessTable, SessionId,
-    Signal,
+    AgentId, AgentProcess, Priority, ProcessInfo, ProcessMessage, ProcessState, ProcessTable,
+    SessionId, Signal,
     manifest_loader::ManifestLoader,
     principal::{Principal, Role, UserId},
 };

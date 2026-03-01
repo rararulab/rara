@@ -22,7 +22,7 @@
 //! - If a process already exists for the session → send via mailbox
 //! - If not → spawn a new long-lived process via `Kernel::spawn()`
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -31,6 +31,7 @@ use crate::{
     io::{bus::InboundBus, types::InboundMessage},
     kernel::Kernel,
     process::{AgentManifest, ProcessMessage, principal::Principal},
+    scheduler::PriorityScheduler,
 };
 
 // ---------------------------------------------------------------------------
@@ -39,8 +40,10 @@ use crate::{
 
 /// The kernel's main event loop.
 ///
-/// Drains the [`InboundBus`] in batches and routes messages to existing
-/// agent processes (via mailbox) or spawns new ones via the [`Kernel`].
+/// Drains the [`InboundBus`] in batches, feeds them into a
+/// [`PriorityScheduler`] for priority-based reordering and rate limiting,
+/// then dispatches ready messages to existing agent processes (via mailbox)
+/// or spawns new ones via the [`Kernel`].
 ///
 /// Stops gracefully when the [`CancellationToken`] is cancelled.
 pub struct TickLoop {
@@ -50,15 +53,20 @@ pub struct TickLoop {
     kernel:      Arc<Kernel>,
     /// Maximum number of messages to drain per tick.
     batch_size:  usize,
+    /// Shared priority scheduler (owned by the Kernel, shared with process
+    /// loops so they can report token usage).
+    scheduler:   Arc<Mutex<PriorityScheduler>>,
 }
 
 impl TickLoop {
-    /// Create a new tick loop.
+    /// Create a new tick loop using the kernel's shared scheduler.
     pub fn new(inbound_bus: Arc<dyn InboundBus>, kernel: Arc<Kernel>) -> Self {
+        let scheduler = kernel.scheduler().clone();
         Self {
             inbound_bus,
             kernel,
             batch_size: 32,
+            scheduler,
         }
     }
 
@@ -87,10 +95,22 @@ impl TickLoop {
         }
     }
 
-    /// Process one tick: drain messages and dispatch.
+    /// Process one tick: drain messages from bus, feed into scheduler,
+    /// then dispatch ready messages in priority order.
     pub async fn tick(&self) {
+        // 1. Drain raw messages from the inbound bus.
         let messages = self.inbound_bus.drain(self.batch_size).await;
-        for msg in messages {
+
+        // 2. Feed into scheduler and drain ready messages.
+        let ready = {
+            let mut sched = self.scheduler.lock().expect("scheduler lock poisoned");
+            let default_priority = sched.config().default_priority;
+            sched.enqueue(messages, default_priority);
+            sched.drain_ready(self.batch_size)
+        };
+
+        // 3. Dispatch ready messages.
+        for msg in ready {
             self.dispatch(msg).await;
         }
     }
@@ -180,6 +200,7 @@ impl TickLoop {
             tools:          vec![],
             max_children:        None,
             max_context_tokens:  None,
+            priority:            crate::process::Priority::default(),
             metadata:            serde_json::Value::Null,
         })
     }
@@ -268,6 +289,7 @@ mod tests {
             max_concurrency:        16,
             default_child_limit:    5,
             default_max_iterations: 5,
+            ..Default::default()
         };
         let mut loader = ManifestLoader::new();
         loader.load_bundled();

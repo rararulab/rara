@@ -39,6 +39,39 @@ use uuid::Uuid;
 
 use crate::{error::Result, io::types::InboundMessage};
 
+// ---------------------------------------------------------------------------
+// Priority
+// ---------------------------------------------------------------------------
+
+/// Dispatch priority for agent messages.
+///
+/// Higher priority messages are processed before lower ones when the
+/// scheduler is draining the inbound bus. Critical messages bypass rate
+/// limiting entirely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
+pub enum Priority {
+    /// Background tasks, batch jobs.
+    Low = 0,
+    /// Default priority for interactive messages.
+    #[default]
+    Normal = 1,
+    /// Elevated priority (e.g., admin requests).
+    High = 2,
+    /// System-critical messages (bypass rate limiting).
+    Critical = 3,
+}
+
+impl std::fmt::Display for Priority {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Priority::Low => write!(f, "low"),
+            Priority::Normal => write!(f, "normal"),
+            Priority::High => write!(f, "high"),
+            Priority::Critical => write!(f, "critical"),
+        }
+    }
+}
+
 /// Unique identifier for a running agent process.
 ///
 /// Each spawned agent receives a fresh `AgentId` (UUID v4). This is analogous
@@ -120,6 +153,9 @@ pub struct AgentManifest {
     /// (8192) when `None`.
     #[serde(default)]
     pub max_context_tokens:  Option<usize>,
+    /// Dispatch priority for scheduling.
+    #[serde(default)]
+    pub priority:            Priority,
     /// Arbitrary metadata for extension.
     #[serde(default)]
     pub metadata:            serde_json::Value,
@@ -452,6 +488,7 @@ mod tests {
             tools:          vec!["read_file".to_string()],
             max_children:        None,
             max_context_tokens:  None,
+            priority:            Priority::default(),
             metadata:            serde_json::Value::Null,
         }
     }

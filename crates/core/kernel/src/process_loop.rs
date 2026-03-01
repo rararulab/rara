@@ -169,6 +169,7 @@ mod tests {
             tools:          vec![],
             max_children:        None,
             max_context_tokens:  None,
+            priority:            crate::process::Priority::default(),
             metadata:            serde_json::Value::Null,
         }
     }
