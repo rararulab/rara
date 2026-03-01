@@ -228,10 +228,25 @@ impl AppConfig {
             .await
             .whatever_context("Failed to initialize infrastructure services")?;
 
-        let app_state = rara_workers::worker_state::AppState::init(
-            &db_store,
+        let pool = db_store.pool().clone();
+
+        // -- runtime settings (needed before RaraState for settings_provider) -
+
+        let settings_svc =
+            rara_backend_admin::settings::SettingsSvc::load(db_store.kv_store(), pool.clone())
+                .await
+                .whatever_context("Failed to initialize runtime settings")?;
+        let settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider> =
+            Arc::new(settings_svc.clone());
+        info!("Runtime settings service loaded");
+
+        // -- RaraState (kernel deps) -----------------------------------------
+
+        let rara = rara_boot::state::RaraState::init(
+            pool.clone(),
             object_store,
             notify_client.clone(),
+            settings_provider.clone(),
             self.memory.mem0_base_url.clone(),
             self.memory.memos_base_url.clone(),
             self.memory.memos_token.clone(),
@@ -239,111 +254,24 @@ impl AppConfig {
             self.memory.hindsight_bank_id.clone(),
         )
         .await
-        .whatever_context("Failed to initialize application state")?;
+        .whatever_context("Failed to initialize RaraState")?;
 
-        // -- HTTP routes -----------------------------------------------------
+        // -- BackendState (domain services) ----------------------------------
 
-        let (domain_routes, openapi) = app_state.routes();
-        let swagger_ui =
-            utoipa_swagger_ui::SwaggerUi::new("/swagger-ui").url("/api/openapi.json", openapi);
+        let backend = rara_backend_admin::state::BackendState::init(
+            pool.clone(),
+            notify_client.clone(),
+            rara.session_repo.clone(),
+            settings_provider.clone(),
+            settings_svc.clone(),
+        )
+        .await
+        .whatever_context("Failed to initialize BackendState")?;
 
-        // -- Auth service + routes -------------------------------------------
-        let jwt_secret = self.jwt_secret.clone().unwrap_or_else(|| {
-            use rand::Rng;
-            let secret: String = rand::rng()
-                .sample_iter(&rand::distr::Alphanumeric)
-                .take(32)
-                .map(char::from)
-                .collect();
-            warn!("JWT_SECRET not configured, using random secret (tokens will not survive restarts)");
-            secret
-        });
-        let jwt_config = rara_domain_user::jwt::JwtConfig::new(jwt_secret);
-        let auth_service =
-            rara_domain_user::service::AuthService::new(db_store.pool().clone(), jwt_config.clone());
-        let auth_routes = rara_domain_user::router::auth_routes(auth_service)
-            .layer(axum::Extension(jwt_config));
-
-        // Create WebAdapter early so we can mount its router into the HTTP server.
-        let web_adapter = Arc::new(rara_channels::web::WebAdapter::new());
-        let web_router = web_adapter.router();
-        let routes_fn: Box<dyn Fn(axum::Router) -> axum::Router + Send + Sync> =
-            Box::new(move |router| {
-                health_routes(router)
-                    .merge(domain_routes.clone())
-                    .merge(auth_routes.clone())
-                    .merge(swagger_ui.clone())
-                    .nest("/api/v1/kernel/chat", web_router.clone())
-            });
-
-        info!("Application initialized successfully");
-
-        // -- start servers ---------------------------------------------------
-
-        let running = Arc::new(AtomicBool::new(true));
-        let cancellation_token = CancellationToken::new();
-
-        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-
-        let mut grpc_handle = start_grpc_server(&self.grpc, &[Arc::new(HelloService)])
-            .whatever_context("Failed to start gRPC server")?;
-
-        info!("starting rest server ...");
-        let mut http_handle = start_rest_server(self.http.clone(), vec![routes_fn])
-            .await
-            .whatever_context("Failed to start REST server")?;
-
-        grpc_handle
-            .wait_for_start()
-            .await
-            .whatever_context("gRPC server failed to report started")?;
-        http_handle
-            .wait_for_start()
-            .await
-            .whatever_context("REST server failed to report started")?;
-
-        // -- background workers ----------------------------------------------
-
-        let worker_runtime = Arc::new(
-            common_runtime::RuntimeOptions::builder()
-                .thread_name("raraworker".to_owned())
-                .enable_io(true)
-                .enable_time(true)
-                .build()
-                .create()
-                .whatever_context("Failed to create worker runtime")?,
-        );
-        let manager_config = common_worker::ManagerConfig {
-            runtime:          Some(worker_runtime),
-            shutdown_timeout: Duration::from_secs(30),
-        };
-        let mut worker_manager =
-            common_worker::Manager::with_state_and_config(app_state.clone(), manager_config);
-
-        // -- telegram adapter (optional) --------------------------------------
-
-        let telegram_adapter = match Self::try_build_telegram(&app_state, db_store.pool().clone(), &self.main_service_http_base).await {
-            Ok(Some(adapter)) => {
-                info!("Telegram adapter built");
-                Some(adapter)
-            }
-            Ok(None) => {
-                info!("Telegram not configured (bot_token unset in settings), skipping");
-                None
-            }
-            Err(e) => {
-                warn!(error = %e, "Failed to build Telegram adapter, skipping");
-                None
-            }
-        };
-
-        // -- Kernel (boot + start) --------------------------------------------
-
-        let settings_provider: std::sync::Arc<dyn rara_domain_shared::settings::SettingsProvider> =
-            std::sync::Arc::new(app_state.settings_svc.clone());
+        // -- Kernel (boot) ---------------------------------------------------
 
         // Ensure root + system users exist before booting the kernel.
-        rara_boot::user_store::ensure_default_users(db_store.pool())
+        rara_boot::user_store::ensure_default_users(&pool)
             .await
             .whatever_context("Failed to ensure default kernel users")?;
 
@@ -357,15 +285,43 @@ impl AppConfig {
         );
 
         let mut kernel = rara_boot::kernel::boot(rara_boot::kernel::BootConfig {
-            provider_registry: app_state.provider_registry.clone(),
-            tool_registry: app_state.tool_registry.clone(),
-            agent_registry: rara_boot::manifests::load_default_registry(),
-            user_store:    Arc::new(rara_boot::user_store::PgUserStore::new(db_store.pool().clone())),
-            session_repo:  app_state.session_repo.clone(),
-            settings:      settings_provider,
-            guard:         Some(Arc::new(path_guard)),
+            provider_registry: rara.provider_registry.clone(),
+            tool_registry:     rara.tool_registry.clone(),
+            agent_registry:    rara_boot::manifests::load_default_registry(),
+            user_store:        rara.user_store.clone(),
+            session_repo:      rara.session_repo.clone(),
+            settings:          settings_provider.clone(),
+            guard:             Some(Arc::new(path_guard)),
             ..Default::default()
         });
+
+        // -- HTTP routes (need kernel Arc for agent/kernel routes) -----------
+
+        // Create WebAdapter early so we can mount its router into the HTTP server.
+        let web_adapter = Arc::new(rara_channels::web::WebAdapter::new());
+        let web_router = web_adapter.router();
+
+        // -- telegram adapter (optional) --------------------------------------
+
+        let telegram_adapter = match Self::try_build_telegram(
+            &backend.settings_svc,
+            &backend.contact_repo,
+            pool.clone(),
+            &self.main_service_http_base,
+        ).await {
+            Ok(Some(adapter)) => {
+                info!("Telegram adapter built");
+                Some(adapter)
+            }
+            Ok(None) => {
+                info!("Telegram not configured (bot_token unset in settings), skipping");
+                None
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to build Telegram adapter, skipping");
+                None
+            }
+        };
 
         // Register egress adapters.
         if let Some(ref tg) = telegram_adapter {
@@ -403,7 +359,87 @@ impl AppConfig {
 
         // Start kernel I/O subsystem (TickLoop + Egress).
         // start() consumes self and returns Arc<Kernel>.
+        let cancellation_token = CancellationToken::new();
         let kernel = kernel.start(cancellation_token.clone());
+
+        // Now build routes with the running kernel.
+        let (domain_routes, openapi) = backend.routes(
+            &kernel,
+            &rara.skill_registry,
+            &rara.mcp_manager,
+            &rara.coding_task_service,
+        );
+        let swagger_ui =
+            utoipa_swagger_ui::SwaggerUi::new("/swagger-ui").url("/api/openapi.json", openapi);
+
+        // -- Auth service + routes -------------------------------------------
+        let jwt_secret = self.jwt_secret.clone().unwrap_or_else(|| {
+            use rand::Rng;
+            let secret: String = rand::rng()
+                .sample_iter(&rand::distr::Alphanumeric)
+                .take(32)
+                .map(char::from)
+                .collect();
+            warn!("JWT_SECRET not configured, using random secret (tokens will not survive restarts)");
+            secret
+        });
+        let jwt_config = rara_domain_user::jwt::JwtConfig::new(jwt_secret);
+        let auth_service =
+            rara_domain_user::service::AuthService::new(pool.clone(), jwt_config.clone());
+        let auth_routes = rara_domain_user::router::auth_routes(auth_service)
+            .layer(axum::Extension(jwt_config));
+
+        let routes_fn: Box<dyn Fn(axum::Router) -> axum::Router + Send + Sync> =
+            Box::new(move |router| {
+                health_routes(router)
+                    .merge(domain_routes.clone())
+                    .merge(auth_routes.clone())
+                    .merge(swagger_ui.clone())
+                    .nest("/api/v1/kernel/chat", web_router.clone())
+            });
+
+        info!("Application initialized successfully");
+
+        // -- start servers ---------------------------------------------------
+
+        let running = Arc::new(AtomicBool::new(true));
+
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+
+        let mut grpc_handle = start_grpc_server(&self.grpc, &[Arc::new(HelloService)])
+            .whatever_context("Failed to start gRPC server")?;
+
+        info!("starting rest server ...");
+        let mut http_handle = start_rest_server(self.http.clone(), vec![routes_fn])
+            .await
+            .whatever_context("Failed to start REST server")?;
+
+        grpc_handle
+            .wait_for_start()
+            .await
+            .whatever_context("gRPC server failed to report started")?;
+        http_handle
+            .wait_for_start()
+            .await
+            .whatever_context("REST server failed to report started")?;
+
+        // -- background workers ----------------------------------------------
+
+        let worker_runtime = Arc::new(
+            common_runtime::RuntimeOptions::builder()
+                .thread_name("raraworker".to_owned())
+                .enable_io(true)
+                .enable_time(true)
+                .build()
+                .create()
+                .whatever_context("Failed to create worker runtime")?,
+        );
+        let manager_config = common_worker::ManagerConfig {
+            runtime:          Some(worker_runtime),
+            shutdown_timeout: Duration::from_secs(30),
+        };
+        let mut worker_manager =
+            common_worker::Manager::with_state_and_config((), manager_config);
 
         // Start channel adapters with the kernel's ingress pipeline.
         if let Some(ref tg_adapter) = telegram_adapter {
@@ -503,13 +539,14 @@ impl AppConfig {
     /// The adapter is NOT started here — the caller is responsible for
     /// calling `adapter.start(sink)` after the I/O pipeline is ready.
     async fn try_build_telegram(
-        state: &rara_workers::worker_state::AppState,
+        settings_svc: &rara_backend_admin::settings::SettingsSvc,
+        contact_repo: &rara_channels::telegram::contacts::repository::ContactRepository,
         pool: sqlx::PgPool,
         main_service_http_base: &str,
     ) -> Result<Option<Arc<rara_channels::telegram::TelegramAdapter>>, Whatever> {
         use rara_domain_shared::settings::{SettingsProvider, keys};
 
-        let settings: Arc<dyn SettingsProvider> = Arc::new(state.settings_svc.clone());
+        let settings: Arc<dyn SettingsProvider> = Arc::new(settings_svc.clone());
         let token = match settings.get(keys::TELEGRAM_BOT_TOKEN).await {
             Some(t) if !t.is_empty() => t,
             _ => return Ok(None),
@@ -534,7 +571,7 @@ impl AppConfig {
         // Build contact tracker from the contact repository.
         let contact_tracker: Arc<dyn rara_channels::telegram::contacts::ContactTracker> =
             Arc::new(ContactRepoTracker {
-                repo: state.contact_repo.clone(),
+                repo: contact_repo.clone(),
             });
 
         // Build link service for /link command handling.

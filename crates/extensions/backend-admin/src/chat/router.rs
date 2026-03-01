@@ -16,7 +16,7 @@
 //!
 //! All endpoints live under `/api/v1/chat/` and use JSON request/response
 //! bodies. The router is constructed via [`routes`] and expects a
-//! [`ChatService`] as shared axum state.
+//! [`SessionService`] as shared axum state.
 //!
 //! ## Route table
 //!
@@ -45,7 +45,7 @@ use serde::Deserialize;
 use tracing::instrument;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
-use crate::chat::{error::ChatError, model_catalog::ChatModel, service::ChatService};
+use crate::chat::{error::ChatError, model_catalog::ChatModel, service::SessionService};
 
 // ---------------------------------------------------------------------------
 // Request / Response types
@@ -127,19 +127,19 @@ pub struct BindChannelRequest {
 // ---------------------------------------------------------------------------
 
 /// Build an axum `Router` with all chat endpoints and the given
-/// [`ChatService`] as shared state.
-pub fn routes(service: ChatService) -> OpenApiRouter {
+/// [`SessionService`] as shared state.
+pub fn routes(service: SessionService) -> OpenApiRouter {
     model_routes(service.clone()).merge(session_routes(service))
 }
 
-fn model_routes(service: ChatService) -> OpenApiRouter {
+fn model_routes(service: SessionService) -> OpenApiRouter {
     OpenApiRouter::new()
         .routes(routes!(list_models))
         .routes(routes!(set_favorites))
         .with_state(service)
 }
 
-fn session_routes(service: ChatService) -> OpenApiRouter {
+fn session_routes(service: SessionService) -> OpenApiRouter {
     OpenApiRouter::new()
         .routes(routes!(create_session, list_sessions))
         .routes(routes!(get_session, update_session, delete_session))
@@ -167,7 +167,7 @@ fn session_routes(service: ChatService) -> OpenApiRouter {
         (status = 200, description = "List of available models", body = Vec<ChatModel>),
     )
 )]
-async fn list_models(State(service): State<ChatService>) -> Json<Vec<ChatModel>> {
+async fn list_models(State(service): State<SessionService>) -> Json<Vec<ChatModel>> {
     let models = service.list_models().await;
     Json(models)
 }
@@ -185,7 +185,7 @@ async fn list_models(State(service): State<ChatService>) -> Json<Vec<ChatModel>>
 )]
 #[instrument(skip(service, req))]
 async fn set_favorites(
-    State(service): State<ChatService>,
+    State(service): State<SessionService>,
     Json(req): Json<SetFavoritesRequest>,
 ) -> Result<Json<Vec<String>>, ChatError> {
     let ids = req.model_ids;
@@ -205,7 +205,7 @@ async fn set_favorites(
 )]
 #[instrument(skip(service, req))]
 async fn create_session(
-    State(service): State<ChatService>,
+    State(service): State<SessionService>,
     Json(req): Json<CreateSessionRequest>,
 ) -> Result<(StatusCode, Json<SessionEntry>), ChatError> {
     let key = SessionKey::from_raw(req.key);
@@ -230,7 +230,7 @@ async fn create_session(
 )]
 #[instrument(skip(service))]
 async fn list_sessions(
-    State(service): State<ChatService>,
+    State(service): State<SessionService>,
     Query(q): Query<ListSessionsQuery>,
 ) -> Result<Json<Vec<SessionEntry>>, ChatError> {
     let sessions = service.list_sessions(q.limit, q.offset).await?;
@@ -249,7 +249,7 @@ async fn list_sessions(
 )]
 #[instrument(skip(service))]
 async fn get_session(
-    State(service): State<ChatService>,
+    State(service): State<SessionService>,
     Path(key): Path<String>,
 ) -> Result<Json<SessionEntry>, ChatError> {
     let session = service.get_session(&SessionKey::from_raw(key)).await?;
@@ -270,7 +270,7 @@ async fn get_session(
 )]
 #[instrument(skip(service, req))]
 async fn update_session(
-    State(service): State<ChatService>,
+    State(service): State<SessionService>,
     Path(key): Path<String>,
     Json(req): Json<UpdateSessionRequest>,
 ) -> Result<Json<SessionEntry>, ChatError> {
@@ -297,7 +297,7 @@ async fn update_session(
 )]
 #[instrument(skip(service))]
 async fn delete_session(
-    State(service): State<ChatService>,
+    State(service): State<SessionService>,
     Path(key): Path<String>,
 ) -> Result<StatusCode, ChatError> {
     service.delete_session(&SessionKey::from_raw(key)).await?;
@@ -321,7 +321,7 @@ async fn delete_session(
 )]
 #[instrument(skip(service))]
 async fn get_messages(
-    State(service): State<ChatService>,
+    State(service): State<SessionService>,
     Path(key): Path<String>,
     Query(q): Query<GetMessagesQuery>,
 ) -> Result<Json<Vec<ChatMessage>>, ChatError> {
@@ -344,7 +344,7 @@ async fn get_messages(
 )]
 #[instrument(skip(service))]
 async fn clear_messages(
-    State(service): State<ChatService>,
+    State(service): State<SessionService>,
     Path(key): Path<String>,
 ) -> Result<StatusCode, ChatError> {
     service.clear_messages(&SessionKey::from_raw(key)).await?;
@@ -365,7 +365,7 @@ async fn clear_messages(
 )]
 #[instrument(skip(service, req))]
 async fn fork_session(
-    State(service): State<ChatService>,
+    State(service): State<SessionService>,
     Path(key): Path<String>,
     Json(req): Json<ForkSessionRequest>,
 ) -> Result<(StatusCode, Json<SessionEntry>), ChatError> {
@@ -392,7 +392,7 @@ async fn fork_session(
 )]
 #[instrument(skip(service, req))]
 async fn bind_channel(
-    State(service): State<ChatService>,
+    State(service): State<SessionService>,
     Json(req): Json<BindChannelRequest>,
 ) -> Result<Json<ChannelBinding>, ChatError> {
     let binding = service
@@ -423,7 +423,7 @@ async fn bind_channel(
 )]
 #[instrument(skip(service))]
 async fn get_channel_binding(
-    State(service): State<ChatService>,
+    State(service): State<SessionService>,
     Path((channel_type, account, chat_id)): Path<(String, String, String)>,
 ) -> Result<Json<Option<ChannelBinding>>, ChatError> {
     let binding = service

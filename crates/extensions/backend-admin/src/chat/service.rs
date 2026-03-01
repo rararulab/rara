@@ -14,7 +14,7 @@
 
 //! Chat domain service — session/message/model management.
 //!
-//! [`ChatService`] is the primary entry point for all chat CRUD operations.
+//! [`SessionService`] is the primary entry point for all chat CRUD operations.
 //! It holds references to the session repository and settings, and exposes
 //! high-level methods for session management, message persistence, model
 //! catalog queries, and channel bindings.
@@ -38,7 +38,7 @@ use crate::chat::{
 
 /// Central orchestrator for session-based AI chat.
 ///
-/// `ChatService` ties together two concerns:
+/// `SessionService` ties together two concerns:
 ///
 /// 1. **Session persistence** — CRUD operations on sessions and messages,
 ///    delegated to a [`SessionRepository`] implementation.
@@ -50,7 +50,7 @@ use crate::chat::{
 /// The service is cheaply cloneable (`Arc`-wrapped internals) and safe to
 /// share across axum handler tasks.
 #[derive(Clone)]
-pub struct ChatService {
+pub struct SessionService {
     /// Persistence layer for sessions, messages, and channel bindings.
     session_repo:      Arc<dyn SessionRepository>,
     /// Cached catalog of models fetched from OpenRouter.
@@ -59,7 +59,7 @@ pub struct ChatService {
     settings_provider: Arc<dyn SettingsProvider>,
 }
 
-impl ChatService {
+impl SessionService {
     /// Create a new chat service with the given dependencies.
     #[must_use]
     pub fn new(
@@ -411,8 +411,8 @@ impl ChatService {
     }
 }
 
-impl std::fmt::Debug for ChatService {
+impl std::fmt::Debug for SessionService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ChatService").finish_non_exhaustive()
+        f.debug_struct("SessionService").finish_non_exhaustive()
     }
 }

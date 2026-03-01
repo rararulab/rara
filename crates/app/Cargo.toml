@@ -30,7 +30,6 @@ rara-domain-user = { workspace = true }
 rara-kernel = { workspace = true }
 rara-server = { workspace = true }
 rara-sessions = { workspace = true }
-rara-workers = { workspace = true }
 serde = { workspace = true }
 snafu = { workspace = true }
 sqlx = { workspace = true }

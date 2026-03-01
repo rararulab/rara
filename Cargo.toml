@@ -119,7 +119,6 @@ members = [
     "crates/server",
     "crates/paths",
     "crates/jobspy-sys",
-    "crates/workers",
     "crates/sessions",
     "crates/memory",
     "crates/skills",
@@ -256,7 +255,6 @@ rara-queue = { path = "crates/core/queue" }
 rara-server = { path = "crates/server" }
 rara-sessions = { path = "crates/sessions" }
 rara-skills = { path = "crates/skills" }
-rara-workers = { path = "crates/workers" }
 rara-workspace = { path = "crates/extensions/workspace" }
 
 yunara-store = { path = "crates/common/yunara-store" }

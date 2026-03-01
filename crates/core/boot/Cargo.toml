@@ -34,6 +34,7 @@ rara-kernel.workspace = true
 rara-mcp.workspace = true
 rara-memory = { workspace = true }
 rara-paths.workspace = true
+rara-sessions.workspace = true
 rara-queue.workspace = true
 rara-skills.workspace = true
 rara-workspace = { workspace = true }
