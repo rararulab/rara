@@ -959,10 +959,21 @@ impl Kernel {
 
             // Record timing and result metrics on the span.
             let elapsed = start.elapsed();
-            turn_span.record("total_ms", elapsed.as_millis() as u64);
+            let elapsed_ms = elapsed.as_millis() as u64;
+            turn_span.record("total_ms", elapsed_ms);
             if let Ok(ref result) = turn_result {
                 turn_span.record("iterations", result.iterations);
                 turn_span.record("tool_calls", result.tool_calls);
+            }
+
+            // Emit turn metrics before closing stream.
+            if let Ok(ref result) = turn_result {
+                stream_handle.emit(crate::io::stream::StreamEvent::TurnMetrics {
+                    duration_ms: elapsed_ms,
+                    iterations: result.iterations,
+                    tool_calls: result.tool_calls,
+                    model: result.model.clone(),
+                });
             }
 
             // Close stream.

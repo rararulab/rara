@@ -103,6 +103,13 @@ pub enum WebEvent {
     ToolCallEnd { id: String },
     /// Progress stage update.
     Progress { stage: String },
+    /// Turn metrics summary (sent before Done).
+    TurnMetrics {
+        duration_ms: u64,
+        iterations: usize,
+        tool_calls: usize,
+        model: String,
+    },
     /// Stream completed (no more deltas).
     Done,
 }
@@ -579,6 +586,9 @@ fn spawn_stream_forwarder(
                         }
                         StreamEvent::ToolCallEnd { id } => WebEvent::ToolCallEnd { id },
                         StreamEvent::Progress { stage } => WebEvent::Progress { stage },
+                        StreamEvent::TurnMetrics { duration_ms, iterations, tool_calls, model } => {
+                            WebEvent::TurnMetrics { duration_ms, iterations, tool_calls, model }
+                        }
                     };
                     WebAdapter::broadcast_event(&sessions, &session_key, &web_event);
                 }

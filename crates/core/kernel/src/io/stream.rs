@@ -77,6 +77,13 @@ pub enum StreamEvent {
     ToolCallEnd { id: String },
     /// Progress stage update.
     Progress { stage: String },
+    /// Turn metrics summary (emitted before stream close).
+    TurnMetrics {
+        duration_ms: u64,
+        iterations: usize,
+        tool_calls: usize,
+        model: String,
+    },
 }
 
 // ---------------------------------------------------------------------------

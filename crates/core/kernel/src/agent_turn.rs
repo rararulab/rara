@@ -50,6 +50,8 @@ pub struct AgentTurnResult {
     pub iterations: usize,
     /// Number of tool calls executed.
     pub tool_calls: usize,
+    /// Model used for this turn.
+    pub model:      String,
 }
 
 /// Execute a single agent turn inline: build messages, stream LLM responses,
@@ -303,6 +305,7 @@ pub(crate) async fn run_inline_agent_loop(
                 text: accumulated_text,
                 iterations: iteration + 1,
                 tool_calls: tool_calls_made,
+                model: model.clone(),
             });
         }
 
@@ -431,6 +434,7 @@ pub(crate) async fn run_inline_agent_loop(
         text:       last_accumulated_text,
         iterations: max_iterations,
         tool_calls: tool_calls_made,
+        model:      model.clone(),
     })
 }
 
