@@ -96,7 +96,15 @@ type WebEvent =
   | { type: "tool_call_start"; name: string; id: string }
   | { type: "tool_call_end"; id: string }
   | { type: "progress"; stage: string }
-  | { type: "done" };
+  | { type: "done" }
+  | { type: "turn_metrics"; duration_ms: number; iterations: number; tool_calls: number; model: string };
+
+interface TurnMetrics {
+  duration_ms: number;
+  iterations: number;
+  tool_calls: number;
+  model: string;
+}
 
 interface ActiveToolCall {
   id: string;
@@ -536,7 +544,7 @@ function ImageBlock({ url }: { url: string }) {
   );
 }
 
-function MessageBubble({ msg }: { msg: ChatMessageData }) {
+function MessageBubble({ msg, metrics }: { msg: ChatMessageData; metrics?: TurnMetrics | null }) {
   const isUser = msg.role === "user";
   const isSystem = msg.role === "system";
   const isMultimodal = Array.isArray(msg.content);
@@ -552,7 +560,7 @@ function MessageBubble({ msg }: { msg: ChatMessageData }) {
 
   return (
     <div
-      className={cn("flex gap-3", isUser ? "flex-row-reverse" : "flex-row")}
+      className={cn("group flex gap-3", isUser ? "flex-row-reverse" : "flex-row")}
     >
       {/* Avatar */}
       <div
@@ -616,6 +624,11 @@ function MessageBubble({ msg }: { msg: ChatMessageData }) {
           )}
         >
           {formatTime(msg.created_at)}
+          {!isUser && metrics && (
+            <span className="ml-2 opacity-0 group-hover:opacity-100 transition-opacity">
+              {metrics.model.split("/").pop() ?? metrics.model} · {(metrics.duration_ms / 1000).toFixed(1)}s · {metrics.iterations} iter · {metrics.tool_calls} tools
+            </span>
+          )}
         </p>
       </div>
     </div>
@@ -1103,6 +1116,7 @@ function ChatThread({
   const [imageInputValue, setImageInputValue] = useState("");
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const [stream, setStream] = useState<StreamState>(INITIAL_STREAM_STATE);
+  const [latestMetrics, setLatestMetrics] = useState<TurnMetrics | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1199,6 +1213,14 @@ function ChatThread({
                 ...s,
                 isThinking: event.stage === "thinking",
               }));
+              break;
+            case "turn_metrics":
+              setLatestMetrics({
+                duration_ms: event.duration_ms,
+                iterations: event.iterations,
+                tool_calls: event.tool_calls,
+                model: event.model,
+              });
               break;
             case "done":
             case "message":
@@ -1441,9 +1463,18 @@ function ChatThread({
 
         {!messagesQuery.isLoading && (
           <div className="space-y-4">
-            {visibleMessages.map((msg) => (
-              <MessageBubble key={msg.seq} msg={msg} />
-            ))}
+            {visibleMessages.map((msg, i) => {
+              const isLastAssistant =
+                msg.role === "assistant" &&
+                !visibleMessages.slice(i + 1).some((m) => m.role === "assistant");
+              return (
+                <MessageBubble
+                  key={msg.seq}
+                  msg={msg}
+                  metrics={isLastAssistant ? latestMetrics : undefined}
+                />
+              );
+            })}
 
             {/* Live streaming assistant bubble */}
             {(stream.isStreaming || stream.text || stream.error) && (
