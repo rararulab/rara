@@ -677,6 +677,7 @@ mod tests {
             created_at: Timestamp::now(),
             finished_at: None,
             result: None,
+            created_files: vec![],
         });
 
         let token = CancellationToken::new();
@@ -1164,11 +1165,12 @@ mod tests {
             session_id:  SessionId::new("test"),
             manifest:    test_manifest("parent"),
             principal:   Principal::user("test"),
-            env:         AgentEnv::default(),
-            state:       ProcessState::Running,
-            created_at:  Timestamp::now(),
-            finished_at: None,
-            result:      None,
+            env:           AgentEnv::default(),
+            state:         ProcessState::Running,
+            created_at:    Timestamp::now(),
+            finished_at:   None,
+            result:        None,
+            created_files: vec![],
         });
 
         inner.process_table.insert(AgentProcess {
@@ -1177,11 +1179,12 @@ mod tests {
             session_id:  SessionId::new("test"),
             manifest:    test_manifest("child1"),
             principal:   Principal::user("test"),
-            env:         AgentEnv::default(),
-            state:       ProcessState::Running,
-            created_at:  Timestamp::now(),
-            finished_at: None,
-            result:      None,
+            env:           AgentEnv::default(),
+            state:         ProcessState::Running,
+            created_at:    Timestamp::now(),
+            finished_at:   None,
+            result:        None,
+            created_files: vec![],
         });
 
         inner.process_table.insert(AgentProcess {
@@ -1190,11 +1193,12 @@ mod tests {
             session_id:  SessionId::new("test"),
             manifest:    test_manifest("child2"),
             principal:   Principal::user("test"),
-            env:         AgentEnv::default(),
-            state:       ProcessState::Running,
-            created_at:  Timestamp::now(),
-            finished_at: None,
-            result:      None,
+            env:           AgentEnv::default(),
+            state:         ProcessState::Running,
+            created_at:    Timestamp::now(),
+            finished_at:   None,
+            result:        None,
+            created_files: vec![],
         });
 
         inner.process_table.insert(AgentProcess {
@@ -1203,11 +1207,12 @@ mod tests {
             session_id:  SessionId::new("test"),
             manifest:    test_manifest("grandchild"),
             principal:   Principal::user("test"),
-            env:         AgentEnv::default(),
-            state:       ProcessState::Running,
-            created_at:  Timestamp::now(),
-            finished_at: None,
-            result:      None,
+            env:           AgentEnv::default(),
+            state:         ProcessState::Running,
+            created_at:    Timestamp::now(),
+            finished_at:   None,
+            result:        None,
+            created_files: vec![],
         });
 
         let handle = ScopedKernelHandle {
@@ -1253,6 +1258,7 @@ mod tests {
             created_at: Timestamp::now(),
             finished_at: None,
             result: None,
+            created_files: vec![],
         });
 
         let handle = ScopedKernelHandle {
@@ -1354,16 +1360,17 @@ mod tests {
         let target_id = AgentId::new();
 
         inner.process_table.insert(AgentProcess {
-            agent_id:    target_id,
-            parent_id:   None,
-            session_id:  SessionId::new("test"),
-            manifest:    test_manifest("target"),
-            principal:   Principal::user("test"),
-            env:         AgentEnv::default(),
-            state:       ProcessState::Running,
-            created_at:  Timestamp::now(),
-            finished_at: None,
-            result:      None,
+            agent_id:      target_id,
+            parent_id:     None,
+            session_id:    SessionId::new("test"),
+            manifest:      test_manifest("target"),
+            principal:     Principal::user("test"),
+            env:           AgentEnv::default(),
+            state:         ProcessState::Running,
+            created_at:    Timestamp::now(),
+            finished_at:   None,
+            result:        None,
+            created_files: vec![],
         });
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(16);
@@ -1397,16 +1404,17 @@ mod tests {
         let target_id = AgentId::new();
 
         inner.process_table.insert(AgentProcess {
-            agent_id:    target_id,
-            parent_id:   None,
-            session_id:  SessionId::new("test"),
-            manifest:    test_manifest("target"),
-            principal:   Principal::user("test"),
-            env:         AgentEnv::default(),
-            state:       ProcessState::Paused,
-            created_at:  Timestamp::now(),
-            finished_at: None,
-            result:      None,
+            agent_id:      target_id,
+            parent_id:     None,
+            session_id:    SessionId::new("test"),
+            manifest:      test_manifest("target"),
+            principal:     Principal::user("test"),
+            env:           AgentEnv::default(),
+            state:         ProcessState::Paused,
+            created_at:    Timestamp::now(),
+            finished_at:   None,
+            result:        None,
+            created_files: vec![],
         });
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(16);
@@ -1439,16 +1447,17 @@ mod tests {
         let target_id = AgentId::new();
 
         inner.process_table.insert(AgentProcess {
-            agent_id:    target_id,
-            parent_id:   None,
-            session_id:  SessionId::new("test"),
-            manifest:    test_manifest("target"),
-            principal:   Principal::user("test"),
-            env:         AgentEnv::default(),
-            state:       ProcessState::Running,
-            created_at:  Timestamp::now(),
-            finished_at: None,
-            result:      None,
+            agent_id:      target_id,
+            parent_id:     None,
+            session_id:    SessionId::new("test"),
+            manifest:      test_manifest("target"),
+            principal:     Principal::user("test"),
+            env:           AgentEnv::default(),
+            state:         ProcessState::Running,
+            created_at:    Timestamp::now(),
+            finished_at:   None,
+            result:        None,
+            created_files: vec![],
         });
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(16);
@@ -1693,6 +1702,7 @@ mod tests {
             max_context_tokens:  None,
             priority:            crate::process::Priority::default(),
             metadata:            serde_json::Value::Null,
+            sandbox:             None,
         }
     }
 }

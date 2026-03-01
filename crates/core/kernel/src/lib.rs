@@ -62,7 +62,7 @@ pub use handle::{scoped::ScopedKernelHandle, spawn_tool::SpawnTool};
 pub use kernel::{Kernel, KernelConfig};
 pub use process::{
     AgentId, AgentProcess, MetricsSnapshot, Priority, ProcessInfo, ProcessMessage, ProcessState,
-    ProcessStats, ProcessTable, RuntimeMetrics, SessionId, Signal, SystemStats,
+    ProcessStats, ProcessTable, RuntimeMetrics, SandboxConfig, SessionId, Signal, SystemStats,
     manifest_loader::ManifestLoader,
     principal::{Principal, Role, UserId},
 };

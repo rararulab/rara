@@ -202,6 +202,7 @@ impl TickLoop {
             max_context_tokens:  None,
             priority:            crate::process::Priority::default(),
             metadata:            serde_json::Value::Null,
+            sandbox:             None,
         })
     }
 }

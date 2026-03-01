@@ -71,6 +71,7 @@ fn test_manifest(name: &str, system_prompt: &str) -> AgentManifest {
         max_context_tokens:  None,
         priority:            Default::default(),
         metadata:            serde_json::Value::Null,
+        sandbox:             None,
     }
 }
 

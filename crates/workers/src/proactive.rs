@@ -109,6 +109,7 @@ impl FallibleWorker<AppState> for ProactiveAgentWorker {
             max_context_tokens: None,
             priority: Default::default(),
             metadata: serde_json::Value::Null,
+            sandbox: None,
         };
 
         let session_id = SessionId::new(PROACTIVE_SESSION_KEY);

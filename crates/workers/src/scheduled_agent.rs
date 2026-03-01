@@ -81,6 +81,7 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
                 max_context_tokens:  None,
                 priority:            Default::default(),
                 metadata:            serde_json::json!({ "job_id": job.id }),
+                sandbox:             None,
             };
 
             let session_id = SessionId::new(job.session_key.clone());

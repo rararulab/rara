@@ -228,6 +228,7 @@ impl KernelInner {
             created_at: Timestamp::now(),
             finished_at: None,
             result: None,
+            created_files: vec![],
         };
         self_ref.process_table.insert(process);
         self_ref
@@ -1293,6 +1294,7 @@ mod tests {
             max_context_tokens:  None,
             priority:            crate::process::Priority::default(),
             metadata:            serde_json::Value::Null,
+            sandbox:             None,
         }
     }
 
