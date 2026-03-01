@@ -102,8 +102,12 @@ impl AgentTool for EchoTool {
     }
 }
 
-/// Helper: build a kernel with the real Ollama provider and optional tools.
-fn build_kernel(tools: Vec<Arc<dyn AgentTool>>) -> rara_kernel::Kernel {
+/// Helper: build and start a kernel with the real Ollama provider and optional tools.
+///
+/// Returns the started kernel (wrapped in Arc) and a cancellation token.
+fn start_test_kernel(
+    tools: Vec<Arc<dyn AgentTool>>,
+) -> (Arc<rara_kernel::Kernel>, tokio_util::sync::CancellationToken) {
     let loader = Arc::new(ollama_loader()) as LlmProviderLoaderRef;
     let mut builder = TestKernelBuilder::new()
         .llm_provider(loader)
@@ -112,7 +116,10 @@ fn build_kernel(tools: Vec<Arc<dyn AgentTool>>) -> rara_kernel::Kernel {
     for tool in tools {
         builder = builder.tool(tool);
     }
-    builder.build()
+    let kernel = builder.build();
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let arc = kernel.start(cancel.clone());
+    (arc, cancel)
 }
 
 /// Poll until the process reaches `Waiting` state and has a result, or timeout.
@@ -154,16 +161,12 @@ async fn wait_for_result(
 #[tokio::test]
 #[ignore = "requires running Ollama instance"]
 async fn test_stream_hub_receives_text_deltas() {
-    let kernel = build_kernel(vec![]);
+    let (kernel, cancel) = start_test_kernel(vec![]);
     let manifest = test_manifest("stream-text-agent", "Reply in one sentence.");
     let principal = Principal::user("test-user");
     let session_id = SessionId::new("io-stream-text");
 
-    // Subscribe to the session's streams BEFORE spawning.
-    // The kernel opens a stream at the start of each message processing,
-    // so we need to subscribe after spawn but the timing is tricky.
-    // Instead, we subscribe right after spawn and poll for new streams.
-    let handle = kernel
+    let agent_id = kernel
         .spawn_with_input(
             manifest,
             "Say hello in one sentence.".to_string(),
@@ -175,7 +178,7 @@ async fn test_stream_hub_receives_text_deltas() {
         .expect("spawn failed");
 
     // Wait for the agent to finish processing via ProcessTable polling.
-    let result = wait_for_result(&kernel, handle.agent_id, 60).await;
+    let result = wait_for_result(&kernel, agent_id, 60).await;
 
     // Verify result was produced (which means stream events were emitted internally).
     assert!(
@@ -183,9 +186,10 @@ async fn test_stream_hub_receives_text_deltas() {
         "agent should produce output via streaming pipeline"
     );
 
-    if let Some(token) = kernel.process_table().get_cancellation_token(&handle.agent_id) {
+    if let Some(token) = kernel.process_table().get_cancellation_token(&agent_id) {
         token.cancel();
     }
+    cancel.cancel();
 }
 
 // ---------------------------------------------------------------------------
@@ -195,7 +199,7 @@ async fn test_stream_hub_receives_text_deltas() {
 #[tokio::test]
 #[ignore = "requires running Ollama instance"]
 async fn test_stream_hub_tool_call_events() {
-    let kernel = build_kernel(vec![Arc::new(EchoTool)]);
+    let (kernel, cancel) = start_test_kernel(vec![Arc::new(EchoTool)]);
     let manifest = test_manifest(
         "stream-tool-agent",
         "You are a tool-using assistant. ALWAYS call echo_tool when asked, then reply briefly.",
@@ -203,7 +207,7 @@ async fn test_stream_hub_tool_call_events() {
     let principal = Principal::user("test-user");
     let session_id = SessionId::new("io-stream-tools");
 
-    let handle = kernel
+    let agent_id = kernel
         .spawn_with_input(
             manifest,
             "Call echo_tool with {\"text\":\"stream-test\"} and reply.".to_string(),
@@ -214,7 +218,7 @@ async fn test_stream_hub_tool_call_events() {
         .await
         .expect("spawn failed");
 
-    let result = wait_for_result(&kernel, handle.agent_id, 60).await;
+    let result = wait_for_result(&kernel, agent_id, 60).await;
 
     // If the model made tool calls, the streaming pipeline internally emitted
     // ToolCallStart/ToolCallEnd events via the StreamHandle.
@@ -228,9 +232,10 @@ async fn test_stream_hub_tool_call_events() {
         "should have final output after tool call"
     );
 
-    if let Some(token) = kernel.process_table().get_cancellation_token(&handle.agent_id) {
+    if let Some(token) = kernel.process_table().get_cancellation_token(&agent_id) {
         token.cancel();
     }
+    cancel.cancel();
 }
 
 // ---------------------------------------------------------------------------
@@ -240,7 +245,7 @@ async fn test_stream_hub_tool_call_events() {
 #[tokio::test]
 #[ignore = "requires running Ollama instance"]
 async fn test_multi_session_isolation() {
-    let kernel = build_kernel(vec![]);
+    let (kernel, cancel) = start_test_kernel(vec![]);
     let principal = Principal::user("test-user");
 
     let manifest1 = test_manifest("session-1-agent", "Reply with exactly: session one");
@@ -250,7 +255,7 @@ async fn test_multi_session_isolation() {
     let session_id2 = SessionId::new("io-session-2");
 
     // Spawn two agents on different sessions concurrently.
-    let handle1 = kernel
+    let agent_id1 = kernel
         .spawn_with_input(
             manifest1,
             "Which session are you?".to_string(),
@@ -261,7 +266,7 @@ async fn test_multi_session_isolation() {
         .await
         .expect("spawn 1 failed");
 
-    let handle2 = kernel
+    let agent_id2 = kernel
         .spawn_with_input(
             manifest2,
             "Which session are you?".to_string(),
@@ -273,8 +278,8 @@ async fn test_multi_session_isolation() {
         .expect("spawn 2 failed");
 
     // Both should complete independently (run sequentially to avoid 429).
-    let result1 = wait_for_result(&kernel, handle1.agent_id, 60).await;
-    let result2 = wait_for_result(&kernel, handle2.agent_id, 60).await;
+    let result1 = wait_for_result(&kernel, agent_id1, 60).await;
+    let result2 = wait_for_result(&kernel, agent_id2, 60).await;
 
     // Both should produce output.
     assert!(
@@ -287,11 +292,12 @@ async fn test_multi_session_isolation() {
     );
 
     // Clean up.
-    for h in [&handle1, &handle2] {
-        if let Some(token) = kernel.process_table().get_cancellation_token(&h.agent_id) {
+    for id in [&agent_id1, &agent_id2] {
+        if let Some(token) = kernel.process_table().get_cancellation_token(id) {
             token.cancel();
         }
     }
+    cancel.cancel();
 }
 
 // ---------------------------------------------------------------------------
@@ -405,109 +411,9 @@ async fn test_runner_streaming_tool_events() {
     assert_eq!(tool_name, "echo_tool", "tool name should be echo_tool");
 }
 
-// ---------------------------------------------------------------------------
-// Test 6: InboundBus publish + drain integration
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn test_inbound_bus_publish_drain_integration() {
-    use rara_kernel::io::{
-        bus::InboundBus,
-        memory_bus::InMemoryInboundBus,
-        types::InboundMessage,
-    };
-    use rara_kernel::process::{SessionId, principal::UserId};
-
-    let bus = InMemoryInboundBus::new(64);
-
-    // Publish 3 messages.
-    for i in 0..3 {
-        let msg = InboundMessage::synthetic(
-            format!("message {i}"),
-            UserId(format!("user-{i}")),
-            SessionId::new(&format!("session-{i}")),
-        );
-        bus.publish(msg).await.expect("publish should succeed");
-    }
-    assert_eq!(bus.pending_count(), 3);
-
-    // Drain all.
-    let messages = bus.drain(10).await;
-    assert_eq!(messages.len(), 3);
-    assert_eq!(messages[0].content.as_text(), "message 0");
-    assert_eq!(messages[1].content.as_text(), "message 1");
-    assert_eq!(messages[2].content.as_text(), "message 2");
-    assert_eq!(bus.pending_count(), 0);
-}
-
-// ---------------------------------------------------------------------------
-// Test 7: OutboundBus multi-subscriber fan-out
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn test_outbound_bus_multi_subscriber_fanout() {
-    use rara_kernel::io::{
-        bus::OutboundBus,
-        memory_bus::InMemoryOutboundBus,
-        types::{
-            MessageId, OutboundEnvelope, OutboundPayload, OutboundRouting,
-        },
-    };
-    use rara_kernel::channel::types::MessageContent;
-    use rara_kernel::process::{SessionId, principal::UserId};
-
-    let bus = InMemoryOutboundBus::new(64);
-
-    // Create 3 subscribers.
-    let mut sub1 = bus.subscribe();
-    let mut sub2 = bus.subscribe();
-    let mut sub3 = bus.subscribe();
-
-    // Publish an envelope.
-    let envelope = OutboundEnvelope {
-        id:          MessageId::new(),
-        in_reply_to: MessageId::new(),
-        user:        UserId("u1".to_string()),
-        session_id:  SessionId::new("s1"),
-        routing:     OutboundRouting::BroadcastAll,
-        payload:     OutboundPayload::Reply {
-            content:     MessageContent::Text("hello all".to_string()),
-            attachments: vec![],
-        },
-        timestamp:   jiff::Timestamp::now(),
-    };
-
-    bus.publish(envelope).await.unwrap();
-
-    // All 3 subscribers should receive it.
-    let msg1 = tokio::time::timeout(
-        std::time::Duration::from_secs(1),
-        sub1.recv(),
-    )
-    .await
-    .expect("sub1 timed out")
-    .expect("sub1 should receive message");
-
-    let msg2 = tokio::time::timeout(
-        std::time::Duration::from_secs(1),
-        sub2.recv(),
-    )
-    .await
-    .expect("sub2 timed out")
-    .expect("sub2 should receive message");
-
-    let msg3 = tokio::time::timeout(
-        std::time::Duration::from_secs(1),
-        sub3.recv(),
-    )
-    .await
-    .expect("sub3 timed out")
-    .expect("sub3 should receive message");
-
-    // All should have the same message ID.
-    assert_eq!(msg1.id, msg2.id);
-    assert_eq!(msg2.id, msg3.id);
-}
+// Tests 6 and 7 (InboundBus, OutboundBus) have been removed — these bus
+// traits are replaced by the unified EventQueue.  EventQueue tests live in
+// `crate::event_queue` and in the `event_loop` module.
 
 // ---------------------------------------------------------------------------
 // Test 8: StreamHub lifecycle — open, subscribe, emit, close

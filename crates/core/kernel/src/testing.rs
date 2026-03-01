@@ -40,7 +40,8 @@ use crate::{
         noop_user_store::NoopUserStore,
     },
     device_registry::DeviceRegistry,
-    io::{bus::OutboundBus, memory_bus::InMemoryOutboundBus, pipe::PipeRegistry, stream::StreamHub},
+    event_queue::EventQueue,
+    io::{pipe::PipeRegistry, stream::StreamHub},
     kernel::{Kernel, KernelConfig, KernelInner},
     model_repo::ModelRepo,
     process::{ProcessTable, manifest_loader::ManifestLoader},
@@ -140,12 +141,11 @@ impl TestKernelBuilder {
                 as Arc<dyn SessionRepository>,
             model_repo:             Arc::new(NoopModelRepo) as Arc<dyn ModelRepo>,
             stream_hub:             Arc::new(StreamHub::new(16)),
-            outbound_bus:           Arc::new(InMemoryOutboundBus::new(64))
-                as Arc<dyn OutboundBus>,
             pipe_registry:          Arc::new(PipeRegistry::new()),
             device_registry:        Arc::new(DeviceRegistry::new()),
             audit_log:              Arc::new(InMemoryAuditLog::default())
                 as Arc<dyn AuditLog>,
+            event_queue:            Arc::new(EventQueue::new(4096)),
         });
 
         // Use private constructor approach: build Kernel from its inner field.

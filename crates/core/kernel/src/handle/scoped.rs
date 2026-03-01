@@ -33,13 +33,10 @@ use crate::{
     error::{KernelError, Result},
     event::KernelEvent,
     guard::GuardContext,
-    io::{
-        pipe::{self, PipeEntry, PipeReader, PipeWriter},
-        types::InboundMessage,
-    },
-    kernel::{KernelInner, SpawnPermits},
+    io::pipe::{self, PipeEntry, PipeReader, PipeWriter},
+    kernel::KernelInner,
     process::{
-        AgentId, AgentManifest, ProcessInfo, ProcessMessage, ProcessState, SessionId, Signal,
+        AgentId, AgentManifest, ProcessInfo, ProcessState, SessionId, Signal,
         principal::Principal,
     },
     provider::LlmProviderLoaderRef,
@@ -162,32 +159,38 @@ impl ScopedKernelHandle {
         Ok(())
     }
 
-    /// Send a signal to a process via its mailbox.
+    /// Send a signal to a process via the EventQueue.
+    ///
+    /// Uses `try_push` (fire-and-forget) since signals are critical-priority
+    /// and should not block the caller.
     fn send_signal(&self, target_id: AgentId, signal: Signal) -> Result<()> {
-        let tx =
-            self.inner
-                .process_table
-                .get_mailbox(&target_id)
-                .ok_or(KernelError::ProcessNotFound {
-                    id: format!("no mailbox for agent {target_id}"),
-                })?;
-        tx.try_send(ProcessMessage::Signal(signal)).map_err(|_| {
-            KernelError::ProcessNotFound {
-                id: format!("mailbox full or closed for agent {target_id}"),
-            }
-        })
+        // Verify the process exists first.
+        self.inner
+            .process_table
+            .get(target_id)
+            .ok_or(KernelError::ProcessNotFound {
+                id: format!("agent {target_id} not found"),
+            })?;
+        self.inner
+            .event_queue
+            .try_push(crate::unified_event::KernelEvent::SendSignal {
+                target: target_id,
+                signal,
+            })
+            .map_err(|_| KernelError::ProcessNotFound {
+                id: format!("event queue full for signal to agent {target_id}"),
+            })
     }
 }
 
 #[async_trait]
 impl ProcessOps for ScopedKernelHandle {
-    /// Spawn a child agent.
+    /// Spawn a child agent via the unified event queue.
     ///
     /// - Validates child tools are a subset of parent's tools
-    /// - Acquires per-agent child semaphore (limits concurrent children)
-    /// - Acquires global semaphore (limits total concurrent agents)
-    /// - Wraps input as InboundMessage::synthetic
-    /// - Delegates to `KernelInner::spawn_process()`
+    /// - Validates the principal is still active
+    /// - Pushes a `KernelEvent::SpawnAgent` into the event queue
+    /// - Waits for the reply from the event loop
     async fn spawn(&self, manifest: AgentManifest, input: String) -> Result<AgentHandle> {
         // 1. Validate tool subset
         if !manifest.tools.is_empty() {
@@ -197,54 +200,37 @@ impl ProcessOps for ScopedKernelHandle {
         // 1.5 Validate principal (user may have been disabled after top-level spawn)
         self.inner.validate_principal(&self.principal).await?;
 
-        // 2. Acquire per-agent child semaphore (non-blocking try)
-        let child_permit = self
-            .child_semaphore
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| KernelError::SpawnLimitReached {
-                message: format!("agent {} reached max child limit", self.agent_id),
-            })?;
-
-        // 3. Acquire global semaphore (non-blocking try)
-        let global_permit = self
-            .inner
-            .global_semaphore
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| KernelError::SpawnLimitReached {
-                message: "global concurrency limit reached".to_string(),
-            })?;
-
-        // 4. Compute effective child tools
-        let allowed_tools = self.effective_child_tools(&manifest.tools);
-        let child_limit = manifest
-            .max_children
-            .unwrap_or(self.inner.default_child_limit);
-
-        // 5. Wrap input as InboundMessage
-        let inbound = InboundMessage::synthetic(
-            input,
-            self.principal.user_id.clone(),
-            self.session_id.clone(),
-        );
-
-        // 6. Delegate to unified spawn
-        KernelInner::spawn_process(
-            Arc::clone(&self.inner),
+        // 2. Push SpawnAgent event and wait for reply.
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let event = crate::unified_event::KernelEvent::SpawnAgent {
             manifest,
-            inbound,
-            self.principal.clone(),
-            self.session_id.clone(),
-            Some(self.agent_id),
-            child_limit,
-            allowed_tools,
-            SpawnPermits::Child {
-                _child:  child_permit,
-                _global: global_permit,
-            },
-        )
-        .await
+            input,
+            principal: self.principal.clone(),
+            session_id: self.session_id.clone(),
+            parent_id: Some(self.agent_id),
+            reply_tx,
+        };
+        self.inner
+            .event_queue
+            .push(event)
+            .await
+            .map_err(|_| KernelError::SpawnFailed {
+                message: "event queue full".to_string(),
+            })?;
+
+        let agent_id = reply_rx
+            .await
+            .map_err(|_| KernelError::SpawnFailed {
+                message: "spawn reply channel closed".to_string(),
+            })??;
+
+        // Build a handle with a oneshot for the result (placeholder — the
+        // event loop manages the actual lifecycle).
+        let (_result_tx, result_rx) = tokio::sync::oneshot::channel();
+        Ok(AgentHandle {
+            agent_id,
+            result_rx,
+        })
     }
 
     async fn send(&self, _agent_id: AgentId, _message: String) -> Result<String> {
@@ -584,7 +570,8 @@ mod tests {
                 },
                 noop_user_store::NoopUserStore,
             },
-            io::{memory_bus::InMemoryOutboundBus, pipe::PipeRegistry, stream::StreamHub},
+            event_queue::EventQueue,
+            io::{pipe::PipeRegistry, stream::StreamHub},
             provider::EnvLlmProviderLoader,
             session::SessionRepository,
         };
@@ -608,12 +595,11 @@ mod tests {
             model_repo:             Arc::new(NoopModelRepo)
                 as Arc<dyn crate::model_repo::ModelRepo>,
             stream_hub:             Arc::new(StreamHub::new(1)),
-            outbound_bus:           Arc::new(InMemoryOutboundBus::new(1))
-                as Arc<dyn crate::io::bus::OutboundBus>,
             pipe_registry:          Arc::new(PipeRegistry::new()),
             device_registry:        Arc::new(crate::device_registry::DeviceRegistry::new()),
             audit_log:              Arc::new(InMemoryAuditLog::default())
                 as Arc<dyn crate::audit::AuditLog>,
+            event_queue:            Arc::new(EventQueue::new(4096)),
         })
     }
 
@@ -1390,8 +1376,8 @@ mod tests {
             .unwrap();
     }
 
-    #[test]
-    fn test_pause_sends_signal() {
+    #[tokio::test]
+    async fn test_pause_sends_signal() {
         let inner = make_kernel_inner();
         let target_id = AgentId::new();
 
@@ -1409,9 +1395,6 @@ mod tests {
             created_files: vec![],
         });
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
-        inner.process_table.set_mailbox(target_id, tx);
-
         let handle = ScopedKernelHandle {
             agent_id:        AgentId::new(),
             session_id:      SessionId::new("test"),
@@ -1425,17 +1408,19 @@ mod tests {
 
         handle.pause(target_id).unwrap();
 
-        // Verify the signal was received.
-        let msg = rx.try_recv().unwrap();
+        // Verify the signal was pushed to the event queue.
+        let events = inner.event_queue.drain(10).await;
+        assert_eq!(events.len(), 1);
         assert!(
-            matches!(msg, ProcessMessage::Signal(Signal::Pause)),
-            "expected Pause signal, got: {:?}",
-            msg
+            matches!(&events[0], crate::unified_event::KernelEvent::SendSignal { target, signal }
+                if *target == target_id && *signal == Signal::Pause),
+            "expected Pause signal event, got: {:?}",
+            events[0]
         );
     }
 
-    #[test]
-    fn test_resume_sends_signal() {
+    #[tokio::test]
+    async fn test_resume_sends_signal() {
         let inner = make_kernel_inner();
         let target_id = AgentId::new();
 
@@ -1453,9 +1438,6 @@ mod tests {
             created_files: vec![],
         });
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
-        inner.process_table.set_mailbox(target_id, tx);
-
         let handle = ScopedKernelHandle {
             agent_id:        AgentId::new(),
             session_id:      SessionId::new("test"),
@@ -1469,16 +1451,19 @@ mod tests {
 
         handle.resume(target_id).unwrap();
 
-        let msg = rx.try_recv().unwrap();
+        // Verify the signal was pushed to the event queue.
+        let events = inner.event_queue.drain(10).await;
+        assert_eq!(events.len(), 1);
         assert!(
-            matches!(msg, ProcessMessage::Signal(Signal::Resume)),
-            "expected Resume signal, got: {:?}",
-            msg
+            matches!(&events[0], crate::unified_event::KernelEvent::SendSignal { target, signal }
+                if *target == target_id && *signal == Signal::Resume),
+            "expected Resume signal event, got: {:?}",
+            events[0]
         );
     }
 
-    #[test]
-    fn test_interrupt_sends_signal() {
+    #[tokio::test]
+    async fn test_interrupt_sends_signal() {
         let inner = make_kernel_inner();
         let target_id = AgentId::new();
 
@@ -1496,9 +1481,6 @@ mod tests {
             created_files: vec![],
         });
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
-        inner.process_table.set_mailbox(target_id, tx);
-
         let handle = ScopedKernelHandle {
             agent_id:        AgentId::new(),
             session_id:      SessionId::new("test"),
@@ -1512,11 +1494,14 @@ mod tests {
 
         handle.interrupt(target_id).unwrap();
 
-        let msg = rx.try_recv().unwrap();
+        // Verify the signal was pushed to the event queue.
+        let events = inner.event_queue.drain(10).await;
+        assert_eq!(events.len(), 1);
         assert!(
-            matches!(msg, ProcessMessage::Signal(Signal::Interrupt)),
-            "expected Interrupt signal, got: {:?}",
-            msg
+            matches!(&events[0], crate::unified_event::KernelEvent::SendSignal { target, signal }
+                if *target == target_id && *signal == Signal::Interrupt),
+            "expected Interrupt signal event, got: {:?}",
+            events[0]
         );
     }
 

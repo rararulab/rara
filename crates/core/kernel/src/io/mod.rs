@@ -12,28 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! I/O Bus — transport primitives for inbound and outbound communication.
+//! I/O — transport primitives for inbound and outbound communication.
 //!
 //! This module implements the kernel's I/O transport layer:
 //!
-//! - **Inbound**: channel adapters publish messages to a single-consumer queue;
-//!   the kernel tick loop drains them at its own pace.
-//! - **Outbound**: the kernel publishes responses to a pub/sub broadcast;
-//!   multiple egress subscribers deliver to their respective channels.
+//! - **Ingress**: channel adapters publish messages through
+//!   [`IngressPipeline`](ingress::IngressPipeline) into the unified
+//!   [`EventQueue`](crate::event_queue::EventQueue).
+//! - **Egress**: the kernel event loop delivers outbound envelopes via
+//!   [`Egress::deliver`](egress::Egress::deliver) to registered adapters.
 //! - **Streaming**: ephemeral real-time events (token deltas, tool progress)
 //!   flow through the [`StreamHub`](stream::StreamHub) for connected frontends.
-//!
-//! Execution-related modules (scheduler, executor, tick loop, session manager)
-//! live at the kernel crate top level.
 //!
 //! ## Architecture
 //!
 //! ```text
-//! Adapters → InboundBus → Kernel Tick → SessionScheduler → AgentExecutor
-//!                                                              ↓
-//!                                              OutboundBus ← StreamHub
-//!                                                  ↓
-//!                                              Egress (subscribers)
+//! Adapters → IngressPipeline → EventQueue → Kernel Event Loop
+//!                                                   ↓
+//!                                         Egress::deliver + StreamHub
+//!                                                   ↓
+//!                                         Channel Adapters (Web, Telegram, ...)
 //! ```
 
 pub mod bus;

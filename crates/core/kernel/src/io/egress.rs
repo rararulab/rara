@@ -14,9 +14,9 @@
 
 //! Egress — outbound message delivery to channel adapters.
 //!
-//! The egress layer consumes
+//! The egress layer receives
 //! [`OutboundEnvelope`](crate::io::types::OutboundEnvelope) messages from the
-//! [`OutboundBus`](crate::io::bus::OutboundBus) and delivers them to the
+//! kernel event loop (via `KernelEvent::Deliver`) and delivers them to the
 //! appropriate channel adapters based on the user's connected [`Endpoint`]s.
 //!
 //! Key components:
@@ -36,10 +36,7 @@ use snafu::Snafu;
 
 use crate::{
     channel::types::ChannelType,
-    io::{
-        bus::OutboundSubscriber,
-        types::{Attachment, OutboundEnvelope, OutboundPayload, OutboundRouting, ReplyContext},
-    },
+    io::types::{Attachment, OutboundEnvelope, OutboundPayload, OutboundRouting, ReplyContext},
     process::principal::UserId,
 };
 
@@ -220,54 +217,24 @@ pub enum EgressError {
 
 /// Outbound delivery engine.
 ///
-/// Consumes [`OutboundEnvelope`]s from the
-/// [`OutboundBus`](crate::io::bus::OutboundBus) via an [`OutboundSubscriber`]
-/// and delivers to the appropriate [`EgressAdapter`]s based on the user's
-/// connected endpoints and routing rules.
-pub struct Egress {
-    adapters:     HashMap<ChannelType, Arc<dyn EgressAdapter>>,
-    endpoints:    Arc<EndpointRegistry>,
-    outbound_sub: Box<dyn OutboundSubscriber>,
-}
+/// Provides static delivery methods for routing [`OutboundEnvelope`]s to
+/// the appropriate [`EgressAdapter`]s based on the user's connected
+/// endpoints and routing rules.
+///
+/// Called directly by `Kernel::handle_deliver()` in the unified event loop.
+pub struct Egress;
 
 use std::sync::Arc;
 
 impl Egress {
-    /// Create a new egress engine.
-    pub fn new(
-        adapters: HashMap<ChannelType, Arc<dyn EgressAdapter>>,
-        endpoints: Arc<EndpointRegistry>,
-        outbound_sub: Box<dyn OutboundSubscriber>,
-    ) -> Self {
-        Self {
-            adapters,
-            endpoints,
-            outbound_sub,
-        }
-    }
-
-    /// Main loop — consume the outbound bus and deliver.
-    ///
-    /// Runs until the bus is closed (returns `None`). Typically spawned
-    /// as a background task.
-    ///
-    /// The method borrows `outbound_sub` separately from the delivery
-    /// fields (`adapters`, `endpoints`) so that the resulting future is
-    /// `Send` — `outbound_sub` is `Send` but not `Sync`, and splitting
-    /// the borrows avoids creating `&Egress` across `.await` points.
-    pub async fn run(&mut self) {
-        let adapters = &self.adapters;
-        let endpoints = &self.endpoints;
-        while let Some(envelope) = self.outbound_sub.recv().await {
-            Self::deliver(adapters, endpoints, envelope).await;
-        }
-    }
-
     /// Deliver a single outbound envelope to all resolved targets.
     ///
     /// This is a free function over the needed fields so that the
     /// `outbound_sub` is never borrowed immutably across an `.await`.
-    async fn deliver(
+    ///
+    /// Also used directly by `Kernel::handle_deliver()` in the unified
+    /// event loop, bypassing the outbound bus subscribe loop.
+    pub async fn deliver(
         adapters: &HashMap<ChannelType, Arc<dyn EgressAdapter>>,
         endpoints: &Arc<EndpointRegistry>,
         envelope: OutboundEnvelope,
@@ -454,19 +421,6 @@ mod tests {
         }
     }
 
-    /// Helper: build an Egress with a registry (no real adapters or subscriber
-    /// needed for resolve_targets tests, so we use a dummy subscriber).
-    struct DummySubscriber;
-
-    #[async_trait]
-    impl OutboundSubscriber for DummySubscriber {
-        async fn recv(&mut self) -> Option<OutboundEnvelope> { None }
-    }
-
-    fn egress_with_registry(registry: Arc<EndpointRegistry>) -> Egress {
-        Egress::new(HashMap::new(), registry, Box::new(DummySubscriber))
-    }
-
     #[test]
     fn test_resolve_targets_broadcast_all() {
         let registry = Arc::new(EndpointRegistry::new());
@@ -474,7 +428,6 @@ mod tests {
         registry.register(&user, tg_endpoint(100));
         registry.register(&user, web_endpoint("conn-1"));
 
-        let _egress = egress_with_registry(registry.clone());
         let envelope = test_envelope(OutboundRouting::BroadcastAll);
 
         let targets = Egress::resolve_targets(&registry, &envelope);

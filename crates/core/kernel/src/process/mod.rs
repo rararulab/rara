@@ -37,11 +37,11 @@ use std::{
 use dashmap::DashMap;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::{error::Result, io::types::InboundMessage};
+use crate::error::Result;
 
 // ---------------------------------------------------------------------------
 // Priority
@@ -256,22 +256,8 @@ impl Default for AgentEnv {
 }
 
 // ---------------------------------------------------------------------------
-// ProcessMessage / Signal — mailbox message types
+// Signal — control signals for agent processes
 // ---------------------------------------------------------------------------
-
-/// Messages delivered to a long-lived agent process via its mailbox.
-#[derive(Debug)]
-pub enum ProcessMessage {
-    /// A new user message to process.
-    UserMessage(InboundMessage),
-    /// Result from a spawned child agent.
-    ChildResult {
-        child_id: AgentId,
-        result:   AgentResult,
-    },
-    /// Control signal.
-    Signal(Signal),
-}
 
 /// Control signals for agent processes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -518,9 +504,6 @@ pub struct ProcessTable {
     processes:     DashMap<AgentId, AgentProcess>,
     /// Maps a session to its currently active agent process.
     session_index: DashMap<SessionId, AgentId>,
-    /// Mailbox senders for long-lived processes (kept separate because
-    /// `mpsc::Sender` doesn't derive `Clone` for `AgentProcess`'s derive).
-    mailboxes:     DashMap<AgentId, mpsc::Sender<ProcessMessage>>,
     /// Cancellation tokens for graceful process termination.
     /// Parent token cancel → all child tokens cancel automatically.
     cancellation_tokens: DashMap<AgentId, CancellationToken>,
@@ -540,7 +523,6 @@ impl ProcessTable {
         Self {
             processes:           DashMap::new(),
             session_index:       DashMap::new(),
-            mailboxes:           DashMap::new(),
             cancellation_tokens: DashMap::new(),
             metrics:             DashMap::new(),
             total_spawned:       AtomicU64::new(0),
@@ -623,7 +605,6 @@ impl ProcessTable {
         if let Some(ref process) = removed {
             self.session_index
                 .remove_if(&process.session_id, |_, agent_id| *agent_id == id);
-            self.mailboxes.remove(&id);
             self.cancellation_tokens.remove(&id);
             self.metrics.remove(&id);
         }
@@ -667,18 +648,6 @@ impl ProcessTable {
     /// binding).
     pub fn bind_session(&self, session_id: SessionId, agent_id: AgentId) {
         self.session_index.insert(session_id, agent_id);
-    }
-
-    // ----- Mailbox methods -----
-
-    /// Register a mailbox sender for a process.
-    pub fn set_mailbox(&self, id: AgentId, tx: mpsc::Sender<ProcessMessage>) {
-        self.mailboxes.insert(id, tx);
-    }
-
-    /// Get a clone of the mailbox sender for a process.
-    pub fn get_mailbox(&self, id: &AgentId) -> Option<mpsc::Sender<ProcessMessage>> {
-        self.mailboxes.get(id).map(|tx| tx.value().clone())
     }
 
     /// Register a cancellation token for a process.
@@ -783,29 +752,6 @@ impl ProcessTable {
             .sum()
     }
 
-    /// Send a message to the agent process handling a given session.
-    ///
-    /// Returns `Ok(())` if the message was sent, or an error if no agent
-    /// is bound to the session or the mailbox is closed.
-    pub async fn send_to_session(&self, session_id: &SessionId, msg: ProcessMessage) -> Result<()> {
-        let agent_id = self
-            .session_index
-            .get(session_id)
-            .map(|r| *r)
-            .ok_or_else(|| crate::error::KernelError::ProcessNotFound {
-                id: format!("no agent for session {session_id}"),
-            })?;
-        let tx = self.get_mailbox(&agent_id).ok_or_else(|| {
-            crate::error::KernelError::ProcessNotFound {
-                id: format!("no mailbox for agent {agent_id}"),
-            }
-        })?;
-        tx.send(msg)
-            .await
-            .map_err(|_| crate::error::KernelError::ProcessNotFound {
-                id: format!("mailbox closed for agent {agent_id}"),
-            })
-    }
 }
 
 impl Default for ProcessTable {
@@ -1173,28 +1119,6 @@ system_prompt: "Hello"
         // Remove should clear the session index
         table.remove(agent_id);
         assert!(table.find_by_session(&session_id).is_none());
-    }
-
-    #[test]
-    fn test_process_table_mailbox() {
-        let table = ProcessTable::new();
-        let p = test_process("mailbox-test", None);
-        let agent_id = p.agent_id;
-        table.insert(p);
-
-        // Initially no mailbox
-        assert!(table.get_mailbox(&agent_id).is_none());
-
-        // Set mailbox
-        let (tx, _rx) = mpsc::channel(16);
-        table.set_mailbox(agent_id, tx);
-
-        // Now we should get it
-        assert!(table.get_mailbox(&agent_id).is_some());
-
-        // Remove clears mailbox too
-        table.remove(agent_id);
-        assert!(table.get_mailbox(&agent_id).is_none());
     }
 
     // -----------------------------------------------------------------------

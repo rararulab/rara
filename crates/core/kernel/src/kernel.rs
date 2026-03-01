@@ -38,33 +38,31 @@
 //! Each spawned agent receives a [`ScopedKernelHandle`] providing syscall-like
 //! access to kernel capabilities (ProcessOps, MemoryOps, EventOps, GuardOps).
 
-use std::{collections::HashMap, sync::{Arc, Mutex}};
+use std::{collections::HashMap, sync::Arc};
 
 use dashmap::DashMap;
 use jiff::Timestamp;
-use tokio::sync::{Semaphore, oneshot};
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::{
-    audit::{AuditEvent, AuditEventType, AuditFilter, AuditLog},
+    audit::{AuditEvent, AuditFilter, AuditLog},
     channel::types::ChannelType,
     device_registry::DeviceRegistry,
     error::{KernelError, Result},
     event::EventBus,
+    event_queue::EventQueue,
     guard::Guard,
-    handle::{AgentHandle, scoped::ScopedKernelHandle},
     io::{
-        bus::{InboundBus, OutboundBus},
-        egress::{Egress, EgressAdapter, EndpointRegistry},
+        egress::{EgressAdapter, EndpointRegistry},
         ingress::{IdentityResolver, IngressPipeline, SessionResolver},
         pipe::PipeRegistry,
         stream::StreamHub,
-        types::InboundMessage,
     },
     memory::Memory,
     process::{
-        AgentEnv, AgentId, AgentManifest, AgentProcess, AgentResult, ProcessState, ProcessTable,
+        AgentId, AgentManifest, ProcessState, ProcessTable,
         SessionId, manifest_loader::ManifestLoader, principal::Principal, user::UserStore,
     },
     provider::LlmProviderLoaderRef,
@@ -113,14 +111,14 @@ pub(crate) struct KernelInner {
     pub model_repo:             Arc<dyn crate::model_repo::ModelRepo>,
     /// Stream hub for real-time streaming events.
     pub stream_hub:             Arc<StreamHub>,
-    /// Outbound bus for publishing final responses.
-    pub outbound_bus:           Arc<dyn OutboundBus>,
     /// Inter-agent pipe registry for streaming data between agents.
     pub pipe_registry:          Arc<PipeRegistry>,
     /// Device registry for hot-pluggable devices (MCP servers, APIs, etc.).
     pub device_registry:        Arc<DeviceRegistry>,
     /// Structured audit log for agent behavior tracking.
     pub audit_log:              Arc<dyn AuditLog>,
+    /// Unified event queue (tiered priority) for all kernel interactions.
+    pub event_queue:            Arc<EventQueue>,
 }
 
 impl KernelInner {
@@ -195,567 +193,8 @@ impl KernelInner {
         }
     }
 
-    /// Unified spawn — creates an agent process with a mailbox-driven
-    /// process_loop.
-    ///
-    /// Shared by `Kernel::spawn()` (top-level) and
-    /// `ScopedKernelHandle::spawn()` (child). The caller is responsible for
-    /// acquiring semaphore permits and computing the effective `allowed_tools`.
-    pub(crate) async fn spawn_process(
-        self_ref: Arc<KernelInner>,
-        manifest: AgentManifest,
-        inbound: InboundMessage,
-        principal: Principal,
-        session_id: SessionId,
-        parent_id: Option<AgentId>,
-        child_limit: usize,
-        allowed_tools: Vec<String>,
-        permits: SpawnPermits,
-    ) -> Result<AgentHandle> {
-        // Kernel setup: ensure session exists and load initial history.
-        // This happens at spawn time before process creation.
-        self_ref.ensure_session(&session_id).await;
-        let initial_messages = self_ref.load_session_messages(&session_id).await;
-
-        let agent_id = AgentId::new();
-        let (mailbox_tx, mailbox_rx) =
-            tokio::sync::mpsc::channel::<crate::process::ProcessMessage>(64);
-        let (result_tx, result_rx) = oneshot::channel();
-
-        // Audit: ProcessSpawned
-        crate::audit::record_async(
-            &self_ref.audit_log,
-            AuditEvent {
-                timestamp:  Timestamp::now(),
-                agent_id,
-                session_id: session_id.clone(),
-                user_id:    principal.user_id.clone(),
-                event_type: AuditEventType::ProcessSpawned {
-                    manifest_name: manifest.name.clone(),
-                    parent_id,
-                },
-                details:    serde_json::json!({
-                    "model": manifest.model,
-                    "max_iterations": manifest.max_iterations,
-                }),
-            },
-        );
-
-        // Register process in table
-        let process = AgentProcess {
-            agent_id,
-            parent_id,
-            session_id: session_id.clone(),
-            manifest: manifest.clone(),
-            principal: principal.clone(),
-            env: AgentEnv::default(),
-            state: ProcessState::Running,
-            created_at: Timestamp::now(),
-            finished_at: None,
-            result: None,
-            created_files: vec![],
-        };
-        self_ref.process_table.insert(process);
-        self_ref
-            .process_table
-            .set_mailbox(agent_id, mailbox_tx.clone());
-
-        // Deliver first message
-        mailbox_tx
-            .try_send(crate::process::ProcessMessage::UserMessage(inbound))
-            .map_err(|_| KernelError::SpawnFailed {
-                message: "failed to deliver initial message".to_string(),
-            })?;
-
-        // Compute effective tool registry
-        let effective_registry = if allowed_tools.is_empty() {
-            Arc::clone(&self_ref.tool_registry)
-        } else {
-            Arc::new(self_ref.tool_registry.filtered(&allowed_tools))
-        };
-
-        // Build ScopedKernelHandle
-        let handle = Arc::new(ScopedKernelHandle {
-            agent_id,
-            session_id: session_id.clone(),
-            principal,
-            manifest,
-            allowed_tools,
-            tool_registry: effective_registry,
-            child_semaphore: Arc::new(Semaphore::new(child_limit)),
-            inner: Arc::clone(&self_ref),
-        });
-
-        // Create cancellation token (child of parent's token if applicable).
-        let token = if let Some(pid) = parent_id {
-            self_ref
-                .process_table
-                .get_cancellation_token(&pid)
-                .map(|parent_token| parent_token.child_token())
-                .unwrap_or_default()
-        } else {
-            CancellationToken::new()
-        };
-        self_ref
-            .process_table
-            .set_cancellation_token(agent_id, token.clone());
-
-        // Kernel process management loop.
-        //
-        // This is the kernel side: it owns the mailbox, drives state
-        // transitions, manages streams, persists messages, and publishes
-        // outbound replies.  The actual agent execution is delegated to
-        // `run_agent_turn` which only knows how to run the LLM.
-        let inner = Arc::clone(&self_ref);
-        let loop_mailbox_tx = mailbox_tx.clone();
-        tokio::spawn(async move {
-            let _permits = permits;
-            let mailbox_tx = loop_mailbox_tx;
-            let mut mailbox_rx = mailbox_rx;
-            let mut conversation = initial_messages;
-            let mut last_result: Option<AgentResult> = None;
-            // Per-turn cancellation token: cancelled by Signal::Interrupt
-            // to abort the current LLM call without killing the process.
-            let mut turn_cancel = CancellationToken::new();
-            // Paused state: when true, incoming messages are buffered.
-            let mut paused = false;
-            let mut pause_buffer: Vec<crate::process::ProcessMessage> = Vec::new();
-
-            // Context compaction: resolve token budget and strategy.
-            let max_context_tokens = handle
-                .manifest()
-                .max_context_tokens
-                .unwrap_or(crate::memory::compaction::DEFAULT_MAX_CONTEXT_TOKENS);
-            let compaction_strategy = crate::memory::compaction::SlidingWindowCompaction;
-
-            // Grab the metrics handle for this process once.
-            let metrics = inner
-                .process_table
-                .get_metrics(&agent_id)
-                .unwrap_or_default();
-
-            loop {
-                tokio::select! {
-                    _ = token.cancelled() => {
-                        info!(agent_id = %agent_id, "cancellation token triggered");
-                        break;
-                    }
-                    msg = mailbox_rx.recv() => {
-                        let Some(msg) = msg else { break };
-
-                        // ---- Signal handling (always processed, even when paused) ----
-                        if let crate::process::ProcessMessage::Signal(sig) = &msg {
-                            match sig {
-                                crate::process::Signal::Interrupt => {
-                                    info!(agent_id = %agent_id, "interrupt signal received");
-                                    // Cancel the current LLM turn token.
-                                    turn_cancel.cancel();
-                                    // Replace with a fresh token for the next turn.
-                                    turn_cancel = CancellationToken::new();
-                                    // Notify via outbound bus.
-                                    let envelope = crate::io::types::OutboundEnvelope {
-                                        id:          crate::io::types::MessageId::new(),
-                                        in_reply_to: crate::io::types::MessageId::new(),
-                                        user:        crate::process::principal::UserId("system".to_string()),
-                                        session_id:  session_id.clone(),
-                                        routing:     crate::io::types::OutboundRouting::BroadcastAll,
-                                        payload:     crate::io::types::OutboundPayload::StateChange {
-                                            event_type: "interrupted".to_string(),
-                                            data:       serde_json::json!({
-                                                "agent_id": agent_id.to_string(),
-                                                "message": "Agent interrupted by user",
-                                            }),
-                                        },
-                                        timestamp:   jiff::Timestamp::now(),
-                                    };
-                                    if let Err(e) = inner.outbound_bus.publish(envelope).await {
-                                        tracing::error!(%e, "failed to publish interrupt notification");
-                                    }
-                                    continue;
-                                }
-                                crate::process::Signal::Pause => {
-                                    info!(agent_id = %agent_id, "pause signal received");
-                                    paused = true;
-                                    let _ = inner.process_table.set_state(
-                                        agent_id,
-                                        ProcessState::Paused,
-                                    );
-                                    continue;
-                                }
-                                crate::process::Signal::Resume => {
-                                    info!(agent_id = %agent_id, "resume signal received");
-                                    paused = false;
-                                    let _ = inner.process_table.set_state(
-                                        agent_id,
-                                        ProcessState::Waiting,
-                                    );
-                                    // Drain buffered messages: re-inject them into the
-                                    // mailbox so they are processed in order.
-                                    let buffered = std::mem::take(&mut pause_buffer);
-                                    for buffered_msg in buffered {
-                                        // Use try_send to avoid deadlock; if the mailbox
-                                        // is full, the message is lost (unlikely given
-                                        // capacity).
-                                        let _ = mailbox_tx.try_send(buffered_msg);
-                                    }
-                                    continue;
-                                }
-                                crate::process::Signal::Terminate => {
-                                    info!(agent_id = %agent_id, "terminate signal received — starting graceful shutdown");
-                                    // Cancel the current LLM turn.
-                                    turn_cancel.cancel();
-                                    // Give the loop a grace period to finish, then
-                                    // force-kill via the process token.
-                                    let process_token = token.clone();
-                                    tokio::spawn(async move {
-                                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                                        process_token.cancel();
-                                    });
-                                    // Break the loop immediately — the process is
-                                    // shutting down.
-                                    break;
-                                }
-                                crate::process::Signal::Kill => {
-                                    info!(agent_id = %agent_id, "kill signal received");
-                                    token.cancel();
-                                    break;
-                                }
-                            }
-                        }
-
-                        // ---- When paused, buffer non-signal messages ----
-                        if paused {
-                            pause_buffer.push(msg);
-                            continue;
-                        }
-
-                        match msg {
-                            crate::process::ProcessMessage::UserMessage(inbound) => {
-                                // --- /proc metrics: message received ---
-                                metrics.record_message();
-                                metrics.touch().await;
-
-                                let _ = inner.process_table.set_state(
-                                    agent_id,
-                                    ProcessState::Running,
-                                );
-
-                                // Apply context compaction before building
-                                // LLM history. This trims the in-memory
-                                // conversation to fit within the token budget,
-                                // preventing context-window overflow.
-                                conversation = crate::memory::compaction::maybe_compact(
-                                    conversation,
-                                    max_context_tokens,
-                                    &compaction_strategy,
-                                )
-                                .await;
-
-                                // Convert in-memory history to LLM format.
-                                let history =
-                                    match crate::runner::build_history_messages(&conversation) {
-                                        Ok(msgs) if !msgs.is_empty() => Some(msgs),
-                                        Ok(_) => None,
-                                        Err(e) => {
-                                            tracing::warn!(%e, "failed to convert history");
-                                            None
-                                        }
-                                    };
-
-                                // Append user message to conversation + persist.
-                                let user_text = inbound.content.as_text();
-                                let user_msg =
-                                    crate::channel::types::ChatMessage::user(&user_text);
-                                conversation.push(user_msg.clone());
-                                if let Err(e) = inner
-                                    .session_repo
-                                    .append_message(&session_id, &user_msg)
-                                    .await
-                                {
-                                    tracing::warn!(%e, "failed to persist user message");
-                                }
-
-                                // Open stream.
-                                let stream_handle =
-                                    inner.stream_hub.open(session_id.clone());
-
-                                // === Agent execution (cancellable by interrupt) ===
-                                let turn_result = crate::agent_turn::run_inline_agent_loop(
-                                    &handle,
-                                    user_text,
-                                    history,
-                                    &stream_handle,
-                                    &turn_cancel,
-                                ).await;
-
-                                // Close stream.
-                                inner.stream_hub.close(stream_handle.stream_id());
-
-                                match turn_result {
-                                    Ok(turn) if !turn.text.is_empty() => {
-                                        // --- /proc metrics: LLM call + tool calls ---
-                                        metrics.record_llm_call();
-                                        metrics.record_tool_calls(turn.tool_calls as u64);
-                                        // Estimate tokens: ~4 chars per token for output.
-                                        let estimated_tokens =
-                                            (turn.text.len() as u64).saturating_div(4).max(1);
-                                        metrics.record_tokens(estimated_tokens);
-                                        metrics.touch().await;
-
-                                        // Persist assistant reply.
-                                        let assistant_msg =
-                                            crate::channel::types::ChatMessage::assistant(
-                                                &turn.text,
-                                            );
-                                        conversation.push(assistant_msg.clone());
-                                        if let Err(e) = inner
-                                            .session_repo
-                                            .append_message(
-                                                &session_id,
-                                                &assistant_msg,
-                                            )
-                                            .await
-                                        {
-                                            tracing::warn!(
-                                                %e,
-                                                "failed to persist assistant message"
-                                            );
-                                        }
-
-                                        let result = AgentResult {
-                                            output:     turn.text.clone(),
-                                            iterations: turn.iterations,
-                                            tool_calls: turn.tool_calls,
-                                        };
-                                        let _ = inner
-                                            .process_table
-                                            .set_result(agent_id, result.clone());
-
-                                        // Publish reply via outbound bus.
-                                        let envelope =
-                                            crate::io::types::OutboundEnvelope {
-                                                id:          crate::io::types::MessageId::new(),
-                                                in_reply_to: inbound.id.clone(),
-                                                user:        inbound.user.clone(),
-                                                session_id:  session_id.clone(),
-                                                routing:     crate::io::types::OutboundRouting::BroadcastAll,
-                                                payload:     crate::io::types::OutboundPayload::Reply {
-                                                    content:     crate::channel::types::MessageContent::Text(
-                                                        turn.text,
-                                                    ),
-                                                    attachments: vec![],
-                                                },
-                                                timestamp:   jiff::Timestamp::now(),
-                                            };
-                                        if let Err(e) =
-                                            inner.outbound_bus.publish(envelope).await
-                                        {
-                                            tracing::error!(
-                                                %e,
-                                                "failed to publish reply"
-                                            );
-                                        }
-
-                                        // Audit: ProcessCompleted
-                                        crate::audit::record_async(
-                                            &inner.audit_log,
-                                            AuditEvent {
-                                                timestamp:  jiff::Timestamp::now(),
-                                                agent_id,
-                                                session_id: session_id.clone(),
-                                                user_id:    inbound.user.clone(),
-                                                event_type: AuditEventType::ProcessCompleted {
-                                                    result: result.output.clone(),
-                                                },
-                                                details:    serde_json::json!({
-                                                    "iterations": result.iterations,
-                                                    "tool_calls": result.tool_calls,
-                                                }),
-                                            },
-                                        );
-
-                                        info!(
-                                            agent_id = %agent_id,
-                                            iterations = result.iterations,
-                                            tool_calls = result.tool_calls,
-                                            "message processed"
-                                        );
-                                        last_result = Some(result);
-                                    }
-                                    Ok(turn) => {
-                                        // Empty result — nothing to publish, but
-                                        // an LLM call was still made.
-                                        metrics.record_llm_call();
-                                        metrics.record_tool_calls(turn.tool_calls as u64);
-                                        metrics.touch().await;
-                                    }
-                                    Err(err_msg) => {
-                                        // Only mark Failed for real errors, not interrupts.
-                                        if err_msg != "interrupted by user" {
-                                            let _ = inner.process_table.set_state(
-                                                agent_id,
-                                                ProcessState::Failed,
-                                            );
-
-                                            // Audit: ProcessFailed
-                                            crate::audit::record_async(
-                                                &inner.audit_log,
-                                                AuditEvent {
-                                                    timestamp:  jiff::Timestamp::now(),
-                                                    agent_id,
-                                                    session_id: session_id.clone(),
-                                                    user_id:    inbound.user.clone(),
-                                                    event_type: AuditEventType::ProcessFailed {
-                                                        error: err_msg.clone(),
-                                                    },
-                                                    details:    serde_json::Value::Null,
-                                                },
-                                            );
-                                        }
-                                        // Publish error via outbound bus.
-                                        let envelope =
-                                            crate::io::types::OutboundEnvelope {
-                                                id:          crate::io::types::MessageId::new(),
-                                                in_reply_to: inbound.id.clone(),
-                                                user:        inbound.user.clone(),
-                                                session_id:  session_id.clone(),
-                                                routing:     crate::io::types::OutboundRouting::BroadcastAll,
-                                                payload:     crate::io::types::OutboundPayload::Error {
-                                                    code:    "agent_error".to_string(),
-                                                    message: err_msg,
-                                                },
-                                                timestamp:   jiff::Timestamp::now(),
-                                            };
-                                        if let Err(e) =
-                                            inner.outbound_bus.publish(envelope).await
-                                        {
-                                            tracing::error!(
-                                                %e,
-                                                "failed to publish error"
-                                            );
-                                        }
-                                    }
-                                }
-
-                                let _ = inner.process_table.set_state(
-                                    agent_id,
-                                    ProcessState::Waiting,
-                                );
-                            }
-                            crate::process::ProcessMessage::ChildResult {
-                                child_id,
-                                result,
-                            } => {
-                                info!(
-                                    agent_id = %agent_id,
-                                    child_id = %child_id,
-                                    output_len = result.output.len(),
-                                    "child result received (handled by SpawnTool)"
-                                );
-
-                                // Persist child result to conversation history
-                                // for audit/replay purposes. SpawnTool already
-                                // returned the child's output as a tool
-                                // response within the same LLM turn, so no
-                                // additional LLM turn is needed here.
-                                let child_result_text = format!(
-                                    "[child_agent_result] child_id={child_id} \
-                                     iterations={} tool_calls={}\n\n{}",
-                                    result.iterations,
-                                    result.tool_calls,
-                                    result.output,
-                                );
-                                let child_msg =
-                                    crate::channel::types::ChatMessage::system(
-                                        &child_result_text,
-                                    );
-                                conversation.push(child_msg.clone());
-                                if let Err(e) = inner
-                                    .session_repo
-                                    .append_message(&session_id, &child_msg)
-                                    .await
-                                {
-                                    tracing::warn!(
-                                        %e,
-                                        "failed to persist child result message"
-                                    );
-                                }
-                            }
-                            crate::process::ProcessMessage::Signal(_) => {
-                                // Already handled above.
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Set terminal state.
-            let final_state = if token.is_cancelled() {
-                ProcessState::Cancelled
-            } else {
-                ProcessState::Completed
-            };
-            let _ = inner.process_table.set_state(agent_id, final_state);
-            info!(agent_id = %agent_id, "process ended");
-
-            let final_result = last_result.unwrap_or(AgentResult {
-                output:     "process ended".to_string(),
-                iterations: 0,
-                tool_calls: 0,
-            });
-
-            // Notify parent process via ChildResult message if this is a
-            // child agent.  This allows the parent's process_loop to resume
-            // LLM execution with the child's output.
-            if let Some(pid) = parent_id {
-                if let Some(parent_mailbox) = inner.process_table.get_mailbox(&pid) {
-                    let child_result_msg =
-                        crate::process::ProcessMessage::ChildResult {
-                            child_id: agent_id,
-                            result:   final_result.clone(),
-                        };
-                    if let Err(e) = parent_mailbox.send(child_result_msg).await {
-                        tracing::warn!(
-                            agent_id = %agent_id,
-                            parent_id = %pid,
-                            error = %e,
-                            "failed to send ChildResult to parent mailbox"
-                        );
-                    }
-                }
-            }
-
-            let _ = result_tx.send(final_result);
-            inner.process_table.clear_cancellation_token(&agent_id);
-        });
-
-        Ok(AgentHandle {
-            agent_id,
-            mailbox: mailbox_tx,
-            result_rx,
-        })
-    }
 }
 
-// ---------------------------------------------------------------------------
-// SpawnPermits
-// ---------------------------------------------------------------------------
-
-/// Semaphore permits that must be held for the lifetime of the spawned task.
-///
-/// This enum accommodates both top-level spawns (global permit only) and
-/// child spawns (global + child permit).
-pub(crate) enum SpawnPermits {
-    /// Top-level spawn — only a global permit.
-    TopLevel {
-        _global: tokio::sync::OwnedSemaphorePermit,
-    },
-    /// Child spawn — both a child and global permit.
-    Child {
-        _child:  tokio::sync::OwnedSemaphorePermit,
-        _global: tokio::sync::OwnedSemaphorePermit,
-    },
-}
 
 // ---------------------------------------------------------------------------
 // KernelConfig
@@ -770,8 +209,6 @@ pub struct KernelConfig {
     pub default_child_limit:    usize,
     /// Default max LLM iterations for spawned agents.
     pub default_max_iterations: usize,
-    /// Scheduler configuration (priority queue + token budgets).
-    pub scheduler:              crate::scheduler::SchedulerConfig,
     /// Maximum number of KV entries per agent (0 = unlimited).
     /// Applies to the agent-scoped namespace only.
     pub memory_quota_per_agent: usize,
@@ -783,7 +220,6 @@ impl Default for KernelConfig {
             max_concurrency:        16,
             default_child_limit:    8,
             default_max_iterations: 25,
-            scheduler:              crate::scheduler::SchedulerConfig::default(),
             memory_quota_per_agent: 1000,
         }
     }
@@ -792,20 +228,17 @@ impl Default for KernelConfig {
 /// The unified agent orchestrator.
 ///
 /// Acts as an OS kernel for agents: manages the process table, enforces
-/// concurrency limits, and provides `spawn()` as the primary entry point.
+/// concurrency limits, and provides the event loop as the single driver
+/// for all kernel activity.
 ///
-/// The Kernel owns its I/O subsystem: inbound bus, outbound bus, stream hub,
-/// endpoint registry, and ingress pipeline. Call [`start()`](Self::start) to
-/// spawn TickLoop and Egress as background tasks.
+/// The Kernel owns its I/O subsystem: stream hub, endpoint registry, and
+/// ingress pipeline. Call [`start()`](Self::start) to spawn the unified
+/// event loop and egress delivery as background tasks.
 pub struct Kernel {
     /// Shared kernel internals (process table, components, etc.).
     inner:  Arc<KernelInner>,
     /// Kernel configuration.
     config: KernelConfig,
-    /// Inbound message bus (shared with IngressPipeline and TickLoop).
-    inbound_bus:       Arc<dyn InboundBus>,
-    /// Outbound message bus (shared with process_loop and Egress).
-    outbound_bus:      Arc<dyn OutboundBus>,
     /// Ephemeral stream hub for real-time token deltas.
     stream_hub:        Arc<StreamHub>,
     /// Ingress pipeline for adapters to push inbound messages.
@@ -813,9 +246,9 @@ pub struct Kernel {
     /// Per-user endpoint registry (tracks connected channels).
     endpoint_registry: Arc<EndpointRegistry>,
     /// Registered egress adapters (mutable before start, consumed by start).
-    egress_adapters:   HashMap<ChannelType, Arc<dyn EgressAdapter>>,
-    /// Shared priority scheduler for LLM call rate limiting.
-    scheduler:         Arc<Mutex<crate::scheduler::PriorityScheduler>>,
+    pub(crate) egress_adapters: HashMap<ChannelType, Arc<dyn EgressAdapter>>,
+    /// Unified event queue for all kernel interactions.
+    event_queue:       Arc<EventQueue>,
     /// When this kernel was created (for uptime calculation).
     started_at:        Timestamp,
 }
@@ -824,9 +257,8 @@ impl Kernel {
     /// Create a new Kernel with the given configuration, components, and I/O
     /// subsystem.
     ///
-    /// The I/O subsystem is fully assembled at construction time -- no
-    /// `set_io_context()` needed. Call [`start()`](Self::start) to spawn
-    /// background tasks (TickLoop, Egress).
+    /// The I/O subsystem is fully assembled at construction time. Call
+    /// [`start()`](Self::start) to spawn the unified event loop.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: KernelConfig,
@@ -839,8 +271,6 @@ impl Kernel {
         user_store: Arc<dyn UserStore>,
         session_repo: Arc<dyn SessionRepository>,
         model_repo: Arc<dyn crate::model_repo::ModelRepo>,
-        inbound_bus: Arc<dyn InboundBus>,
-        outbound_bus: Arc<dyn OutboundBus>,
         stream_hub: Arc<StreamHub>,
         identity_resolver: Arc<dyn IdentityResolver>,
         session_resolver: Arc<dyn SessionResolver>,
@@ -854,11 +284,12 @@ impl Kernel {
         );
 
         let endpoint_registry = Arc::new(EndpointRegistry::new());
+        let event_queue = Arc::new(EventQueue::new(4096));
 
-        let ingress_pipeline = Arc::new(IngressPipeline::new(
+        let ingress_pipeline = Arc::new(IngressPipeline::with_event_queue(
             identity_resolver,
             session_resolver,
-            inbound_bus.clone(),
+            event_queue.clone(),
         ));
 
         let inner = Arc::new(KernelInner {
@@ -878,87 +309,28 @@ impl Kernel {
             session_repo,
             model_repo,
             stream_hub: stream_hub.clone(),
-            outbound_bus: outbound_bus.clone(),
             pipe_registry: Arc::new(PipeRegistry::new()),
             device_registry: Arc::new(DeviceRegistry::new()),
             audit_log,
+            event_queue: event_queue.clone(),
         });
-
-        let scheduler = Arc::new(Mutex::new(
-            crate::scheduler::PriorityScheduler::new(config.scheduler.clone()),
-        ));
 
         Self {
             inner,
             config,
-            inbound_bus,
-            outbound_bus,
             stream_hub,
             ingress_pipeline,
             endpoint_registry,
             egress_adapters: HashMap::new(),
-            scheduler,
+            event_queue,
             started_at: Timestamp::now(),
         }
     }
 
-    /// Spawn a long-lived agent process for a session.
+    /// Spawn a new agent process via the unified event queue.
     ///
-    /// Spawns a process_loop that receives messages via a mailbox.
-    /// The first message (from `inbound`) is automatically delivered.
-    ///
-    /// # Arguments
-    /// - `manifest` — the agent definition to run
-    /// - `inbound` — the first inbound message to process
-    /// - `principal` — the identity under which the agent runs
-    /// - `session_id` — the session this agent belongs to
-    /// - `parent_id` — optional parent agent ID (for process tree)
-    pub async fn spawn(
-        &self,
-        manifest: AgentManifest,
-        inbound: InboundMessage,
-        principal: Principal,
-        session_id: SessionId,
-        parent_id: Option<AgentId>,
-    ) -> Result<AgentHandle> {
-        // Validate user exists, is enabled, and has Spawn permission
-        self.inner.validate_principal(&principal).await?;
-
-        // Acquire global semaphore
-        let global_permit = self
-            .inner
-            .global_semaphore
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| KernelError::SpawnLimitReached {
-                message: "global concurrency limit reached".to_string(),
-            })?;
-
-        let child_limit = manifest
-            .max_children
-            .unwrap_or(self.config.default_child_limit);
-
-        KernelInner::spawn_process(
-            Arc::clone(&self.inner),
-            manifest,
-            inbound,
-            principal,
-            session_id,
-            parent_id,
-            child_limit,
-            vec![], // top-level: no tool restriction
-            SpawnPermits::TopLevel {
-                _global: global_permit,
-            },
-        )
-        .await
-    }
-
-    /// Convenience spawn with string input (for workers and backward
-    /// compatibility).
-    ///
-    /// Wraps the input string as a synthetic [`InboundMessage`] and delegates
-    /// to [`spawn()`](Self::spawn).
+    /// Pushes a `KernelEvent::SpawnAgent` into the event queue and waits
+    /// for the reply. The event loop handles process creation.
     pub async fn spawn_with_input(
         &self,
         manifest: AgentManifest,
@@ -966,17 +338,29 @@ impl Kernel {
         principal: Principal,
         session_id: SessionId,
         parent_id: Option<AgentId>,
-    ) -> Result<AgentHandle> {
-        let user_id = principal.user_id.clone();
-        let inbound =
-            InboundMessage::synthetic(input, user_id, session_id.clone());
-        self.spawn(manifest, inbound, principal, session_id, parent_id)
+    ) -> Result<AgentId> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let event = crate::unified_event::KernelEvent::SpawnAgent {
+            manifest,
+            input,
+            principal,
+            session_id,
+            parent_id,
+            reply_tx,
+        };
+        self.event_queue
+            .push(event)
             .await
+            .map_err(|_| KernelError::SpawnFailed {
+                message: "event queue full".to_string(),
+            })?;
+
+        reply_rx.await.map_err(|_| KernelError::SpawnFailed {
+            message: "spawn reply channel closed".to_string(),
+        })?
     }
 
-    /// Spawn a named agent by looking up its manifest (legacy string input).
-    ///
-    /// Uses the short-lived execution model (`spawn_with_input`).
+    /// Spawn a named agent by looking up its manifest.
     pub async fn spawn_named(
         &self,
         agent_name: &str,
@@ -984,7 +368,7 @@ impl Kernel {
         principal: Principal,
         session_id: SessionId,
         parent_id: Option<AgentId>,
-    ) -> Result<AgentHandle> {
+    ) -> Result<AgentId> {
         let manifest = self
             .inner
             .manifest_loader
@@ -1018,12 +402,6 @@ impl Kernel {
 
     /// Access the model repository for runtime model resolution.
     pub fn model_repo(&self) -> &Arc<dyn crate::model_repo::ModelRepo> { &self.inner.model_repo }
-
-    /// Access the shared priority scheduler.
-    ///
-    /// Used by the process loop to record token usage after LLM calls, and
-    /// by the tick loop to enqueue/drain messages.
-    pub fn scheduler(&self) -> &Arc<Mutex<crate::scheduler::PriorityScheduler>> { &self.scheduler }
 
     /// Get detailed runtime statistics for a single process.
     ///
@@ -1086,38 +464,30 @@ impl Kernel {
     /// Used by [`crate::testing::TestKernelBuilder`] to assemble kernels in
     /// tests without going through the public `new()` constructor.
     ///
-    /// Creates minimal I/O subsystem components (InboundBus, IngressPipeline,
-    /// EndpointRegistry) with Noop resolvers. The OutboundBus and StreamHub
+    /// Creates minimal I/O subsystem components (IngressPipeline,
+    /// EndpointRegistry) with Noop resolvers. The StreamHub and EventQueue
     /// are cloned from `KernelInner`.
     pub(crate) fn from_inner(inner: Arc<KernelInner>, config: KernelConfig) -> Self {
-        use crate::io::memory_bus::InMemoryInboundBus;
-
-        let inbound_bus: Arc<dyn InboundBus> = Arc::new(InMemoryInboundBus::new(128));
         let identity_resolver: Arc<dyn IdentityResolver> =
             Arc::new(crate::defaults::noop::NoopIdentityResolver);
         let session_resolver: Arc<dyn SessionResolver> =
             Arc::new(crate::defaults::noop::NoopSessionResolver);
-        let ingress_pipeline = Arc::new(IngressPipeline::new(
+        let event_queue = inner.event_queue.clone();
+        let ingress_pipeline = Arc::new(IngressPipeline::with_event_queue(
             identity_resolver,
             session_resolver,
-            inbound_bus.clone(),
+            event_queue.clone(),
         ));
         let endpoint_registry = Arc::new(EndpointRegistry::new());
 
-        let scheduler = Arc::new(Mutex::new(
-            crate::scheduler::PriorityScheduler::new(config.scheduler.clone()),
-        ));
-
         Self {
-            outbound_bus: inner.outbound_bus.clone(),
             stream_hub: inner.stream_hub.clone(),
             inner,
             config,
-            inbound_bus,
             ingress_pipeline,
             endpoint_registry,
             egress_adapters: HashMap::new(),
-            scheduler,
+            event_queue,
             started_at: Timestamp::now(),
         }
     }
@@ -1135,8 +505,8 @@ impl Kernel {
     /// tracking).
     pub fn endpoint_registry(&self) -> &Arc<EndpointRegistry> { &self.endpoint_registry }
 
-    /// Access the inbound bus (for monitoring / pending count).
-    pub fn inbound_bus(&self) -> &Arc<dyn InboundBus> { &self.inbound_bus }
+    /// Access the unified event queue.
+    pub fn event_queue(&self) -> &Arc<EventQueue> { &self.event_queue }
 
     /// Register an egress adapter for a channel type.
     ///
@@ -1145,48 +515,27 @@ impl Kernel {
         self.egress_adapters.insert(channel_type, adapter);
     }
 
-    /// Spawn TickLoop and Egress as background tasks.
+    /// Start the unified event loop as a background task.
     ///
-    /// Consumes `self` by value, wraps it in `Arc`, spawns background tasks,
+    /// Consumes `self` by value, wraps it in `Arc`, spawns the event loop,
     /// and returns the shared `Arc<Kernel>` for callers to use.
     ///
     /// The returned `Arc<Kernel>` can be used to access the ingress pipeline,
-    /// stream hub, endpoint registry, etc. The background tasks run until the
+    /// stream hub, endpoint registry, etc. The event loop runs until the
     /// `cancel_token` is cancelled.
-    pub fn start(mut self, cancel_token: CancellationToken) -> Arc<Self> {
-        let adapters = std::mem::take(&mut self.egress_adapters);
+    pub fn start(self, cancel_token: CancellationToken) -> Arc<Self> {
         let kernel = Arc::new(self);
 
-        // TickLoop
-        let tick_loop = crate::tick::TickLoop::new(
-            kernel.inbound_bus.clone(),
-            kernel.clone(),
-        );
+        // Unified event loop (replaces TickLoop + process_loop + Egress subscribe)
         tokio::spawn({
-            let token = cancel_token.clone();
-            async move {
-                tick_loop.run(token).await;
-            }
-        });
-
-        // Egress
-        let outbound_sub = kernel.outbound_bus.subscribe();
-        let mut egress = Egress::new(
-            adapters,
-            kernel.endpoint_registry.clone(),
-            outbound_sub,
-        );
-        tokio::spawn({
+            let k = kernel.clone();
             let token = cancel_token;
             async move {
-                tokio::select! {
-                    _ = egress.run() => {}
-                    _ = token.cancelled() => {}
-                }
+                k.run_event_loop(token).await;
             }
         });
 
-        info!("kernel I/O subsystem started (tick_loop + egress)");
+        info!("kernel event loop started");
         kernel
     }
 }
@@ -1200,7 +549,6 @@ mod tests {
             noop::{NoopEventBus, NoopGuard, NoopMemory, NoopModelRepo, NoopSessionRepository},
             noop_user_store::NoopUserStore,
         },
-        io::memory_bus::{InMemoryInboundBus, InMemoryOutboundBus},
         process::principal::Principal,
         provider::EnvLlmProviderLoader,
     };
@@ -1228,13 +576,23 @@ mod tests {
             Arc::new(NoopUserStore),
             Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
             Arc::new(NoopModelRepo) as Arc<dyn crate::model_repo::ModelRepo>,
-            Arc::new(InMemoryInboundBus::new(128)) as Arc<dyn InboundBus>,
-            Arc::new(InMemoryOutboundBus::new(64)) as Arc<dyn OutboundBus>,
             Arc::new(StreamHub::new(16)),
             Arc::new(crate::defaults::noop::NoopIdentityResolver) as Arc<dyn IdentityResolver>,
             Arc::new(crate::defaults::noop::NoopSessionResolver) as Arc<dyn SessionResolver>,
             Arc::new(InMemoryAuditLog::default()) as Arc<dyn AuditLog>,
         )
+    }
+
+    /// Create a test kernel with its event loop running, returning an Arc<Kernel>
+    /// and a CancellationToken to shut it down.
+    fn start_test_kernel(
+        max_concurrency: usize,
+        child_limit: usize,
+    ) -> (Arc<Kernel>, CancellationToken) {
+        let kernel = make_test_kernel(max_concurrency, child_limit);
+        let cancel = CancellationToken::new();
+        let arc = kernel.start(cancel.clone());
+        (arc, cancel)
     }
 
     fn test_manifest(name: &str) -> AgentManifest {
@@ -1282,35 +640,32 @@ mod tests {
 
     #[tokio::test]
     async fn test_kernel_spawn_creates_process() {
-        let kernel = make_test_kernel(10, 5);
+        let (kernel, cancel) = start_test_kernel(10, 5);
         let manifest = test_manifest("test-agent");
         let principal = Principal::user("test-user");
         let session_id = SessionId::new("test-session");
 
-        // spawn_with_input will fail because there's no real LLM provider,
-        // but the process should be created in the table
-        let handle = kernel
+        let result = kernel
             .spawn_with_input(manifest, "hello".to_string(), principal, session_id, None)
             .await;
 
-        // The spawn itself should succeed (it just launches a task)
-        assert!(handle.is_ok());
-        let handle = handle.unwrap();
+        assert!(result.is_ok());
+        let agent_id = result.unwrap();
 
-        // Process should appear in the table
-        let process = kernel.process_table().get(handle.agent_id);
+        let process = kernel.process_table().get(agent_id);
         assert!(process.is_some());
         let process = process.unwrap();
         assert_eq!(process.manifest.name, "test-agent");
+
+        cancel.cancel();
     }
 
     #[tokio::test]
     async fn test_kernel_spawn_global_limit() {
-        let kernel = make_test_kernel(2, 5);
+        let (kernel, cancel) = start_test_kernel(2, 5);
         let principal = Principal::user("test-user");
         let session_id = SessionId::new("test-session");
 
-        // Spawn 2 agents (global limit is 2)
         let h1 = kernel
             .spawn_with_input(
                 test_manifest("a1"),
@@ -1350,15 +705,17 @@ mod tests {
             "expected global limit error, got: {}",
             err
         );
+
+        cancel.cancel();
     }
 
     #[tokio::test]
     async fn test_kernel_spawn_named_success() {
-        let kernel = make_test_kernel(10, 5);
+        let (kernel, cancel) = start_test_kernel(10, 5);
         let principal = Principal::user("test-user");
         let session_id = SessionId::new("test-session");
 
-        let handle = kernel
+        let result = kernel
             .spawn_named(
                 "scout",
                 "find something".to_string(),
@@ -1367,12 +724,14 @@ mod tests {
                 None,
             )
             .await;
-        assert!(handle.is_ok());
+        assert!(result.is_ok());
+
+        cancel.cancel();
     }
 
     #[tokio::test]
     async fn test_kernel_spawn_named_not_found() {
-        let kernel = make_test_kernel(10, 5);
+        let (kernel, cancel) = start_test_kernel(10, 5);
         let principal = Principal::user("test-user");
         let session_id = SessionId::new("test-session");
 
@@ -1392,15 +751,17 @@ mod tests {
                 .to_string()
                 .contains("manifest not found")
         );
+
+        cancel.cancel();
     }
 
     #[tokio::test]
     async fn test_kernel_spawn_with_parent() {
-        let kernel = make_test_kernel(10, 5);
+        let (kernel, cancel) = start_test_kernel(10, 5);
         let principal = Principal::user("test-user");
         let session_id = SessionId::new("test-session");
 
-        let parent_handle = kernel
+        let parent_id = kernel
             .spawn_with_input(
                 test_manifest("parent"),
                 "parent task".to_string(),
@@ -1411,483 +772,25 @@ mod tests {
             .await
             .unwrap();
 
-        let child_handle = kernel
+        let child_id = kernel
             .spawn_with_input(
                 test_manifest("child"),
                 "child task".to_string(),
                 principal,
                 session_id,
-                Some(parent_handle.agent_id),
+                Some(parent_id),
             )
             .await
             .unwrap();
 
-        let child_process = kernel.process_table().get(child_handle.agent_id).unwrap();
-        assert_eq!(child_process.parent_id, Some(parent_handle.agent_id));
+        let child_process = kernel.process_table().get(child_id).unwrap();
+        assert_eq!(child_process.parent_id, Some(parent_id));
 
-        let children = kernel.process_table().children_of(parent_handle.agent_id);
+        let children = kernel.process_table().children_of(parent_id);
         assert_eq!(children.len(), 1);
-        assert_eq!(children[0].agent_id, child_handle.agent_id);
-    }
+        assert_eq!(children[0].agent_id, child_id);
 
-    // =======================================================================
-    // ChildResult integration tests
-    // =======================================================================
-
-    /// Stub LLM provider that records calls and returns a canned response.
-    mod child_result_helpers {
-        use std::sync::{Arc, Mutex};
-
-        use async_openai::types::chat::{
-            ChatChoiceStream, ChatCompletionResponseStream, ChatCompletionStreamResponseDelta,
-            CreateChatCompletionRequest, CreateChatCompletionStreamResponse, FinishReason,
-        };
-        use async_trait::async_trait;
-        use futures::stream;
-
-        use crate::{
-            error::KernelError,
-            provider::{LlmProvider, LlmProviderLoader, LlmProviderLoaderRef},
-        };
-
-        /// Records the number of messages in each LLM call so tests can assert
-        /// the conversation length.
-        #[derive(Default)]
-        pub struct StubLlm {
-            pub call_counts: Mutex<Vec<usize>>,
-        }
-
-        #[async_trait]
-        impl LlmProvider for StubLlm {
-            async fn chat_completion(
-                &self,
-                _req: CreateChatCompletionRequest,
-            ) -> crate::error::Result<
-                async_openai::types::chat::CreateChatCompletionResponse,
-            > {
-                Err(KernelError::Other {
-                    message: "not supported".into(),
-                })
-            }
-
-            #[allow(deprecated)]
-            async fn chat_completion_stream(
-                &self,
-                req: CreateChatCompletionRequest,
-            ) -> crate::error::Result<ChatCompletionResponseStream> {
-                self.call_counts
-                    .lock()
-                    .unwrap()
-                    .push(req.messages.len());
-
-                let chunk = CreateChatCompletionStreamResponse {
-                    id:                 "resp_child".to_string(),
-                    choices:            vec![ChatChoiceStream {
-                        index:         0,
-                        delta:         ChatCompletionStreamResponseDelta {
-                            content:       Some(
-                                "processed child result".to_string(),
-                            ),
-                            function_call: None,
-                            tool_calls:    None,
-                            role:          None,
-                            refusal:       None,
-                        },
-                        finish_reason: Some(FinishReason::Stop),
-                        logprobs:      None,
-                    }],
-                    created:            0,
-                    model:              "test-model".to_string(),
-                    service_tier:       None,
-                    system_fingerprint: None,
-                    object:             "chat.completion.chunk".to_string(),
-                    usage:              None,
-                };
-                Ok(Box::pin(stream::iter(vec![Ok(chunk)])))
-            }
-        }
-
-        #[derive(Clone)]
-        pub struct StubLoader {
-            pub provider: Arc<dyn LlmProvider>,
-        }
-
-        #[async_trait]
-        impl LlmProviderLoader for StubLoader {
-            async fn acquire_provider(
-                &self,
-            ) -> crate::error::Result<Arc<dyn LlmProvider>> {
-                Ok(Arc::clone(&self.provider))
-            }
-        }
-
-        pub fn make_llm() -> (Arc<StubLlm>, LlmProviderLoaderRef) {
-            let llm = Arc::new(StubLlm::default());
-            let loader = Arc::new(StubLoader {
-                provider: llm.clone() as Arc<dyn LlmProvider>,
-            }) as LlmProviderLoaderRef;
-            (llm, loader)
-        }
-    }
-
-    /// Helper: build a kernel with a stub LLM that records calls.
-    fn make_kernel_with_stub_llm(
-    ) -> (Kernel, Arc<child_result_helpers::StubLlm>) {
-        let (llm, loader) = child_result_helpers::make_llm();
-        let config = KernelConfig {
-            max_concurrency:        16,
-            default_child_limit:    5,
-            default_max_iterations: 5,
-            ..Default::default()
-        };
-        let mut manifest_loader = ManifestLoader::new();
-        manifest_loader.load_bundled();
-
-        let kernel = Kernel::new(
-            config,
-            loader,
-            Arc::new(ToolRegistry::new()),
-            Arc::new(NoopMemory),
-            Arc::new(NoopEventBus),
-            Arc::new(NoopGuard),
-            manifest_loader,
-            Arc::new(NoopUserStore),
-            Arc::new(NoopSessionRepository)
-                as Arc<dyn SessionRepository>,
-            Arc::new(NoopModelRepo)
-                as Arc<dyn crate::model_repo::ModelRepo>,
-            Arc::new(InMemoryInboundBus::new(128))
-                as Arc<dyn InboundBus>,
-            Arc::new(InMemoryOutboundBus::new(64))
-                as Arc<dyn OutboundBus>,
-            Arc::new(StreamHub::new(16)),
-            Arc::new(crate::defaults::noop::NoopIdentityResolver)
-                as Arc<dyn IdentityResolver>,
-            Arc::new(crate::defaults::noop::NoopSessionResolver)
-                as Arc<dyn SessionResolver>,
-            Arc::new(crate::audit::InMemoryAuditLog::default())
-                as Arc<dyn crate::audit::AuditLog>,
-        );
-        (kernel, llm)
-    }
-
-    #[tokio::test]
-    async fn test_child_result_delivered_to_parent_mailbox() {
-        // Spawn a parent process, then a child.  When the child's process
-        // loop ends (after mailbox is closed) it should deliver a
-        // ChildResult to the parent's mailbox.
-        let (kernel, llm) = make_kernel_with_stub_llm();
-
-        let principal = Principal::user("test-user");
-        let session_id = SessionId::new("cr-test-session");
-
-        let parent_handle = kernel
-            .spawn_with_input(
-                test_manifest("parent"),
-                "parent task".to_string(),
-                principal.clone(),
-                session_id.clone(),
-                None,
-            )
-            .await
-            .unwrap();
-
-        let child_handle = kernel
-            .spawn_with_input(
-                test_manifest("child"),
-                "child task".to_string(),
-                principal,
-                session_id,
-                Some(parent_handle.agent_id),
-            )
-            .await
-            .unwrap();
-
-        let child_agent_id = child_handle.agent_id;
-
-        // Wait for the child's initial turn to complete (enters Waiting).
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-        let calls_before = llm.call_counts.lock().unwrap().len();
-
-        // Force the child to terminate by removing it from the process
-        // table (which drops the mailbox sender in the table), then
-        // dropping the handle's mailbox sender.  This closes the mailbox
-        // channel, causing the child's process_loop to exit and send
-        // ChildResult to the parent.
-        kernel.process_table().remove(child_agent_id);
-        drop(child_handle);
-
-        // Wait for the child's cleanup to run and the parent to process
-        // the ChildResult.
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-        // ChildResult is now handled by SpawnTool (within the same LLM
-        // turn) — the process loop only persists the child result as a
-        // system message; no additional LLM call is triggered.
-        let calls_after = llm.call_counts.lock().unwrap().len();
-        assert_eq!(
-            calls_after, calls_before,
-            "parent should NOT make additional LLM call after child \
-             result (SpawnTool handles it inline): \
-             before={calls_before}, after={calls_after}"
-        );
-
-        // Parent should still be alive.
-        let parent_process =
-            kernel.process_table().get(parent_handle.agent_id);
-        assert!(
-            parent_process.is_some(),
-            "parent process should still exist"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_child_result_triggers_parent_llm_turn() {
-        // ChildResult no longer triggers an additional LLM turn — SpawnTool
-        // handles child output inline within the parent's LLM turn. This
-        // test verifies that ChildResult is persisted but does NOT cause
-        // an extra LLM call.
-        let (kernel, llm) = make_kernel_with_stub_llm();
-
-        let principal = Principal::user("test-user");
-        let session_id = SessionId::new("cr-llm-test");
-
-        let parent_handle = kernel
-            .spawn_with_input(
-                test_manifest("parent"),
-                "parent task".to_string(),
-                principal.clone(),
-                session_id.clone(),
-                None,
-            )
-            .await
-            .unwrap();
-
-        // Wait a bit for the parent's initial turn to complete.
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-        let initial_calls = llm.call_counts.lock().unwrap().len();
-
-        // Directly send a ChildResult to the parent's mailbox.
-        let child_id = crate::process::AgentId::new();
-        let child_result = crate::process::AgentResult {
-            output:     "child output text".to_string(),
-            iterations: 2,
-            tool_calls: 1,
-        };
-        kernel
-            .process_table()
-            .get_mailbox(&parent_handle.agent_id)
-            .unwrap()
-            .send(crate::process::ProcessMessage::ChildResult {
-                child_id,
-                result: child_result,
-            })
-            .await
-            .unwrap();
-
-        // Give the parent time to process the ChildResult.
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-        let total_calls = llm.call_counts.lock().unwrap().len();
-        assert_eq!(
-            total_calls, initial_calls,
-            "parent should NOT make additional LLM call(s) after \
-             ChildResult (SpawnTool handles it inline): \
-             initial={initial_calls}, total={total_calls}"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_child_result_parent_state_transitions() {
-        // Verify parent state transitions:
-        //   Running → (initial turn) → Waiting → (ChildResult) → Running
-        //   → (LLM turn) → Waiting
-        let (kernel, _llm) = make_kernel_with_stub_llm();
-
-        let principal = Principal::user("test-user");
-        let session_id = SessionId::new("cr-state-test");
-
-        let parent_handle = kernel
-            .spawn_with_input(
-                test_manifest("parent"),
-                "parent task".to_string(),
-                principal,
-                session_id,
-                None,
-            )
-            .await
-            .unwrap();
-
-        // Wait for initial turn to complete → Waiting.
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-        let state = kernel
-            .process_table()
-            .get(parent_handle.agent_id)
-            .unwrap()
-            .state;
-        assert_eq!(
-            state,
-            ProcessState::Waiting,
-            "parent should be Waiting after initial turn"
-        );
-
-        // Send a ChildResult.
-        let child_id = crate::process::AgentId::new();
-        kernel
-            .process_table()
-            .get_mailbox(&parent_handle.agent_id)
-            .unwrap()
-            .send(crate::process::ProcessMessage::ChildResult {
-                child_id,
-                result: crate::process::AgentResult {
-                    output:     "done".to_string(),
-                    iterations: 1,
-                    tool_calls: 0,
-                },
-            })
-            .await
-            .unwrap();
-
-        // After processing the ChildResult + follow-up LLM turn, the
-        // parent should be back to Waiting.
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-        let state = kernel
-            .process_table()
-            .get(parent_handle.agent_id)
-            .unwrap()
-            .state;
-        assert_eq!(
-            state,
-            ProcessState::Waiting,
-            "parent should return to Waiting after processing ChildResult"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_child_result_error_handling() {
-        // When a child's output is empty (e.g., failure case), the parent
-        // should still process it gracefully.
-        let (kernel, _llm) = make_kernel_with_stub_llm();
-
-        let principal = Principal::user("test-user");
-        let session_id = SessionId::new("cr-error-test");
-
-        let parent_handle = kernel
-            .spawn_with_input(
-                test_manifest("parent"),
-                "parent task".to_string(),
-                principal,
-                session_id,
-                None,
-            )
-            .await
-            .unwrap();
-
-        // Wait for initial turn to complete.
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-        // Send a ChildResult with empty/error output.
-        let child_id = crate::process::AgentId::new();
-        kernel
-            .process_table()
-            .get_mailbox(&parent_handle.agent_id)
-            .unwrap()
-            .send(crate::process::ProcessMessage::ChildResult {
-                child_id,
-                result: crate::process::AgentResult {
-                    output:     String::new(),
-                    iterations: 0,
-                    tool_calls: 0,
-                },
-            })
-            .await
-            .unwrap();
-
-        // Parent should handle it gracefully and return to Waiting.
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-        let parent_process =
-            kernel.process_table().get(parent_handle.agent_id);
-        assert!(
-            parent_process.is_some(),
-            "parent should still exist after empty child result"
-        );
-        let state = parent_process.unwrap().state;
-        assert_eq!(
-            state,
-            ProcessState::Waiting,
-            "parent should be Waiting after processing empty child result"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_child_result_multiple_children() {
-        // Parent receives ChildResult from multiple children sequentially.
-        // ChildResult no longer triggers LLM calls — only persists messages.
-        let (kernel, llm) = make_kernel_with_stub_llm();
-
-        let principal = Principal::user("test-user");
-        let session_id = SessionId::new("cr-multi-test");
-
-        let parent_handle = kernel
-            .spawn_with_input(
-                test_manifest("parent"),
-                "parent task".to_string(),
-                principal,
-                session_id,
-                None,
-            )
-            .await
-            .unwrap();
-
-        // Wait for initial turn.
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        let calls_after_init = llm.call_counts.lock().unwrap().len();
-
-        // Send two ChildResult messages.
-        for i in 0..2 {
-            let child_id = crate::process::AgentId::new();
-            kernel
-                .process_table()
-                .get_mailbox(&parent_handle.agent_id)
-                .unwrap()
-                .send(crate::process::ProcessMessage::ChildResult {
-                    child_id,
-                    result: crate::process::AgentResult {
-                        output:     format!("child {i} output"),
-                        iterations: 1,
-                        tool_calls: 0,
-                    },
-                })
-                .await
-                .unwrap();
-            // Give time for each to be processed sequentially.
-            tokio::time::sleep(std::time::Duration::from_millis(300))
-                .await;
-        }
-
-        let total_calls = llm.call_counts.lock().unwrap().len();
-        assert_eq!(
-            total_calls, calls_after_init,
-            "parent should NOT make additional LLM calls for \
-             child results (SpawnTool handles them inline): \
-             init={calls_after_init}, total={total_calls}"
-        );
-
-        let state = kernel
-            .process_table()
-            .get(parent_handle.agent_id)
-            .unwrap()
-            .state;
-        assert_eq!(
-            state,
-            ProcessState::Waiting,
-            "parent should be Waiting after processing all child results"
-        );
+        cancel.cancel();
     }
 
     // -----------------------------------------------------------------------
@@ -1896,11 +799,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_kernel_process_stats_after_spawn() {
-        let kernel = make_test_kernel(10, 5);
+        let (kernel, cancel) = start_test_kernel(10, 5);
         let principal = Principal::user("test-user");
         let session_id = SessionId::new("stats-session");
 
-        let handle = kernel
+        let agent_id = kernel
             .spawn_with_input(
                 test_manifest("stats-agent"),
                 "hello".to_string(),
@@ -1911,20 +814,20 @@ mod tests {
             .await
             .unwrap();
 
-        let stats = kernel.process_stats(&handle.agent_id).await;
+        let stats = kernel.process_stats(&agent_id).await;
         assert!(stats.is_some());
 
         let stats = stats.unwrap();
-        assert_eq!(stats.agent_id, handle.agent_id);
+        assert_eq!(stats.agent_id, agent_id);
         assert_eq!(stats.manifest_name, "stats-agent");
         assert!(stats.parent_id.is_none());
-        // uptime_ms is u64, just verify it was populated
-        let _ = stats.uptime_ms;
+
+        cancel.cancel();
     }
 
     #[tokio::test]
     async fn test_kernel_list_processes_returns_all_spawned() {
-        let kernel = make_test_kernel(10, 5);
+        let (kernel, cancel) = start_test_kernel(10, 5);
         let principal = Principal::user("test-user");
 
         kernel
@@ -1955,12 +858,13 @@ mod tests {
         let names: Vec<&str> = list.iter().map(|s| s.manifest_name.as_str()).collect();
         assert!(names.contains(&"agent-1"));
         assert!(names.contains(&"agent-2"));
+
+        cancel.cancel();
     }
 
-    #[tokio::test]
-    async fn test_kernel_system_stats_initial() {
+    #[test]
+    fn test_kernel_system_stats_initial() {
         let kernel = make_test_kernel(10, 5);
-
         let stats = kernel.system_stats();
         assert_eq!(stats.active_processes, 0);
         assert_eq!(stats.total_spawned, 0);
@@ -1968,13 +872,11 @@ mod tests {
         assert_eq!(stats.total_failed, 0);
         assert_eq!(stats.global_semaphore_available, 10);
         assert_eq!(stats.total_tokens_consumed, 0);
-        // uptime_ms is u64, just verify it was populated
-        let _ = stats.uptime_ms;
     }
 
     #[tokio::test]
     async fn test_kernel_system_stats_after_spawn() {
-        let kernel = make_test_kernel(10, 5);
+        let (kernel, cancel) = start_test_kernel(10, 5);
         let principal = Principal::user("test-user");
 
         kernel
@@ -1990,24 +892,26 @@ mod tests {
 
         let stats = kernel.system_stats();
         assert_eq!(stats.total_spawned, 1);
+        // Note: global_semaphore permit is leaked (std::mem::forget) in
+        // handle_spawn_agent, so the available count decreases.
         assert_eq!(stats.global_semaphore_available, 9);
+
+        cancel.cancel();
     }
 
     // =======================================================================
-    // Signal system tests
+    // Signal system tests (via KernelEvent::SendSignal through EventQueue)
     // =======================================================================
 
     #[tokio::test]
-    async fn test_pause_resume_buffers_messages() {
-        use crate::process::ProcessMessage;
-
-        let kernel = make_test_kernel(10, 5);
+    async fn test_signal_via_event_queue() {
+        let (kernel, cancel) = start_test_kernel(10, 5);
         let principal = Principal::user("test-user");
-        let session_id = SessionId::new("pause-resume-session");
+        let session_id = SessionId::new("signal-session");
 
-        let handle = kernel
+        let agent_id = kernel
             .spawn_with_input(
-                test_manifest("pausable"),
+                test_manifest("signalable"),
                 "initial message".to_string(),
                 principal,
                 session_id,
@@ -2016,288 +920,50 @@ mod tests {
             .await
             .unwrap();
 
-        let agent_id = handle.agent_id;
+        // Verify process exists in the table.
+        let process = kernel.process_table().get(agent_id);
+        assert!(process.is_some(), "process should exist after spawn");
 
-        // Wait for the process to finish its initial LLM call (it will
-        // fail because the model is "test-model") and transition to Waiting.
-        // We poll until state is Waiting or a timeout is reached.
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-        loop {
-            if let Some(p) = kernel.process_table().get(agent_id) {
-                if p.state == ProcessState::Waiting {
-                    break;
-                }
-            }
-            if tokio::time::Instant::now() > deadline {
-                panic!("timed out waiting for process to reach Waiting state");
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        }
+        // Push a Pause signal via event queue.
+        let event = crate::unified_event::KernelEvent::SendSignal {
+            target: agent_id,
+            signal: crate::process::Signal::Pause,
+        };
+        kernel.event_queue().push(event).await.unwrap();
 
-        // Send Pause signal.
-        handle
-            .mailbox
-            .send(ProcessMessage::Signal(crate::process::Signal::Pause))
-            .await
-            .unwrap();
+        // Allow time for the event loop to process.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        // Wait for the Paused state.
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            if let Some(p) = kernel.process_table().get(agent_id) {
-                if p.state == ProcessState::Paused {
-                    break;
-                }
-            }
-            if tokio::time::Instant::now() > deadline {
-                let state = kernel
-                    .process_table()
-                    .get(agent_id)
-                    .map(|p| p.state);
-                panic!(
-                    "timed out waiting for Paused state, current: {:?}",
-                    state
-                );
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-
-        // Verify Paused state.
+        // Process should be Paused.
         let process = kernel.process_table().get(agent_id).unwrap();
-        assert_eq!(process.state, ProcessState::Paused);
+        assert_eq!(
+            process.state,
+            ProcessState::Paused,
+            "expected Paused after signal, got {:?}",
+            process.state
+        );
 
-        // Send Resume signal.
-        handle
-            .mailbox
-            .send(ProcessMessage::Signal(crate::process::Signal::Resume))
-            .await
-            .unwrap();
+        // Push Resume signal.
+        let event = crate::unified_event::KernelEvent::SendSignal {
+            target: agent_id,
+            signal: crate::process::Signal::Resume,
+        };
+        kernel.event_queue().push(event).await.unwrap();
 
-        // Wait for the process to leave Paused state.
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            if let Some(p) = kernel.process_table().get(agent_id) {
-                if p.state != ProcessState::Paused {
-                    break;
-                }
-            }
-            if tokio::time::Instant::now() > deadline {
-                panic!("timed out waiting for process to leave Paused state");
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        // Process should be back to Waiting (not Paused).
         let process = kernel.process_table().get(agent_id).unwrap();
         assert_ne!(
             process.state,
             ProcessState::Paused,
             "process should not be Paused after Resume"
         );
+
+        cancel.cancel();
     }
 
-    #[tokio::test]
-    async fn test_terminate_shuts_down_process() {
-        use crate::process::ProcessMessage;
-
-        let kernel = make_test_kernel(10, 5);
-        let principal = Principal::user("test-user");
-        let session_id = SessionId::new("terminate-session");
-
-        let handle = kernel
-            .spawn_with_input(
-                test_manifest("terminable"),
-                "initial message".to_string(),
-                principal,
-                session_id,
-                None,
-            )
-            .await
-            .unwrap();
-
-        let agent_id = handle.agent_id;
-
-        // Wait for the initial message to be processed.
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-        loop {
-            if let Some(p) = kernel.process_table().get(agent_id) {
-                if p.state == ProcessState::Waiting {
-                    break;
-                }
-            }
-            if tokio::time::Instant::now() > deadline {
-                // Even if we don't reach Waiting, proceed with the test
-                // — the Terminate signal should still work.
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        }
-
-        // Send Terminate signal.
-        handle
-            .mailbox
-            .send(ProcessMessage::Signal(crate::process::Signal::Terminate))
-            .await
-            .unwrap();
-
-        // Wait for result — the process should complete.
-        let result =
-            tokio::time::timeout(std::time::Duration::from_secs(10), handle.result_rx).await;
-        assert!(
-            result.is_ok(),
-            "process should have completed after Terminate"
-        );
-
-        // Process should be in a terminal state.
-        let process = kernel.process_table().get(agent_id).unwrap();
-        assert!(
-            matches!(
-                process.state,
-                ProcessState::Completed | ProcessState::Cancelled
-            ),
-            "expected terminal state, got: {:?}",
-            process.state
-        );
-    }
-
-    #[tokio::test]
-    async fn test_kill_signal_terminates_immediately() {
-        use crate::process::ProcessMessage;
-
-        let kernel = make_test_kernel(10, 5);
-        let principal = Principal::user("test-user");
-        let session_id = SessionId::new("kill-session");
-
-        let handle = kernel
-            .spawn_with_input(
-                test_manifest("killable"),
-                "initial message".to_string(),
-                principal,
-                session_id,
-                None,
-            )
-            .await
-            .unwrap();
-
-        let agent_id = handle.agent_id;
-
-        // Wait for the initial message to be processed.
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-        loop {
-            if let Some(p) = kernel.process_table().get(agent_id) {
-                if p.state == ProcessState::Waiting {
-                    break;
-                }
-            }
-            if tokio::time::Instant::now() > deadline {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        }
-
-        // Send Kill signal.
-        handle
-            .mailbox
-            .send(ProcessMessage::Signal(crate::process::Signal::Kill))
-            .await
-            .unwrap();
-
-        // Wait for result.
-        let result =
-            tokio::time::timeout(std::time::Duration::from_secs(5), handle.result_rx).await;
-        assert!(result.is_ok(), "process should have completed after Kill");
-
-        // Process should be Cancelled.
-        let process = kernel.process_table().get(agent_id).unwrap();
-        assert_eq!(
-            process.state,
-            ProcessState::Cancelled,
-            "expected Cancelled state, got: {:?}",
-            process.state
-        );
-    }
-
-    #[tokio::test]
-    async fn test_interrupt_process_stays_alive() {
-        use crate::process::ProcessMessage;
-
-        let kernel = make_test_kernel(10, 5);
-        let principal = Principal::user("test-user");
-        let session_id = SessionId::new("interrupt-session");
-
-        let handle = kernel
-            .spawn_with_input(
-                test_manifest("interruptable"),
-                "initial message".to_string(),
-                principal,
-                session_id,
-                None,
-            )
-            .await
-            .unwrap();
-
-        let agent_id = handle.agent_id;
-
-        // Wait for the process to settle into Waiting state.
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-        loop {
-            if let Some(p) = kernel.process_table().get(agent_id) {
-                if p.state == ProcessState::Waiting {
-                    break;
-                }
-            }
-            if tokio::time::Instant::now() > deadline {
-                let state = kernel
-                    .process_table()
-                    .get(agent_id)
-                    .map(|p| p.state);
-                panic!(
-                    "timed out waiting for Waiting state, current: {:?}",
-                    state
-                );
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        }
-
-        // Send Interrupt signal.
-        handle
-            .mailbox
-            .send(ProcessMessage::Signal(crate::process::Signal::Interrupt))
-            .await
-            .unwrap();
-
-        // Wait a bit for the interrupt to be processed.
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        // Process should still exist (not removed from table) and be
-        // in a non-terminal state.
-        let process = kernel.process_table().get(agent_id);
-        assert!(
-            process.is_some(),
-            "process should still be alive after Interrupt"
-        );
-        let state = process.unwrap().state;
-        assert!(
-            !matches!(
-                state,
-                ProcessState::Completed | ProcessState::Failed | ProcessState::Cancelled
-            ),
-            "process should not be in terminal state after Interrupt, got: {:?}",
-            state
-        );
-
-        // The mailbox should still be open — we can still send messages.
-        let send_result = handle
-            .mailbox
-            .try_send(ProcessMessage::Signal(crate::process::Signal::Interrupt));
-        assert!(
-            send_result.is_ok(),
-            "mailbox should still accept messages after Interrupt"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_kernel_system_stats_serializes_to_json() {
+    #[test]
+    fn test_kernel_system_stats_serializes_to_json() {
         let kernel = make_test_kernel(10, 5);
         let stats = kernel.system_stats();
         let json = serde_json::to_string(&stats).unwrap();

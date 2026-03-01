@@ -42,7 +42,7 @@ use crate::{
 
 /// Result of a single agent turn.
 #[derive(Debug)]
-pub(crate) struct AgentTurnResult {
+pub struct AgentTurnResult {
     /// The final text produced by the agent.
     pub text:       String,
     /// Number of LLM iterations consumed.
@@ -397,7 +397,7 @@ mod tests {
             noop::{NoopEventBus, NoopGuard, NoopMemory, NoopSessionRepository},
             noop_user_store::NoopUserStore,
         },
-        io::{memory_bus::InMemoryOutboundBus, stream::StreamHub},
+        io::stream::StreamHub,
         kernel::KernelInner,
         process::{
             AgentEnv, AgentId, AgentManifest, AgentProcess, ProcessState, ProcessTable, SessionId,
@@ -445,12 +445,11 @@ mod tests {
             model_repo:             Arc::new(crate::defaults::noop::NoopModelRepo)
                 as Arc<dyn crate::model_repo::ModelRepo>,
             stream_hub:             Arc::new(StreamHub::new(16)),
-            outbound_bus:           Arc::new(InMemoryOutboundBus::new(64))
-                as Arc<dyn crate::io::bus::OutboundBus>,
             pipe_registry:          Arc::new(crate::io::pipe::PipeRegistry::new()),
             device_registry:        Arc::new(crate::device_registry::DeviceRegistry::new()),
             audit_log:              Arc::new(InMemoryAuditLog::default())
                 as Arc<dyn crate::audit::AuditLog>,
+            event_queue:            Arc::new(crate::event_queue::EventQueue::new(4096)),
         })
     }
 

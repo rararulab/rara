@@ -294,7 +294,6 @@ mod tests {
 
             let agent_id = AgentId::new();
             let (tx, rx) = oneshot::channel();
-            let (mailbox_tx, _mailbox_rx) = tokio::sync::mpsc::channel(16);
 
             // Immediately send a result
             let _ = tx.send(AgentResult {
@@ -305,7 +304,6 @@ mod tests {
 
             Ok(AgentHandle {
                 agent_id,
-                mailbox: mailbox_tx,
                 result_rx: rx,
             })
         }

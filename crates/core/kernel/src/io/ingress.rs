@@ -14,14 +14,15 @@
 
 //! Ingress Pipeline — converts raw platform messages into unified
 //! [`InboundMessage`](crate::io::types::InboundMessage) and publishes
-//! to the [`InboundBus`](crate::io::bus::InboundBus).
+//! to the [`EventQueue`](crate::event_queue::EventQueue).
 //!
 //! The pipeline orchestrates three steps:
 //! 1. **Identity resolution** — map `(channel_type, platform_user_id)` to a
 //!    unified [`UserId`](crate::process::principal::UserId).
 //! 2. **Session resolution** — resolve or create a
 //!    [`SessionId`](crate::process::SessionId) for this user + channel context.
-//! 3. **Bus publish** — build an [`InboundMessage`] and publish it to the bus.
+//! 3. **Event queue push** — build an [`InboundMessage`] and push it to the
+//!    [`EventQueue`](crate::event_queue::EventQueue) as a `KernelEvent::UserMessage`.
 //!
 //! Channel adapters only need to call [`IngressPipeline::ingest`] — all
 //! coordination lives here.
@@ -33,10 +34,7 @@ use serde_json::Value;
 
 use crate::{
     channel::types::{ChannelType, MessageContent},
-    io::{
-        bus::InboundBus,
-        types::{BusError, ChannelSource, InboundMessage, IngestError, MessageId, ReplyContext},
-    },
+    io::types::{BusError, ChannelSource, InboundMessage, IngestError, MessageId, ReplyContext},
     process::{SessionId, principal::UserId},
 };
 
@@ -109,30 +107,30 @@ pub trait SessionResolver: Send + Sync + 'static {
 // IngressPipeline
 // ---------------------------------------------------------------------------
 
-/// Orchestrates identity resolution, session resolution, and bus publishing.
+/// Orchestrates identity resolution, session resolution, and event publishing.
 ///
 /// Channel adapters call [`ingest`](Self::ingest) with a
 /// [`RawPlatformMessage`]; the pipeline handles identity resolution,
-/// session resolution, and bus publishing. It composes an
-/// [`IdentityResolver`], a [`SessionResolver`], and an [`InboundBus`]
-/// publisher.
+/// session resolution, and publishing to the unified [`EventQueue`] as
+/// `KernelEvent::UserMessage`.
 pub struct IngressPipeline {
     identity_resolver: Arc<dyn IdentityResolver>,
     session_resolver:  Arc<dyn SessionResolver>,
-    publisher:         Arc<dyn InboundBus>,
+    /// Unified event queue — the sole publish backend.
+    event_queue:       Arc<crate::event_queue::EventQueue>,
 }
 
 impl IngressPipeline {
-    /// Create a new ingress pipeline.
-    pub fn new(
+    /// Create a new ingress pipeline with unified EventQueue backend.
+    pub fn with_event_queue(
         identity_resolver: Arc<dyn IdentityResolver>,
         session_resolver: Arc<dyn SessionResolver>,
-        publisher: Arc<dyn InboundBus>,
+        event_queue: Arc<crate::event_queue::EventQueue>,
     ) -> Self {
         Self {
             identity_resolver,
             session_resolver,
-            publisher,
+            event_queue,
         }
     }
 
@@ -171,13 +169,16 @@ impl IngressPipeline {
             metadata: raw.metadata,
         };
 
-        // 4. Publish to bus (translate BusError → IngestError)
-        self.publisher.publish(msg).await.map_err(|e| match e {
-            BusError::Full => IngestError::SystemBusy,
-            other => IngestError::Internal {
-                message: other.to_string(),
-            },
-        })
+        // 4. Publish to EventQueue.
+        self.event_queue
+            .push(crate::unified_event::KernelEvent::UserMessage(msg))
+            .await
+            .map_err(|e| match e {
+                BusError::Full => IngestError::SystemBusy,
+                other => IngestError::Internal {
+                    message: other.to_string(),
+                },
+            })
     }
 }
 
@@ -186,7 +187,7 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
-    use crate::io::memory_bus::InMemoryInboundBus;
+    use crate::event_queue::EventQueue;
 
     // -----------------------------------------------------------------------
     // Mock IdentityResolver
@@ -294,24 +295,29 @@ mod tests {
     async fn test_pipeline_ingest_success() {
         let identity = Arc::new(MockIdentityResolver::succeeding("user-1"));
         let session = Arc::new(MockSessionResolver::new("session-1"));
-        let bus = Arc::new(InMemoryInboundBus::new(100));
+        let eq = Arc::new(EventQueue::new(100));
 
-        let pipeline = IngressPipeline::new(
+        let pipeline = IngressPipeline::with_event_queue(
             identity.clone() as Arc<dyn IdentityResolver>,
             session as Arc<dyn SessionResolver>,
-            bus.clone() as Arc<dyn InboundBus>,
+            eq.clone(),
         );
 
         pipeline.ingest(raw_message("hello")).await.unwrap();
 
-        // Verify the message landed in the bus
-        let messages = bus.drain(10).await;
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].content.as_text(), "hello");
-        assert_eq!(messages[0].user, UserId("user-1".to_string()));
-        assert_eq!(messages[0].session_id, SessionId::new("session-1"));
-        assert_eq!(messages[0].source.channel_type, ChannelType::Telegram);
-        assert_eq!(messages[0].source.platform_user_id, "tg-user-1".to_string());
+        // Verify the message landed in the event queue
+        let events = eq.drain(10).await;
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            crate::unified_event::KernelEvent::UserMessage(msg) => {
+                assert_eq!(msg.content.as_text(), "hello");
+                assert_eq!(msg.user, UserId("user-1".to_string()));
+                assert_eq!(msg.session_id, SessionId::new("session-1"));
+                assert_eq!(msg.source.channel_type, ChannelType::Telegram);
+                assert_eq!(msg.source.platform_user_id, "tg-user-1".to_string());
+            }
+            other => panic!("expected UserMessage, got: {:?}", other),
+        }
 
         // Verify identity resolver was called correctly
         let calls = identity.calls.lock().unwrap();
@@ -329,12 +335,12 @@ mod tests {
             },
         ));
         let session = Arc::new(MockSessionResolver::new("session-1"));
-        let bus = Arc::new(InMemoryInboundBus::new(100));
+        let eq = Arc::new(EventQueue::new(100));
 
-        let pipeline = IngressPipeline::new(
+        let pipeline = IngressPipeline::with_event_queue(
             identity as Arc<dyn IdentityResolver>,
             session as Arc<dyn SessionResolver>,
-            bus.clone() as Arc<dyn InboundBus>,
+            eq.clone(),
         );
 
         let result = pipeline.ingest(raw_message("hello")).await;
@@ -344,22 +350,22 @@ mod tests {
             IngestError::IdentityResolutionFailed { .. }
         ));
 
-        // Bus should be empty — nothing was published
-        let messages = bus.drain(10).await;
-        assert_eq!(messages.len(), 0);
+        // Queue should be empty — nothing was published
+        let events = eq.drain(10).await;
+        assert_eq!(events.len(), 0);
     }
 
     #[tokio::test]
-    async fn test_pipeline_bus_full() {
+    async fn test_pipeline_queue_full() {
         let identity = Arc::new(MockIdentityResolver::succeeding("user-1"));
         let session = Arc::new(MockSessionResolver::new("session-1"));
         // Capacity of 1 — second message should fail
-        let bus = Arc::new(InMemoryInboundBus::new(1));
+        let eq = Arc::new(EventQueue::new(1));
 
-        let pipeline = IngressPipeline::new(
+        let pipeline = IngressPipeline::with_event_queue(
             identity as Arc<dyn IdentityResolver>,
             session as Arc<dyn SessionResolver>,
-            bus as Arc<dyn InboundBus>,
+            eq,
         );
 
         // First message should succeed

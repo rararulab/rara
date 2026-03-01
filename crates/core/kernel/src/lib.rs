@@ -36,10 +36,13 @@ pub mod device;
 pub mod device_registry;
 pub mod error;
 pub mod event;
+pub mod event_loop;
+pub mod event_queue;
 pub mod guard;
 pub mod handle;
 pub mod io;
 pub mod kernel;
+pub mod unified_event;
 pub mod llm;
 pub mod memory;
 pub mod model;
@@ -49,9 +52,7 @@ pub(crate) mod agent_turn;
 pub mod prompt;
 pub mod provider;
 pub mod runner;
-pub mod scheduler;
 pub mod session;
-pub mod tick;
 pub mod tool;
 
 #[cfg(any(test, feature = "testing"))]
@@ -63,7 +64,7 @@ pub use handle::{AgentHandle, EventOps, GuardOps, KernelHandle, MemoryOps, PipeO
 pub use handle::{scoped::ScopedKernelHandle, spawn_tool::SpawnTool};
 pub use kernel::{Kernel, KernelConfig};
 pub use process::{
-    AgentId, AgentProcess, MetricsSnapshot, Priority, ProcessInfo, ProcessMessage, ProcessState,
+    AgentId, AgentProcess, MetricsSnapshot, Priority, ProcessInfo, ProcessState,
     ProcessStats, ProcessTable, RuntimeMetrics, SandboxConfig, SessionId, Signal, SystemStats,
     manifest_loader::ManifestLoader,
     principal::{Principal, Role, UserId},

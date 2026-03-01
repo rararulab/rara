@@ -26,7 +26,6 @@ use std::sync::Arc;
 use rara_kernel::{
     audit::{AuditLog, InMemoryAuditLog},
     io::{
-        bus::{InboundBus, OutboundBus},
         ingress::{IdentityResolver, SessionResolver},
         stream::StreamHub,
     },
@@ -67,12 +66,8 @@ pub struct BootConfig {
     pub model_repo: Arc<dyn ModelRepo>,
 
     // -- I/O capacities (optional, have sensible defaults) -------------------
-    /// Inbound bus capacity.
-    pub inbound_capacity:  usize,
-    /// Outbound bus capacity.
-    pub outbound_capacity: usize,
     /// Per-stream broadcast capacity.
-    pub stream_capacity:   usize,
+    pub stream_capacity: usize,
 
     // -- optional overrides for resolvers / components -----------------------
     /// Identity resolver (optional — defaults to `DefaultIdentityResolver`).
@@ -103,8 +98,6 @@ impl Default for BootConfig {
             user_store:        Arc::new(NoopUserStore) as Arc<dyn UserStore>,
             session_repo:      Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
             model_repo:        Arc::new(NoopModelRepo) as Arc<dyn ModelRepo>,
-            inbound_capacity:  1024,
-            outbound_capacity: 256,
             stream_capacity:   64,
             identity_resolver: None,
             session_resolver:  None,
@@ -123,15 +116,10 @@ impl Default for BootConfig {
 /// Assemble a fully-configured [`Kernel`] with I/O subsystem.
 ///
 /// This is the single entry point for creating a production-ready kernel.
-/// The returned `Kernel` owns its buses, stream hub, endpoint registry, and
-/// ingress pipeline. Call [`Kernel::register_adapter`] to add egress
-/// adapters, then [`Kernel::start`] to spawn background tasks.
+/// The returned `Kernel` owns its EventQueue, stream hub, endpoint registry,
+/// and ingress pipeline. Call [`Kernel::register_adapter`] to add egress
+/// adapters, then [`Kernel::start`] to spawn the unified event loop.
 pub fn boot(config: BootConfig) -> Kernel {
-    // I/O buses
-    let inbound_bus: Arc<dyn InboundBus> =
-        crate::bus::default_inbound_bus(config.inbound_capacity);
-    let outbound_bus: Arc<dyn OutboundBus> =
-        crate::bus::default_outbound_bus(config.outbound_capacity);
     let stream_hub: Arc<StreamHub> =
         crate::stream::default_stream_hub(config.stream_capacity);
 
@@ -158,8 +146,6 @@ pub fn boot(config: BootConfig) -> Kernel {
         .unwrap_or_else(|| Arc::new(InMemoryAuditLog::default()));
 
     tracing::info!(
-        inbound_capacity = config.inbound_capacity,
-        outbound_capacity = config.outbound_capacity,
         stream_capacity = config.stream_capacity,
         "booting kernel via boot::kernel::boot()"
     );
@@ -175,8 +161,6 @@ pub fn boot(config: BootConfig) -> Kernel {
         config.user_store,
         config.session_repo,
         config.model_repo,
-        inbound_bus,
-        outbound_bus,
         stream_hub,
         identity_resolver,
         session_resolver,
@@ -220,6 +204,6 @@ mod tests {
         let _ = kernel.ingress_pipeline();
         let _ = kernel.stream_hub();
         let _ = kernel.endpoint_registry();
-        let _ = kernel.inbound_bus();
+        let _ = kernel.event_queue();
     }
 }

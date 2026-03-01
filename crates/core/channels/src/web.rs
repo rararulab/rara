@@ -740,17 +740,18 @@ impl EgressAdapter for WebAdapter {
 mod tests {
     use rara_kernel::{
         defaults::noop::{NoopIdentityResolver, NoopSessionResolver},
-        io::{bus::InboundBus, ingress::IdentityResolver, memory_bus::InMemoryInboundBus},
+        event_queue::EventQueue,
+        io::ingress::IdentityResolver,
     };
 
     use super::*;
 
-    /// Create a test `IngressPipeline` with noop resolvers and in-memory bus.
+    /// Create a test `IngressPipeline` with noop resolvers and an EventQueue.
     fn test_pipeline() -> Arc<IngressPipeline> {
-        Arc::new(IngressPipeline::new(
+        Arc::new(IngressPipeline::with_event_queue(
             Arc::new(NoopIdentityResolver) as Arc<dyn IdentityResolver>,
             Arc::new(NoopSessionResolver) as Arc<dyn rara_kernel::io::ingress::SessionResolver>,
-            Arc::new(InMemoryInboundBus::new(100)) as Arc<dyn InboundBus>,
+            Arc::new(EventQueue::new(100)),
         ))
     }
 

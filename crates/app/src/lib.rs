@@ -412,10 +412,7 @@ impl AppConfig {
                 ),
             }
         }
-        info!(
-            inbound_pending = kernel.inbound_bus().pending_count(),
-            "Kernel I/O subsystem running"
-        );
+        info!("Kernel I/O subsystem running");
 
         info!("Application started successfully");
 

@@ -12,74 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Bus traits for inbound and outbound message passing.
+//! Bus traits for durable message storage.
 //!
-//! The I/O bus layer uses asymmetric designs:
-//! - [`InboundBus`]: single-consumer queue (kernel pulls at its own pace)
-//! - [`OutboundBus`]: pub/sub broadcast (multiple egress subscribers)
+//! The legacy `InboundBus` / `OutboundBus` / `OutboundSubscriber` traits have
+//! been replaced by the unified [`EventQueue`](crate::event_queue::EventQueue).
 //!
-//! Additionally, [`OutboxStore`] provides durable storage for messages that
-//! could not be delivered immediately (user offline).
+//! [`OutboxStore`] provides durable storage for messages that could not be
+//! delivered immediately (user offline).
 
 use async_trait::async_trait;
 
-use crate::io::types::{BusError, InboundMessage, MessageId, OutboundEnvelope};
-
-// ---------------------------------------------------------------------------
-// InboundBus
-// ---------------------------------------------------------------------------
-
-/// Single-consumer inbound message queue.
-///
-/// Ingress writes messages via [`publish`](Self::publish); the kernel tick
-/// loop drains them in batches via [`drain`](Self::drain). The bus owns
-/// the wakeup mechanism — [`wait_for_messages`](Self::wait_for_messages)
-/// blocks until new messages are available.
-#[async_trait]
-pub trait InboundBus: Send + Sync + 'static {
-    /// Publish a message into the bus. Returns [`BusError::Full`] if at
-    /// capacity.
-    async fn publish(&self, msg: InboundMessage) -> Result<(), BusError>;
-
-    /// Drain up to `max` messages from the bus (exclusive consume, removes on
-    /// read).
-    async fn drain(&self, max: usize) -> Vec<InboundMessage>;
-
-    /// Block until new messages are available (encapsulates wakeup mechanism).
-    async fn wait_for_messages(&self);
-
-    /// Current backlog count (for monitoring).
-    fn pending_count(&self) -> usize;
-}
-
-// ---------------------------------------------------------------------------
-// OutboundBus
-// ---------------------------------------------------------------------------
-
-/// Pub/sub outbound message broadcast.
-///
-/// The kernel publishes final responses via [`publish`](Self::publish).
-/// Each egress instance (e.g. Telegram egress, Web egress) gets an
-/// independent subscriber via [`subscribe`](Self::subscribe).
-#[async_trait]
-pub trait OutboundBus: Send + Sync + 'static {
-    /// Publish an outbound envelope to all subscribers.
-    async fn publish(&self, msg: OutboundEnvelope) -> Result<(), BusError>;
-
-    /// Create a new independent subscriber.
-    fn subscribe(&self) -> Box<dyn OutboundSubscriber>;
-}
-
-// ---------------------------------------------------------------------------
-// OutboundSubscriber
-// ---------------------------------------------------------------------------
-
-/// A subscriber receiving outbound envelopes from an [`OutboundBus`].
-#[async_trait]
-pub trait OutboundSubscriber: Send + 'static {
-    /// Receive the next envelope. Returns `None` when the bus is closed.
-    async fn recv(&mut self) -> Option<OutboundEnvelope>;
-}
+use crate::io::types::{BusError, MessageId, OutboundEnvelope};
 
 // ---------------------------------------------------------------------------
 // OutboxStore

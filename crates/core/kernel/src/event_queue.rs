@@ -1,0 +1,479 @@
+// Copyright 2025 Crrow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Unified event queue — tiered priority queue for all kernel interactions.
+//!
+//! Replaces `InboundBus` + `OutboundBus` + `PriorityScheduler` + process
+//! mailboxes with a single event queue.
+//!
+//! Events are auto-classified into three priority tiers:
+//! - **Critical**: signals (Interrupt, Kill, Pause, Resume), shutdown
+//! - **Normal**: turn completions, child completions, deliver
+//! - **Low**: user messages, spawn requests, timers
+
+use std::{
+    collections::VecDeque,
+    sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
+
+use tokio::sync;
+
+use crate::io::types::BusError;
+
+// Re-export the unified event from the sibling module.
+pub use crate::unified_event::{KernelEvent, EventPriority};
+
+// ---------------------------------------------------------------------------
+// EventQueue
+// ---------------------------------------------------------------------------
+
+/// Tiered priority queue for all kernel interactions.
+///
+/// Uses three `VecDeque`s (one per priority tier) protected by `std::sync::Mutex`
+/// (not tokio — critical sections are trivial push/pop operations).
+///
+/// `tokio::sync::Notify` provides async wakeup when events are pushed.
+pub struct EventQueue {
+    /// Three tiers: [Critical, Normal, Low].
+    queues:   [Mutex<VecDeque<KernelEvent>>; 3],
+    /// Async notification for the event loop.
+    notify:   sync::Notify,
+    /// Total pending event count across all tiers.
+    pending:  AtomicUsize,
+    /// Maximum capacity (total across all tiers).
+    capacity: usize,
+}
+
+impl EventQueue {
+    /// Create a new event queue with the given maximum capacity.
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            queues: [
+                Mutex::new(VecDeque::new()),
+                Mutex::new(VecDeque::new()),
+                Mutex::new(VecDeque::new()),
+            ],
+            notify: sync::Notify::new(),
+            pending: AtomicUsize::new(0),
+            capacity,
+        }
+    }
+
+    /// Push an event into the queue. Returns `BusError::Full` if at capacity.
+    ///
+    /// Automatically routes to the correct priority tier based on the event
+    /// variant.
+    pub async fn push(&self, event: KernelEvent) -> Result<(), BusError> {
+        self.try_push(event)
+    }
+
+    /// Non-async push (for fire-and-forget signal sends).
+    pub fn try_push(&self, event: KernelEvent) -> Result<(), BusError> {
+        let current = self.pending.load(Ordering::Acquire);
+        if current >= self.capacity {
+            return Err(BusError::Full);
+        }
+
+        let tier = event.priority() as usize;
+        let mut q = self.queues[tier].lock().expect("event queue lock poisoned");
+        q.push_back(event);
+        drop(q);
+
+        self.pending.fetch_add(1, Ordering::Release);
+        self.notify.notify_one();
+        Ok(())
+    }
+
+    /// Drain up to `max` events from the queue, in priority order.
+    ///
+    /// Critical events are drained first, then Normal, then Low.
+    pub async fn drain(&self, max: usize) -> Vec<KernelEvent> {
+        let mut result = Vec::with_capacity(max);
+        let mut remaining = max;
+
+        // Drain in priority order: Critical (0) → Normal (1) → Low (2)
+        for tier in 0..3 {
+            if remaining == 0 {
+                break;
+            }
+            let mut q = self.queues[tier].lock().expect("event queue lock poisoned");
+            let n = remaining.min(q.len());
+            result.extend(q.drain(..n));
+            remaining -= n;
+        }
+
+        let drained = result.len();
+        if drained > 0 {
+            self.pending.fetch_sub(drained, Ordering::Release);
+        }
+
+        result
+    }
+
+    /// Wait until events are available.
+    ///
+    /// Returns immediately if events are already pending.
+    pub async fn wait(&self) {
+        if self.pending.load(Ordering::Acquire) > 0 {
+            return;
+        }
+        self.notify.notified().await;
+    }
+
+    /// Current total pending count across all tiers.
+    pub fn pending_count(&self) -> usize {
+        self.pending.load(Ordering::Acquire)
+    }
+}
+
+impl std::fmt::Debug for EventQueue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EventQueue")
+            .field("pending", &self.pending_count())
+            .field("capacity", &self.capacity)
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::unified_event::KernelEvent;
+    use crate::io::types::InboundMessage;
+    use crate::process::{AgentId, SessionId, Signal, principal::UserId};
+    use crate::channel::types::{ChannelType, MessageContent};
+    use crate::io::types::{ChannelSource, MessageId};
+    use std::collections::HashMap;
+
+    fn test_inbound(text: &str) -> InboundMessage {
+        InboundMessage {
+            id:            MessageId::new(),
+            source:        ChannelSource {
+                channel_type:        ChannelType::Internal,
+                platform_message_id: None,
+                platform_user_id:    "test".to_string(),
+                platform_chat_id:    None,
+            },
+            user:          UserId("u1".to_string()),
+            session_id:    SessionId::new("s1"),
+            content:       MessageContent::Text(text.to_string()),
+            reply_context: None,
+            timestamp:     jiff::Timestamp::now(),
+            metadata:      HashMap::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_push_and_drain() {
+        let q = EventQueue::new(100);
+
+        q.push(KernelEvent::UserMessage(test_inbound("hello")))
+            .await
+            .unwrap();
+        q.push(KernelEvent::UserMessage(test_inbound("world")))
+            .await
+            .unwrap();
+
+        assert_eq!(q.pending_count(), 2);
+
+        let events = q.drain(10).await;
+        assert_eq!(events.len(), 2);
+        assert_eq!(q.pending_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_priority_ordering() {
+        let q = EventQueue::new(100);
+
+        // Push in reverse priority order: Low, Normal, Critical
+        q.push(KernelEvent::UserMessage(test_inbound("low")))
+            .await
+            .unwrap();
+        q.push(KernelEvent::Deliver(crate::io::types::OutboundEnvelope {
+            id:          MessageId::new(),
+            in_reply_to: MessageId::new(),
+            user:        UserId("u1".to_string()),
+            session_id:  SessionId::new("s1"),
+            routing:     crate::io::types::OutboundRouting::BroadcastAll,
+            payload:     crate::io::types::OutboundPayload::Reply {
+                content:     MessageContent::Text("normal".to_string()),
+                attachments: vec![],
+            },
+            timestamp:   jiff::Timestamp::now(),
+        }))
+        .await
+        .unwrap();
+        q.push(KernelEvent::SendSignal {
+            target: AgentId::new(),
+            signal: Signal::Interrupt,
+        })
+        .await
+        .unwrap();
+
+        let events = q.drain(10).await;
+        assert_eq!(events.len(), 3);
+
+        // First should be Critical (SendSignal)
+        assert!(matches!(events[0], KernelEvent::SendSignal { .. }));
+        // Second should be Normal (Deliver)
+        assert!(matches!(events[1], KernelEvent::Deliver(_)));
+        // Third should be Low (UserMessage)
+        assert!(matches!(events[2], KernelEvent::UserMessage(_)));
+    }
+
+    #[tokio::test]
+    async fn test_capacity_full() {
+        let q = EventQueue::new(2);
+
+        q.push(KernelEvent::UserMessage(test_inbound("a")))
+            .await
+            .unwrap();
+        q.push(KernelEvent::UserMessage(test_inbound("b")))
+            .await
+            .unwrap();
+
+        let result = q.push(KernelEvent::UserMessage(test_inbound("c"))).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), BusError::Full));
+    }
+
+    #[tokio::test]
+    async fn test_wait_wakeup() {
+        let q = std::sync::Arc::new(EventQueue::new(100));
+        let q2 = q.clone();
+
+        let handle = tokio::spawn(async move {
+            q2.wait().await;
+            let events = q2.drain(10).await;
+            assert_eq!(events.len(), 1);
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        q.push(KernelEvent::UserMessage(test_inbound("wake")))
+            .await
+            .unwrap();
+
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_drain_respects_limit() {
+        let q = EventQueue::new(100);
+
+        for i in 0..5 {
+            q.push(KernelEvent::UserMessage(test_inbound(&format!("msg{i}"))))
+                .await
+                .unwrap();
+        }
+
+        let events = q.drain(3).await;
+        assert_eq!(events.len(), 3);
+        assert_eq!(q.pending_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_try_push_sync() {
+        let q = EventQueue::new(100);
+
+        q.try_push(KernelEvent::UserMessage(test_inbound("sync")))
+            .unwrap();
+
+        assert_eq!(q.pending_count(), 1);
+        let events = q.drain(10).await;
+        assert_eq!(events.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_try_push_sync_full() {
+        let q = EventQueue::new(1);
+
+        q.try_push(KernelEvent::UserMessage(test_inbound("a")))
+            .unwrap();
+
+        let result = q.try_push(KernelEvent::UserMessage(test_inbound("b")));
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), BusError::Full));
+    }
+
+    #[tokio::test]
+    async fn test_drain_empty_queue() {
+        let q = EventQueue::new(100);
+        let events = q.drain(10).await;
+        assert_eq!(events.len(), 0);
+        assert_eq!(q.pending_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_wait_returns_immediately_when_pending() {
+        let q = EventQueue::new(100);
+        q.push(KernelEvent::UserMessage(test_inbound("already")))
+            .await
+            .unwrap();
+
+        // wait() should return immediately because there's a pending event
+        tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            q.wait(),
+        )
+        .await
+        .expect("wait() should return immediately when events pending");
+    }
+
+    #[tokio::test]
+    async fn test_pending_count_tracks_push_and_drain() {
+        let q = EventQueue::new(100);
+        assert_eq!(q.pending_count(), 0);
+
+        q.push(KernelEvent::UserMessage(test_inbound("a"))).await.unwrap();
+        assert_eq!(q.pending_count(), 1);
+
+        q.push(KernelEvent::UserMessage(test_inbound("b"))).await.unwrap();
+        assert_eq!(q.pending_count(), 2);
+
+        q.push(KernelEvent::UserMessage(test_inbound("c"))).await.unwrap();
+        assert_eq!(q.pending_count(), 3);
+
+        // Drain 2
+        let events = q.drain(2).await;
+        assert_eq!(events.len(), 2);
+        assert_eq!(q.pending_count(), 1);
+
+        // Drain remaining
+        let events = q.drain(10).await;
+        assert_eq!(events.len(), 1);
+        assert_eq!(q.pending_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_is_critical_priority() {
+        let q = EventQueue::new(100);
+
+        // Push a Low event first, then Shutdown (Critical)
+        q.push(KernelEvent::UserMessage(test_inbound("low")))
+            .await
+            .unwrap();
+        q.push(KernelEvent::Shutdown).await.unwrap();
+
+        let events = q.drain(10).await;
+        assert_eq!(events.len(), 2);
+        // Shutdown should come first (Critical priority)
+        assert!(matches!(events[0], KernelEvent::Shutdown));
+        assert!(matches!(events[1], KernelEvent::UserMessage(_)));
+    }
+
+    #[tokio::test]
+    async fn test_all_priority_tiers_interleaved() {
+        let q = EventQueue::new(100);
+
+        // Push events in reverse priority order across all tiers
+        // Low: UserMessage, Timer
+        q.push(KernelEvent::UserMessage(test_inbound("user-msg")))
+            .await
+            .unwrap();
+        q.push(KernelEvent::Timer {
+            name:    "tick".to_string(),
+            payload: serde_json::Value::Null,
+        })
+        .await
+        .unwrap();
+
+        // Normal: Deliver, ChildCompleted
+        q.push(KernelEvent::Deliver(crate::io::types::OutboundEnvelope {
+            id:          MessageId::new(),
+            in_reply_to: MessageId::new(),
+            user:        UserId("u1".to_string()),
+            session_id:  SessionId::new("s1"),
+            routing:     crate::io::types::OutboundRouting::BroadcastAll,
+            payload:     crate::io::types::OutboundPayload::Reply {
+                content:     MessageContent::Text("reply".to_string()),
+                attachments: vec![],
+            },
+            timestamp:   jiff::Timestamp::now(),
+        }))
+        .await
+        .unwrap();
+        q.push(KernelEvent::ChildCompleted {
+            parent_id: AgentId::new(),
+            child_id:  AgentId::new(),
+            result:    crate::process::AgentResult {
+                output:     "done".to_string(),
+                iterations: 1,
+                tool_calls: 0,
+            },
+        })
+        .await
+        .unwrap();
+
+        // Critical: SendSignal, Shutdown
+        q.push(KernelEvent::SendSignal {
+            target: AgentId::new(),
+            signal: Signal::Kill,
+        })
+        .await
+        .unwrap();
+        q.push(KernelEvent::Shutdown).await.unwrap();
+
+        assert_eq!(q.pending_count(), 6);
+
+        let events = q.drain(10).await;
+        assert_eq!(events.len(), 6);
+        assert_eq!(q.pending_count(), 0);
+
+        // Critical tier first (index 0, 1)
+        assert!(matches!(events[0], KernelEvent::SendSignal { .. }));
+        assert!(matches!(events[1], KernelEvent::Shutdown));
+
+        // Normal tier next (index 2, 3)
+        assert!(matches!(events[2], KernelEvent::Deliver(_)));
+        assert!(matches!(events[3], KernelEvent::ChildCompleted { .. }));
+
+        // Low tier last (index 4, 5)
+        assert!(matches!(events[4], KernelEvent::UserMessage(_)));
+        assert!(matches!(events[5], KernelEvent::Timer { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_multiple_drains_consume_different_events() {
+        let q = EventQueue::new(100);
+
+        for i in 0..6 {
+            q.push(KernelEvent::UserMessage(test_inbound(&format!("msg{i}"))))
+                .await
+                .unwrap();
+        }
+
+        let batch1 = q.drain(2).await;
+        let batch2 = q.drain(2).await;
+        let batch3 = q.drain(2).await;
+        let batch4 = q.drain(2).await;
+
+        assert_eq!(batch1.len(), 2);
+        assert_eq!(batch2.len(), 2);
+        assert_eq!(batch3.len(), 2);
+        assert_eq!(batch4.len(), 0); // all consumed
+        assert_eq!(q.pending_count(), 0);
+    }
+
+    #[test]
+    fn test_event_queue_debug_format() {
+        let q = EventQueue::new(50);
+        let debug = format!("{:?}", q);
+        assert!(debug.contains("EventQueue"));
+        assert!(debug.contains("pending: 0"));
+        assert!(debug.contains("capacity: 50"));
+    }
+}

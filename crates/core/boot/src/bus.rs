@@ -13,20 +13,7 @@
 // limitations under the License.
 
 //! Factory functions for I/O bus components.
-
-use std::sync::Arc;
-
-use rara_kernel::io::{
-    bus::{InboundBus, OutboundBus},
-    memory_bus::{InMemoryInboundBus, InMemoryOutboundBus},
-};
-
-/// Create a default in-memory inbound bus with the given capacity.
-pub fn default_inbound_bus(capacity: usize) -> Arc<dyn InboundBus> {
-    Arc::new(InMemoryInboundBus::new(capacity))
-}
-
-/// Create a default in-memory outbound bus with the given capacity.
-pub fn default_outbound_bus(capacity: usize) -> Arc<dyn OutboundBus> {
-    Arc::new(InMemoryOutboundBus::new(capacity))
-}
+//!
+//! The legacy `InboundBus` / `OutboundBus` have been replaced by the unified
+//! [`EventQueue`](rara_kernel::event_queue::EventQueue). This module is kept
+//! for backward compatibility but no longer creates bus instances.
