@@ -129,6 +129,7 @@ members = [
     "crates/core/boot",
     "crates/core/channels",
     "crates/core/kernel",
+    "crates/core/queue",
 
     "crates/integrations/k8s",
     "crates/integrations/composio",
@@ -246,6 +247,7 @@ rara-mcp = { path = "crates/integrations/mcp" }
 rara-memory = { path = "crates/memory" }
 rara-model = { path = "crates/rara-model" }
 rara-paths = { path = "crates/paths" }
+rara-queue = { path = "crates/core/queue" }
 rara-server = { path = "crates/server" }
 rara-sessions = { path = "crates/sessions" }
 rara-skills = { path = "crates/skills" }

@@ -20,6 +20,7 @@
 
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
 use crate::{
@@ -377,5 +378,225 @@ impl std::fmt::Debug for KernelEvent {
             Self::Timer { name, .. } => write!(f, "Timer(name={})", name),
             Self::Shutdown => write!(f, "Shutdown"),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PersistableEvent — serializable subset of KernelEvent for WAL persistence
+// ---------------------------------------------------------------------------
+
+/// Serializable subset of [`KernelEvent`] for WAL persistence.
+///
+/// Only events that must survive a crash are persisted:
+/// - **UserMessage** — unprocessed user input would be lost.
+/// - **SpawnAgent** — the caller is blocked on a reply; on recovery the kernel
+///   can re-spawn (without the oneshot channel — the original caller is gone).
+/// - **Timer** — scheduled work that should not be silently dropped.
+///
+/// Transient events (signals, syscalls, turn completions) are intentionally
+/// excluded — they are either idempotent or the originating task has already
+/// been lost on crash.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PersistableEvent {
+    /// A user message from a channel adapter.
+    UserMessage(InboundMessage),
+
+    /// A spawn-agent request (without the oneshot reply channel).
+    SpawnAgent {
+        manifest:  AgentManifest,
+        input:     String,
+        principal: Principal,
+        parent_id: Option<AgentId>,
+    },
+
+    /// A timer event.
+    Timer {
+        name:    String,
+        payload: serde_json::Value,
+    },
+}
+
+impl PersistableEvent {
+    /// Try to convert a [`KernelEvent`] into a persistable form.
+    ///
+    /// Returns `None` for events that are transient and should not be
+    /// persisted (signals, syscalls, turn completions, etc.).
+    pub fn from_kernel_event(event: &KernelEvent) -> Option<Self> {
+        match event {
+            KernelEvent::UserMessage(msg) => Some(Self::UserMessage(msg.clone())),
+            KernelEvent::SpawnAgent {
+                manifest,
+                input,
+                principal,
+                parent_id,
+                ..
+            } => Some(Self::SpawnAgent {
+                manifest:  manifest.clone(),
+                input:     input.clone(),
+                principal: principal.clone(),
+                parent_id: *parent_id,
+            }),
+            KernelEvent::Timer { name, payload } => Some(Self::Timer {
+                name:    name.clone(),
+                payload: payload.clone(),
+            }),
+            // Transient events — not persisted.
+            KernelEvent::SendSignal { .. }
+            | KernelEvent::TurnCompleted { .. }
+            | KernelEvent::ChildCompleted { .. }
+            | KernelEvent::Deliver(_)
+            | KernelEvent::Syscall(_)
+            | KernelEvent::Shutdown => None,
+        }
+    }
+
+    /// Convert back to a [`KernelEvent`].
+    ///
+    /// For `SpawnAgent`, a fresh oneshot channel is created. The caller
+    /// receives the `Receiver` to await the spawn result.
+    pub fn into_kernel_event(self) -> (KernelEvent, Option<oneshot::Receiver<crate::error::Result<AgentId>>>) {
+        match self {
+            Self::UserMessage(msg) => (KernelEvent::UserMessage(msg), None),
+            Self::SpawnAgent {
+                manifest,
+                input,
+                principal,
+                parent_id,
+            } => {
+                let (tx, rx) = oneshot::channel();
+                let event = KernelEvent::SpawnAgent {
+                    manifest,
+                    input,
+                    principal,
+                    parent_id,
+                    reply_tx: tx,
+                };
+                (event, Some(rx))
+            }
+            Self::Timer { name, payload } => {
+                (KernelEvent::Timer { name, payload }, None)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::channel::types::{ChannelType, MessageContent};
+    use crate::io::types::{ChannelSource, MessageId};
+    use crate::process::principal::UserId;
+    use std::collections::HashMap;
+
+    fn test_inbound(text: &str) -> InboundMessage {
+        InboundMessage {
+            id:              MessageId::new(),
+            source:          ChannelSource {
+                channel_type:        ChannelType::Internal,
+                platform_message_id: None,
+                platform_user_id:    "test".to_string(),
+                platform_chat_id:    None,
+            },
+            user:            UserId("u1".to_string()),
+            session_id:      SessionId::new("s1"),
+            target_agent_id: None,
+            target_agent:    None,
+            content:         MessageContent::Text(text.to_string()),
+            reply_context:   None,
+            timestamp:       jiff::Timestamp::now(),
+            metadata:        HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn persistable_event_roundtrip_user_message() {
+        let msg = test_inbound("hello");
+        let event = KernelEvent::UserMessage(msg);
+        let persistable = PersistableEvent::from_kernel_event(&event).unwrap();
+
+        // Serialize and deserialize
+        let json = serde_json::to_string(&persistable).unwrap();
+        let restored: PersistableEvent = serde_json::from_str(&json).unwrap();
+
+        let (kernel_event, rx) = restored.into_kernel_event();
+        assert!(rx.is_none());
+        assert!(matches!(kernel_event, KernelEvent::UserMessage(_)));
+    }
+
+    #[test]
+    fn persistable_event_roundtrip_spawn_agent() {
+        let manifest = AgentManifest {
+            name:               "test-agent".to_string(),
+            role:               None,
+            description:        "test".to_string(),
+            model:              "gpt-4o-mini".to_string(),
+            system_prompt:      "hello".to_string(),
+            soul_prompt:        None,
+            provider_hint:      None,
+            max_iterations:     Some(10),
+            tools:              vec![],
+            max_children:       None,
+            max_context_tokens: None,
+            priority:           Default::default(),
+            metadata:           Default::default(),
+            sandbox:            None,
+        };
+        let (tx, _rx) = oneshot::channel();
+        let event = KernelEvent::SpawnAgent {
+            manifest:  manifest.clone(),
+            input:     "do something".to_string(),
+            principal: Principal::user("test-user"),
+            parent_id: None,
+            reply_tx:  tx,
+        };
+
+        let persistable = PersistableEvent::from_kernel_event(&event).unwrap();
+        let json = serde_json::to_string(&persistable).unwrap();
+        let restored: PersistableEvent = serde_json::from_str(&json).unwrap();
+
+        let (kernel_event, rx) = restored.into_kernel_event();
+        assert!(rx.is_some()); // fresh oneshot created
+        match kernel_event {
+            KernelEvent::SpawnAgent { manifest: m, input, .. } => {
+                assert_eq!(m.name, "test-agent");
+                assert_eq!(input, "do something");
+            }
+            _ => panic!("expected SpawnAgent"),
+        }
+    }
+
+    #[test]
+    fn persistable_event_roundtrip_timer() {
+        let event = KernelEvent::Timer {
+            name:    "heartbeat".to_string(),
+            payload: serde_json::json!({"interval": 60}),
+        };
+        let persistable = PersistableEvent::from_kernel_event(&event).unwrap();
+        let json = serde_json::to_string(&persistable).unwrap();
+        let restored: PersistableEvent = serde_json::from_str(&json).unwrap();
+
+        let (kernel_event, rx) = restored.into_kernel_event();
+        assert!(rx.is_none());
+        match kernel_event {
+            KernelEvent::Timer { name, payload } => {
+                assert_eq!(name, "heartbeat");
+                assert_eq!(payload, serde_json::json!({"interval": 60}));
+            }
+            _ => panic!("expected Timer"),
+        }
+    }
+
+    #[test]
+    fn transient_events_are_not_persistable() {
+        // SendSignal
+        assert!(PersistableEvent::from_kernel_event(&KernelEvent::SendSignal {
+            target: AgentId::new(),
+            signal: Signal::Kill,
+        })
+        .is_none());
+
+        // Shutdown
+        assert!(PersistableEvent::from_kernel_event(&KernelEvent::Shutdown).is_none());
     }
 }

@@ -29,6 +29,7 @@ rara-k8s = { workspace = true, optional = true }
 rara-kernel.workspace = true
 rara-mcp.workspace = true
 rara-paths.workspace = true
+rara-queue.workspace = true
 rara-skills.workspace = true
 reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }
@@ -40,6 +41,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+tempfile = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["postgres"] }
 tokio = { workspace = true, features = ["test-util", "macros"] }

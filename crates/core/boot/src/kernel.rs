@@ -84,6 +84,8 @@ pub struct BootConfig {
     pub audit_log: Option<Arc<dyn AuditLog>>,
     /// Approval manager (optional — defaults to ApprovalManager with default policy).
     pub approval: Option<Arc<ApprovalManager>>,
+    /// Event queue (optional — defaults to InMemoryEventQueue(4096)).
+    pub event_queue: Option<Arc<dyn rara_kernel::event_queue::EventQueue>>,
 }
 
 impl Default for BootConfig {
@@ -114,6 +116,7 @@ impl Default for BootConfig {
             guard:             None,
             audit_log:         None,
             approval:          None,
+            event_queue:       None,
         }
     }
 }
@@ -178,6 +181,7 @@ pub fn boot(config: BootConfig) -> Kernel {
         session_resolver,
         audit_log,
         approval,
+        config.event_queue,
     )
 }
 

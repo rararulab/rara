@@ -120,7 +120,7 @@ pub(crate) struct KernelInner {
     /// Approval manager for gating dangerous tool executions.
     pub approval:               Arc<crate::approval::ApprovalManager>,
     /// Unified event queue (tiered priority) for all kernel interactions.
-    pub event_queue:            Arc<EventQueue>,
+    pub event_queue:            Arc<dyn EventQueue>,
 }
 
 impl KernelInner {
@@ -250,7 +250,7 @@ pub struct Kernel {
     /// Registered egress adapters (mutable before start, consumed by start).
     pub(crate) egress_adapters: HashMap<ChannelType, Arc<dyn EgressAdapter>>,
     /// Unified event queue for all kernel interactions.
-    event_queue:       Arc<EventQueue>,
+    event_queue:       Arc<dyn EventQueue>,
     /// When this kernel was created (for uptime calculation).
     started_at:        Timestamp,
 }
@@ -278,6 +278,7 @@ impl Kernel {
         session_resolver: Arc<dyn SessionResolver>,
         audit_log: Arc<dyn AuditLog>,
         approval: Arc<crate::approval::ApprovalManager>,
+        event_queue: Option<Arc<dyn EventQueue>>,
     ) -> Self {
         info!(
             max_concurrency = config.max_concurrency,
@@ -287,7 +288,8 @@ impl Kernel {
         );
 
         let endpoint_registry = Arc::new(EndpointRegistry::new());
-        let event_queue = Arc::new(EventQueue::new(4096));
+        let event_queue: Arc<dyn EventQueue> = event_queue
+            .unwrap_or_else(|| Arc::new(crate::event_queue::InMemoryEventQueue::new(4096)));
 
         let ingress_pipeline = Arc::new(IngressPipeline::with_event_queue(
             identity_resolver,
@@ -509,7 +511,7 @@ impl Kernel {
     pub fn endpoint_registry(&self) -> &Arc<EndpointRegistry> { &self.endpoint_registry }
 
     /// Access the unified event queue.
-    pub fn event_queue(&self) -> &Arc<EventQueue> { &self.event_queue }
+    pub fn event_queue(&self) -> &Arc<dyn EventQueue> { &self.event_queue }
 
     /// Register an egress adapter for a channel type.
     ///
@@ -592,6 +594,7 @@ mod tests {
             Arc::new(crate::approval::ApprovalManager::new(
                 crate::approval::ApprovalPolicy::default(),
             )),
+            None,
         )
     }
 

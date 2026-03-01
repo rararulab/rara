@@ -117,7 +117,7 @@ pub struct IngressPipeline {
     identity_resolver: Arc<dyn IdentityResolver>,
     session_resolver:  Arc<dyn SessionResolver>,
     /// Unified event queue — the sole publish backend.
-    event_queue:       Arc<crate::event_queue::EventQueue>,
+    event_queue:       Arc<dyn crate::event_queue::EventQueue>,
 }
 
 impl IngressPipeline {
@@ -125,7 +125,7 @@ impl IngressPipeline {
     pub fn with_event_queue(
         identity_resolver: Arc<dyn IdentityResolver>,
         session_resolver: Arc<dyn SessionResolver>,
-        event_queue: Arc<crate::event_queue::EventQueue>,
+        event_queue: Arc<dyn crate::event_queue::EventQueue>,
     ) -> Self {
         Self {
             identity_resolver,
@@ -189,7 +189,7 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
-    use crate::event_queue::EventQueue;
+    use crate::event_queue::{EventQueue, InMemoryEventQueue};
 
     // -----------------------------------------------------------------------
     // Mock IdentityResolver
@@ -297,7 +297,7 @@ mod tests {
     async fn test_pipeline_ingest_success() {
         let identity = Arc::new(MockIdentityResolver::succeeding("user-1"));
         let session = Arc::new(MockSessionResolver::new("session-1"));
-        let eq = Arc::new(EventQueue::new(100));
+        let eq = Arc::new(InMemoryEventQueue::new(100));
 
         let pipeline = IngressPipeline::with_event_queue(
             identity.clone() as Arc<dyn IdentityResolver>,
@@ -310,7 +310,7 @@ mod tests {
         // Verify the message landed in the event queue
         let events = eq.drain(10).await;
         assert_eq!(events.len(), 1);
-        match &events[0] {
+        match &events[0].0 {
             crate::unified_event::KernelEvent::UserMessage(msg) => {
                 assert_eq!(msg.content.as_text(), "hello");
                 assert_eq!(msg.user, UserId("user-1".to_string()));
@@ -337,7 +337,7 @@ mod tests {
             },
         ));
         let session = Arc::new(MockSessionResolver::new("session-1"));
-        let eq = Arc::new(EventQueue::new(100));
+        let eq = Arc::new(InMemoryEventQueue::new(100));
 
         let pipeline = IngressPipeline::with_event_queue(
             identity as Arc<dyn IdentityResolver>,
@@ -362,7 +362,7 @@ mod tests {
         let identity = Arc::new(MockIdentityResolver::succeeding("user-1"));
         let session = Arc::new(MockSessionResolver::new("session-1"));
         // Capacity of 1 — second message should fail
-        let eq = Arc::new(EventQueue::new(1));
+        let eq = Arc::new(InMemoryEventQueue::new(1));
 
         let pipeline = IngressPipeline::with_event_queue(
             identity as Arc<dyn IdentityResolver>,
