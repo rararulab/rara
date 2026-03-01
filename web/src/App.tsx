@@ -27,6 +27,7 @@ import AgentConsole from '@/pages/AgentConsole';
 import JobsWorkspace from '@/pages/JobsWorkspace';
 import Docs from '@/pages/Docs';
 import Settings from '@/pages/Settings';
+import AdminUsers from '@/pages/AdminUsers';
 
 const queryClient = new QueryClient();
 
@@ -62,7 +63,7 @@ export default function App() {
 
                   {/* Admin routes */}
                   <Route element={<AdminRoute />}>
-                    <Route path="admin/users" element={<div className="p-6 text-muted-foreground">User management coming soon.</div>} />
+                    <Route path="admin/users" element={<AdminUsers />} />
                   </Route>
                 </Route>
               </Route>

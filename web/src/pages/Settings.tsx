@@ -18,12 +18,13 @@ import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { settingsApi, api } from "@/api/client";
+import { settingsApi, authApi, api } from "@/api/client";
 import type {
   CreateContactRequest,
   SettingsMap,
   TelegramContact,
   UpdateContactRequest,
+  ChangePasswordRequest,
 } from "@/api/types";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -56,9 +57,14 @@ import {
 import {
   Bot,
   BookOpen,
+  Check,
+  Clipboard,
   ExternalLink,
   Eye,
   EyeOff,
+  Key,
+  Link,
+  Loader2,
   Mail,
   MessageSquare,
   Pencil,
@@ -67,6 +73,7 @@ import {
   Settings2,
   Sparkles,
   Trash2,
+  User,
   Users,
   Sun,
   Moon,
@@ -81,7 +88,7 @@ import Skills from "@/pages/Skills";
 import Agents from "@/pages/Agents";
 import McpServers from "@/pages/McpServers";
 
-type SettingsPage = "general" | "providers" | "agents" | "skills" | "mcp" | "channels" | "tools";
+type SettingsPage = "account" | "general" | "providers" | "agents" | "skills" | "mcp" | "channels" | "tools";
 type ToastState = { kind: "success" | "error"; message: string } | null;
 
 // Well-known setting keys (must match backend keys module)
@@ -306,7 +313,7 @@ export default function Settings() {
   const queryClient = useQueryClient();
   const [activeCategory, setActiveCategory] = useState<SettingsPage>(() => {
     const section = searchParams.get("section");
-    const allowed: SettingsPage[] = ["general", "providers", "agents", "skills", "mcp", "channels", "tools"];
+    const allowed: SettingsPage[] = ["account", "general", "providers", "agents", "skills", "mcp", "channels", "tools"];
     return allowed.includes(section as SettingsPage) ? (section as SettingsPage) : "general";
   });
   const [toast, setToast] = useState<ToastState>(null);
@@ -316,6 +323,13 @@ export default function Settings() {
 
   // Group-level toasts
   const [groupToasts, setGroupToasts] = useState<Record<string, ToastState>>({});
+
+  // Account state
+  const [oldPassword, setOldPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [linkCode, setLinkCode] = useState<string | null>(null);
+  const [linkCodeCopied, setLinkCodeCopied] = useState(false);
 
   // Contacts state
   const [contactDialogOpen, setContactDialogOpen] = useState(false);
@@ -330,6 +344,55 @@ export default function Settings() {
     queryKey: ["settings"],
     queryFn: () => settingsApi.list(),
   });
+
+  // Fetch user profile for account tab
+  const profileQuery = useQuery({
+    queryKey: ["profile"],
+    queryFn: () => authApi.me(),
+  });
+
+  // Change password mutation
+  const changePasswordMutation = useMutation({
+    mutationFn: (data: ChangePasswordRequest) => authApi.changePassword(data),
+    onSuccess: () => {
+      setOldPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setToast({ kind: "success", message: "Password changed successfully." });
+    },
+    onError: (e: unknown) => {
+      setToast({ kind: "error", message: e instanceof Error ? e.message : "Failed to change password" });
+    },
+  });
+
+  // Generate TG link code mutation
+  const linkCodeMutation = useMutation({
+    mutationFn: () => authApi.generateLinkCode("web_to_tg"),
+    onSuccess: (data) => {
+      setLinkCode(data.code);
+    },
+    onError: (e: unknown) => {
+      setToast({ kind: "error", message: e instanceof Error ? e.message : "Failed to generate link code" });
+    },
+  });
+
+  const handleChangePassword = () => {
+    if (newPassword !== confirmPassword) {
+      setToast({ kind: "error", message: "New passwords do not match." });
+      return;
+    }
+    if (newPassword.length < 6) {
+      setToast({ kind: "error", message: "New password must be at least 6 characters." });
+      return;
+    }
+    changePasswordMutation.mutate({ old_password: oldPassword, new_password: newPassword });
+  };
+
+  const handleCopyLinkCode = async (code: string) => {
+    await navigator.clipboard.writeText(`/link ${code}`);
+    setLinkCodeCopied(true);
+    setTimeout(() => setLinkCodeCopied(false), 2000);
+  };
 
   const contactsQuery = useQuery({
     queryKey: ["contacts"],
@@ -507,6 +570,7 @@ export default function Settings() {
     icon: ReactNode;
     summary: string;
   }> = [
+    { id: "account", label: "Account", icon: <User className="h-4 w-4" />, summary: "Password and linked platforms" },
     { id: "general", label: "General", icon: <Palette className="h-4 w-4" />, summary: "Appearance and documentation" },
     { id: "providers", label: "Providers", icon: <Sparkles className="h-4 w-4" />, summary: "LLM provider and model config" },
     { id: "agents", label: "Agents", icon: <Users className="h-4 w-4" />, summary: "Agent definitions and overrides" },
@@ -573,6 +637,171 @@ export default function Settings() {
           )}>
             {toast.message}
           </div>
+        )}
+
+        {/* ── Account ── */}
+        {activeCategory === "account" && (
+          <>
+            {/* Password Change */}
+            <Card className="app-surface border-border/60">
+              <CardHeader>
+                <div className="flex items-center gap-3">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
+                    <Key className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <CardTitle className="text-base">Change Password</CardTitle>
+                    <CardDescription>Update your login credentials</CardDescription>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label htmlFor="old-password" className="text-sm font-medium">Current Password</Label>
+                  <Input
+                    id="old-password"
+                    type="password"
+                    value={oldPassword}
+                    onChange={(e) => setOldPassword(e.target.value)}
+                    placeholder="Enter current password"
+                    className="h-9"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="new-password" className="text-sm font-medium">New Password</Label>
+                  <Input
+                    id="new-password"
+                    type="password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="Enter new password"
+                    className="h-9"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="confirm-password" className="text-sm font-medium">Confirm New Password</Label>
+                  <Input
+                    id="confirm-password"
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="Confirm new password"
+                    className="h-9"
+                  />
+                </div>
+                <div className="flex justify-end pt-2">
+                  <Button
+                    onClick={handleChangePassword}
+                    disabled={!oldPassword || !newPassword || !confirmPassword || changePasswordMutation.isPending}
+                    size="sm"
+                  >
+                    {changePasswordMutation.isPending ? (
+                      <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />Changing...</>
+                    ) : (
+                      <><Save className="mr-1.5 h-3.5 w-3.5" />Change Password</>
+                    )}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Connected Platforms */}
+            <Card className="app-surface border-border/60">
+              <CardHeader>
+                <div className="flex items-center gap-3">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
+                    <Link className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <CardTitle className="text-base">Connected Platforms</CardTitle>
+                    <CardDescription>Linked external accounts</CardDescription>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {profileQuery.isLoading ? (
+                  <Skeleton className="h-20 w-full" />
+                ) : profileQuery.isError ? (
+                  <p className="text-sm text-destructive">Failed to load profile.</p>
+                ) : profileQuery.data?.platforms && profileQuery.data.platforms.length > 0 ? (
+                  <div className="divide-y divide-border/60 rounded-lg border">
+                    {profileQuery.data.platforms.map((p) => (
+                      <div key={p.platform} className="flex items-center justify-between px-4 py-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <Badge variant="outline" className="capitalize">{p.platform}</Badge>
+                            {p.display_name && (
+                              <span className="text-sm font-medium">{p.display_name}</span>
+                            )}
+                          </div>
+                          <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                            ID: {p.platform_user_id} &middot; Linked {new Date(p.linked_at).toLocaleDateString()}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No platforms linked yet.</p>
+                )}
+
+                {/* Connect Telegram */}
+                <div className="rounded-lg border border-dashed border-border/70 p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium">Connect Telegram</p>
+                      <p className="text-xs text-muted-foreground">
+                        Link your Telegram account for notifications and chat
+                      </p>
+                    </div>
+                    {!linkCode && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => linkCodeMutation.mutate()}
+                        disabled={linkCodeMutation.isPending}
+                      >
+                        {linkCodeMutation.isPending ? (
+                          <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />Generating...</>
+                        ) : (
+                          <><Link className="mr-1.5 h-3.5 w-3.5" />Generate Link Code</>
+                        )}
+                      </Button>
+                    )}
+                  </div>
+
+                  {linkCode && (
+                    <div className="mt-3 rounded-md bg-muted/50 p-3">
+                      <p className="mb-2 text-xs text-muted-foreground">
+                        Send this command to your bot on Telegram:
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <code className="flex-1 rounded bg-background px-3 py-1.5 font-mono text-sm">
+                          /link {linkCode}
+                        </code>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 shrink-0"
+                          onClick={() => handleCopyLinkCode(linkCode)}
+                          title="Copy command"
+                        >
+                          {linkCodeCopied ? (
+                            <Check className="h-3.5 w-3.5 text-green-600" />
+                          ) : (
+                            <Clipboard className="h-3.5 w-3.5" />
+                          )}
+                        </Button>
+                      </div>
+                      <p className="mt-2 text-[10px] text-muted-foreground">
+                        The code will expire shortly. Generate a new one if needed.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </>
         )}
 
         {/* ── General ── */}
