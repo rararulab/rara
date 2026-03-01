@@ -16,29 +16,31 @@
 
 use std::path::Path;
 
-use rara_kernel::process::manifest_loader::ManifestLoader;
+use rara_kernel::process::{
+    agent_registry::AgentRegistry,
+    manifest_loader::ManifestLoader,
+};
 use tracing::info;
 
-/// Load agent manifests: code-defined agents from `rara-agents`, then overlay
-/// user-defined agents from the default data directory (`<data_dir>/agents`).
+/// Load agent manifests and build an AgentRegistry.
 ///
-/// Loading order:
-/// 1. Code-defined agents (rara, etc.) from `rara_agents`
-/// 2. User directory YAML files (overrides code-defined)
-pub fn load_default_manifests() -> ManifestLoader {
+/// Builtin agents (rara, etc.) are loaded from `rara_agents`.
+/// User-defined YAML files from `<data_dir>/agents` are loaded via
+/// ManifestLoader and fed into the registry as custom agents.
+pub fn load_default_registry() -> AgentRegistry {
+    let builtin = vec![rara_agents::rara().clone()];
+    let agents_dir = rara_paths::data_dir().join("agents");
     let mut loader = ManifestLoader::new();
-    loader.load_manifests(std::iter::once(rara_agents::rara().clone()));
-    let user_dir = rara_paths::data_dir().join("agents");
-    let _ = loader.load_dir(&user_dir);
-    info!(count = loader.list().len(), "agent manifests loaded");
-    loader
+    let _ = loader.load_dir(&agents_dir);
+    let registry = AgentRegistry::init(builtin, &loader, agents_dir);
+    info!(count = registry.list().len(), "agent registry initialized");
+    registry
 }
 
-/// Load agent manifests from code-defined agents, then overlay
-/// user-defined agents from a custom directory.
-pub fn load_manifests_from(dir: &Path) -> ManifestLoader {
+/// Load agent manifests from code-defined agents and a custom directory.
+pub fn load_registry_from(dir: &Path) -> AgentRegistry {
+    let builtin = vec![rara_agents::rara().clone()];
     let mut loader = ManifestLoader::new();
-    loader.load_manifests(std::iter::once(rara_agents::rara().clone()));
     let _ = loader.load_dir(dir);
-    loader
+    AgentRegistry::init(builtin, &loader, dir.to_path_buf())
 }

@@ -323,7 +323,7 @@ impl AppConfig {
         let mut kernel = rara_boot::kernel::boot(rara_boot::kernel::BootConfig {
             llm_provider:  app_state.llm_provider.clone(),
             tool_registry: app_state.tool_registry.clone(),
-            manifest_loader: rara_boot::manifests::load_default_manifests(),
+            agent_registry: rara_boot::manifests::load_default_registry(),
             user_store:    rara_boot::components::default_user_store(),
             session_repo:  app_state.session_repo.clone(),
             settings:      settings_provider,

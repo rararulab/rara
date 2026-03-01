@@ -247,7 +247,7 @@ impl AppState {
 
         // -- kernel ---------------------------------------------------------------
 
-        let manifest_loader = rara_boot::manifests::load_default_manifests();
+        let agent_registry = rara_boot::manifests::load_default_registry();
 
         // User store — PgUserStore backed by the shared pool
         let user_store: Arc<dyn rara_kernel::process::user::UserStore> =
@@ -266,7 +266,7 @@ impl AppState {
             },
             llm_provider:     llm_provider.clone(),
             tool_registry:    tools.clone(),
-            manifest_loader,
+            agent_registry,
             user_store:       user_store.clone(),
             session_repo:     session_repo.clone(),
             settings:         settings_provider.clone(),

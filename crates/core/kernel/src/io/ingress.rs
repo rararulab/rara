@@ -163,6 +163,7 @@ impl IngressPipeline {
             },
             user: user_id,
             session_id,
+            target_agent_id: None,
             target_agent: None,
             content: raw.content,
             reply_context: raw.reply_context,

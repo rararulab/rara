@@ -24,6 +24,7 @@
 //! that tracks all running agent processes, supporting process tree queries
 //! (parent/children) and state transitions.
 
+pub mod agent_registry;
 pub mod manifest_loader;
 pub mod principal;
 pub mod user;
@@ -31,7 +32,7 @@ pub mod user;
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{Arc, atomic::{AtomicU64, Ordering}},
 };
 
 use dashmap::DashMap;
@@ -258,6 +259,26 @@ pub enum ProcessState {
     Cancelled,
 }
 
+impl ProcessState {
+    /// Whether this state is terminal (process no longer accepts messages).
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+    }
+}
+
+impl std::fmt::Display for ProcessState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProcessState::Running => write!(f, "running"),
+            ProcessState::Waiting => write!(f, "waiting"),
+            ProcessState::Paused => write!(f, "paused"),
+            ProcessState::Completed => write!(f, "completed"),
+            ProcessState::Failed => write!(f, "failed"),
+            ProcessState::Cancelled => write!(f, "cancelled"),
+        }
+    }
+}
+
 /// Result of a completed agent process.
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentResult {
@@ -346,6 +367,8 @@ pub struct AgentProcess {
     pub result:        Option<AgentResult>,
     /// Files created or modified by this agent (for resource tracking).
     pub created_files: Vec<PathBuf>,
+    /// Per-process runtime metrics (atomic counters for lock-free updates).
+    pub metrics:       Arc<RuntimeMetrics>,
 }
 
 /// Summary info for listing processes.
@@ -547,11 +570,10 @@ pub struct ProcessTable {
     processes:     DashMap<AgentId, AgentProcess>,
     /// Maps a session to its currently active agent process.
     session_index: DashMap<SessionId, AgentId>,
-    /// Maps agent manifest name to its currently active agent process.
-    /// Used for sender-addressed message routing (target_agent → process).
-    name_index:    DashMap<String, AgentId>,
-    /// Per-process runtime metrics (atomic counters for lock-free updates).
-    metrics:       DashMap<AgentId, std::sync::Arc<RuntimeMetrics>>,
+    /// Parent → Children index, O(1) child lookup.
+    children_index: DashMap<AgentId, Vec<AgentId>>,
+    /// Agent manifest name → Vec<AgentId> (1:N, observability only).
+    name_registry: DashMap<String, Vec<AgentId>>,
     /// Monotonically increasing counter of total processes ever spawned.
     total_spawned:    AtomicU64,
     /// Total processes that completed successfully.
@@ -566,8 +588,8 @@ impl ProcessTable {
         Self {
             processes:           DashMap::new(),
             session_index:       DashMap::new(),
-            name_index:          DashMap::new(),
-            metrics:             DashMap::new(),
+            children_index:      DashMap::new(),
+            name_registry:       DashMap::new(),
             total_spawned:       AtomicU64::new(0),
             total_completed:     AtomicU64::new(0),
             total_failed:        AtomicU64::new(0),
@@ -575,28 +597,19 @@ impl ProcessTable {
     }
 
     /// Insert a process into the table.
-    ///
-    /// If the process has a `channel_session_id`, the session index is updated
-    /// so `find_by_session` can route inbound channel messages to it.
-    /// Subagents (`channel_session_id = None`) are **not** inserted into
-    /// `session_index` — they are only reachable via `AgentHandle`.
-    ///
-    /// Updates the name index so `find_by_name` can locate it by manifest
-    /// name, creates a [`RuntimeMetrics`] entry, and increments the total
-    /// spawned counter.
-    ///
-    /// If a process with the same manifest name already exists in the name
-    /// index, it is overwritten (the old entry may be stale from a process
-    /// that ended but was not cleaned up).
     pub fn insert(&self, process: AgentProcess) {
         let agent_id = process.agent_id;
         if let Some(ref channel_sid) = process.channel_session_id {
             self.session_index.insert(channel_sid.clone(), agent_id);
         }
-        self.name_index
-            .insert(process.manifest.name.clone(), agent_id);
-        self.metrics
-            .insert(agent_id, std::sync::Arc::new(RuntimeMetrics::new()));
+        // Children index: register under parent
+        if let Some(parent_id) = process.parent_id {
+            self.children_index.entry(parent_id).or_default().push(agent_id);
+        }
+        // Initialize empty children list for this process
+        self.children_index.entry(agent_id).or_default();
+        // Name registry (1:N)
+        self.name_registry.entry(process.manifest.name.clone()).or_default().push(agent_id);
         self.total_spawned.fetch_add(1, Ordering::Relaxed);
         self.processes.insert(agent_id, process);
     }
@@ -652,29 +665,38 @@ impl ProcessTable {
     }
 
     /// Remove a process from the table, returning it if it existed.
-    ///
-    /// Also cleans up the session index (if the process had a channel
-    /// binding), name index, and metrics entries.
     pub fn remove(&self, id: AgentId) -> Option<AgentProcess> {
         let removed = self.processes.remove(&id).map(|(_, p)| p);
         if let Some(ref process) = removed {
+            // Session index cleanup
             if let Some(ref channel_sid) = process.channel_session_id {
                 self.session_index
                     .remove_if(channel_sid, |_, agent_id| *agent_id == id);
             }
-            self.name_index
-                .remove_if(&process.manifest.name, |_, agent_id| *agent_id == id);
-            self.metrics.remove(&id);
+            // Children index: remove from parent's children list
+            if let Some(parent_id) = process.parent_id {
+                if let Some(mut children) = self.children_index.get_mut(&parent_id) {
+                    children.retain(|c| *c != id);
+                }
+            }
+            // Remove own children entry
+            self.children_index.remove(&id);
+            // Name registry: remove from vec
+            if let Some(mut ids) = self.name_registry.get_mut(&process.manifest.name) {
+                ids.retain(|aid| *aid != id);
+            }
         }
         removed
     }
 
-    /// List all children of a given parent.
+    /// List all children of a given parent (O(1) lookup via children_index).
     pub fn children_of(&self, parent_id: AgentId) -> Vec<ProcessInfo> {
-        self.processes
-            .iter()
-            .filter(|p| p.parent_id == Some(parent_id))
-            .map(|p| ProcessInfo::from(p.value()))
+        let child_ids = self.children_index
+            .get(&parent_id)
+            .map(|ids| ids.clone())
+            .unwrap_or_default();
+        child_ids.iter()
+            .filter_map(|id| self.processes.get(id).map(|p| ProcessInfo::from(p.value())))
             .collect()
     }
 
@@ -702,10 +724,18 @@ impl ProcessTable {
         self.get(*agent_id)
     }
 
-    /// Find the active agent process by manifest name.
+    /// Find agent processes by manifest name (returns the most recently inserted).
     pub fn find_by_name(&self, name: &str) -> Option<AgentProcess> {
-        let agent_id = self.name_index.get(name)?;
-        self.get(*agent_id)
+        let ids = self.name_registry.get(name)?;
+        ids.last().and_then(|id| self.get(*id))
+    }
+
+    /// Find all agent processes with the given manifest name.
+    pub fn find_all_by_name(&self, name: &str) -> Vec<AgentProcess> {
+        self.name_registry
+            .get(name)
+            .map(|ids| ids.iter().filter_map(|id| self.get(*id)).collect())
+            .unwrap_or_default()
     }
 
     /// Bind a session to a specific agent process (overwrites any existing
@@ -717,32 +747,18 @@ impl ProcessTable {
     // ----- Metrics methods -----
 
     /// Get a shared reference to the metrics for a process.
-    pub fn get_metrics(&self, id: &AgentId) -> Option<std::sync::Arc<RuntimeMetrics>> {
-        self.metrics.get(id).map(|m| std::sync::Arc::clone(m.value()))
+    pub fn get_metrics(&self, id: &AgentId) -> Option<Arc<RuntimeMetrics>> {
+        self.processes.get(id).map(|p| Arc::clone(&p.metrics))
     }
 
     /// Build a [`ProcessStats`] snapshot for a single process.
-    ///
-    /// Combines static process metadata with live runtime metrics.
     pub async fn process_stats(&self, id: AgentId) -> Option<ProcessStats> {
         let process = self.get(id)?;
-        let metrics_snapshot = if let Some(m) = self.get_metrics(&id) {
-            m.snapshot().await
-        } else {
-            MetricsSnapshot {
-                messages_received: 0,
-                llm_calls:         0,
-                tool_calls:        0,
-                tokens_consumed:   0,
-                last_activity:     None,
-            }
-        };
-        let children: Vec<AgentId> = self
-            .processes
-            .iter()
-            .filter(|p| p.parent_id == Some(id))
-            .map(|p| p.agent_id)
-            .collect();
+        let metrics_snapshot = process.metrics.snapshot().await;
+        let children: Vec<AgentId> = self.children_index
+            .get(&id)
+            .map(|ids| ids.clone())
+            .unwrap_or_default();
         let uptime_ms = Timestamp::now()
             .since(process.created_at)
             .ok()
@@ -795,9 +811,9 @@ impl ProcessTable {
 
     /// Sum of tokens consumed across all currently tracked processes.
     pub fn total_tokens_consumed(&self) -> u64 {
-        self.metrics
+        self.processes
             .iter()
-            .map(|m| m.value().tokens_consumed.load(Ordering::Relaxed))
+            .map(|p| p.metrics.tokens_consumed.load(Ordering::Relaxed))
             .sum()
     }
 
@@ -832,7 +848,6 @@ mod tests {
         }
     }
 
-    /// Helper to create a test process (with a default channel session).
     fn test_process(name: &str, parent_id: Option<AgentId>) -> AgentProcess {
         test_process_with_session(name, parent_id, "test-session")
     }
@@ -853,6 +868,7 @@ mod tests {
             finished_at:        None,
             result:             None,
             created_files:      vec![],
+            metrics:            Arc::new(RuntimeMetrics::new()),
         }
     }
 
@@ -876,6 +892,7 @@ mod tests {
             finished_at:        None,
             result:             None,
             created_files:      vec![],
+            metrics:            Arc::new(RuntimeMetrics::new()),
         }
     }
 
@@ -1178,6 +1195,7 @@ system_prompt: "Hello"
             finished_at:        None,
             result:             None,
             created_files:      vec![],
+            metrics:            Arc::new(RuntimeMetrics::new()),
         };
         table.insert(new_process);
         table.bind_session(channel_sid.clone(), new_id);
@@ -1241,7 +1259,7 @@ system_prompt: "Hello"
     }
 
     #[test]
-    fn test_insert_creates_metrics() {
+    fn test_get_metrics_from_process() {
         let table = ProcessTable::new();
         let p = test_process("metrics-test", None);
         let id = p.agent_id;
@@ -1307,6 +1325,7 @@ system_prompt: "Hello"
 
         assert!(table.get_metrics(&id).is_some());
         table.remove(id);
+        // Process removed, get_metrics should return None.
         assert!(table.get_metrics(&id).is_none());
     }
 
@@ -1316,6 +1335,7 @@ system_prompt: "Hello"
 
         let parent = test_process("planner", None);
         let parent_id = parent.agent_id;
+        let parent_metrics = Arc::clone(&parent.metrics);
         table.insert(parent);
 
         let child = test_process("worker", Some(parent_id));
@@ -1323,12 +1343,11 @@ system_prompt: "Hello"
         table.insert(child);
 
         // Record some metrics on the parent
-        let metrics = table.get_metrics(&parent_id).unwrap();
-        metrics.record_message();
-        metrics.record_llm_call();
-        metrics.record_tool_calls(2);
-        metrics.record_tokens(500);
-        metrics.touch().await;
+        parent_metrics.record_message();
+        parent_metrics.record_llm_call();
+        parent_metrics.record_tool_calls(2);
+        parent_metrics.record_tokens(500);
+        parent_metrics.touch().await;
 
         let stats = table.process_stats(parent_id).await.unwrap();
         assert_eq!(stats.agent_id, parent_id);
@@ -1341,7 +1360,6 @@ system_prompt: "Hello"
         assert_eq!(stats.tool_calls, 2);
         assert_eq!(stats.tokens_consumed, 500);
         assert!(stats.last_activity.is_some());
-        // uptime should be a reasonable value (just check it's been set)
         let _ = stats.uptime_ms;
     }
 
@@ -1367,15 +1385,15 @@ system_prompt: "Hello"
         let table = ProcessTable::new();
 
         let p1 = test_process("a", None);
-        let id1 = p1.agent_id;
+        let m1 = Arc::clone(&p1.metrics);
         table.insert(p1);
 
         let p2 = test_process("b", None);
-        let id2 = p2.agent_id;
+        let m2 = Arc::clone(&p2.metrics);
         table.insert(p2);
 
-        table.get_metrics(&id1).unwrap().record_tokens(100);
-        table.get_metrics(&id2).unwrap().record_tokens(200);
+        m1.record_tokens(100);
+        m2.record_tokens(200);
 
         assert_eq!(table.total_tokens_consumed(), 300);
     }
@@ -1394,7 +1412,7 @@ system_prompt: "Hello"
     }
 
     // -----------------------------------------------------------------------
-    // Name index tests
+    // Name registry tests
     // -----------------------------------------------------------------------
 
     #[test]
@@ -1408,12 +1426,11 @@ system_prompt: "Hello"
         assert!(found.is_some());
         assert_eq!(found.unwrap().agent_id, id);
 
-        // Non-existent name returns None.
         assert!(table.find_by_name("no-such-agent").is_none());
     }
 
     #[test]
-    fn test_name_index_cleanup_on_remove() {
+    fn test_name_registry_cleanup_on_remove() {
         let table = ProcessTable::new();
         let p = test_process("removable-agent", None);
         let id = p.agent_id;
@@ -1426,7 +1443,7 @@ system_prompt: "Hello"
     }
 
     #[test]
-    fn test_name_index_overwrite_on_duplicate() {
+    fn test_name_registry_tracks_multiple() {
         let table = ProcessTable::new();
 
         let p1 = test_process("dup-agent", None);
@@ -1435,38 +1452,40 @@ system_prompt: "Hello"
 
         assert_eq!(table.find_by_name("dup-agent").unwrap().agent_id, id1);
 
-        // Insert a second process with the same manifest name.
         let p2 = test_process("dup-agent", None);
         let id2 = p2.agent_id;
         table.insert(p2);
 
-        // Name index should point to the new process.
+        // find_by_name returns the most recently inserted.
         assert_eq!(table.find_by_name("dup-agent").unwrap().agent_id, id2);
         assert_ne!(id1, id2);
+
+        // find_all_by_name returns both.
+        let all = table.find_all_by_name("dup-agent");
+        assert_eq!(all.len(), 2);
     }
 
     #[test]
-    fn test_remove_does_not_clear_name_index_for_different_agent() {
+    fn test_remove_does_not_clear_name_registry_for_different_agent() {
         let table = ProcessTable::new();
 
         let p1 = test_process("shared-name", None);
         let id1 = p1.agent_id;
         table.insert(p1);
 
-        // Overwrite name index with p2
         let p2 = test_process("shared-name", None);
         let id2 = p2.agent_id;
         table.insert(p2);
 
-        // Remove p1 — should NOT clear name_index because it points to p2.
+        // Remove p1 — name_registry should still have p2.
         table.remove(id1);
         assert!(
             table.find_by_name("shared-name").is_some(),
-            "name_index should still point to p2"
+            "name_registry should still have p2"
         );
         assert_eq!(table.find_by_name("shared-name").unwrap().agent_id, id2);
 
-        // Remove p2 — now name_index should be cleared.
+        // Remove p2 — name_registry should be empty.
         table.remove(id2);
         assert!(table.find_by_name("shared-name").is_none());
     }
@@ -1499,7 +1518,7 @@ system_prompt: "Hello"
         assert_eq!(table.find_by_session(&csid1).unwrap().agent_id, id1);
         assert_eq!(table.find_by_session(&csid2).unwrap().agent_id, id2);
 
-        // Name index only points to the most recent insertion.
+        // find_by_name returns the most recently inserted.
         assert_eq!(table.find_by_name("rara").unwrap().agent_id, id2);
 
         // Both processes can be queried independently.
@@ -1561,24 +1580,22 @@ system_prompt: "Hello"
     }
 
     #[test]
-    fn test_multi_session_remove_preserves_name_index() {
+    fn test_multi_session_remove_preserves_name_registry() {
         let table = ProcessTable::new();
 
-        // Spawn "rara" for session-1 (name index points to id1).
         let p1 = test_process_with_session("rara", None, "session-1");
         let id1 = p1.agent_id;
         table.insert(p1);
 
-        // Spawn "rara" for session-2 (name index now points to id2).
         let p2 = test_process_with_session("rara", None, "session-2");
         let id2 = p2.agent_id;
         table.insert(p2);
 
-        // Remove the older process (id1). Name index should still point to id2.
+        // Remove the older process. Name registry should still have id2.
         table.remove(id1);
         assert_eq!(table.find_by_name("rara").unwrap().agent_id, id2);
 
-        // Remove the newer process (id2). Name index should be cleared.
+        // Remove the newer process. Name registry should be empty.
         table.remove(id2);
         assert!(table.find_by_name("rara").is_none());
     }
@@ -1644,9 +1661,78 @@ system_prompt: "Hello"
         let p2_sid = p2.session_id.clone();
         table.insert(p2);
 
-        // Each process has a unique agent-scoped session.
         assert_ne!(p1_sid, p2_sid);
         assert!(p1_sid.as_str().starts_with("agent:"));
         assert!(p2_sid.as_str().starts_with("agent:"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Children index tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_children_index_insert_creates_entry() {
+        let table = ProcessTable::new();
+        let p = test_process("root", None);
+        let id = p.agent_id;
+        table.insert(p);
+
+        let children = table.children_of(id);
+        assert!(children.is_empty());
+    }
+
+    #[test]
+    fn test_children_index_parent_child() {
+        let table = ProcessTable::new();
+        let parent = test_process("parent", None);
+        let parent_id = parent.agent_id;
+        table.insert(parent);
+
+        let child = test_subagent("child", parent_id);
+        let child_id = child.agent_id;
+        table.insert(child);
+
+        let children = table.children_of(parent_id);
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].agent_id, child_id);
+    }
+
+    #[test]
+    fn test_children_index_remove_child() {
+        let table = ProcessTable::new();
+        let parent = test_process("parent", None);
+        let parent_id = parent.agent_id;
+        table.insert(parent);
+
+        let child = test_subagent("child", parent_id);
+        let child_id = child.agent_id;
+        table.insert(child);
+
+        assert_eq!(table.children_of(parent_id).len(), 1);
+
+        table.remove(child_id);
+        assert_eq!(table.children_of(parent_id).len(), 0);
+    }
+
+    #[test]
+    fn test_children_index_multiple_children() {
+        let table = ProcessTable::new();
+        let parent = test_process("parent", None);
+        let parent_id = parent.agent_id;
+        table.insert(parent);
+
+        let c1 = test_subagent("c1", parent_id);
+        let c1_id = c1.agent_id;
+        table.insert(c1);
+
+        let c2 = test_subagent("c2", parent_id);
+        let c2_id = c2.agent_id;
+        table.insert(c2);
+
+        let children = table.children_of(parent_id);
+        assert_eq!(children.len(), 2);
+        let ids: Vec<AgentId> = children.iter().map(|c| c.agent_id).collect();
+        assert!(ids.contains(&c1_id));
+        assert!(ids.contains(&c2_id));
     }
 }

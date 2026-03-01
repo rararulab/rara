@@ -64,6 +64,7 @@ pub use kernel::{Kernel, KernelConfig};
 pub use process::{
     AgentId, AgentProcess, AgentRole, MetricsSnapshot, Priority, ProcessInfo, ProcessState,
     ProcessStats, ProcessTable, RuntimeMetrics, SandboxConfig, SessionId, Signal, SystemStats,
+    agent_registry::AgentRegistry,
     manifest_loader::ManifestLoader,
     principal::{Principal, Role, UserId},
 };

@@ -43,7 +43,7 @@ use crate::{
     event_queue::EventQueue,
     io::{pipe::PipeRegistry, stream::StreamHub},
     kernel::{Kernel, KernelConfig, KernelInner},
-    process::{AgentManifest, ProcessTable, manifest_loader::ManifestLoader},
+    process::{AgentManifest, ProcessTable, agent_registry::AgentRegistry},
     provider::LlmProviderLoaderRef,
     session::SessionRepository,
     tool::{AgentToolRef, ToolRegistry},
@@ -58,14 +58,15 @@ pub struct TestKernelBuilder {
     config:          KernelConfig,
     llm_provider:    Option<LlmProviderLoaderRef>,
     tool_registry:   ToolRegistry,
-    manifest_loader: ManifestLoader,
+    agent_registry:  AgentRegistry,
 }
 
 impl TestKernelBuilder {
-    /// Create a new builder with default Noop components.
     pub fn new() -> Self {
-        let mut manifest_loader = ManifestLoader::new();
-        manifest_loader.load_manifests(test_manifests());
+        let agent_registry = AgentRegistry::new(
+            test_manifests(),
+            std::env::temp_dir().join("test_kernel_agents"),
+        );
 
         Self {
             config: KernelConfig {
@@ -77,7 +78,7 @@ impl TestKernelBuilder {
             },
             llm_provider:    None,
             tool_registry:   ToolRegistry::new(),
-            manifest_loader,
+            agent_registry,
         }
     }
 
@@ -132,7 +133,7 @@ impl TestKernelBuilder {
             memory:                 Arc::new(NoopMemory),
             event_bus:              Arc::new(NoopEventBus),
             guard:                  Arc::new(NoopGuard),
-            manifest_loader:        self.manifest_loader,
+            agent_registry:         self.agent_registry,
             shared_kv:              DashMap::new(),
             memory_quota_per_agent: self.config.memory_quota_per_agent,
             user_store:             Arc::new(NoopUserStore),

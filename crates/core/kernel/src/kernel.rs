@@ -25,7 +25,7 @@
 //! Kernel (top-level)
 //!   ├── ProcessTable  (all running agents)
 //!   ├── global_semaphore (max total concurrent agents)
-//!   ├── ManifestLoader  (named agent definitions)
+//!   ├── AgentRegistry   (named agent definitions)
 //!   └── KernelInner (shared state via Arc)
 //!         ├── LlmProviderLoader
 //!         ├── ToolRegistry
@@ -63,7 +63,7 @@ use crate::{
     memory::Memory,
     process::{
         AgentId, AgentManifest, ProcessState, ProcessTable,
-        SessionId, manifest_loader::ManifestLoader, principal::Principal, user::UserStore,
+        SessionId, agent_registry::AgentRegistry, principal::Principal, user::UserStore,
     },
     provider::LlmProviderLoaderRef,
     session::SessionRepository,
@@ -97,8 +97,8 @@ pub(crate) struct KernelInner {
     pub event_bus:              Arc<dyn EventBus>,
     /// Guard for tool approval checks.
     pub guard:                  Arc<dyn Guard>,
-    /// Manifest loader for looking up named agent definitions.
-    pub manifest_loader:        ManifestLoader,
+    /// Agent registry for looking up named agent definitions.
+    pub agent_registry:         AgentRegistry,
     /// Cross-agent shared key-value store (simple DashMap).
     pub shared_kv:              DashMap<String, serde_json::Value>,
     /// Maximum number of KV entries per agent (0 = unlimited).
@@ -267,7 +267,7 @@ impl Kernel {
         memory: Arc<dyn Memory>,
         event_bus: Arc<dyn EventBus>,
         guard: Arc<dyn Guard>,
-        manifest_loader: ManifestLoader,
+        agent_registry: AgentRegistry,
         user_store: Arc<dyn UserStore>,
         session_repo: Arc<dyn SessionRepository>,
         settings: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
@@ -302,7 +302,7 @@ impl Kernel {
             memory,
             event_bus,
             guard,
-            manifest_loader,
+            agent_registry,
             shared_kv: DashMap::new(),
             memory_quota_per_agent: config.memory_quota_per_agent,
             user_store,
@@ -369,12 +369,11 @@ impl Kernel {
     ) -> Result<AgentId> {
         let manifest = self
             .inner
-            .manifest_loader
+            .agent_registry
             .get(agent_name)
             .ok_or(KernelError::ManifestNotFound {
                 name: agent_name.to_string(),
-            })?
-            .clone();
+            })?;
 
         self.spawn_with_input(manifest, input, principal, parent_id)
             .await
@@ -383,8 +382,8 @@ impl Kernel {
     /// Access the process table for querying.
     pub fn process_table(&self) -> &ProcessTable { &self.inner.process_table }
 
-    /// Access the manifest loader for looking up named manifests.
-    pub fn manifest_loader(&self) -> &ManifestLoader { &self.inner.manifest_loader }
+    /// Access the agent registry for looking up named manifests.
+    pub fn agent_registry(&self) -> &AgentRegistry { &self.inner.agent_registry }
 
     /// Access the tool registry.
     pub fn tool_registry(&self) -> &Arc<ToolRegistry> { &self.inner.tool_registry }
@@ -559,8 +558,10 @@ mod tests {
             ..Default::default()
         };
 
-        let mut loader = ManifestLoader::new();
-        loader.load_manifests(crate::testing::test_manifests());
+        let registry = AgentRegistry::new(
+            crate::testing::test_manifests(),
+            std::env::temp_dir().join("kernel_test_agents"),
+        );
 
         Kernel::new(
             config,
@@ -569,7 +570,7 @@ mod tests {
             Arc::new(NoopMemory),
             Arc::new(NoopEventBus),
             Arc::new(NoopGuard),
-            loader,
+            registry,
             Arc::new(NoopUserStore),
             Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
             Arc::new(NoopSettingsProvider) as Arc<dyn rara_domain_shared::settings::SettingsProvider>,
@@ -620,11 +621,11 @@ mod tests {
     }
 
     #[test]
-    fn test_kernel_manifest_loader() {
+    fn test_kernel_agent_registry() {
         let kernel = make_test_kernel(10, 5);
-        assert!(kernel.manifest_loader().get("rara").is_some());
-        assert!(kernel.manifest_loader().get("scout").is_some());
-        assert!(kernel.manifest_loader().get("nonexistent").is_none());
+        assert!(kernel.agent_registry().get("rara").is_some());
+        assert!(kernel.agent_registry().get("scout").is_some());
+        assert!(kernel.agent_registry().get("nonexistent").is_none());
     }
 
     #[test]

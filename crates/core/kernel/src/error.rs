@@ -94,6 +94,10 @@ pub enum KernelError {
     #[snafu(display("process not found: {id}"))]
     ProcessNotFound { id: String },
 
+    /// Process is in a terminal state (Completed/Failed/Cancelled).
+    #[snafu(display("process terminal: {id} ({state})"))]
+    ProcessTerminal { id: String, state: String },
+
     /// Permission denied for the requested operation.
     #[snafu(display("permission denied: {reason}"))]
     PermissionDenied { reason: String },

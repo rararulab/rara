@@ -535,108 +535,179 @@ impl Kernel {
     /// The default root agent name used when `target_agent` is `None`.
     const ROOT_AGENT_NAME: &'static str = "rara";
 
-    /// Handle a user message: route by session first, then by target agent
-    /// name, find or spawn a process, then start an LLM turn.
+    /// Handle a user message with 3-path routing:
     ///
-    /// Routing priority (session-first):
-    /// 1. If the session already has a bound agent process, route to it
-    ///    (existing conversation continues).
-    /// 2. Otherwise, resolve the target agent manifest by name (or default
-    ///    to "rara") and spawn a new process instance for this session.
-    ///
-    /// This allows the same agent manifest (e.g., "rara") to have multiple
-    /// concurrent process instances, each bound to a different session.
+    /// 1. **ID addressing** (`target_agent_id` set): deliver to specific
+    ///    process — error if terminal or not found (A2A Protocol pattern).
+    /// 2. **Session addressing** (session_index match): deliver to bound
+    ///    process — if terminal, clear binding and respawn transparently
+    ///    (AutoGen lazy instantiation pattern).
+    /// 3. **Name addressing** (fallback): lookup AgentRegistry by name,
+    ///    always spawn a new process (Anthropic spawn-new pattern).
     async fn handle_user_message(&self, msg: InboundMessage, runtimes: &RuntimeTable) {
         let session_id = msg.session_id.clone();
         let user = msg.user.clone();
+
+        // ----- Path 1: ID addressing (agent-to-agent) -----
+        if let Some(target_id) = msg.target_agent_id {
+            match self.process_table().get(target_id) {
+                Some(process) if process.state.is_terminal() => {
+                    // Terminal process — return error (A2A pattern).
+                    let envelope = OutboundEnvelope {
+                        id:          MessageId::new(),
+                        in_reply_to: msg.id.clone(),
+                        user:        user.clone(),
+                        session_id:  session_id.clone(),
+                        routing:     OutboundRouting::BroadcastAll,
+                        payload:     OutboundPayload::Error {
+                            code:    "process_terminal".to_string(),
+                            message: format!(
+                                "process {} is {}", target_id, process.state
+                            ),
+                        },
+                        timestamp:   jiff::Timestamp::now(),
+                    };
+                    if let Err(e) = self.event_queue().try_push(KernelEvent::Deliver(envelope)) {
+                        error!(%e, "failed to push process-terminal error Deliver");
+                    }
+                    return;
+                }
+                Some(_) => {
+                    // Process alive — buffer if busy/paused, else deliver.
+                    if let Some(mut rt) = runtimes.get_mut(&target_id) {
+                        if rt.paused {
+                            rt.pause_buffer.push(KernelEvent::UserMessage(msg));
+                            return;
+                        }
+                        if let Some(p) = self.process_table().get(target_id) {
+                            if p.state == ProcessState::Running {
+                                rt.pause_buffer.push(KernelEvent::UserMessage(msg));
+                                return;
+                            }
+                        }
+                    }
+                    self.start_llm_turn(target_id, msg, runtimes).await;
+                    return;
+                }
+                None => {
+                    // Process not found — return error.
+                    let envelope = OutboundEnvelope {
+                        id:          MessageId::new(),
+                        in_reply_to: msg.id.clone(),
+                        user:        user.clone(),
+                        session_id:  session_id.clone(),
+                        routing:     OutboundRouting::BroadcastAll,
+                        payload:     OutboundPayload::Error {
+                            code:    "process_not_found".to_string(),
+                            message: format!("process not found: {target_id}"),
+                        },
+                        timestamp:   jiff::Timestamp::now(),
+                    };
+                    if let Err(e) = self.event_queue().try_push(KernelEvent::Deliver(envelope)) {
+                        error!(%e, "failed to push process-not-found error Deliver");
+                    }
+                    return;
+                }
+            }
+        }
+
+        // ----- Path 2: Session addressing (external user) -----
+        if let Some(process) = self.process_table().find_by_session(&session_id) {
+            let aid = process.agent_id;
+
+            if process.state.is_terminal() {
+                // Terminal process — clear session binding, fall through to
+                // Path 3 (Name addressing) to spawn a replacement.
+                info!(
+                    agent_id = %aid,
+                    session_id = %session_id,
+                    state = %process.state,
+                    "session-bound process terminal — clearing binding, will respawn"
+                );
+                self.process_table().remove(aid);
+                // Fall through to Path 3 below.
+            } else {
+                // Process alive — buffer if busy/paused, else deliver.
+                if let Some(mut rt) = runtimes.get_mut(&aid) {
+                    if rt.paused {
+                        rt.pause_buffer.push(KernelEvent::UserMessage(msg));
+                        return;
+                    }
+                    if let Some(p) = self.process_table().get(aid) {
+                        if p.state == ProcessState::Running {
+                            rt.pause_buffer.push(KernelEvent::UserMessage(msg));
+                            return;
+                        }
+                    }
+                }
+                self.start_llm_turn(aid, msg, runtimes).await;
+                return;
+            }
+        }
+
+        // ----- Path 3: Name addressing (always spawn new) -----
         let target_name = msg
             .target_agent
             .as_deref()
             .unwrap_or(Self::ROOT_AGENT_NAME);
 
-        // 1. Session-first: check if this session already has a bound agent.
-        let agent_id = if let Some(process) = self.process_table().find_by_session(&session_id) {
-            let aid = process.agent_id;
-
-            // Check if process is paused or already running — buffer the event.
-            if let Some(mut rt) = runtimes.get_mut(&aid) {
-                if rt.paused {
-                    rt.pause_buffer.push(KernelEvent::UserMessage(msg));
+        let manifest = if let Some(m) = self.inner().agent_registry.get(target_name) {
+            m
+        } else if target_name == Self::ROOT_AGENT_NAME {
+            match self.resolve_manifest_for_auto_spawn().await {
+                Some(m) => m,
+                None => {
+                    error!(
+                        session_id = %session_id,
+                        "no model configured — cannot spawn root agent"
+                    );
                     return;
                 }
-                // Check if process state is Running (LLM turn in progress).
-                if let Some(p) = self.process_table().get(aid) {
-                    if p.state == ProcessState::Running {
-                        // Buffer — we'll drain after the current turn completes.
-                        rt.pause_buffer.push(KernelEvent::UserMessage(msg));
-                        return;
-                    }
-                }
             }
-            aid
         } else {
-            // 2. New session — resolve manifest by target_agent name, spawn new instance.
-            let manifest = if let Some(m) = self.inner().manifest_loader.get(target_name) {
-                m.clone()
-            } else if target_name == Self::ROOT_AGENT_NAME {
-                // Root agent without a manifest — fall back to auto-spawn.
-                match self.resolve_manifest_for_auto_spawn().await {
-                    Some(m) => m,
-                    None => {
-                        error!(
-                            session_id = %session_id,
-                            "no model configured — cannot spawn root agent"
-                        );
-                        return;
-                    }
-                }
-            } else {
-                // Unknown target agent — send error reply.
-                warn!(
-                    target_name = %target_name,
-                    session_id = %session_id,
-                    "unknown target agent"
-                );
-                let envelope = OutboundEnvelope {
-                    id:          MessageId::new(),
-                    in_reply_to: msg.id.clone(),
-                    user:        user.clone(),
-                    session_id:  session_id.clone(),
-                    routing:     OutboundRouting::BroadcastAll,
-                    payload:     OutboundPayload::Error {
-                        code:    "unknown_agent".to_string(),
-                        message: format!("unknown target agent: {target_name}"),
-                    },
-                    timestamp:   jiff::Timestamp::now(),
-                };
-                if let Err(e) = self.event_queue().try_push(KernelEvent::Deliver(envelope)) {
-                    error!(%e, "failed to push unknown-agent error Deliver");
-                }
-                return;
+            warn!(
+                target_name = %target_name,
+                session_id = %session_id,
+                "unknown target agent"
+            );
+            let envelope = OutboundEnvelope {
+                id:          MessageId::new(),
+                in_reply_to: msg.id.clone(),
+                user:        user.clone(),
+                session_id:  session_id.clone(),
+                routing:     OutboundRouting::BroadcastAll,
+                payload:     OutboundPayload::Error {
+                    code:    "unknown_agent".to_string(),
+                    message: format!("unknown target agent: {target_name}"),
+                },
+                timestamp:   jiff::Timestamp::now(),
             };
-
-            let principal = Principal::user(user.0.clone());
-            match self
-                .handle_spawn_agent(
-                    manifest,
-                    msg.content.as_text(),
-                    principal,
-                    Some(session_id.clone()), // channel session binding
-                    None,
-                    runtimes,
-                )
-                .await
-            {
-                Ok(aid) => aid,
-                Err(e) => {
-                    error!(session_id = %session_id, error = %e, "failed to spawn agent");
-                    return;
-                }
+            if let Err(e) = self.event_queue().try_push(KernelEvent::Deliver(envelope)) {
+                error!(%e, "failed to push unknown-agent error Deliver");
             }
+            return;
         };
 
-        // 3. Start LLM turn for this process.
-        self.start_llm_turn(agent_id, msg, runtimes).await;
+        let principal = Principal::user(user.0.clone());
+        match self
+            .handle_spawn_agent(
+                manifest,
+                msg.content.as_text(),
+                principal,
+                Some(session_id.clone()),
+                None,
+                runtimes,
+            )
+            .await
+        {
+            Ok(_aid) => {
+                // handle_spawn_agent pushes a synthetic UserMessage that will
+                // re-enter handle_user_message and be routed via Path 2.
+            }
+            Err(e) => {
+                error!(session_id = %session_id, error = %e, "failed to spawn agent");
+            }
+        }
     }
 
     /// Start an LLM turn for the given agent, spawning the work as an async
@@ -986,6 +1057,7 @@ impl Kernel {
         );
 
         // Register process in table.
+        let metrics = std::sync::Arc::new(crate::process::RuntimeMetrics::new());
         let process = AgentProcess {
             agent_id,
             parent_id,
@@ -999,6 +1071,7 @@ impl Kernel {
             finished_at: None,
             result: None,
             created_files: vec![],
+            metrics,
         };
         inner.process_table.insert(process);
 
