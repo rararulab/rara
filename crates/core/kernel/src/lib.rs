@@ -17,7 +17,7 @@
 //! Unified agent orchestrator — the single core crate for agent lifecycle,
 //! 7-component architecture, and LLM ↔ Tool execution loop.
 //!
-//! ## 7 Components
+//! ## 6 Components
 //!
 //! | Component   | Trait            | Purpose                          |
 //! |-------------|------------------|----------------------------------|
@@ -25,7 +25,6 @@
 //! | Tool        | [`ToolRegistry`] | Tool registration + dispatch     |
 //! | Memory      | [`Memory`]       | 3-layer memory (State/Knowledge/Learning) |
 //! | Session     | [`SessionRepository`] | Conversation history persistence |
-//! | Prompt      | [`PromptRepo`]   | System prompt templates          |
 //! | Guard       | [`Guard`]        | Tool approval + output moderation |
 //! | Event Bus   | [`EventBus`]     | Inter-component event broadcasting |
 
@@ -48,7 +47,6 @@ pub mod memory;
 pub mod model;
 pub mod process;
 pub(crate) mod agent_turn;
-pub mod prompt;
 pub mod provider;
 pub mod runner;
 pub mod session;
