@@ -322,7 +322,7 @@ impl AppConfig {
 
         // -- telegram adapter (optional) --------------------------------------
 
-        let telegram_adapter = match Self::try_build_telegram(&app_state).await {
+        let telegram_adapter = match Self::try_build_telegram(&app_state, db_store.pool().clone(), &self.main_service_http_base).await {
             Ok(Some(adapter)) => {
                 info!("Telegram adapter built");
                 Some(adapter)
@@ -504,6 +504,8 @@ impl AppConfig {
     /// calling `adapter.start(sink)` after the I/O pipeline is ready.
     async fn try_build_telegram(
         state: &rara_workers::worker_state::AppState,
+        pool: sqlx::PgPool,
+        main_service_http_base: &str,
     ) -> Result<Option<Arc<rara_channels::telegram::TelegramAdapter>>, Whatever> {
         use rara_domain_shared::settings::{SettingsProvider, keys};
 
@@ -535,10 +537,17 @@ impl AppConfig {
                 repo: state.contact_repo.clone(),
             });
 
+        // Build link service for /link command handling.
+        let link_service = rara_channels::telegram::TelegramLinkService::new(
+            pool,
+            main_service_http_base.to_string(),
+        );
+
         let adapter = Arc::new(
             rara_channels::telegram::TelegramAdapter::new(bot, vec![])
                 .with_config(tg_config)
-                .with_contact_tracker(contact_tracker),
+                .with_contact_tracker(contact_tracker)
+                .with_link_service(link_service),
         );
 
         // Spawn a background task to hot-reload config from settings.

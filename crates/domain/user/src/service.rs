@@ -436,6 +436,115 @@ impl AuthService {
         Ok(rows.iter().map(row_to_user_info).collect())
     }
 
+    /// 完成平台链接：验证码并创建平台身份绑定
+    pub async fn complete_link(
+        &self,
+        code: &str,
+        platform: &str,
+        platform_user_id: &str,
+        display_name: Option<&str>,
+    ) -> Result<(), AuthError> {
+        // 1. 验证链接码
+        let link_info = self.verify_link_code(code).await?;
+
+        // 2. 创建平台身份
+        let identity_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO user_platform_identities (id, user_id, platform, platform_user_id, display_name) \
+             VALUES ($1, $2, $3, $4, $5) \
+             ON CONFLICT (platform, platform_user_id) DO UPDATE SET user_id = $2, display_name = $5",
+        )
+        .bind(identity_id)
+        .bind(link_info.user_id)
+        .bind(platform)
+        .bind(platform_user_id)
+        .bind(display_name)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| AuthError::InternalError { message: e.to_string() })?;
+
+        // 3. 删除已使用的链接码
+        sqlx::query("DELETE FROM link_codes WHERE code = $1")
+            .bind(code)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| AuthError::InternalError { message: e.to_string() })?;
+
+        info!(platform = %platform, platform_user_id = %platform_user_id, "platform identity linked");
+        Ok(())
+    }
+
+    /// 生成 TG→Web 方向的链接码（带 chat_id 平台数据）
+    pub async fn generate_tg_link_code(
+        &self,
+        chat_id: i64,
+    ) -> Result<LinkCode, AuthError> {
+        let code = generate_random_code(6);
+        let expires_at = chrono::Utc::now() + chrono::Duration::minutes(5);
+        let platform_data = serde_json::json!({ "chat_id": chat_id });
+
+        let row = sqlx::query_as::<_, LinkCodeRow>(
+            "INSERT INTO link_codes (code, user_id, direction, platform_data, expires_at) \
+             VALUES ($1, (SELECT id FROM kernel_users WHERE name = 'system'), $2, $3, $4) RETURNING *",
+        )
+        .bind(&code)
+        .bind("tg_to_web")
+        .bind(&platform_data)
+        .bind(expires_at)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| AuthError::InternalError { message: e.to_string() })?;
+
+        info!(code = %code, chat_id = %chat_id, "tg link code generated");
+        Ok(row_to_link_code(row))
+    }
+
+    /// 验证 TG→Web 方向的链接码（由已认证的 Web 用户调用）
+    pub async fn verify_and_complete_tg_link(
+        &self,
+        user_id: uuid::Uuid,
+        code: &str,
+    ) -> Result<(), AuthError> {
+        // 验证链接码
+        let link_info = self.verify_link_code(code).await?;
+
+        if link_info.direction != "tg_to_web" {
+            return Err(AuthError::LinkCodeInvalid);
+        }
+
+        // 从 platform_data 中提取 chat_id
+        let chat_id = link_info
+            .platform_data
+            .as_ref()
+            .and_then(|d| d.get("chat_id"))
+            .and_then(|v| v.as_i64())
+            .ok_or(AuthError::LinkCodeInvalid)?;
+
+        // 创建平台身份绑定
+        let identity_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO user_platform_identities (id, user_id, platform, platform_user_id, display_name) \
+             VALUES ($1, $2, 'telegram', $3, NULL) \
+             ON CONFLICT (platform, platform_user_id) DO UPDATE SET user_id = $2",
+        )
+        .bind(identity_id)
+        .bind(user_id)
+        .bind(chat_id.to_string())
+        .execute(&self.pool)
+        .await
+        .map_err(|e| AuthError::InternalError { message: e.to_string() })?;
+
+        // 删除已使用的链接码
+        sqlx::query("DELETE FROM link_codes WHERE code = $1")
+            .bind(code)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| AuthError::InternalError { message: e.to_string() })?;
+
+        info!(user_id = %user_id, chat_id = %chat_id, "tg→web link completed");
+        Ok(())
+    }
+
     /// 禁用用户
     pub async fn disable_user(&self, user_id: uuid::Uuid) -> Result<(), AuthError> {
         sqlx::query("UPDATE kernel_users SET enabled = false, updated_at = now() WHERE id = $1")

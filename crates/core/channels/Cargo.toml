@@ -13,6 +13,7 @@ chrono = { workspace = true }
 dashmap = "6"
 futures = { workspace = true }
 jiff = { workspace = true }
+rand = { workspace = true }
 rara-kernel = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
