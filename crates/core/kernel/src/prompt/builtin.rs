@@ -61,16 +61,6 @@ impl PromptRepo for BuiltinPromptRepo {
 pub fn all_builtin_prompts() -> Vec<PromptSpec> {
     vec![
         PromptSpec {
-            name:            "agent/soul.md",
-            description:     "Global personality / soul prompt",
-            default_content: include_str!("defaults/agent/soul.md"),
-        },
-        PromptSpec {
-            name:            "chat/default_system.md",
-            description:     "Default chat system prompt",
-            default_content: include_str!("defaults/chat/default_system.md"),
-        },
-        PromptSpec {
             name:            "workers/agent_policy.md",
             description:     "Proactive/scheduled agent operating policy",
             default_content: include_str!("defaults/workers/agent_policy.md"),

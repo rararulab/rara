@@ -27,6 +27,7 @@ use rara_kernel::process::{AgentManifest, AgentRole, Priority};
 static RARA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| {
     AgentManifest {
         name: "rara".to_string(),
+        role: Some(AgentRole::Chat),
         description: "Rara — personal AI assistant with personality and tools".to_string(),
         model: "openai/gpt-4o-mini".to_string(),
         system_prompt: RARA_SYSTEM_PROMPT.to_string(),
@@ -37,7 +38,7 @@ static RARA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| {
         max_children: None,
         max_context_tokens: None,
         priority: Priority::default(),
-        metadata: serde_json::json!({ "role": AgentRole::Chat.to_string() }),
+        metadata: serde_json::Value::Null,
         sandbox: None,
     }
 });
@@ -218,9 +219,9 @@ mod tests {
     }
 
     #[test]
-    fn test_rara_metadata_has_role() {
+    fn test_rara_role() {
         let m = rara();
-        assert_eq!(m.metadata["role"], "chat");
+        assert_eq!(m.role, Some(AgentRole::Chat));
     }
 
     #[test]

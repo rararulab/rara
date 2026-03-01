@@ -196,6 +196,9 @@ pub type SessionId = crate::session::SessionKey;
 pub struct AgentManifest {
     /// Unique name identifying this agent definition.
     pub name:           String,
+    /// Agent's functional role (chat, scout, planner, worker).
+    #[serde(default)]
+    pub role:           Option<AgentRole>,
     /// Human-readable description.
     pub description:    String,
     /// LLM model identifier (e.g., "deepseek/deepseek-chat", "gpt-4").
@@ -813,6 +816,7 @@ mod tests {
     fn test_manifest(name: &str) -> AgentManifest {
         AgentManifest {
             name:           name.to_string(),
+        role:           None,
             description:    format!("Test agent: {name}"),
             model:          "test-model".to_string(),
             system_prompt:  "You are a test agent.".to_string(),

@@ -418,6 +418,7 @@ mod tests {
     fn test_manifest() -> AgentManifest {
         AgentManifest {
             name:                "test-agent".to_string(),
+        role:           None,
             description:         "Test agent".to_string(),
             model:               "test-model".to_string(),
             system_prompt:       "You are a test agent.".to_string(),

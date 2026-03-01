@@ -120,6 +120,7 @@ mod tests {
         let mut loader = ManifestLoader::new();
         let manifest = AgentManifest {
             name: "test-agent".to_string(),
+        role:           None,
             description: "test".to_string(),
             model: "gpt-4".to_string(),
             system_prompt: "You are a test agent.".to_string(),
@@ -143,6 +144,7 @@ mod tests {
         let mut loader = ManifestLoader::new();
         let m1 = AgentManifest {
             name: "agent".to_string(),
+        role:           None,
             description: "v1".to_string(),
             model: "gpt-3.5".to_string(),
             system_prompt: "v1".to_string(),
@@ -158,6 +160,7 @@ mod tests {
         };
         let m2 = AgentManifest {
             name: "agent".to_string(),
+        role:           None,
             description: "v2".to_string(),
             model: "gpt-4".to_string(),
             system_prompt: "v2".to_string(),

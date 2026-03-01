@@ -163,6 +163,7 @@ pub fn test_manifests() -> Vec<AgentManifest> {
     vec![
         AgentManifest {
             name: "rara".to_string(),
+        role:           None,
             description: "Test chat agent".to_string(),
             model: "openai/gpt-4o-mini".to_string(),
             system_prompt: "You are a helpful assistant.".to_string(),
@@ -178,6 +179,7 @@ pub fn test_manifests() -> Vec<AgentManifest> {
         },
         AgentManifest {
             name: "scout".to_string(),
+        role:           None,
             description: "Test scout agent".to_string(),
             model: "deepseek/deepseek-chat".to_string(),
             system_prompt: "You are a scout agent.".to_string(),

@@ -61,6 +61,7 @@ fn ollama_model() -> String {
 fn test_manifest(name: &str, system_prompt: &str) -> AgentManifest {
     AgentManifest {
         name:           name.to_string(),
+        role:           None,
         description:    format!("I/O test agent: {name}"),
         model:          ollama_model(),
         system_prompt:  system_prompt.to_string(),

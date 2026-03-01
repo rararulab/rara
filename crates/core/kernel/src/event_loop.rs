@@ -1289,6 +1289,7 @@ impl Kernel {
         .await?;
         Some(AgentManifest {
             name:               "io-agent".to_string(),
+        role:           None,
             description:        "I/O bus agent".to_string(),
             model,
             system_prompt:      "You are a helpful assistant.".to_string(),
