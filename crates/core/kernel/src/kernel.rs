@@ -98,7 +98,7 @@ pub(crate) struct KernelInner {
     /// Guard for tool approval checks.
     pub guard:                  Arc<dyn Guard>,
     /// Agent registry for looking up named agent definitions.
-    pub agent_registry:         AgentRegistry,
+    pub agent_registry:         Arc<AgentRegistry>,
     /// Cross-agent shared key-value store (simple DashMap).
     pub shared_kv:              DashMap<String, serde_json::Value>,
     /// Maximum number of KV entries per agent (0 = unlimited).
@@ -272,7 +272,7 @@ impl Kernel {
         memory: Arc<dyn Memory>,
         event_bus: Arc<dyn EventBus>,
         guard: Arc<dyn Guard>,
-        agent_registry: AgentRegistry,
+        agent_registry: Arc<AgentRegistry>,
         user_store: Arc<dyn UserStore>,
         session_repo: Arc<dyn SessionRepository>,
         settings: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
@@ -596,10 +596,10 @@ mod tests {
             ..Default::default()
         };
 
-        let registry = AgentRegistry::new(
+        let registry = Arc::new(AgentRegistry::new(
             crate::testing::test_manifests(),
             std::env::temp_dir().join("kernel_test_agents"),
-        );
+        ));
 
         let provider_registry = Arc::new(
             ProviderRegistryBuilder::new("test", "test-model").build(),
@@ -998,5 +998,96 @@ mod tests {
         let json = serde_json::to_string(&stats).unwrap();
         assert!(json.contains("\"active_processes\":0"));
         assert!(json.contains("\"global_semaphore_available\":10"));
+    }
+
+    // =======================================================================
+    // Per-process syscall tool injection tests (#443)
+    // =======================================================================
+
+    #[tokio::test]
+    async fn test_get_tool_registry_includes_spawn_agent() {
+        let (kernel, cancel) = start_test_kernel(10, 5);
+        let principal = Principal::user("test-user");
+
+        let agent_id = kernel
+            .spawn_with_input(
+                test_manifest("tool-test-agent"),
+                "hello".to_string(),
+                principal,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Allow time for the spawn to fully register the runtime.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Create a ProcessHandle pointing at this agent and query the
+        // tool registry via the GetToolRegistry syscall.
+        let handle = crate::handle::process_handle::ProcessHandle::new(
+            agent_id,
+            crate::process::SessionId::new("test"),
+            Principal::user("test-user"),
+            kernel.event_queue().clone(),
+        );
+
+        let registry = handle.tool_registry().await.unwrap();
+
+        // The per-process SpawnTool should be injected.
+        assert!(
+            registry.get("spawn_agent").is_some(),
+            "tool registry should include spawn_agent, got: {:?}",
+            registry.tool_names(),
+        );
+
+        cancel.cancel();
+    }
+
+    #[tokio::test]
+    async fn test_tool_registry_filtered_by_manifest_tools() {
+        // The "scout" manifest specifies tools: ["read_file", "grep"].
+        // Even though spawn_agent is injected, `filtered()` should exclude
+        // it when the manifest specifies a non-empty tool list.
+        let (kernel, cancel) = start_test_kernel(10, 5);
+        let principal = Principal::user("test-user");
+
+        let agent_id = kernel
+            .spawn_with_input(
+                test_manifest("filter-agent"),
+                "hello".to_string(),
+                principal,
+                None,
+            )
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let handle = crate::handle::process_handle::ProcessHandle::new(
+            agent_id,
+            crate::process::SessionId::new("test"),
+            Principal::user("test-user"),
+            kernel.event_queue().clone(),
+        );
+
+        let full_registry = handle.tool_registry().await.unwrap();
+        assert!(full_registry.get("spawn_agent").is_some());
+
+        // Filter with an explicit tool whitelist that excludes spawn_agent.
+        let whitelist = vec!["read_file".to_string(), "grep".to_string()];
+        let filtered = full_registry.filtered(&whitelist);
+        assert!(
+            filtered.get("spawn_agent").is_none(),
+            "filtered registry should NOT include spawn_agent"
+        );
+
+        // Filter with empty list means include all.
+        let unfiltered = full_registry.filtered(&[]);
+        assert!(
+            unfiltered.get("spawn_agent").is_some(),
+            "unfiltered registry should include spawn_agent"
+        );
+
+        cancel.cancel();
     }
 }

@@ -57,6 +57,7 @@ pub enum ToolLayer {
 }
 
 /// Internal entry pairing a tool with its source and layer metadata.
+#[derive(Clone)]
 struct ToolEntry {
     tool:   AgentToolRef,
     source: ToolSource,
@@ -64,6 +65,7 @@ struct ToolEntry {
 }
 
 /// Registry of available tools for an agent run.
+#[derive(Clone)]
 pub struct ToolRegistry {
     tools: HashMap<String, ToolEntry>,
 }

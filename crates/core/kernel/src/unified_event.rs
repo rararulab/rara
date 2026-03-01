@@ -161,8 +161,9 @@ pub enum Syscall {
         reply_tx: oneshot::Sender<crate::error::Result<AgentManifest>>,
     },
 
-    /// Get the tool registry.
+    /// Get the tool registry, enriched with per-process tools (e.g. SpawnTool).
     GetToolRegistry {
+        agent_id: AgentId,
         reply_tx: oneshot::Sender<Arc<ToolRegistry>>,
     },
 
@@ -224,12 +225,13 @@ impl Syscall {
             | Self::PublishEvent { agent_id, .. }
             | Self::RequestApproval { agent_id, .. }
             | Self::GetManifest { agent_id, .. }
-            | Self::ResolveProvider { agent_id, .. } => *agent_id,
+            | Self::ResolveProvider { agent_id, .. }
+            | Self::GetToolRegistry { agent_id, .. } => *agent_id,
             Self::CreatePipe { owner, .. }
             | Self::CreateNamedPipe { owner, .. } => *owner,
             Self::ConnectPipe { connector, .. } => *connector,
             // Agent-less syscalls — route to a fixed nil shard.
-            Self::RequiresApproval { .. } | Self::GetToolRegistry { .. } => {
+            Self::RequiresApproval { .. } => {
                 AgentId(uuid::Uuid::nil())
             }
         }
@@ -295,7 +297,9 @@ impl std::fmt::Debug for Syscall {
             Self::GetManifest { agent_id, .. } => {
                 write!(f, "Syscall::GetManifest(agent={})", agent_id)
             }
-            Self::GetToolRegistry { .. } => write!(f, "Syscall::GetToolRegistry"),
+            Self::GetToolRegistry { agent_id, .. } => {
+                write!(f, "Syscall::GetToolRegistry(agent={})", agent_id)
+            }
             Self::ResolveProvider { agent_id, .. } => {
                 write!(f, "Syscall::ResolveProvider(agent={})", agent_id)
             }
@@ -840,10 +844,11 @@ mod tests {
     }
 
     #[test]
-    fn syscall_agent_id_for_get_tool_registry_is_nil() {
+    fn syscall_agent_id_for_get_tool_registry() {
+        let agent_id = AgentId::new();
         let (tx, _rx) = oneshot::channel();
-        let syscall = Syscall::GetToolRegistry { reply_tx: tx };
-        assert_eq!(syscall.agent_id(), AgentId(uuid::Uuid::nil()));
+        let syscall = Syscall::GetToolRegistry { agent_id, reply_tx: tx };
+        assert_eq!(syscall.agent_id(), agent_id);
     }
 
     #[test]

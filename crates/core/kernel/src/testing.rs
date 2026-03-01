@@ -138,7 +138,7 @@ impl TestKernelBuilder {
             memory:                 Arc::new(NoopMemory),
             event_bus:              Arc::new(NoopEventBus),
             guard:                  Arc::new(NoopGuard),
-            agent_registry:         self.agent_registry,
+            agent_registry:         Arc::new(self.agent_registry),
             shared_kv:              DashMap::new(),
             memory_quota_per_agent: self.config.memory_quota_per_agent,
             user_store:             Arc::new(NoopUserStore),

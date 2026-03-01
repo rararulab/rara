@@ -391,10 +391,11 @@ impl ProcessHandle {
         })?
     }
 
-    /// Get the tool registry.
+    /// Get the tool registry, enriched with per-process tools (e.g. SpawnTool).
     pub async fn tool_registry(&self) -> Result<Arc<ToolRegistry>> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.syscall_push(KernelEvent::Syscall(Syscall::GetToolRegistry {
+            agent_id: self.agent_id,
             reply_tx,
         }))
         .await?;

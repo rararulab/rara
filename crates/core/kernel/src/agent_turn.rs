@@ -22,6 +22,7 @@
 //! cancellation via `tokio::select!` on a [`CancellationToken`].
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
 
 use async_openai::types::chat::{
@@ -110,10 +111,15 @@ pub(crate) async fn run_inline_agent_loop(
         .manifest()
         .await
         .map_err(|e| format!("failed to get manifest: {e}"))?;
-    let tools = handle
+    let full_tools = handle
         .tool_registry()
         .await
         .map_err(|e| format!("failed to get tool registry: {e}"))?;
+
+    // Filter tools by manifest.tools whitelist. If the list is empty (e.g.
+    // rara), all tools are included. If specific tools are listed (e.g.
+    // scout: ["read_file", "grep"]), only those are available.
+    let tools = Arc::new(full_tools.filtered(&manifest.tools));
 
     let max_iterations = manifest.max_iterations.unwrap_or(25);
     // Build effective system prompt (prepend soul_prompt if present)

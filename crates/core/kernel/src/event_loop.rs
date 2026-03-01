@@ -277,7 +277,7 @@ impl Kernel {
                 self.handle_deliver(envelope).await;
             }
             KernelEvent::Syscall(syscall) => {
-                self.handle_syscall(syscall).await;
+                self.handle_syscall(syscall, runtimes).await;
             }
             KernelEvent::Timer { name, payload } => {
                 info!(name = %name, "timer event received (not yet implemented)");
@@ -296,7 +296,7 @@ impl Kernel {
     /// Handle a syscall from a ProcessHandle.
     ///
     /// All business logic lives here, executed by the kernel event loop.
-    async fn handle_syscall(&self, syscall: Syscall) {
+    async fn handle_syscall(&self, syscall: Syscall, runtimes: &RuntimeTable) {
         let syscall_type = syscall.variant_name();
         let syscall_agent_id = syscall.agent_id();
         let span = debug_span!(
@@ -490,8 +490,16 @@ impl Kernel {
                 let _ = reply_tx.send(result);
             }
 
-            Syscall::GetToolRegistry { reply_tx } => {
-                let _ = reply_tx.send(Arc::clone(&inner.tool_registry));
+            Syscall::GetToolRegistry { agent_id, reply_tx } => {
+                let mut registry = inner.tool_registry.as_ref().clone();
+                if let Some(rt) = runtimes.get(&agent_id) {
+                    let spawn_tool = crate::handle::spawn_tool::SpawnTool::new(
+                        Arc::clone(&rt.handle),
+                        Arc::clone(&inner.agent_registry),
+                    );
+                    registry.register_builtin(Arc::new(spawn_tool));
+                }
+                let _ = reply_tx.send(Arc::new(registry));
             }
 
             Syscall::ResolveProvider { agent_id, reply_tx } => {

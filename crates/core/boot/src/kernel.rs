@@ -57,7 +57,7 @@ pub struct BootConfig {
     /// Global tool registry.
     pub tool_registry: Arc<ToolRegistry>,
     /// Agent registry.
-    pub agent_registry: AgentRegistry,
+    pub agent_registry: Arc<AgentRegistry>,
     /// User store for permission checks.
     pub user_store: Arc<dyn UserStore>,
     /// Session repository for conversation history.
@@ -103,10 +103,10 @@ impl Default for BootConfig {
                 ProviderRegistryBuilder::new("openrouter", "openai/gpt-4o-mini").build(),
             ),
             tool_registry:     Arc::new(ToolRegistry::new()),
-            agent_registry:    AgentRegistry::new(
+            agent_registry:    Arc::new(AgentRegistry::new(
                 vec![],
                 rara_paths::data_dir().join("agents"),
-            ),
+            )),
             user_store:        Arc::new(NoopUserStore) as Arc<dyn UserStore>,
             session_repo:      Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
             settings:          Arc::new(NoopSettingsProvider)
