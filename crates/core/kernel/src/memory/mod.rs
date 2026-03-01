@@ -37,6 +37,7 @@
 //! [`MemoryContext`] carries the caller's identity (`user_id`, `agent_id`,
 //! `session_id`) and is passed to every trait method.
 
+pub mod compaction;
 pub mod error;
 pub mod knowledge;
 pub mod learning;

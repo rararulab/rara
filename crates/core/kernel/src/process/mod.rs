@@ -110,10 +110,19 @@ pub struct AgentManifest {
     pub tools:          Vec<String>,
     /// Maximum number of concurrent child agents this agent can spawn.
     #[serde(default)]
-    pub max_children:   Option<usize>,
+    pub max_children:        Option<usize>,
+    /// Maximum context window size in tokens.
+    ///
+    /// When the in-memory conversation history exceeds this budget, the
+    /// kernel applies a [`CompactionStrategy`](crate::memory::compaction::CompactionStrategy)
+    /// to trim it before sending to the LLM. Defaults to
+    /// [`DEFAULT_MAX_CONTEXT_TOKENS`](crate::memory::compaction::DEFAULT_MAX_CONTEXT_TOKENS)
+    /// (8192) when `None`.
+    #[serde(default)]
+    pub max_context_tokens:  Option<usize>,
     /// Arbitrary metadata for extension.
     #[serde(default)]
-    pub metadata:       serde_json::Value,
+    pub metadata:            serde_json::Value,
 }
 
 /// Runtime state of an agent process.
@@ -441,8 +450,9 @@ mod tests {
             provider_hint:  None,
             max_iterations: Some(10),
             tools:          vec!["read_file".to_string()],
-            max_children:   None,
-            metadata:       serde_json::Value::Null,
+            max_children:        None,
+            max_context_tokens:  None,
+            metadata:            serde_json::Value::Null,
         }
     }
 

@@ -67,8 +67,9 @@ fn test_manifest(name: &str, system_prompt: &str) -> AgentManifest {
         provider_hint:  None,
         max_iterations: Some(5),
         tools:          vec![],
-        max_children:   None,
-        metadata:       serde_json::Value::Null,
+        max_children:        None,
+        max_context_tokens:  None,
+        metadata:            serde_json::Value::Null,
     }
 }
 

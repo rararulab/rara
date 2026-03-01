@@ -781,8 +781,9 @@ mod tests {
             provider_hint:  None,
             max_iterations: Some(10),
             tools:          vec!["read_file".to_string()],
-            max_children:   None,
-            metadata:       serde_json::Value::Null,
+            max_children:        None,
+            max_context_tokens:  None,
+            metadata:            serde_json::Value::Null,
         }
     }
 }

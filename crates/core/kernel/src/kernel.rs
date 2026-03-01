@@ -280,6 +280,13 @@ impl KernelInner {
             let mut conversation = initial_messages;
             let mut last_result: Option<AgentResult> = None;
 
+            // Context compaction: resolve token budget and strategy.
+            let max_context_tokens = handle
+                .manifest()
+                .max_context_tokens
+                .unwrap_or(crate::memory::compaction::DEFAULT_MAX_CONTEXT_TOKENS);
+            let compaction_strategy = crate::memory::compaction::SlidingWindowCompaction;
+
             loop {
                 tokio::select! {
                     _ = token.cancelled() => {
@@ -294,6 +301,17 @@ impl KernelInner {
                                     agent_id,
                                     ProcessState::Running,
                                 );
+
+                                // Apply context compaction before building
+                                // LLM history. This trims the in-memory
+                                // conversation to fit within the token budget,
+                                // preventing context-window overflow.
+                                conversation = crate::memory::compaction::maybe_compact(
+                                    conversation,
+                                    max_context_tokens,
+                                    &compaction_strategy,
+                                )
+                                .await;
 
                                 // Convert in-memory history to LLM format.
                                 let history =
@@ -899,8 +917,9 @@ mod tests {
             provider_hint:  None,
             max_iterations: Some(5),
             tools:          vec![],
-            max_children:   None,
-            metadata:       serde_json::Value::Null,
+            max_children:        None,
+            max_context_tokens:  None,
+            metadata:            serde_json::Value::Null,
         }
     }
 
