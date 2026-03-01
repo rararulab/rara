@@ -72,9 +72,18 @@ pub enum StreamEvent {
     /// Incremental reasoning/thinking text.
     ReasoningDelta(String),
     /// A tool call has started executing.
-    ToolCallStart { name: String, id: String },
+    ToolCallStart {
+        name:      String,
+        id:        String,
+        arguments: serde_json::Value,
+    },
     /// A tool call has finished.
-    ToolCallEnd { id: String },
+    ToolCallEnd {
+        id:             String,
+        result_preview: String,
+        success:        bool,
+        error:          Option<String>,
+    },
     /// Progress stage update.
     Progress { stage: String },
     /// Turn metrics summary (emitted before stream close).
@@ -253,11 +262,15 @@ mod tests {
         // Emit without any subscriber — should not panic.
         handle.emit(StreamEvent::TextDelta("ignored".to_string()));
         handle.emit(StreamEvent::ToolCallStart {
-            name: "read_file".to_string(),
-            id:   "tc-1".to_string(),
+            name:      "read_file".to_string(),
+            id:        "tc-1".to_string(),
+            arguments: serde_json::json!({"path": "/tmp/test"}),
         });
         handle.emit(StreamEvent::ToolCallEnd {
-            id: "tc-1".to_string(),
+            id:             "tc-1".to_string(),
+            result_preview: "ok".to_string(),
+            success:        true,
+            error:          None,
         });
     }
 }

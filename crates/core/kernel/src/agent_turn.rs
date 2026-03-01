@@ -41,6 +41,18 @@ use crate::{
     runner::{PendingToolCall, UserContent, build_tool_response_message, build_user_message},
 };
 
+/// Maximum byte length for result preview strings.
+const RESULT_PREVIEW_MAX_BYTES: usize = 2048;
+
+/// Truncate a string to at most `max_bytes` bytes on a valid char boundary.
+fn truncate_preview(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+    let boundary = s.floor_char_boundary(max_bytes);
+    format!("{}... (truncated)", &s[..boundary])
+}
+
 /// Trace of a single tool call within an iteration.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ToolCallTrace {
@@ -48,6 +60,9 @@ pub struct ToolCallTrace {
     pub id: String,
     pub duration_ms: u64,
     pub success: bool,
+    pub arguments: serde_json::Value,
+    pub result_preview: String,
+    pub error: Option<String>,
 }
 
 /// Trace of a single LLM iteration within a turn.
@@ -420,8 +435,9 @@ pub(crate) async fn run_inline_agent_loop(
                 };
 
             stream_handle.emit(StreamEvent::ToolCallStart {
-                name: tool_call.name.clone(),
-                id:   tool_call.id.clone(),
+                name:      tool_call.name.clone(),
+                id:        tool_call.id.clone(),
+                arguments: args.clone(),
             });
             valid_tool_calls.push((tool_call.id, tool_call.name, args));
         }
@@ -477,20 +493,31 @@ pub(crate) async fn run_inline_agent_loop(
         let mut tool_call_traces: Vec<ToolCallTrace> = Vec::with_capacity(results.len());
 
         // Emit ToolCallEnd events and append tool response messages
-        for ((id, name, _args), (success, result, _err, duration_ms)) in
+        for ((id, name, args), (success, result, err, duration_ms)) in
             valid_tool_calls.iter().zip(results)
         {
-            stream_handle.emit(StreamEvent::ToolCallEnd { id: id.clone() });
+            let result_str = result.to_string();
+            let result_preview = truncate_preview(&result_str, RESULT_PREVIEW_MAX_BYTES);
+
+            stream_handle.emit(StreamEvent::ToolCallEnd {
+                id:             id.clone(),
+                result_preview: result_preview.clone(),
+                success,
+                error:          err.clone(),
+            });
 
             tool_call_traces.push(ToolCallTrace {
                 name: name.clone(),
                 id: id.clone(),
                 duration_ms,
                 success,
+                arguments: args.clone(),
+                result_preview,
+                error: err,
             });
 
             messages.push(
-                build_tool_response_message(id, &result.to_string())
+                build_tool_response_message(id, &result_str)
                     .map_err(|e| format!("failed to build tool response: {e}"))?,
             );
         }

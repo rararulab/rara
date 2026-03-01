@@ -98,9 +98,18 @@ pub enum WebEvent {
     /// Incremental reasoning/thinking text.
     ReasoningDelta { text: String },
     /// A tool call has started.
-    ToolCallStart { name: String, id: String },
+    ToolCallStart {
+        name:      String,
+        id:        String,
+        arguments: serde_json::Value,
+    },
     /// A tool call has finished.
-    ToolCallEnd { id: String },
+    ToolCallEnd {
+        id:             String,
+        result_preview: String,
+        success:        bool,
+        error:          Option<String>,
+    },
     /// Progress stage update.
     Progress { stage: String },
     /// Turn metrics summary (sent before Done).
@@ -581,10 +590,12 @@ fn spawn_stream_forwarder(
                     let web_event = match event {
                         StreamEvent::TextDelta(t) => WebEvent::TextDelta { text: t },
                         StreamEvent::ReasoningDelta(t) => WebEvent::ReasoningDelta { text: t },
-                        StreamEvent::ToolCallStart { name, id } => {
-                            WebEvent::ToolCallStart { name, id }
+                        StreamEvent::ToolCallStart { name, id, arguments } => {
+                            WebEvent::ToolCallStart { name, id, arguments }
                         }
-                        StreamEvent::ToolCallEnd { id } => WebEvent::ToolCallEnd { id },
+                        StreamEvent::ToolCallEnd { id, result_preview, success, error } => {
+                            WebEvent::ToolCallEnd { id, result_preview, success, error }
+                        }
                         StreamEvent::Progress { stage } => WebEvent::Progress { stage },
                         StreamEvent::TurnMetrics { duration_ms, iterations, tool_calls, model } => {
                             WebEvent::TurnMetrics { duration_ms, iterations, tool_calls, model }

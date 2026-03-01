@@ -455,10 +455,16 @@ async fn test_stream_hub_full_lifecycle() {
     handle.emit(StreamEvent::TextDelta("Hello ".to_string()));
     handle.emit(StreamEvent::TextDelta("world!".to_string()));
     handle.emit(StreamEvent::ToolCallStart {
-        name: "echo_tool".to_string(),
-        id:   "tc-1".to_string(),
+        name:      "echo_tool".to_string(),
+        id:        "tc-1".to_string(),
+        arguments: serde_json::json!({"text": "hello"}),
     });
-    handle.emit(StreamEvent::ToolCallEnd { id: "tc-1".to_string() });
+    handle.emit(StreamEvent::ToolCallEnd {
+        id:             "tc-1".to_string(),
+        result_preview: "{\"text\":\"hello\"}".to_string(),
+        success:        true,
+        error:          None,
+    });
 
     // Receive and verify events.
     let e1 = rx.recv().await.unwrap();
@@ -474,7 +480,7 @@ async fn test_stream_hub_full_lifecycle() {
     assert!(matches!(e4, StreamEvent::ToolCallStart { ref name, .. } if name == "echo_tool"));
 
     let e5 = rx.recv().await.unwrap();
-    assert!(matches!(e5, StreamEvent::ToolCallEnd { ref id } if id == "tc-1"));
+    assert!(matches!(e5, StreamEvent::ToolCallEnd { ref id, success, .. } if id == "tc-1" && success));
 
     // Close the stream.
     hub.close(&stream_id);
