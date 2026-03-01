@@ -1245,7 +1245,12 @@ function ChatThread({
       };
 
       ws.onclose = () => {
-        wsRef.current = null;
+        // Only clear the ref if it still points to THIS WebSocket instance.
+        // Prevents a stale onclose (from StrictMode's first mount) from
+        // nullifying the ref set by the second mount's connect().
+        if (wsRef.current === ws) {
+          wsRef.current = null;
+        }
         if (cleanedUp) return;
         // Auto-reconnect after delay
         setTimeout(() => connect(), 2000);

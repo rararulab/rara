@@ -527,12 +527,12 @@ async fn polling_loop(
                     warn!("telegram adapter: another bot instance detected — exiting");
                     break;
                 }
-                error!(error = %api_err, "telegram adapter: API error in getUpdates");
+                error!(error = ?api_err, "telegram adapter: API error in getUpdates");
                 tokio::time::sleep(retry_delay).await;
                 retry_delay = (retry_delay * 2).min(MAX_RETRY_DELAY);
             }
             Err(e) => {
-                error!(error = %e, "telegram adapter: getUpdates request failed");
+                error!(error = ?e, "telegram adapter: getUpdates request failed");
                 tokio::time::sleep(retry_delay).await;
                 retry_delay = (retry_delay * 2).min(MAX_RETRY_DELAY);
             }

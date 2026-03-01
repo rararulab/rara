@@ -530,7 +530,7 @@ mod tests {
             name:               "test-agent".to_string(),
             role:               None,
             description:        "test".to_string(),
-            model:              "gpt-4o-mini".to_string(),
+            model:              Some("gpt-4o-mini".to_string()),
             system_prompt:      "hello".to_string(),
             soul_prompt:        None,
             provider_hint:      None,
