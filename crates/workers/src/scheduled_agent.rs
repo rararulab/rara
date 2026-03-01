@@ -75,6 +75,7 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
                 max_iterations: Some(max_iterations),
                 tools:          vec![], // inherit all tools
                 max_children:   None,
+                priority:       Default::default(),
                 metadata:       serde_json::json!({ "job_id": job.id }),
             };
 

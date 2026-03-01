@@ -782,6 +782,7 @@ mod tests {
             max_iterations: Some(10),
             tools:          vec!["read_file".to_string()],
             max_children:   None,
+            priority:       crate::process::Priority::default(),
             metadata:       serde_json::Value::Null,
         }
     }

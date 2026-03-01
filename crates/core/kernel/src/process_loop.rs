@@ -168,6 +168,7 @@ mod tests {
             max_iterations: Some(5),
             tools:          vec![],
             max_children:   None,
+            priority:       crate::process::Priority::default(),
             metadata:       serde_json::Value::Null,
         }
     }

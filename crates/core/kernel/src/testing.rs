@@ -69,6 +69,7 @@ impl TestKernelBuilder {
                 max_concurrency:        16,
                 default_child_limit:    8,
                 default_max_iterations: 25,
+                ..Default::default()
             },
             llm_provider:    None,
             tool_registry:   ToolRegistry::new(),
