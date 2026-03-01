@@ -46,7 +46,7 @@ impl KernelClient {
     }
 
     pub async fn agents(&self) -> Result<Vec<AgentInfo>, ClientError> {
-        let url = format!("{}/api/v1/kernel/agents", self.base_url);
+        let url = format!("{}/api/v1/agents", self.base_url);
         self.get_json(&url).await
     }
 
