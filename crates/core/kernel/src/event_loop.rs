@@ -681,6 +681,28 @@ impl Kernel {
         let session_id = msg.session_id.clone();
         let user = msg.user.clone();
 
+        // Register egress endpoint for non-connection-oriented channels (e.g.
+        // Telegram) so that the Egress layer can route replies back.  Web
+        // endpoints are registered by WebAdapter on WS/SSE connect; Telegram
+        // has no persistent connection, so we register on every inbound
+        // message (idempotent — EndpointRegistry uses a HashSet).
+        if msg.source.channel_type == crate::channel::types::ChannelType::Telegram {
+            if let Some(ref chat_id_str) = msg.source.platform_chat_id {
+                if let Ok(chat_id) = chat_id_str.parse::<i64>() {
+                    self.endpoint_registry().register(
+                        &user,
+                        crate::io::egress::Endpoint {
+                            channel_type: crate::channel::types::ChannelType::Telegram,
+                            address:      crate::io::egress::EndpointAddress::Telegram {
+                                chat_id,
+                                thread_id: None,
+                            },
+                        },
+                    );
+                }
+            }
+        }
+
         // ----- Path 1: ID addressing (agent-to-agent) -----
         if let Some(target_id) = msg.target_agent_id {
             span.record("routing_path", "id_addressing");

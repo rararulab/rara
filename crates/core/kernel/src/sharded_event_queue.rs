@@ -347,6 +347,7 @@ mod tests {
                 text:       "done".to_string(),
                 iterations: 1,
                 tool_calls: 0,
+                model:      "test".to_string(),
             }),
             in_reply_to: MessageId::new(),
             user:        UserId("u1".to_string()),
