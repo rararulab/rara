@@ -330,13 +330,13 @@ impl Kernel {
     /// Spawn a new agent process via the unified event queue.
     ///
     /// Pushes a `KernelEvent::SpawnAgent` into the event queue and waits
-    /// for the reply. The event loop handles process creation.
+    /// for the reply. The kernel generates a fresh isolated session for
+    /// the new process.
     pub async fn spawn_with_input(
         &self,
         manifest: AgentManifest,
         input: String,
         principal: Principal,
-        session_id: SessionId,
         parent_id: Option<AgentId>,
     ) -> Result<AgentId> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
@@ -344,7 +344,6 @@ impl Kernel {
             manifest,
             input,
             principal,
-            session_id,
             parent_id,
             reply_tx,
         };
@@ -366,7 +365,6 @@ impl Kernel {
         agent_name: &str,
         input: String,
         principal: Principal,
-        session_id: SessionId,
         parent_id: Option<AgentId>,
     ) -> Result<AgentId> {
         let manifest = self
@@ -378,7 +376,7 @@ impl Kernel {
             })?
             .clone();
 
-        self.spawn_with_input(manifest, input, principal, session_id, parent_id)
+        self.spawn_with_input(manifest, input, principal, parent_id)
             .await
     }
 
@@ -642,10 +640,9 @@ mod tests {
         let (kernel, cancel) = start_test_kernel(10, 5);
         let manifest = test_manifest("test-agent");
         let principal = Principal::user("test-user");
-        let session_id = SessionId::new("test-session");
 
         let result = kernel
-            .spawn_with_input(manifest, "hello".to_string(), principal, session_id, None)
+            .spawn_with_input(manifest, "hello".to_string(), principal, None)
             .await;
 
         assert!(result.is_ok());
@@ -655,6 +652,8 @@ mod tests {
         assert!(process.is_some());
         let process = process.unwrap();
         assert_eq!(process.manifest.name, "test-agent");
+        // Each process gets its own agent-scoped session.
+        assert!(process.session_id.as_str().starts_with("agent:"));
 
         cancel.cancel();
     }
@@ -663,14 +662,12 @@ mod tests {
     async fn test_kernel_spawn_global_limit() {
         let (kernel, cancel) = start_test_kernel(2, 5);
         let principal = Principal::user("test-user");
-        let session_id = SessionId::new("test-session");
 
         let h1 = kernel
             .spawn_with_input(
                 test_manifest("a1"),
                 "task 1".to_string(),
                 principal.clone(),
-                session_id.clone(),
                 None,
             )
             .await;
@@ -681,7 +678,6 @@ mod tests {
                 test_manifest("a2"),
                 "task 2".to_string(),
                 principal.clone(),
-                session_id.clone(),
                 None,
             )
             .await;
@@ -693,7 +689,6 @@ mod tests {
                 test_manifest("a3"),
                 "task 3".to_string(),
                 principal,
-                session_id,
                 None,
             )
             .await;
@@ -712,14 +707,12 @@ mod tests {
     async fn test_kernel_spawn_named_success() {
         let (kernel, cancel) = start_test_kernel(10, 5);
         let principal = Principal::user("test-user");
-        let session_id = SessionId::new("test-session");
 
         let result = kernel
             .spawn_named(
                 "scout",
                 "find something".to_string(),
                 principal,
-                session_id,
                 None,
             )
             .await;
@@ -732,14 +725,12 @@ mod tests {
     async fn test_kernel_spawn_named_not_found() {
         let (kernel, cancel) = start_test_kernel(10, 5);
         let principal = Principal::user("test-user");
-        let session_id = SessionId::new("test-session");
 
         let result = kernel
             .spawn_named(
                 "nonexistent",
                 "task".to_string(),
                 principal,
-                session_id,
                 None,
             )
             .await;
@@ -758,14 +749,12 @@ mod tests {
     async fn test_kernel_spawn_with_parent() {
         let (kernel, cancel) = start_test_kernel(10, 5);
         let principal = Principal::user("test-user");
-        let session_id = SessionId::new("test-session");
 
         let parent_id = kernel
             .spawn_with_input(
                 test_manifest("parent"),
                 "parent task".to_string(),
                 principal.clone(),
-                session_id.clone(),
                 None,
             )
             .await
@@ -776,7 +765,6 @@ mod tests {
                 test_manifest("child"),
                 "child task".to_string(),
                 principal,
-                session_id,
                 Some(parent_id),
             )
             .await
@@ -800,14 +788,12 @@ mod tests {
     async fn test_kernel_process_stats_after_spawn() {
         let (kernel, cancel) = start_test_kernel(10, 5);
         let principal = Principal::user("test-user");
-        let session_id = SessionId::new("stats-session");
 
         let agent_id = kernel
             .spawn_with_input(
                 test_manifest("stats-agent"),
                 "hello".to_string(),
                 principal,
-                session_id,
                 None,
             )
             .await
@@ -834,7 +820,6 @@ mod tests {
                 test_manifest("agent-1"),
                 "task 1".to_string(),
                 principal.clone(),
-                SessionId::new("s1"),
                 None,
             )
             .await
@@ -845,7 +830,6 @@ mod tests {
                 test_manifest("agent-2"),
                 "task 2".to_string(),
                 principal,
-                SessionId::new("s2"),
                 None,
             )
             .await
@@ -883,7 +867,6 @@ mod tests {
                 test_manifest("sys-agent"),
                 "work".to_string(),
                 principal,
-                SessionId::new("sys-session"),
                 None,
             )
             .await
@@ -906,14 +889,12 @@ mod tests {
     async fn test_signal_via_event_queue() {
         let (kernel, cancel) = start_test_kernel(10, 5);
         let principal = Principal::user("test-user");
-        let session_id = SessionId::new("signal-session");
 
         let agent_id = kernel
             .spawn_with_input(
                 test_manifest("signalable"),
                 "initial message".to_string(),
                 principal,
-                session_id,
                 None,
             )
             .await

@@ -315,13 +315,20 @@ pub enum Signal {
 #[derive(Debug, Clone)]
 pub struct AgentProcess {
     /// Unique identifier for this process.
-    pub agent_id:      AgentId,
+    pub agent_id:           AgentId,
     /// Parent process (None for root-level agents).
-    pub parent_id:     Option<AgentId>,
-    /// Session this process belongs to.
-    pub session_id:    SessionId,
+    pub parent_id:          Option<AgentId>,
+    /// The process's own session (always `agent:{agent_id}`), used for
+    /// conversation storage. Each process gets an isolated session so
+    /// subagents never load or pollute the parent's history.
+    pub session_id:         SessionId,
+    /// External channel binding (e.g., `web:chat123`). Only set for root
+    /// processes that entered via an external channel adapter. Used by
+    /// `session_index` for routing inbound messages to the correct process.
+    /// Subagents have `None` — they are only reachable via `AgentHandle`.
+    pub channel_session_id: Option<SessionId>,
     /// The agent definition driving this process.
-    pub manifest:      AgentManifest,
+    pub manifest:           AgentManifest,
     /// The identity under which this process runs.
     pub principal:     principal::Principal,
     /// Per-process environment.
@@ -566,18 +573,23 @@ impl ProcessTable {
 
     /// Insert a process into the table.
     ///
-    /// Automatically updates the session index so `find_by_session` can
-    /// locate this process, updates the name index so `find_by_name` can
-    /// locate it by manifest name, creates a [`RuntimeMetrics`] entry, and
-    /// increments the total spawned counter.
+    /// If the process has a `channel_session_id`, the session index is updated
+    /// so `find_by_session` can route inbound channel messages to it.
+    /// Subagents (`channel_session_id = None`) are **not** inserted into
+    /// `session_index` — they are only reachable via `AgentHandle`.
+    ///
+    /// Updates the name index so `find_by_name` can locate it by manifest
+    /// name, creates a [`RuntimeMetrics`] entry, and increments the total
+    /// spawned counter.
     ///
     /// If a process with the same manifest name already exists in the name
     /// index, it is overwritten (the old entry may be stale from a process
     /// that ended but was not cleaned up).
     pub fn insert(&self, process: AgentProcess) {
         let agent_id = process.agent_id;
-        self.session_index
-            .insert(process.session_id.clone(), agent_id);
+        if let Some(ref channel_sid) = process.channel_session_id {
+            self.session_index.insert(channel_sid.clone(), agent_id);
+        }
         self.name_index
             .insert(process.manifest.name.clone(), agent_id);
         self.metrics
@@ -638,13 +650,15 @@ impl ProcessTable {
 
     /// Remove a process from the table, returning it if it existed.
     ///
-    /// Also cleans up the session index, name index, cancellation token, and
-    /// metrics entries.
+    /// Also cleans up the session index (if the process had a channel
+    /// binding), name index, and metrics entries.
     pub fn remove(&self, id: AgentId) -> Option<AgentProcess> {
         let removed = self.processes.remove(&id).map(|(_, p)| p);
         if let Some(ref process) = removed {
-            self.session_index
-                .remove_if(&process.session_id, |_, agent_id| *agent_id == id);
+            if let Some(ref channel_sid) = process.channel_session_id {
+                self.session_index
+                    .remove_if(channel_sid, |_, agent_id| *agent_id == id);
+            }
             self.name_index
                 .remove_if(&process.manifest.name, |_, agent_id| *agent_id == id);
             self.metrics.remove(&id);
@@ -814,29 +828,50 @@ mod tests {
         }
     }
 
-    /// Helper to create a test process.
+    /// Helper to create a test process (with a default channel session).
     fn test_process(name: &str, parent_id: Option<AgentId>) -> AgentProcess {
         test_process_with_session(name, parent_id, "test-session")
     }
 
-    /// Helper to create a test process with a specific session ID.
+    /// Helper to create a test process simulating a subagent (no channel session).
+    fn test_subagent(name: &str, parent_id: AgentId) -> AgentProcess {
+        let agent_id = AgentId::new();
+        AgentProcess {
+            agent_id,
+            parent_id:          Some(parent_id),
+            session_id:         SessionId::new(format!("agent:{}", agent_id)),
+            channel_session_id: None,
+            manifest:           test_manifest(name),
+            principal:          Principal::user("test-user"),
+            env:                AgentEnv::default(),
+            state:              ProcessState::Running,
+            created_at:         Timestamp::now(),
+            finished_at:        None,
+            result:             None,
+            created_files:      vec![],
+        }
+    }
+
+    /// Helper to create a test process with a specific channel session ID.
     fn test_process_with_session(
         name: &str,
         parent_id: Option<AgentId>,
-        session: &str,
+        channel_session: &str,
     ) -> AgentProcess {
+        let agent_id = AgentId::new();
         AgentProcess {
-            agent_id:      AgentId::new(),
+            agent_id,
             parent_id,
-            session_id:    SessionId::new(session),
-            manifest:      test_manifest(name),
-            principal:     Principal::user("test-user"),
-            env:           AgentEnv::default(),
-            state:         ProcessState::Running,
-            created_at:    Timestamp::now(),
-            finished_at:   None,
-            result:        None,
-            created_files: vec![],
+            session_id:         SessionId::new(format!("agent:{}", agent_id)),
+            channel_session_id: Some(SessionId::new(channel_session)),
+            manifest:           test_manifest(name),
+            principal:          Principal::user("test-user"),
+            env:                AgentEnv::default(),
+            state:              ProcessState::Running,
+            created_at:         Timestamp::now(),
+            finished_at:        None,
+            result:             None,
+            created_files:      vec![],
         }
     }
 
@@ -1113,36 +1148,37 @@ system_prompt: "Hello"
     fn test_process_table_session_index() {
         let table = ProcessTable::new();
 
-        // Insert creates a session index entry
+        // Insert creates a session index entry (via channel_session_id)
         let p = test_process("agent-a", None);
         let agent_id = p.agent_id;
-        let session_id = p.session_id.clone();
+        let channel_sid = p.channel_session_id.clone().unwrap();
         table.insert(p);
 
         // find_by_session should return the process
-        let found = table.find_by_session(&session_id);
+        let found = table.find_by_session(&channel_sid);
         assert!(found.is_some());
         assert_eq!(found.unwrap().agent_id, agent_id);
 
         // bind_session overwrites
         let new_id = AgentId::new();
         let new_process = AgentProcess {
-            agent_id:      new_id,
-            parent_id:     None,
-            session_id:    session_id.clone(),
-            manifest:      test_manifest("agent-b"),
-            principal:     Principal::user("test-user"),
-            env:           AgentEnv::default(),
-            state:         ProcessState::Running,
-            created_at:    Timestamp::now(),
-            finished_at:   None,
-            result:        None,
-            created_files: vec![],
+            agent_id:           new_id,
+            parent_id:          None,
+            session_id:         SessionId::new(format!("agent:{}", new_id)),
+            channel_session_id: Some(channel_sid.clone()),
+            manifest:           test_manifest("agent-b"),
+            principal:          Principal::user("test-user"),
+            env:                AgentEnv::default(),
+            state:              ProcessState::Running,
+            created_at:         Timestamp::now(),
+            finished_at:        None,
+            result:             None,
+            created_files:      vec![],
         };
         table.insert(new_process);
-        table.bind_session(session_id.clone(), new_id);
+        table.bind_session(channel_sid.clone(), new_id);
 
-        let found = table.find_by_session(&session_id);
+        let found = table.find_by_session(&channel_sid);
         assert!(found.is_some());
         assert_eq!(found.unwrap().agent_id, new_id);
     }
@@ -1152,15 +1188,15 @@ system_prompt: "Hello"
         let table = ProcessTable::new();
         let p = test_process("removable", None);
         let agent_id = p.agent_id;
-        let session_id = p.session_id.clone();
+        let channel_sid = p.channel_session_id.clone().unwrap();
         table.insert(p);
 
-        // Session index should have an entry
-        assert!(table.find_by_session(&session_id).is_some());
+        // Session index should have an entry (via channel_session_id)
+        assert!(table.find_by_session(&channel_sid).is_some());
 
         // Remove should clear the session index
         table.remove(agent_id);
-        assert!(table.find_by_session(&session_id).is_none());
+        assert!(table.find_by_session(&channel_sid).is_none());
     }
 
     // -----------------------------------------------------------------------
@@ -1439,25 +1475,25 @@ system_prompt: "Hello"
     fn test_same_agent_multiple_sessions() {
         let table = ProcessTable::new();
 
-        // Spawn "rara" for session-1.
+        // Spawn "rara" for channel session-1.
         let p1 = test_process_with_session("rara", None, "session-1");
         let id1 = p1.agent_id;
-        let sid1 = p1.session_id.clone();
+        let csid1 = p1.channel_session_id.clone().unwrap();
         table.insert(p1);
 
-        // Spawn "rara" for session-2.
+        // Spawn "rara" for channel session-2.
         let p2 = test_process_with_session("rara", None, "session-2");
         let id2 = p2.agent_id;
-        let sid2 = p2.session_id.clone();
+        let csid2 = p2.channel_session_id.clone().unwrap();
         table.insert(p2);
 
         // Two different AgentProcess instances exist.
         assert_ne!(id1, id2);
         assert_eq!(table.list().len(), 2);
 
-        // Session index routes to the correct instance.
-        assert_eq!(table.find_by_session(&sid1).unwrap().agent_id, id1);
-        assert_eq!(table.find_by_session(&sid2).unwrap().agent_id, id2);
+        // Session index routes by channel_session_id to the correct instance.
+        assert_eq!(table.find_by_session(&csid1).unwrap().agent_id, id1);
+        assert_eq!(table.find_by_session(&csid2).unwrap().agent_id, id2);
 
         // Name index only points to the most recent insertion.
         assert_eq!(table.find_by_name("rara").unwrap().agent_id, id2);
@@ -1467,23 +1503,26 @@ system_prompt: "Hello"
         let p2_info = table.get(id2).unwrap();
         assert_eq!(p1_info.manifest.name, "rara");
         assert_eq!(p2_info.manifest.name, "rara");
-        assert_eq!(p1_info.session_id, sid1);
-        assert_eq!(p2_info.session_id, sid2);
+        // Each process has its own agent:{id} session.
+        assert_ne!(p1_info.session_id, p2_info.session_id);
+        // Each process has distinct channel sessions.
+        assert_eq!(p1_info.channel_session_id.as_ref().unwrap(), &csid1);
+        assert_eq!(p2_info.channel_session_id.as_ref().unwrap(), &csid2);
     }
 
     #[test]
     fn test_existing_session_routes_to_same_agent() {
         let table = ProcessTable::new();
 
-        // Insert an agent bound to session-1.
+        // Insert an agent bound to channel session-1.
         let p = test_process_with_session("rara", None, "session-1");
         let agent_id = p.agent_id;
-        let session_id = p.session_id.clone();
+        let channel_sid = p.channel_session_id.clone().unwrap();
         table.insert(p);
 
-        // Repeated lookups by session always return the same agent.
-        assert_eq!(table.find_by_session(&session_id).unwrap().agent_id, agent_id);
-        assert_eq!(table.find_by_session(&session_id).unwrap().agent_id, agent_id);
+        // Repeated lookups by channel session always return the same agent.
+        assert_eq!(table.find_by_session(&channel_sid).unwrap().agent_id, agent_id);
+        assert_eq!(table.find_by_session(&channel_sid).unwrap().agent_id, agent_id);
 
         // A different session returns None (no agent bound to it).
         let other_session = SessionId::new("session-2");
@@ -1494,15 +1533,15 @@ system_prompt: "Hello"
     fn test_multi_session_independent_lifecycle() {
         let table = ProcessTable::new();
 
-        // Spawn two instances of "rara" on different sessions.
+        // Spawn two instances of "rara" on different channel sessions.
         let p1 = test_process_with_session("rara", None, "session-a");
         let id1 = p1.agent_id;
-        let sid_a = p1.session_id.clone();
+        let csid_a = p1.channel_session_id.clone().unwrap();
         table.insert(p1);
 
         let p2 = test_process_with_session("rara", None, "session-b");
         let id2 = p2.agent_id;
-        let sid_b = p2.session_id.clone();
+        let csid_b = p2.channel_session_id.clone().unwrap();
         table.insert(p2);
 
         // Complete session-a's process. Session-b's process should be unaffected.
@@ -1512,8 +1551,8 @@ system_prompt: "Hello"
 
         // Remove session-a's process. Session-b still exists.
         table.remove(id1);
-        assert!(table.find_by_session(&sid_a).is_none());
-        assert_eq!(table.find_by_session(&sid_b).unwrap().agent_id, id2);
+        assert!(table.find_by_session(&csid_a).is_none());
+        assert_eq!(table.find_by_session(&csid_b).unwrap().agent_id, id2);
         assert_eq!(table.list().len(), 1);
     }
 
@@ -1538,5 +1577,72 @@ system_prompt: "Hello"
         // Remove the newer process (id2). Name index should be cleared.
         table.remove(id2);
         assert!(table.find_by_name("rara").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Session isolation tests — subagents get their own sessions
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_subagent_not_in_session_index() {
+        let table = ProcessTable::new();
+
+        // Root process has channel session.
+        let parent = test_process("rara", None);
+        let parent_id = parent.agent_id;
+        let channel_sid = parent.channel_session_id.clone().unwrap();
+        table.insert(parent);
+        assert!(table.find_by_session(&channel_sid).is_some());
+
+        // Subagent has no channel session — should NOT appear in session_index.
+        let child = test_subagent("scout", parent_id);
+        let child_id = child.agent_id;
+        let child_session = child.session_id.clone();
+        table.insert(child);
+
+        // The subagent's own session is NOT in session_index.
+        assert!(table.find_by_session(&child_session).is_none());
+        // The parent's channel session still routes to the parent.
+        assert_eq!(table.find_by_session(&channel_sid).unwrap().agent_id, parent_id);
+        // But the subagent is reachable via get().
+        assert!(table.get(child_id).is_some());
+        assert_eq!(table.get(child_id).unwrap().parent_id, Some(parent_id));
+    }
+
+    #[test]
+    fn test_subagent_removal_does_not_affect_session_index() {
+        let table = ProcessTable::new();
+
+        let parent = test_process("rara", None);
+        let parent_id = parent.agent_id;
+        let channel_sid = parent.channel_session_id.clone().unwrap();
+        table.insert(parent);
+
+        let child = test_subagent("scout", parent_id);
+        let child_id = child.agent_id;
+        table.insert(child);
+
+        // Remove subagent — parent's channel session binding must survive.
+        table.remove(child_id);
+        assert_eq!(table.find_by_session(&channel_sid).unwrap().agent_id, parent_id);
+    }
+
+    #[test]
+    fn test_each_process_has_unique_session() {
+        let table = ProcessTable::new();
+
+        let p1 = test_process("rara", None);
+        let p1_sid = p1.session_id.clone();
+        let p1_id = p1.agent_id;
+        table.insert(p1);
+
+        let p2 = test_subagent("scout", p1_id);
+        let p2_sid = p2.session_id.clone();
+        table.insert(p2);
+
+        // Each process has a unique agent-scoped session.
+        assert_ne!(p1_sid, p2_sid);
+        assert!(p1_sid.as_str().starts_with("agent:"));
+        assert!(p2_sid.as_str().starts_with("agent:"));
     }
 }

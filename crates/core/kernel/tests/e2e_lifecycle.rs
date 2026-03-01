@@ -34,7 +34,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 use rara_kernel::{
-    process::{AgentId, AgentManifest, AgentResult, ProcessState, SessionId, principal::Principal},
+    process::{AgentId, AgentManifest, AgentResult, ProcessState, principal::Principal},
     provider::{LlmProviderLoaderRef, OllamaProviderLoader},
     testing::TestKernelBuilder,
     tool::AgentTool,
@@ -164,14 +164,12 @@ async fn test_spawn_plain_text_receives_result() {
     let (kernel, cancel) = build_kernel(vec![]);
     let manifest = test_manifest("plain-agent", "You are a concise assistant. Reply in one sentence.");
     let principal = Principal::user("test-user");
-    let session_id = SessionId::new("e2e-plain-text");
 
     let agent_id = kernel
         .spawn_with_input(
             manifest,
             "What is 2 + 2? Reply with just the number.".to_string(),
             principal,
-            session_id,
             None,
         )
         .await
@@ -203,14 +201,12 @@ async fn test_spawn_with_tool_makes_tool_call() {
          ALWAYS call echo_tool with the text, then summarize the result.",
     );
     let principal = Principal::user("test-user");
-    let session_id = SessionId::new("e2e-tool-call");
 
     let agent_id = kernel
         .spawn_with_input(
             manifest,
             "Please call echo_tool with {\"text\":\"integration-test\"} and tell me the result.".to_string(),
             principal,
-            session_id,
             None,
         )
         .await
@@ -241,14 +237,12 @@ async fn test_process_state_transitions() {
     let (kernel, cancel) = build_kernel(vec![]);
     let manifest = test_manifest("state-agent", "Reply in one sentence.");
     let principal = Principal::user("test-user");
-    let session_id = SessionId::new("e2e-state");
 
     let agent_id = kernel
         .spawn_with_input(
             manifest,
             "Say hello.".to_string(),
             principal,
-            session_id,
             None,
         )
         .await
@@ -282,14 +276,12 @@ async fn test_egress_delivers_reply() {
     let (kernel, cancel) = build_kernel(vec![]);
     let manifest = test_manifest("outbound-agent", "Reply in one sentence.");
     let principal = Principal::user("test-user");
-    let session_id = SessionId::new("e2e-outbound");
 
     let agent_id = kernel
         .spawn_with_input(
             manifest,
             "What color is the sky?".to_string(),
             principal,
-            session_id,
             None,
         )
         .await
@@ -319,14 +311,12 @@ async fn test_cancellation_stops_process() {
     let (kernel, cancel) = build_kernel(vec![]);
     let manifest = test_manifest("cancel-agent", "Reply in one sentence.");
     let principal = Principal::user("test-user");
-    let session_id = SessionId::new("e2e-cancel");
 
     let agent_id = kernel
         .spawn_with_input(
             manifest,
             "Say hello.".to_string(),
             principal,
-            session_id,
             None,
         )
         .await
@@ -369,14 +359,12 @@ async fn test_multi_turn_via_event_queue() {
         "You are a concise assistant that remembers context. Reply in one sentence.",
     );
     let principal = Principal::user("test-user");
-    let session_id = SessionId::new("e2e-multi-turn");
 
     let agent_id = kernel
         .spawn_with_input(
             manifest,
             "My name is Alice.".to_string(),
             principal.clone(),
-            session_id.clone(),
             None,
         )
         .await
@@ -385,11 +373,20 @@ async fn test_multi_turn_via_event_queue() {
     // Wait for first turn to complete.
     let _first = wait_for_result(&kernel, agent_id, 60).await;
 
-    // Send a second message via the event queue (replaces mailbox).
-    let second_msg = rara_kernel::io::types::InboundMessage::synthetic(
+    // Look up the process's own session for routing the second message.
+    let process_session = kernel
+        .process_table()
+        .get(agent_id)
+        .expect("process should exist")
+        .session_id
+        .clone();
+
+    // Send a second message via the event queue, addressed to the agent by name.
+    let second_msg = rara_kernel::io::types::InboundMessage::synthetic_to(
         "What is my name?".to_string(),
         principal.user_id.clone(),
-        session_id,
+        process_session,
+        "multi-turn-agent".to_string(),
     );
     kernel
         .event_queue()
@@ -428,13 +425,11 @@ async fn test_multiple_agents_different_sessions() {
     let principal = Principal::user("test-user");
 
     let manifest1 = test_manifest("agent-1", "Reply with exactly: done");
-    let session_id1 = SessionId::new("e2e-multi-1");
     let id1 = kernel
         .spawn_with_input(
             manifest1,
             "Say done.".to_string(),
             principal.clone(),
-            session_id1,
             None,
         )
         .await
@@ -444,13 +439,11 @@ async fn test_multiple_agents_different_sessions() {
     assert!(!result1.output.trim().is_empty());
 
     let manifest2 = test_manifest("agent-2", "Reply with exactly: done");
-    let session_id2 = SessionId::new("e2e-multi-2");
     let id2 = kernel
         .spawn_with_input(
             manifest2,
             "Say done.".to_string(),
             principal,
-            session_id2,
             None,
         )
         .await
@@ -471,14 +464,12 @@ async fn test_multiple_agents_different_sessions() {
 async fn test_spawn_named_agent() {
     let (kernel, cancel) = build_kernel(vec![]);
     let principal = Principal::user("test-user");
-    let session_id = SessionId::new("e2e-named");
 
     let agent_id = kernel
         .spawn_named(
             "scout",
             "List 3 colors.".to_string(),
             principal,
-            session_id,
             None,
         )
         .await
@@ -543,7 +534,6 @@ async fn test_global_concurrency_limit() {
             manifest.clone(),
             "Essay topic 1.".to_string(),
             principal.clone(),
-            SessionId::new("limit-1"),
             None,
         )
         .await
@@ -554,7 +544,6 @@ async fn test_global_concurrency_limit() {
             manifest.clone(),
             "Essay topic 2.".to_string(),
             principal.clone(),
-            SessionId::new("limit-2"),
             None,
         )
         .await
@@ -566,7 +555,6 @@ async fn test_global_concurrency_limit() {
             manifest,
             "Essay topic 3.".to_string(),
             principal,
-            SessionId::new("limit-3"),
             None,
         )
         .await;

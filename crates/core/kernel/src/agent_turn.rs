@@ -450,7 +450,6 @@ mod tests {
                 manifest,
                 "init".to_string(),
                 Principal::user("test-user"),
-                SessionId::new("test-session"),
                 None,
             )
             .await
