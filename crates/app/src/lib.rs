@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod io_pipeline;
-mod resolvers;
-
 use std::{
     sync::{
         Arc,
@@ -361,103 +358,83 @@ impl AppConfig {
             }
         };
 
-        // -- I/O Bus pipeline -------------------------------------------------
+        // -- Kernel (boot + start) --------------------------------------------
 
-        // Construct Kernel for the I/O pipeline.
-        let kernel = {
-            use rara_kernel::{
-                defaults::{
-                    noop::{NoopEventBus, NoopGuard, NoopMemory},
-                    noop_user_store::NoopUserStore,
-                },
-                kernel::{Kernel, KernelConfig},
-                process::manifest_loader::ManifestLoader,
-            };
-
-            let config = KernelConfig::default();
-            let mut loader = ManifestLoader::new();
-            loader.load_bundled();
-
-            Kernel::new(
-                config,
-                app_state.llm_provider.clone(),
-                app_state.tool_registry.clone(),
-                Arc::new(NoopMemory),
-                Arc::new(NoopEventBus),
-                Arc::new(NoopGuard),
-                loader,
-                Arc::new(NoopUserStore),
-            )
-        };
-
-        let io_pipeline = io_pipeline::init_io_pipeline(
-            telegram_adapter.clone(),
-            Some(web_adapter.clone()),
-            options.cli_adapter.clone(),
-            app_state.session_repo.clone(),
-            kernel,
-        );
-
-        // Start TickLoop in the background.
-        // The TickLoop drains the InboundBus and routes messages to
-        // long-lived agent processes via their mailboxes.
-        let tick_loop = io_pipeline.tick_loop;
-        tokio::spawn({
-            let token = cancellation_token.clone();
-            async move {
-                tick_loop.run(token).await;
-            }
+        let mut kernel = rara_boot::kernel::boot(rara_boot::kernel::BootConfig {
+            llm_provider:  app_state.llm_provider.clone(),
+            tool_registry: app_state.tool_registry.clone(),
+            manifest_loader: {
+                let mut loader = rara_kernel::process::manifest_loader::ManifestLoader::new();
+                loader.load_bundled();
+                loader
+            },
+            user_store:    rara_boot::components::default_user_store(),
+            session_repo:  app_state.session_repo.clone(),
+            ..Default::default()
         });
 
-        // Spawn Egress — delivers outbound envelopes to channel adapters.
-        let mut egress = io_pipeline.egress;
-        tokio::spawn({
-            let token = cancellation_token.clone();
-            async move {
-                // Run until the outbound bus closes (sender dropped).
-                // Also stop early if cancellation is signalled.
-                tokio::select! {
-                    _ = egress.run() => {}
-                    _ = token.cancelled() => {}
-                }
-            }
-        });
+        // Register egress adapters.
+        if let Some(ref tg) = telegram_adapter {
+            use rara_kernel::channel::types::ChannelType;
+            use rara_kernel::io::egress::EgressAdapter;
+            kernel.register_adapter(
+                ChannelType::Telegram,
+                tg.clone() as Arc<dyn EgressAdapter>,
+            );
+        }
+        {
+            use rara_kernel::channel::types::ChannelType;
+            use rara_kernel::io::egress::EgressAdapter;
+            kernel.register_adapter(
+                ChannelType::Web,
+                web_adapter.clone() as Arc<dyn EgressAdapter>,
+            );
+        }
+        if let Some(ref cli) = options.cli_adapter {
+            use rara_kernel::channel::types::ChannelType;
+            use rara_kernel::io::egress::EgressAdapter;
+            kernel.register_adapter(
+                ChannelType::Cli,
+                cli.clone() as Arc<dyn EgressAdapter>,
+            );
+        }
 
-        // Start Telegram adapter with the I/O Bus ingress pipeline.
+        // Inject StreamHub / EndpointRegistry into WebAdapter before start.
+        web_adapter
+            .set_stream_hub(kernel.stream_hub().clone())
+            .await;
+        web_adapter
+            .set_endpoint_registry(kernel.endpoint_registry().clone())
+            .await;
+
+        // Start kernel I/O subsystem (TickLoop + Egress).
+        // start() consumes self and returns Arc<Kernel>.
+        let kernel = kernel.start(cancellation_token.clone());
+
+        // Start channel adapters with the kernel's ingress pipeline.
         if let Some(ref tg_adapter) = telegram_adapter {
             use rara_kernel::channel::adapter::ChannelAdapter as _;
-            match tg_adapter.start(io_pipeline.ingress_pipeline.clone()).await {
-                Ok(()) => info!("Telegram adapter started (I/O Bus)"),
+            match tg_adapter.start(kernel.ingress_pipeline().clone()).await {
+                Ok(()) => info!("Telegram adapter started"),
                 Err(e) => warn!(
                     error = %e,
-                    "Failed to start Telegram adapter, I/O Bus ingress inactive"
+                    "Failed to start Telegram adapter"
                 ),
             }
         }
-
-        // Start WebAdapter with the I/O Bus ingress pipeline.
         {
             use rara_kernel::channel::adapter::ChannelAdapter as _;
-            // Inject StreamHub so WebSocket handler can forward token deltas.
-            web_adapter
-                .set_stream_hub(io_pipeline.stream_hub.clone())
-                .await;
-            // Inject EndpointRegistry so WS/SSE handlers can register connections.
-            web_adapter
-                .set_endpoint_registry(io_pipeline.endpoint_registry.clone())
-                .await;
-            match web_adapter.start(io_pipeline.ingress_pipeline.clone()).await {
-                Ok(()) => info!("WebAdapter started (I/O Bus)"),
+            match web_adapter.start(kernel.ingress_pipeline().clone()).await {
+                Ok(()) => info!("WebAdapter started"),
                 Err(e) => warn!(
                     error = %e,
-                    "Failed to start WebAdapter, I/O Bus web ingress inactive"
+                    "Failed to start WebAdapter"
                 ),
             }
         }
-
         info!(
-            inbound_pending = io_pipeline.inbound_bus.pending_count(),
-            "I/O Bus pipeline running"
+            inbound_pending = kernel.inbound_bus().pending_count(),
+            "Kernel I/O subsystem running"
         );
 
         info!("Application started successfully");
@@ -468,9 +445,9 @@ impl AppConfig {
             shutdown_tx:        Some(shutdown_tx),
             running:            Arc::clone(&running),
             cancellation_token: cancellation_token.clone(),
-            ingress_pipeline:   Some(io_pipeline.ingress_pipeline.clone()),
-            endpoint_registry:  Some(io_pipeline.endpoint_registry.clone()),
-            stream_hub:         Some(io_pipeline.stream_hub.clone()),
+            ingress_pipeline:   Some(kernel.ingress_pipeline().clone()),
+            endpoint_registry:  Some(kernel.endpoint_registry().clone()),
+            stream_hub:         Some(kernel.stream_hub().clone()),
         };
 
         // -- shutdown loop ---------------------------------------------------
@@ -693,7 +670,7 @@ mod tests {
     fn test_config_defaults() {
         let config = AppConfig::default();
         assert_eq!(config.object_store.endpoint, "http://localhost:9000");
-        assert_eq!(config.object_store.bucket, "raramarkdown");
+        assert_eq!(config.object_store.bucket, "rara");
     }
 
     #[tokio::test]

@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Identity and session resolvers for the I/O Bus pipeline.
+//! Default identity and session resolvers for the I/O Bus pipeline.
 //!
-//! These are simple implementations used during the transition period.
+//! These are simple pass-through implementations suitable for bootstrapping.
 //! Once a real user store is wired into the I/O Bus model, the identity
 //! resolver can look up registered users via the database.
 
@@ -29,7 +29,7 @@ use rara_kernel::{
 };
 
 // ---------------------------------------------------------------------------
-// AppIdentityResolver
+// DefaultIdentityResolver
 // ---------------------------------------------------------------------------
 
 /// Simple identity resolver that maps platform user IDs to a unified
@@ -37,15 +37,19 @@ use rara_kernel::{
 ///
 /// This is a pass-through implementation for the initial I/O Bus wiring.
 /// A future version will look up the user store / auto-provision users.
-pub struct AppIdentityResolver;
+pub struct DefaultIdentityResolver;
 
-impl AppIdentityResolver {
+impl DefaultIdentityResolver {
     /// Create a new resolver.
     pub fn new() -> Self { Self }
 }
 
+impl Default for DefaultIdentityResolver {
+    fn default() -> Self { Self::new() }
+}
+
 #[async_trait]
-impl IdentityResolver for AppIdentityResolver {
+impl IdentityResolver for DefaultIdentityResolver {
     async fn resolve(
         &self,
         channel_type: ChannelType,
@@ -60,7 +64,7 @@ impl IdentityResolver for AppIdentityResolver {
 }
 
 // ---------------------------------------------------------------------------
-// AppSessionResolver
+// DefaultSessionResolver
 // ---------------------------------------------------------------------------
 
 /// Simple session resolver that maps each platform chat to its own session
@@ -68,15 +72,19 @@ impl IdentityResolver for AppIdentityResolver {
 ///
 /// This mirrors the `tg:<chat_id>` convention used by the Telegram
 /// adapter.
-pub struct AppSessionResolver;
+pub struct DefaultSessionResolver;
 
-impl AppSessionResolver {
+impl DefaultSessionResolver {
     /// Create a new resolver.
     pub fn new() -> Self { Self }
 }
 
+impl Default for DefaultSessionResolver {
+    fn default() -> Self { Self::new() }
+}
+
 #[async_trait]
-impl SessionResolver for AppSessionResolver {
+impl SessionResolver for DefaultSessionResolver {
     async fn resolve(
         &self,
         _user: &UserId,
@@ -96,7 +104,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_identity_resolver_format() {
-        let resolver = AppIdentityResolver::new();
+        let resolver = DefaultIdentityResolver::new();
         let user_id = resolver
             .resolve(ChannelType::Telegram, "12345", Some("chat-1"))
             .await
@@ -106,7 +114,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_identity_resolver_no_chat_id() {
-        let resolver = AppIdentityResolver::new();
+        let resolver = DefaultIdentityResolver::new();
         let user_id = resolver
             .resolve(ChannelType::Web, "user-abc", None)
             .await
@@ -116,7 +124,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_session_resolver_with_chat_id() {
-        let resolver = AppSessionResolver::new();
+        let resolver = DefaultSessionResolver::new();
         let user = UserId("telegram:12345".to_string());
         let session_id = resolver
             .resolve(&user, ChannelType::Telegram, Some("chat-1"))
@@ -127,7 +135,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_session_resolver_default_chat_id() {
-        let resolver = AppSessionResolver::new();
+        let resolver = DefaultSessionResolver::new();
         let user = UserId("web:user-abc".to_string());
         let session_id = resolver
             .resolve(&user, ChannelType::Web, None)

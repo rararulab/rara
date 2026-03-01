@@ -176,16 +176,23 @@ mod tests {
     use crate::{
         channel::types::{ChannelType, MessageContent},
         defaults::{
-            noop::{NoopEventBus, NoopGuard, NoopMemory},
+            noop::{
+                NoopEventBus, NoopGuard, NoopIdentityResolver, NoopMemory,
+                NoopSessionRepository, NoopSessionResolver,
+            },
             noop_user_store::NoopUserStore,
         },
         io::{
-            memory_bus::InMemoryInboundBus,
+            bus::{InboundBus, OutboundBus},
+            ingress::{IdentityResolver, SessionResolver},
+            memory_bus::{InMemoryInboundBus, InMemoryOutboundBus},
+            stream::StreamHub,
             types::{ChannelSource, MessageId},
         },
         kernel::{Kernel, KernelConfig},
         process::{SessionId, manifest_loader::ManifestLoader, principal::UserId},
         provider::{EnvLlmProviderLoader, LlmProviderLoaderRef},
+        session::SessionRepository,
         tool::ToolRegistry,
     };
 
@@ -226,6 +233,12 @@ mod tests {
             Arc::new(NoopGuard),
             loader,
             Arc::new(NoopUserStore),
+            Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
+            Arc::new(InMemoryInboundBus::new(128)) as Arc<dyn InboundBus>,
+            Arc::new(InMemoryOutboundBus::new(64)) as Arc<dyn OutboundBus>,
+            Arc::new(StreamHub::new(16)),
+            Arc::new(NoopIdentityResolver) as Arc<dyn IdentityResolver>,
+            Arc::new(NoopSessionResolver) as Arc<dyn SessionResolver>,
         ))
     }
 

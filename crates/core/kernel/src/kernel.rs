@@ -38,7 +38,7 @@
 //! Each spawned agent receives a [`ScopedKernelHandle`] providing syscall-like
 //! access to kernel capabilities (ProcessOps, MemoryOps, EventOps, GuardOps).
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use dashmap::DashMap;
 use jiff::Timestamp;
@@ -47,11 +47,18 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::{
+    channel::types::ChannelType,
     error::{KernelError, Result},
     event::EventBus,
     guard::Guard,
     handle::{AgentHandle, scoped::ScopedKernelHandle},
-    io::{bus::OutboundBus, stream::StreamHub, types::InboundMessage},
+    io::{
+        bus::{InboundBus, OutboundBus},
+        egress::{Egress, EgressAdapter, EndpointRegistry},
+        ingress::{IdentityResolver, IngressPipeline, SessionResolver},
+        stream::StreamHub,
+        types::InboundMessage,
+    },
     memory::Memory,
     process::{
         AgentEnv, AgentId, AgentManifest, AgentProcess, AgentResult, ProcessState, ProcessTable,
@@ -528,15 +535,36 @@ impl Default for KernelConfig {
 ///
 /// Acts as an OS kernel for agents: manages the process table, enforces
 /// concurrency limits, and provides `spawn()` as the primary entry point.
+///
+/// The Kernel owns its I/O subsystem: inbound bus, outbound bus, stream hub,
+/// endpoint registry, and ingress pipeline. Call [`start()`](Self::start) to
+/// spawn TickLoop and Egress as background tasks.
 pub struct Kernel {
     /// Shared kernel internals (process table, components, etc.).
     inner:  Arc<KernelInner>,
     /// Kernel configuration.
     config: KernelConfig,
+    /// Inbound message bus (shared with IngressPipeline and TickLoop).
+    inbound_bus:       Arc<dyn InboundBus>,
+    /// Outbound message bus (shared with process_loop and Egress).
+    outbound_bus:      Arc<dyn OutboundBus>,
+    /// Ephemeral stream hub for real-time token deltas.
+    stream_hub:        Arc<StreamHub>,
+    /// Ingress pipeline (implements InboundSink for adapters).
+    ingress_pipeline:  Arc<IngressPipeline>,
+    /// Per-user endpoint registry (tracks connected channels).
+    endpoint_registry: Arc<EndpointRegistry>,
+    /// Registered egress adapters (mutable before start, consumed by start).
+    egress_adapters:   HashMap<ChannelType, Arc<dyn EgressAdapter>>,
 }
 
 impl Kernel {
-    /// Create a new Kernel with the given configuration and components.
+    /// Create a new Kernel with the given configuration, components, and I/O
+    /// subsystem.
+    ///
+    /// The I/O subsystem is fully assembled at construction time -- no
+    /// `set_io_context()` needed. Call [`start()`](Self::start) to spawn
+    /// background tasks (TickLoop, Egress).
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: KernelConfig,
@@ -547,6 +575,12 @@ impl Kernel {
         guard: Arc<dyn Guard>,
         manifest_loader: ManifestLoader,
         user_store: Arc<dyn UserStore>,
+        session_repo: Arc<dyn SessionRepository>,
+        inbound_bus: Arc<dyn InboundBus>,
+        outbound_bus: Arc<dyn OutboundBus>,
+        stream_hub: Arc<StreamHub>,
+        identity_resolver: Arc<dyn IdentityResolver>,
+        session_resolver: Arc<dyn SessionResolver>,
     ) -> Self {
         info!(
             max_concurrency = config.max_concurrency,
@@ -554,6 +588,14 @@ impl Kernel {
             default_max_iterations = config.default_max_iterations,
             "booting kernel"
         );
+
+        let endpoint_registry = Arc::new(EndpointRegistry::new());
+
+        let ingress_pipeline = Arc::new(IngressPipeline::new(
+            identity_resolver,
+            session_resolver,
+            inbound_bus.clone(),
+        ));
 
         let inner = Arc::new(KernelInner {
             process_table: Arc::new(ProcessTable::new()),
@@ -568,31 +610,21 @@ impl Kernel {
             manifest_loader,
             shared_kv: DashMap::new(),
             user_store,
-            session_repo: Arc::new(crate::defaults::noop::NoopSessionRepository)
-                as Arc<dyn SessionRepository>,
-            stream_hub: Arc::new(StreamHub::new(1)),
-            outbound_bus: Arc::new(crate::io::memory_bus::InMemoryOutboundBus::new(1))
-                as Arc<dyn OutboundBus>,
+            session_repo,
+            stream_hub: stream_hub.clone(),
+            outbound_bus: outbound_bus.clone(),
         });
 
-        Self { inner, config }
-    }
-
-    /// Set the I/O pipeline components for process loops.
-    ///
-    /// Must be called before any Arc clones are taken (i.e., before
-    /// `Arc::new(kernel)` or any `spawn()` calls).
-    pub fn set_io_context(
-        &mut self,
-        session_repo: Arc<dyn SessionRepository>,
-        stream_hub: Arc<StreamHub>,
-        outbound_bus: Arc<dyn OutboundBus>,
-    ) {
-        let inner = Arc::get_mut(&mut self.inner)
-            .expect("set_io_context must be called before any Arc clones");
-        inner.session_repo = session_repo;
-        inner.stream_hub = stream_hub;
-        inner.outbound_bus = outbound_bus;
+        Self {
+            inner,
+            config,
+            inbound_bus,
+            outbound_bus,
+            stream_hub,
+            ingress_pipeline,
+            endpoint_registry,
+            egress_adapters: HashMap::new(),
+        }
     }
 
     /// Spawn a long-lived agent process for a session.
@@ -717,8 +749,103 @@ impl Kernel {
     ///
     /// Used by [`crate::testing::TestKernelBuilder`] to assemble kernels in
     /// tests without going through the public `new()` constructor.
+    ///
+    /// Creates minimal I/O subsystem components (InboundBus, IngressPipeline,
+    /// EndpointRegistry) with Noop resolvers. The OutboundBus and StreamHub
+    /// are cloned from `KernelInner`.
     pub(crate) fn from_inner(inner: Arc<KernelInner>, config: KernelConfig) -> Self {
-        Self { inner, config }
+        use crate::io::memory_bus::InMemoryInboundBus;
+
+        let inbound_bus: Arc<dyn InboundBus> = Arc::new(InMemoryInboundBus::new(128));
+        let identity_resolver: Arc<dyn IdentityResolver> =
+            Arc::new(crate::defaults::noop::NoopIdentityResolver);
+        let session_resolver: Arc<dyn SessionResolver> =
+            Arc::new(crate::defaults::noop::NoopSessionResolver);
+        let ingress_pipeline = Arc::new(IngressPipeline::new(
+            identity_resolver,
+            session_resolver,
+            inbound_bus.clone(),
+        ));
+        let endpoint_registry = Arc::new(EndpointRegistry::new());
+
+        Self {
+            outbound_bus: inner.outbound_bus.clone(),
+            stream_hub: inner.stream_hub.clone(),
+            inner,
+            config,
+            inbound_bus,
+            ingress_pipeline,
+            endpoint_registry,
+            egress_adapters: HashMap::new(),
+        }
+    }
+
+    // -- I/O subsystem accessors -----------------------------------------
+
+    /// Access the ingress pipeline (adapters need this to push messages).
+    pub fn ingress_pipeline(&self) -> &Arc<IngressPipeline> { &self.ingress_pipeline }
+
+    /// Access the ephemeral stream hub (WebAdapter needs this for token
+    /// deltas).
+    pub fn stream_hub(&self) -> &Arc<StreamHub> { &self.stream_hub }
+
+    /// Access the endpoint registry (WebAdapter needs this for connection
+    /// tracking).
+    pub fn endpoint_registry(&self) -> &Arc<EndpointRegistry> { &self.endpoint_registry }
+
+    /// Access the inbound bus (for monitoring / pending count).
+    pub fn inbound_bus(&self) -> &Arc<dyn InboundBus> { &self.inbound_bus }
+
+    /// Register an egress adapter for a channel type.
+    ///
+    /// Must be called **before** [`start()`](Self::start).
+    pub fn register_adapter(&mut self, channel_type: ChannelType, adapter: Arc<dyn EgressAdapter>) {
+        self.egress_adapters.insert(channel_type, adapter);
+    }
+
+    /// Spawn TickLoop and Egress as background tasks.
+    ///
+    /// Consumes `self` by value, wraps it in `Arc`, spawns background tasks,
+    /// and returns the shared `Arc<Kernel>` for callers to use.
+    ///
+    /// The returned `Arc<Kernel>` can be used to access the ingress pipeline,
+    /// stream hub, endpoint registry, etc. The background tasks run until the
+    /// `cancel_token` is cancelled.
+    pub fn start(mut self, cancel_token: CancellationToken) -> Arc<Self> {
+        let adapters = std::mem::take(&mut self.egress_adapters);
+        let kernel = Arc::new(self);
+
+        // TickLoop
+        let tick_loop = crate::tick::TickLoop::new(
+            kernel.inbound_bus.clone(),
+            kernel.clone(),
+        );
+        tokio::spawn({
+            let token = cancel_token.clone();
+            async move {
+                tick_loop.run(token).await;
+            }
+        });
+
+        // Egress
+        let outbound_sub = kernel.outbound_bus.subscribe();
+        let mut egress = Egress::new(
+            adapters,
+            kernel.endpoint_registry.clone(),
+            outbound_sub,
+        );
+        tokio::spawn({
+            let token = cancel_token;
+            async move {
+                tokio::select! {
+                    _ = egress.run() => {}
+                    _ = token.cancelled() => {}
+                }
+            }
+        });
+
+        info!("kernel I/O subsystem started (tick_loop + egress)");
+        kernel
     }
 }
 
@@ -727,9 +854,10 @@ mod tests {
     use super::*;
     use crate::{
         defaults::{
-            noop::{NoopEventBus, NoopGuard, NoopMemory},
+            noop::{NoopEventBus, NoopGuard, NoopMemory, NoopSessionRepository},
             noop_user_store::NoopUserStore,
         },
+        io::memory_bus::{InMemoryInboundBus, InMemoryOutboundBus},
         process::principal::Principal,
         provider::EnvLlmProviderLoader,
     };
@@ -753,6 +881,12 @@ mod tests {
             Arc::new(NoopGuard),
             loader,
             Arc::new(NoopUserStore),
+            Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
+            Arc::new(InMemoryInboundBus::new(128)) as Arc<dyn InboundBus>,
+            Arc::new(InMemoryOutboundBus::new(64)) as Arc<dyn OutboundBus>,
+            Arc::new(StreamHub::new(16)),
+            Arc::new(crate::defaults::noop::NoopIdentityResolver) as Arc<dyn IdentityResolver>,
+            Arc::new(crate::defaults::noop::NoopSessionResolver) as Arc<dyn SessionResolver>,
         )
     }
 

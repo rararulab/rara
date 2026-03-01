@@ -353,20 +353,19 @@ impl AppState {
             .await
             .whatever_context("Failed to ensure default users")?;
 
-        let kernel = Arc::new(rara_kernel::Kernel::new(
-            rara_kernel::KernelConfig {
+        let kernel = Arc::new(rara_boot::kernel::boot(rara_boot::kernel::BootConfig {
+            kernel_config: rara_kernel::KernelConfig {
                 max_concurrency:        16,
                 default_child_limit:    4,
                 default_max_iterations: 25,
             },
-            llm_provider.clone(),
-            tools.clone(),
-            rara_boot::components::default_memory(),
-            rara_boot::components::default_event_bus(),
-            rara_boot::components::default_guard(),
+            llm_provider:     llm_provider.clone(),
+            tool_registry:    tools.clone(),
             manifest_loader,
-            user_store.clone(),
-        ));
+            user_store:       user_store.clone(),
+            session_repo:     session_repo.clone(),
+            ..Default::default()
+        }));
         info!("Kernel initialized");
 
         Ok(Self {
