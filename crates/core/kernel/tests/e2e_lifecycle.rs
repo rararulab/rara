@@ -155,7 +155,7 @@ async fn wait_for_result(
             );
         }
         if let Some(p) = kernel.process_table().get(agent_id) {
-            if matches!(p.state, ProcessState::Waiting | ProcessState::Completed) {
+            if matches!(p.state, ProcessState::Idle | ProcessState::Completed) {
                 if let Some(result) = p.result {
                     return result;
                 }
@@ -272,7 +272,7 @@ async fn test_process_state_transitions() {
     // After processing, state should be Waiting (waiting for next message).
     let process = kernel.process_table().get(agent_id).unwrap();
     assert!(
-        matches!(process.state, ProcessState::Waiting),
+        matches!(process.state, ProcessState::Idle),
         "expected Waiting state after processing, got {:?}",
         process.state
     );
@@ -415,7 +415,7 @@ async fn test_multi_turn_via_event_queue() {
             panic!("timed out waiting for second turn");
         }
         if let Some(p) = kernel.process_table().get(agent_id) {
-            if matches!(p.state, ProcessState::Waiting) {
+            if matches!(p.state, ProcessState::Idle) {
                 if let Some(ref result) = p.result {
                     if result.output.to_lowercase().contains("alice") {
                         cancel.cancel();
@@ -502,7 +502,7 @@ async fn test_spawn_named_agent() {
         }
         if let Some(p) = kernel.process_table().get(agent_id) {
             match p.state {
-                ProcessState::Waiting | ProcessState::Completed => break,
+                ProcessState::Idle | ProcessState::Completed => break,
                 ProcessState::Failed => panic!("named agent failed"),
                 _ => {}
             }
@@ -512,7 +512,7 @@ async fn test_spawn_named_agent() {
 
     let process = kernel.process_table().get(agent_id).unwrap();
     assert!(
-        matches!(process.state, ProcessState::Waiting | ProcessState::Completed),
+        matches!(process.state, ProcessState::Idle | ProcessState::Completed),
         "named agent should reach Waiting after processing"
     );
 

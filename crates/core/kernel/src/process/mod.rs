@@ -252,7 +252,9 @@ pub struct AgentManifest {
 pub enum ProcessState {
     /// Agent is actively running (LLM loop in progress).
     Running,
-    /// Agent is waiting for child agent results (mailbox still open).
+    /// Turn done, waiting for next user message (no pending work).
+    Idle,
+    /// Agent is waiting for child agent results (has pending work).
     Waiting,
     /// Agent is suspended by a Pause signal. Messages are buffered.
     Paused,
@@ -275,6 +277,7 @@ impl std::fmt::Display for ProcessState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ProcessState::Running => write!(f, "running"),
+            ProcessState::Idle => write!(f, "idle"),
             ProcessState::Waiting => write!(f, "waiting"),
             ProcessState::Paused => write!(f, "paused"),
             ProcessState::Completed => write!(f, "completed"),
@@ -524,6 +527,8 @@ pub struct ProcessStats {
     pub children:          Vec<AgentId>,
     /// When this process was created.
     pub created_at:        Timestamp,
+    /// When this process finished (if terminal).
+    pub finished_at:       Option<Timestamp>,
     /// How long this process has been alive (milliseconds).
     pub uptime_ms:         u64,
     // -- Runtime metrics --
@@ -654,7 +659,7 @@ impl ProcessTable {
             ProcessState::Cancelled => {
                 entry.finished_at = Some(Timestamp::now());
             }
-            ProcessState::Running | ProcessState::Waiting | ProcessState::Paused => {
+            ProcessState::Running | ProcessState::Idle | ProcessState::Waiting | ProcessState::Paused => {
                 // Non-terminal states: do not set finished_at.
             }
         }
@@ -772,6 +777,12 @@ impl ProcessTable {
         self.session_index.insert(session_id, agent_id);
     }
 
+    /// Remove a session index entry only if it points to the given agent.
+    pub fn session_index_remove(&self, session_id: &SessionId, agent_id: AgentId) {
+        self.session_index
+            .remove_if(session_id, |_, aid| *aid == agent_id);
+    }
+
     // ----- Metrics methods -----
 
     /// Get a shared reference to the metrics for a process.
@@ -801,6 +812,7 @@ impl ProcessTable {
             parent_id:         process.parent_id,
             children,
             created_at:        process.created_at,
+            finished_at:       process.finished_at,
             uptime_ms,
             messages_received: metrics_snapshot.messages_received,
             llm_calls:         metrics_snapshot.llm_calls,
@@ -811,7 +823,12 @@ impl ProcessTable {
     }
 
     /// Build [`ProcessStats`] for all processes currently in the table.
+    ///
+    /// Also performs lazy reaping of terminal processes older than the TTL.
     pub async fn all_process_stats(&self) -> Vec<ProcessStats> {
+        // Lazy reap: remove stale terminal processes on observation.
+        self.reap_terminal(Self::TERMINAL_TTL);
+
         let ids: Vec<AgentId> = self.processes.iter().map(|p| p.agent_id).collect();
         let mut stats = Vec::with_capacity(ids.len());
         for id in ids {
@@ -820,6 +837,43 @@ impl ProcessTable {
             }
         }
         stats
+    }
+
+    /// How long terminal processes remain visible before being reaped.
+    const TERMINAL_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+    /// Remove terminal processes whose `finished_at` is older than `max_age`.
+    ///
+    /// Returns the number of processes reaped.
+    pub fn reap_terminal(&self, max_age: std::time::Duration) -> usize {
+        let now = Timestamp::now();
+        let max_age_ms = max_age.as_millis() as i128;
+        let to_remove: Vec<AgentId> = self
+            .processes
+            .iter()
+            .filter(|entry| {
+                let p = entry.value();
+                if !p.state.is_terminal() {
+                    return false;
+                }
+                match p.finished_at {
+                    Some(finished) => {
+                        // Use raw nanosecond difference for precision.
+                        let elapsed_ns = now.as_nanosecond() - finished.as_nanosecond();
+                        let elapsed_ms = elapsed_ns / 1_000_000;
+                        elapsed_ms > max_age_ms
+                    }
+                    None => false, // No finished_at — keep it (shouldn't happen)
+                }
+            })
+            .map(|entry| entry.agent_id)
+            .collect();
+
+        let count = to_remove.len();
+        for id in to_remove {
+            self.remove(id);
+        }
+        count
     }
 
     /// Get the total number of processes ever spawned.
@@ -1160,6 +1214,33 @@ system_prompt: "Hello"
         table.insert(p);
         table.set_state(id, ProcessState::Cancelled).unwrap();
         assert!(table.get(id).unwrap().finished_at.is_some());
+    }
+
+    #[test]
+    fn test_process_state_idle_does_not_set_finished_at() {
+        let table = ProcessTable::new();
+        let p = test_process("idler", None);
+        let id = p.agent_id;
+        table.insert(p);
+
+        table.set_state(id, ProcessState::Idle).unwrap();
+
+        let process = table.get(id).unwrap();
+        assert_eq!(process.state, ProcessState::Idle);
+        assert!(
+            process.finished_at.is_none(),
+            "Idle state should not set finished_at"
+        );
+    }
+
+    #[test]
+    fn test_process_state_idle_is_not_terminal() {
+        assert!(!ProcessState::Idle.is_terminal());
+    }
+
+    #[test]
+    fn test_process_state_idle_display() {
+        assert_eq!(ProcessState::Idle.to_string(), "idle");
     }
 
     #[test]
@@ -1778,5 +1859,109 @@ system_prompt: "Hello"
         let ids: Vec<AgentId> = children.iter().map(|c| c.agent_id).collect();
         assert!(ids.contains(&c1_id));
         assert!(ids.contains(&c2_id));
+    }
+
+    // -----------------------------------------------------------------------
+    // Idle state + running_count tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_running_count_excludes_idle() {
+        let table = ProcessTable::new();
+
+        let p1 = test_process("a", None);
+        let p1_id = p1.agent_id;
+        table.insert(p1);
+
+        let p2 = test_process("b", None);
+        table.insert(p2);
+
+        assert_eq!(table.running_count(), 2);
+
+        // Transition p1 to Idle — should NOT count as running.
+        table.set_state(p1_id, ProcessState::Idle).unwrap();
+        assert_eq!(table.running_count(), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Terminal TTL / reap tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_reap_terminal_removes_old_processes() {
+        let table = ProcessTable::new();
+
+        let p = test_process("reap-me", None);
+        let id = p.agent_id;
+        table.insert(p);
+
+        // Complete the process with finished_at far in the past.
+        table.set_state(id, ProcessState::Completed).unwrap();
+        // Manually backdate finished_at to ensure reaping works.
+        {
+            let mut entry = table.processes.get_mut(&id).unwrap();
+            let past = Timestamp::from_second(
+                Timestamp::now().as_second() - 120,
+            )
+            .unwrap();
+            entry.finished_at = Some(past);
+        }
+
+        // Verify backdating worked.
+        let p = table.get(id).unwrap();
+        assert!(p.finished_at.is_some(), "finished_at should be set");
+
+        // Reap with 60s TTL — process finished 120s ago, should be removed.
+        let reaped = table.reap_terminal(std::time::Duration::from_secs(60));
+        assert_eq!(reaped, 1);
+        assert!(table.get(id).is_none());
+    }
+
+    #[test]
+    fn test_reap_terminal_keeps_recent_processes() {
+        let table = ProcessTable::new();
+
+        let p = test_process("keep-me", None);
+        let id = p.agent_id;
+        table.insert(p);
+
+        table.set_state(id, ProcessState::Completed).unwrap();
+
+        // Reap with 60s TTL — process just finished, should be kept.
+        let reaped = table.reap_terminal(std::time::Duration::from_secs(60));
+        assert_eq!(reaped, 0);
+        assert!(table.get(id).is_some());
+    }
+
+    #[test]
+    fn test_reap_terminal_ignores_non_terminal() {
+        let table = ProcessTable::new();
+
+        let p = test_process("running-agent", None);
+        let id = p.agent_id;
+        table.insert(p);
+
+        // Even with zero TTL, Running processes should not be reaped.
+        let reaped = table.reap_terminal(std::time::Duration::ZERO);
+        assert_eq!(reaped, 0);
+        assert!(table.get(id).is_some());
+    }
+
+    #[tokio::test]
+    async fn test_process_stats_includes_finished_at() {
+        let table = ProcessTable::new();
+
+        let p = test_process("fin-test", None);
+        let id = p.agent_id;
+        table.insert(p);
+
+        // Before completing — finished_at should be None.
+        let stats = table.process_stats(id).await.unwrap();
+        assert!(stats.finished_at.is_none());
+
+        // After completing — finished_at should be Some.
+        table.set_state(id, ProcessState::Completed).unwrap();
+        let stats = table.process_stats(id).await.unwrap();
+        assert!(stats.finished_at.is_some());
     }
 }

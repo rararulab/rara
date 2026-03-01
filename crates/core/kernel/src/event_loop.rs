@@ -775,13 +775,19 @@ impl Kernel {
             if process.state.is_terminal() {
                 // Terminal process — clear session binding, fall through to
                 // Path 3 (Name addressing) to spawn a replacement.
+                // We do NOT remove the process from the table here — the
+                // reaper (lazy cleanup in all_process_stats) handles that
+                // after the TTL expires. This keeps terminal processes
+                // visible in the UI for observability.
                 info!(
                     agent_id = %aid,
                     session_id = %session_id,
                     state = %process.state,
                     "session-bound process terminal — clearing binding, will respawn"
                 );
-                self.process_table().remove(aid);
+                if let Some(ref channel_sid) = process.channel_session_id {
+                    self.process_table().session_index_remove(channel_sid, aid);
+                }
                 // Fall through to Path 3 below.
             } else {
                 // Process alive — buffer if busy/paused, else deliver.
@@ -1247,10 +1253,10 @@ impl Kernel {
             }
         }
 
-        // Set state to Waiting.
+        // Set state to Idle (turn done, no pending work).
         let _ = inner
             .process_table
-            .set_state(agent_id, ProcessState::Waiting);
+            .set_state(agent_id, ProcessState::Idle);
 
         // Drain pause buffer: re-inject buffered events into the queue.
         if let Some(mut rt) = runtimes.get_mut(&agent_id) {
@@ -1347,7 +1353,7 @@ impl Kernel {
             manifest: manifest.clone(),
             principal: principal.clone(),
             env: AgentEnv::default(),
-            state: ProcessState::Waiting,
+            state: ProcessState::Idle,
             created_at: jiff::Timestamp::now(),
             finished_at: None,
             result: None,
@@ -1506,7 +1512,7 @@ impl Kernel {
                 } else {
                     vec![]
                 };
-                let _ = inner.process_table.set_state(target, ProcessState::Waiting);
+                let _ = inner.process_table.set_state(target, ProcessState::Idle);
                 if !buffered.is_empty() {
                     for event in buffered {
                         if let Err(e) = self.event_queue().try_push(event) {

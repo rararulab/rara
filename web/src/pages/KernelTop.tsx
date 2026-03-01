@@ -69,6 +69,7 @@ interface ProcessStats {
   parent_id: string | null;
   children: string[];
   created_at: string;
+  finished_at: string | null;
   uptime_ms: number;
   messages_received: number;
   llm_calls: number;
@@ -145,11 +146,16 @@ function stateColor(state: string): "default" | "secondary" | "destructive" | "o
     case "running":
       return "default";
     case "idle":
-    case "waiting":
+    case "paused":
       return "secondary";
+    case "waiting":
+      return "outline";
     case "failed":
     case "error":
       return "destructive";
+    case "completed":
+    case "cancelled":
+      return "outline";
     default:
       return "outline";
   }
@@ -474,6 +480,11 @@ export default function KernelTop() {
                         >
                           {p.state}
                         </Badge>
+                        {p.finished_at && (
+                          <span className="ml-1.5 text-xs text-muted-foreground">
+                            {formatRelativeTime(p.finished_at)}
+                          </span>
+                        )}
                       </TableCell>
                       <TableCell className="text-right font-mono text-xs">
                         {formatUptime(p.uptime_ms)}
