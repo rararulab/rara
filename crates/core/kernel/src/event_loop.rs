@@ -1091,6 +1091,9 @@ impl Kernel {
                 span.record("tool_calls", turn.tool_calls);
                 span.record("reply_len", turn.text.len());
 
+                // Store turn trace for observability.
+                inner.process_table.push_turn_trace(agent_id, turn.trace.clone());
+
                 // Record metrics.
                 if let Some(metrics) = inner.process_table.get_metrics(&agent_id) {
                     metrics.record_llm_call();
@@ -1172,6 +1175,9 @@ impl Kernel {
                 span.record("tool_calls", turn.tool_calls);
                 span.record("reply_len", 0u64);
                 info!(agent_id = %agent_id, "turn completed (empty result)");
+
+                // Store turn trace for observability.
+                inner.process_table.push_turn_trace(agent_id, turn.trace.clone());
 
                 // Empty result — LLM call was made but produced no text.
                 if let Some(metrics) = inner.process_table.get_metrics(&agent_id) {
@@ -1328,6 +1334,7 @@ impl Kernel {
             result: None,
             created_files: vec![],
             metrics,
+            turn_traces: vec![],
         };
         inner.process_table.insert(process);
 
@@ -1351,7 +1358,7 @@ impl Kernel {
         let handle = Arc::new(ProcessHandle::new(
             agent_id,
             session_id.clone(),
-            principal,
+            principal.clone(),
             inner.event_queue.clone(),
         ));
 
@@ -1397,7 +1404,7 @@ impl Kernel {
         let msg_session = channel_session_id.unwrap_or(session_id);
         let inbound = InboundMessage::synthetic_to(
             input,
-            crate::process::principal::UserId("system".to_string()),
+            principal.user_id.clone(),
             msg_session,
             manifest.name.clone(),
         );

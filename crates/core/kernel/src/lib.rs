@@ -48,7 +48,7 @@ pub mod llm;
 pub mod memory;
 pub mod model;
 pub mod process;
-pub(crate) mod agent_turn;
+pub mod agent_turn;
 pub mod provider;
 pub mod runner;
 pub mod session;
