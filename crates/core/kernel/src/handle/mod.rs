@@ -21,9 +21,10 @@
 //! - [`MemoryOps`]: cross-agent shared memory
 //! - [`EventOps`]: event bus publishing
 //! - [`GuardOps`]: tool approval requests
+//! - [`PipeOps`]: inter-agent streaming pipes
 //!
 //! The blanket `KernelHandle` trait is automatically implemented for any type
-//! that implements all four subsystem traits.
+//! that implements all five subsystem traits.
 
 pub mod scoped;
 pub mod spawn_tool;
@@ -33,6 +34,7 @@ use tokio::sync::oneshot;
 
 use crate::{
     error::Result,
+    io::pipe::{PipeReader, PipeWriter},
     process::{AgentId, AgentManifest, AgentResult, ProcessInfo, ProcessMessage},
 };
 
@@ -163,13 +165,38 @@ pub trait GuardOps: Send + Sync {
     async fn request_approval(&self, tool_name: &str, summary: &str) -> Result<bool>;
 }
 
+/// Inter-agent pipe operations.
+///
+/// Provides Unix-pipe-like streaming data channels between agent processes.
+/// Supports both anonymous pipes (parent creates, gives reader to child)
+/// and named pipes (any agent can create and connect by name).
+pub trait PipeOps: Send + Sync {
+    /// Create an anonymous pipe targeting a specific agent.
+    ///
+    /// Returns the writer end. The reader end must be delivered to the
+    /// target agent through the returned `PipeReader`.
+    fn create_pipe(&self, target: AgentId) -> Result<(PipeWriter, PipeReader)>;
+
+    /// Create a named pipe that any agent can connect to.
+    ///
+    /// The name is globally unique within the kernel. Returns the writer
+    /// end; readers connect via [`connect_pipe`](Self::connect_pipe).
+    fn create_named_pipe(&self, name: &str) -> Result<(PipeWriter, PipeReader)>;
+
+    /// Connect to a named pipe as a reader.
+    ///
+    /// Returns `Err` if the named pipe does not exist or has already been
+    /// connected by another reader.
+    fn connect_pipe(&self, name: &str) -> Result<PipeReader>;
+}
+
 /// Unified kernel handle — the single "syscall" interface for agents.
 ///
-/// This is a blanket trait: any type implementing all four subsystem traits
+/// This is a blanket trait: any type implementing all five subsystem traits
 /// automatically implements `KernelHandle`. This allows agents to receive a
 /// single handle that provides all kernel capabilities.
-pub trait KernelHandle: ProcessOps + MemoryOps + EventOps + GuardOps {}
-impl<T: ProcessOps + MemoryOps + EventOps + GuardOps> KernelHandle for T {}
+pub trait KernelHandle: ProcessOps + MemoryOps + EventOps + GuardOps + PipeOps {}
+impl<T: ProcessOps + MemoryOps + EventOps + GuardOps + PipeOps> KernelHandle for T {}
 
 #[cfg(test)]
 mod tests {
@@ -202,7 +229,9 @@ mod tests {
     /// Verify that the KernelHandle blanket impl works at the type level.
     /// This is a compile-time check — if this module compiles, the blanket
     /// impl is correctly defined.
-    fn _assert_kernel_handle_blanket<T: ProcessOps + MemoryOps + EventOps + GuardOps>() {
+    fn _assert_kernel_handle_blanket<
+        T: ProcessOps + MemoryOps + EventOps + GuardOps + PipeOps,
+    >() {
         fn _requires_kernel_handle<H: KernelHandle>() {}
         _requires_kernel_handle::<T>();
     }
