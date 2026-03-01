@@ -18,6 +18,15 @@ pub struct ProblemDetails {
 }
 
 impl ProblemDetails {
+    pub fn bad_request(detail: impl Into<String>) -> Self {
+        Self {
+            problem_type: "https://rara.dev/problems/bad-request".to_string(),
+            title: "Bad Request".to_string(),
+            status: 400,
+            detail: Some(detail.into()),
+        }
+    }
+
     pub fn not_found(title: impl Into<String>, detail: impl Into<String>) -> Self {
         Self {
             problem_type: "https://rara.dev/problems/not-found".to_string(),

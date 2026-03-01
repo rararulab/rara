@@ -41,6 +41,38 @@ use crate::{
     runner::{PendingToolCall, UserContent, build_tool_response_message, build_user_message},
 };
 
+/// Trace of a single tool call within an iteration.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ToolCallTrace {
+    pub name: String,
+    pub id: String,
+    pub duration_ms: u64,
+    pub success: bool,
+}
+
+/// Trace of a single LLM iteration within a turn.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct IterationTrace {
+    pub index: usize,
+    pub first_token_ms: Option<u64>,
+    pub stream_ms: u64,
+    /// First 200 chars of accumulated text.
+    pub text_preview: String,
+    pub tool_calls: Vec<ToolCallTrace>,
+}
+
+/// Complete trace of a single agent turn.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TurnTrace {
+    pub duration_ms: u64,
+    pub model: String,
+    pub iterations: Vec<IterationTrace>,
+    pub final_text_len: usize,
+    pub total_tool_calls: usize,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
 /// Result of a single agent turn.
 #[derive(Debug)]
 pub struct AgentTurnResult {
@@ -52,6 +84,8 @@ pub struct AgentTurnResult {
     pub tool_calls: usize,
     /// Model used for this turn.
     pub model:      String,
+    /// Detailed trace of the turn for observability.
+    pub trace:      TurnTrace,
 }
 
 /// Execute a single agent turn inline: build messages, stream LLM responses,
@@ -142,6 +176,8 @@ pub(crate) async fn run_inline_agent_loop(
 
     let mut tool_calls_made = 0usize;
     let mut last_accumulated_text = String::new();
+    let turn_start = Instant::now();
+    let mut iteration_traces: Vec<IterationTrace> = Vec::new();
 
     for iteration in 0..max_iterations {
         let iter_span = info_span!(
@@ -301,11 +337,32 @@ pub(crate) async fn run_inline_agent_loop(
 
         // Terminal response (no tool calls)
         if !has_tool_calls {
+            let first_token_ms = first_token_at
+                .map(|t| t.duration_since(stream_start).as_millis() as u64);
+            let stream_ms = stream_start.elapsed().as_millis() as u64;
+            let text_preview: String = accumulated_text.chars().take(200).collect();
+            iteration_traces.push(IterationTrace {
+                index: iteration,
+                first_token_ms,
+                stream_ms,
+                text_preview,
+                tool_calls: vec![],
+            });
+            let trace = TurnTrace {
+                duration_ms: turn_start.elapsed().as_millis() as u64,
+                model: model.clone(),
+                iterations: iteration_traces,
+                final_text_len: accumulated_text.len(),
+                total_tool_calls: tool_calls_made,
+                success: true,
+                error: None,
+            };
             return Ok(AgentTurnResult {
                 text: accumulated_text,
                 iterations: iteration + 1,
                 tool_calls: tool_calls_made,
                 model: model.clone(),
+                trace,
             });
         }
 
@@ -371,7 +428,7 @@ pub(crate) async fn run_inline_agent_loop(
 
         iter_span.record("tool_count", valid_tool_calls.len());
 
-        // Execute all tool calls concurrently
+        // Execute all tool calls concurrently (with timing for traces)
         let tool_futures: Vec<_> = valid_tool_calls
             .iter()
             .map(|(_id, name, args)| {
@@ -385,25 +442,30 @@ pub(crate) async fn run_inline_agent_loop(
                 );
                 async move {
                     let _guard = tool_span.enter();
+                    let tool_start = Instant::now();
                     if let Some(tool) = tool {
                         match tool.execute(args).await {
                             Ok(result) => {
                                 tool_span.record("success", true);
-                                (true, result, None::<String>)
+                                let dur = tool_start.elapsed().as_millis() as u64;
+                                (true, result, None::<String>, dur)
                             }
                             Err(e) => {
                                 tool_span.record("success", false);
+                                let dur = tool_start.elapsed().as_millis() as u64;
                                 (
                                     false,
                                     serde_json::json!({ "error": e.to_string() }),
                                     Some(e.to_string()),
+                                    dur,
                                 )
                             }
                         }
                     } else {
                         tool_span.record("success", false);
                         let err = format!("tool not found: {name}");
-                        (false, serde_json::json!({ "error": &err }), Some(err))
+                        let dur = tool_start.elapsed().as_millis() as u64;
+                        (false, serde_json::json!({ "error": &err }), Some(err), dur)
                     }
                 }
             })
@@ -411,16 +473,41 @@ pub(crate) async fn run_inline_agent_loop(
 
         let results = futures::future::join_all(tool_futures).await;
 
+        // Build tool call traces from results
+        let mut tool_call_traces: Vec<ToolCallTrace> = Vec::with_capacity(results.len());
+
         // Emit ToolCallEnd events and append tool response messages
-        for ((id, _name, _args), (_success, result, _err)) in
+        for ((id, name, _args), (success, result, _err, duration_ms)) in
             valid_tool_calls.iter().zip(results)
         {
             stream_handle.emit(StreamEvent::ToolCallEnd { id: id.clone() });
+
+            tool_call_traces.push(ToolCallTrace {
+                name: name.clone(),
+                id: id.clone(),
+                duration_ms,
+                success,
+            });
 
             messages.push(
                 build_tool_response_message(id, &result.to_string())
                     .map_err(|e| format!("failed to build tool response: {e}"))?,
             );
+        }
+
+        // Collect iteration trace (with tool calls)
+        {
+            let first_token_ms = first_token_at
+                .map(|t| t.duration_since(stream_start).as_millis() as u64);
+            let stream_ms = stream_start.elapsed().as_millis() as u64;
+            let text_preview: String = accumulated_text.chars().take(200).collect();
+            iteration_traces.push(IterationTrace {
+                index: iteration,
+                first_token_ms,
+                stream_ms,
+                text_preview,
+                tool_calls: tool_call_traces,
+            });
         }
     }
 
@@ -430,11 +517,21 @@ pub(crate) async fn run_inline_agent_loop(
         tool_calls_made,
         "inline agent loop hit max iterations limit, returning partial results"
     );
+    let trace = TurnTrace {
+        duration_ms: turn_start.elapsed().as_millis() as u64,
+        model: model.clone(),
+        iterations: iteration_traces,
+        final_text_len: last_accumulated_text.len(),
+        total_tool_calls: tool_calls_made,
+        success: true,
+        error: None,
+    };
     Ok(AgentTurnResult {
         text:       last_accumulated_text,
         iterations: max_iterations,
         tool_calls: tool_calls_made,
         model:      model.clone(),
+        trace,
     })
 }
 

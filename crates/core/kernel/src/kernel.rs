@@ -461,6 +461,11 @@ impl Kernel {
         }
     }
 
+    /// Get the detailed turn traces for a specific agent process.
+    pub fn get_process_turns(&self, agent_id: AgentId) -> Vec<crate::agent_turn::TurnTrace> {
+        self.inner.process_table.get_turn_traces(agent_id)
+    }
+
     /// Access the device registry (for hot-plugging devices).
     pub fn device_registry(&self) -> &Arc<DeviceRegistry> { &self.inner.device_registry }
 

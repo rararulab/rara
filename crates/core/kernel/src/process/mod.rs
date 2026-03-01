@@ -374,6 +374,8 @@ pub struct AgentProcess {
     pub created_files: Vec<PathBuf>,
     /// Per-process runtime metrics (atomic counters for lock-free updates).
     pub metrics:       Arc<RuntimeMetrics>,
+    /// Detailed turn traces for observability (most recent 50 turns).
+    pub turn_traces:   Vec<crate::agent_turn::TurnTrace>,
 }
 
 /// Summary info for listing processes.
@@ -713,6 +715,27 @@ impl ProcessTable {
             .collect()
     }
 
+    /// Maximum number of turn traces retained per process.
+    const MAX_TURN_TRACES: usize = 50;
+
+    /// Push a turn trace onto a process, evicting the oldest if at capacity.
+    pub fn push_turn_trace(&self, id: AgentId, trace: crate::agent_turn::TurnTrace) {
+        if let Some(mut entry) = self.processes.get_mut(&id) {
+            if entry.turn_traces.len() >= Self::MAX_TURN_TRACES {
+                entry.turn_traces.remove(0);
+            }
+            entry.turn_traces.push(trace);
+        }
+    }
+
+    /// Get the turn traces for a process.
+    pub fn get_turn_traces(&self, id: AgentId) -> Vec<crate::agent_turn::TurnTrace> {
+        self.processes
+            .get(&id)
+            .map(|p| p.turn_traces.clone())
+            .unwrap_or_default()
+    }
+
     /// Count running processes.
     pub fn running_count(&self) -> usize {
         self.processes
@@ -874,6 +897,7 @@ mod tests {
             result:             None,
             created_files:      vec![],
             metrics:            Arc::new(RuntimeMetrics::new()),
+            turn_traces:        vec![],
         }
     }
 
@@ -898,6 +922,7 @@ mod tests {
             result:             None,
             created_files:      vec![],
             metrics:            Arc::new(RuntimeMetrics::new()),
+            turn_traces:        vec![],
         }
     }
 
@@ -1214,6 +1239,7 @@ system_prompt: "Hello"
             result:             None,
             created_files:      vec![],
             metrics:            Arc::new(RuntimeMetrics::new()),
+            turn_traces:        vec![],
         };
         table.insert(new_process);
         table.bind_session(channel_sid.clone(), new_id);
