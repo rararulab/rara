@@ -102,20 +102,20 @@ mod tests {
 
     fn test_manifest(name: &str) -> AgentManifest {
         AgentManifest {
-            name: name.to_string(),
-            role: None,
-            description: format!("Test agent: {name}"),
-            model: "test-model".to_string(),
-            system_prompt: "You are a test agent.".to_string(),
-            soul_prompt: None,
-            provider_hint: None,
-            max_iterations: Some(10),
-            tools: vec![],
-            max_children: None,
+            name:               name.to_string(),
+            role:               None,
+            description:        format!("Test agent: {name}"),
+            model:              Some("test-model".to_string()),
+            system_prompt:      "You are a test agent.".to_string(),
+            soul_prompt:        None,
+            provider_hint:      None,
+            max_iterations:     Some(10),
+            tools:              vec![],
+            max_children:       None,
             max_context_tokens: None,
-            priority: Priority::default(),
-            metadata: serde_json::Value::Null,
-            sandbox: None,
+            priority:           Priority::default(),
+            metadata:           serde_json::Value::Null,
+            sandbox:            None,
         }
     }
 
@@ -136,11 +136,11 @@ mod tests {
             std::env::temp_dir().join("agent_registry_test_shadow"),
         );
         let mut custom = test_manifest("rara");
-        custom.model = "custom-model".to_string();
+        custom.model = Some("custom-model".to_string());
         registry.custom.insert("rara".to_string(), custom);
 
         let m = registry.get("rara").unwrap();
-        assert_eq!(m.model, "custom-model");
+        assert_eq!(m.model, Some("custom-model".to_string()));
     }
 
     #[test]

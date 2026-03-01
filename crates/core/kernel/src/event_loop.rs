@@ -386,8 +386,17 @@ impl Kernel {
                 let _ = reply_tx.send(Arc::clone(&inner.tool_registry));
             }
 
-            Syscall::AcquireProvider { reply_tx } => {
-                let result = inner.llm_provider.acquire_provider().await;
+            Syscall::ResolveProvider { agent_id, reply_tx } => {
+                let result = match inner.process_table.get(agent_id) {
+                    Some(process) => inner.provider_registry.resolve(
+                        &process.manifest.name,
+                        process.manifest.provider_hint.as_deref(),
+                        process.manifest.model.as_deref(),
+                    ),
+                    None => Err(KernelError::ProcessNotFound {
+                        id: agent_id.to_string(),
+                    }),
+                };
                 let _ = reply_tx.send(result);
             }
 
@@ -1364,7 +1373,7 @@ impl Kernel {
             self.settings().as_ref(),
             "chat",
         )
-        .await?;
+        .await;
         Some(AgentManifest {
             name:               "io-agent".to_string(),
         role:           None,

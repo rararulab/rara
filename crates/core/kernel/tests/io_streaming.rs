@@ -34,7 +34,7 @@ use async_trait::async_trait;
 use rara_kernel::{
     io::stream::{StreamEvent, StreamHub},
     process::{AgentId, AgentManifest, AgentResult, ProcessState, SessionId, principal::Principal},
-    provider::{LlmProviderLoaderRef, OllamaProviderLoader},
+    provider::{LlmProviderLoaderRef, OllamaProviderLoader, ProviderRegistryBuilder},
     testing::TestKernelBuilder,
     tool::{AgentTool, ToolRegistry},
 };
@@ -60,20 +60,20 @@ fn ollama_model() -> String {
 /// Helper: build a test manifest using the real Ollama model.
 fn test_manifest(name: &str, system_prompt: &str) -> AgentManifest {
     AgentManifest {
-        name:           name.to_string(),
-        role:           None,
-        description:    format!("I/O test agent: {name}"),
-        model:          ollama_model(),
-        system_prompt:  system_prompt.to_string(),
-        soul_prompt:    None,
-        provider_hint:  None,
-        max_iterations: Some(5),
-        tools:          vec![],
-        max_children:        None,
-        max_context_tokens:  None,
-        priority:            Default::default(),
-        metadata:            serde_json::Value::Null,
-        sandbox:             None,
+        name:               name.to_string(),
+        role:               None,
+        description:        format!("I/O test agent: {name}"),
+        model:              Some(ollama_model()),
+        system_prompt:      system_prompt.to_string(),
+        soul_prompt:        None,
+        provider_hint:      None,
+        max_iterations:     Some(5),
+        tools:              vec![],
+        max_children:       None,
+        max_context_tokens: None,
+        priority:           Default::default(),
+        metadata:           serde_json::Value::Null,
+        sandbox:            None,
     }
 }
 
@@ -110,9 +110,22 @@ impl AgentTool for EchoTool {
 fn start_test_kernel(
     tools: Vec<Arc<dyn AgentTool>>,
 ) -> (Arc<rara_kernel::Kernel>, tokio_util::sync::CancellationToken) {
-    let loader = Arc::new(ollama_loader()) as LlmProviderLoaderRef;
+    let ollama = ollama_loader();
+    let model = ollama_model();
+    let registry = Arc::new(
+        ProviderRegistryBuilder::new("ollama", &model)
+            .provider("ollama", Arc::new(rara_kernel::provider::OpenAiProvider::with_config(
+                async_openai::config::OpenAIConfig::new()
+                    .with_api_key("ollama")
+                    .with_api_base(
+                        std::env::var("OLLAMA_BASE_URL")
+                            .unwrap_or_else(|_| OLLAMA_BASE_URL.to_string()),
+                    ),
+            )))
+            .build(),
+    );
     let mut builder = TestKernelBuilder::new()
-        .llm_provider(loader)
+        .provider_registry(registry)
         .max_concurrency(8)
         .max_iterations(10);
     for tool in tools {

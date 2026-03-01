@@ -40,7 +40,7 @@ pub struct AppState {
     pub contact_repo:        rara_channels::telegram::contacts::repository::ContactRepository,
 
     // -- LLM provider --
-    pub llm_provider: rara_kernel::provider::LlmProviderLoaderRef,
+    pub provider_registry: std::sync::Arc<rara_kernel::provider::ProviderRegistry>,
 
     // -- infra --
     pub object_store: Operator,
@@ -91,10 +91,9 @@ impl AppState {
             Arc::new(settings_svc.clone());
         info!("Runtime settings service loaded");
 
-        // -- LLM provider ----------------------------------------------------
+        // -- LLM provider registry -------------------------------------------
 
-        let llm_provider: rara_kernel::provider::LlmProviderLoaderRef =
-            Arc::new(SettingsLlmProviderLoader::new(settings_provider.clone()));
+        let provider_registry = build_provider_registry(&*settings_provider).await;
 
         // -- domain services -------------------------------------------------
 
@@ -264,7 +263,7 @@ impl AppState {
                 memory_quota_per_agent: 1000,
                 ..Default::default()
             },
-            llm_provider:     llm_provider.clone(),
+            provider_registry: provider_registry.clone(),
             tool_registry:    tools.clone(),
             agent_registry,
             user_store:       user_store.clone(),
@@ -286,7 +285,7 @@ impl AppState {
             settings_svc,
             notify_client,
             contact_repo,
-            llm_provider,
+            provider_registry,
             object_store,
             memory_manager,
             skill_registry,
@@ -407,19 +406,66 @@ fn merge_openapi_router(
 }
 
 // ---------------------------------------------------------------------------
-// SettingsLlmProviderLoader
+// ProviderRegistry builder from settings
 // ---------------------------------------------------------------------------
 
-/// [`LlmProviderLoader`](rara_kernel::provider::LlmProviderLoader)
-/// implementation that reads the API key from
-/// [`SettingsSvc`](rara_backend_admin::settings::SettingsSvc) runtime settings
-/// rather than from environment variables.
+/// Build a [`ProviderRegistry`] from runtime settings.
 ///
-/// A fresh [`OpenAiProvider`](rara_kernel::provider::OpenAiProvider) is created
-/// on every call so that runtime API-key changes take effect immediately.
-struct SettingsLlmProviderLoader {
-    settings:           Arc<dyn rara_domain_shared::settings::SettingsProvider>,
-    codex_refresh_lock: Arc<tokio::sync::Mutex<()>>,
+/// Reads `llm.provider` (default: `"openrouter"`) and `llm.models.default`
+/// to determine the default provider and model. Then registers all
+/// available providers based on configured API keys / base URLs.
+async fn build_provider_registry(
+    settings: &dyn rara_domain_shared::settings::SettingsProvider,
+) -> Arc<rara_kernel::provider::ProviderRegistry> {
+    use rara_domain_shared::settings::keys;
+    use rara_kernel::provider::{OpenAiProvider, ProviderRegistryBuilder};
+
+    let default_provider = settings
+        .get(keys::LLM_PROVIDER)
+        .await
+        .unwrap_or_else(|| "openrouter".to_owned());
+    let default_model = settings
+        .get(keys::LLM_MODELS_DEFAULT)
+        .await
+        .unwrap_or_else(|| "openai/gpt-4o-mini".to_owned());
+
+    let mut builder = ProviderRegistryBuilder::new(&default_provider, &default_model);
+
+    // -- openrouter ---------------------------------------------------------
+    if let Some(api_key) = settings.get(keys::LLM_OPENROUTER_API_KEY).await {
+        builder = builder.provider(
+            "openrouter",
+            Arc::new(OpenAiProvider::new(api_key)),
+        );
+    }
+
+    // -- ollama -------------------------------------------------------------
+    {
+        let base_url = settings
+            .get(keys::LLM_OLLAMA_BASE_URL)
+            .await
+            .unwrap_or_else(|| "http://localhost:11434".to_owned());
+        let config = async_openai::config::OpenAIConfig::new()
+            .with_api_base(format!("{}/v1", base_url))
+            .with_api_key("ollama");
+        builder = builder.provider(
+            "ollama",
+            Arc::new(OpenAiProvider::with_config(config)),
+        );
+    }
+
+    // -- codex (OpenAI via OAuth) -------------------------------------------
+    if let Ok(Some(tokens)) = rara_codex_oauth::load_tokens() {
+        let config =
+            async_openai::config::OpenAIConfig::new().with_api_key(&tokens.access_token);
+        builder = builder.provider(
+            "codex",
+            Arc::new(OpenAiProvider::with_config(config)),
+        );
+    }
+
+    info!("provider registry: default_provider={default_provider}, default_model={default_model}");
+    Arc::new(builder.build())
 }
 
 /// Composio auth provider that reads credentials from runtime settings.
@@ -448,85 +494,5 @@ impl rara_composio::ComposioAuthProvider for SettingsComposioAuthProvider {
             api_key,
             entity_id.as_deref(),
         ))
-    }
-}
-
-impl SettingsLlmProviderLoader {
-    fn new(settings: Arc<dyn rara_domain_shared::settings::SettingsProvider>) -> Self {
-        Self {
-            settings,
-            codex_refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
-        }
-    }
-}
-
-#[async_trait]
-impl rara_kernel::provider::LlmProviderLoader for SettingsLlmProviderLoader {
-    async fn acquire_provider(
-        &self,
-    ) -> rara_kernel::error::Result<Arc<dyn rara_kernel::provider::LlmProvider>> {
-        use rara_domain_shared::settings::keys;
-        let provider = self
-            .settings
-            .get(keys::LLM_PROVIDER)
-            .await
-            .unwrap_or_else(|| "openrouter".to_owned());
-        match provider.as_str() {
-            "ollama" => {
-                let base_url = self
-                    .settings
-                    .get(keys::LLM_OLLAMA_BASE_URL)
-                    .await
-                    .unwrap_or_else(|| "http://localhost:11434".to_owned());
-                let config = async_openai::config::OpenAIConfig::new()
-                    .with_api_base(format!("{}/v1", base_url))
-                    .with_api_key("ollama");
-                Ok(Arc::new(
-                    rara_kernel::provider::OpenAiProvider::with_config(config),
-                ))
-            }
-            "codex" => {
-                let mut tokens = rara_codex_oauth::load_tokens()
-                    .map_err(|e| rara_kernel::KernelError::Provider { message: e.into() })?
-                    .ok_or(rara_kernel::error::ProviderNotConfiguredSnafu.build())?;
-
-                if rara_codex_oauth::should_refresh_token(tokens.expires_at_unix) {
-                    let _guard = self.codex_refresh_lock.lock().await;
-                    tokens = rara_codex_oauth::load_tokens()
-                        .map_err(|e| rara_kernel::KernelError::Provider { message: e.into() })?
-                        .ok_or(rara_kernel::error::ProviderNotConfiguredSnafu.build())?;
-                    if rara_codex_oauth::should_refresh_token(tokens.expires_at_unix) {
-                        let refreshed_tokens = rara_codex_oauth::refresh_tokens(&tokens)
-                            .await
-                            .map_err(|e| rara_kernel::KernelError::Provider {
-                                message: e.into(),
-                            })?;
-                        rara_codex_oauth::save_tokens(&refreshed_tokens).map_err(|e| {
-                            rara_kernel::KernelError::Provider {
-                                message: format!("failed to persist refreshed codex token: {e}")
-                                    .into(),
-                            }
-                        })?;
-                        tokens = refreshed_tokens;
-                    }
-                }
-
-                let config =
-                    async_openai::config::OpenAIConfig::new().with_api_key(tokens.access_token);
-                Ok(Arc::new(
-                    rara_kernel::provider::OpenAiProvider::with_config(config),
-                ))
-            }
-            _ => {
-                let api_key = self
-                    .settings
-                    .get(keys::LLM_OPENROUTER_API_KEY)
-                    .await
-                    .ok_or(rara_kernel::error::ProviderNotConfiguredSnafu.build())?;
-                Ok(Arc::new(rara_kernel::provider::OpenAiProvider::new(
-                    api_key,
-                )))
-            }
-        }
     }
 }

@@ -403,10 +403,12 @@ impl ProcessHandle {
         })
     }
 
-    /// Acquire an LLM provider instance.
-    pub async fn acquire_provider(&self) -> Result<Arc<dyn LlmProvider>> {
+    /// Resolve an LLM provider + model for this agent via the kernel's
+    /// `ProviderRegistry`. Returns `(provider, model_name)`.
+    pub async fn resolve_provider(&self) -> Result<(Arc<dyn LlmProvider>, String)> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.syscall_push(KernelEvent::Syscall(Syscall::AcquireProvider {
+        self.syscall_push(KernelEvent::Syscall(Syscall::ResolveProvider {
+            agent_id: self.agent_id,
             reply_tx,
         }))
         .await?;

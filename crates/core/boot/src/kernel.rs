@@ -32,7 +32,7 @@ use rara_kernel::{
     },
     kernel::{Kernel, KernelConfig},
     process::{agent_registry::AgentRegistry, user::UserStore},
-    provider::LlmProviderLoaderRef,
+    provider::ProviderRegistry,
     session::SessionRepository,
     tool::ToolRegistry,
 };
@@ -52,8 +52,8 @@ pub struct BootConfig {
     // -- core kernel config --------------------------------------------------
     /// Kernel concurrency / iteration limits.
     pub kernel_config: KernelConfig,
-    /// LLM provider loader.
-    pub llm_provider:  LlmProviderLoaderRef,
+    /// Multi-provider LLM registry.
+    pub provider_registry: Arc<ProviderRegistry>,
     /// Global tool registry.
     pub tool_registry: Arc<ToolRegistry>,
     /// Agent registry.
@@ -90,11 +90,13 @@ impl Default for BootConfig {
     fn default() -> Self {
         use rara_kernel::defaults::noop::{NoopSettingsProvider, NoopSessionRepository};
         use rara_kernel::defaults::noop_user_store::NoopUserStore;
-        use rara_kernel::provider::EnvLlmProviderLoader;
+        use rara_kernel::provider::ProviderRegistryBuilder;
 
         Self {
             kernel_config:     KernelConfig::default(),
-            llm_provider:      Arc::new(EnvLlmProviderLoader::default()) as LlmProviderLoaderRef,
+            provider_registry: Arc::new(
+                ProviderRegistryBuilder::new("openrouter", "openai/gpt-4o-mini").build(),
+            ),
             tool_registry:     Arc::new(ToolRegistry::new()),
             agent_registry:    AgentRegistry::new(
                 vec![],
@@ -162,7 +164,7 @@ pub fn boot(config: BootConfig) -> Kernel {
 
     Kernel::new(
         config.kernel_config,
-        config.llm_provider,
+        config.provider_registry,
         config.tool_registry,
         memory,
         event_bus,

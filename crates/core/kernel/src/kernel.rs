@@ -65,7 +65,7 @@ use crate::{
         AgentId, AgentManifest, ProcessState, ProcessTable,
         SessionId, agent_registry::AgentRegistry, principal::Principal, user::UserStore,
     },
-    provider::LlmProviderLoaderRef,
+    provider::ProviderRegistry,
     session::SessionRepository,
     tool::ToolRegistry,
 };
@@ -87,8 +87,8 @@ pub(crate) struct KernelInner {
     pub default_child_limit:    usize,
     /// Default max LLM iterations for spawned agents.
     pub default_max_iterations: usize,
-    /// LLM provider loader for acquiring providers.
-    pub llm_provider:           LlmProviderLoaderRef,
+    /// Multi-provider LLM registry with per-agent overrides.
+    pub provider_registry:      Arc<ProviderRegistry>,
     /// Global tool registry (spawned agents get filtered subsets).
     pub tool_registry:          Arc<ToolRegistry>,
     /// 3-layer memory (not used for cross-agent KV — see shared_kv).
@@ -264,7 +264,7 @@ impl Kernel {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: KernelConfig,
-        llm_provider: LlmProviderLoaderRef,
+        provider_registry: Arc<ProviderRegistry>,
         tool_registry: Arc<ToolRegistry>,
         memory: Arc<dyn Memory>,
         event_bus: Arc<dyn EventBus>,
@@ -300,7 +300,7 @@ impl Kernel {
             global_semaphore: Arc::new(Semaphore::new(config.max_concurrency)),
             default_child_limit: config.default_child_limit,
             default_max_iterations: config.default_max_iterations,
-            llm_provider,
+            provider_registry,
             tool_registry,
             memory,
             event_bus,
@@ -553,7 +553,7 @@ mod tests {
             noop_user_store::NoopUserStore,
         },
         process::principal::Principal,
-        provider::EnvLlmProviderLoader,
+        provider::ProviderRegistryBuilder,
     };
 
     fn make_test_kernel(max_concurrency: usize, child_limit: usize) -> Kernel {
@@ -570,9 +570,13 @@ mod tests {
             std::env::temp_dir().join("kernel_test_agents"),
         );
 
+        let provider_registry = Arc::new(
+            ProviderRegistryBuilder::new("test", "test-model").build(),
+        );
+
         Kernel::new(
             config,
-            Arc::new(EnvLlmProviderLoader::default()) as LlmProviderLoaderRef,
+            provider_registry,
             Arc::new(ToolRegistry::new()),
             Arc::new(NoopMemory),
             Arc::new(NoopEventBus),
@@ -608,7 +612,7 @@ mod tests {
             name:           name.to_string(),
         role:           None,
             description:    format!("Test agent: {name}"),
-            model:          "test-model".to_string(),
+            model:          Some("test-model".to_string()),
             system_prompt:  "You are a test agent.".to_string(),
             soul_prompt:    None,
             provider_hint:  None,
