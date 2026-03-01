@@ -141,6 +141,18 @@ pub enum KernelError {
     /// Sandbox: path resolution failed (e.g., path traversal attempt).
     #[snafu(display("sandbox path error: {message}"))]
     SandboxPathError { message: String },
+
+    /// Device already registered in the registry.
+    #[snafu(display("device already registered: {id}"))]
+    DeviceAlreadyRegistered { id: String },
+
+    /// Device not found in the registry.
+    #[snafu(display("device not found: {id}"))]
+    DeviceNotFound { id: String },
+
+    /// Device health check or shutdown failed.
+    #[snafu(display("device error: {message}"))]
+    Device { message: String },
 }
 
 impl From<crate::memory::MemoryError> for KernelError {

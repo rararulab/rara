@@ -578,6 +578,7 @@ mod tests {
             outbound_bus:           Arc::new(InMemoryOutboundBus::new(1))
                 as Arc<dyn crate::io::bus::OutboundBus>,
             pipe_registry:          Arc::new(PipeRegistry::new()),
+            device_registry:        Arc::new(crate::device_registry::DeviceRegistry::new()),
         })
     }
 

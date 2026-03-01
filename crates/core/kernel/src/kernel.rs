@@ -48,6 +48,7 @@ use tracing::info;
 
 use crate::{
     channel::types::ChannelType,
+    device_registry::DeviceRegistry,
     error::{KernelError, Result},
     event::EventBus,
     guard::Guard,
@@ -115,6 +116,8 @@ pub(crate) struct KernelInner {
     pub outbound_bus:           Arc<dyn OutboundBus>,
     /// Inter-agent pipe registry for streaming data between agents.
     pub pipe_registry:          Arc<PipeRegistry>,
+    /// Device registry for hot-pluggable devices (MCP servers, APIs, etc.).
+    pub device_registry:        Arc<DeviceRegistry>,
 }
 
 impl KernelInner {
@@ -939,6 +942,7 @@ impl Kernel {
             stream_hub: stream_hub.clone(),
             outbound_bus: outbound_bus.clone(),
             pipe_registry: Arc::new(PipeRegistry::new()),
+            device_registry: Arc::new(DeviceRegistry::new()),
         });
 
         let scheduler = Arc::new(Mutex::new(
@@ -1122,6 +1126,9 @@ impl Kernel {
             uptime_ms,
         }
     }
+
+    /// Access the device registry (for hot-plugging devices).
+    pub fn device_registry(&self) -> &Arc<DeviceRegistry> { &self.inner.device_registry }
 
     /// Access the shared KernelInner (for constructing ScopedKernelHandles
     /// externally).

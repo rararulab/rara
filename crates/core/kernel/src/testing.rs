@@ -38,6 +38,7 @@ use crate::{
         noop::{NoopEventBus, NoopGuard, NoopMemory, NoopModelRepo, NoopSessionRepository},
         noop_user_store::NoopUserStore,
     },
+    device_registry::DeviceRegistry,
     io::{bus::OutboundBus, memory_bus::InMemoryOutboundBus, pipe::PipeRegistry, stream::StreamHub},
     kernel::{Kernel, KernelConfig, KernelInner},
     model_repo::ModelRepo,
@@ -141,6 +142,7 @@ impl TestKernelBuilder {
             outbound_bus:           Arc::new(InMemoryOutboundBus::new(64))
                 as Arc<dyn OutboundBus>,
             pipe_registry:          Arc::new(PipeRegistry::new()),
+            device_registry:        Arc::new(DeviceRegistry::new()),
         });
 
         // Use private constructor approach: build Kernel from its inner field.
