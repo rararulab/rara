@@ -899,6 +899,27 @@ impl Kernel {
             .process_table
             .set_state(agent_id, ProcessState::Running);
 
+        // Send a typing / progress indicator so the user sees feedback
+        // while the LLM is thinking (e.g. Telegram "typing..." bubble).
+        let egress_session_id = self
+            .inner()
+            .process_table
+            .get(agent_id)
+            .and_then(|p| p.channel_session_id.clone())
+            .unwrap_or_else(|| session_id.clone());
+        let _ = self.event_queue().try_push(KernelEvent::Deliver(OutboundEnvelope {
+            id:          MessageId::new(),
+            in_reply_to: msg_id.clone(),
+            user:        user.clone(),
+            session_id:  egress_session_id,
+            routing:     OutboundRouting::BroadcastAll,
+            payload:     OutboundPayload::Progress {
+                stage:  "thinking".to_string(),
+                detail: Some(String::new()),
+            },
+            timestamp:   jiff::Timestamp::now(),
+        }));
+
         // Record metrics.
         if let Some(metrics) = self.inner().process_table.get_metrics(&agent_id) {
             metrics.record_message();
