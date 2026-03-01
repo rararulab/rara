@@ -38,7 +38,6 @@ use dashmap::DashMap;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::error::Result;
@@ -504,9 +503,6 @@ pub struct ProcessTable {
     processes:     DashMap<AgentId, AgentProcess>,
     /// Maps a session to its currently active agent process.
     session_index: DashMap<SessionId, AgentId>,
-    /// Cancellation tokens for graceful process termination.
-    /// Parent token cancel → all child tokens cancel automatically.
-    cancellation_tokens: DashMap<AgentId, CancellationToken>,
     /// Per-process runtime metrics (atomic counters for lock-free updates).
     metrics:       DashMap<AgentId, std::sync::Arc<RuntimeMetrics>>,
     /// Monotonically increasing counter of total processes ever spawned.
@@ -523,7 +519,6 @@ impl ProcessTable {
         Self {
             processes:           DashMap::new(),
             session_index:       DashMap::new(),
-            cancellation_tokens: DashMap::new(),
             metrics:             DashMap::new(),
             total_spawned:       AtomicU64::new(0),
             total_completed:     AtomicU64::new(0),
@@ -605,7 +600,6 @@ impl ProcessTable {
         if let Some(ref process) = removed {
             self.session_index
                 .remove_if(&process.session_id, |_, agent_id| *agent_id == id);
-            self.cancellation_tokens.remove(&id);
             self.metrics.remove(&id);
         }
         removed
@@ -648,21 +642,6 @@ impl ProcessTable {
     /// binding).
     pub fn bind_session(&self, session_id: SessionId, agent_id: AgentId) {
         self.session_index.insert(session_id, agent_id);
-    }
-
-    /// Register a cancellation token for a process.
-    pub fn set_cancellation_token(&self, id: AgentId, token: CancellationToken) {
-        self.cancellation_tokens.insert(id, token);
-    }
-
-    /// Get a clone of the cancellation token for a process.
-    pub fn get_cancellation_token(&self, id: &AgentId) -> Option<CancellationToken> {
-        self.cancellation_tokens.get(id).map(|t| t.value().clone())
-    }
-
-    /// Remove the cancellation token for a process that ended naturally.
-    pub fn clear_cancellation_token(&self, id: &AgentId) {
-        self.cancellation_tokens.remove(id);
     }
 
     // ----- Metrics methods -----

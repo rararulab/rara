@@ -335,10 +335,13 @@ async fn test_cancellation_stops_process() {
     // Wait for the first turn to complete (enters Waiting state).
     let _result = wait_for_result(&kernel, agent_id, 60).await;
 
-    // Cancel via the process's cancellation token.
-    if let Some(token) = kernel.process_table().get_cancellation_token(&agent_id) {
-        token.cancel();
-    }
+    // Cancel via Kill signal through the event queue.
+    let _ = kernel.event_queue().try_push(
+        rara_kernel::unified_event::KernelEvent::SendSignal {
+            target: agent_id,
+            signal: rara_kernel::process::Signal::Kill,
+        },
+    );
 
     // Give a moment for the event loop to process.
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
