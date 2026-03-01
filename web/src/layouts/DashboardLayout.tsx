@@ -14,8 +14,11 @@
  * limitations under the License.
  */
 
-import { Outlet, useLocation } from 'react-router';
+import { Outlet, useLocation, useNavigate } from 'react-router';
+import { LogOut, ShieldCheck, User } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/contexts/AuthContext';
+import { Button } from '@/components/ui/button';
 
 /** Routes that need zero padding in the main content area. */
 const FULL_BLEED_ROUTES = new Set(['/agent', '/jobs', '/docs']);
@@ -25,12 +28,48 @@ const FULL_BLEED_PREFIXES: string[] = [];
 
 export default function DashboardLayout() {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { user, isRoot, logout } = useAuth();
   const isFullBleed = FULL_BLEED_ROUTES.has(location.pathname) || FULL_BLEED_PREFIXES.some(p => location.pathname.startsWith(p));
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login', { replace: true });
+  };
 
   return (
     <div className="flex h-screen bg-transparent">
       <main className={cn('relative flex min-w-0 flex-1 flex-col', isFullBleed ? 'overflow-hidden' : 'overflow-auto')}>
-        <div className={isFullBleed ? 'flex-1 min-h-0 p-2 md:p-3' : 'p-4 md:p-6'}>
+        {/* Top bar with user info */}
+        <div className="flex shrink-0 items-center justify-end gap-2 border-b border-border/40 bg-background/30 px-4 py-1.5 backdrop-blur-sm">
+          {isRoot && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => navigate('/admin/users')}
+            >
+              <ShieldCheck className="h-3.5 w-3.5" />
+              Admin
+            </Button>
+          )}
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <User className="h-3.5 w-3.5" />
+            <span>{user?.name ?? 'Unknown'}</span>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-destructive"
+            onClick={handleLogout}
+            title="Sign out"
+          >
+            <LogOut className="h-3.5 w-3.5" />
+            Logout
+          </Button>
+        </div>
+
+        <div className={cn('flex-1 min-h-0', isFullBleed ? 'p-2 md:p-3' : 'p-4 md:p-6')}>
           <Outlet />
         </div>
       </main>
