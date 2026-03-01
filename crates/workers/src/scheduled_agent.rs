@@ -76,6 +76,7 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
                 tools:          vec![], // inherit all tools
                 max_children:   None,
                 metadata:       serde_json::json!({ "job_id": job.id }),
+                sandbox:        None,
             };
 
             let session_id = SessionId::new(job.session_key.clone());

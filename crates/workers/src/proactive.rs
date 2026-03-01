@@ -104,6 +104,7 @@ impl FallibleWorker<AppState> for ProactiveAgentWorker {
             tools: vec![], // inherit all tools
             max_children: None,
             metadata: serde_json::Value::Null,
+            sandbox: None,
         };
 
         let session_id = SessionId::new(PROACTIVE_SESSION_KEY);

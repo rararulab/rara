@@ -221,6 +221,7 @@ impl KernelInner {
             created_at: Timestamp::now(),
             finished_at: None,
             result: None,
+            created_files: vec![],
         };
         self_ref.process_table.insert(process);
         self_ref
@@ -901,6 +902,7 @@ mod tests {
             tools:          vec![],
             max_children:   None,
             metadata:       serde_json::Value::Null,
+            sandbox:        None,
         }
     }
 

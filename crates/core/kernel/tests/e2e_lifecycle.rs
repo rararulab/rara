@@ -70,6 +70,7 @@ fn test_manifest(name: &str, system_prompt: &str) -> AgentManifest {
         tools:          vec![],
         max_children:   None,
         metadata:       serde_json::Value::Null,
+        sandbox:        None,
     }
 }
 

@@ -121,6 +121,14 @@ pub enum KernelError {
     /// User account is disabled.
     #[snafu(display("user disabled: {name}"))]
     UserDisabled { name: String },
+
+    /// Sandbox: access to a file path was denied.
+    #[snafu(display("sandbox denied {operation} access to: {path}"))]
+    SandboxAccessDenied { path: String, operation: String },
+
+    /// Sandbox: path resolution failed (e.g., path traversal attempt).
+    #[snafu(display("sandbox path error: {message}"))]
+    SandboxPathError { message: String },
 }
 
 impl From<crate::memory::MemoryError> for KernelError {

@@ -169,6 +169,7 @@ mod tests {
             tools:          vec![],
             max_children:   None,
             metadata:       serde_json::Value::Null,
+            sandbox:        None,
         }
     }
 
@@ -200,15 +201,16 @@ mod tests {
 
         let process = AgentProcess {
             agent_id,
-            parent_id:   None,
-            session_id:  session_id.clone(),
-            manifest:    manifest.clone(),
-            principal:   Principal::user("test-user"),
-            env:         AgentEnv::default(),
-            state:       ProcessState::Running,
-            created_at:  jiff::Timestamp::now(),
-            finished_at: None,
-            result:      None,
+            parent_id:     None,
+            session_id:    session_id.clone(),
+            manifest:      manifest.clone(),
+            principal:     Principal::user("test-user"),
+            env:           AgentEnv::default(),
+            state:         ProcessState::Running,
+            created_at:    jiff::Timestamp::now(),
+            finished_at:   None,
+            result:        None,
+            created_files: vec![],
         };
         inner.process_table.insert(process);
 

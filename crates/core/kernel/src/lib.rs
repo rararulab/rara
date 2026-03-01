@@ -60,8 +60,8 @@ pub use handle::{AgentHandle, EventOps, GuardOps, KernelHandle, MemoryOps, Proce
 pub use handle::{scoped::ScopedKernelHandle, spawn_tool::SpawnTool};
 pub use kernel::{Kernel, KernelConfig};
 pub use process::{
-    AgentId, AgentProcess, ProcessInfo, ProcessMessage, ProcessState, ProcessTable, SessionId,
-    Signal,
+    AgentId, AgentProcess, ProcessInfo, ProcessMessage, ProcessState, ProcessTable, SandboxConfig,
+    SessionId, Signal,
     manifest_loader::ManifestLoader,
     principal::{Principal, Role, UserId},
 };

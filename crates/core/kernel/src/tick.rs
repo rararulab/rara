@@ -164,6 +164,7 @@ impl TickLoop {
             tools:          vec![],
             max_children:   None,
             metadata:       serde_json::Value::Null,
+            sandbox:        None,
         }
     }
 }

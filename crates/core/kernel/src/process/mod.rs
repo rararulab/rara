@@ -28,7 +28,7 @@ pub mod manifest_loader;
 pub mod principal;
 pub mod user;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 
 use dashmap::DashMap;
 use jiff::Timestamp;
@@ -38,6 +38,44 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{error::Result, io::types::InboundMessage};
+
+// ---------------------------------------------------------------------------
+// SandboxConfig — file access whitelisting for agent processes
+// ---------------------------------------------------------------------------
+
+/// Configuration for agent file-system sandboxing.
+///
+/// Controls which file paths an agent process is allowed to access,
+/// with support for read/write, read-only, and deny lists.
+/// Deny rules take precedence over allow rules.
+///
+/// # YAML example
+/// ```yaml
+/// sandbox:
+///   allowed_paths:
+///     - /tmp/agent-workspace
+///     - /data/shared
+///   read_only_paths:
+///     - /etc/config
+///   denied_paths:
+///     - /etc/secrets
+///   isolated_workspace: true
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SandboxConfig {
+    /// Allowed file paths (read/write). Path-prefix matching.
+    #[serde(default)]
+    pub allowed_paths:      Vec<String>,
+    /// Read-only paths (reads allowed, writes denied). Path-prefix matching.
+    #[serde(default)]
+    pub read_only_paths:    Vec<String>,
+    /// Denied paths (takes precedence over allowed and read-only).
+    #[serde(default)]
+    pub denied_paths:       Vec<String>,
+    /// Whether to create an isolated temp workspace for this agent.
+    #[serde(default)]
+    pub isolated_workspace: bool,
+}
 
 /// Unique identifier for a running agent process.
 ///
@@ -114,6 +152,9 @@ pub struct AgentManifest {
     /// Arbitrary metadata for extension.
     #[serde(default)]
     pub metadata:       serde_json::Value,
+    /// Optional sandbox configuration for file access control.
+    #[serde(default)]
+    pub sandbox:        Option<SandboxConfig>,
 }
 
 /// Runtime state of an agent process.
@@ -196,25 +237,27 @@ pub enum Signal {
 #[derive(Debug, Clone)]
 pub struct AgentProcess {
     /// Unique identifier for this process.
-    pub agent_id:    AgentId,
+    pub agent_id:      AgentId,
     /// Parent process (None for root-level agents).
-    pub parent_id:   Option<AgentId>,
+    pub parent_id:     Option<AgentId>,
     /// Session this process belongs to.
-    pub session_id:  SessionId,
+    pub session_id:    SessionId,
     /// The agent definition driving this process.
-    pub manifest:    AgentManifest,
+    pub manifest:      AgentManifest,
     /// The identity under which this process runs.
-    pub principal:   principal::Principal,
+    pub principal:     principal::Principal,
     /// Per-process environment.
-    pub env:         AgentEnv,
+    pub env:           AgentEnv,
     /// Current lifecycle state.
-    pub state:       ProcessState,
+    pub state:         ProcessState,
     /// When this process was created.
-    pub created_at:  Timestamp,
+    pub created_at:    Timestamp,
     /// When this process finished (if terminal).
-    pub finished_at: Option<Timestamp>,
+    pub finished_at:   Option<Timestamp>,
     /// Result of execution (set on completion/failure).
-    pub result:      Option<AgentResult>,
+    pub result:        Option<AgentResult>,
+    /// Files created or modified by this agent (for resource tracking).
+    pub created_files: Vec<PathBuf>,
 }
 
 /// Summary info for listing processes.
@@ -443,22 +486,24 @@ mod tests {
             tools:          vec!["read_file".to_string()],
             max_children:   None,
             metadata:       serde_json::Value::Null,
+            sandbox:        None,
         }
     }
 
     /// Helper to create a test process.
     fn test_process(name: &str, parent_id: Option<AgentId>) -> AgentProcess {
         AgentProcess {
-            agent_id: AgentId::new(),
+            agent_id:      AgentId::new(),
             parent_id,
-            session_id: SessionId::new("test-session"),
-            manifest: test_manifest(name),
-            principal: Principal::user("test-user"),
-            env: AgentEnv::default(),
-            state: ProcessState::Running,
-            created_at: Timestamp::now(),
-            finished_at: None,
-            result: None,
+            session_id:    SessionId::new("test-session"),
+            manifest:      test_manifest(name),
+            principal:     Principal::user("test-user"),
+            env:           AgentEnv::default(),
+            state:         ProcessState::Running,
+            created_at:    Timestamp::now(),
+            finished_at:   None,
+            result:        None,
+            created_files: vec![],
         }
     }
 
@@ -720,16 +765,17 @@ system_prompt: "Hello"
         // bind_session overwrites
         let new_id = AgentId::new();
         let new_process = AgentProcess {
-            agent_id:    new_id,
-            parent_id:   None,
-            session_id:  session_id.clone(),
-            manifest:    test_manifest("agent-b"),
-            principal:   Principal::user("test-user"),
-            env:         AgentEnv::default(),
-            state:       ProcessState::Running,
-            created_at:  Timestamp::now(),
-            finished_at: None,
-            result:      None,
+            agent_id:      new_id,
+            parent_id:     None,
+            session_id:    session_id.clone(),
+            manifest:      test_manifest("agent-b"),
+            principal:     Principal::user("test-user"),
+            env:           AgentEnv::default(),
+            state:         ProcessState::Running,
+            created_at:    Timestamp::now(),
+            finished_at:   None,
+            result:        None,
+            created_files: vec![],
         };
         table.insert(new_process);
         table.bind_session(session_id.clone(), new_id);
