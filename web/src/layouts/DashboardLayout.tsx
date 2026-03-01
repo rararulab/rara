@@ -17,7 +17,7 @@
 import { useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { LogOut, ShieldCheck, User } from 'lucide-react';
+import { Activity, LogOut, ShieldCheck, User } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { authApi } from '@/api/client';
@@ -74,6 +74,15 @@ export default function DashboardLayout() {
       <main className={cn('relative flex min-w-0 flex-1 flex-col', isFullBleed ? 'overflow-hidden' : 'overflow-auto')}>
         {/* Top bar with user info */}
         <div className="flex shrink-0 items-center justify-end gap-2 border-b border-border/40 bg-background/30 px-4 py-1.5 backdrop-blur-sm">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+            onClick={() => navigate('/kernel-top')}
+          >
+            <Activity className="h-3.5 w-3.5" />
+            Kernel
+          </Button>
           {isRoot && (
             <Button
               variant="ghost"

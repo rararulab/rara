@@ -28,6 +28,7 @@ import JobsWorkspace from '@/pages/JobsWorkspace';
 import Docs from '@/pages/Docs';
 import Settings from '@/pages/Settings';
 import AdminUsers from '@/pages/AdminUsers';
+import KernelTop from '@/pages/KernelTop';
 
 const queryClient = new QueryClient();
 
@@ -50,6 +51,7 @@ export default function App() {
                   <Route path="jobs" element={<JobsWorkspace />} />
                   <Route path="docs" element={<Docs />} />
                   <Route path="settings" element={<Settings />} />
+                  <Route path="kernel-top" element={<KernelTop />} />
 
                   {/* Redirects for old routes */}
                   <Route path="chat" element={<Navigate to="/agent?tab=chat" replace />} />
