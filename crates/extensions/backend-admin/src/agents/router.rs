@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 pub struct AgentResponse {
     pub name:           String,
     pub description:    String,
-    pub model:          String,
+    pub model:          Option<String>,
     pub role:           Option<String>,
     pub provider_hint:  Option<String>,
     pub max_iterations: Option<usize>,
@@ -145,7 +145,7 @@ async fn create_agent(
         name:               req.name,
         role:               None,
         description:        req.description,
-        model:              req.model,
+        model:              Some(req.model),
         system_prompt:      req.system_prompt,
         soul_prompt:        req.soul_prompt,
         provider_hint:      req.provider_hint,

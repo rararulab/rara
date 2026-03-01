@@ -110,7 +110,6 @@ impl AgentTool for EchoTool {
 fn start_test_kernel(
     tools: Vec<Arc<dyn AgentTool>>,
 ) -> (Arc<rara_kernel::Kernel>, tokio_util::sync::CancellationToken) {
-    let ollama = ollama_loader();
     let model = ollama_model();
     let registry = Arc::new(
         ProviderRegistryBuilder::new("ollama", &model)
