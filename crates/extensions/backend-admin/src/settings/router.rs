@@ -12,135 +12,103 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use axum::{Json, extract::State, http::StatusCode};
-use rara_domain_shared::settings::model::{
-    AgentRuntimeSettingsPatch, ComposioRuntimeSettingsPatch, Settings, UpdateRequest,
+//! Flat KV settings HTTP API.
+//!
+//! | Method | Path                       | Description            |
+//! |--------|----------------------------|------------------------|
+//! | GET    | `/api/v1/settings`         | list all               |
+//! | PATCH  | `/api/v1/settings`         | batch update           |
+//! | GET    | `/api/v1/settings/*key`    | get one                |
+//! | PUT    | `/api/v1/settings/*key`    | set one                |
+//! | DELETE | `/api/v1/settings/*key`    | delete one             |
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::StatusCode,
+    routing::get,
 };
-use utoipa_axum::{router::OpenApiRouter, routes};
+use rara_domain_shared::settings::SettingsProvider;
+use utoipa_axum::router::OpenApiRouter;
 
 use crate::settings::SettingsSvc;
 
+// -- state wrapper --
+
+type SharedProvider = Arc<dyn SettingsProvider>;
+
 pub fn routes(svc: SettingsSvc) -> OpenApiRouter {
-    OpenApiRouter::new()
-        .merge(runtime_routes())
-        .merge(super::ai::routes())
-        .merge(super::gmail::routes())
-        .merge(super::auth::routes())
-        .merge(super::tg::routes())
-        .with_state(svc)
+    let provider: SharedProvider = Arc::new(svc);
+
+    let settings_router = axum::Router::new()
+        .route("/api/v1/settings", get(list_settings).patch(batch_update_settings))
+        .route("/api/v1/settings/*key", get(get_setting).put(set_setting).delete(delete_setting))
+        .with_state(provider);
+
+    OpenApiRouter::from(settings_router)
 }
 
-fn runtime_routes() -> OpenApiRouter<SettingsSvc> {
-    OpenApiRouter::new().nest(
-        "/api/v1",
-        OpenApiRouter::new().routes(routes!(get_settings, update_settings)),
-    )
+// -- request / response types -----------------------------------------------
+
+#[derive(Debug, serde::Deserialize)]
+struct SetValueBody {
+    value: String,
 }
 
-#[utoipa::path(
-    get,
-    path = "/settings",
-    tag = "settings",
-    responses((status = 200, description = "Runtime settings (unsplit admins only)", body = RuntimeSettingsView))
-)]
-async fn get_settings(
-    State(state): State<SettingsSvc>,
-) -> Result<Json<RuntimeSettingsView>, (StatusCode, String)> {
-    Ok(Json(state.current().into()))
+// -- handlers ---------------------------------------------------------------
+
+async fn list_settings(
+    State(provider): State<SharedProvider>,
+) -> Json<HashMap<String, String>> {
+    Json(provider.list().await)
 }
 
-#[utoipa::path(
-    post,
-    path = "/settings",
-    tag = "settings",
-    request_body = SettingsAdminUpdateRequest,
-    responses((status = 200, description = "Settings updated", body = RuntimeSettingsView))
-)]
-async fn update_settings(
-    State(state): State<SettingsSvc>,
-    Json(req): Json<SettingsAdminUpdateRequest>,
-) -> Result<Json<RuntimeSettingsView>, (StatusCode, String)> {
-    let updated = state.update(req.into()).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to update runtime settings: {e}"),
-        )
-    })?;
-    Ok(Json(updated.into()))
-}
-
-#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
-pub struct RuntimeSettingsView {
-    pub agent:        AgentSettingsView,
-    #[schema(value_type = Option<String>)]
-    pub updated_at:   Option<chrono::DateTime<chrono::Utc>>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
-pub struct AgentSettingsView {
-    pub composio: ComposioSettingsView,
-}
-
-#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
-pub struct ComposioSettingsView {
-    pub api_key:   Option<String>,
-    pub entity_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, serde::Deserialize, utoipa::ToSchema)]
-pub struct SettingsAdminUpdateRequest {
-    pub agent:        Option<AgentSettingsAdminPatch>,
-}
-
-impl From<SettingsAdminUpdateRequest> for UpdateRequest {
-    fn from(value: SettingsAdminUpdateRequest) -> Self {
-        let mut req = UpdateRequest::default();
-        req.agent = value.agent.map(Into::into);
-        req
+async fn get_setting(
+    State(provider): State<SharedProvider>,
+    Path(key): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let key = key.trim_start_matches('/');
+    match provider.get(key).await {
+        Some(value) => Ok(Json(serde_json::json!({ "key": key, "value": value }))),
+        None => Err(StatusCode::NOT_FOUND),
     }
 }
 
-#[derive(Debug, Clone, Default, serde::Deserialize, utoipa::ToSchema)]
-pub struct AgentSettingsAdminPatch {
-    pub composio: Option<ComposioSettingsAdminPatch>,
+async fn set_setting(
+    State(provider): State<SharedProvider>,
+    Path(key): Path<String>,
+    Json(body): Json<SetValueBody>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let key = key.trim_start_matches('/');
+    provider
+        .set(key, &body.value)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
-impl From<AgentSettingsAdminPatch> for AgentRuntimeSettingsPatch {
-    fn from(value: AgentSettingsAdminPatch) -> Self {
-        Self {
-            memory:         None,
-            composio:       value.composio.map(Into::into),
-            gmail:          None,
-            max_iterations: None,
-        }
-    }
+async fn delete_setting(
+    State(provider): State<SharedProvider>,
+    Path(key): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let key = key.trim_start_matches('/');
+    provider
+        .delete(key)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Debug, Clone, Default, serde::Deserialize, utoipa::ToSchema)]
-pub struct ComposioSettingsAdminPatch {
-    pub api_key:   Option<String>,
-    pub entity_id: Option<String>,
-}
-
-impl From<ComposioSettingsAdminPatch> for ComposioRuntimeSettingsPatch {
-    fn from(value: ComposioSettingsAdminPatch) -> Self {
-        Self {
-            api_key:   value.api_key,
-            entity_id: value.entity_id,
-        }
-    }
-}
-
-impl From<Settings> for RuntimeSettingsView {
-    fn from(value: Settings) -> Self {
-        Self {
-            agent:        AgentSettingsView {
-                composio: ComposioSettingsView {
-                    api_key:   value.agent.composio.api_key,
-                    entity_id: value.agent.composio.entity_id,
-                },
-            },
-            updated_at:   value.updated_at,
-        }
-    }
+async fn batch_update_settings(
+    State(provider): State<SharedProvider>,
+    Json(patches): Json<HashMap<String, Option<String>>>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    provider
+        .batch_update(patches)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
 }

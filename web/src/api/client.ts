@@ -83,7 +83,7 @@ async function requestBlob(path: string, options?: RequestInit & { timeoutMs?: n
   }
 }
 
-import type { LlmfitRecommendationsResponse, OllamaHealthResponse, OllamaModelListResponse, OllamaModelInfo, CodexOAuthStartResponse, CodexOAuthStatusResponse } from './types';
+import type { SettingsMap, SettingValue, SettingsPatch } from './types';
 
 export const api = {
   get: <T>(path: string) => request<T>(path),
@@ -95,25 +95,21 @@ export const api = {
     request<T>(path, { method: 'PATCH', body: body ? JSON.stringify(body) : undefined }),
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
   blob: (path: string) => requestBlob(path),
+};
 
-  getOllamaModelRecommendations: (limit = 10) =>
-    request<LlmfitRecommendationsResponse>(`/api/v1/ai/ollama/model-recommendations?limit=${limit}`),
-
-  ollamaHealth: () => request<OllamaHealthResponse>('/api/v1/ai/ollama/health'),
-  ollamaListModels: () => request<OllamaModelListResponse>('/api/v1/ai/ollama/models'),
-  ollamaDeleteModel: (name: string) =>
-    request<void>('/api/v1/ai/ollama/models', {
-      method: 'DELETE',
-      body: JSON.stringify({ name }),
+export const settingsApi = {
+  list: () => request<SettingsMap>('/api/v1/settings'),
+  get: (key: string) => request<SettingValue>(`/api/v1/settings/${key}`),
+  set: (key: string, value: string) =>
+    request<void>(`/api/v1/settings/${key}`, {
+      method: 'PUT',
+      body: JSON.stringify({ value }),
     }),
-  ollamaModelInfo: (name: string) =>
-    request<OllamaModelInfo>(`/api/v1/ai/ollama/models/${encodeURIComponent(name)}/info`),
-
-  codexOAuthStart: () =>
-    request<CodexOAuthStartResponse>('/api/v1/ai/codex/oauth/start', { method: 'POST' }),
-  codexOAuthStatus: () =>
-    request<CodexOAuthStatusResponse>('/api/v1/ai/codex/oauth/status'),
-  codexOAuthDisconnect: () =>
-    request<CodexOAuthStatusResponse>('/api/v1/ai/codex/oauth/disconnect', { method: 'POST' }),
-
+  delete: (key: string) =>
+    request<void>(`/api/v1/settings/${key}`, { method: 'DELETE' }),
+  batchUpdate: (patches: SettingsPatch) =>
+    request<void>('/api/v1/settings', {
+      method: 'PATCH',
+      body: JSON.stringify(patches),
+    }),
 };

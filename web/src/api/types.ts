@@ -152,62 +152,10 @@ export interface TaskRunRecord {
   error_message: string | null;
 }
 
-// Runtime Settings
-export interface RuntimeSettingsView {
-  agent: {
-    composio: {
-      api_key: string | null;
-      entity_id: string | null;
-    };
-  };
-  updated_at: string | null;
-}
-
-export interface RuntimeSettingsPatch {
-  agent?: {
-    composio?: {
-      api_key?: string;
-      entity_id?: string;
-    };
-  };
-}
-
-export interface AiAdminSettingsView {
-  configured: boolean;
-  provider: string | null;
-  ollama_base_url: string | null;
-  openrouter_api_key: string | null;
-  updated_at: string | null;
-}
-
-export interface AiAdminUpdateRequest {
-  provider?: string;
-  ollama_base_url?: string;
-  openrouter_api_key?: string;
-}
-
-export interface CodexOAuthStartResponse {
-  auth_url: string;
-}
-
-export interface CodexOAuthStatusResponse {
-  connected: boolean;
-  expires_at_unix: number | null;
-}
-
-
-export interface ModelEntryView {
-  key: string;
-  model: string;
-}
-
-export interface ModelListView {
-  models: ModelEntryView[];
-}
-
-export interface FallbackModelsView {
-  models: string[];
-}
+// Flat KV Settings
+export type SettingsMap = Record<string, string>;
+export interface SettingValue { key: string; value: string; }
+export type SettingsPatch = Record<string, string | null>;
 
 export interface PromptFileView {
   name: string;
@@ -376,23 +324,6 @@ export interface CreateMcpServerRequest {
   tool_timeout_secs?: number;
 }
 
-// Gmail Settings
-export interface GmailSettings {
-  configured: boolean;
-  auto_send_enabled: boolean;
-  address: string | null;
-  app_password_hint: string | null;
-}
-
-export interface GmailAdminSettingsView extends GmailSettings {
-  updated_at: string | null;
-}
-
-export interface GmailAdminUpdateRequest {
-  address?: string;
-  app_password?: string;
-  auto_send_enabled?: boolean;
-}
 
 // Coding Tasks
 export type CodingTaskStatus = 'Pending' | 'Cloning' | 'Running' | 'Completed' | 'Failed' | 'Merged' | 'MergeFailed';
@@ -435,69 +366,4 @@ export interface CreateCodingTaskRequest {
   session_key?: string;
 }
 
-// llmfit model recommendations
-export interface LlmfitSystemInfo {
-  total_ram_gb: number;
-  available_ram_gb: number;
-  cpu_cores: number;
-  cpu_name: string;
-  has_gpu: boolean;
-  gpu_vram_gb: number | null;
-  gpu_name: string | null;
-  backend: string;
-}
-
-export interface LlmfitModelEntry {
-  name: string;
-  provider: string | null;
-  fit_level: string;
-  run_mode: string;
-  score: number;
-  estimated_tps: number;
-  best_quant: string;
-  memory_required_gb: number;
-  use_case: string | null;
-  installed: boolean;
-}
-
-export interface LlmfitRecommendationsResponse {
-  available: boolean;
-  system: LlmfitSystemInfo | null;
-  models: LlmfitModelEntry[];
-  error: string | null;
-}
-
-// Ollama Management
-export interface OllamaHealthResponse {
-  healthy: boolean;
-  version: string | null;
-  url: string;
-}
-
-export interface OllamaLocalModel {
-  name: string;
-  size: number;
-  parameter_size: string | null;
-  quantization_level: string | null;
-  family: string | null;
-  modified_at: string;
-  capabilities: string[];
-}
-
-export interface OllamaModelListResponse {
-  models: OllamaLocalModel[];
-}
-
-export interface OllamaModelInfo {
-  name: string;
-  model_info: Record<string, unknown>;
-  template: string | null;
-  system: string | null;
-  parameters: string | null;
-}
-
-export type PullProgressEvent =
-  | { type: "progress"; status: string; completed: number | null; total: number | null }
-  | { type: "done"; status: string }
-  | { type: "error"; message: string };
 

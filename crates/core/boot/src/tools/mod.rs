@@ -19,9 +19,8 @@
 
 use std::sync::Arc;
 
-use rara_domain_shared::settings::model::Settings;
+use rara_domain_shared::settings::SettingsProvider;
 use rara_kernel::tool::AgentToolRef;
-use tokio::sync::watch;
 
 mod bash;
 mod composio;
@@ -53,7 +52,7 @@ pub use write_file::WriteFileTool;
 
 /// Dependencies required to construct primitive tools.
 pub struct PrimitiveDeps {
-    pub settings_rx:            watch::Receiver<Settings>,
+    pub settings:               Arc<dyn SettingsProvider>,
     pub object_store:           opendal::Operator,
     pub composio_auth_provider: Arc<dyn rara_composio::ComposioAuthProvider>,
 }
@@ -71,7 +70,7 @@ pub fn default_primitives(deps: PrimitiveDeps) -> Vec<AgentToolRef> {
         Arc::new(ListDirectoryTool::new()),
         Arc::new(HttpFetchTool::new()),
         // Domain primitives
-        Arc::new(SendEmailTool::new(deps.settings_rx)),
+        Arc::new(SendEmailTool::new(deps.settings.clone())),
         Arc::new(StorageReadTool::new(deps.object_store)),
     ];
     tools.push(Arc::new(ComposioTool::from_auth_provider(

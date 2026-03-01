@@ -24,19 +24,18 @@ use lettre::{
     message::{Attachment, MultiPart, SinglePart, header::ContentType},
     transport::smtp::authentication::Credentials,
 };
-use rara_domain_shared::settings::model::Settings;
+use rara_domain_shared::settings::{SettingsProvider, keys};
 use serde_json::json;
-use tokio::sync::watch;
 
 use rara_kernel::tool::AgentTool;
 
 /// Layer 1 primitive: send an email via Gmail SMTP.
 pub struct SendEmailTool {
-    settings_rx: watch::Receiver<Settings>,
+    settings: std::sync::Arc<dyn SettingsProvider>,
 }
 
 impl SendEmailTool {
-    pub fn new(settings_rx: watch::Receiver<Settings>) -> Self { Self { settings_rx } }
+    pub fn new(settings: std::sync::Arc<dyn SettingsProvider>) -> Self { Self { settings } }
 }
 
 #[async_trait]
@@ -93,20 +92,18 @@ impl AgentTool for SendEmailTool {
         let attachment_path = params.get("attachment_path").and_then(|v| v.as_str());
 
         // Read gmail settings at call time.
-        let settings = self.settings_rx.borrow().clone();
-        let gmail = &settings.agent.gmail;
-
-        if !gmail.auto_send_enabled {
+        let auto_send = self.settings.get(keys::GMAIL_AUTO_SEND_ENABLED).await;
+        if auto_send.as_deref() != Some("true") {
             return Ok(json!({ "error": "auto send is disabled" }));
         }
 
-        let from_address = match &gmail.address {
-            Some(addr) if !addr.is_empty() => addr.clone(),
+        let from_address = match self.settings.get(keys::GMAIL_ADDRESS).await {
+            Some(addr) if !addr.is_empty() => addr,
             _ => return Ok(json!({ "error": "gmail not configured: missing address" })),
         };
 
-        let app_password = match &gmail.app_password {
-            Some(pw) if !pw.is_empty() => pw.clone(),
+        let app_password = match self.settings.get(keys::GMAIL_APP_PASSWORD).await {
+            Some(pw) if !pw.is_empty() => pw,
             _ => return Ok(json!({ "error": "gmail not configured: missing app_password" })),
         };
 

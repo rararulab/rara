@@ -33,7 +33,6 @@ use crate::{
         Result as MemResult, knowledge::KnowledgeMemory, learning::LearningMemory,
         state::StateMemory, types::*,
     },
-    model_repo::{ModelEntry, ModelRepo, ModelRepoError},
     process::{SessionId, principal::UserId},
     session::{
         ChannelBinding, SessionEntry, SessionError, SessionKey, SessionRepository,
@@ -361,34 +360,38 @@ impl SessionResolver for NoopSessionResolver {
     }
 }
 
-// ---- NoopModelRepo ----
+// ---- NoopSettingsProvider ----
 
-/// A no-op model repo for testing — always returns `None`.
-pub struct NoopModelRepo;
+/// A no-op settings provider for testing — always returns `None`.
+pub struct NoopSettingsProvider;
 
 #[async_trait]
-impl ModelRepo for NoopModelRepo {
+impl rara_domain_shared::settings::SettingsProvider for NoopSettingsProvider {
     async fn get(&self, _key: &str) -> Option<String> {
         None
     }
 
-    async fn set(&self, _key: &str, _model: &str) -> Result<(), ModelRepoError> {
+    async fn set(&self, _key: &str, _value: &str) -> anyhow::Result<()> {
         Ok(())
     }
 
-    async fn remove(&self, _key: &str) -> Result<(), ModelRepoError> {
+    async fn delete(&self, _key: &str) -> anyhow::Result<()> {
         Ok(())
     }
 
-    async fn list(&self) -> Vec<ModelEntry> {
-        vec![]
+    async fn list(&self) -> std::collections::HashMap<String, String> {
+        std::collections::HashMap::new()
     }
 
-    async fn fallback_models(&self) -> Vec<String> {
-        vec![]
-    }
-
-    async fn set_fallback_models(&self, _models: Vec<String>) -> Result<(), ModelRepoError> {
+    async fn batch_update(
+        &self,
+        _patches: std::collections::HashMap<String, Option<String>>,
+    ) -> anyhow::Result<()> {
         Ok(())
+    }
+
+    fn subscribe(&self) -> tokio::sync::watch::Receiver<()> {
+        let (_tx, rx) = tokio::sync::watch::channel(());
+        rx
     }
 }

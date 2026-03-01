@@ -1193,10 +1193,11 @@ impl Kernel {
     /// Resolve a manifest for auto-spawning (when a user message arrives
     /// with no existing process).
     async fn resolve_manifest_for_auto_spawn(&self) -> Option<AgentManifest> {
-        let model = self
-            .model_repo()
-            .get(crate::model_repo::model_keys::CHAT)
-            .await?;
+        let model = rara_domain_shared::settings::get_model(
+            self.settings().as_ref(),
+            "chat",
+        )
+        .await?;
         Some(AgentManifest {
             name:               "io-agent".to_string(),
             description:        "I/O bus agent".to_string(),

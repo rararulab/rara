@@ -36,14 +36,13 @@ use tokio::sync::Semaphore;
 use crate::{
     audit::{AuditLog, InMemoryAuditLog},
     defaults::{
-        noop::{NoopEventBus, NoopGuard, NoopMemory, NoopModelRepo, NoopSessionRepository},
+        noop::{NoopEventBus, NoopGuard, NoopMemory, NoopSettingsProvider, NoopSessionRepository},
         noop_user_store::NoopUserStore,
     },
     device_registry::DeviceRegistry,
     event_queue::EventQueue,
     io::{pipe::PipeRegistry, stream::StreamHub},
     kernel::{Kernel, KernelConfig, KernelInner},
-    model_repo::ModelRepo,
     process::{ProcessTable, manifest_loader::ManifestLoader},
     provider::LlmProviderLoaderRef,
     session::SessionRepository,
@@ -139,7 +138,8 @@ impl TestKernelBuilder {
             user_store:             Arc::new(NoopUserStore),
             session_repo:           Arc::new(NoopSessionRepository)
                 as Arc<dyn SessionRepository>,
-            model_repo:             Arc::new(NoopModelRepo) as Arc<dyn ModelRepo>,
+            settings:               Arc::new(NoopSettingsProvider)
+                as Arc<dyn rara_domain_shared::settings::SettingsProvider>,
             stream_hub:             Arc::new(StreamHub::new(16)),
             pipe_registry:          Arc::new(PipeRegistry::new()),
             device_registry:        Arc::new(DeviceRegistry::new()),

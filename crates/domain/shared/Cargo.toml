@@ -24,6 +24,7 @@ snafu.workspace = true
 sqlx = { workspace = true }
 strum.workspace = true
 strum_macros.workspace = true
+tokio = { workspace = true, features = ["sync"] }
 tracing.workspace = true
 utoipa.workspace = true
 uuid = { version = "1", features = ["v4", "serde"] }

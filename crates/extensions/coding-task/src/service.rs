@@ -21,10 +21,10 @@ use rara_domain_shared::{
         client::NotifyClient,
         types::{NotificationPriority, SendTelegramNotificationRequest},
     },
-    settings::model::Settings,
+    settings::{SettingsProvider, keys},
 };
 use rara_workspace::WorkspaceManager;
-use tokio::{process::Command, sync::watch};
+use tokio::process::Command;
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -41,7 +41,7 @@ pub struct CodingTaskService {
     repo:              Arc<dyn CodingTaskRepository>,
     workspace_manager: WorkspaceManager,
     notify:            NotifyClient,
-    settings_rx:       watch::Receiver<Settings>,
+    settings:          Arc<dyn SettingsProvider>,
     default_repo_url:  String,
 }
 
@@ -50,14 +50,14 @@ impl CodingTaskService {
         repo: Arc<dyn CodingTaskRepository>,
         workspace_manager: WorkspaceManager,
         notify: NotifyClient,
-        settings_rx: watch::Receiver<Settings>,
+        settings: Arc<dyn SettingsProvider>,
         default_repo_url: String,
     ) -> Self {
         Self {
             repo,
             workspace_manager,
             notify,
-            settings_rx,
+            settings,
             default_repo_url,
         }
     }
@@ -387,8 +387,8 @@ impl CodingTaskService {
             msg.push_str(&format!("\n\nError:\n{tail}"));
         }
 
-        let settings = self.settings_rx.borrow().clone();
-        let chat_id = settings.telegram.chat_id;
+        let chat_id = self.settings.get(keys::TELEGRAM_CHAT_ID).await
+            .and_then(|v| v.parse::<i64>().ok());
 
         let request = SendTelegramNotificationRequest {
             chat_id,
@@ -438,7 +438,7 @@ pub fn wire(
     pool: sqlx::PgPool,
     workspace_manager: WorkspaceManager,
     notify: NotifyClient,
-    settings_rx: watch::Receiver<Settings>,
+    settings: Arc<dyn SettingsProvider>,
     default_repo_url: String,
 ) -> CodingTaskService {
     let repo = Arc::new(crate::pg_repository::PgCodingTaskRepository::new(pool));
@@ -446,7 +446,7 @@ pub fn wire(
         repo,
         workspace_manager,
         notify,
-        settings_rx,
+        settings,
         default_repo_url,
     )
 }

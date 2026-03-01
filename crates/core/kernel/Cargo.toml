@@ -24,6 +24,7 @@ base.workspace = true
 bon.workspace = true
 chrono.workspace = true
 dashmap = "6"
+rara-domain-shared.workspace = true
 futures.workspace = true
 jiff.workspace = true
 opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"] }

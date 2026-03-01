@@ -46,7 +46,6 @@ pub mod unified_event;
 pub mod llm;
 pub mod memory;
 pub mod model;
-pub mod model_repo;
 pub mod process;
 pub(crate) mod agent_turn;
 pub mod prompt;
