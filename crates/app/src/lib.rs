@@ -320,13 +320,28 @@ impl AppConfig {
         let settings_provider: std::sync::Arc<dyn rara_domain_shared::settings::SettingsProvider> =
             std::sync::Arc::new(app_state.settings_svc.clone());
 
+        // Ensure root + system users exist before booting the kernel.
+        rara_boot::user_store::ensure_default_users(db_store.pool())
+            .await
+            .whatever_context("Failed to ensure default kernel users")?;
+
+        // PathGuard wraps NoopGuard with file-system access control.
+        let workspace_path = std::env::current_dir()
+            .whatever_context("Failed to determine current working directory")?;
+        let path_guard = rara_kernel::guard::path_guard::PathGuard::new(
+            rara_kernel::process::SandboxConfig::default(),
+            workspace_path,
+            Box::new(rara_kernel::defaults::noop_guard::NoopGuard),
+        );
+
         let mut kernel = rara_boot::kernel::boot(rara_boot::kernel::BootConfig {
             llm_provider:  app_state.llm_provider.clone(),
             tool_registry: app_state.tool_registry.clone(),
             manifest_loader: rara_boot::manifests::load_default_manifests(),
-            user_store:    rara_boot::components::default_user_store(),
+            user_store:    Arc::new(rara_boot::user_store::PgUserStore::new(db_store.pool().clone())),
             session_repo:  app_state.session_repo.clone(),
             settings:      settings_provider,
+            guard:         Some(Arc::new(path_guard)),
             ..Default::default()
         });
 
