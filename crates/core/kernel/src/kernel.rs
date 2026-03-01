@@ -280,6 +280,12 @@ impl KernelInner {
             let mut conversation = initial_messages;
             let mut last_result: Option<AgentResult> = None;
 
+            // Grab the metrics handle for this process once.
+            let metrics = inner
+                .process_table
+                .get_metrics(&agent_id)
+                .unwrap_or_default();
+
             loop {
                 tokio::select! {
                     _ = token.cancelled() => {
@@ -290,6 +296,10 @@ impl KernelInner {
                         let Some(msg) = msg else { break };
                         match msg {
                             crate::process::ProcessMessage::UserMessage(inbound) => {
+                                // --- /proc metrics: message received ---
+                                metrics.record_message();
+                                metrics.touch().await;
+
                                 let _ = inner.process_table.set_state(
                                     agent_id,
                                     ProcessState::Running,
@@ -338,6 +348,15 @@ impl KernelInner {
 
                                 match turn_result {
                                     Ok(turn) if !turn.text.is_empty() => {
+                                        // --- /proc metrics: LLM call + tool calls ---
+                                        metrics.record_llm_call();
+                                        metrics.record_tool_calls(turn.tool_calls as u64);
+                                        // Estimate tokens: ~4 chars per token for output.
+                                        let estimated_tokens =
+                                            (turn.text.len() as u64).saturating_div(4).max(1);
+                                        metrics.record_tokens(estimated_tokens);
+                                        metrics.touch().await;
+
                                         // Persist assistant reply.
                                         let assistant_msg =
                                             crate::channel::types::ChatMessage::assistant(
@@ -400,8 +419,12 @@ impl KernelInner {
                                         );
                                         last_result = Some(result);
                                     }
-                                    Ok(_) => {
-                                        // Empty result — nothing to publish.
+                                    Ok(turn) => {
+                                        // Empty result — nothing to publish, but
+                                        // an LLM call was still made.
+                                        metrics.record_llm_call();
+                                        metrics.record_tool_calls(turn.tool_calls as u64);
+                                        metrics.touch().await;
                                     }
                                     Err(err_msg) => {
                                         let _ = inner.process_table.set_state(
@@ -556,6 +579,8 @@ pub struct Kernel {
     endpoint_registry: Arc<EndpointRegistry>,
     /// Registered egress adapters (mutable before start, consumed by start).
     egress_adapters:   HashMap<ChannelType, Arc<dyn EgressAdapter>>,
+    /// When this kernel was created (for uptime calculation).
+    started_at:        Timestamp,
 }
 
 impl Kernel {
@@ -624,6 +649,7 @@ impl Kernel {
             ingress_pipeline,
             endpoint_registry,
             egress_adapters: HashMap::new(),
+            started_at: Timestamp::now(),
         }
     }
 
@@ -741,6 +767,47 @@ impl Kernel {
     /// Access the kernel config.
     pub fn config(&self) -> &KernelConfig { &self.config }
 
+    /// Get detailed runtime statistics for a single process.
+    ///
+    /// Returns `None` if the process does not exist.
+    pub async fn process_stats(
+        &self,
+        agent_id: &AgentId,
+    ) -> Option<crate::process::ProcessStats> {
+        self.inner.process_table.process_stats(*agent_id).await
+    }
+
+    /// List detailed runtime statistics for all processes.
+    pub async fn list_processes(&self) -> Vec<crate::process::ProcessStats> {
+        self.inner.process_table.all_process_stats().await
+    }
+
+    /// Get kernel-wide aggregate statistics.
+    pub fn system_stats(&self) -> crate::process::SystemStats {
+        let pt = &self.inner.process_table;
+        let active = pt
+            .list()
+            .iter()
+            .filter(|p| matches!(p.state, ProcessState::Running | ProcessState::Waiting))
+            .count();
+
+        let uptime_ms = Timestamp::now()
+            .since(self.started_at)
+            .ok()
+            .map(|span| span.get_milliseconds().unsigned_abs())
+            .unwrap_or(0);
+
+        crate::process::SystemStats {
+            active_processes:           active,
+            total_spawned:              pt.total_spawned(),
+            total_completed:            pt.total_completed(),
+            total_failed:               pt.total_failed(),
+            global_semaphore_available: self.inner.global_semaphore.available_permits(),
+            total_tokens_consumed:      pt.total_tokens_consumed(),
+            uptime_ms,
+        }
+    }
+
     /// Access the shared KernelInner (for constructing ScopedKernelHandles
     /// externally).
     pub(crate) fn inner(&self) -> &Arc<KernelInner> { &self.inner }
@@ -777,6 +844,7 @@ impl Kernel {
             ingress_pipeline,
             endpoint_registry,
             egress_adapters: HashMap::new(),
+            started_at: Timestamp::now(),
         }
     }
 
@@ -1077,5 +1145,118 @@ mod tests {
         let children = kernel.process_table().children_of(parent_handle.agent_id);
         assert_eq!(children.len(), 1);
         assert_eq!(children[0].agent_id, child_handle.agent_id);
+    }
+
+    // -----------------------------------------------------------------------
+    // /proc API — Kernel-level introspection tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_kernel_process_stats_after_spawn() {
+        let kernel = make_test_kernel(10, 5);
+        let principal = Principal::user("test-user");
+        let session_id = SessionId::new("stats-session");
+
+        let handle = kernel
+            .spawn_with_input(
+                test_manifest("stats-agent"),
+                "hello".to_string(),
+                principal,
+                session_id,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let stats = kernel.process_stats(&handle.agent_id).await;
+        assert!(stats.is_some());
+
+        let stats = stats.unwrap();
+        assert_eq!(stats.agent_id, handle.agent_id);
+        assert_eq!(stats.manifest_name, "stats-agent");
+        assert!(stats.parent_id.is_none());
+        // uptime_ms is u64, just verify it was populated
+        let _ = stats.uptime_ms;
+    }
+
+    #[tokio::test]
+    async fn test_kernel_list_processes_returns_all_spawned() {
+        let kernel = make_test_kernel(10, 5);
+        let principal = Principal::user("test-user");
+
+        kernel
+            .spawn_with_input(
+                test_manifest("agent-1"),
+                "task 1".to_string(),
+                principal.clone(),
+                SessionId::new("s1"),
+                None,
+            )
+            .await
+            .unwrap();
+
+        kernel
+            .spawn_with_input(
+                test_manifest("agent-2"),
+                "task 2".to_string(),
+                principal,
+                SessionId::new("s2"),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let list = kernel.list_processes().await;
+        assert_eq!(list.len(), 2);
+
+        let names: Vec<&str> = list.iter().map(|s| s.manifest_name.as_str()).collect();
+        assert!(names.contains(&"agent-1"));
+        assert!(names.contains(&"agent-2"));
+    }
+
+    #[tokio::test]
+    async fn test_kernel_system_stats_initial() {
+        let kernel = make_test_kernel(10, 5);
+
+        let stats = kernel.system_stats();
+        assert_eq!(stats.active_processes, 0);
+        assert_eq!(stats.total_spawned, 0);
+        assert_eq!(stats.total_completed, 0);
+        assert_eq!(stats.total_failed, 0);
+        assert_eq!(stats.global_semaphore_available, 10);
+        assert_eq!(stats.total_tokens_consumed, 0);
+        // uptime_ms is u64, just verify it was populated
+        let _ = stats.uptime_ms;
+    }
+
+    #[tokio::test]
+    async fn test_kernel_system_stats_after_spawn() {
+        let kernel = make_test_kernel(10, 5);
+        let principal = Principal::user("test-user");
+
+        kernel
+            .spawn_with_input(
+                test_manifest("sys-agent"),
+                "work".to_string(),
+                principal,
+                SessionId::new("sys-session"),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let stats = kernel.system_stats();
+        assert_eq!(stats.total_spawned, 1);
+        // Semaphore should have one fewer permit
+        assert_eq!(stats.global_semaphore_available, 9);
+    }
+
+    #[tokio::test]
+    async fn test_kernel_system_stats_serializes_to_json() {
+        let kernel = make_test_kernel(10, 5);
+        let stats = kernel.system_stats();
+        let json = serde_json::to_string(&stats).unwrap();
+        assert!(json.contains("\"active_processes\":0"));
+        assert!(json.contains("\"global_semaphore_available\":10"));
     }
 }
