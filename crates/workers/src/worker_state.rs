@@ -419,12 +419,6 @@ impl AppState {
             self.coding_task_service.clone(),
         ));
 
-        // Prompt admin routes.
-        let (prompt_router, prompt_api) =
-            rara_backend_admin::prompts::routes(self.prompt_repo.clone()).split_for_parts();
-        router = router.merge(prompt_router);
-        api.merge(prompt_api);
-
         (router, api)
     }
 

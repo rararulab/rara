@@ -157,16 +157,6 @@ export type SettingsMap = Record<string, string>;
 export interface SettingValue { key: string; value: string; }
 export type SettingsPatch = Record<string, string | null>;
 
-export interface PromptFileView {
-  name: string;
-  description: string;
-  content: string;
-}
-
-export interface PromptListView {
-  prompts: PromptFileView[];
-}
-
 // Chat Models
 export interface ChatModel {
   id: string;

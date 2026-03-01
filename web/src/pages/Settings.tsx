@@ -21,7 +21,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { settingsApi, api } from "@/api/client";
 import type {
   CreateContactRequest,
-  PromptListView,
   SettingsMap,
   TelegramContact,
   UpdateContactRequest,
@@ -74,7 +73,7 @@ import { useTheme, type Theme } from "@/hooks/use-theme";
 import Skills from "@/pages/Skills";
 import McpServers from "@/pages/McpServers";
 
-type SettingsPage = "general" | "providers" | "prompts" | "skills" | "mcp" | "channels" | "tools";
+type SettingsPage = "general" | "providers" | "skills" | "mcp" | "channels" | "tools";
 type ToastState = { kind: "success" | "error"; message: string } | null;
 
 // Well-known setting keys (must match backend keys module)
@@ -259,7 +258,7 @@ export default function Settings() {
   const queryClient = useQueryClient();
   const [activeCategory, setActiveCategory] = useState<SettingsPage>(() => {
     const section = searchParams.get("section");
-    const allowed: SettingsPage[] = ["general", "providers", "prompts", "skills", "mcp", "channels", "tools"];
+    const allowed: SettingsPage[] = ["general", "providers", "skills", "mcp", "channels", "tools"];
     return allowed.includes(section as SettingsPage) ? (section as SettingsPage) : "general";
   });
   const [toast, setToast] = useState<ToastState>(null);
@@ -278,19 +277,10 @@ export default function Settings() {
   const [contactNotes, setContactNotes] = useState("");
   const [contactEnabled, setContactEnabled] = useState(true);
 
-  // Prompt viewer state
-  const [selectedPromptName, setSelectedPromptName] = useState("");
-  const [selectedPromptContent, setSelectedPromptContent] = useState("");
-
   // Fetch all settings as flat KV map
   const settingsQuery = useQuery({
     queryKey: ["settings"],
     queryFn: () => settingsApi.list(),
-  });
-
-  const promptsQuery = useQuery({
-    queryKey: ["prompt-admin"],
-    queryFn: () => api.get<PromptListView>("/api/v1/prompts"),
   });
 
   const contactsQuery = useQuery({
@@ -312,23 +302,6 @@ export default function Settings() {
       return next;
     });
   }, [settingsQuery.data]);
-
-  // Prompt selection
-  useEffect(() => {
-    const prompts = promptsQuery.data?.prompts ?? [];
-    if (prompts.length === 0) return;
-    if (!selectedPromptName || !prompts.some((p) => p.name === selectedPromptName)) {
-      const preferred = prompts.find((p) => p.name === "agent/soul.md");
-      const initial = preferred ?? prompts[0];
-      setSelectedPromptName(initial.name);
-      setSelectedPromptContent(initial.content);
-      return;
-    }
-    const matched = prompts.find((p) => p.name === selectedPromptName);
-    if (matched) {
-      setSelectedPromptContent(matched.content);
-    }
-  }, [promptsQuery.data, selectedPromptName]);
 
   // Toast auto-dismiss
   useEffect(() => {
@@ -479,8 +452,6 @@ export default function Settings() {
   }
 
   const original: SettingsMap = settingsQuery.data ?? {};
-  const availablePrompts = promptsQuery.data?.prompts ?? [];
-  const selectedPromptMeta = availablePrompts.find((p) => p.name === selectedPromptName);
 
   const settingsNavItems: Array<{
     id: SettingsPage;
@@ -490,8 +461,7 @@ export default function Settings() {
   }> = [
     { id: "general", label: "General", icon: <Palette className="h-4 w-4" />, summary: "Appearance and documentation" },
     { id: "providers", label: "Providers", icon: <Sparkles className="h-4 w-4" />, summary: "LLM provider and model config" },
-    { id: "prompts", label: "Prompts", icon: <Sparkles className="h-4 w-4" />, summary: "Prompt admin and templates" },
-    { id: "skills", label: "Skills", icon: <Bot className="h-4 w-4" />, summary: "Installed skills and management" },
+{ id: "skills", label: "Skills", icon: <Bot className="h-4 w-4" />, summary: "Installed skills and management" },
     { id: "mcp", label: "MCP Servers", icon: <ExternalLink className="h-4 w-4" />, summary: "Tool server connections" },
     { id: "channels", label: "Channels", icon: <MessageSquare className="h-4 w-4" />, summary: "Telegram, Gmail, contacts" },
     { id: "tools", label: "Tools", icon: <Settings2 className="h-4 w-4" />, summary: "Composio, memory integrations" },
@@ -708,67 +678,6 @@ export default function Settings() {
               toast={groupToasts["llm-models"] ?? null}
             />
           </>
-        )}
-
-        {/* ── Prompts ── */}
-        {activeCategory === "prompts" && (
-          <Card className="app-surface border-border/60">
-            <CardHeader>
-              <div className="flex items-center gap-3">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
-                  <Sparkles className="h-4 w-4" />
-                </div>
-                <div>
-                  <CardTitle className="text-base">Prompts</CardTitle>
-                  <CardDescription>{availablePrompts.length} prompt files</CardDescription>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {promptsQuery.isLoading ? (
-                <Skeleton className="h-48 w-full" />
-              ) : availablePrompts.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No prompts found.</p>
-              ) : (
-                <div className="grid gap-4 lg:grid-cols-[14rem_1fr]">
-                  <div className="space-y-1">
-                    {availablePrompts.map((p) => (
-                      <button
-                        key={p.name}
-                        type="button"
-                        onClick={() => {
-                          setSelectedPromptName(p.name);
-                          setSelectedPromptContent(p.content);
-                        }}
-                        className={cn(
-                          "w-full rounded-lg px-3 py-2 text-left text-sm transition-colors",
-                          selectedPromptName === p.name
-                            ? "bg-primary/10 font-medium text-foreground"
-                            : "text-muted-foreground hover:bg-accent/40"
-                        )}
-                      >
-                        <p className="truncate">{p.name}</p>
-                        <p className="truncate text-xs text-muted-foreground">{p.description}</p>
-                      </button>
-                    ))}
-                  </div>
-                  <div className="space-y-3">
-                    {selectedPromptMeta && (
-                      <div>
-                        <h3 className="font-semibold">{selectedPromptMeta.name}</h3>
-                        <p className="text-sm text-muted-foreground">{selectedPromptMeta.description}</p>
-                      </div>
-                    )}
-                    <Textarea
-                      value={selectedPromptContent}
-                      readOnly
-                      className="min-h-[400px] font-mono text-xs"
-                    />
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
         )}
 
         {/* ── Skills ── */}

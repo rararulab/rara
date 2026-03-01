@@ -27,7 +27,6 @@ pub mod contacts;
 pub mod interview;
 pub mod job;
 pub mod mcp;
-pub mod prompts;
 pub mod resume;
 pub mod scheduler;
 pub mod settings;
