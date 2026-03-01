@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use jiff::Timestamp;
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
@@ -81,6 +81,9 @@ pub(crate) struct ProcessRuntime {
     pub max_context_tokens: usize,
     /// Last successful result (for final output when process ends).
     pub last_result: Option<AgentResult>,
+    /// Global semaphore permit — dropped when this runtime is removed,
+    /// automatically releasing one slot for new process spawns.
+    pub _global_permit: OwnedSemaphorePermit,
 }
 
 /// Table of per-process runtime state, managed by the kernel event loop.
@@ -1003,7 +1006,9 @@ impl Kernel {
             .max_context_tokens
             .unwrap_or(crate::memory::compaction::DEFAULT_MAX_CONTEXT_TOKENS);
 
-        // Create runtime entry.
+        // Create runtime entry. The global permit is stored here so it lives
+        // as long as the process — dropping the runtime entry automatically
+        // releases the semaphore slot.
         let runtime = ProcessRuntime {
             conversation: initial_messages,
             turn_cancel: CancellationToken::new(),
@@ -1014,14 +1019,9 @@ impl Kernel {
             child_semaphore: Arc::new(Semaphore::new(child_limit)),
             max_context_tokens,
             last_result: None,
+            _global_permit: global_permit,
         };
         runtimes.insert(agent_id, runtime);
-
-        // Store the global permit so it lives as long as the process.
-        // We leak it into the runtime — it will be dropped when the runtime
-        // entry is removed.
-        // TODO: track permits properly in ProcessRuntime
-        std::mem::forget(global_permit);
 
         info!(
             agent_id = %agent_id,

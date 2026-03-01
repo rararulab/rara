@@ -891,8 +891,8 @@ mod tests {
 
         let stats = kernel.system_stats();
         assert_eq!(stats.total_spawned, 1);
-        // Note: global_semaphore permit is leaked (std::mem::forget) in
-        // handle_spawn_agent, so the available count decreases.
+        // The global semaphore permit is stored in ProcessRuntime, so the
+        // available count decreases while the process is alive.
         assert_eq!(stats.global_semaphore_available, 9);
 
         cancel.cancel();

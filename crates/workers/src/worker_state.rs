@@ -77,7 +77,7 @@ pub struct AppState {
 /// Build the system prompt for background worker agents.
 ///
 /// Reads `workers/agent_policy.md` and `agent/soul.md` from the prompt repo
-/// and combines them. Replaces `AgentContext::build_worker_policy()`.
+/// and combines them.
 pub async fn build_worker_policy(
     prompt_repo: &dyn rara_kernel::prompt::PromptRepo,
 ) -> String {
