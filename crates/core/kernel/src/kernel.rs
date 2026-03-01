@@ -446,9 +446,148 @@ impl KernelInner {
                                     agent_id = %agent_id,
                                     child_id = %child_id,
                                     output_len = result.output.len(),
-                                    "child result received"
+                                    iterations = result.iterations,
+                                    tool_calls = result.tool_calls,
+                                    "child result received, resuming parent"
                                 );
-                                // TODO: integrate child result into context
+
+                                let _ = inner.process_table.set_state(
+                                    agent_id,
+                                    ProcessState::Running,
+                                );
+
+                                // Format child result as a system message injected
+                                // into the parent's conversation context.
+                                let child_result_text = format!(
+                                    "[child_agent_result] child_id={child_id} \
+                                     iterations={} tool_calls={}\n\n{}",
+                                    result.iterations,
+                                    result.tool_calls,
+                                    result.output,
+                                );
+                                let child_msg =
+                                    crate::channel::types::ChatMessage::system(
+                                        &child_result_text,
+                                    );
+                                conversation.push(child_msg.clone());
+                                if let Err(e) = inner
+                                    .session_repo
+                                    .append_message(&session_id, &child_msg)
+                                    .await
+                                {
+                                    tracing::warn!(
+                                        %e,
+                                        "failed to persist child result message"
+                                    );
+                                }
+
+                                // Build history and run a new LLM turn so the
+                                // parent can reason about the child's output.
+                                let history =
+                                    match crate::runner::build_history_messages(
+                                        &conversation,
+                                    ) {
+                                        Ok(msgs) if !msgs.is_empty() => {
+                                            Some(msgs)
+                                        }
+                                        Ok(_) => None,
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                %e,
+                                                "failed to convert history"
+                                            );
+                                            None
+                                        }
+                                    };
+
+                                let resume_text = format!(
+                                    "Child agent {child_id} completed. \
+                                     Process the result above and continue."
+                                );
+
+                                let stream_handle =
+                                    inner.stream_hub.open(session_id.clone());
+
+                                let turn_result =
+                                    crate::process_loop::run_agent_turn(
+                                        &handle,
+                                        resume_text,
+                                        history,
+                                        &stream_handle,
+                                    )
+                                    .await;
+
+                                inner
+                                    .stream_hub
+                                    .close(stream_handle.stream_id());
+
+                                match turn_result {
+                                    Ok(turn) if !turn.text.is_empty() => {
+                                        let assistant_msg =
+                                            crate::channel::types::ChatMessage::assistant(
+                                                &turn.text,
+                                            );
+                                        conversation
+                                            .push(assistant_msg.clone());
+                                        if let Err(e) = inner
+                                            .session_repo
+                                            .append_message(
+                                                &session_id,
+                                                &assistant_msg,
+                                            )
+                                            .await
+                                        {
+                                            tracing::warn!(
+                                                %e,
+                                                "failed to persist assistant \
+                                                 message after child result"
+                                            );
+                                        }
+
+                                        let agent_result = AgentResult {
+                                            output: turn.text.clone(),
+                                            iterations: turn.iterations,
+                                            tool_calls: turn.tool_calls,
+                                        };
+                                        let _ = inner
+                                            .process_table
+                                            .set_result(
+                                                agent_id,
+                                                agent_result.clone(),
+                                            );
+
+                                        info!(
+                                            agent_id = %agent_id,
+                                            iterations = agent_result.iterations,
+                                            tool_calls = agent_result.tool_calls,
+                                            "child result processed"
+                                        );
+                                        last_result = Some(agent_result);
+                                    }
+                                    Ok(_) => {
+                                        // Empty result — nothing to update.
+                                    }
+                                    Err(err_msg) => {
+                                        tracing::error!(
+                                            agent_id = %agent_id,
+                                            error = %err_msg,
+                                            "LLM turn failed after child \
+                                             result"
+                                        );
+                                        let _ = inner
+                                            .process_table
+                                            .set_state(
+                                                agent_id,
+                                                ProcessState::Failed,
+                                            );
+                                    }
+                                }
+
+                                // Return to waiting for more messages.
+                                let _ = inner.process_table.set_state(
+                                    agent_id,
+                                    ProcessState::Waiting,
+                                );
                             }
                             crate::process::ProcessMessage::Signal(
                                 crate::process::Signal::Interrupt,
@@ -470,11 +609,34 @@ impl KernelInner {
             let _ = inner.process_table.set_state(agent_id, final_state);
             info!(agent_id = %agent_id, "process ended");
 
-            let _ = result_tx.send(last_result.unwrap_or(AgentResult {
+            let final_result = last_result.unwrap_or(AgentResult {
                 output:     "process ended".to_string(),
                 iterations: 0,
                 tool_calls: 0,
-            }));
+            });
+
+            // Notify parent process via ChildResult message if this is a
+            // child agent.  This allows the parent's process_loop to resume
+            // LLM execution with the child's output.
+            if let Some(pid) = parent_id {
+                if let Some(parent_mailbox) = inner.process_table.get_mailbox(&pid) {
+                    let child_result_msg =
+                        crate::process::ProcessMessage::ChildResult {
+                            child_id: agent_id,
+                            result:   final_result.clone(),
+                        };
+                    if let Err(e) = parent_mailbox.send(child_result_msg).await {
+                        tracing::warn!(
+                            agent_id = %agent_id,
+                            parent_id = %pid,
+                            error = %e,
+                            "failed to send ChildResult to parent mailbox"
+                        );
+                    }
+                }
+            }
+
+            let _ = result_tx.send(final_result);
             inner.process_table.clear_cancellation_token(&agent_id);
         });
 
@@ -1077,5 +1239,454 @@ mod tests {
         let children = kernel.process_table().children_of(parent_handle.agent_id);
         assert_eq!(children.len(), 1);
         assert_eq!(children[0].agent_id, child_handle.agent_id);
+    }
+
+    // =======================================================================
+    // ChildResult integration tests
+    // =======================================================================
+
+    /// Stub LLM provider that records calls and returns a canned response.
+    mod child_result_helpers {
+        use std::sync::{Arc, Mutex};
+
+        use async_openai::types::chat::{
+            ChatChoiceStream, ChatCompletionResponseStream, ChatCompletionStreamResponseDelta,
+            CreateChatCompletionRequest, CreateChatCompletionStreamResponse, FinishReason,
+        };
+        use async_trait::async_trait;
+        use futures::stream;
+
+        use crate::{
+            error::KernelError,
+            provider::{LlmProvider, LlmProviderLoader, LlmProviderLoaderRef},
+        };
+
+        /// Records the number of messages in each LLM call so tests can assert
+        /// the conversation length.
+        #[derive(Default)]
+        pub struct StubLlm {
+            pub call_counts: Mutex<Vec<usize>>,
+        }
+
+        #[async_trait]
+        impl LlmProvider for StubLlm {
+            async fn chat_completion(
+                &self,
+                _req: CreateChatCompletionRequest,
+            ) -> crate::error::Result<
+                async_openai::types::chat::CreateChatCompletionResponse,
+            > {
+                Err(KernelError::Other {
+                    message: "not supported".into(),
+                })
+            }
+
+            #[allow(deprecated)]
+            async fn chat_completion_stream(
+                &self,
+                req: CreateChatCompletionRequest,
+            ) -> crate::error::Result<ChatCompletionResponseStream> {
+                self.call_counts
+                    .lock()
+                    .unwrap()
+                    .push(req.messages.len());
+
+                let chunk = CreateChatCompletionStreamResponse {
+                    id:                 "resp_child".to_string(),
+                    choices:            vec![ChatChoiceStream {
+                        index:         0,
+                        delta:         ChatCompletionStreamResponseDelta {
+                            content:       Some(
+                                "processed child result".to_string(),
+                            ),
+                            function_call: None,
+                            tool_calls:    None,
+                            role:          None,
+                            refusal:       None,
+                        },
+                        finish_reason: Some(FinishReason::Stop),
+                        logprobs:      None,
+                    }],
+                    created:            0,
+                    model:              "test-model".to_string(),
+                    service_tier:       None,
+                    system_fingerprint: None,
+                    object:             "chat.completion.chunk".to_string(),
+                    usage:              None,
+                };
+                Ok(Box::pin(stream::iter(vec![Ok(chunk)])))
+            }
+        }
+
+        #[derive(Clone)]
+        pub struct StubLoader {
+            pub provider: Arc<dyn LlmProvider>,
+        }
+
+        #[async_trait]
+        impl LlmProviderLoader for StubLoader {
+            async fn acquire_provider(
+                &self,
+            ) -> crate::error::Result<Arc<dyn LlmProvider>> {
+                Ok(Arc::clone(&self.provider))
+            }
+        }
+
+        pub fn make_llm() -> (Arc<StubLlm>, LlmProviderLoaderRef) {
+            let llm = Arc::new(StubLlm::default());
+            let loader = Arc::new(StubLoader {
+                provider: llm.clone() as Arc<dyn LlmProvider>,
+            }) as LlmProviderLoaderRef;
+            (llm, loader)
+        }
+    }
+
+    /// Helper: build a kernel with a stub LLM that records calls.
+    fn make_kernel_with_stub_llm(
+    ) -> (Kernel, Arc<child_result_helpers::StubLlm>) {
+        let (llm, loader) = child_result_helpers::make_llm();
+        let config = KernelConfig {
+            max_concurrency:        16,
+            default_child_limit:    5,
+            default_max_iterations: 5,
+        };
+        let mut manifest_loader = ManifestLoader::new();
+        manifest_loader.load_bundled();
+
+        let kernel = Kernel::new(
+            config,
+            loader,
+            Arc::new(ToolRegistry::new()),
+            Arc::new(NoopMemory),
+            Arc::new(NoopEventBus),
+            Arc::new(NoopGuard),
+            manifest_loader,
+            Arc::new(NoopUserStore),
+            Arc::new(NoopSessionRepository)
+                as Arc<dyn SessionRepository>,
+            Arc::new(InMemoryInboundBus::new(128))
+                as Arc<dyn InboundBus>,
+            Arc::new(InMemoryOutboundBus::new(64))
+                as Arc<dyn OutboundBus>,
+            Arc::new(StreamHub::new(16)),
+            Arc::new(crate::defaults::noop::NoopIdentityResolver)
+                as Arc<dyn IdentityResolver>,
+            Arc::new(crate::defaults::noop::NoopSessionResolver)
+                as Arc<dyn SessionResolver>,
+        );
+        (kernel, llm)
+    }
+
+    #[tokio::test]
+    async fn test_child_result_delivered_to_parent_mailbox() {
+        // Spawn a parent process, then a child.  When the child's process
+        // loop ends (after mailbox is closed) it should deliver a
+        // ChildResult to the parent's mailbox.
+        let (kernel, llm) = make_kernel_with_stub_llm();
+
+        let principal = Principal::user("test-user");
+        let session_id = SessionId::new("cr-test-session");
+
+        let parent_handle = kernel
+            .spawn_with_input(
+                test_manifest("parent"),
+                "parent task".to_string(),
+                principal.clone(),
+                session_id.clone(),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let child_handle = kernel
+            .spawn_with_input(
+                test_manifest("child"),
+                "child task".to_string(),
+                principal,
+                session_id,
+                Some(parent_handle.agent_id),
+            )
+            .await
+            .unwrap();
+
+        let child_agent_id = child_handle.agent_id;
+
+        // Wait for the child's initial turn to complete (enters Waiting).
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let calls_before = llm.call_counts.lock().unwrap().len();
+
+        // Force the child to terminate by removing it from the process
+        // table (which drops the mailbox sender in the table), then
+        // dropping the handle's mailbox sender.  This closes the mailbox
+        // channel, causing the child's process_loop to exit and send
+        // ChildResult to the parent.
+        kernel.process_table().remove(child_agent_id);
+        drop(child_handle);
+
+        // Wait for the child's cleanup to run and the parent to process
+        // the ChildResult.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        // The parent should have made an additional LLM call from
+        // processing the ChildResult.
+        let calls_after = llm.call_counts.lock().unwrap().len();
+        assert!(
+            calls_after > calls_before,
+            "parent should have made additional LLM call after child \
+             result delivery: before={calls_before}, after={calls_after}"
+        );
+
+        // Parent should still be alive.
+        let parent_process =
+            kernel.process_table().get(parent_handle.agent_id);
+        assert!(
+            parent_process.is_some(),
+            "parent process should still exist"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_child_result_triggers_parent_llm_turn() {
+        // Verify that receiving a ChildResult causes the parent to make
+        // an additional LLM call (beyond the initial UserMessage turn).
+        let (kernel, llm) = make_kernel_with_stub_llm();
+
+        let principal = Principal::user("test-user");
+        let session_id = SessionId::new("cr-llm-test");
+
+        let parent_handle = kernel
+            .spawn_with_input(
+                test_manifest("parent"),
+                "parent task".to_string(),
+                principal.clone(),
+                session_id.clone(),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Wait a bit for the parent's initial turn to complete.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let initial_calls = llm.call_counts.lock().unwrap().len();
+
+        // Directly send a ChildResult to the parent's mailbox.
+        let child_id = crate::process::AgentId::new();
+        let child_result = crate::process::AgentResult {
+            output:     "child output text".to_string(),
+            iterations: 2,
+            tool_calls: 1,
+        };
+        kernel
+            .process_table()
+            .get_mailbox(&parent_handle.agent_id)
+            .unwrap()
+            .send(crate::process::ProcessMessage::ChildResult {
+                child_id,
+                result: child_result,
+            })
+            .await
+            .unwrap();
+
+        // Give the parent time to process the ChildResult and make the
+        // follow-up LLM call.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        let total_calls = llm.call_counts.lock().unwrap().len();
+        assert!(
+            total_calls > initial_calls,
+            "parent should have made additional LLM call(s) after \
+             ChildResult: initial={initial_calls}, total={total_calls}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_child_result_parent_state_transitions() {
+        // Verify parent state transitions:
+        //   Running → (initial turn) → Waiting → (ChildResult) → Running
+        //   → (LLM turn) → Waiting
+        let (kernel, _llm) = make_kernel_with_stub_llm();
+
+        let principal = Principal::user("test-user");
+        let session_id = SessionId::new("cr-state-test");
+
+        let parent_handle = kernel
+            .spawn_with_input(
+                test_manifest("parent"),
+                "parent task".to_string(),
+                principal,
+                session_id,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Wait for initial turn to complete → Waiting.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let state = kernel
+            .process_table()
+            .get(parent_handle.agent_id)
+            .unwrap()
+            .state;
+        assert_eq!(
+            state,
+            ProcessState::Waiting,
+            "parent should be Waiting after initial turn"
+        );
+
+        // Send a ChildResult.
+        let child_id = crate::process::AgentId::new();
+        kernel
+            .process_table()
+            .get_mailbox(&parent_handle.agent_id)
+            .unwrap()
+            .send(crate::process::ProcessMessage::ChildResult {
+                child_id,
+                result: crate::process::AgentResult {
+                    output:     "done".to_string(),
+                    iterations: 1,
+                    tool_calls: 0,
+                },
+            })
+            .await
+            .unwrap();
+
+        // After processing the ChildResult + follow-up LLM turn, the
+        // parent should be back to Waiting.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        let state = kernel
+            .process_table()
+            .get(parent_handle.agent_id)
+            .unwrap()
+            .state;
+        assert_eq!(
+            state,
+            ProcessState::Waiting,
+            "parent should return to Waiting after processing ChildResult"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_child_result_error_handling() {
+        // When a child's output is empty (e.g., failure case), the parent
+        // should still process it gracefully.
+        let (kernel, _llm) = make_kernel_with_stub_llm();
+
+        let principal = Principal::user("test-user");
+        let session_id = SessionId::new("cr-error-test");
+
+        let parent_handle = kernel
+            .spawn_with_input(
+                test_manifest("parent"),
+                "parent task".to_string(),
+                principal,
+                session_id,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Wait for initial turn to complete.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        // Send a ChildResult with empty/error output.
+        let child_id = crate::process::AgentId::new();
+        kernel
+            .process_table()
+            .get_mailbox(&parent_handle.agent_id)
+            .unwrap()
+            .send(crate::process::ProcessMessage::ChildResult {
+                child_id,
+                result: crate::process::AgentResult {
+                    output:     String::new(),
+                    iterations: 0,
+                    tool_calls: 0,
+                },
+            })
+            .await
+            .unwrap();
+
+        // Parent should handle it gracefully and return to Waiting.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        let parent_process =
+            kernel.process_table().get(parent_handle.agent_id);
+        assert!(
+            parent_process.is_some(),
+            "parent should still exist after empty child result"
+        );
+        let state = parent_process.unwrap().state;
+        assert_eq!(
+            state,
+            ProcessState::Waiting,
+            "parent should be Waiting after processing empty child result"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_child_result_multiple_children() {
+        // Parent receives ChildResult from multiple children sequentially.
+        let (kernel, llm) = make_kernel_with_stub_llm();
+
+        let principal = Principal::user("test-user");
+        let session_id = SessionId::new("cr-multi-test");
+
+        let parent_handle = kernel
+            .spawn_with_input(
+                test_manifest("parent"),
+                "parent task".to_string(),
+                principal,
+                session_id,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Wait for initial turn.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let calls_after_init = llm.call_counts.lock().unwrap().len();
+
+        // Send two ChildResult messages.
+        for i in 0..2 {
+            let child_id = crate::process::AgentId::new();
+            kernel
+                .process_table()
+                .get_mailbox(&parent_handle.agent_id)
+                .unwrap()
+                .send(crate::process::ProcessMessage::ChildResult {
+                    child_id,
+                    result: crate::process::AgentResult {
+                        output:     format!("child {i} output"),
+                        iterations: 1,
+                        tool_calls: 0,
+                    },
+                })
+                .await
+                .unwrap();
+            // Give time for each to be processed sequentially.
+            tokio::time::sleep(std::time::Duration::from_millis(300))
+                .await;
+        }
+
+        let total_calls = llm.call_counts.lock().unwrap().len();
+        assert!(
+            total_calls >= calls_after_init + 2,
+            "parent should have made at least 2 additional LLM calls \
+             for 2 child results: init={calls_after_init}, total={total_calls}"
+        );
+
+        let state = kernel
+            .process_table()
+            .get(parent_handle.agent_id)
+            .unwrap()
+            .state;
+        assert_eq!(
+            state,
+            ProcessState::Waiting,
+            "parent should be Waiting after processing all child results"
+        );
     }
 }
