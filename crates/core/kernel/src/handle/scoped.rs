@@ -27,12 +27,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use jiff::Timestamp;
 use tokio::sync::Semaphore;
-use super::{AgentHandle, EventOps, GuardOps, MemoryOps, ProcessOps};
+use super::{AgentHandle, EventOps, GuardOps, MemoryOps, PipeOps, ProcessOps};
 use crate::{
     error::{KernelError, Result},
     event::KernelEvent,
     guard::GuardContext,
-    io::types::InboundMessage,
+    io::{
+        pipe::{self, PipeEntry, PipeReader, PipeWriter},
+        types::InboundMessage,
+    },
     kernel::{KernelInner, SpawnPermits},
     process::{
         AgentId, AgentManifest, ProcessInfo, ProcessState, SessionId,
@@ -291,6 +294,83 @@ impl GuardOps for ScopedKernelHandle {
     }
 }
 
+impl PipeOps for ScopedKernelHandle {
+    fn create_pipe(&self, target: AgentId) -> Result<(PipeWriter, PipeReader)> {
+        let (writer, reader) = pipe::pipe(64);
+        self.inner.pipe_registry.register(
+            writer.pipe_id().clone(),
+            PipeEntry {
+                owner:      self.agent_id,
+                reader:     Some(target),
+                created_at: Timestamp::now(),
+            },
+        );
+        Ok((writer, reader))
+    }
+
+    fn create_named_pipe(&self, name: &str) -> Result<(PipeWriter, PipeReader)> {
+        // Check if name is already taken
+        if self.inner.pipe_registry.resolve_name(name).is_some() {
+            return Err(KernelError::Other {
+                message: format!("named pipe already exists: {name}").into(),
+            });
+        }
+        let (writer, reader) = pipe::pipe(64);
+        let pipe_id = writer.pipe_id().clone();
+        self.inner.pipe_registry.register_named(
+            name.to_string(),
+            pipe_id.clone(),
+            PipeEntry {
+                owner:      self.agent_id,
+                reader:     None,
+                created_at: Timestamp::now(),
+            },
+        );
+        // Park the reader so that connect_pipe() can hand it out.
+        // The caller also receives a copy-less reference via the return value,
+        // but for named pipes the typical pattern is:
+        //   creator:   create_named_pipe("feed") -> keeps writer, ignores reader
+        //   connector: connect_pipe("feed") -> gets the parked reader
+        // We return both so the creator has the option of handing the reader
+        // directly to a child too (anonymous-pipe style).
+        //
+        // Because PipeReader is not Clone, we do NOT park it here — the caller
+        // decides. If the caller wants rendezvous semantics they should call
+        // `pipe_registry.park_reader()` with the returned reader.
+        Ok((writer, reader))
+    }
+
+    fn connect_pipe(&self, name: &str) -> Result<PipeReader> {
+        let pipe_id = self
+            .inner
+            .pipe_registry
+            .resolve_name(name)
+            .ok_or_else(|| KernelError::Other {
+                message: format!("named pipe not found: {name}").into(),
+            })?;
+
+        // Take the parked reader (one-shot — only the first connector gets it).
+        let reader = self
+            .inner
+            .pipe_registry
+            .take_parked_reader(&pipe_id)
+            .ok_or_else(|| KernelError::Other {
+                message: format!(
+                    "named pipe '{name}' has no parked reader \
+                     (already taken or not parked)"
+                )
+                .into(),
+            })?;
+
+        // Record who connected.
+        self.inner
+            .pipe_registry
+            .set_reader(&pipe_id, self.agent_id);
+
+        Ok(reader)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use dashmap::DashMap;
@@ -308,7 +388,7 @@ mod tests {
                 noop::{NoopEventBus, NoopGuard, NoopMemory, NoopSessionRepository},
                 noop_user_store::NoopUserStore,
             },
-            io::{memory_bus::InMemoryOutboundBus, stream::StreamHub},
+            io::{memory_bus::InMemoryOutboundBus, pipe::PipeRegistry, stream::StreamHub},
             provider::EnvLlmProviderLoader,
             session::SessionRepository,
         };
@@ -331,6 +411,7 @@ mod tests {
             stream_hub:             Arc::new(StreamHub::new(1)),
             outbound_bus:           Arc::new(InMemoryOutboundBus::new(1))
                 as Arc<dyn crate::io::bus::OutboundBus>,
+            pipe_registry:          Arc::new(PipeRegistry::new()),
         })
     }
 
@@ -769,6 +850,190 @@ mod tests {
             .publish("test_event", serde_json::json!({"key": "value"}))
             .await
             .unwrap();
+    }
+
+    // ---- PipeOps tests -------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_pipe_ops_create_pipe() {
+        let inner = make_kernel_inner();
+        let agent_a = AgentId::new();
+        let agent_b = AgentId::new();
+
+        let handle = ScopedKernelHandle {
+            agent_id:        agent_a,
+            session_id:      SessionId::new("test"),
+            principal:       Principal::user("test"),
+            manifest:        test_manifest("test"),
+            allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner:           Arc::clone(&inner),
+        };
+
+        let (writer, mut reader) = handle.create_pipe(agent_b).unwrap();
+
+        // Registry should record the pipe
+        let entry = inner.pipe_registry.get(writer.pipe_id()).unwrap();
+        assert_eq!(entry.owner, agent_a);
+        assert_eq!(entry.reader, Some(agent_b));
+
+        // Data flows
+        writer.send("from a to b".to_string()).await.unwrap();
+        let msg = reader.recv().await.unwrap();
+        assert_eq!(
+            msg,
+            crate::io::pipe::PipeMessage::Data("from a to b".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pipe_ops_create_named_pipe_and_connect() {
+        let inner = make_kernel_inner();
+        let producer = AgentId::new();
+        let consumer = AgentId::new();
+
+        let producer_handle = ScopedKernelHandle {
+            agent_id:        producer,
+            session_id:      SessionId::new("test"),
+            principal:       Principal::user("test"),
+            manifest:        test_manifest("producer"),
+            allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner:           Arc::clone(&inner),
+        };
+
+        let consumer_handle = ScopedKernelHandle {
+            agent_id:        consumer,
+            session_id:      SessionId::new("test"),
+            principal:       Principal::user("test"),
+            manifest:        test_manifest("consumer"),
+            allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner:           Arc::clone(&inner),
+        };
+
+        // Producer creates named pipe and parks the reader
+        let (writer, reader) = producer_handle
+            .create_named_pipe("data-feed")
+            .unwrap();
+        inner
+            .pipe_registry
+            .park_reader(writer.pipe_id().clone(), reader);
+
+        // Consumer connects by name
+        let mut reader = consumer_handle.connect_pipe("data-feed").unwrap();
+
+        // Registry records the consumer
+        let entry = inner.pipe_registry.get(writer.pipe_id()).unwrap();
+        assert_eq!(entry.reader, Some(consumer));
+
+        // Data flows
+        writer.send("streamed data".to_string()).await.unwrap();
+        let msg = reader.recv().await.unwrap();
+        assert_eq!(
+            msg,
+            crate::io::pipe::PipeMessage::Data("streamed data".to_string())
+        );
+    }
+
+    #[test]
+    fn test_pipe_ops_duplicate_named_pipe_fails() {
+        let inner = make_kernel_inner();
+        let handle = ScopedKernelHandle {
+            agent_id:        AgentId::new(),
+            session_id:      SessionId::new("test"),
+            principal:       Principal::user("test"),
+            manifest:        test_manifest("test"),
+            allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner,
+        };
+
+        // First creation succeeds
+        let result = handle.create_named_pipe("unique");
+        assert!(result.is_ok());
+
+        // Second creation with same name fails
+        let result = handle.create_named_pipe("unique");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("named pipe already exists")
+        );
+    }
+
+    #[test]
+    fn test_pipe_ops_connect_nonexistent_fails() {
+        let inner = make_kernel_inner();
+        let handle = ScopedKernelHandle {
+            agent_id:        AgentId::new(),
+            session_id:      SessionId::new("test"),
+            principal:       Principal::user("test"),
+            manifest:        test_manifest("test"),
+            allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner,
+        };
+
+        let result = handle.connect_pipe("nonexistent");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("named pipe not found")
+        );
+    }
+
+    #[test]
+    fn test_pipe_ops_connect_without_parked_reader_fails() {
+        let inner = make_kernel_inner();
+        let creator = AgentId::new();
+        let connector = AgentId::new();
+
+        let creator_handle = ScopedKernelHandle {
+            agent_id:        creator,
+            session_id:      SessionId::new("test"),
+            principal:       Principal::user("test"),
+            manifest:        test_manifest("creator"),
+            allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner:           Arc::clone(&inner),
+        };
+
+        let connector_handle = ScopedKernelHandle {
+            agent_id:        connector,
+            session_id:      SessionId::new("test"),
+            principal:       Principal::user("test"),
+            manifest:        test_manifest("connector"),
+            allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner:           Arc::clone(&inner),
+        };
+
+        // Create named pipe but DON'T park the reader
+        let (_writer, _reader) = creator_handle
+            .create_named_pipe("no-park")
+            .unwrap();
+
+        // Connecting fails because no reader was parked
+        let result = connector_handle.connect_pipe("no-park");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("no parked reader")
+        );
     }
 
     /// Helper to create a test manifest.

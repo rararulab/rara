@@ -56,6 +56,7 @@ use crate::{
         bus::{InboundBus, OutboundBus},
         egress::{Egress, EgressAdapter, EndpointRegistry},
         ingress::{IdentityResolver, IngressPipeline, SessionResolver},
+        pipe::PipeRegistry,
         stream::StreamHub,
         types::InboundMessage,
     },
@@ -108,6 +109,8 @@ pub(crate) struct KernelInner {
     pub stream_hub:             Arc<StreamHub>,
     /// Outbound bus for publishing final responses.
     pub outbound_bus:           Arc<dyn OutboundBus>,
+    /// Inter-agent pipe registry for streaming data between agents.
+    pub pipe_registry:          Arc<PipeRegistry>,
 }
 
 impl KernelInner {
@@ -613,6 +616,7 @@ impl Kernel {
             session_repo,
             stream_hub: stream_hub.clone(),
             outbound_bus: outbound_bus.clone(),
+            pipe_registry: Arc::new(PipeRegistry::new()),
         });
 
         Self {

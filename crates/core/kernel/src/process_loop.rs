@@ -190,6 +190,7 @@ mod tests {
             stream_hub:             Arc::new(StreamHub::new(16)),
             outbound_bus:           Arc::new(InMemoryOutboundBus::new(64))
                 as Arc<dyn crate::io::bus::OutboundBus>,
+            pipe_registry:          Arc::new(crate::io::pipe::PipeRegistry::new()),
         })
     }
 

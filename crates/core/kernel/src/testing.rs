@@ -38,7 +38,7 @@ use crate::{
         noop::{NoopEventBus, NoopGuard, NoopMemory, NoopSessionRepository},
         noop_user_store::NoopUserStore,
     },
-    io::{bus::OutboundBus, memory_bus::InMemoryOutboundBus, stream::StreamHub},
+    io::{bus::OutboundBus, memory_bus::InMemoryOutboundBus, pipe::PipeRegistry, stream::StreamHub},
     kernel::{Kernel, KernelConfig, KernelInner},
     process::{ProcessTable, manifest_loader::ManifestLoader},
     provider::LlmProviderLoaderRef,
@@ -135,6 +135,7 @@ impl TestKernelBuilder {
             stream_hub:             Arc::new(StreamHub::new(16)),
             outbound_bus:           Arc::new(InMemoryOutboundBus::new(64))
                 as Arc<dyn OutboundBus>,
+            pipe_registry:          Arc::new(PipeRegistry::new()),
         });
 
         // Use private constructor approach: build Kernel from its inner field.
