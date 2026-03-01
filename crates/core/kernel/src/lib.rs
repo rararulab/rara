@@ -60,8 +60,7 @@ pub mod testing;
 
 pub use error::{KernelError, Result};
 // New process model re-exports
-pub use handle::{AgentHandle, EventOps, GuardOps, KernelHandle, MemoryOps, PipeOps, ProcessOps};
-pub use handle::{scoped::ScopedKernelHandle, spawn_tool::SpawnTool};
+pub use handle::{AgentHandle, process_handle::ProcessHandle, spawn_tool::SpawnTool};
 pub use kernel::{Kernel, KernelConfig};
 pub use process::{
     AgentId, AgentProcess, MetricsSnapshot, Priority, ProcessInfo, ProcessState,

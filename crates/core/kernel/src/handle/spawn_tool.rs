@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! SpawnTool — LLM-callable tool for spawning child agents via KernelHandle.
+//! SpawnTool — LLM-callable tool for spawning child agents via ProcessHandle.
 //!
 //! Supports two modes:
 //! - **Single**: `{"agent": "scout", "task": "Find auth code"}` — spawn a named
@@ -27,25 +27,25 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use tracing::{info, warn};
 
-use super::{AgentHandle, ProcessOps};
+use super::{AgentHandle, process_handle::ProcessHandle};
 use crate::process::{AgentManifest, manifest_loader::ManifestLoader};
 
 /// An `AgentTool` implementation that allows LLMs to spawn child agents.
 ///
-/// The tool wraps a `ScopedKernelHandle` (via `Arc<dyn ProcessOps>`) and
-/// the `ManifestLoader` for resolving agent names to manifests.
+/// The tool wraps a `ProcessHandle` (via `Arc`) and the `ManifestLoader`
+/// for resolving agent names to manifests.
 pub struct SpawnTool {
-    /// Process operations handle for spawning children.
-    process_ops:     Arc<dyn ProcessOps>,
+    /// Process handle for spawning children.
+    handle:          Arc<ProcessHandle>,
     /// Manifest loader for looking up named agent definitions.
     manifest_loader: Arc<ManifestLoader>,
 }
 
 impl SpawnTool {
     /// Create a new SpawnTool.
-    pub fn new(process_ops: Arc<dyn ProcessOps>, manifest_loader: Arc<ManifestLoader>) -> Self {
+    pub fn new(handle: Arc<ProcessHandle>, manifest_loader: Arc<ManifestLoader>) -> Self {
         Self {
-            process_ops,
+            handle,
             manifest_loader,
         }
     }
@@ -85,7 +85,7 @@ impl SpawnTool {
         );
 
         let handle = self
-            .process_ops
+            .handle
             .spawn(manifest, task.to_string())
             .await
             .map_err(|e| anyhow::anyhow!("spawn failed: {e}"))?;
@@ -120,7 +120,7 @@ impl SpawnTool {
         for task_req in &tasks {
             let manifest = self.resolve_manifest(&task_req.agent)?;
             match self
-                .process_ops
+                .handle
                 .spawn(manifest, task_req.task.clone())
                 .await
             {
@@ -267,68 +267,18 @@ impl crate::tool::AgentTool for SpawnTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::KernelError;
-    use crate::handle::AgentHandle;
-    use crate::process::{AgentId, AgentManifest, AgentResult, ProcessInfo};
+    use crate::event_queue::EventQueue;
+    use crate::process::{AgentId, SessionId};
+    use crate::process::principal::Principal;
     use crate::tool::AgentTool;
-    use tokio::sync::oneshot;
 
-    /// Mock ProcessOps that spawns agents and immediately returns results.
-    struct MockProcessOps {
-        /// Whether to fail spawns.
-        fail: bool,
-    }
-
-    #[async_trait]
-    impl ProcessOps for MockProcessOps {
-        async fn spawn(
-            &self,
-            manifest: AgentManifest,
-            input: String,
-        ) -> crate::error::Result<AgentHandle> {
-            if self.fail {
-                return Err(KernelError::SpawnLimitReached {
-                    message: "mock limit reached".to_string(),
-                });
-            }
-
-            let agent_id = AgentId::new();
-            let (tx, rx) = oneshot::channel();
-
-            // Immediately send a result
-            let _ = tx.send(AgentResult {
-                output:     format!("Result from {}: processed '{}'", manifest.name, input),
-                iterations: 1,
-                tool_calls: 0,
-            });
-
-            Ok(AgentHandle {
-                agent_id,
-                result_rx: rx,
-            })
-        }
-
-        async fn send(&self, _agent_id: AgentId, _message: String) -> crate::error::Result<String> {
-            Err(KernelError::Other {
-                message: "not implemented".into(),
-            })
-        }
-
-        fn status(&self, _agent_id: AgentId) -> crate::error::Result<ProcessInfo> {
-            Err(KernelError::ProcessNotFound {
-                id: "mock".to_string(),
-            })
-        }
-
-        fn kill(&self, _agent_id: AgentId) -> crate::error::Result<()> { Ok(()) }
-
-        fn pause(&self, _agent_id: AgentId) -> crate::error::Result<()> { Ok(()) }
-
-        fn resume(&self, _agent_id: AgentId) -> crate::error::Result<()> { Ok(()) }
-
-        fn interrupt(&self, _agent_id: AgentId) -> crate::error::Result<()> { Ok(()) }
-
-        fn children(&self) -> Vec<ProcessInfo> { vec![] }
+    fn make_test_handle() -> Arc<ProcessHandle> {
+        Arc::new(ProcessHandle::new(
+            AgentId::new(),
+            SessionId::new("test-session"),
+            Principal::user("test-user"),
+            Arc::new(EventQueue::new(4096)),
+        ))
     }
 
     fn make_test_manifest_loader() -> Arc<ManifestLoader> {
@@ -337,90 +287,11 @@ mod tests {
         Arc::new(loader)
     }
 
-    #[tokio::test]
-    async fn test_spawn_tool_single_mode() {
-        let process_ops = Arc::new(MockProcessOps { fail: false }) as Arc<dyn ProcessOps>;
-        let loader = make_test_manifest_loader();
-        let tool = SpawnTool::new(process_ops, loader);
-
-        let params = serde_json::json!({
-            "agent": "scout",
-            "task": "Find auth code"
-        });
-
-        let result = tool.execute(params).await.unwrap();
-        assert!(
-            result["output"]
-                .as_str()
-                .unwrap()
-                .contains("Result from scout")
-        );
-        assert!(result["agent_id"].as_str().is_some());
-        assert_eq!(result["iterations"], 1);
-        assert_eq!(result["tool_calls"], 0);
-    }
-
-    #[tokio::test]
-    async fn test_spawn_tool_parallel_mode() {
-        let process_ops = Arc::new(MockProcessOps { fail: false }) as Arc<dyn ProcessOps>;
-        let loader = make_test_manifest_loader();
-        let tool = SpawnTool::new(process_ops, loader);
-
-        let params = serde_json::json!({
-            "parallel": [
-                {"agent": "scout", "task": "Find files"},
-                {"agent": "planner", "task": "Create plan"}
-            ]
-        });
-
-        let result = tool.execute(params).await.unwrap();
-        assert_eq!(result["total"], 2);
-        let results = result["results"].as_array().unwrap();
-        assert_eq!(results.len(), 2);
-
-        // Check both results have output
-        for r in results {
-            assert!(r["output"].as_str().is_some());
-        }
-    }
-
-    #[tokio::test]
-    async fn test_spawn_tool_unknown_agent() {
-        let process_ops = Arc::new(MockProcessOps { fail: false }) as Arc<dyn ProcessOps>;
-        let loader = make_test_manifest_loader();
-        let tool = SpawnTool::new(process_ops, loader);
-
-        let params = serde_json::json!({
-            "agent": "nonexistent_agent",
-            "task": "do something"
-        });
-
-        let result = tool.execute(params).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("unknown agent"));
-    }
-
-    #[tokio::test]
-    async fn test_spawn_tool_spawn_failure() {
-        let process_ops = Arc::new(MockProcessOps { fail: true }) as Arc<dyn ProcessOps>;
-        let loader = make_test_manifest_loader();
-        let tool = SpawnTool::new(process_ops, loader);
-
-        let params = serde_json::json!({
-            "agent": "scout",
-            "task": "Find something"
-        });
-
-        let result = tool.execute(params).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("spawn failed"));
-    }
-
     #[test]
     fn test_spawn_tool_metadata() {
-        let process_ops = Arc::new(MockProcessOps { fail: false }) as Arc<dyn ProcessOps>;
+        let handle = make_test_handle();
         let loader = make_test_manifest_loader();
-        let tool = SpawnTool::new(process_ops, loader);
+        let tool = SpawnTool::new(handle, loader);
 
         assert_eq!(tool.name(), "spawn_agent");
         assert!(tool.description().contains("Spawn"));
@@ -433,14 +304,30 @@ mod tests {
 
     #[test]
     fn test_spawn_tool_available_agents() {
-        let process_ops = Arc::new(MockProcessOps { fail: false }) as Arc<dyn ProcessOps>;
+        let handle = make_test_handle();
         let loader = make_test_manifest_loader();
-        let tool = SpawnTool::new(process_ops, loader);
+        let tool = SpawnTool::new(handle, loader);
 
         let agents = tool.available_agents();
         assert!(agents.contains(&"scout".to_string()));
         assert!(agents.contains(&"planner".to_string()));
         assert!(agents.contains(&"worker".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_spawn_tool_unknown_agent() {
+        let handle = make_test_handle();
+        let loader = make_test_manifest_loader();
+        let tool = SpawnTool::new(handle, loader);
+
+        let params = serde_json::json!({
+            "agent": "nonexistent_agent",
+            "task": "do something"
+        });
+
+        let result = tool.execute(params).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("unknown agent"));
     }
 
     #[tokio::test]

@@ -34,7 +34,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::{
-    handle::scoped::ScopedKernelHandle,
+    handle::process_handle::ProcessHandle,
     io::stream::{StreamEvent, StreamHandle},
     model::ModelCapabilities,
     runner::{PendingToolCall, UserContent, build_tool_response_message, build_user_message},
@@ -58,14 +58,26 @@ pub struct AgentTurnResult {
 /// 1. Does **not** spawn a separate tokio task
 /// 2. Emits `StreamEvent` directly (no RunnerEvent -> StreamEvent translation)
 /// 3. Supports cancellation via `turn_cancel` token in every `tokio::select!`
+///
+/// Context (manifest, tools, provider) is queried via syscalls through the
+/// ProcessHandle.
 pub(crate) async fn run_inline_agent_loop(
-    handle: &ScopedKernelHandle,
+    handle: &ProcessHandle,
     user_text: String,
     history: Option<Vec<ChatCompletionRequestMessage>>,
     stream_handle: &StreamHandle,
     turn_cancel: &CancellationToken,
 ) -> Result<AgentTurnResult, String> {
-    let manifest = handle.manifest();
+    // Query context via syscalls.
+    let manifest = handle
+        .manifest()
+        .await
+        .map_err(|e| format!("failed to get manifest: {e}"))?;
+    let tools = handle
+        .tool_registry()
+        .await
+        .map_err(|e| format!("failed to get tool registry: {e}"))?;
+
     let max_iterations = manifest.max_iterations.unwrap_or(25);
     let model = &manifest.model;
     let system_prompt = &manifest.system_prompt;
@@ -90,7 +102,6 @@ pub(crate) async fn run_inline_agent_loop(
     };
 
     // Check model tool support
-    let tools = handle.tool_registry();
     let request_tools = if tools.is_empty() {
         None
     } else {
@@ -125,9 +136,8 @@ pub(crate) async fn run_inline_agent_loop(
             "calling LLM (inline streaming)"
         );
 
-        // Acquire provider
+        // Acquire provider via syscall
         let provider = handle
-            .llm_provider()
             .acquire_provider()
             .await
             .map_err(|e| format!("failed to acquire LLM provider: {e}"))?;
@@ -386,27 +396,19 @@ mod tests {
         CreateChatCompletionStreamResponse, FinishReason,
     };
     use async_trait::async_trait;
-    use dashmap::DashMap;
     use futures::stream;
-    use tokio::sync::Semaphore;
+    use tokio_util::sync::CancellationToken;
 
     use super::*;
     use crate::{
-        audit::InMemoryAuditLog,
-        defaults::{
-            noop::{NoopEventBus, NoopGuard, NoopMemory, NoopSessionRepository},
-            noop_user_store::NoopUserStore,
-        },
-        io::stream::StreamHub,
-        kernel::KernelInner,
+        handle::process_handle::ProcessHandle,
+        kernel::Kernel,
         process::{
-            AgentEnv, AgentId, AgentManifest, AgentProcess, ProcessState, ProcessTable, SessionId,
-            manifest_loader::ManifestLoader,
+            AgentId, AgentManifest, SessionId,
             principal::Principal,
         },
         provider::{LlmProvider, LlmProviderLoader, LlmProviderLoaderRef},
-        session::SessionRepository,
-        tool::ToolRegistry,
+        testing::TestKernelBuilder,
     };
 
     fn test_manifest() -> AgentManifest {
@@ -426,63 +428,33 @@ mod tests {
         }
     }
 
-    fn make_test_inner(llm_provider: LlmProviderLoaderRef) -> Arc<KernelInner> {
-        Arc::new(KernelInner {
-            process_table:          Arc::new(ProcessTable::new()),
-            global_semaphore:       Arc::new(Semaphore::new(10)),
-            default_child_limit:    5,
-            default_max_iterations: 25,
-            llm_provider,
-            tool_registry:          Arc::new(ToolRegistry::new()),
-            memory:                 Arc::new(NoopMemory),
-            event_bus:              Arc::new(NoopEventBus),
-            guard:                  Arc::new(NoopGuard),
-            manifest_loader:        ManifestLoader::new(),
-            shared_kv:              DashMap::new(),
-            memory_quota_per_agent: 1000,
-            user_store:             Arc::new(NoopUserStore),
-            session_repo:           Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
-            model_repo:             Arc::new(crate::defaults::noop::NoopModelRepo)
-                as Arc<dyn crate::model_repo::ModelRepo>,
-            stream_hub:             Arc::new(StreamHub::new(16)),
-            pipe_registry:          Arc::new(crate::io::pipe::PipeRegistry::new()),
-            device_registry:        Arc::new(crate::device_registry::DeviceRegistry::new()),
-            audit_log:              Arc::new(InMemoryAuditLog::default())
-                as Arc<dyn crate::audit::AuditLog>,
-            event_queue:            Arc::new(crate::event_queue::EventQueue::new(4096)),
-        })
-    }
+    /// Set up a test kernel with the event loop running, spawn a process,
+    /// and return the kernel + agent_id + cancel token.
+    async fn setup_test_kernel_with_process(
+        llm_provider: LlmProviderLoaderRef,
+    ) -> (Arc<Kernel>, AgentId, CancellationToken) {
+        let kernel = TestKernelBuilder::new()
+            .llm_provider(llm_provider)
+            .build();
+        let cancel = CancellationToken::new();
+        let kernel = kernel.start(cancel.clone());
 
-    fn setup_handle(inner: &Arc<KernelInner>) -> Arc<ScopedKernelHandle> {
-        let agent_id = AgentId::new();
-        let session_id = SessionId::new("test-session");
         let manifest = test_manifest();
+        let agent_id = kernel
+            .spawn_with_input(
+                manifest,
+                "init".to_string(),
+                Principal::user("test-user"),
+                SessionId::new("test-session"),
+                None,
+            )
+            .await
+            .unwrap();
 
-        let process = AgentProcess {
-            agent_id,
-            parent_id:     None,
-            session_id:    session_id.clone(),
-            manifest:      manifest.clone(),
-            principal:     Principal::user("test-user"),
-            env:           AgentEnv::default(),
-            state:         ProcessState::Running,
-            created_at:    jiff::Timestamp::now(),
-            finished_at:   None,
-            result:        None,
-            created_files: vec![],
-        };
-        inner.process_table.insert(process);
+        // Wait briefly for spawn to complete.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        Arc::new(ScopedKernelHandle {
-            agent_id,
-            session_id,
-            principal:       Principal::user("test-user"),
-            manifest,
-            allowed_tools:   vec![],
-            tool_registry:   Arc::new(ToolRegistry::new()),
-            child_semaphore: Arc::new(Semaphore::new(5)),
-            inner:           Arc::clone(inner),
-        })
+        (kernel, agent_id, cancel)
     }
 
     #[derive(Default)]
@@ -555,24 +527,35 @@ mod tests {
         let llm_provider = Arc::new(StubProviderLoader {
             provider: provider.clone() as Arc<dyn LlmProvider>,
         }) as LlmProviderLoaderRef;
-        let inner = make_test_inner(llm_provider);
-        let handle = setup_handle(&inner);
 
-        let stream_handle = inner.stream_hub.open(SessionId::new("test-session"));
-        let cancel = CancellationToken::new();
+        let (kernel, _agent_id, cancel) =
+            setup_test_kernel_with_process(llm_provider).await;
+
+        // Create a handle that talks to this kernel's event queue.
+        let handle = ProcessHandle::new(
+            _agent_id,
+            SessionId::new("test-session"),
+            Principal::user("test-user"),
+            kernel.event_queue().clone(),
+        );
+
+        let stream_handle = kernel.stream_hub().open(SessionId::new("test-session"));
+        let turn_cancel = CancellationToken::new();
 
         let result = run_inline_agent_loop(
             &handle,
             "hello".to_string(),
             None,
             &stream_handle,
-            &cancel,
+            &turn_cancel,
         )
         .await;
 
         assert!(result.is_ok());
         let result = result.unwrap();
         assert_eq!(result.text, "test reply");
+
+        cancel.cancel();
     }
 
     #[tokio::test]
@@ -581,11 +564,19 @@ mod tests {
         let llm_provider = Arc::new(StubProviderLoader {
             provider: provider.clone() as Arc<dyn LlmProvider>,
         }) as LlmProviderLoaderRef;
-        let inner = make_test_inner(llm_provider);
-        let handle = setup_handle(&inner);
 
-        let stream_handle = inner.stream_hub.open(SessionId::new("test-session"));
-        let cancel = CancellationToken::new();
+        let (kernel, _agent_id, cancel) =
+            setup_test_kernel_with_process(llm_provider).await;
+
+        let handle = ProcessHandle::new(
+            _agent_id,
+            SessionId::new("test-session"),
+            Principal::user("test-user"),
+            kernel.event_queue().clone(),
+        );
+
+        let stream_handle = kernel.stream_hub().open(SessionId::new("test-session"));
+        let turn_cancel = CancellationToken::new();
 
         let history = vec![
             ChatCompletionRequestUserMessageArgs::default()
@@ -600,21 +591,18 @@ mod tests {
             "new question".to_string(),
             Some(history),
             &stream_handle,
-            &cancel,
+            &turn_cancel,
         )
         .await;
 
         assert!(result.is_ok());
 
-        // LLM should receive 3 messages: system + 1 history + 1 current.
-        assert_eq!(
-            provider
-                .message_counts
-                .lock()
-                .expect("lock")
-                .as_slice(),
-            [3]
-        );
+        // message_counts includes the initial spawn_with_input("init") call
+        // (system + "init" = 2) plus this call (system + 1 history + 1 current = 3).
+        let counts = provider.message_counts.lock().expect("lock");
+        assert_eq!(*counts.last().unwrap(), 3);
+
+        cancel.cancel();
     }
 
     /// A provider that blocks indefinitely until cancelled.
@@ -647,14 +635,22 @@ mod tests {
         let llm_provider = Arc::new(StubProviderLoader {
             provider: provider as Arc<dyn LlmProvider>,
         }) as LlmProviderLoaderRef;
-        let inner = make_test_inner(llm_provider);
-        let handle = setup_handle(&inner);
 
-        let stream_handle = inner.stream_hub.open(SessionId::new("test-session"));
-        let cancel = CancellationToken::new();
+        let (kernel, _agent_id, cancel_kernel) =
+            setup_test_kernel_with_process(llm_provider).await;
+
+        let handle = Arc::new(ProcessHandle::new(
+            _agent_id,
+            SessionId::new("test-session"),
+            Principal::user("test-user"),
+            kernel.event_queue().clone(),
+        ));
+
+        let stream_handle = kernel.stream_hub().open(SessionId::new("test-session"));
+        let turn_cancel = CancellationToken::new();
 
         // Spawn the agent loop and cancel shortly after
-        let cancel_clone = cancel.clone();
+        let turn_cancel_clone = turn_cancel.clone();
         let handle_clone = Arc::clone(&handle);
         let join = tokio::spawn(async move {
             run_inline_agent_loop(
@@ -662,17 +658,19 @@ mod tests {
                 "hello".to_string(),
                 None,
                 &stream_handle,
-                &cancel_clone,
+                &turn_cancel_clone,
             )
             .await
         });
 
         // Give a moment for the loop to start, then cancel.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        cancel.cancel();
+        turn_cancel.cancel();
 
         let result = join.await.unwrap();
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "interrupted by user");
+
+        cancel_kernel.cancel();
     }
 }

@@ -44,7 +44,7 @@ pub enum Scope {
 
 /// Visibility partition for KV shared memory operations.
 ///
-/// Used by [`MemoryOps::shared_store`] and [`MemoryOps::shared_recall`]
+/// Used by `ProcessHandle::shared_store` and `ProcessHandle::shared_recall`
 /// to provide cross-agent data sharing with explicit scope control.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum KvScope {

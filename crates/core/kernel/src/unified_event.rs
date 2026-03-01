@@ -18,12 +18,23 @@
 //! ProcessMessage via mailbox, OutboundEnvelope via outbound bus) with
 //! a single unified event type processed by `Kernel::run()`.
 
+use std::sync::Arc;
+
 use tokio::sync::oneshot;
 
 use crate::{
     agent_turn::AgentTurnResult,
-    io::types::{InboundMessage, MessageId, OutboundEnvelope},
-    process::{AgentId, AgentManifest, AgentResult, SessionId, Signal, principal::{Principal, UserId}},
+    io::{
+        pipe::{PipeReader, PipeWriter},
+        types::{InboundMessage, MessageId, OutboundEnvelope},
+    },
+    memory::KvScope,
+    process::{
+        AgentId, AgentManifest, AgentResult, ProcessInfo, SessionId, Signal,
+        principal::{Principal, UserId},
+    },
+    provider::LlmProvider,
+    tool::ToolRegistry,
 };
 
 // ---------------------------------------------------------------------------
@@ -35,10 +46,210 @@ use crate::{
 pub enum EventPriority {
     /// Signal, Shutdown — processed first.
     Critical = 0,
-    /// TurnCompleted, ChildCompleted, Deliver — processed second.
+    /// TurnCompleted, ChildCompleted, Deliver, Syscall — processed second.
     Normal = 1,
     /// UserMessage, SpawnAgent, Timer — processed last.
     Low = 2,
+}
+
+// ---------------------------------------------------------------------------
+// Syscall — process handle requests routed through the event queue
+// ---------------------------------------------------------------------------
+
+/// Syscall variants — all interactions that a `ProcessHandle` routes through
+/// the kernel event queue. Each variant carries identity fields plus a oneshot
+/// reply channel for the kernel event loop to respond on.
+pub enum Syscall {
+    // -- Process queries --
+
+    /// Query the status of a target agent process.
+    QueryStatus {
+        target:   AgentId,
+        reply_tx: oneshot::Sender<crate::error::Result<ProcessInfo>>,
+    },
+
+    /// Query children of a parent agent process.
+    QueryChildren {
+        parent:   AgentId,
+        reply_tx: oneshot::Sender<Vec<ProcessInfo>>,
+    },
+
+    // -- Memory --
+
+    /// Store a value in the agent's private memory namespace.
+    MemStore {
+        agent_id:   AgentId,
+        session_id: SessionId,
+        principal:  Principal,
+        key:        String,
+        value:      serde_json::Value,
+        reply_tx:   oneshot::Sender<crate::error::Result<()>>,
+    },
+
+    /// Recall a value from the agent's private memory namespace.
+    MemRecall {
+        agent_id: AgentId,
+        key:      String,
+        reply_tx: oneshot::Sender<crate::error::Result<Option<serde_json::Value>>>,
+    },
+
+    /// Store a value in a shared (scoped) memory namespace.
+    SharedStore {
+        agent_id:  AgentId,
+        principal: Principal,
+        scope:     KvScope,
+        key:       String,
+        value:     serde_json::Value,
+        reply_tx:  oneshot::Sender<crate::error::Result<()>>,
+    },
+
+    /// Recall a value from a shared (scoped) memory namespace.
+    SharedRecall {
+        agent_id:  AgentId,
+        principal: Principal,
+        scope:     KvScope,
+        key:       String,
+        reply_tx:  oneshot::Sender<crate::error::Result<Option<serde_json::Value>>>,
+    },
+
+    // -- Pipe --
+
+    /// Create an anonymous pipe between two agents.
+    CreatePipe {
+        owner:    AgentId,
+        target:   AgentId,
+        reply_tx: oneshot::Sender<crate::error::Result<(PipeWriter, PipeReader)>>,
+    },
+
+    /// Create a named pipe.
+    CreateNamedPipe {
+        owner:    AgentId,
+        name:     String,
+        reply_tx: oneshot::Sender<crate::error::Result<(PipeWriter, PipeReader)>>,
+    },
+
+    /// Connect to a named pipe as a reader.
+    ConnectPipe {
+        connector: AgentId,
+        name:      String,
+        reply_tx:  oneshot::Sender<crate::error::Result<PipeReader>>,
+    },
+
+    // -- Guard --
+
+    /// Check whether a tool requires approval before execution.
+    RequiresApproval {
+        tool_name: String,
+        reply_tx:  oneshot::Sender<bool>,
+    },
+
+    /// Request approval for a tool execution.
+    RequestApproval {
+        agent_id:  AgentId,
+        principal: Principal,
+        tool_name: String,
+        summary:   String,
+        reply_tx:  oneshot::Sender<crate::error::Result<bool>>,
+    },
+
+    // -- Context queries (used by agent_turn) --
+
+    /// Get the manifest for an agent process.
+    GetManifest {
+        agent_id: AgentId,
+        reply_tx: oneshot::Sender<crate::error::Result<AgentManifest>>,
+    },
+
+    /// Get the tool registry.
+    GetToolRegistry {
+        reply_tx: oneshot::Sender<Arc<ToolRegistry>>,
+    },
+
+    /// Acquire an LLM provider instance.
+    AcquireProvider {
+        reply_tx: oneshot::Sender<crate::error::Result<Arc<dyn LlmProvider>>>,
+    },
+
+    // -- Event publishing --
+
+    /// Publish an event to the kernel event bus.
+    PublishEvent {
+        agent_id:   AgentId,
+        event_type: String,
+        payload:    serde_json::Value,
+    },
+}
+
+impl std::fmt::Debug for Syscall {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::QueryStatus { target, .. } => {
+                write!(f, "Syscall::QueryStatus(target={})", target)
+            }
+            Self::QueryChildren { parent, .. } => {
+                write!(f, "Syscall::QueryChildren(parent={})", parent)
+            }
+            Self::MemStore { agent_id, key, .. } => {
+                write!(f, "Syscall::MemStore(agent={}, key={})", agent_id, key)
+            }
+            Self::MemRecall { agent_id, key, .. } => {
+                write!(f, "Syscall::MemRecall(agent={}, key={})", agent_id, key)
+            }
+            Self::SharedStore { agent_id, scope, key, .. } => {
+                write!(
+                    f,
+                    "Syscall::SharedStore(agent={}, scope={:?}, key={})",
+                    agent_id, scope, key
+                )
+            }
+            Self::SharedRecall { agent_id, scope, key, .. } => {
+                write!(
+                    f,
+                    "Syscall::SharedRecall(agent={}, scope={:?}, key={})",
+                    agent_id, scope, key
+                )
+            }
+            Self::CreatePipe { owner, target, .. } => {
+                write!(f, "Syscall::CreatePipe(owner={}, target={})", owner, target)
+            }
+            Self::CreateNamedPipe { owner, name, .. } => {
+                write!(
+                    f,
+                    "Syscall::CreateNamedPipe(owner={}, name={})",
+                    owner, name
+                )
+            }
+            Self::ConnectPipe { connector, name, .. } => {
+                write!(
+                    f,
+                    "Syscall::ConnectPipe(connector={}, name={})",
+                    connector, name
+                )
+            }
+            Self::RequiresApproval { tool_name, .. } => {
+                write!(f, "Syscall::RequiresApproval(tool={})", tool_name)
+            }
+            Self::RequestApproval { agent_id, tool_name, .. } => {
+                write!(
+                    f,
+                    "Syscall::RequestApproval(agent={}, tool={})",
+                    agent_id, tool_name
+                )
+            }
+            Self::GetManifest { agent_id, .. } => {
+                write!(f, "Syscall::GetManifest(agent={})", agent_id)
+            }
+            Self::GetToolRegistry { .. } => write!(f, "Syscall::GetToolRegistry"),
+            Self::AcquireProvider { .. } => write!(f, "Syscall::AcquireProvider"),
+            Self::PublishEvent { agent_id, event_type, .. } => {
+                write!(
+                    f,
+                    "Syscall::PublishEvent(agent={}, type={})",
+                    agent_id, event_type
+                )
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -97,6 +308,13 @@ pub enum KernelEvent {
     /// Deliver an outbound envelope to egress.
     Deliver(OutboundEnvelope),
 
+    // === Syscall: ProcessHandle → kernel event loop ===
+
+    /// A syscall from a ProcessHandle. All handle interactions go through
+    /// here so that the kernel event loop is the single owner of mutable
+    /// state.
+    Syscall(Syscall),
+
     // === System ===
 
     /// Timer event (reserved for future use).
@@ -119,7 +337,8 @@ impl KernelEvent {
             Self::SendSignal { .. } | Self::Shutdown => EventPriority::Critical,
             Self::TurnCompleted { .. }
             | Self::ChildCompleted { .. }
-            | Self::Deliver(_) => EventPriority::Normal,
+            | Self::Deliver(_)
+            | Self::Syscall(_) => EventPriority::Normal,
             Self::UserMessage(_)
             | Self::SpawnAgent { .. }
             | Self::Timer { .. } => EventPriority::Low,
@@ -144,6 +363,7 @@ impl std::fmt::Debug for KernelEvent {
                 write!(f, "ChildCompleted(parent={}, child={})", parent_id, child_id)
             }
             Self::Deliver(env) => write!(f, "Deliver(session={})", env.session_id),
+            Self::Syscall(syscall) => write!(f, "{:?}", syscall),
             Self::Timer { name, .. } => write!(f, "Timer(name={})", name),
             Self::Shutdown => write!(f, "Shutdown"),
         }

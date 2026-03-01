@@ -35,8 +35,8 @@
 //!         └── shared_kv (cross-agent KV)
 //! ```
 //!
-//! Each spawned agent receives a [`ScopedKernelHandle`] providing syscall-like
-//! access to kernel capabilities (ProcessOps, MemoryOps, EventOps, GuardOps).
+//! Each spawned agent receives a [`ProcessHandle`] — a thin event pusher that
+//! sends [`Syscall`] variants through the unified event queue.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -74,7 +74,7 @@ use crate::{
 // KernelInner — shared kernel state
 // ---------------------------------------------------------------------------
 
-/// Shared kernel state accessed by all `ScopedKernelHandle` instances via `Arc`.
+/// Shared kernel state accessed by the event loop via `Arc`.
 ///
 /// This is the "real" kernel data — process table, component registries,
 /// I/O subsystems. `Kernel` wraps it with concurrency config and a public API.
@@ -125,7 +125,7 @@ impl KernelInner {
     /// Validate that the principal's user exists, is enabled, and has Spawn
     /// permission.
     ///
-    /// Called by both `Kernel::spawn()` and `ScopedKernelHandle::spawn()`.
+    /// Called by both `Kernel::spawn()` and `handle_syscall(SpawnAgent)`.
     pub(crate) async fn validate_principal(&self, principal: &Principal) -> Result<()> {
         let user = self
             .user_store
@@ -455,8 +455,7 @@ impl Kernel {
         self.inner.audit_log.query(filter).await
     }
 
-    /// Access the shared KernelInner (for constructing ScopedKernelHandles
-    /// externally).
+    /// Access the shared KernelInner (used by event loop and tests).
     pub(crate) fn inner(&self) -> &Arc<KernelInner> { &self.inner }
 
     /// Construct a `Kernel` from a pre-built `KernelInner` and config.

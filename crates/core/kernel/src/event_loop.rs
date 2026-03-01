@@ -23,21 +23,29 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
+use jiff::Timestamp;
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::{
-    audit::{AuditEvent, AuditEventType},
+    audit::{AuditEvent, AuditEventType, MemoryOp},
     channel::types::ChatMessage,
     error::{KernelError, Result},
-    handle::scoped::ScopedKernelHandle,
-    io::types::{InboundMessage, MessageId, OutboundEnvelope, OutboundPayload, OutboundRouting},
-    kernel::Kernel,
-    process::{
-        AgentEnv, AgentId, AgentManifest, AgentProcess, AgentResult, ProcessState, SessionId,
-        Signal, principal::Principal,
+    guard::GuardContext,
+    handle::process_handle::ProcessHandle,
+    io::{
+        pipe::{self, PipeEntry},
+        types::{InboundMessage, MessageId, OutboundEnvelope, OutboundPayload, OutboundRouting},
     },
-    unified_event::KernelEvent,
+    kernel::Kernel,
+    memory::KvScope,
+    process::{
+        AgentEnv, AgentId, AgentManifest, AgentProcess, AgentResult, ProcessInfo, ProcessState,
+        SessionId, Signal,
+        principal::Principal,
+    },
+    unified_event::{KernelEvent, Syscall},
 };
 
 // ---------------------------------------------------------------------------
@@ -61,8 +69,10 @@ pub(crate) struct ProcessRuntime {
     pub paused: bool,
     /// Buffered events received while the process was paused or busy.
     pub pause_buffer: Vec<KernelEvent>,
-    /// The ScopedKernelHandle for this process (needed to run LLM turns).
-    pub handle: Arc<ScopedKernelHandle>,
+    /// The ProcessHandle for this process (needed to run LLM turns).
+    pub handle: Arc<ProcessHandle>,
+    /// Per-agent semaphore limiting concurrent child processes.
+    pub child_semaphore: Arc<Semaphore>,
     /// Maximum context tokens for compaction.
     pub max_context_tokens: usize,
     /// Last successful result (for final output when process ends).
@@ -160,6 +170,9 @@ impl Kernel {
             KernelEvent::Deliver(envelope) => {
                 self.handle_deliver(envelope).await;
             }
+            KernelEvent::Syscall(syscall) => {
+                self.handle_syscall(syscall).await;
+            }
             KernelEvent::Timer { name, payload } => {
                 info!(name = %name, "timer event received (not yet implemented)");
                 let _ = payload;
@@ -168,6 +181,343 @@ impl Kernel {
                 info!("shutdown event received");
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // handle_syscall — all ProcessHandle interactions
+    // -----------------------------------------------------------------------
+
+    /// Handle a syscall from a ProcessHandle.
+    ///
+    /// All business logic lives here, executed by the kernel event loop.
+    async fn handle_syscall(&self, syscall: Syscall) {
+        let inner = self.inner();
+
+        match syscall {
+            Syscall::QueryStatus { target, reply_tx } => {
+                let result = inner
+                    .process_table
+                    .get(target)
+                    .map(|p| ProcessInfo::from(&p))
+                    .ok_or(KernelError::ProcessNotFound {
+                        id: target.to_string(),
+                    });
+                let _ = reply_tx.send(result);
+            }
+
+            Syscall::QueryChildren { parent, reply_tx } => {
+                let children = inner.process_table.children_of(parent);
+                let _ = reply_tx.send(children);
+            }
+
+            Syscall::MemStore {
+                agent_id,
+                session_id,
+                principal,
+                key,
+                value,
+                reply_tx,
+            } => {
+                let result = Self::do_mem_store(inner, agent_id, &session_id, &principal, &key, value);
+                let _ = reply_tx.send(result);
+            }
+
+            Syscall::MemRecall {
+                agent_id,
+                key,
+                reply_tx,
+            } => {
+                let namespaced = format!("agent:{}:{}", agent_id.0, key);
+                let result = Ok(inner
+                    .shared_kv
+                    .get(&namespaced)
+                    .map(|v| v.value().clone()));
+                let _ = reply_tx.send(result);
+            }
+
+            Syscall::SharedStore {
+                agent_id,
+                principal,
+                scope,
+                key,
+                value,
+                reply_tx,
+            } => {
+                let result =
+                    Self::do_shared_store(inner, agent_id, &principal, &scope, &key, value);
+                let _ = reply_tx.send(result);
+            }
+
+            Syscall::SharedRecall {
+                agent_id,
+                principal,
+                scope,
+                key,
+                reply_tx,
+            } => {
+                let result =
+                    Self::do_shared_recall(inner, agent_id, &principal, &scope, &key);
+                let _ = reply_tx.send(result);
+            }
+
+            Syscall::CreatePipe {
+                owner,
+                target,
+                reply_tx,
+            } => {
+                let (writer, reader) = pipe::pipe(64);
+                inner.pipe_registry.register(
+                    writer.pipe_id().clone(),
+                    PipeEntry {
+                        owner,
+                        reader: Some(target),
+                        created_at: Timestamp::now(),
+                    },
+                );
+                let _ = reply_tx.send(Ok((writer, reader)));
+            }
+
+            Syscall::CreateNamedPipe {
+                owner,
+                name,
+                reply_tx,
+            } => {
+                if inner.pipe_registry.resolve_name(&name).is_some() {
+                    let _ = reply_tx.send(Err(KernelError::Other {
+                        message: format!("named pipe already exists: {name}").into(),
+                    }));
+                    return;
+                }
+                let (writer, reader) = pipe::pipe(64);
+                let pipe_id = writer.pipe_id().clone();
+                inner.pipe_registry.register_named(
+                    name,
+                    pipe_id,
+                    PipeEntry {
+                        owner,
+                        reader: None,
+                        created_at: Timestamp::now(),
+                    },
+                );
+                let _ = reply_tx.send(Ok((writer, reader)));
+            }
+
+            Syscall::ConnectPipe {
+                connector,
+                name,
+                reply_tx,
+            } => {
+                let result = match inner.pipe_registry.resolve_name(&name) {
+                    Some(pipe_id) => {
+                        match inner.pipe_registry.take_parked_reader(&pipe_id) {
+                            Some(reader) => {
+                                inner.pipe_registry.set_reader(&pipe_id, connector);
+                                Ok(reader)
+                            }
+                            None => Err(KernelError::Other {
+                                message: format!(
+                                    "named pipe '{name}' has no parked reader \
+                                     (already taken or not parked)"
+                                )
+                                .into(),
+                            }),
+                        }
+                    }
+                    None => Err(KernelError::Other {
+                        message: format!("named pipe not found: {name}").into(),
+                    }),
+                };
+                let _ = reply_tx.send(result);
+            }
+
+            Syscall::RequiresApproval { tool_name: _, reply_tx } => {
+                // Heuristic: return false (no approval required by default).
+                let _ = reply_tx.send(false);
+            }
+
+            Syscall::RequestApproval {
+                agent_id,
+                principal: _,
+                tool_name,
+                summary,
+                reply_tx,
+            } => {
+                let guard_ctx = GuardContext {
+                    agent_id: agent_id.0,
+                    user_id: uuid::Uuid::nil(),
+                    session_id: uuid::Uuid::nil(),
+                };
+                let verdict = inner
+                    .guard
+                    .check_tool(
+                        &guard_ctx,
+                        &tool_name,
+                        &serde_json::json!({"summary": summary}),
+                    )
+                    .await;
+                let _ = reply_tx.send(Ok(verdict.is_allow()));
+            }
+
+            Syscall::GetManifest { agent_id, reply_tx } => {
+                let result = inner
+                    .process_table
+                    .get(agent_id)
+                    .map(|p| p.manifest.clone())
+                    .ok_or(KernelError::ProcessNotFound {
+                        id: agent_id.to_string(),
+                    });
+                let _ = reply_tx.send(result);
+            }
+
+            Syscall::GetToolRegistry { reply_tx } => {
+                let _ = reply_tx.send(Arc::clone(&inner.tool_registry));
+            }
+
+            Syscall::AcquireProvider { reply_tx } => {
+                let result = inner.llm_provider.acquire_provider().await;
+                let _ = reply_tx.send(result);
+            }
+
+            Syscall::PublishEvent {
+                agent_id,
+                event_type,
+                payload: _,
+            } => {
+                inner
+                    .event_bus
+                    .publish(crate::event::KernelEvent::ToolExecuted {
+                        agent_id: agent_id.0,
+                        tool_name: format!("event:{event_type}"),
+                        success: true,
+                        timestamp: Timestamp::now(),
+                    })
+                    .await;
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Syscall helper methods
+    // -----------------------------------------------------------------------
+
+    /// Store a value in an agent's private memory namespace.
+    fn do_mem_store(
+        inner: &Arc<crate::kernel::KernelInner>,
+        agent_id: AgentId,
+        session_id: &SessionId,
+        principal: &Principal,
+        key: &str,
+        value: serde_json::Value,
+    ) -> Result<()> {
+        let namespaced = format!("agent:{}:{}", agent_id.0, key);
+
+        // Check quota before inserting — only if this is a new key.
+        if !inner.shared_kv.contains_key(&namespaced) {
+            let max = inner.memory_quota_per_agent;
+            if max > 0 {
+                let prefix = format!("agent:{}:", agent_id.0);
+                let count = inner
+                    .shared_kv
+                    .iter()
+                    .filter(|entry| entry.key().starts_with(&prefix))
+                    .count();
+                if count >= max {
+                    return Err(KernelError::MemoryQuotaExceeded {
+                        agent_id: agent_id.to_string(),
+                        current: count,
+                        max,
+                    });
+                }
+            }
+        }
+
+        inner.shared_kv.insert(namespaced, value);
+
+        // Audit: MemoryAccess (Store)
+        crate::audit::record_async(
+            &inner.audit_log,
+            AuditEvent {
+                timestamp: Timestamp::now(),
+                agent_id,
+                session_id: session_id.clone(),
+                user_id: principal.user_id.clone(),
+                event_type: AuditEventType::MemoryAccess {
+                    operation: MemoryOp::Store,
+                    key: key.to_string(),
+                },
+                details: serde_json::Value::Null,
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Validate scope permissions for shared memory operations.
+    fn check_scope_permission(
+        agent_id: AgentId,
+        principal: &Principal,
+        scope: &KvScope,
+    ) -> Result<()> {
+        match scope {
+            KvScope::Global | KvScope::Team(_) => {
+                if !principal.is_admin() {
+                    return Err(KernelError::MemoryScopeDenied {
+                        reason: format!(
+                            "agent {} (role {:?}) cannot access {:?} scope — requires Root or Admin",
+                            agent_id, principal.role, scope,
+                        ),
+                    });
+                }
+            }
+            KvScope::Agent(target_id) => {
+                if *target_id != agent_id.0 && !principal.is_admin() {
+                    return Err(KernelError::MemoryScopeDenied {
+                        reason: format!(
+                            "agent {} cannot access agent {}'s scope — not admin",
+                            agent_id, target_id,
+                        ),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Build a scoped key from a KvScope.
+    fn scoped_key(scope: &KvScope, key: &str) -> String {
+        match scope {
+            KvScope::Global => key.to_string(),
+            KvScope::Team(name) => format!("team:{name}:{key}"),
+            KvScope::Agent(id) => format!("agent:{id}:{key}"),
+        }
+    }
+
+    /// Store a value in a shared (scoped) memory namespace.
+    fn do_shared_store(
+        inner: &Arc<crate::kernel::KernelInner>,
+        agent_id: AgentId,
+        principal: &Principal,
+        scope: &KvScope,
+        key: &str,
+        value: serde_json::Value,
+    ) -> Result<()> {
+        Self::check_scope_permission(agent_id, principal, scope)?;
+        let scoped = Self::scoped_key(scope, key);
+        inner.shared_kv.insert(scoped, value);
+        Ok(())
+    }
+
+    /// Recall a value from a shared (scoped) memory namespace.
+    fn do_shared_recall(
+        inner: &Arc<crate::kernel::KernelInner>,
+        agent_id: AgentId,
+        principal: &Principal,
+        scope: &KvScope,
+        key: &str,
+    ) -> Result<Option<serde_json::Value>> {
+        Self::check_scope_permission(agent_id, principal, scope)?;
+        let scoped = Self::scoped_key(scope, key);
+        Ok(inner.shared_kv.get(&scoped).map(|v| v.value().clone()))
     }
 
     // -----------------------------------------------------------------------
@@ -260,8 +610,6 @@ impl Kernel {
         // Record metrics.
         if let Some(metrics) = self.inner().process_table.get_metrics(&agent_id) {
             metrics.record_message();
-            // Deliberately NOT calling `.touch().await` here since we hold
-            // the DashMap guard — instead we'll touch after the turn.
         }
 
         // Apply context compaction.
@@ -590,22 +938,17 @@ impl Kernel {
             .process_table
             .set_cancellation_token(agent_id, token);
 
-        // Build ScopedKernelHandle.
+        // Build ProcessHandle.
         let child_limit = manifest
             .max_children
             .unwrap_or(inner.default_child_limit);
-        let effective_registry = Arc::clone(&inner.tool_registry);
 
-        let handle = Arc::new(ScopedKernelHandle {
+        let handle = Arc::new(ProcessHandle::new(
             agent_id,
-            session_id: session_id.clone(),
+            session_id.clone(),
             principal,
-            manifest: manifest.clone(),
-            allowed_tools: vec![],
-            tool_registry: effective_registry,
-            child_semaphore: Arc::new(tokio::sync::Semaphore::new(child_limit)),
-            inner: Arc::clone(inner),
-        });
+            inner.event_queue.clone(),
+        ));
 
         let max_context_tokens = manifest
             .max_context_tokens
@@ -618,6 +961,7 @@ impl Kernel {
             paused: false,
             pause_buffer: Vec::new(),
             handle,
+            child_semaphore: Arc::new(Semaphore::new(child_limit)),
             max_context_tokens,
             last_result: None,
         };
