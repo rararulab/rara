@@ -100,6 +100,8 @@ pub(crate) struct KernelInner {
     pub manifest_loader:        ManifestLoader,
     /// Cross-agent shared key-value store (simple DashMap).
     pub shared_kv:              DashMap<String, serde_json::Value>,
+    /// Maximum number of KV entries per agent (0 = unlimited).
+    pub memory_quota_per_agent: usize,
     /// User store for user management and permission validation.
     pub user_store:             Arc<dyn UserStore>,
     /// Session repository for conversation history.
@@ -519,6 +521,9 @@ pub struct KernelConfig {
     pub default_child_limit:    usize,
     /// Default max LLM iterations for spawned agents.
     pub default_max_iterations: usize,
+    /// Maximum number of KV entries per agent (0 = unlimited).
+    /// Applies to the agent-scoped namespace only.
+    pub memory_quota_per_agent: usize,
 }
 
 impl Default for KernelConfig {
@@ -527,6 +532,7 @@ impl Default for KernelConfig {
             max_concurrency:        16,
             default_child_limit:    8,
             default_max_iterations: 25,
+            memory_quota_per_agent: 1000,
         }
     }
 }
@@ -609,6 +615,7 @@ impl Kernel {
             guard,
             manifest_loader,
             shared_kv: DashMap::new(),
+            memory_quota_per_agent: config.memory_quota_per_agent,
             user_store,
             session_repo,
             stream_hub: stream_hub.clone(),
@@ -867,6 +874,7 @@ mod tests {
             max_concurrency,
             default_child_limit: child_limit,
             default_max_iterations: 5,
+            memory_quota_per_agent: 1000,
         };
 
         let mut loader = ManifestLoader::new();
@@ -927,6 +935,7 @@ mod tests {
         assert_eq!(config.max_concurrency, 16);
         assert_eq!(config.default_child_limit, 8);
         assert_eq!(config.default_max_iterations, 25);
+        assert_eq!(config.memory_quota_per_agent, 1000);
     }
 
     #[tokio::test]

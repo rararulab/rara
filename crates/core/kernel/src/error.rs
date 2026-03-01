@@ -121,6 +121,18 @@ pub enum KernelError {
     /// User account is disabled.
     #[snafu(display("user disabled: {name}"))]
     UserDisabled { name: String },
+
+    /// Memory scope access denied.
+    #[snafu(display("memory scope denied: {reason}"))]
+    MemoryScopeDenied { reason: String },
+
+    /// Memory quota exceeded for an agent.
+    #[snafu(display("memory quota exceeded: agent {agent_id} has {current} entries (max {max})"))]
+    MemoryQuotaExceeded {
+        agent_id: String,
+        current:  usize,
+        max:      usize,
+    },
 }
 
 impl From<crate::memory::MemoryError> for KernelError {

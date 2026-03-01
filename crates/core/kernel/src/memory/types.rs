@@ -36,10 +36,26 @@ pub struct MemoryContext {
 pub enum Scope {
     /// Shared across all agents.
     Global,
-    /// Shared within a team / project.
-    Team(Uuid),
+    /// Shared within a named team / project.
+    Team(String),
     /// Private to the agent identified by `MemoryContext::agent_id`.
     Agent,
+}
+
+/// Visibility partition for KV shared memory operations.
+///
+/// Used by [`MemoryOps::shared_store`] and [`MemoryOps::shared_recall`]
+/// to provide cross-agent data sharing with explicit scope control.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum KvScope {
+    /// Global scope — key stored as-is. Requires Root or Admin role.
+    Global,
+    /// Team scope — key prefixed with `"team:{name}:"`. Requires Root or
+    /// Admin role.
+    Team(String),
+    /// Agent scope — key prefixed with `"agent:{agent_id}:"`. Regular agents
+    /// can only access their own agent scope; Root/Admin can access any.
+    Agent(uuid::Uuid),
 }
 
 // ─── State Layer types ───────────────────────────────────────────────

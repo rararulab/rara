@@ -185,6 +185,7 @@ mod tests {
             guard:                  Arc::new(NoopGuard),
             manifest_loader:        ManifestLoader::new(),
             shared_kv:              DashMap::new(),
+            memory_quota_per_agent: 1000,
             user_store:             Arc::new(NoopUserStore),
             session_repo:           Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
             stream_hub:             Arc::new(StreamHub::new(16)),

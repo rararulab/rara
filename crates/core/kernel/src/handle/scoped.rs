@@ -234,14 +234,122 @@ impl ProcessOps for ScopedKernelHandle {
     fn children(&self) -> Vec<ProcessInfo> { self.inner.process_table.children_of(self.agent_id) }
 }
 
+impl ScopedKernelHandle {
+    /// Build the namespaced key for this agent's private KV scope.
+    fn namespaced_key(&self, key: &str) -> String {
+        format!("agent:{}:{}", self.agent_id.0, key)
+    }
+
+    /// Build a scoped key from a [`KvScope`].
+    fn scoped_key(scope: &crate::memory::KvScope, key: &str) -> String {
+        match scope {
+            crate::memory::KvScope::Global => key.to_string(),
+            crate::memory::KvScope::Team(name) => format!("team:{name}:{key}"),
+            crate::memory::KvScope::Agent(id) => format!("agent:{id}:{key}"),
+        }
+    }
+
+    /// Validate that the current principal is allowed to access the given scope.
+    fn check_scope_permission(&self, scope: &crate::memory::KvScope) -> Result<()> {
+        match scope {
+            crate::memory::KvScope::Global | crate::memory::KvScope::Team(_) => {
+                // Global and Team scopes require Root or Admin role.
+                if !self.principal.is_admin() {
+                    return Err(KernelError::MemoryScopeDenied {
+                        reason: format!(
+                            "agent {} (role {:?}) cannot access {:?} scope — requires Root or Admin",
+                            self.agent_id, self.principal.role, scope,
+                        ),
+                    });
+                }
+            }
+            crate::memory::KvScope::Agent(target_id) => {
+                // Regular agents can only access their own agent scope.
+                if *target_id != self.agent_id.0 && !self.principal.is_admin() {
+                    return Err(KernelError::MemoryScopeDenied {
+                        reason: format!(
+                            "agent {} cannot access agent {}'s scope — not admin",
+                            self.agent_id, target_id,
+                        ),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Check memory quota for the current agent's namespace.
+    ///
+    /// Counts all keys with the prefix `"agent:{agent_id}:"` and compares
+    /// against the configured quota. Returns an error if the quota would be
+    /// exceeded.
+    fn check_quota(&self) -> Result<()> {
+        let max = self.inner.memory_quota_per_agent;
+        if max == 0 {
+            return Ok(()); // unlimited
+        }
+        let prefix = format!("agent:{}:", self.agent_id.0);
+        let count = self
+            .inner
+            .shared_kv
+            .iter()
+            .filter(|entry| entry.key().starts_with(&prefix))
+            .count();
+        if count >= max {
+            return Err(KernelError::MemoryQuotaExceeded {
+                agent_id: self.agent_id.to_string(),
+                current:  count,
+                max,
+            });
+        }
+        Ok(())
+    }
+}
+
 impl MemoryOps for ScopedKernelHandle {
     fn mem_store(&self, key: &str, value: serde_json::Value) -> Result<()> {
-        self.inner.shared_kv.insert(key.to_string(), value);
+        let namespaced = self.namespaced_key(key);
+        // Check quota before inserting — only if this is a new key.
+        if !self.inner.shared_kv.contains_key(&namespaced) {
+            self.check_quota()?;
+        }
+        self.inner.shared_kv.insert(namespaced, value);
         Ok(())
     }
 
     fn mem_recall(&self, key: &str) -> Result<Option<serde_json::Value>> {
-        Ok(self.inner.shared_kv.get(key).map(|v| v.value().clone()))
+        let namespaced = self.namespaced_key(key);
+        Ok(self
+            .inner
+            .shared_kv
+            .get(&namespaced)
+            .map(|v| v.value().clone()))
+    }
+
+    fn shared_store(
+        &self,
+        scope: crate::memory::KvScope,
+        key: &str,
+        value: serde_json::Value,
+    ) -> Result<()> {
+        self.check_scope_permission(&scope)?;
+        let scoped = Self::scoped_key(&scope, key);
+        self.inner.shared_kv.insert(scoped, value);
+        Ok(())
+    }
+
+    fn shared_recall(
+        &self,
+        scope: crate::memory::KvScope,
+        key: &str,
+    ) -> Result<Option<serde_json::Value>> {
+        self.check_scope_permission(&scope)?;
+        let scoped = Self::scoped_key(&scope, key);
+        Ok(self
+            .inner
+            .shared_kv
+            .get(&scoped)
+            .map(|v| v.value().clone()))
     }
 }
 
@@ -303,6 +411,10 @@ mod tests {
     };
 
     fn make_kernel_inner() -> Arc<KernelInner> {
+        make_kernel_inner_with_quota(1000)
+    }
+
+    fn make_kernel_inner_with_quota(quota: usize) -> Arc<KernelInner> {
         use crate::{
             defaults::{
                 noop::{NoopEventBus, NoopGuard, NoopMemory, NoopSessionRepository},
@@ -326,6 +438,7 @@ mod tests {
             guard:                  Arc::new(NoopGuard),
             manifest_loader:        ManifestLoader::new(),
             shared_kv:              DashMap::new(),
+            memory_quota_per_agent: quota,
             user_store:             Arc::new(NoopUserStore),
             session_repo:           Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
             stream_hub:             Arc::new(StreamHub::new(1)),
@@ -521,36 +634,366 @@ mod tests {
     }
 
     #[test]
-    fn test_memory_ops_shared_across_handles() {
+    fn test_memory_namespace_isolation() {
+        // Agent A cannot read Agent B's data via mem_store/mem_recall.
         let inner = make_kernel_inner();
 
-        let handle1 = ScopedKernelHandle {
+        let handle_a = ScopedKernelHandle {
             agent_id:        AgentId::new(),
             session_id:      SessionId::new("test"),
-            principal:       Principal::user("user-1"),
-            manifest:        test_manifest("test"),
+            principal:       Principal::user("user-a"),
+            manifest:        test_manifest("agent-a"),
             allowed_tools:   vec![],
             tool_registry:   Arc::new(ToolRegistry::new()),
             child_semaphore: Arc::new(Semaphore::new(5)),
             inner:           Arc::clone(&inner),
         };
 
-        let handle2 = ScopedKernelHandle {
+        let handle_b = ScopedKernelHandle {
             agent_id:        AgentId::new(),
             session_id:      SessionId::new("test"),
-            principal:       Principal::user("user-2"),
-            manifest:        test_manifest("test"),
+            principal:       Principal::user("user-b"),
+            manifest:        test_manifest("agent-b"),
             allowed_tools:   vec![],
             tool_registry:   Arc::new(ToolRegistry::new()),
             child_semaphore: Arc::new(Semaphore::new(5)),
             inner:           Arc::clone(&inner),
         };
 
-        handle1
-            .mem_store("shared_key", serde_json::json!("hello"))
+        // Agent A stores a value.
+        handle_a
+            .mem_store("secret", serde_json::json!("only-for-a"))
             .unwrap();
-        let recalled = handle2.mem_recall("shared_key").unwrap();
-        assert_eq!(recalled.unwrap(), serde_json::json!("hello"));
+
+        // Agent A can recall it.
+        let recalled_a = handle_a.mem_recall("secret").unwrap();
+        assert_eq!(recalled_a.unwrap(), serde_json::json!("only-for-a"));
+
+        // Agent B cannot see it via mem_recall (different namespace).
+        let recalled_b = handle_b.mem_recall("secret").unwrap();
+        assert!(
+            recalled_b.is_none(),
+            "Agent B should NOT be able to read Agent A's data"
+        );
+
+        // Agent B stores the same key — should not overwrite Agent A's.
+        handle_b
+            .mem_store("secret", serde_json::json!("only-for-b"))
+            .unwrap();
+
+        // Both see their own value.
+        let a_val = handle_a.mem_recall("secret").unwrap().unwrap();
+        let b_val = handle_b.mem_recall("secret").unwrap().unwrap();
+        assert_eq!(a_val, serde_json::json!("only-for-a"));
+        assert_eq!(b_val, serde_json::json!("only-for-b"));
+    }
+
+    #[test]
+    fn test_shared_store_global_requires_admin() {
+        use crate::memory::KvScope;
+
+        let inner = make_kernel_inner();
+
+        // Regular user handle.
+        let handle_user = ScopedKernelHandle {
+            agent_id:        AgentId::new(),
+            session_id:      SessionId::new("test"),
+            principal:       Principal::user("alice"),
+            manifest:        test_manifest("test"),
+            allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner:           Arc::clone(&inner),
+        };
+
+        // Should fail — user cannot access Global scope.
+        let result = handle_user.shared_store(
+            KvScope::Global,
+            "global-key",
+            serde_json::json!("value"),
+        );
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("scope denied"),
+            "expected scope denied error"
+        );
+
+        // Admin handle.
+        let handle_admin = ScopedKernelHandle {
+            agent_id:        AgentId::new(),
+            session_id:      SessionId::new("test"),
+            principal:       Principal::admin("admin-1"),
+            manifest:        test_manifest("test"),
+            allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner:           Arc::clone(&inner),
+        };
+
+        // Should succeed.
+        handle_admin
+            .shared_store(KvScope::Global, "global-key", serde_json::json!("global-val"))
+            .unwrap();
+
+        let recalled = handle_admin
+            .shared_recall(KvScope::Global, "global-key")
+            .unwrap();
+        assert_eq!(recalled.unwrap(), serde_json::json!("global-val"));
+
+        // Regular user still cannot read Global scope.
+        let result = handle_user.shared_recall(KvScope::Global, "global-key");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_shared_store_team_requires_admin() {
+        use crate::memory::KvScope;
+
+        let inner = make_kernel_inner();
+
+        let handle_user = ScopedKernelHandle {
+            agent_id:        AgentId::new(),
+            session_id:      SessionId::new("test"),
+            principal:       Principal::user("bob"),
+            manifest:        test_manifest("test"),
+            allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner:           Arc::clone(&inner),
+        };
+
+        let result = handle_user.shared_store(
+            KvScope::Team("team-alpha".to_string()),
+            "team-key",
+            serde_json::json!("value"),
+        );
+        assert!(result.is_err());
+
+        let handle_admin = ScopedKernelHandle {
+            agent_id:        AgentId::new(),
+            session_id:      SessionId::new("test"),
+            principal:       Principal::admin("admin"),
+            manifest:        test_manifest("test"),
+            allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner:           Arc::clone(&inner),
+        };
+
+        handle_admin
+            .shared_store(
+                KvScope::Team("team-alpha".to_string()),
+                "team-key",
+                serde_json::json!("team-val"),
+            )
+            .unwrap();
+
+        let recalled = handle_admin
+            .shared_recall(KvScope::Team("team-alpha".to_string()), "team-key")
+            .unwrap();
+        assert_eq!(recalled.unwrap(), serde_json::json!("team-val"));
+    }
+
+    #[test]
+    fn test_shared_store_agent_scope_own_access() {
+        use crate::memory::KvScope;
+
+        let inner = make_kernel_inner();
+        let agent_id = AgentId::new();
+
+        let handle = ScopedKernelHandle {
+            agent_id,
+            session_id:      SessionId::new("test"),
+            principal:       Principal::user("alice"),
+            manifest:        test_manifest("test"),
+            allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner:           Arc::clone(&inner),
+        };
+
+        // Agent can access its own scope.
+        handle
+            .shared_store(
+                KvScope::Agent(agent_id.0),
+                "my-key",
+                serde_json::json!("my-val"),
+            )
+            .unwrap();
+
+        let recalled = handle
+            .shared_recall(KvScope::Agent(agent_id.0), "my-key")
+            .unwrap();
+        assert_eq!(recalled.unwrap(), serde_json::json!("my-val"));
+
+        // Agent cannot access another agent's scope.
+        let other_id = AgentId::new();
+        let result = handle.shared_store(
+            KvScope::Agent(other_id.0),
+            "other-key",
+            serde_json::json!("nope"),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_root_can_access_any_agent_scope() {
+        use crate::memory::KvScope;
+        use crate::process::principal::Role;
+
+        let inner = make_kernel_inner();
+        let target_agent_id = AgentId::new();
+
+        // Root principal.
+        let root_principal = Principal {
+            user_id:     crate::process::principal::UserId("root".to_string()),
+            role:        Role::Root,
+            permissions: vec![],
+        };
+
+        let handle_root = ScopedKernelHandle {
+            agent_id:        AgentId::new(), // different from target
+            session_id:      SessionId::new("test"),
+            principal:       root_principal,
+            manifest:        test_manifest("test"),
+            allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner:           Arc::clone(&inner),
+        };
+
+        // Root can write to any agent's scope.
+        handle_root
+            .shared_store(
+                KvScope::Agent(target_agent_id.0),
+                "injected",
+                serde_json::json!("by-root"),
+            )
+            .unwrap();
+
+        let recalled = handle_root
+            .shared_recall(KvScope::Agent(target_agent_id.0), "injected")
+            .unwrap();
+        assert_eq!(recalled.unwrap(), serde_json::json!("by-root"));
+
+        // Root can also access Global.
+        handle_root
+            .shared_store(KvScope::Global, "g", serde_json::json!(1))
+            .unwrap();
+        assert!(
+            handle_root
+                .shared_recall(KvScope::Global, "g")
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn test_memory_quota_enforcement() {
+        let small_inner = make_kernel_inner_with_quota(3);
+
+        let handle = ScopedKernelHandle {
+            agent_id:        AgentId::new(),
+            session_id:      SessionId::new("test"),
+            principal:       Principal::user("test"),
+            manifest:        test_manifest("test"),
+            allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner:           Arc::clone(&small_inner),
+        };
+
+        // Store 3 entries (at the limit).
+        handle.mem_store("k1", serde_json::json!(1)).unwrap();
+        handle.mem_store("k2", serde_json::json!(2)).unwrap();
+        handle.mem_store("k3", serde_json::json!(3)).unwrap();
+
+        // Fourth entry should fail.
+        let result = handle.mem_store("k4", serde_json::json!(4));
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("quota exceeded"),
+            "expected quota exceeded error"
+        );
+
+        // Updating an existing key should succeed (not a new entry).
+        handle
+            .mem_store("k1", serde_json::json!("updated"))
+            .unwrap();
+        let val = handle.mem_recall("k1").unwrap().unwrap();
+        assert_eq!(val, serde_json::json!("updated"));
+    }
+
+    #[test]
+    fn test_memory_quota_zero_means_unlimited() {
+        let unlimited_inner = make_kernel_inner_with_quota(0);
+
+        let handle = ScopedKernelHandle {
+            agent_id:        AgentId::new(),
+            session_id:      SessionId::new("test"),
+            principal:       Principal::user("test"),
+            manifest:        test_manifest("test"),
+            allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner:           unlimited_inner,
+        };
+
+        // Should be able to store many entries without quota error.
+        for i in 0..50 {
+            handle
+                .mem_store(&format!("key-{i}"), serde_json::json!(i))
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn test_shared_store_cross_agent_via_explicit_scope() {
+        // Two agents sharing data through explicit KvScope::Agent.
+        use crate::memory::KvScope;
+
+        let inner = make_kernel_inner();
+        let agent_a_id = AgentId::new();
+        let agent_b_id = AgentId::new();
+
+        // Admin handle for Agent A — can write to any scope.
+        let handle_a = ScopedKernelHandle {
+            agent_id:        agent_a_id,
+            session_id:      SessionId::new("test"),
+            principal:       Principal::admin("admin"),
+            manifest:        test_manifest("agent-a"),
+            allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner:           Arc::clone(&inner),
+        };
+
+        // Admin handle for Agent B.
+        let handle_b = ScopedKernelHandle {
+            agent_id:        agent_b_id,
+            session_id:      SessionId::new("test"),
+            principal:       Principal::admin("admin"),
+            manifest:        test_manifest("agent-b"),
+            allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner:           Arc::clone(&inner),
+        };
+
+        // Agent A writes to Agent B's scope.
+        handle_a
+            .shared_store(
+                KvScope::Agent(agent_b_id.0),
+                "shared-data",
+                serde_json::json!("from-a-to-b"),
+            )
+            .unwrap();
+
+        // Agent B reads from its own scope.
+        let val = handle_b
+            .shared_recall(KvScope::Agent(agent_b_id.0), "shared-data")
+            .unwrap();
+        assert_eq!(val.unwrap(), serde_json::json!("from-a-to-b"));
     }
 
     #[test]

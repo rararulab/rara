@@ -69,6 +69,7 @@ impl TestKernelBuilder {
                 max_concurrency:        16,
                 default_child_limit:    8,
                 default_max_iterations: 25,
+                memory_quota_per_agent: 1000,
             },
             llm_provider:    None,
             tool_registry:   ToolRegistry::new(),
@@ -129,6 +130,7 @@ impl TestKernelBuilder {
             guard:                  Arc::new(NoopGuard),
             manifest_loader:        self.manifest_loader,
             shared_kv:              DashMap::new(),
+            memory_quota_per_agent: self.config.memory_quota_per_agent,
             user_store:             Arc::new(NoopUserStore),
             session_repo:           Arc::new(NoopSessionRepository)
                 as Arc<dyn SessionRepository>,

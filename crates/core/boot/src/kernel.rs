@@ -189,6 +189,7 @@ mod tests {
                 max_concurrency:        4,
                 default_child_limit:    2,
                 default_max_iterations: 10,
+                memory_quota_per_agent: 1000,
             },
             ..Default::default()
         };
