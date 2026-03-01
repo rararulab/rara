@@ -186,9 +186,13 @@ async fn test_stream_hub_receives_text_deltas() {
         "agent should produce output via streaming pipeline"
     );
 
-    if let Some(token) = kernel.process_table().get_cancellation_token(&agent_id) {
-        token.cancel();
-    }
+    // Clean up: send Kill signal to stop the process.
+    let _ = kernel.event_queue().try_push(
+        rara_kernel::unified_event::KernelEvent::SendSignal {
+            target: agent_id,
+            signal: rara_kernel::process::Signal::Kill,
+        },
+    );
     cancel.cancel();
 }
 
@@ -232,9 +236,13 @@ async fn test_stream_hub_tool_call_events() {
         "should have final output after tool call"
     );
 
-    if let Some(token) = kernel.process_table().get_cancellation_token(&agent_id) {
-        token.cancel();
-    }
+    // Clean up: send Kill signal to stop the process.
+    let _ = kernel.event_queue().try_push(
+        rara_kernel::unified_event::KernelEvent::SendSignal {
+            target: agent_id,
+            signal: rara_kernel::process::Signal::Kill,
+        },
+    );
     cancel.cancel();
 }
 
@@ -291,11 +299,14 @@ async fn test_multi_session_isolation() {
         "session 2 should produce output"
     );
 
-    // Clean up.
-    for id in [&agent_id1, &agent_id2] {
-        if let Some(token) = kernel.process_table().get_cancellation_token(id) {
-            token.cancel();
-        }
+    // Clean up: send Kill signal to stop each process.
+    for id in [agent_id1, agent_id2] {
+        let _ = kernel.event_queue().try_push(
+            rara_kernel::unified_event::KernelEvent::SendSignal {
+                target: id,
+                signal: rara_kernel::process::Signal::Kill,
+            },
+        );
     }
     cancel.cancel();
 }

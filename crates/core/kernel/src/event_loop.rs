@@ -64,6 +64,10 @@ pub(crate) struct ProcessRuntime {
     /// Per-turn cancellation token — cancelled by Signal::Interrupt to abort
     /// the current LLM call without killing the process.
     pub turn_cancel: CancellationToken,
+    /// Process-level cancellation token — cancelled by Signal::Kill or
+    /// Signal::Terminate to shut down the entire process. Child processes
+    /// use `parent_token.child_token()` so cancelling a parent cascades.
+    pub process_cancel: CancellationToken,
     /// Whether this process is paused. When true, incoming messages are
     /// buffered in `pause_buffer` instead of being processed.
     pub paused: bool,
@@ -924,19 +928,17 @@ impl Kernel {
         };
         inner.process_table.insert(process);
 
-        // Create cancellation token.
-        let token = if let Some(pid) = parent_id {
-            inner
-                .process_table
-                .get_cancellation_token(&pid)
-                .map(|parent_token| parent_token.child_token())
+        // Create process-level cancellation token.
+        // Child processes derive their token from the parent's, so cancelling
+        // a parent cascades to all children automatically.
+        let process_cancel = if let Some(pid) = parent_id {
+            runtimes
+                .get(&pid)
+                .map(|parent_rt| parent_rt.process_cancel.child_token())
                 .unwrap_or_default()
         } else {
             CancellationToken::new()
         };
-        inner
-            .process_table
-            .set_cancellation_token(agent_id, token);
 
         // Build ProcessHandle.
         let child_limit = manifest
@@ -958,6 +960,7 @@ impl Kernel {
         let runtime = ProcessRuntime {
             conversation: initial_messages,
             turn_cancel: CancellationToken::new(),
+            process_cancel,
             paused: false,
             pause_buffer: Vec::new(),
             handle,
@@ -1073,21 +1076,23 @@ impl Kernel {
                 if let Some(rt) = runtimes.get(&target) {
                     rt.turn_cancel.cancel();
                 }
-                // Grace period then force-kill.
-                let pt = inner.process_table.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                    if let Some(token) = pt.get_cancellation_token(&target) {
+                // Grace period then force-kill via process_cancel token.
+                let process_cancel = runtimes
+                    .get(&target)
+                    .map(|rt| rt.process_cancel.clone());
+                if let Some(token) = process_cancel {
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                         token.cancel();
-                    }
-                });
+                    });
+                }
                 // Clean up runtime.
                 self.cleanup_process(target, runtimes).await;
             }
             Signal::Kill => {
                 info!(agent_id = %target, "kill signal");
-                if let Some(token) = inner.process_table.get_cancellation_token(&target) {
-                    token.cancel();
+                if let Some(rt) = runtimes.get(&target) {
+                    rt.process_cancel.cancel();
                 }
                 let _ = inner
                     .process_table
@@ -1165,6 +1170,9 @@ impl Kernel {
     // -----------------------------------------------------------------------
 
     /// Clean up a process runtime entry.
+    ///
+    /// Removing the runtime from the table drops the `process_cancel` token
+    /// naturally, so no explicit cancellation-token cleanup is needed.
     async fn cleanup_process(&self, agent_id: AgentId, runtimes: &RuntimeTable) {
         let rt = runtimes.remove(&agent_id);
         if let Some((_, rt)) = rt {
@@ -1187,7 +1195,6 @@ impl Kernel {
                 }
             }
         }
-        self.inner().process_table.clear_cancellation_token(&agent_id);
     }
 
     /// Resolve a manifest for auto-spawning (when a user message arrives
