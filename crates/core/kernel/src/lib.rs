@@ -37,6 +37,7 @@ pub mod device_registry;
 pub mod error;
 pub mod event;
 pub mod event_loop;
+pub(crate) mod event_processor;
 pub mod event_queue;
 pub mod guard;
 pub mod handle;
@@ -51,6 +52,8 @@ pub(crate) mod agent_turn;
 pub mod provider;
 pub mod runner;
 pub mod session;
+pub(crate) mod shard_queue;
+pub mod sharded_event_queue;
 pub mod tool;
 
 #[cfg(any(test, feature = "testing"))]

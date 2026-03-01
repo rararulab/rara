@@ -86,6 +86,9 @@ pub struct BootConfig {
     pub approval: Option<Arc<ApprovalManager>>,
     /// Event queue (optional — defaults to InMemoryEventQueue(4096)).
     pub event_queue: Option<Arc<dyn rara_kernel::event_queue::EventQueue>>,
+    /// Sharded event queue (optional — overrides `event_queue` when set).
+    /// When provided, the kernel uses multi-processor mode.
+    pub sharded_queue: Option<Arc<rara_kernel::sharded_event_queue::ShardedEventQueue>>,
 }
 
 impl Default for BootConfig {
@@ -117,6 +120,7 @@ impl Default for BootConfig {
             audit_log:         None,
             approval:          None,
             event_queue:       None,
+            sharded_queue:     None,
         }
     }
 }
@@ -182,6 +186,7 @@ pub fn boot(config: BootConfig) -> Kernel {
         audit_log,
         approval,
         config.event_queue,
+        config.sharded_queue,
     )
 }
 

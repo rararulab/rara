@@ -98,21 +98,36 @@ pub(crate) type RuntimeTable = DashMap<AgentId, ProcessRuntime>;
 impl Kernel {
     /// Run the unified event loop until shutdown.
     ///
-    /// This is the single driver for all kernel activity. It drains the
-    /// `EventQueue` in priority order and dispatches each event to the
-    /// appropriate handler.
+    /// If the kernel was created with a [`ShardedEventQueue`], spawns N+1
+    /// [`EventProcessor`] tasks (1 global + N shard) for parallel processing.
+    /// Otherwise, falls back to the single-loop behavior for backward
+    /// compatibility.
     ///
     /// Replaces: TickLoop + process_loop + Egress subscribe loop.
     pub async fn run_event_loop(&self, shutdown: CancellationToken) {
         let runtimes: Arc<RuntimeTable> = Arc::new(DashMap::new());
 
-        info!("kernel event loop started");
+        if let Some(sharded) = self.sharded_queue() {
+            self.run_sharded_event_loop(sharded.clone(), runtimes, shutdown)
+                .await;
+        } else {
+            self.run_single_event_loop(&runtimes, shutdown).await;
+        }
+    }
+
+    /// Single-processor event loop (backward compatible).
+    async fn run_single_event_loop(
+        &self,
+        runtimes: &RuntimeTable,
+        shutdown: CancellationToken,
+    ) {
+        info!("kernel event loop started (single-processor mode)");
         loop {
             tokio::select! {
                 _ = self.event_queue().wait() => {
                     let events = self.event_queue().drain(32).await;
                     for (event, wal_id) in events {
-                        self.handle_event(event, &runtimes).await;
+                        self.handle_event(event, runtimes).await;
                         if let Some(id) = wal_id {
                             self.event_queue().mark_completed(id);
                         }
@@ -124,7 +139,7 @@ impl Kernel {
                     let remaining = self.event_queue().drain(1024).await;
                     for (event, wal_id) in remaining {
                         if matches!(event, KernelEvent::SendSignal { .. } | KernelEvent::Shutdown) {
-                            self.handle_event(event, &runtimes).await;
+                            self.handle_event(event, runtimes).await;
                         }
                         if let Some(id) = wal_id {
                             self.event_queue().mark_completed(id);
@@ -137,8 +152,107 @@ impl Kernel {
         info!("kernel event loop stopped");
     }
 
+    /// Multi-processor event loop using sharded queue.
+    ///
+    /// Uses `futures::future::select_all` to wait on all shard queues in
+    /// parallel within a single async task. When any queue receives events,
+    /// we drain and process all queues that have pending events.
+    async fn run_sharded_event_loop(
+        &self,
+        sharded_queue: Arc<crate::sharded_event_queue::ShardedEventQueue>,
+        runtimes: Arc<RuntimeTable>,
+        shutdown: CancellationToken,
+    ) {
+        let num_shards = sharded_queue.num_shards();
+        info!(
+            num_shards = num_shards,
+            total_processors = num_shards + 1,
+            "kernel event loop started (sharded mode)"
+        );
+
+        loop {
+            // Build a future that resolves when ANY queue has events.
+            let any_ready = {
+                let sq = &sharded_queue;
+                async move {
+                    use std::pin::Pin;
+                    use futures::future::select_all;
+
+                    // Fast path: check if anything is pending already.
+                    if sq.global().pending_count() > 0 {
+                        return;
+                    }
+                    for i in 0..num_shards {
+                        if sq.shard(i).pending_count() > 0 {
+                            return;
+                        }
+                    }
+
+                    // Wait on all queues in parallel.
+                    let mut futs: Vec<Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>> =
+                        Vec::with_capacity(num_shards + 1);
+                    futs.push(Box::pin(sq.global().wait()));
+                    for i in 0..num_shards {
+                        futs.push(Box::pin(sq.shard(i).wait()));
+                    }
+                    let _ = select_all(futs).await;
+                }
+            };
+
+            tokio::select! {
+                _ = any_ready => {
+                    // Process global queue
+                    let global_events = sharded_queue.global().drain(32);
+                    for (event, wal_id) in global_events {
+                        self.handle_event(event, &runtimes).await;
+                        if let Some(id) = wal_id {
+                            self.event_queue().mark_completed(id);
+                        }
+                    }
+
+                    // Process each shard queue
+                    for i in 0..num_shards {
+                        let shard_events = sharded_queue.shard(i).drain(32);
+                        for (event, wal_id) in shard_events {
+                            self.handle_event(event, &runtimes).await;
+                            if let Some(id) = wal_id {
+                                self.event_queue().mark_completed(id);
+                            }
+                        }
+                    }
+                }
+                _ = shutdown.cancelled() => {
+                    info!("sharded kernel event loop shutting down");
+                    // Drain critical events from all queues.
+                    let global_remaining = sharded_queue.global().drain(1024);
+                    for (event, wal_id) in global_remaining {
+                        if matches!(event, KernelEvent::SendSignal { .. } | KernelEvent::Shutdown) {
+                            self.handle_event(event, &runtimes).await;
+                        }
+                        if let Some(id) = wal_id {
+                            self.event_queue().mark_completed(id);
+                        }
+                    }
+                    for i in 0..num_shards {
+                        let shard_remaining = sharded_queue.shard(i).drain(1024);
+                        for (event, wal_id) in shard_remaining {
+                            if matches!(event, KernelEvent::SendSignal { .. } | KernelEvent::Shutdown) {
+                                self.handle_event(event, &runtimes).await;
+                            }
+                            if let Some(id) = wal_id {
+                                self.event_queue().mark_completed(id);
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        info!("sharded kernel event loop stopped");
+    }
+
     /// Dispatch a single event to its handler.
-    async fn handle_event(&self, event: KernelEvent, runtimes: &RuntimeTable) {
+    pub(crate) async fn handle_event(&self, event: KernelEvent, runtimes: &RuntimeTable) {
         match event {
             KernelEvent::UserMessage(msg) => {
                 self.handle_user_message(msg, runtimes).await;

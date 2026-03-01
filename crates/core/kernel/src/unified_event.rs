@@ -186,6 +186,35 @@ pub enum Syscall {
     },
 }
 
+impl Syscall {
+    /// Extract the primary `AgentId` from this syscall variant.
+    ///
+    /// For agent-less syscalls (`RequiresApproval`, `GetToolRegistry`),
+    /// returns a fixed nil UUID-based `AgentId` so they always hash to the
+    /// same shard.
+    pub fn agent_id(&self) -> AgentId {
+        match self {
+            Self::QueryStatus { target, .. } => *target,
+            Self::QueryChildren { parent, .. } => *parent,
+            Self::MemStore { agent_id, .. }
+            | Self::MemRecall { agent_id, .. }
+            | Self::SharedStore { agent_id, .. }
+            | Self::SharedRecall { agent_id, .. }
+            | Self::PublishEvent { agent_id, .. }
+            | Self::RequestApproval { agent_id, .. }
+            | Self::GetManifest { agent_id, .. }
+            | Self::ResolveProvider { agent_id, .. } => *agent_id,
+            Self::CreatePipe { owner, .. }
+            | Self::CreateNamedPipe { owner, .. } => *owner,
+            Self::ConnectPipe { connector, .. } => *connector,
+            // Agent-less syscalls — route to a fixed nil shard.
+            Self::RequiresApproval { .. } | Self::GetToolRegistry { .. } => {
+                AgentId(uuid::Uuid::nil())
+            }
+        }
+    }
+}
+
 impl std::fmt::Debug for Syscall {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -339,6 +368,26 @@ pub enum KernelEvent {
 }
 
 impl KernelEvent {
+    /// Extract the primary `AgentId` associated with this event, if any.
+    ///
+    /// Returns `None` for global events that are not agent-scoped
+    /// (UserMessage, SpawnAgent, Timer, Shutdown, Deliver).
+    /// Returns `Some(agent_id)` for events that target a specific agent.
+    pub fn agent_id(&self) -> Option<AgentId> {
+        match self {
+            Self::SendSignal { target, .. } => Some(*target),
+            Self::TurnCompleted { agent_id, .. } => Some(*agent_id),
+            Self::ChildCompleted { parent_id, .. } => Some(*parent_id),
+            Self::Syscall(syscall) => Some(syscall.agent_id()),
+            // Global events — no specific agent affinity.
+            Self::UserMessage(_)
+            | Self::SpawnAgent { .. }
+            | Self::Timer { .. }
+            | Self::Deliver(_)
+            | Self::Shutdown => None,
+        }
+    }
+
     /// Determine the priority tier for this event.
     ///
     /// Priority is auto-inferred from the event variant — callers never
@@ -598,5 +647,177 @@ mod tests {
 
         // Shutdown
         assert!(PersistableEvent::from_kernel_event(&KernelEvent::Shutdown).is_none());
+    }
+
+    // -- KernelEvent::agent_id() tests ------------------------------------
+
+    #[test]
+    fn agent_id_for_user_message_is_none() {
+        let event = KernelEvent::UserMessage(test_inbound("hello"));
+        assert!(event.agent_id().is_none());
+    }
+
+    #[test]
+    fn agent_id_for_spawn_agent_is_none() {
+        let (tx, _rx) = oneshot::channel();
+        let event = KernelEvent::SpawnAgent {
+            manifest: AgentManifest {
+                name:               "test".to_string(),
+                role:               None,
+                description:        "test".to_string(),
+                model:              None,
+                system_prompt:      "test".to_string(),
+                soul_prompt:        None,
+                provider_hint:      None,
+                max_iterations:     None,
+                tools:              vec![],
+                max_children:       None,
+                max_context_tokens: None,
+                priority:           Default::default(),
+                metadata:           Default::default(),
+                sandbox:            None,
+            },
+            input:     "hello".to_string(),
+            principal: Principal::user("test"),
+            parent_id: None,
+            reply_tx:  tx,
+        };
+        assert!(event.agent_id().is_none());
+    }
+
+    #[test]
+    fn agent_id_for_timer_is_none() {
+        let event = KernelEvent::Timer {
+            name:    "tick".to_string(),
+            payload: serde_json::Value::Null,
+        };
+        assert!(event.agent_id().is_none());
+    }
+
+    #[test]
+    fn agent_id_for_shutdown_is_none() {
+        assert!(KernelEvent::Shutdown.agent_id().is_none());
+    }
+
+    #[test]
+    fn agent_id_for_send_signal_is_target() {
+        let target = AgentId::new();
+        let event = KernelEvent::SendSignal {
+            target,
+            signal: Signal::Interrupt,
+        };
+        assert_eq!(event.agent_id(), Some(target));
+    }
+
+    #[test]
+    fn agent_id_for_turn_completed_is_agent_id() {
+        let agent_id = AgentId::new();
+        let event = KernelEvent::TurnCompleted {
+            agent_id,
+            session_id: SessionId::new("s1"),
+            result:     Ok(crate::agent_turn::AgentTurnResult {
+                text:       "done".to_string(),
+                iterations: 1,
+                tool_calls: 0,
+            }),
+            in_reply_to: MessageId::new(),
+            user:        UserId("u1".to_string()),
+        };
+        assert_eq!(event.agent_id(), Some(agent_id));
+    }
+
+    #[test]
+    fn agent_id_for_child_completed_is_parent_id() {
+        let parent_id = AgentId::new();
+        let event = KernelEvent::ChildCompleted {
+            parent_id,
+            child_id: AgentId::new(),
+            result:   crate::process::AgentResult {
+                output:     "done".to_string(),
+                iterations: 1,
+                tool_calls: 0,
+            },
+        };
+        assert_eq!(event.agent_id(), Some(parent_id));
+    }
+
+    #[test]
+    fn agent_id_for_deliver_is_none() {
+        let event = KernelEvent::Deliver(crate::io::types::OutboundEnvelope {
+            id:          MessageId::new(),
+            in_reply_to: MessageId::new(),
+            user:        UserId("u1".to_string()),
+            session_id:  SessionId::new("s1"),
+            routing:     crate::io::types::OutboundRouting::BroadcastAll,
+            payload:     crate::io::types::OutboundPayload::Reply {
+                content:     crate::channel::types::MessageContent::Text("reply".to_string()),
+                attachments: vec![],
+            },
+            timestamp:   jiff::Timestamp::now(),
+        });
+        assert!(event.agent_id().is_none());
+    }
+
+    // -- Syscall::agent_id() tests ----------------------------------------
+
+    #[test]
+    fn syscall_agent_id_for_query_status() {
+        let target = AgentId::new();
+        let (tx, _rx) = oneshot::channel();
+        let syscall = Syscall::QueryStatus { target, reply_tx: tx };
+        assert_eq!(syscall.agent_id(), target);
+    }
+
+    #[test]
+    fn syscall_agent_id_for_mem_store() {
+        let agent_id = AgentId::new();
+        let (tx, _rx) = oneshot::channel();
+        let syscall = Syscall::MemStore {
+            agent_id,
+            session_id: SessionId::new("s1"),
+            principal:  Principal::user("test"),
+            key:        "k".to_string(),
+            value:      serde_json::Value::Null,
+            reply_tx:   tx,
+        };
+        assert_eq!(syscall.agent_id(), agent_id);
+    }
+
+    #[test]
+    fn syscall_agent_id_for_requires_approval_is_nil() {
+        let (tx, _rx) = oneshot::channel();
+        let syscall = Syscall::RequiresApproval {
+            tool_name: "test".to_string(),
+            reply_tx:  tx,
+        };
+        assert_eq!(syscall.agent_id(), AgentId(uuid::Uuid::nil()));
+    }
+
+    #[test]
+    fn syscall_agent_id_for_get_tool_registry_is_nil() {
+        let (tx, _rx) = oneshot::channel();
+        let syscall = Syscall::GetToolRegistry { reply_tx: tx };
+        assert_eq!(syscall.agent_id(), AgentId(uuid::Uuid::nil()));
+    }
+
+    #[test]
+    fn syscall_agent_id_for_create_pipe() {
+        let owner = AgentId::new();
+        let target = AgentId::new();
+        let (tx, _rx) = oneshot::channel();
+        let syscall = Syscall::CreatePipe { owner, target, reply_tx: tx };
+        assert_eq!(syscall.agent_id(), owner);
+    }
+
+    #[test]
+    fn syscall_agent_id_for_connect_pipe() {
+        let connector = AgentId::new();
+        let (tx, _rx) = oneshot::channel();
+        let syscall = Syscall::ConnectPipe {
+            connector,
+            name: "test".to_string(),
+            reply_tx: tx,
+        };
+        assert_eq!(syscall.agent_id(), connector);
     }
 }

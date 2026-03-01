@@ -259,6 +259,9 @@ pub struct Kernel {
     pub(crate) egress_adapters: HashMap<ChannelType, Arc<dyn EgressAdapter>>,
     /// Unified event queue for all kernel interactions.
     event_queue:       Arc<dyn EventQueue>,
+    /// Optional sharded event queue (for multi-processor mode).
+    /// When present, `event_queue` points to the same object.
+    sharded_queue:     Option<Arc<crate::sharded_event_queue::ShardedEventQueue>>,
     /// When this kernel was created (for uptime calculation).
     started_at:        Timestamp,
 }
@@ -287,6 +290,7 @@ impl Kernel {
         audit_log: Arc<dyn AuditLog>,
         approval: Arc<crate::approval::ApprovalManager>,
         event_queue: Option<Arc<dyn EventQueue>>,
+        sharded_queue: Option<Arc<crate::sharded_event_queue::ShardedEventQueue>>,
     ) -> Self {
         info!(
             max_concurrency = config.max_concurrency,
@@ -296,8 +300,17 @@ impl Kernel {
         );
 
         let endpoint_registry = Arc::new(EndpointRegistry::new());
-        let event_queue: Arc<dyn EventQueue> = event_queue
-            .unwrap_or_else(|| Arc::new(crate::event_queue::InMemoryEventQueue::new(4096)));
+
+        // Determine the event queue: prefer sharded if provided, then fall
+        // back to the generic event_queue param, then default InMemoryEventQueue.
+        let (event_queue, sharded_queue): (Arc<dyn EventQueue>, Option<Arc<crate::sharded_event_queue::ShardedEventQueue>>) =
+            if let Some(sq) = sharded_queue {
+                (sq.clone() as Arc<dyn EventQueue>, Some(sq))
+            } else if let Some(eq) = event_queue {
+                (eq, None)
+            } else {
+                (Arc::new(crate::event_queue::InMemoryEventQueue::new(4096)), None)
+            };
 
         let ingress_pipeline = Arc::new(IngressPipeline::with_event_queue(
             identity_resolver,
@@ -337,6 +350,7 @@ impl Kernel {
             endpoint_registry,
             egress_adapters: HashMap::new(),
             event_queue,
+            sharded_queue,
             started_at: Timestamp::now(),
         }
     }
@@ -501,6 +515,7 @@ impl Kernel {
             endpoint_registry,
             egress_adapters: HashMap::new(),
             event_queue,
+            sharded_queue: None,
             started_at: Timestamp::now(),
         }
     }
@@ -520,6 +535,14 @@ impl Kernel {
 
     /// Access the unified event queue.
     pub fn event_queue(&self) -> &Arc<dyn EventQueue> { &self.event_queue }
+
+    /// Access the sharded event queue, if configured.
+    ///
+    /// Returns `Some` when the kernel was created with a
+    /// [`ShardedEventQueue`](crate::sharded_event_queue::ShardedEventQueue).
+    pub(crate) fn sharded_queue(&self) -> Option<&Arc<crate::sharded_event_queue::ShardedEventQueue>> {
+        self.sharded_queue.as_ref()
+    }
 
     /// Register an egress adapter for a channel type.
     ///
@@ -602,6 +625,7 @@ mod tests {
             Arc::new(crate::approval::ApprovalManager::new(
                 crate::approval::ApprovalPolicy::default(),
             )),
+            None,
             None,
         )
     }
