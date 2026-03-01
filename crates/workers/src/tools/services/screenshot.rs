@@ -15,6 +15,7 @@
 //! Layer 2 service tool for capturing web page screenshots via Playwright.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use rara_domain_shared::{
@@ -22,29 +23,28 @@ use rara_domain_shared::{
         client::NotifyClient,
         types::{NotificationPriority, SendTelegramNotificationRequest},
     },
-    settings::model::Settings,
+    settings::{SettingsProvider, keys},
 };
 use serde_json::json;
-use tokio::sync::watch;
 use rara_kernel::tool::AgentTool;
 use tracing::{info, warn};
 use uuid::Uuid;
 
 pub struct ScreenshotTool {
     notify:       NotifyClient,
-    settings_rx:  watch::Receiver<Settings>,
+    settings:     Arc<dyn SettingsProvider>,
     project_root: PathBuf,
 }
 
 impl ScreenshotTool {
     pub fn new(
         notify: NotifyClient,
-        settings_rx: watch::Receiver<Settings>,
+        settings: Arc<dyn SettingsProvider>,
         project_root: PathBuf,
     ) -> Self {
         Self {
             notify,
-            settings_rx,
+            settings,
             project_root,
         }
     }
@@ -157,8 +157,8 @@ impl AgentTool for ScreenshotTool {
 
         // Send to Telegram if requested.
         if send {
-            let settings = self.settings_rx.borrow().clone();
-            let chat_id = settings.telegram.chat_id;
+            let chat_id: Option<i64> = self.settings.get(keys::TELEGRAM_CHAT_ID).await
+                .and_then(|v| v.parse().ok());
 
             let caption_text = caption.unwrap_or_else(|| format!("Screenshot: {url}"));
 

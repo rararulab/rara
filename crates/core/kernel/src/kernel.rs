@@ -107,8 +107,8 @@ pub(crate) struct KernelInner {
     pub user_store:             Arc<dyn UserStore>,
     /// Session repository for conversation history.
     pub session_repo:           Arc<dyn SessionRepository>,
-    /// Model repository for runtime model resolution.
-    pub model_repo:             Arc<dyn crate::model_repo::ModelRepo>,
+    /// Flat KV settings provider for runtime configuration.
+    pub settings:               Arc<dyn rara_domain_shared::settings::SettingsProvider>,
     /// Stream hub for real-time streaming events.
     pub stream_hub:             Arc<StreamHub>,
     /// Inter-agent pipe registry for streaming data between agents.
@@ -270,7 +270,7 @@ impl Kernel {
         manifest_loader: ManifestLoader,
         user_store: Arc<dyn UserStore>,
         session_repo: Arc<dyn SessionRepository>,
-        model_repo: Arc<dyn crate::model_repo::ModelRepo>,
+        settings: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
         stream_hub: Arc<StreamHub>,
         identity_resolver: Arc<dyn IdentityResolver>,
         session_resolver: Arc<dyn SessionResolver>,
@@ -307,7 +307,7 @@ impl Kernel {
             memory_quota_per_agent: config.memory_quota_per_agent,
             user_store,
             session_repo,
-            model_repo,
+            settings,
             stream_hub: stream_hub.clone(),
             pipe_registry: Arc::new(PipeRegistry::new()),
             device_registry: Arc::new(DeviceRegistry::new()),
@@ -400,8 +400,8 @@ impl Kernel {
     /// Access the kernel config.
     pub fn config(&self) -> &KernelConfig { &self.config }
 
-    /// Access the model repository for runtime model resolution.
-    pub fn model_repo(&self) -> &Arc<dyn crate::model_repo::ModelRepo> { &self.inner.model_repo }
+    /// Access the flat KV settings provider.
+    pub fn settings(&self) -> &Arc<dyn rara_domain_shared::settings::SettingsProvider> { &self.inner.settings }
 
     /// Get detailed runtime statistics for a single process.
     ///
@@ -546,7 +546,7 @@ mod tests {
     use crate::{
         audit::InMemoryAuditLog,
         defaults::{
-            noop::{NoopEventBus, NoopGuard, NoopMemory, NoopModelRepo, NoopSessionRepository},
+            noop::{NoopEventBus, NoopGuard, NoopMemory, NoopSettingsProvider, NoopSessionRepository},
             noop_user_store::NoopUserStore,
         },
         process::principal::Principal,
@@ -575,7 +575,7 @@ mod tests {
             loader,
             Arc::new(NoopUserStore),
             Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
-            Arc::new(NoopModelRepo) as Arc<dyn crate::model_repo::ModelRepo>,
+            Arc::new(NoopSettingsProvider) as Arc<dyn rara_domain_shared::settings::SettingsProvider>,
             Arc::new(StreamHub::new(16)),
             Arc::new(crate::defaults::noop::NoopIdentityResolver) as Arc<dyn IdentityResolver>,
             Arc::new(crate::defaults::noop::NoopSessionResolver) as Arc<dyn SessionResolver>,

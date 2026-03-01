@@ -317,10 +317,8 @@ impl AppConfig {
 
         // -- Kernel (boot + start) --------------------------------------------
 
-        let model_repo: std::sync::Arc<dyn rara_kernel::model_repo::ModelRepo> =
-            std::sync::Arc::new(rara_backend_admin::models::SettingsModelRepo::new(
-                app_state.settings_svc.clone(),
-            ));
+        let settings_provider: std::sync::Arc<dyn rara_domain_shared::settings::SettingsProvider> =
+            std::sync::Arc::new(app_state.settings_svc.clone());
 
         let mut kernel = rara_boot::kernel::boot(rara_boot::kernel::BootConfig {
             llm_provider:  app_state.llm_provider.clone(),
@@ -332,7 +330,7 @@ impl AppConfig {
             },
             user_store:    rara_boot::components::default_user_store(),
             session_repo:  app_state.session_repo.clone(),
-            model_repo,
+            settings:      settings_provider,
             ..Default::default()
         });
 
@@ -474,7 +472,10 @@ impl AppConfig {
     async fn try_build_telegram(
         state: &rara_workers::worker_state::AppState,
     ) -> Result<Option<Arc<rara_channels::telegram::TelegramAdapter>>, Whatever> {
-        let token = match state.settings_svc.current().telegram.bot_token.clone() {
+        use rara_domain_shared::settings::{SettingsProvider, keys};
+
+        let settings: Arc<dyn SettingsProvider> = Arc::new(state.settings_svc.clone());
+        let token = match settings.get(keys::TELEGRAM_BOT_TOKEN).await {
             Some(t) if !t.is_empty() => t,
             _ => return Ok(None),
         };
@@ -482,12 +483,18 @@ impl AppConfig {
         let bot = teloxide::Bot::new(&token);
 
         // Read initial settings for primary/group chat IDs.
-        let settings = state.settings_svc.current();
-        let tg = &settings.telegram;
+        let chat_id: Option<i64> = settings
+            .get(keys::TELEGRAM_CHAT_ID)
+            .await
+            .and_then(|v| v.parse().ok());
+        let group_id: Option<i64> = settings
+            .get(keys::TELEGRAM_ALLOWED_GROUP_CHAT_ID)
+            .await
+            .and_then(|v| v.parse().ok());
 
         let mut tg_config = rara_channels::telegram::TelegramConfig::default();
-        tg_config.primary_chat_id = tg.chat_id;
-        tg_config.allowed_group_chat_id = tg.allowed_group_chat_id;
+        tg_config.primary_chat_id = chat_id;
+        tg_config.allowed_group_chat_id = group_id;
 
         // Build contact tracker from the contact repository.
         let contact_tracker: Arc<dyn rara_channels::telegram::contacts::ContactTracker> =
@@ -503,13 +510,20 @@ impl AppConfig {
 
         // Spawn a background task to hot-reload config from settings.
         let config_handle = adapter.config_handle();
-        let mut settings_rx = state.settings_svc.subscribe();
+        let mut settings_rx = settings.subscribe();
         tokio::spawn(async move {
             while settings_rx.changed().await.is_ok() {
-                let s = settings_rx.borrow_and_update();
+                let new_chat_id: Option<i64> = settings
+                    .get(keys::TELEGRAM_CHAT_ID)
+                    .await
+                    .and_then(|v| v.parse().ok());
+                let new_group_id: Option<i64> = settings
+                    .get(keys::TELEGRAM_ALLOWED_GROUP_CHAT_ID)
+                    .await
+                    .and_then(|v| v.parse().ok());
                 let mut cfg = config_handle.write().unwrap_or_else(|e| e.into_inner());
-                cfg.primary_chat_id = s.telegram.chat_id;
-                cfg.allowed_group_chat_id = s.telegram.allowed_group_chat_id;
+                cfg.primary_chat_id = new_chat_id;
+                cfg.allowed_group_chat_id = new_group_id;
             }
         });
 

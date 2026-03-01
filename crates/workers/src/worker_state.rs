@@ -115,9 +115,12 @@ impl AppState {
 
         // -- runtime settings ------------------------------------------------
 
-        let settings_svc = rara_backend_admin::settings::SettingsSvc::load(db_store.kv_store())
-            .await
-            .whatever_context("Failed to initialize runtime settings")?;
+        let settings_svc =
+            rara_backend_admin::settings::SettingsSvc::load(db_store.kv_store(), pool.clone())
+                .await
+                .whatever_context("Failed to initialize runtime settings")?;
+        let settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider> =
+            Arc::new(settings_svc.clone());
         info!("Runtime settings service loaded");
 
         // -- prompt repo -------------------------------------------------------
@@ -130,12 +133,12 @@ impl AppState {
         // -- LLM provider ----------------------------------------------------
 
         let llm_provider: rara_kernel::provider::LlmProviderLoaderRef =
-            Arc::new(SettingsLlmProviderLoader::new(settings_svc.clone()));
+            Arc::new(SettingsLlmProviderLoader::new(settings_provider.clone()));
 
         // -- AI task agents --------------------------------------------------
 
         let ai_service = rara_backend_admin::ai_tasks::TaskAgentService::new(
-            settings_svc.subscribe(),
+            settings_provider.clone(),
             llm_provider.clone(),
             prompt_repo.clone(),
         );
@@ -163,12 +166,12 @@ impl AppState {
             .whatever_context("Failed to initialize session repository")?,
         );
         let composio_auth_provider: Arc<dyn rara_composio::ComposioAuthProvider> =
-            Arc::new(SettingsComposioAuthProvider::new(settings_svc.clone()));
+            Arc::new(SettingsComposioAuthProvider::new(settings_provider.clone()));
         let contact_repo =
             rara_channels::telegram::contacts::repository::ContactRepository::new(pool.clone());
         let mut tool_registry = rara_kernel::tool::ToolRegistry::new();
         for tool in rara_boot::tools::default_primitives(rara_boot::tools::PrimitiveDeps {
-            settings_rx:            settings_svc.subscribe(),
+            settings:               settings_provider.clone(),
             object_store:           object_store.clone(),
             composio_auth_provider: composio_auth_provider.clone(),
         }) {
@@ -210,7 +213,7 @@ impl AppState {
             pool.clone(),
             workspace_manager,
             notify_client.clone(),
-            settings_svc.subscribe(),
+            settings_provider.clone(),
             default_repo_url,
         );
         let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -219,7 +222,7 @@ impl AppState {
         )));
         tool_registry.register_service(Arc::new(crate::tools::services::ScreenshotTool::new(
             notify_client.clone(),
-            settings_svc.subscribe(),
+            settings_provider.clone(),
             project_root,
         )));
         tool_registry.register_service(Arc::new(crate::tools::services::CodexStatusTool::new(
@@ -285,9 +288,7 @@ impl AppState {
         let session_repo: Arc<dyn rara_sessions::repository::SessionRepository> = session_repo;
         let chat_service = rara_backend_admin::chat::service::ChatService::new(
             session_repo.clone(),
-            Arc::new(settings_svc.clone())
-                as Arc<dyn rara_domain_shared::settings::SettingsUpdater>,
-            settings_svc.subscribe(),
+            settings_provider.clone(),
         );
         info!("Chat service initialized");
 
@@ -315,6 +316,7 @@ impl AppState {
             manifest_loader,
             user_store:       user_store.clone(),
             session_repo:     session_repo.clone(),
+            settings:         settings_provider.clone(),
             ..Default::default()
         }));
         info!("Kernel initialized");
@@ -417,17 +419,6 @@ impl AppState {
             self.coding_task_service.clone(),
         ));
 
-        // Model admin routes (OpenAPI).
-        let model_repo: std::sync::Arc<dyn rara_kernel::model_repo::ModelRepo> =
-            std::sync::Arc::new(rara_backend_admin::models::SettingsModelRepo::new(
-                self.settings_svc.clone(),
-            ));
-        merge_openapi_router(
-            &mut router,
-            &mut api,
-            rara_backend_admin::models::routes(model_repo),
-        );
-
         // Prompt admin routes.
         let (prompt_router, prompt_api) =
             rara_backend_admin::prompts::routes(self.prompt_repo.clone()).split_for_parts();
@@ -487,37 +478,41 @@ fn merge_openapi_router(
 /// A fresh [`OpenAiProvider`](rara_kernel::provider::OpenAiProvider) is created
 /// on every call so that runtime API-key changes take effect immediately.
 struct SettingsLlmProviderLoader {
-    settings:           rara_backend_admin::settings::SettingsSvc,
+    settings:           Arc<dyn rara_domain_shared::settings::SettingsProvider>,
     codex_refresh_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// Composio auth provider that reads credentials from runtime settings.
 #[derive(Clone)]
 struct SettingsComposioAuthProvider {
-    settings: rara_backend_admin::settings::SettingsSvc,
+    settings: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
 }
 
 impl SettingsComposioAuthProvider {
-    fn new(settings: rara_backend_admin::settings::SettingsSvc) -> Self { Self { settings } }
+    fn new(settings: Arc<dyn rara_domain_shared::settings::SettingsProvider>) -> Self {
+        Self { settings }
+    }
 }
 
 #[async_trait]
 impl rara_composio::ComposioAuthProvider for SettingsComposioAuthProvider {
     async fn acquire_auth(&self) -> anyhow::Result<rara_composio::ComposioAuth> {
-        let current = self.settings.current();
-        let composio = current.agent.composio;
-        let api_key = composio
-            .api_key
+        use rara_domain_shared::settings::keys;
+        let api_key = self
+            .settings
+            .get(keys::COMPOSIO_API_KEY)
+            .await
             .ok_or_else(|| anyhow::anyhow!("composio.api_key is not configured in settings"))?;
+        let entity_id = self.settings.get(keys::COMPOSIO_ENTITY_ID).await;
         Ok(rara_composio::ComposioAuth::new(
             api_key,
-            composio.entity_id.as_deref(),
+            entity_id.as_deref(),
         ))
     }
 }
 
 impl SettingsLlmProviderLoader {
-    fn new(settings: rara_backend_admin::settings::SettingsSvc) -> Self {
+    fn new(settings: Arc<dyn rara_domain_shared::settings::SettingsProvider>) -> Self {
         Self {
             settings,
             codex_refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -530,14 +525,19 @@ impl rara_kernel::provider::LlmProviderLoader for SettingsLlmProviderLoader {
     async fn acquire_provider(
         &self,
     ) -> rara_kernel::error::Result<Arc<dyn rara_kernel::provider::LlmProvider>> {
-        let settings = self.settings.current();
-        match settings.ai.provider.as_deref().unwrap_or("openrouter") {
+        use rara_domain_shared::settings::keys;
+        let provider = self
+            .settings
+            .get(keys::LLM_PROVIDER)
+            .await
+            .unwrap_or_else(|| "openrouter".to_owned());
+        match provider.as_str() {
             "ollama" => {
-                let base_url = settings
-                    .ai
-                    .ollama_base_url
-                    .as_deref()
-                    .unwrap_or("http://localhost:11434");
+                let base_url = self
+                    .settings
+                    .get(keys::LLM_OLLAMA_BASE_URL)
+                    .await
+                    .unwrap_or_else(|| "http://localhost:11434".to_owned());
                 let config = async_openai::config::OpenAIConfig::new()
                     .with_api_base(format!("{}/v1", base_url))
                     .with_api_key("ollama");
@@ -546,15 +546,12 @@ impl rara_kernel::provider::LlmProviderLoader for SettingsLlmProviderLoader {
                 ))
             }
             "codex" => {
-                // Token persistence and refresh rules live in integration layer.
-                // Worker only orchestrates load -> maybe refresh -> construct provider.
                 let mut tokens = rara_codex_oauth::load_tokens()
                     .map_err(|e| rara_kernel::KernelError::Provider { message: e.into() })?
                     .ok_or(rara_kernel::error::ProviderNotConfiguredSnafu.build())?;
 
                 if rara_codex_oauth::should_refresh_token(tokens.expires_at_unix) {
                     let _guard = self.codex_refresh_lock.lock().await;
-                    // Double-check in case another request refreshed already.
                     tokens = rara_codex_oauth::load_tokens()
                         .map_err(|e| rara_kernel::KernelError::Provider { message: e.into() })?
                         .ok_or(rara_kernel::error::ProviderNotConfiguredSnafu.build())?;
@@ -581,10 +578,10 @@ impl rara_kernel::provider::LlmProviderLoader for SettingsLlmProviderLoader {
                 ))
             }
             _ => {
-                let api_key = settings
-                    .ai
-                    .openrouter_api_key
-                    .clone()
+                let api_key = self
+                    .settings
+                    .get(keys::LLM_OPENROUTER_API_KEY)
+                    .await
                     .ok_or(rara_kernel::error::ProviderNotConfiguredSnafu.build())?;
                 Ok(Arc::new(rara_kernel::provider::OpenAiProvider::new(
                     api_key,

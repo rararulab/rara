@@ -15,23 +15,14 @@
  */
 
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/api/client";
+import { settingsApi, api } from "@/api/client";
 import type {
-  AiAdminSettingsView,
-  AiAdminUpdateRequest,
   CreateContactRequest,
-  FallbackModelsView,
-  GmailAdminUpdateRequest,
-  GmailAdminSettingsView,
-  ModelListView,
-  PullProgressEvent,
   PromptListView,
-  RuntimeSettingsPatch,
-  RuntimeSettingsView,
-  SshKeyResponse,
+  SettingsMap,
   TelegramContact,
   UpdateContactRequest,
 } from "@/api/types";
@@ -57,12 +48,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  ArrowDown,
-  ArrowUp,
   Bot,
   BookOpen,
-  ChevronRight,
-  Download,
   ExternalLink,
   Eye,
   EyeOff,
@@ -70,12 +57,11 @@ import {
   MessageSquare,
   Pencil,
   Plus,
-  Search,
+  Save,
+  Settings2,
   Sparkles,
-  RefreshCw,
   Trash2,
   Users,
-  X,
   Sun,
   Moon,
   Monitor,
@@ -83,65 +69,39 @@ import {
 } from "lucide-react";
 
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { useTheme, type Theme } from "@/hooks/use-theme";
 import Skills from "@/pages/Skills";
 import McpServers from "@/pages/McpServers";
 
-type SettingKey = "ai" | "agent" | "telegram" | "gmail" | "composio" | "contacts" | "auth";
-type SettingCategory = "appearance" | "documentation" | "ai" | "channels" | "auth" | "runtime";
-type SettingsPage = "general" | "providers" | "prompts" | "skills" | "mcp" | "channels" | "auth" | "runtime";
+type SettingsPage = "general" | "providers" | "prompts" | "skills" | "mcp" | "channels" | "tools";
 type ToastState = { kind: "success" | "error"; message: string } | null;
-type OpenRouterModel = {
-  id: string;
-  name: string;
-  contextLength: number | null;
-};
 
-/** Well-known OpenAI models available through Codex OAuth. */
-const CODEX_KNOWN_MODELS: OpenRouterModel[] = [
-  { id: "o3-pro", name: "o3-pro", contextLength: 200000 },
-  { id: "o3", name: "o3", contextLength: 200000 },
-  { id: "o3-mini", name: "o3-mini", contextLength: 200000 },
-  { id: "o4-mini", name: "o4-mini", contextLength: 200000 },
-  { id: "gpt-4.1", name: "gpt-4.1", contextLength: 1047576 },
-  { id: "gpt-4.1-mini", name: "gpt-4.1-mini", contextLength: 1047576 },
-  { id: "gpt-4.1-nano", name: "gpt-4.1-nano", contextLength: 1047576 },
-  { id: "gpt-4o", name: "gpt-4o", contextLength: 128000 },
-  { id: "gpt-4o-mini", name: "gpt-4o-mini", contextLength: 128000 },
-  { id: "codex-mini-latest", name: "codex-mini-latest", contextLength: 192000 },
-];
-
-type TgAdminSettingsView = {
-  configured: boolean;
-  chat_id: number | null;
-  allowed_group_chat_id: number | null;
-  notification_channel_id: number | null;
-  token_hint: string | null;
-  updated_at: string | null;
-};
-type TgAdminUpdateRequest = {
-  bot_token?: string;
-  chat_id?: number;
-  allowed_group_chat_id?: number;
-  notification_channel_id?: number | null;
-};
-
-function formatUpdatedAt(value: string | null): string {
-  if (!value) return "Never";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return value;
-  return d.toLocaleString();
-}
-
-const BASE_URL = import.meta.env.VITE_API_URL || '';
+// Well-known setting keys (must match backend keys module)
+const KEYS = {
+  LLM_PROVIDER: "llm.provider",
+  LLM_OPENROUTER_API_KEY: "llm.openrouter.api_key",
+  LLM_OLLAMA_BASE_URL: "llm.ollama.base_url",
+  LLM_MODELS_DEFAULT: "llm.models.default",
+  LLM_MODELS_CHAT: "llm.models.chat",
+  LLM_MODELS_JOB: "llm.models.job",
+  LLM_FALLBACK_MODELS: "llm.fallback_models",
+  LLM_FAVORITE_MODELS: "llm.favorite_models",
+  TELEGRAM_BOT_TOKEN: "telegram.bot_token",
+  TELEGRAM_CHAT_ID: "telegram.chat_id",
+  TELEGRAM_ALLOWED_GROUP_CHAT_ID: "telegram.allowed_group_chat_id",
+  TELEGRAM_NOTIFICATION_CHANNEL_ID: "telegram.notification_channel_id",
+  GMAIL_ADDRESS: "gmail.address",
+  GMAIL_APP_PASSWORD: "gmail.app_password",
+  GMAIL_AUTO_SEND_ENABLED: "gmail.auto_send_enabled",
+  COMPOSIO_API_KEY: "composio.api_key",
+  COMPOSIO_ENTITY_ID: "composio.entity_id",
+  MEMORY_MEM0_BASE_URL: "memory.mem0.base_url",
+  MEMORY_MEMOS_BASE_URL: "memory.memos.base_url",
+  MEMORY_MEMOS_TOKEN: "memory.memos.token",
+  MEMORY_HINDSIGHT_BASE_URL: "memory.hindsight.base_url",
+  MEMORY_HINDSIGHT_BANK_ID: "memory.hindsight.bank_id",
+} as const;
 
 const THEME_OPTIONS: Array<{ key: Theme; label: string; icon: ReactNode; description: string }> = [
   { key: "system", label: "System", icon: <Monitor className="h-4 w-4" />, description: "Follow OS appearance" },
@@ -149,50 +109,168 @@ const THEME_OPTIONS: Array<{ key: Theme; label: string; icon: ReactNode; descrip
   { key: "dark", label: "Dark", icon: <Moon className="h-4 w-4" />, description: "Low-light friendly" },
 ];
 
+// Sensitive keys that should be masked by default
+const SENSITIVE_KEYS: Set<string> = new Set([
+  KEYS.LLM_OPENROUTER_API_KEY,
+  KEYS.TELEGRAM_BOT_TOKEN,
+  KEYS.GMAIL_APP_PASSWORD,
+  KEYS.COMPOSIO_API_KEY,
+  KEYS.MEMORY_MEMOS_TOKEN,
+]);
+
+// A single KV field with optional show/hide toggle for sensitive values
+function KvField({
+  settingKey,
+  label,
+  value,
+  placeholder,
+  onChange,
+  sensitive,
+  description,
+}: {
+  settingKey: string;
+  label: string;
+  value: string;
+  placeholder?: string;
+  onChange: (value: string) => void;
+  sensitive?: boolean;
+  description?: string;
+}) {
+  const [visible, setVisible] = useState(false);
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <Label htmlFor={settingKey} className="text-sm font-medium">
+          {label}
+        </Label>
+        <span className="font-mono text-[10px] text-muted-foreground">{settingKey}</span>
+      </div>
+      <div className="flex items-center gap-2">
+        <Input
+          id={settingKey}
+          type={sensitive && !visible ? "password" : "text"}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          className="h-9 font-mono text-sm"
+        />
+        {sensitive && (
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="h-9 w-9 shrink-0"
+            onClick={() => setVisible((v) => !v)}
+          >
+            {visible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+          </Button>
+        )}
+      </div>
+      {description && (
+        <p className="text-xs text-muted-foreground">{description}</p>
+      )}
+    </div>
+  );
+}
+
+// Group of KV fields with a save button
+function KvGroup({
+  title,
+  description,
+  icon,
+  fields,
+  values,
+  original,
+  onFieldChange,
+  onSave,
+  saving,
+  toast,
+}: {
+  title: string;
+  description: string;
+  icon: ReactNode;
+  fields: Array<{
+    key: string;
+    label: string;
+    placeholder?: string;
+    description?: string;
+  }>;
+  values: Record<string, string>;
+  original: Record<string, string>;
+  onFieldChange: (key: string, value: string) => void;
+  onSave: () => void;
+  saving: boolean;
+  toast: ToastState;
+}) {
+  const hasChanges = fields.some((f) => (values[f.key] ?? "") !== (original[f.key] ?? ""));
+
+  return (
+    <Card className="app-surface border-border/60">
+      <CardHeader className="pb-4">
+        <div className="flex items-center gap-3">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
+            {icon}
+          </div>
+          <div>
+            <CardTitle className="text-base">{title}</CardTitle>
+            <CardDescription>{description}</CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {fields.map((f) => (
+          <KvField
+            key={f.key}
+            settingKey={f.key}
+            label={f.label}
+            value={values[f.key] ?? ""}
+            placeholder={f.placeholder}
+            onChange={(v) => onFieldChange(f.key, v)}
+            sensitive={SENSITIVE_KEYS.has(f.key)}
+            description={f.description}
+          />
+        ))}
+        <div className="flex items-center justify-between pt-2">
+          <div>
+            {toast && (
+              <p className={cn("text-sm", toast.kind === "success" ? "text-green-600" : "text-destructive")}>
+                {toast.message}
+              </p>
+            )}
+          </div>
+          <Button
+            onClick={onSave}
+            disabled={!hasChanges || saving}
+            size="sm"
+          >
+            <Save className="mr-1.5 h-3.5 w-3.5" />
+            {saving ? "Saving..." : "Save"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Settings() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { theme, setTheme } = useTheme();
   const queryClient = useQueryClient();
-  const [modelMap, setModelMap] = useState<Record<string, string>>({});
-  const [fallbackModels, setFallbackModels] = useState<string[]>([]);
-  const [aiProvider, setAiProvider] = useState("openrouter");
-  const [ollamaBaseUrl, setOllamaBaseUrl] = useState("http://localhost:11434");
-  const [aiApiKey, setAiApiKey] = useState("");
-  const [showAiApiKey, setShowAiApiKey] = useState(false);
-  const [modelsLoading, setModelsLoading] = useState(false);
-  const [modelsError, setModelsError] = useState<string | null>(null);
-  const [modelSearch, setModelSearch] = useState("");
-  const [models, setModels] = useState<OpenRouterModel[]>([]);
-  const [telegramToken, setTelegramToken] = useState("");
-  const [telegramChatId, setTelegramChatId] = useState("");
-  const [telegramAllowedGroupChatId, setTelegramAllowedGroupChatId] = useState("");
-  const [telegramNotificationChannelId, setTelegramNotificationChannelId] = useState("");
-  const [composioApiKey, setComposioApiKey] = useState("");
-  const [showComposioApiKey, setShowComposioApiKey] = useState(false);
-  const [composioEntityId, setComposioEntityId] = useState("");
-  const [gmailAddress, setGmailAddress] = useState("");
-  const [gmailAppPassword, setGmailAppPassword] = useState("");
-  const [showGmailAppPassword, setShowGmailAppPassword] = useState(false);
-  const [gmailAutoSendEnabled, setGmailAutoSendEnabled] = useState(false);
-  const [selectedPromptName, setSelectedPromptName] = useState("");
-  const [selectedPromptContent, setSelectedPromptContent] = useState("");
-  const [selectedSetting, setSelectedSetting] = useState<SettingKey | null>(null);
   const [activeCategory, setActiveCategory] = useState<SettingsPage>(() => {
     const section = searchParams.get("section");
-    const allowed: SettingsPage[] = ["general", "providers", "prompts", "skills", "mcp", "channels", "auth", "runtime"];
+    const allowed: SettingsPage[] = ["general", "providers", "prompts", "skills", "mcp", "channels", "tools"];
     return allowed.includes(section as SettingsPage) ? (section as SettingsPage) : "general";
   });
   const [toast, setToast] = useState<ToastState>(null);
 
-  // -- ollama pull state --
-  const [pullModelName, setPullModelName] = useState("");
-  const [pullProgress, setPullProgress] = useState<{ status: string; pct: number } | null>(null);
-  const [pullError, setPullError] = useState<string | null>(null);
+  // Local draft of all KV values
+  const [draft, setDraft] = useState<Record<string, string>>({});
 
-  // -- ollama capability filter --
-  const [capabilityFilter, setCapabilityFilter] = useState<Set<string>>(new Set());
+  // Group-level toasts
+  const [groupToasts, setGroupToasts] = useState<Record<string, ToastState>>({});
 
-  // -- contacts state --
+  // Contacts state
   const [contactDialogOpen, setContactDialogOpen] = useState(false);
   const [editingContact, setEditingContact] = useState<TelegramContact | null>(null);
   const [contactName, setContactName] = useState("");
@@ -200,51 +278,19 @@ export default function Settings() {
   const [contactNotes, setContactNotes] = useState("");
   const [contactEnabled, setContactEnabled] = useState(true);
 
+  // Prompt viewer state
+  const [selectedPromptName, setSelectedPromptName] = useState("");
+  const [selectedPromptContent, setSelectedPromptContent] = useState("");
+
+  // Fetch all settings as flat KV map
   const settingsQuery = useQuery({
     queryKey: ["settings"],
-    queryFn: () => api.get<RuntimeSettingsView>("/api/v1/settings"),
+    queryFn: () => settingsApi.list(),
   });
-
-  const modelListQuery = useQuery({
-    queryKey: ["model-admin", "models"],
-    queryFn: () => api.get<ModelListView>("/api/v1/models"),
-  });
-
-  const modelFallbacksQuery = useQuery({
-    queryKey: ["model-admin", "fallbacks"],
-    queryFn: () => api.get<FallbackModelsView>("/api/v1/models/fallbacks"),
-  });
-
-  const aiSettingsQuery = useQuery({
-    queryKey: ["ai-admin-settings"],
-    queryFn: () => api.get<AiAdminSettingsView>("/api/v1/ai/settings"),
-  });
-
-  const codexOAuthStatusQuery = useQuery({
-    queryKey: ["codex-oauth-status"],
-    queryFn: () => api.codexOAuthStatus(),
-  });
-
 
   const promptsQuery = useQuery({
     queryKey: ["prompt-admin"],
     queryFn: () => api.get<PromptListView>("/api/v1/prompts"),
-  });
-
-  const tgSettingsQuery = useQuery({
-    queryKey: ["tg-admin-settings"],
-    queryFn: () => api.get<TgAdminSettingsView>("/api/v1/tg/settings"),
-  });
-
-  const gmailSettingsQuery = useQuery({
-    queryKey: ["gmail-admin-settings"],
-    queryFn: () => api.get<GmailAdminSettingsView>("/api/v1/gmail/settings"),
-  });
-
-  const sshKeyQuery = useQuery({
-    queryKey: ["auth-admin", "ssh-key"],
-    queryFn: () => api.get<SshKeyResponse>("/api/v1/auth/ssh-key"),
-    enabled: false,
   });
 
   const contactsQuery = useQuery({
@@ -252,132 +298,90 @@ export default function Settings() {
     queryFn: () => api.get<TelegramContact[]>("/api/v1/contacts"),
   });
 
-  const { data: recommendations, isLoading: recsLoading, refetch: refetchRecs } = useQuery({
-    queryKey: ["ollama-recommendations"],
-    queryFn: () => api.getOllamaModelRecommendations(),
-    enabled: false,
-    staleTime: 5 * 60 * 1000,
-  });
-
-  const ollamaHealthQuery = useQuery({
-    queryKey: ["ollama-health"],
-    queryFn: () => api.ollamaHealth(),
-    enabled: aiProvider === "ollama",
-    refetchInterval: 30_000,
-    retry: false,
-  });
-
-  const ollamaModelsQuery = useQuery({
-    queryKey: ["ollama-models"],
-    queryFn: () => api.ollamaListModels(),
-    enabled: aiProvider === "ollama" && ollamaHealthQuery.data?.healthy === true,
-  });
-
-  const ollamaDeleteMutation = useMutation({
-    mutationFn: (name: string) => api.ollamaDeleteModel(name),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["ollama-models"] });
-      setToast({ kind: "success", message: "Model deleted." });
-    },
-    onError: (e: unknown) => {
-      const message = e instanceof Error ? e.message : "Failed to delete model";
-      setToast({ kind: "error", message });
-    },
-  });
-
-  const ollamaModels = ollamaModelsQuery.data?.models ?? [];
-
-  // Collect all unique capabilities across all models
-  const allCapabilities = useMemo(() => {
-    const caps = new Set<string>();
-    for (const model of ollamaModels) {
-      for (const cap of model.capabilities) {
-        caps.add(cap);
-      }
-    }
-    return Array.from(caps).sort();
-  }, [ollamaModels]);
-
-  // Filter models by selected capabilities (intersection — model must have ALL selected caps)
-  const filteredOllamaModels = useMemo(() => {
-    if (capabilityFilter.size === 0) return ollamaModels;
-    return ollamaModels.filter((model) =>
-      Array.from(capabilityFilter).every((cap) => model.capabilities.includes(cap))
-    );
-  }, [ollamaModels, capabilityFilter]);
-
-  const handlePullModel = async () => {
-    const name = pullModelName.trim();
-    if (!name) return;
-    setPullProgress({ status: "Starting...", pct: 0 });
-    setPullError(null);
-
-    try {
-      const res = await fetch(`${BASE_URL}/api/v1/ai/ollama/models/pull`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
-      });
-
-      if (!res.ok) {
-        const text = await res.text();
-        setPullError(text || "Pull failed");
-        setPullProgress(null);
-        return;
-      }
-
-      const reader = res.body?.getReader();
-      const decoder = new TextDecoder();
-      if (!reader) {
-        setPullError("No response body");
-        setPullProgress(null);
-        return;
-      }
-
-      let buffer = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const json = line.slice(6).trim();
-          if (!json) continue;
-          try {
-            const event = JSON.parse(json) as PullProgressEvent;
-            if (event.type === "progress") {
-              const pct =
-                event.total && event.total > 0
-                  ? Math.round(((event.completed ?? 0) / event.total) * 100)
-                  : 0;
-              setPullProgress({ status: event.status, pct });
-            } else if (event.type === "done") {
-              setPullProgress(null);
-              setPullModelName("");
-              queryClient.invalidateQueries({ queryKey: ["ollama-models"] });
-              setToast({
-                kind: "success",
-                message: `Model "${name}" pulled successfully.`,
-              });
-            } else if (event.type === "error") {
-              setPullError(event.message);
-              setPullProgress(null);
-            }
-          } catch {
-            // skip malformed JSON
-          }
+  // Sync fetched data into draft
+  useEffect(() => {
+    if (!settingsQuery.data) return;
+    setDraft((prev) => {
+      const next = { ...settingsQuery.data };
+      // Preserve local edits for keys that haven't been saved yet
+      for (const [k, v] of Object.entries(prev)) {
+        if (v !== (settingsQuery.data![k] ?? "") && v !== "") {
+          next[k] = v;
         }
       }
-    } catch (e) {
-      setPullError(e instanceof Error ? e.message : "Pull failed");
-      setPullProgress(null);
+      return next;
+    });
+  }, [settingsQuery.data]);
+
+  // Prompt selection
+  useEffect(() => {
+    const prompts = promptsQuery.data?.prompts ?? [];
+    if (prompts.length === 0) return;
+    if (!selectedPromptName || !prompts.some((p) => p.name === selectedPromptName)) {
+      const preferred = prompts.find((p) => p.name === "agent/soul.md");
+      const initial = preferred ?? prompts[0];
+      setSelectedPromptName(initial.name);
+      setSelectedPromptContent(initial.content);
+      return;
     }
+    const matched = prompts.find((p) => p.name === selectedPromptName);
+    if (matched) {
+      setSelectedPromptContent(matched.content);
+    }
+  }, [promptsQuery.data, selectedPromptName]);
+
+  // Toast auto-dismiss
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  useEffect(() => {
+    for (const [group, t] of Object.entries(groupToasts)) {
+      if (!t) continue;
+      const timer = window.setTimeout(() => {
+        setGroupToasts((prev) => ({ ...prev, [group]: null }));
+      }, 3000);
+      return () => window.clearTimeout(timer);
+    }
+  }, [groupToasts]);
+
+  // Batch save mutation for a group of keys
+  const saveMutation = useMutation({
+    mutationFn: async ({ keys, group }: { keys: string[]; group: string }) => {
+      const patches: Record<string, string | null> = {};
+      const original = settingsQuery.data ?? {};
+      for (const key of keys) {
+        const newVal = draft[key] ?? "";
+        const oldVal = original[key] ?? "";
+        if (newVal !== oldVal) {
+          patches[key] = newVal || null; // empty string = delete
+        }
+      }
+      if (Object.keys(patches).length === 0) return group;
+      await settingsApi.batchUpdate(patches);
+      return group;
+    },
+    onSuccess: (group) => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+      setGroupToasts((prev) => ({ ...prev, [group]: { kind: "success", message: "Settings saved." } }));
+    },
+    onError: (e: unknown, { group }) => {
+      const message = e instanceof Error ? e.message : "Failed to save settings";
+      setGroupToasts((prev) => ({ ...prev, [group]: { kind: "error", message } }));
+    },
+  });
+
+  const handleFieldChange = (key: string, value: string) => {
+    setDraft((prev) => ({ ...prev, [key]: value }));
   };
 
+  const handleGroupSave = (keys: string[], group: string) => {
+    saveMutation.mutate({ keys, group });
+  };
+
+  // Contact mutations
   const createContactMutation = useMutation({
     mutationFn: (req: CreateContactRequest) =>
       api.post<TelegramContact>("/api/v1/contacts", req),
@@ -387,8 +391,7 @@ export default function Settings() {
       setToast({ kind: "success", message: "Contact created." });
     },
     onError: (e: unknown) => {
-      const message = e instanceof Error ? e.message : "Failed to create contact";
-      setToast({ kind: "error", message });
+      setToast({ kind: "error", message: e instanceof Error ? e.message : "Failed to create contact" });
     },
   });
 
@@ -401,8 +404,7 @@ export default function Settings() {
       setToast({ kind: "success", message: "Contact updated." });
     },
     onError: (e: unknown) => {
-      const message = e instanceof Error ? e.message : "Failed to update contact";
-      setToast({ kind: "error", message });
+      setToast({ kind: "error", message: e instanceof Error ? e.message : "Failed to update contact" });
     },
   });
 
@@ -413,8 +415,7 @@ export default function Settings() {
       setToast({ kind: "success", message: "Contact deleted." });
     },
     onError: (e: unknown) => {
-      const message = e instanceof Error ? e.message : "Failed to delete contact";
-      setToast({ kind: "error", message });
+      setToast({ kind: "error", message: e instanceof Error ? e.message : "Failed to delete contact" });
     },
   });
 
@@ -457,491 +458,6 @@ export default function Settings() {
     }
   };
 
-  useEffect(() => {
-    if (!aiSettingsQuery.data) return;
-    setAiProvider(aiSettingsQuery.data.provider ?? "openrouter");
-    setOllamaBaseUrl(aiSettingsQuery.data.ollama_base_url ?? "http://localhost:11434");
-    setAiApiKey(aiSettingsQuery.data.openrouter_api_key ?? "");
-  }, [aiSettingsQuery.data]);
-
-  useEffect(() => {
-    if (!settingsQuery.data) return;
-    setComposioApiKey(settingsQuery.data.agent.composio.api_key ?? "");
-    setComposioEntityId(settingsQuery.data.agent.composio.entity_id ?? "");
-  }, [settingsQuery.data]);
-
-  useEffect(() => {
-    const tg = tgSettingsQuery.data;
-    if (!tg) return;
-    setTelegramChatId(tg.chat_id == null ? "" : String(tg.chat_id));
-    setTelegramAllowedGroupChatId(
-      tg.allowed_group_chat_id == null ? "" : String(tg.allowed_group_chat_id),
-    );
-    setTelegramNotificationChannelId(
-      tg.notification_channel_id == null ? "" : String(tg.notification_channel_id),
-    );
-  }, [tgSettingsQuery.data]);
-
-  useEffect(() => {
-    const gmail = gmailSettingsQuery.data;
-    if (!gmail) return;
-    setGmailAddress(gmail.address ?? "");
-    setGmailAppPassword("");
-    setGmailAutoSendEnabled(gmail.auto_send_enabled);
-  }, [gmailSettingsQuery.data]);
-
-  useEffect(() => {
-    if (!modelListQuery.data) return;
-    const next: Record<string, string> = {};
-    for (const entry of modelListQuery.data.models) {
-      next[entry.key] = entry.model;
-    }
-    setModelMap(next);
-  }, [modelListQuery.data]);
-
-  useEffect(() => {
-    setFallbackModels(modelFallbacksQuery.data?.models ?? []);
-  }, [modelFallbacksQuery.data]);
-
-  useEffect(() => {
-    const prompts = promptsQuery.data?.prompts ?? [];
-    if (prompts.length === 0) return;
-
-    if (!selectedPromptName || !prompts.some((p) => p.name === selectedPromptName)) {
-      const preferred = prompts.find((p) => p.name === "agent/soul.md");
-      const initial = preferred ?? prompts[0];
-      setSelectedPromptName(initial.name);
-      setSelectedPromptContent(initial.content);
-      return;
-    }
-
-    const matched = prompts.find((p) => p.name === selectedPromptName);
-    if (matched) {
-      setSelectedPromptContent(matched.content);
-    }
-  }, [promptsQuery.data, selectedPromptName]);
-
-  const filteredModels = useMemo(() => {
-    const q = modelSearch.trim().toLowerCase();
-    const filtered = !q
-      ? models
-      : models.filter((m) => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q));
-    return filtered;
-  }, [modelSearch, models]);
-
-  const patch = useMemo<RuntimeSettingsPatch | null>(() => {
-    const current = settingsQuery.data;
-    if (!current) return null;
-    const next: RuntimeSettingsPatch = {};
-
-    const agentPatch: NonNullable<RuntimeSettingsPatch["agent"]> = {};
-    const currentComposioApiKey = current.agent.composio.api_key ?? "";
-    const currentComposioEntityId = current.agent.composio.entity_id ?? "";
-    const nextComposioApiKey = composioApiKey.trim();
-    const nextComposioEntityId = composioEntityId.trim();
-
-    if (nextComposioApiKey !== currentComposioApiKey) {
-      // empty string means clear
-      agentPatch.composio = {
-        ...(agentPatch.composio ?? {}),
-        api_key: nextComposioApiKey,
-      };
-    }
-    if (nextComposioEntityId !== currentComposioEntityId) {
-      agentPatch.composio = {
-        ...(agentPatch.composio ?? {}),
-        entity_id: nextComposioEntityId,
-      };
-    }
-    if (Object.keys(agentPatch).length > 0) {
-      next.agent = agentPatch;
-    }
-
-    return Object.keys(next).length > 0 ? next : null;
-  }, [
-    composioApiKey,
-    composioEntityId,
-    settingsQuery.data,
-  ]);
-
-  const aiPatch = useMemo<AiAdminUpdateRequest | null>(() => {
-    const current = aiSettingsQuery.data;
-    if (!current) return null;
-    const next: AiAdminUpdateRequest = {};
-    const currentProvider = current.provider ?? "openrouter";
-    if (aiProvider !== currentProvider) {
-      next.provider = aiProvider;
-    }
-    const currentOllamaUrl = current.ollama_base_url ?? "http://localhost:11434";
-    if (ollamaBaseUrl.trim() !== currentOllamaUrl) {
-      next.ollama_base_url = ollamaBaseUrl.trim();
-    }
-    if (aiProvider === "openrouter" && aiApiKey.trim() !== "") {
-      next.openrouter_api_key = aiApiKey.trim();
-    }
-    return Object.keys(next).length > 0 ? next : null;
-  }, [aiApiKey, aiProvider, aiSettingsQuery.data, ollamaBaseUrl]);
-
-  const modelAdminDiff = useMemo(() => {
-    const currentModels: Record<string, string> = {};
-    for (const entry of modelListQuery.data?.models ?? []) {
-      currentModels[entry.key] = entry.model;
-    }
-    const setOps: Record<string, string> = {};
-    const deleteOps: string[] = [];
-
-    for (const [key, value] of Object.entries(modelMap)) {
-      if (currentModels[key] !== value) {
-        setOps[key] = value;
-      }
-    }
-    for (const key of Object.keys(currentModels)) {
-      if (!(key in modelMap)) {
-        deleteOps.push(key);
-      }
-    }
-
-    const currentFallbacks = modelFallbacksQuery.data?.models ?? [];
-    const fallbackChanged = JSON.stringify(fallbackModels) !== JSON.stringify(currentFallbacks);
-
-    return {
-      setOps,
-      deleteOps,
-      fallbackChanged,
-      hasChanges: Object.keys(setOps).length > 0 || deleteOps.length > 0 || fallbackChanged,
-    };
-  }, [fallbackModels, modelFallbacksQuery.data, modelListQuery.data, modelMap]);
-
-  const tgPatch = useMemo<TgAdminUpdateRequest | null>(() => {
-    const current = tgSettingsQuery.data;
-    if (!current) return null;
-
-    const next: TgAdminUpdateRequest = {};
-    if (telegramToken.trim() !== "") {
-      next.bot_token = telegramToken.trim();
-    }
-    if (telegramChatId.trim() !== "") {
-      const parsed = Number.parseInt(telegramChatId.trim(), 10);
-      if (!Number.isFinite(parsed)) return null;
-      if (parsed !== current.chat_id) {
-        next.chat_id = parsed;
-      }
-    }
-    if (telegramAllowedGroupChatId.trim() !== "") {
-      const parsed = Number.parseInt(telegramAllowedGroupChatId.trim(), 10);
-      if (!Number.isFinite(parsed)) return null;
-      if (parsed !== current.allowed_group_chat_id) {
-        next.allowed_group_chat_id = parsed;
-      }
-    }
-    const trimmedNotifChannel = telegramNotificationChannelId.trim();
-    if (trimmedNotifChannel === "") {
-      if (current.notification_channel_id != null) {
-        next.notification_channel_id = null;
-      }
-    } else {
-      const parsed = Number.parseInt(trimmedNotifChannel, 10);
-      if (!Number.isFinite(parsed)) return null;
-      if (parsed !== current.notification_channel_id) {
-        next.notification_channel_id = parsed;
-      }
-    }
-
-    return Object.keys(next).length > 0 ? next : null;
-  }, [
-    tgSettingsQuery.data,
-    telegramAllowedGroupChatId,
-    telegramChatId,
-    telegramNotificationChannelId,
-    telegramToken,
-  ]);
-
-  const gmailPatch = useMemo<GmailAdminUpdateRequest | null>(() => {
-    const current = gmailSettingsQuery.data;
-    if (!current) return null;
-
-    const next: GmailAdminUpdateRequest = {};
-    const nextAddress = gmailAddress.trim();
-    const currentAddress = current.address ?? "";
-    if (nextAddress !== currentAddress) {
-      next.address = nextAddress;
-    }
-    if (gmailAppPassword.trim() !== "") {
-      next.app_password = gmailAppPassword.trim();
-    }
-    if (gmailAutoSendEnabled !== current.auto_send_enabled) {
-      next.auto_send_enabled = gmailAutoSendEnabled;
-    }
-
-    return Object.keys(next).length > 0 ? next : null;
-  }, [gmailAddress, gmailAppPassword, gmailAutoSendEnabled, gmailSettingsQuery.data]);
-
-  const updateMutation = useMutation({
-    mutationFn: (payload: RuntimeSettingsPatch) =>
-      api.post<RuntimeSettingsView>("/api/v1/settings", payload),
-    onSuccess: (updated) => {
-      queryClient.setQueryData(["settings"], updated);
-      setComposioApiKey(updated.agent.composio.api_key ?? "");
-      setComposioEntityId(updated.agent.composio.entity_id ?? "");
-      setShowComposioApiKey(false);
-      setSelectedSetting(null);
-      setToast({ kind: "success", message: "Settings updated successfully." });
-    },
-    onError: (e: unknown) => {
-      const message = e instanceof Error ? e.message : "Failed to update settings";
-      setToast({ kind: "error", message });
-    },
-  });
-
-  const tgUpdateMutation = useMutation({
-    mutationFn: (payload: TgAdminUpdateRequest) =>
-      api.put<TgAdminSettingsView>("/api/v1/tg/settings", payload),
-    onSuccess: (updated) => {
-      queryClient.setQueryData(["tg-admin-settings"], updated);
-      queryClient.setQueryData<RuntimeSettingsView>(["settings"], (prev) =>
-        prev
-          ? {
-              ...prev,
-              updated_at: updated.updated_at ?? prev.updated_at,
-            }
-          : prev,
-      );
-      setTelegramToken("");
-      setSelectedSetting(null);
-      setToast({ kind: "success", message: "Telegram admin settings updated." });
-    },
-    onError: (e: unknown) => {
-      const message = e instanceof Error ? e.message : "Failed to update Telegram settings";
-      setToast({ kind: "error", message });
-    },
-  });
-
-  const gmailUpdateMutation = useMutation({
-    mutationFn: (payload: GmailAdminUpdateRequest) =>
-      api.put<GmailAdminSettingsView>("/api/v1/gmail/settings", payload),
-    onSuccess: (updated) => {
-      queryClient.setQueryData(["gmail-admin-settings"], updated);
-      queryClient.setQueryData<RuntimeSettingsView>(["settings"], (prev) =>
-        prev
-          ? {
-              ...prev,
-              updated_at: updated.updated_at ?? prev.updated_at,
-            }
-          : prev,
-      );
-      setGmailAppPassword("");
-      setShowGmailAppPassword(false);
-      setSelectedSetting(null);
-      setToast({ kind: "success", message: "Gmail admin settings updated." });
-    },
-    onError: (e: unknown) => {
-      const message = e instanceof Error ? e.message : "Failed to update Gmail settings";
-      setToast({ kind: "error", message });
-    },
-  });
-
-  const aiAdminSaveMutation = useMutation({
-    mutationFn: async () => {
-      if (aiPatch) {
-        await api.put<AiAdminSettingsView>("/api/v1/ai/settings", aiPatch);
-      }
-      await Promise.all(
-        Object.entries(modelAdminDiff.setOps).map(([key, model]) =>
-          api.put(`/api/v1/models/${encodeURIComponent(key)}`, { model }),
-        ),
-      );
-      await Promise.all(
-        modelAdminDiff.deleteOps.map((key) =>
-          api.del(`/api/v1/models/${encodeURIComponent(key)}`),
-        ),
-      );
-      if (modelAdminDiff.fallbackChanged) {
-        await api.put<FallbackModelsView>("/api/v1/models/fallbacks", { models: fallbackModels });
-      }
-    },
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["settings"] }),
-        queryClient.invalidateQueries({ queryKey: ["ai-admin-settings"] }),
-        queryClient.invalidateQueries({ queryKey: ["model-admin", "models"] }),
-        queryClient.invalidateQueries({ queryKey: ["model-admin", "fallbacks"] }),
-      ]);
-      setShowAiApiKey(false);
-      setSelectedSetting(null);
-      setToast({ kind: "success", message: "Model admin settings updated." });
-    },
-    onError: (e: unknown) => {
-      const message = e instanceof Error ? e.message : "Failed to update model admin settings";
-      setToast({ kind: "error", message });
-    },
-  });
-
-  const [codexAuthUrl, setCodexAuthUrl] = useState<string | null>(null);
-
-  const codexOAuthStartMutation = useMutation({
-    mutationFn: () => api.codexOAuthStart(),
-    onSuccess: (resp) => {
-      setCodexAuthUrl(resp.auth_url);
-    },
-    onError: (e: unknown) => {
-      const message = e instanceof Error ? e.message : "Failed to start Codex OAuth";
-      setToast({ kind: "error", message });
-    },
-  });
-
-  const codexOAuthDisconnectMutation = useMutation({
-    mutationFn: () => api.codexOAuthDisconnect(),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["codex-oauth-status"] }),
-        queryClient.invalidateQueries({ queryKey: ["ai-admin-settings"] }),
-      ]);
-      setToast({ kind: "success", message: "Codex OAuth disconnected." });
-    },
-    onError: (e: unknown) => {
-      const message = e instanceof Error ? e.message : "Failed to disconnect Codex OAuth";
-      setToast({ kind: "error", message });
-    },
-  });
-
-  const handleSave = () => {
-    if (selectedSetting === "ai") {
-      if (!aiPatch && !modelAdminDiff.hasChanges) {
-        setToast({ kind: "error", message: "No valid AI/model admin changes to save." });
-        return;
-      }
-      aiAdminSaveMutation.mutate();
-      return;
-    }
-    if (!settingsQuery.data) return;
-    if (selectedSetting === "telegram") {
-      if (!tgPatch) {
-        setToast({ kind: "error", message: "No valid Telegram settings changes to save." });
-        return;
-      }
-      tgUpdateMutation.mutate(tgPatch);
-      return;
-    }
-    if (selectedSetting === "gmail") {
-      if (!gmailPatch) {
-        setToast({ kind: "error", message: "No valid Gmail settings changes to save." });
-        return;
-      }
-      gmailUpdateMutation.mutate(gmailPatch);
-      return;
-    }
-    if (!patch) {
-      setToast({ kind: "error", message: "No valid settings changes to save." });
-      return;
-    }
-    updateMutation.mutate(patch);
-  };
-
-  const openSetting = (setting: SettingKey) => {
-    setSelectedSetting(setting);
-    if (setting === "auth") {
-      void sshKeyQuery.refetch();
-    }
-    if (setting === "ai") {
-      setModelSearch("");
-      setModelsError(null);
-      setShowAiApiKey(false);
-    } else if (setting === "gmail") {
-      setShowGmailAppPassword(false);
-    } else if (setting === "composio") {
-      setShowComposioApiKey(false);
-    }
-  };
-
-  const fetchModels = useCallback(async () => {
-    const key = aiApiKey.trim() || aiSettingsQuery.data?.openrouter_api_key?.trim() || "";
-    if (!key) {
-      setModelsError("Please enter your OpenRouter API key first.");
-      return;
-    }
-    setModelsLoading(true);
-    setModelsError(null);
-    try {
-      const resp = await fetch("https://openrouter.ai/api/v1/models", {
-        headers: {
-          Authorization: `Bearer ${key}`,
-        },
-      });
-      if (!resp.ok) {
-        const text = await resp.text();
-        throw new Error(text || "Failed to fetch models.");
-      }
-      const data = (await resp.json()) as {
-        data?: Array<{
-          id?: string;
-          name?: string;
-          context_length?: number;
-          contextLength?: number;
-        }>;
-      };
-      const loaded = (data.data ?? [])
-        .map((m) => {
-          const id = (m.id ?? "").trim();
-          if (!id) return null;
-          const name = (m.name ?? id).trim();
-          const contextLength = m.context_length ?? m.contextLength ?? null;
-          return {
-            id,
-            name,
-            contextLength,
-          } satisfies OpenRouterModel;
-        })
-        .filter((m): m is OpenRouterModel => Boolean(m));
-      setModels(loaded);
-      setToast({ kind: "success", message: `Fetched ${loaded.length} models.` });
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Failed to fetch models";
-      setModelsError(message);
-    } finally {
-      setModelsLoading(false);
-    }
-  }, [aiProvider, aiApiKey, aiSettingsQuery.data?.openrouter_api_key]);
-
-  useEffect(() => {
-    if (!toast) return;
-    const timer = window.setTimeout(() => setToast(null), 3000);
-    return () => window.clearTimeout(timer);
-  }, [toast]);
-
-  useEffect(() => {
-    const oauthResult = searchParams.get("codex_oauth");
-    if (!oauthResult) return;
-    if (oauthResult === "success") {
-      setToast({ kind: "success", message: "Codex OAuth connected." });
-    } else {
-      setToast({ kind: "error", message: "Codex OAuth failed. Please retry." });
-    }
-    const next = new URLSearchParams(searchParams);
-    next.delete("codex_oauth");
-    setSearchParams(next, { replace: true });
-    void queryClient.invalidateQueries({ queryKey: ["codex-oauth-status"] });
-    void queryClient.invalidateQueries({ queryKey: ["ai-admin-settings"] });
-  }, [queryClient, searchParams, setSearchParams]);
-
-  const codexConnected = Boolean(codexOAuthStatusQuery.data?.connected);
-
-  useEffect(() => {
-    if (selectedSetting !== "ai") return;
-    if (aiProvider !== "openrouter") return;
-    if (models.length > 0) return;
-    if (modelsLoading || modelsError) return;
-    if (!aiSettingsQuery.data?.openrouter_api_key) return;
-    void fetchModels();
-  }, [
-    aiProvider,
-    fetchModels,
-    models.length,
-    modelsLoading,
-    modelsError,
-    selectedSetting,
-    aiSettingsQuery.data?.openrouter_api_key,
-  ]);
-
   if (settingsQuery.isLoading) {
     return (
       <div className="space-y-6">
@@ -951,7 +467,7 @@ export default function Settings() {
     );
   }
 
-  if (!settingsQuery.data) {
+  if (settingsQuery.isError) {
     return (
       <div className="space-y-4">
         <h1 className="text-2xl font-bold">Settings</h1>
@@ -962,277 +478,9 @@ export default function Settings() {
     );
   }
 
-  const current = settingsQuery.data;
+  const original: SettingsMap = settingsQuery.data ?? {};
   const availablePrompts = promptsQuery.data?.prompts ?? [];
   const selectedPromptMeta = availablePrompts.find((p) => p.name === selectedPromptName);
-  const isDialogOpen = selectedSetting !== null;
-  const currentTelegram = tgSettingsQuery.data;
-  const aiCurrent = aiSettingsQuery.data;
-  const gmailCurrent = gmailSettingsQuery.data;
-  const providerLabel =
-    (aiCurrent?.provider ?? "openrouter") === "ollama"
-      ? "Ollama"
-      : (aiCurrent?.provider ?? "openrouter") === "codex"
-        ? "Codex OAuth"
-        : "OpenRouter";
-
-  const dialogTitle =
-    selectedSetting === "ai"
-      ? `Model Admin (${providerLabel})`
-      : selectedSetting === "gmail"
-        ? "Gmail Admin"
-      : selectedSetting === "composio"
-        ? "Composio"
-      : selectedSetting === "agent"
-        ? "Prompt Admin"
-        : selectedSetting === "auth"
-          ? "Auth"
-        : selectedSetting === "contacts"
-          ? "Telegram Contacts"
-          : "Telegram Admin";
-  const dialogSaving = selectedSetting === "telegram"
-    ? tgUpdateMutation.isPending
-    : selectedSetting === "gmail"
-      ? gmailUpdateMutation.isPending
-    : selectedSetting === "ai"
-      ? aiAdminSaveMutation.isPending
-    : updateMutation.isPending;
-
-  /** Well-known model keys displayed in the settings UI */
-  const MODEL_KEYS = ["default", "chat", "job"] as const;
-
-  /** Update a single key in the modelMap */
-  const setModelKey = (key: string, value: string | undefined) => {
-    setModelMap((prev) => {
-      const next = { ...prev };
-      if (value && value.trim()) {
-        next[key] = value.trim();
-      } else {
-        delete next[key];
-      }
-      return next;
-    });
-  };
-
-  /** Render the unified key->model table */
-  const renderModelKeyTable = () => {
-    return (
-      <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
-        <p className="text-sm font-semibold">Model Assignments</p>
-        <p className="text-xs text-muted-foreground">
-          Assign models to keys. Unset keys fall back to &quot;default&quot;, then &quot;openai/gpt-4o&quot;.
-        </p>
-        <div className="space-y-2">
-          {MODEL_KEYS.map((key) => {
-            const currentValue = modelMap[key] ?? "";
-            return (
-              <div key={key} className="flex items-center gap-2 rounded border bg-background px-3 py-2">
-                <span className="w-24 shrink-0 text-sm font-medium">{key}</span>
-                {aiProvider === "ollama" ? (
-                  <Input
-                    value={currentValue}
-                    onChange={(e) => setModelKey(key, e.target.value || undefined)}
-                    placeholder={key === "default" ? "openai/gpt-4o" : `(falls back to default)`}
-                    className="h-8 text-sm font-mono"
-                  />
-                ) : aiProvider === "codex" ? (
-                  <Input
-                    value={currentValue}
-                    onChange={(e) => setModelKey(key, e.target.value || undefined)}
-                    placeholder={key === "default" ? "codex-mini-latest" : `(falls back to default)`}
-                    list={`codex-models-${key}`}
-                    className="h-8 text-sm font-mono"
-                  />
-                ) : (
-                  <div className="flex-1 min-w-0">
-                    <Select
-                      value={currentValue || "__unset__"}
-                      onValueChange={(val) => setModelKey(key, val === "__unset__" ? undefined : val)}
-                    >
-                      <SelectTrigger className="h-8 text-sm font-mono">
-                        <SelectValue placeholder={key === "default" ? "openai/gpt-4o" : "(use default)"} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__unset__">
-                          {key === "default" ? "openai/gpt-4o (hardcoded)" : "(use default)"}
-                        </SelectItem>
-                        {filteredModels.map((m) => (
-                          <SelectItem key={m.id} value={m.id}>
-                            {m.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-                {currentValue && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
-                    onClick={() => setModelKey(key, undefined)}
-                    title="Clear"
-                  >
-                    <X className="h-3 w-3" />
-                  </Button>
-                )}
-              </div>
-            );
-          })}
-        </div>
-        {aiProvider === "codex" && MODEL_KEYS.map((key) => (
-          <datalist key={key} id={`codex-models-${key}`}>
-            {CODEX_KNOWN_MODELS.map((m) => (
-              <option key={m.id} value={m.id} />
-            ))}
-          </datalist>
-        ))}
-      </div>
-    );
-  };
-
-  /** Render fallback models list editor */
-  const renderFallbackModelsEditor = () => {
-    const addFallback = (modelId: string) => {
-      if (!fallbackModels.includes(modelId)) {
-        setFallbackModels((prev) => [...prev, modelId]);
-      }
-    };
-    const removeFallback = (index: number) => {
-      setFallbackModels((prev) => prev.filter((_, i) => i !== index));
-    };
-    const moveFallbackUp = (index: number) => {
-      if (index === 0) return;
-      setFallbackModels((prev) => {
-        const next = [...prev];
-        [next[index - 1], next[index]] = [next[index], next[index - 1]];
-        return next;
-      });
-    };
-    const moveFallbackDown = (index: number) => {
-      setFallbackModels((prev) => {
-        if (index >= prev.length - 1) return prev;
-        const next = [...prev];
-        [next[index], next[index + 1]] = [next[index + 1], next[index]];
-        return next;
-      });
-    };
-
-    return (
-      <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
-        <p className="text-sm font-semibold">Global Fallback Models</p>
-        <p className="text-xs text-muted-foreground">
-          Tried in order when the primary model is unavailable.
-        </p>
-        {fallbackModels.length > 0 && (
-          <div className="space-y-1">
-            {fallbackModels.map((id, index) => (
-              <div
-                key={`${id}-${index}`}
-                className="flex items-center gap-2 rounded border bg-background px-2 py-1.5"
-              >
-                <span className="w-5 shrink-0 text-center text-xs font-medium text-muted-foreground">
-                  {index + 1}.
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-mono">{id}</p>
-                </div>
-                <Button type="button" variant="ghost" size="icon" className="h-6 w-6 shrink-0" disabled={index === 0} onClick={() => moveFallbackUp(index)} title="Move up">
-                  <ArrowUp className="h-3 w-3" />
-                </Button>
-                <Button type="button" variant="ghost" size="icon" className="h-6 w-6 shrink-0" disabled={index === fallbackModels.length - 1} onClick={() => moveFallbackDown(index)} title="Move down">
-                  <ArrowDown className="h-3 w-3" />
-                </Button>
-                <Button type="button" variant="ghost" size="icon" className="h-6 w-6 shrink-0 text-muted-foreground hover:text-destructive" onClick={() => removeFallback(index)} title="Remove">
-                  <X className="h-3 w-3" />
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
-        {aiProvider === "ollama" || aiProvider === "codex" ? (
-          <div className="flex items-center gap-2">
-            <Input
-              placeholder="Model name to add..."
-              list={aiProvider === "codex" ? "codex-fallback-models" : undefined}
-              className="h-8 text-sm font-mono"
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  const value = (e.target as HTMLInputElement).value.trim();
-                  if (value) {
-                    addFallback(value);
-                    (e.target as HTMLInputElement).value = "";
-                  }
-                }
-              }}
-            />
-            {aiProvider === "codex" && (
-              <datalist id="codex-fallback-models">
-                {CODEX_KNOWN_MODELS.filter((m) => !fallbackModels.includes(m.id)).map((m) => (
-                  <option key={m.id} value={m.id} />
-                ))}
-              </datalist>
-            )}
-            <p className="text-xs text-muted-foreground shrink-0">Press Enter to add</p>
-          </div>
-        ) : (
-          <Select onValueChange={(val) => addFallback(val)}>
-            <SelectTrigger className="h-8 text-sm">
-              <SelectValue placeholder="Add fallback model..." />
-            </SelectTrigger>
-            <SelectContent>
-              {filteredModels
-                .filter((m) => !fallbackModels.includes(m.id))
-                .map((m) => (
-                  <SelectItem key={m.id} value={m.id}>
-                    {m.name}
-                  </SelectItem>
-                ))}
-            </SelectContent>
-          </Select>
-        )}
-      </div>
-    );
-  };
-
-  const expandedCategories = new Set<SettingCategory>([
-    "appearance",
-    "documentation",
-    "ai",
-    "channels",
-    "auth",
-    "runtime",
-  ]);
-
-  const sectionHeader = (
-    _category: SettingCategory,
-    label: string,
-    summary: string,
-    icon: ReactNode,
-    count?: string,
-  ) => {
-    return (
-      <div className="flex w-full items-center justify-between rounded-xl border bg-card px-4 py-3 text-left shadow-sm">
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
-            {icon}
-          </div>
-          <div className="min-w-0">
-            <p className="text-sm font-semibold">{label}</p>
-            <p className="truncate text-xs text-muted-foreground">{summary}</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          {count && (
-            <Badge variant="secondary" className="text-[10px]">
-              {count}
-            </Badge>
-          )}
-        </div>
-      </div>
-    );
-  };
 
   const settingsNavItems: Array<{
     id: SettingsPage;
@@ -1240,58 +488,18 @@ export default function Settings() {
     icon: ReactNode;
     summary: string;
   }> = [
-    {
-      id: "general",
-      label: "General",
-      icon: <Palette className="h-4 w-4" />,
-      summary: "Appearance and documentation",
-    },
-    {
-      id: "providers",
-      label: "Providers",
-      icon: <Sparkles className="h-4 w-4" />,
-      summary: "Provider and model admin",
-    },
-    {
-      id: "prompts",
-      label: "Prompts",
-      icon: <Sparkles className="h-4 w-4" />,
-      summary: "Prompt admin and templates",
-    },
-    {
-      id: "skills",
-      label: "Skills",
-      icon: <Bot className="h-4 w-4" />,
-      summary: "Installed skills and management",
-    },
-    {
-      id: "mcp",
-      label: "MCP Servers",
-      icon: <ExternalLink className="h-4 w-4" />,
-      summary: "Tool server connections",
-    },
-    {
-      id: "channels",
-      label: "Channels",
-      icon: <MessageSquare className="h-4 w-4" />,
-      summary: "Telegram, contacts, Gmail",
-    },
-    {
-      id: "auth",
-      label: "Auth",
-      icon: <ExternalLink className="h-4 w-4" />,
-      summary: "SSH key management",
-    },
-    {
-      id: "runtime",
-      label: "Runtime",
-      icon: <Bot className="h-4 w-4" />,
-      summary: "Composio and runtime tools",
-    },
+    { id: "general", label: "General", icon: <Palette className="h-4 w-4" />, summary: "Appearance and documentation" },
+    { id: "providers", label: "Providers", icon: <Sparkles className="h-4 w-4" />, summary: "LLM provider and model config" },
+    { id: "prompts", label: "Prompts", icon: <Sparkles className="h-4 w-4" />, summary: "Prompt admin and templates" },
+    { id: "skills", label: "Skills", icon: <Bot className="h-4 w-4" />, summary: "Installed skills and management" },
+    { id: "mcp", label: "MCP Servers", icon: <ExternalLink className="h-4 w-4" />, summary: "Tool server connections" },
+    { id: "channels", label: "Channels", icon: <MessageSquare className="h-4 w-4" />, summary: "Telegram, Gmail, contacts" },
+    { id: "tools", label: "Tools", icon: <Settings2 className="h-4 w-4" />, summary: "Composio, memory integrations" },
   ];
 
   return (
     <div className="grid gap-4 xl:grid-cols-[16rem_minmax(0,1fr)]">
+      {/* Sidebar */}
       <aside className="data-panel h-fit xl:sticky xl:top-4">
         <div className="border-b border-border/70 px-4 py-4">
           <h1 className="text-lg font-semibold tracking-tight">Settings</h1>
@@ -1328,41 +536,43 @@ export default function Settings() {
                 </span>
                 <span className="min-w-0">
                   <span className="block truncate font-medium">{item.label}</span>
-                  <span className="block truncate text-xs text-muted-foreground/80">
-                    {item.summary}
-                  </span>
+                  <span className="block truncate text-xs text-muted-foreground/80">{item.summary}</span>
                 </span>
               </button>
             ))}
           </nav>
         </div>
-        <div className="border-t border-border/70 px-4 py-3 text-xs text-muted-foreground">
-          Last updated: {formatUpdatedAt(current.updated_at)}
-        </div>
       </aside>
 
+      {/* Content */}
       <div className="space-y-6">
-        <div className="data-panel p-5 md:p-6">
-          <h2 className="text-2xl font-bold tracking-tight">General Settings</h2>
-          <p className="mt-2 text-muted-foreground">
-            Workspace configuration grouped by category. Open a card to edit details.
-          </p>
-        </div>
+        {/* Toast */}
+        {toast && (
+          <div className={cn(
+            "rounded-lg border px-4 py-2 text-sm",
+            toast.kind === "success" ? "border-green-200 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-950 dark:text-green-300" : "border-destructive/30 bg-destructive/5 text-destructive"
+          )}>
+            {toast.message}
+          </div>
+        )}
 
-        <div className="space-y-6">
+        {/* ── General ── */}
         {activeCategory === "general" && (
-        <>
-        <div id="settings-appearance" className="scroll-mt-6 space-y-2">
-          {sectionHeader(
-            "appearance",
-            "Appearance",
-            "Theme and display preferences",
-            <Palette className="h-4 w-4" />,
-            "1 item",
-          )}
-          {expandedCategories.has("appearance") && (
-            <div className="space-y-2 rounded-xl border border-dashed bg-muted/10 p-2">
-              <div className="rounded-lg border p-4">
+          <>
+            {/* Appearance */}
+            <Card className="app-surface border-border/60">
+              <CardHeader>
+                <div className="flex items-center gap-3">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
+                    <Palette className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <CardTitle className="text-base">Appearance</CardTitle>
+                    <CardDescription>Theme and display preferences</CardDescription>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <div className="space-y-1">
                     <p className="font-medium">Theme</p>
@@ -1370,9 +580,7 @@ export default function Settings() {
                       Choose how the UI looks across all pages.
                     </p>
                   </div>
-                  <Badge variant="secondary" className="capitalize">
-                    {theme}
-                  </Badge>
+                  <Badge variant="secondary" className="capitalize">{theme}</Badge>
                 </div>
                 <div className="grid gap-2 md:grid-cols-3">
                   {THEME_OPTIONS.map((option) => (
@@ -1380,1384 +588,414 @@ export default function Settings() {
                       key={option.key}
                       type="button"
                       onClick={() => setTheme(option.key)}
-                      className={`group rounded-xl border p-3 text-left transition-all ${
+                      className={cn(
+                        "group rounded-xl border p-3 text-left transition-all",
                         theme === option.key
                           ? "border-primary/30 bg-primary/8 shadow-sm ring-1 ring-primary/10"
                           : "hover:bg-accent/40"
-                      }`}
+                      )}
                     >
                       <div className="flex items-center gap-2">
-                        <span className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border ${
+                        <span className={cn(
+                          "inline-flex h-8 w-8 items-center justify-center rounded-lg border",
                           theme === option.key
                             ? "border-primary/20 bg-primary/10 text-primary"
                             : "border-border/70 bg-background/70 text-muted-foreground"
-                        }`}>
+                        )}>
                           {option.icon}
                         </span>
                         <div className="min-w-0">
                           <p className="text-sm font-medium">{option.label}</p>
-                          <p className="truncate text-xs text-muted-foreground">
-                            {option.description}
-                          </p>
+                          <p className="truncate text-xs text-muted-foreground">{option.description}</p>
                         </div>
                       </div>
                     </button>
                   ))}
                 </div>
-              </div>
+              </CardContent>
+            </Card>
 
-            </div>
-          )}
-        </div>
-
-        <div id="settings-documentation" className="scroll-mt-6 space-y-2">
-          {sectionHeader(
-            "documentation",
-            "Documentation",
-            "Project guides and backend API reference",
-            <BookOpen className="h-4 w-4" />,
-            "2 links",
-          )}
-          {expandedCategories.has("documentation") && (
-            <div className="space-y-2 rounded-xl border border-dashed bg-muted/10 p-2">
-              <div className="grid gap-2 lg:grid-cols-2">
-                <a
-                  href="/book/"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="group rounded-xl border bg-card p-4 transition-colors hover:bg-accent/30"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <div className="flex h-9 w-9 items-center justify-center rounded-lg border bg-background/70 text-muted-foreground">
-                        <BookOpen className="h-4 w-4" />
-                      </div>
-                      <div>
-                        <p className="font-medium">Guides</p>
-                        <p className="text-xs text-muted-foreground">mdBook</p>
-                      </div>
-                    </div>
-                    <ExternalLink className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+            {/* Documentation */}
+            <Card className="app-surface border-border/60">
+              <CardHeader>
+                <div className="flex items-center gap-3">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
+                    <BookOpen className="h-4 w-4" />
                   </div>
-                  <p className="mt-3 text-xs text-muted-foreground">
-                    Open project guides, setup notes, and operational documentation in a new tab.
-                  </p>
-                </a>
-
-                <a
-                  href="/swagger-ui/"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="group rounded-xl border bg-card p-4 transition-colors hover:bg-accent/30"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <div className="flex h-9 w-9 items-center justify-center rounded-lg border bg-background/70 text-muted-foreground">
-                        <ExternalLink className="h-4 w-4" />
-                      </div>
-                      <div>
-                        <p className="font-medium">API Reference</p>
-                        <p className="text-xs text-muted-foreground">Swagger UI</p>
-                      </div>
-                    </div>
-                    <ExternalLink className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                  <div>
+                    <CardTitle className="text-base">Documentation</CardTitle>
+                    <CardDescription>Project guides and backend API reference</CardDescription>
                   </div>
-                  <p className="mt-3 text-xs text-muted-foreground">
-                    Browse endpoints, request schemas, and test APIs against the backend.
-                  </p>
-                </a>
-              </div>
-            </div>
-          )}
-        </div>
-        </>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-2 lg:grid-cols-2">
+                  <a
+                    href="/book/"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="group rounded-xl border bg-card p-4 transition-colors hover:bg-accent/30"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <BookOpen className="h-4 w-4 text-muted-foreground" />
+                        <div>
+                          <p className="font-medium">Guides</p>
+                          <p className="text-xs text-muted-foreground">mdBook</p>
+                        </div>
+                      </div>
+                      <ExternalLink className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                    </div>
+                  </a>
+                  <a
+                    href="/swagger-ui/"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="group rounded-xl border bg-card p-4 transition-colors hover:bg-accent/30"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <ExternalLink className="h-4 w-4 text-muted-foreground" />
+                        <div>
+                          <p className="font-medium">API Reference</p>
+                          <p className="text-xs text-muted-foreground">Swagger UI</p>
+                        </div>
+                      </div>
+                      <ExternalLink className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                    </div>
+                  </a>
+                </div>
+              </CardContent>
+            </Card>
+          </>
         )}
 
+        {/* ── Providers ── */}
         {activeCategory === "providers" && (
-        <div id="settings-ai" className="scroll-mt-6 space-y-2">
-          {sectionHeader(
-            "ai",
-            "AI",
-            `${providerLabel} provider, model mappings, prompts`,
-            <Sparkles className="h-4 w-4" />,
-            "2 items",
-          )}
-          {expandedCategories.has("ai") && (
-            <div className="space-y-2 rounded-xl border border-dashed bg-muted/10 p-2">
-              <button
-                type="button"
-                className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
-                onClick={() => openSetting("ai")}
-              >
-                <div className="flex items-center gap-3">
-                  <Sparkles className="h-4 w-4 text-muted-foreground" />
-                  <div className="space-y-1">
-                    <p className="font-medium">Model Admin ({providerLabel})</p>
-                    <p className="text-xs text-muted-foreground">
-                      Default: {modelMap["default"] ?? "openai/gpt-4o"}
-                      {providerLabel === "OpenRouter" && <> · Key: {aiCurrent?.openrouter_api_key ? "Set" : "Not set"}</>}
-                      {providerLabel === "Ollama" && <> · URL: {aiCurrent?.ollama_base_url ?? "localhost:11434"}</>}
-                      {providerLabel === "Codex OAuth" && <> · OAuth: {codexConnected ? "Connected" : "Not connected"}</>}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <Badge variant={aiCurrent?.configured ? "default" : "secondary"}>
-                    {aiCurrent?.configured ? "Configured" : "Not configured"}
-                  </Badge>
-                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                </div>
-              </button>
-
-              <button
-                type="button"
-                className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
-                onClick={() => openSetting("agent")}
-              >
-                <div className="flex items-center gap-3">
-                  <Bot className="h-4 w-4 text-muted-foreground" />
-                  <div className="space-y-1">
-                    <p className="font-medium">Prompt Admin</p>
-                    <p className="text-xs text-muted-foreground">
-                      {availablePrompts.length} prompt files · Built-in prompt viewer
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <Badge variant="default">Enabled</Badge>
-                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                </div>
-              </button>
-            </div>
-          )}
-        </div>
+          <>
+            <KvGroup
+              title="LLM Provider"
+              description="Primary provider and API credentials"
+              icon={<Sparkles className="h-4 w-4" />}
+              fields={[
+                { key: KEYS.LLM_PROVIDER, label: "Provider", placeholder: "openrouter", description: "openrouter, ollama, or codex" },
+                { key: KEYS.LLM_OPENROUTER_API_KEY, label: "OpenRouter API Key", placeholder: "sk-or-v1-..." },
+                { key: KEYS.LLM_OLLAMA_BASE_URL, label: "Ollama Base URL", placeholder: "http://localhost:11434" },
+              ]}
+              values={draft}
+              original={original}
+              onFieldChange={handleFieldChange}
+              onSave={() => handleGroupSave([KEYS.LLM_PROVIDER, KEYS.LLM_OPENROUTER_API_KEY, KEYS.LLM_OLLAMA_BASE_URL], "llm-provider")}
+              saving={saveMutation.isPending}
+              toast={groupToasts["llm-provider"] ?? null}
+            />
+            <KvGroup
+              title="Model Assignments"
+              description="Map model keys to specific model IDs. Unset keys fall back to default."
+              icon={<Bot className="h-4 w-4" />}
+              fields={[
+                { key: KEYS.LLM_MODELS_DEFAULT, label: "Default Model", placeholder: "openai/gpt-4o" },
+                { key: KEYS.LLM_MODELS_CHAT, label: "Chat Model", placeholder: "(falls back to default)", description: "Model used for interactive chat" },
+                { key: KEYS.LLM_MODELS_JOB, label: "Job Model", placeholder: "(falls back to default)", description: "Model used for job analysis tasks" },
+                { key: KEYS.LLM_FALLBACK_MODELS, label: "Fallback Models", placeholder: "model1,model2,model3", description: "Comma-separated ordered fallback list" },
+                { key: KEYS.LLM_FAVORITE_MODELS, label: "Favorite Models", placeholder: "model1,model2", description: "Comma-separated favorites shown in model picker" },
+              ]}
+              values={draft}
+              original={original}
+              onFieldChange={handleFieldChange}
+              onSave={() => handleGroupSave([KEYS.LLM_MODELS_DEFAULT, KEYS.LLM_MODELS_CHAT, KEYS.LLM_MODELS_JOB, KEYS.LLM_FALLBACK_MODELS, KEYS.LLM_FAVORITE_MODELS], "llm-models")}
+              saving={saveMutation.isPending}
+              toast={groupToasts["llm-models"] ?? null}
+            />
+          </>
         )}
 
+        {/* ── Prompts ── */}
         {activeCategory === "prompts" && (
-        <div className="scroll-mt-6 space-y-2">
-          {sectionHeader(
-            "ai",
-            "Prompts",
-            "Prompt admin and built-in prompt viewer",
-            <Sparkles className="h-4 w-4" />,
-            "1 tool",
-          )}
-          <div className="space-y-2 rounded-xl border border-dashed bg-muted/10 p-2">
-            <button
-              type="button"
-              className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
-              onClick={() => openSetting("agent")}
-            >
+          <Card className="app-surface border-border/60">
+            <CardHeader>
               <div className="flex items-center gap-3">
-                <Sparkles className="h-4 w-4 text-muted-foreground" />
-                <div className="space-y-1">
-                  <p className="font-medium">Prompt Admin</p>
-                  <p className="text-xs text-muted-foreground">
-                    {availablePrompts.length} prompt files · Built-in prompt viewer
-                  </p>
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
+                  <Sparkles className="h-4 w-4" />
+                </div>
+                <div>
+                  <CardTitle className="text-base">Prompts</CardTitle>
+                  <CardDescription>{availablePrompts.length} prompt files</CardDescription>
                 </div>
               </div>
-              <div className="flex items-center gap-3">
-                <Badge variant="default">Enabled</Badge>
-                <ChevronRight className="h-4 w-4 text-muted-foreground" />
-              </div>
-            </button>
-          </div>
-        </div>
+            </CardHeader>
+            <CardContent>
+              {promptsQuery.isLoading ? (
+                <Skeleton className="h-48 w-full" />
+              ) : availablePrompts.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No prompts found.</p>
+              ) : (
+                <div className="grid gap-4 lg:grid-cols-[14rem_1fr]">
+                  <div className="space-y-1">
+                    {availablePrompts.map((p) => (
+                      <button
+                        key={p.name}
+                        type="button"
+                        onClick={() => {
+                          setSelectedPromptName(p.name);
+                          setSelectedPromptContent(p.content);
+                        }}
+                        className={cn(
+                          "w-full rounded-lg px-3 py-2 text-left text-sm transition-colors",
+                          selectedPromptName === p.name
+                            ? "bg-primary/10 font-medium text-foreground"
+                            : "text-muted-foreground hover:bg-accent/40"
+                        )}
+                      >
+                        <p className="truncate">{p.name}</p>
+                        <p className="truncate text-xs text-muted-foreground">{p.description}</p>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="space-y-3">
+                    {selectedPromptMeta && (
+                      <div>
+                        <h3 className="font-semibold">{selectedPromptMeta.name}</h3>
+                        <p className="text-sm text-muted-foreground">{selectedPromptMeta.description}</p>
+                      </div>
+                    )}
+                    <Textarea
+                      value={selectedPromptContent}
+                      readOnly
+                      className="min-h-[400px] font-mono text-xs"
+                    />
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         )}
 
+        {/* ── Skills ── */}
         {activeCategory === "skills" && (
-        <div className="scroll-mt-6 space-y-2">
-          {sectionHeader(
-            "runtime",
-            "Skills",
-            "Installed skills and skill management",
-            <Bot className="h-4 w-4" />,
-          )}
           <div className="data-panel p-4">
             <Skills />
           </div>
-        </div>
         )}
 
+        {/* ── MCP Servers ── */}
         {activeCategory === "mcp" && (
-        <div className="scroll-mt-6 space-y-2">
-          {sectionHeader(
-            "runtime",
-            "MCP Servers",
-            "Model Context Protocol server connections",
-            <ExternalLink className="h-4 w-4" />,
-          )}
           <div className="data-panel p-4">
             <McpServers />
           </div>
-        </div>
         )}
 
+        {/* ── Channels ── */}
         {activeCategory === "channels" && (
-        <div id="settings-channels" className="scroll-mt-6 space-y-2">
-          {sectionHeader(
-            "channels",
-            "Channels",
-            "Telegram bot, contacts, Gmail sending",
-            <MessageSquare className="h-4 w-4" />,
-            "3 items",
-          )}
-          {expandedCategories.has("channels") && (
-            <div className="space-y-2 rounded-xl border border-dashed bg-muted/10 p-2">
-              <button
-                type="button"
-                className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
-                onClick={() => openSetting("telegram")}
-              >
-                <div className="flex items-center gap-3">
-                  <MessageSquare className="h-4 w-4 text-muted-foreground" />
-                  <div className="space-y-1">
-                    <p className="font-medium">Telegram Admin</p>
-                    <p className="text-xs text-muted-foreground">
-                      Chat ID: {currentTelegram?.chat_id ?? "Not set"} · Token:{" "}
-                      {currentTelegram?.token_hint ?? "Not set"} · Group:{" "}
-                      {currentTelegram?.allowed_group_chat_id ?? "Not set"} · Notif Channel:{" "}
-                      {currentTelegram?.notification_channel_id ?? "Not set"}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <Badge variant={currentTelegram?.configured ? "default" : "secondary"}>
-                    {currentTelegram?.configured ? "Configured" : "Not configured"}
-                  </Badge>
-                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                </div>
-              </button>
+          <>
+            <KvGroup
+              title="Telegram"
+              description="Bot token and chat IDs for Telegram integration"
+              icon={<MessageSquare className="h-4 w-4" />}
+              fields={[
+                { key: KEYS.TELEGRAM_BOT_TOKEN, label: "Bot Token", placeholder: "123456:ABC-DEF..." },
+                { key: KEYS.TELEGRAM_CHAT_ID, label: "Chat ID", placeholder: "e.g. 123456789" },
+                { key: KEYS.TELEGRAM_ALLOWED_GROUP_CHAT_ID, label: "Allowed Group Chat ID", placeholder: "e.g. -100123456789" },
+                { key: KEYS.TELEGRAM_NOTIFICATION_CHANNEL_ID, label: "Notification Channel ID", placeholder: "e.g. -100123456789" },
+              ]}
+              values={draft}
+              original={original}
+              onFieldChange={handleFieldChange}
+              onSave={() => handleGroupSave([KEYS.TELEGRAM_BOT_TOKEN, KEYS.TELEGRAM_CHAT_ID, KEYS.TELEGRAM_ALLOWED_GROUP_CHAT_ID, KEYS.TELEGRAM_NOTIFICATION_CHANNEL_ID], "telegram")}
+              saving={saveMutation.isPending}
+              toast={groupToasts["telegram"] ?? null}
+            />
 
-              <button
-                type="button"
-                className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
-                onClick={() => openSetting("contacts")}
-              >
-                <div className="flex items-center gap-3">
-                  <Users className="h-4 w-4 text-muted-foreground" />
-                  <div className="space-y-1">
-                    <p className="font-medium">Telegram Contacts</p>
-                    <p className="text-xs text-muted-foreground">
-                      {contactsQuery.data?.length ?? 0} contacts ·{" "}
-                      {contactsQuery.data?.filter((c) => c.enabled).length ?? 0} enabled
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <Badge variant={(contactsQuery.data?.length ?? 0) > 0 ? "default" : "secondary"}>
-                    {(contactsQuery.data?.length ?? 0) > 0 ? `${contactsQuery.data!.length} contacts` : "No contacts"}
-                  </Badge>
-                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                </div>
-              </button>
-
-              <button
-                type="button"
-                className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
-                onClick={() => openSetting("gmail")}
-              >
-                <div className="flex items-center gap-3">
-                  <Mail className="h-4 w-4 text-muted-foreground" />
-                  <div className="space-y-1">
-                    <p className="font-medium">Gmail Admin</p>
-                    <p className="text-xs text-muted-foreground">
-                      Address: {gmailCurrent?.address ?? "Not set"} · Password: {gmailCurrent?.app_password_hint ?? "Not set"} · Auto-Send: {gmailCurrent?.auto_send_enabled ? "On" : "Off"}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <Badge variant={gmailCurrent?.configured ? "default" : "secondary"}>
-                    {gmailCurrent?.configured ? "Configured" : "Not configured"}
-                  </Badge>
-                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                </div>
-              </button>
-            </div>
-          )}
-        </div>
-        )}
-
-        {activeCategory === "auth" && (
-        <div id="settings-auth" className="scroll-mt-6 space-y-2">
-          {sectionHeader(
-            "auth",
-            "Auth",
-            "SSH key management",
-            <ExternalLink className="h-4 w-4" />,
-            "1 item",
-          )}
-          {expandedCategories.has("auth") && (
-            <div className="space-y-2 rounded-xl border border-dashed bg-muted/10 p-2">
-              <button
-                type="button"
-                className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
-                onClick={() => openSetting("auth")}
-              >
-                <div className="flex items-center gap-3">
-                  <ExternalLink className="h-4 w-4 text-muted-foreground" />
-                  <div className="space-y-1">
-                    <p className="font-medium">SSH Key</p>
-                    <p className="text-xs text-muted-foreground">
-                      {sshKeyQuery.data?.public_key ? "Public key available" : "Load and copy public key"}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <Badge variant={sshKeyQuery.data?.public_key ? "default" : "secondary"}>
-                    {sshKeyQuery.data?.public_key ? "Ready" : "Not loaded"}
-                  </Badge>
-                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                </div>
-              </button>
-            </div>
-          )}
-        </div>
-        )}
-
-        {activeCategory === "runtime" && (
-        <div id="settings-runtime" className="scroll-mt-6 space-y-2">
-          {sectionHeader(
-            "runtime",
-            "Runtime",
-            "Operational settings not yet split out",
-            <Bot className="h-4 w-4" />,
-            "1 item",
-          )}
-          {expandedCategories.has("runtime") && (
-            <div className="space-y-2 rounded-xl border border-dashed bg-muted/10 p-2">
-              <button
-                type="button"
-                className="flex w-full items-center justify-between rounded-lg border p-4 text-left transition-colors hover:bg-accent"
-                onClick={() => openSetting("composio")}
-              >
-                <div className="flex items-center gap-3">
-                  <Sparkles className="h-4 w-4 text-muted-foreground" />
-                  <div className="space-y-1">
-                    <p className="font-medium">Composio</p>
-                    <p className="text-xs text-muted-foreground">
-                      Entity: {current.agent.composio.entity_id ?? "default"} · Key:{" "}
-                      {current.agent.composio.api_key ? "Set" : "Not set"}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <Badge variant={current.agent.composio.api_key ? "default" : "secondary"}>
-                    {current.agent.composio.api_key ? "Configured" : "Not configured"}
-                  </Badge>
-                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                </div>
-              </button>
-            </div>
-          )}
-        </div>
-        )}
-      </div>
-      </div>
-
-      <Dialog open={isDialogOpen} onOpenChange={(open) => !open && setSelectedSetting(null)}>
-        <DialogContent className="max-h-[85vh] overflow-y-auto p-0 sm:max-w-3xl">
-          <DialogHeader className="border-b px-6 pb-4 pt-6">
-            <DialogTitle>{dialogTitle}</DialogTitle>
-            <DialogDescription>
-              Review current values and update this setting.
-            </DialogDescription>
-          </DialogHeader>
-
-          {selectedSetting === "ai" && (
-            <div className="space-y-6 px-6 py-5">
-              {/* Provider selector */}
-              <div className="space-y-3 rounded-xl border bg-card p-4">
-                <Label className="text-base font-semibold">Provider</Label>
-                <Select value={aiProvider} onValueChange={(v) => { setAiProvider(v); setModels([]); setModelSearch(""); setModelsError(null); }}>
-                  <SelectTrigger className="h-11">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="openrouter">OpenRouter (Cloud)</SelectItem>
-                    <SelectItem value="ollama">Ollama (Local)</SelectItem>
-                    <SelectItem value="codex">Codex OAuth (ChatGPT)</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  {aiProvider === "ollama"
-                    ? "Ollama runs models locally — no API key needed."
-                    : aiProvider === "codex"
-                      ? "Codex OAuth uses your ChatGPT account token via OAuth."
-                      : "OpenRouter provides access to many cloud LLM providers."}
-                </p>
-              </div>
-
-              {/* OpenRouter API Key — only when provider is openrouter */}
-              {aiProvider === "openrouter" && (
-                <div className="space-y-3 rounded-xl border bg-card p-4">
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="ai-api-key" className="text-base font-semibold">
-                      OpenRouter API Key
-                    </Label>
-                    <span className="text-xs text-muted-foreground">
-                      {aiCurrent?.openrouter_api_key ? "Current: Saved in settings" : "No key saved"}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      id="ai-api-key"
-                      type={showAiApiKey ? "text" : "password"}
-                      value={aiApiKey}
-                      onChange={(e) => setAiApiKey(e.target.value)}
-                      placeholder={aiCurrent?.openrouter_api_key ?? "sk-or-v1-..."}
-                      className="h-11"
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      className="h-11 w-11 shrink-0"
-                      onClick={() => setShowAiApiKey((v) => !v)}
-                    >
-                      {showAiApiKey ? <EyeOff /> : <Eye />}
-                    </Button>
-                  </div>
-                  <p className="text-sm text-muted-foreground">
-                    Get your API key from{" "}
-                    <a
-                      href="https://openrouter.ai/keys"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-primary hover:underline"
-                    >
-                      OpenRouter Keys <ExternalLink className="h-3 w-3" />
-                    </a>
-                  </p>
-                </div>
-              )}
-
-              {/* Ollama Base URL — only when provider is ollama */}
-              {aiProvider === "ollama" && (
-                <div className="space-y-3 rounded-xl border bg-card p-4">
-                  <Label htmlFor="ollama-base-url" className="text-base font-semibold">
-                    Ollama Base URL
-                  </Label>
-                  <Input
-                    id="ollama-base-url"
-                    value={ollamaBaseUrl}
-                    onChange={(e) => setOllamaBaseUrl(e.target.value)}
-                    placeholder="http://localhost:11434"
-                    className="h-11"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Default: http://localhost:11434. Change if Ollama runs on a different host/port.
-                  </p>
-                </div>
-              )}
-
-              {aiProvider === "codex" && (
-                <div className="space-y-3 rounded-xl border bg-card p-4">
-                  <div className="flex items-center justify-between">
-                    <Label className="text-base font-semibold">Codex OAuth</Label>
-                    {codexOAuthStatusQuery.isLoading ? (
-                      <Badge variant="secondary">Loading...</Badge>
-                    ) : codexConnected ? (
-                      <Badge variant="default">Connected</Badge>
-                    ) : (
-                      <Badge variant="secondary">Not connected</Badge>
-                    )}
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    {codexOAuthStatusQuery.data?.expires_at_unix
-                      ? `Access token expiry: ${new Date(codexOAuthStatusQuery.data.expires_at_unix * 1000).toLocaleString()}`
-                      : "No expiry timestamp available."}
-                  </p>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      type="button"
-                      variant="default"
-                      onClick={() => codexOAuthStartMutation.mutate()}
-                      disabled={codexOAuthStartMutation.isPending}
-                    >
-                      {codexOAuthStartMutation.isPending ? "Generating..." : "Connect Codex"}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => codexOAuthDisconnectMutation.mutate()}
-                      disabled={!codexConnected || codexOAuthDisconnectMutation.isPending}
-                    >
-                      Disconnect
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      onClick={() => codexOAuthStatusQuery.refetch()}
-                      disabled={codexOAuthStatusQuery.isFetching}
-                    >
-                      <RefreshCw className={`h-3 w-3 mr-1 ${codexOAuthStatusQuery.isFetching ? "animate-spin" : ""}`} />
-                      Refresh status
-                    </Button>
-                  </div>
-                  {codexAuthUrl && (
-                    <div className="space-y-2 rounded-lg border border-dashed p-3">
-                      <p className="text-xs text-muted-foreground">Open the link below to sign in with your ChatGPT account:</p>
-                      <div className="flex items-center gap-2">
-                        <input
-                          readOnly
-                          value={codexAuthUrl}
-                          className="flex-1 rounded-md border bg-muted px-2 py-1 text-xs font-mono select-all"
-                          onFocus={(e) => e.target.select()}
-                        />
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            void navigator.clipboard.writeText(codexAuthUrl);
-                            setToast({ kind: "success", message: "URL copied to clipboard." });
-                          }}
-                        >
-                          Copy
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="default"
-                          size="sm"
-                          onClick={() => window.open(codexAuthUrl, "_blank")}
-                        >
-                          Open
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div className="space-y-3 rounded-xl border bg-card p-4">
+            {/* Contacts */}
+            <Card className="app-surface border-border/60">
+              <CardHeader>
                 <div className="flex items-center justify-between">
-                  <Label htmlFor={aiProvider === "ollama" ? "ollama-default-model" : "models-search"} className="text-xl font-semibold">
-                    Models
-                  </Label>
-                  {aiProvider === "openrouter" && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={fetchModels}
-                      disabled={modelsLoading}
-                      className="h-10 px-4"
-                    >
-                      <Download className="h-4 w-4" />
-                      {modelsLoading ? "Fetching..." : "Fetch"}
-                    </Button>
-                  )}
-                </div>
-
-                {aiProvider === "ollama" ? (
-                  <div className="space-y-4">
-                    {/* Health indicator */}
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium">Status:</span>
-                      {ollamaHealthQuery.isLoading ? (
-                        <Skeleton className="h-5 w-28" />
-                      ) : ollamaHealthQuery.data?.healthy ? (
-                        <Badge variant="default" className="gap-1">
-                          <span className="inline-block h-2 w-2 rounded-full bg-green-400" />
-                          Connected{ollamaHealthQuery.data.version ? ` v${ollamaHealthQuery.data.version}` : ""}
-                        </Badge>
-                      ) : (
-                        <Badge variant="destructive" className="gap-1">
-                          <span className="inline-block h-2 w-2 rounded-full bg-red-400" />
-                          Unreachable
-                        </Badge>
-                      )}
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        onClick={() => ollamaHealthQuery.refetch()}
-                        disabled={ollamaHealthQuery.isFetching}
-                      >
-                        <RefreshCw className={`h-3 w-3 ${ollamaHealthQuery.isFetching ? "animate-spin" : ""}`} />
-                      </Button>
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
+                      <Users className="h-4 w-4" />
                     </div>
-
-                    {/* Local models list */}
-                    {ollamaHealthQuery.data?.healthy && (
-                      <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
-                        <div className="flex items-center justify-between">
-                          <p className="text-sm font-semibold">Local Models</p>
+                    <div>
+                      <CardTitle className="text-base">Telegram Contacts</CardTitle>
+                      <CardDescription>
+                        {contactsQuery.data?.length ?? 0} contacts, {contactsQuery.data?.filter((c) => c.enabled).length ?? 0} enabled
+                      </CardDescription>
+                    </div>
+                  </div>
+                  <Button size="sm" variant="outline" onClick={openNewContact}>
+                    <Plus className="mr-1.5 h-3.5 w-3.5" />
+                    Add
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {contactsQuery.isLoading ? (
+                  <Skeleton className="h-24 w-full" />
+                ) : !contactsQuery.data || contactsQuery.data.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No contacts yet.</p>
+                ) : (
+                  <div className="divide-y divide-border/60 rounded-lg border">
+                    {contactsQuery.data.map((contact) => (
+                      <div key={contact.id} className="flex items-center justify-between px-4 py-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <p className="truncate text-sm font-medium">{contact.name}</p>
+                            <Badge variant={contact.enabled ? "default" : "secondary"} className="text-[10px]">
+                              {contact.enabled ? "Enabled" : "Disabled"}
+                            </Badge>
+                          </div>
+                          <p className="truncate text-xs text-muted-foreground">
+                            @{contact.telegram_username}
+                            {contact.chat_id != null && ` · Chat ID: ${contact.chat_id}`}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
                           <Button
-                            type="button"
                             variant="ghost"
-                            size="sm"
-                            onClick={() => ollamaModelsQuery.refetch()}
-                            disabled={ollamaModelsQuery.isFetching}
+                            size="icon"
+                            className="h-7 w-7"
+                            onClick={() => openEditContact(contact)}
                           >
-                            <RefreshCw className={`h-3 w-3 mr-1 ${ollamaModelsQuery.isFetching ? "animate-spin" : ""}`} />
-                            Refresh
+                            <Pencil className="h-3 w-3" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                            onClick={() => {
+                              if (window.confirm(`Delete contact "${contact.name}"?`)) {
+                                deleteContactMutation.mutate(contact.id);
+                              }
+                            }}
+                          >
+                            <Trash2 className="h-3 w-3" />
                           </Button>
                         </div>
-                        {/* Capability filters */}
-                        {allCapabilities.length > 0 && (
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-xs text-muted-foreground shrink-0">Filter:</span>
-                            {allCapabilities.map((cap) => (
-                              <Button
-                                key={cap}
-                                type="button"
-                                variant={capabilityFilter.has(cap) ? "default" : "outline"}
-                                size="sm"
-                                className="h-6 text-xs px-2"
-                                onClick={() => {
-                                  setCapabilityFilter((prev) => {
-                                    const next = new Set(prev);
-                                    if (next.has(cap)) {
-                                      next.delete(cap);
-                                    } else {
-                                      next.add(cap);
-                                    }
-                                    return next;
-                                  });
-                                }}
-                              >
-                                {cap}
-                              </Button>
-                            ))}
-                            {capabilityFilter.size > 0 && (
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                className="h-6 text-xs px-2 text-muted-foreground"
-                                onClick={() => setCapabilityFilter(new Set())}
-                              >
-                                Clear
-                              </Button>
-                            )}
-                          </div>
-                        )}
-                        <p className="text-xs text-muted-foreground">
-                          Showing {filteredOllamaModels.length} of {ollamaModels.length} models
-                        </p>
-                        {ollamaModelsQuery.isLoading ? (
-                          <div className="space-y-2">
-                            <Skeleton className="h-8 w-full" />
-                            <Skeleton className="h-8 w-full" />
-                          </div>
-                        ) : filteredOllamaModels.length === 0 ? (
-                          <p className="text-sm text-muted-foreground py-2">
-                            {ollamaModels.length === 0
-                              ? "No models pulled yet. Pull a model below to get started."
-                              : "No models match the selected filters."}
-                          </p>
-                        ) : (
-                          <div className="max-h-56 overflow-y-auto rounded border bg-background">
-                            {filteredOllamaModels.map((model) => (
-                              <div
-                                key={model.name}
-                                className="flex items-center justify-between gap-3 border-b px-3 py-2 last:border-b-0"
-                              >
-                                <div className="min-w-0 flex-1">
-                                  <div className="flex items-center gap-2">
-                                    <p className="truncate text-sm font-medium font-mono">{model.name}</p>
-                                    {model.name === modelMap["default"] && (
-                                      <Badge variant="default" className="text-[10px] px-1.5 py-0 shrink-0">Active</Badge>
-                                    )}
-                                  </div>
-                                  <p className="text-xs text-muted-foreground">
-                                    {(model.size / 1e9).toFixed(1)} GB
-                                    {model.parameter_size ? ` \u00B7 ${model.parameter_size}` : ""}
-                                    {model.quantization_level ? ` \u00B7 ${model.quantization_level}` : ""}
-                                    {model.family ? ` \u00B7 ${model.family}` : ""}
-                                  </p>
-                                  {model.capabilities.length > 0 && (
-                                    <div className="flex items-center gap-1 mt-0.5">
-                                      {model.capabilities.map((cap) => (
-                                        <Badge
-                                          key={cap}
-                                          variant={cap === "tools" ? "default" : "secondary"}
-                                          className="text-[9px] px-1 py-0"
-                                        >
-                                          {cap}
-                                        </Badge>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                                <div className="flex items-center gap-1 shrink-0">
-                                  <Button
-                                    type="button"
-                                    variant="outline"
-                                    size="sm"
-                                    className="h-7 text-xs"
-                                    onClick={() => setModelKey("default", model.name)}
-                                  >
-                                    Use
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                                    onClick={() => {
-                                      if (window.confirm(`Delete model "${model.name}"?`)) {
-                                        ollamaDeleteMutation.mutate(model.name);
-                                      }
-                                    }}
-                                    disabled={ollamaDeleteMutation.isPending}
-                                    title="Delete model"
-                                  >
-                                    <Trash2 className="h-3 w-3" />
-                                  </Button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-
-                        {/* Pull model */}
-                        <div className="space-y-2 pt-2 border-t">
-                          <p className="text-sm font-semibold">Pull Model</p>
-                          <div className="flex items-center gap-2">
-                            <Input
-                              value={pullModelName}
-                              onChange={(e) => setPullModelName(e.target.value)}
-                              placeholder="e.g. llama3.2, qwen2.5, deepseek-r1"
-                              className="h-9"
-                              disabled={!!pullProgress}
-                            />
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="h-9 shrink-0"
-                              onClick={handlePullModel}
-                              disabled={!pullModelName.trim() || !!pullProgress}
-                            >
-                              <Download className="h-3 w-3 mr-1" />
-                              Pull
-                            </Button>
-                          </div>
-                          {pullProgress && (
-                            <div className="space-y-1">
-                              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                                <span className="truncate">{pullProgress.status}</span>
-                                <span className="shrink-0">{pullProgress.pct}%</span>
-                              </div>
-                              <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
-                                <div
-                                  className="h-full rounded-full bg-primary transition-all duration-300"
-                                  style={{ width: `${pullProgress.pct}%` }}
-                                />
-                              </div>
-                            </div>
-                          )}
-                          {pullError && (
-                            <p className="text-sm text-destructive">{pullError}</p>
-                          )}
-                        </div>
-
                       </div>
-                    )}
-
-                    {/* Key-model assignments (Ollama) */}
-                    {renderModelKeyTable()}
-                    {renderFallbackModelsEditor()}
-                  </div>
-                ) : aiProvider === "openrouter" ? (
-                  <>
-                    <div className="relative">
-                      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                      <Input
-                        id="models-search"
-                        value={modelSearch}
-                        onChange={(e) => setModelSearch(e.target.value)}
-                        placeholder="Search models..."
-                        className="h-11 pl-10"
-                      />
-                    </div>
-                    <p className="text-sm text-muted-foreground">
-                      Showing {filteredModels.length} models
-                    </p>
-                    {modelsError && (
-                      <p className="text-sm text-destructive">{modelsError}</p>
-                    )}
-
-                    {renderModelKeyTable()}
-                    {renderFallbackModelsEditor()}
-                  </>
-                ) : (
-                  <>
-                    <p className="text-sm text-muted-foreground">
-                      Select from known OpenAI models or type a custom model id.
-                    </p>
-                    {renderModelKeyTable()}
-                    {renderFallbackModelsEditor()}
-                  </>
-                )}
-              </div>
-
-              {/* llmfit model recommendations — on-demand */}
-              {aiCurrent?.provider === "ollama" && (
-                <Card>
-                  <CardHeader>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <CardTitle className="flex items-center gap-2">
-                          <Bot className="h-5 w-5" />
-                          硬件感知模型推荐
-                        </CardTitle>
-                        <CardDescription>
-                          由 llmfit 分析当前硬件，推荐适合运行的本地模型
-                        </CardDescription>
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => refetchRecs()}
-                        disabled={recsLoading}
-                      >
-                        <RefreshCw className={`h-4 w-4 mr-1 ${recsLoading ? "animate-spin" : ""}`} />
-                        {recommendations ? "刷新" : "开始分析"}
-                      </Button>
-                    </div>
-                  </CardHeader>
-                  {(recsLoading || recommendations) && (
-                    <CardContent>
-                      {recsLoading ? (
-                        <div className="space-y-2">
-                          <Skeleton className="h-8 w-full" />
-                          <Skeleton className="h-8 w-full" />
-                          <Skeleton className="h-8 w-full" />
-                        </div>
-                      ) : recommendations?.error && !recommendations.system ? (
-                        <div className="text-sm text-destructive p-4 bg-muted rounded-lg">
-                          <p>{recommendations.error}</p>
-                        </div>
-                      ) : recommendations ? (
-                        <>
-                          {recommendations.system && (
-                            <div className="text-xs text-muted-foreground mb-3 flex gap-4 flex-wrap">
-                              <span>RAM: {recommendations.system.total_ram_gb.toFixed(0)}GB</span>
-                              {recommendations.system.has_gpu && (
-                                <span>GPU: {recommendations.system.gpu_name} ({recommendations.system.gpu_vram_gb?.toFixed(0)}GB)</span>
-                              )}
-                              <span>Backend: {recommendations.system.backend}</span>
-                              <span>CPU: {recommendations.system.cpu_cores} 核</span>
-                            </div>
-                          )}
-                          <div className="space-y-2">
-                            {recommendations.models.map((model, idx) => (
-                              <div key={idx} className="flex items-center gap-3 p-2 rounded-lg border hover:bg-muted/50 transition-colors">
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-center gap-2 flex-wrap">
-                                    <span className="font-mono text-sm font-medium truncate">{model.name}</span>
-                                    {model.installed && <Badge variant="outline" className="text-xs shrink-0">已安装</Badge>}
-                                    <Badge
-                                      className="text-xs shrink-0"
-                                      variant={
-                                        model.fit_level === "Perfect" ? "default" :
-                                        model.fit_level === "Good" ? "secondary" :
-                                        "outline"
-                                      }
-                                    >
-                                      {model.fit_level}
-                                    </Badge>
-                                  </div>
-                                  <div className="text-xs text-muted-foreground mt-0.5 flex gap-3 flex-wrap">
-                                    <span>评分 {model.score.toFixed(0)}</span>
-                                    <span>{model.estimated_tps.toFixed(0)} tok/s</span>
-                                    <span>{model.best_quant}</span>
-                                    <span>{model.memory_required_gb.toFixed(1)}GB</span>
-                                    <span>{model.run_mode}</span>
-                                  </div>
-                                </div>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => {
-                                    setModelKey("default", model.name);
-                                  }}
-                                >
-                                  选用
-                                </Button>
-                              </div>
-                            ))}
-                          </div>
-                          {recommendations.error && (
-                            <p className="mt-2 text-xs text-destructive">{recommendations.error}</p>
-                          )}
-                        </>
-                      ) : null}
-                    </CardContent>
-                  )}
-                </Card>
-              )}
-            </div>
-          )}
-
-          {selectedSetting === "composio" && (
-            <div className="space-y-6 px-6 py-5">
-              <div className="space-y-4 rounded-xl border bg-card p-4">
-                <div className="space-y-2">
-                  <Label htmlFor="composio-api-key" className="text-base font-semibold">
-                    Composio API Key
-                  </Label>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      id="composio-api-key"
-                      type={showComposioApiKey ? "text" : "password"}
-                      value={composioApiKey}
-                      onChange={(e) => setComposioApiKey(e.target.value)}
-                      placeholder={current.agent.composio.api_key ?? "cmp_..."}
-                      className="h-11"
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      className="h-11 w-11 shrink-0"
-                      onClick={() => setShowComposioApiKey((v) => !v)}
-                    >
-                      {showComposioApiKey ? <EyeOff /> : <Eye />}
-                    </Button>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    Leave empty and save to clear the key from runtime settings.
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="composio-entity-id" className="text-base font-semibold">
-                    Default Entity ID
-                  </Label>
-                  <Input
-                    id="composio-entity-id"
-                    value={composioEntityId}
-                    onChange={(e) => setComposioEntityId(e.target.value)}
-                    placeholder="default"
-                    className="h-11"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Used when tool calls omit entity_id.
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {selectedSetting === "agent" && (
-            <div className="space-y-6 px-6 py-5">
-              <div className="space-y-3 rounded-xl border bg-card p-4">
-                <div className="flex items-center justify-between">
-                  <Label className="text-base font-semibold">Prompt Markdown</Label>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => promptsQuery.refetch()}
-                    disabled={promptsQuery.isFetching}
-                  >
-                    {promptsQuery.isFetching ? "Refreshing..." : "Refresh"}
-                  </Button>
-                </div>
-                <Select
-                  value={selectedPromptName}
-                  onValueChange={(value) => {
-                    const prompt = availablePrompts.find((p) => p.name === value);
-                    setSelectedPromptName(value);
-                    setSelectedPromptContent(prompt?.content ?? "");
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select prompt file" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availablePrompts.map((prompt) => (
-                      <SelectItem key={prompt.name} value={prompt.name}>
-                        {prompt.name}
-                      </SelectItem>
                     ))}
-                  </SelectContent>
-                </Select>
-                <Textarea
-                  value={selectedPromptContent}
-                  readOnly
-                  rows={14}
-                  className="font-mono text-xs"
-                  placeholder="Select a prompt file to view..."
-                  disabled={!selectedPromptName}
-                />
-                <p className="text-xs text-muted-foreground">
-                  {selectedPromptMeta?.description ??
-                    "Select a prompt file to view."}
-                </p>
-              </div>
-
-            </div>
-          )}
-
-          {selectedSetting === "telegram" && (
-            <div className="space-y-6 px-6 py-5">
-              <div className="space-y-4 rounded-xl border bg-card p-4">
-                <div className="space-y-2">
-                  <Label htmlFor="telegram-chat-id" className="text-base font-semibold">
-                    Chat ID
-                  </Label>
-                  <Input
-                    id="telegram-chat-id"
-                    value={telegramChatId}
-                    onChange={(e) => setTelegramChatId(e.target.value)}
-                    placeholder="123456789"
-                    className="h-11"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label
-                    htmlFor="telegram-allowed-group-chat-id"
-                    className="text-base font-semibold"
-                  >
-                    Allowed Group Chat ID
-                  </Label>
-                  <Input
-                    id="telegram-allowed-group-chat-id"
-                    value={telegramAllowedGroupChatId}
-                    onChange={(e) => setTelegramAllowedGroupChatId(e.target.value)}
-                    placeholder="-1001234567890"
-                    className="h-11"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Bot only responds in this group when mentioned. Private chats still work.
-                  </p>
-                </div>
-                <div className="space-y-2">
-                  <Label
-                    htmlFor="telegram-notification-channel-id"
-                    className="text-base font-semibold"
-                  >
-                    Notification Channel ID
-                  </Label>
-                  <Input
-                    id="telegram-notification-channel-id"
-                    value={telegramNotificationChannelId}
-                    onChange={(e) => setTelegramNotificationChannelId(e.target.value)}
-                    placeholder="-1001234567890"
-                    className="h-11"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Telegram channel ID for automated notifications.
-                    Leave empty to use private chat.
-                  </p>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="telegram-token" className="text-base font-semibold">
-                    Bot Token
-                  </Label>
-                  <Input
-                    id="telegram-token"
-                    type="password"
-                    value={telegramToken}
-                    onChange={(e) => setTelegramToken(e.target.value)}
-                    placeholder={currentTelegram?.token_hint ?? "123456:ABC..."}
-                    className="h-11"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Current token hint: {currentTelegram?.token_hint ?? "Not set"}
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {selectedSetting === "gmail" && (
-            <div className="space-y-6 px-6 py-5">
-              <div className="space-y-4 rounded-xl border bg-card p-4">
-                <div className="space-y-2">
-                  <Label htmlFor="gmail-address" className="text-base font-semibold">
-                    Gmail Address
-                  </Label>
-                  <Input
-                    id="gmail-address"
-                    type="email"
-                    value={gmailAddress}
-                    onChange={(e) => setGmailAddress(e.target.value)}
-                    placeholder="you@gmail.com"
-                    className="h-11"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="gmail-app-password" className="text-base font-semibold">
-                    App Password
-                  </Label>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      id="gmail-app-password"
-                      type={showGmailAppPassword ? "text" : "password"}
-                      value={gmailAppPassword}
-                      onChange={(e) => setGmailAppPassword(e.target.value)}
-                      placeholder={gmailCurrent?.app_password_hint ?? "xxxx xxxx xxxx xxxx"}
-                      className="h-11"
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      className="h-11 w-11 shrink-0"
-                      onClick={() => setShowGmailAppPassword((v) => !v)}
-                    >
-                      {showGmailAppPassword ? <EyeOff /> : <Eye />}
-                    </Button>
                   </div>
-                  <p className="text-xs text-muted-foreground">
-                    Leave empty to keep the current app password.
-                  </p>
-                </div>
+                )}
+              </CardContent>
+            </Card>
 
-                <div className="flex items-center justify-between rounded-lg border bg-muted/30 p-3">
-                  <div>
-                    <p className="text-sm font-medium">Auto-Send</p>
-                    <p className="text-xs text-muted-foreground">
-                      Allow the agent to send emails automatically.
-                    </p>
-                  </div>
-                  <Switch
-                    checked={gmailAutoSendEnabled}
-                    onCheckedChange={setGmailAutoSendEnabled}
-                  />
-                </div>
-              </div>
+            <KvGroup
+              title="Gmail"
+              description="SMTP credentials for sending emails"
+              icon={<Mail className="h-4 w-4" />}
+              fields={[
+                { key: KEYS.GMAIL_ADDRESS, label: "Email Address", placeholder: "you@gmail.com" },
+                { key: KEYS.GMAIL_APP_PASSWORD, label: "App Password", placeholder: "xxxx xxxx xxxx xxxx" },
+                { key: KEYS.GMAIL_AUTO_SEND_ENABLED, label: "Auto-Send Enabled", placeholder: "true or false", description: "Set to 'true' to enable auto-sending" },
+              ]}
+              values={draft}
+              original={original}
+              onFieldChange={handleFieldChange}
+              onSave={() => handleGroupSave([KEYS.GMAIL_ADDRESS, KEYS.GMAIL_APP_PASSWORD, KEYS.GMAIL_AUTO_SEND_ENABLED], "gmail")}
+              saving={saveMutation.isPending}
+              toast={groupToasts["gmail"] ?? null}
+            />
+          </>
+        )}
+
+        {/* ── Tools ── */}
+        {activeCategory === "tools" && (
+          <>
+            <KvGroup
+              title="Composio"
+              description="Tool orchestration platform credentials"
+              icon={<Settings2 className="h-4 w-4" />}
+              fields={[
+                { key: KEYS.COMPOSIO_API_KEY, label: "API Key", placeholder: "cmp-..." },
+                { key: KEYS.COMPOSIO_ENTITY_ID, label: "Entity ID", placeholder: "default" },
+              ]}
+              values={draft}
+              original={original}
+              onFieldChange={handleFieldChange}
+              onSave={() => handleGroupSave([KEYS.COMPOSIO_API_KEY, KEYS.COMPOSIO_ENTITY_ID], "composio")}
+              saving={saveMutation.isPending}
+              toast={groupToasts["composio"] ?? null}
+            />
+            <KvGroup
+              title="Memory"
+              description="External memory service connections"
+              icon={<Bot className="h-4 w-4" />}
+              fields={[
+                { key: KEYS.MEMORY_MEM0_BASE_URL, label: "Mem0 Base URL", placeholder: "http://localhost:..." },
+                { key: KEYS.MEMORY_MEMOS_BASE_URL, label: "Memos Base URL", placeholder: "http://localhost:5230" },
+                { key: KEYS.MEMORY_MEMOS_TOKEN, label: "Memos Token" },
+                { key: KEYS.MEMORY_HINDSIGHT_BASE_URL, label: "Hindsight Base URL", placeholder: "http://localhost:..." },
+                { key: KEYS.MEMORY_HINDSIGHT_BANK_ID, label: "Hindsight Bank ID" },
+              ]}
+              values={draft}
+              original={original}
+              onFieldChange={handleFieldChange}
+              onSave={() => handleGroupSave([KEYS.MEMORY_MEM0_BASE_URL, KEYS.MEMORY_MEMOS_BASE_URL, KEYS.MEMORY_MEMOS_TOKEN, KEYS.MEMORY_HINDSIGHT_BASE_URL, KEYS.MEMORY_HINDSIGHT_BANK_ID], "memory")}
+              saving={saveMutation.isPending}
+              toast={groupToasts["memory"] ?? null}
+            />
+          </>
+        )}
+      </div>
+
+      {/* Contact Dialog */}
+      <Dialog open={contactDialogOpen} onOpenChange={(open) => !open && setContactDialogOpen(false)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{editingContact ? "Edit Contact" : "New Contact"}</DialogTitle>
+            <DialogDescription>
+              {editingContact ? "Update contact details." : "Add a new Telegram contact."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="contact-name">Name</Label>
+              <Input
+                id="contact-name"
+                value={contactName}
+                onChange={(e) => setContactName(e.target.value)}
+                placeholder="Contact name"
+              />
             </div>
-          )}
-
-          {selectedSetting === "auth" && (
-            <div className="space-y-6 px-6 py-5">
-              <div className="space-y-3 rounded-xl border bg-card p-4">
-                <div className="flex items-center justify-between">
-                  <Label className="text-base font-semibold">SSH Public Key</Label>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => sshKeyQuery.refetch()}
-                    disabled={sshKeyQuery.isFetching}
-                  >
-                    {sshKeyQuery.isFetching ? "Refreshing..." : "Refresh"}
-                  </Button>
-                </div>
-                <Textarea
-                  readOnly
-                  rows={6}
-                  className="font-mono text-xs"
-                  value={sshKeyQuery.data?.public_key ?? ""}
-                  placeholder={sshKeyQuery.isLoading ? "Loading SSH public key..." : "No SSH public key available"}
-                />
-                <div className="flex justify-end">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={!sshKeyQuery.data?.public_key}
-                    onClick={async () => {
-                      if (!sshKeyQuery.data?.public_key) return;
-                      try {
-                        await navigator.clipboard.writeText(sshKeyQuery.data.public_key);
-                        setToast({ kind: "success", message: "SSH public key copied." });
-                      } catch (e) {
-                        setToast({
-                          kind: "error",
-                          message: e instanceof Error ? e.message : "Failed to copy SSH key",
-                        });
-                      }
-                    }}
-                  >
-                    Copy Public Key
-                  </Button>
-                </div>
-              </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="contact-username">Telegram Username</Label>
+              <Input
+                id="contact-username"
+                value={contactUsername}
+                onChange={(e) => setContactUsername(e.target.value)}
+                placeholder="username (without @)"
+              />
             </div>
-          )}
-
-          {selectedSetting === "contacts" && (
-            <div className="space-y-4 px-6 py-5">
-              <div className="flex items-center justify-between">
-                <p className="text-sm text-muted-foreground">
-                  Manage allowed Telegram contacts. Only contacts in this list can receive messages via the send_telegram tool.
-                </p>
-                <Button type="button" variant="outline" size="sm" onClick={openNewContact}>
-                  <Plus className="mr-1 h-3 w-3" />
-                  Add
-                </Button>
-              </div>
-
-              {contactsQuery.isLoading && <Skeleton className="h-32 w-full" />}
-
-              {contactsQuery.data && contactsQuery.data.length === 0 && (
-                <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-                  No contacts yet. Add a contact to enable recipient-based messaging.
-                </div>
-              )}
-
-              {contactsQuery.data && contactsQuery.data.length > 0 && (
-                <div className="space-y-2">
-                  {contactsQuery.data.map((contact) => (
-                    <div
-                      key={contact.id}
-                      className="flex items-center justify-between gap-3 rounded-lg border bg-card p-3"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <p className="font-medium text-sm">{contact.name}</p>
-                          <Badge variant={contact.enabled ? "default" : "secondary"} className="text-[10px] px-1.5 py-0">
-                            {contact.enabled ? "Enabled" : "Disabled"}
-                          </Badge>
-                          {contact.chat_id != null && (
-                            <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                              Resolved
-                            </Badge>
-                          )}
-                        </div>
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                          @{contact.telegram_username}
-                          {contact.chat_id != null && ` · chat_id: ${contact.chat_id}`}
-                          {contact.notes && ` · ${contact.notes}`}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7"
-                          onClick={() => openEditContact(contact)}
-                          title="Edit"
-                        >
-                          <Pencil className="h-3 w-3" />
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                          onClick={() => {
-                            if (window.confirm(`Delete contact "${contact.name}"?`)) {
-                              deleteContactMutation.mutate(contact.id);
-                            }
-                          }}
-                          title="Delete"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Add/Edit Contact Dialog */}
-              <Dialog open={contactDialogOpen} onOpenChange={setContactDialogOpen}>
-                <DialogContent className="sm:max-w-md">
-                  <DialogHeader>
-                    <DialogTitle>{editingContact ? "Edit Contact" : "Add Contact"}</DialogTitle>
-                    <DialogDescription>
-                      {editingContact
-                        ? "Update this contact's details."
-                        : "Add a new Telegram contact to the allowlist."}
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-4 py-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="contact-name">Name</Label>
-                      <Input
-                        id="contact-name"
-                        value={contactName}
-                        onChange={(e) => setContactName(e.target.value)}
-                        placeholder="John Doe"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="contact-username">Telegram Username</Label>
-                      <Input
-                        id="contact-username"
-                        value={contactUsername}
-                        onChange={(e) => setContactUsername(e.target.value)}
-                        placeholder="johndoe"
-                      />
-                      <p className="text-xs text-muted-foreground">Without the @ prefix.</p>
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="contact-notes">Notes</Label>
-                      <Input
-                        id="contact-notes"
-                        value={contactNotes}
-                        onChange={(e) => setContactNotes(e.target.value)}
-                        placeholder="Optional notes..."
-                      />
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <Label htmlFor="contact-enabled">Enabled</Label>
-                      <Switch
-                        id="contact-enabled"
-                        checked={contactEnabled}
-                        onCheckedChange={setContactEnabled}
-                      />
-                    </div>
-                  </div>
-                  <DialogFooter>
-                    <Button
-                      variant="outline"
-                      onClick={() => setContactDialogOpen(false)}
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      onClick={handleSaveContact}
-                      disabled={
-                        !contactName.trim() ||
-                        !contactUsername.trim() ||
-                        createContactMutation.isPending ||
-                        updateContactMutation.isPending
-                      }
-                    >
-                      {createContactMutation.isPending || updateContactMutation.isPending
-                        ? "Saving..."
-                        : editingContact
-                          ? "Update"
-                          : "Create"}
-                    </Button>
-                  </DialogFooter>
-                </DialogContent>
-              </Dialog>
+            <div className="space-y-1.5">
+              <Label htmlFor="contact-notes">Notes</Label>
+              <Textarea
+                id="contact-notes"
+                value={contactNotes}
+                onChange={(e) => setContactNotes(e.target.value)}
+                placeholder="Optional notes"
+                rows={2}
+              />
             </div>
-          )}
-
-          {selectedSetting !== "contacts" && selectedSetting !== "auth" && selectedSetting !== "agent" && (
-            <DialogFooter className="border-t px-6 py-4">
-              <Button
-                variant="outline"
-                onClick={() => setSelectedSetting(null)}
-                disabled={dialogSaving}
-              >
-                Cancel
-              </Button>
-              <Button onClick={handleSave} disabled={dialogSaving}>
-                {dialogSaving ? "Saving..." : "Save Settings"}
-              </Button>
-            </DialogFooter>
-          )}
+            <div className="flex items-center gap-2">
+              <Switch
+                id="contact-enabled"
+                checked={contactEnabled}
+                onCheckedChange={setContactEnabled}
+              />
+              <Label htmlFor="contact-enabled">Enabled</Label>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setContactDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSaveContact}
+              disabled={!contactName.trim() || !contactUsername.trim() || createContactMutation.isPending || updateContactMutation.isPending}
+            >
+              {editingContact ? "Update" : "Create"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {toast && (
-        <div className="fixed right-6 top-6 z-50">
-          <div
-            className={`rounded-md border px-4 py-3 text-sm shadow-lg ${
-              toast.kind === "success"
-                ? "border-green-200 bg-green-50 text-green-800"
-                : "border-red-200 bg-red-50 text-red-800"
-            }`}
-          >
-            {toast.message}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

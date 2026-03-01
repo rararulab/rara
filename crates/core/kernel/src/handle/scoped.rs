@@ -566,7 +566,7 @@ mod tests {
             audit::InMemoryAuditLog,
             defaults::{
                 noop::{
-                    NoopEventBus, NoopGuard, NoopMemory, NoopModelRepo, NoopSessionRepository,
+                    NoopEventBus, NoopGuard, NoopMemory, NoopSettingsProvider, NoopSessionRepository,
                 },
                 noop_user_store::NoopUserStore,
             },
@@ -592,8 +592,8 @@ mod tests {
             memory_quota_per_agent: quota,
             user_store:             Arc::new(NoopUserStore),
             session_repo:           Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
-            model_repo:             Arc::new(NoopModelRepo)
-                as Arc<dyn crate::model_repo::ModelRepo>,
+            settings:               Arc::new(NoopSettingsProvider)
+                as Arc<dyn rara_domain_shared::settings::SettingsProvider>,
             stream_hub:             Arc::new(StreamHub::new(1)),
             pipe_registry:          Arc::new(PipeRegistry::new()),
             device_registry:        Arc::new(crate::device_registry::DeviceRegistry::new()),

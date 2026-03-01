@@ -442,8 +442,8 @@ mod tests {
             memory_quota_per_agent: 1000,
             user_store:             Arc::new(NoopUserStore),
             session_repo:           Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
-            model_repo:             Arc::new(crate::defaults::noop::NoopModelRepo)
-                as Arc<dyn crate::model_repo::ModelRepo>,
+            settings:               Arc::new(crate::defaults::noop::NoopSettingsProvider)
+                as Arc<dyn rara_domain_shared::settings::SettingsProvider>,
             stream_hub:             Arc::new(StreamHub::new(16)),
             pipe_registry:          Arc::new(crate::io::pipe::PipeRegistry::new()),
             device_registry:        Arc::new(crate::device_registry::DeviceRegistry::new()),

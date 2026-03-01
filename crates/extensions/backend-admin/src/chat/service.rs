@@ -24,12 +24,11 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use rara_domain_shared::settings::model::Settings;
+use rara_domain_shared::settings::{SettingsProvider, keys};
 use rara_sessions::{
     repository::SessionRepository,
     types::{ChannelBinding, ChatMessage, SessionEntry, SessionKey},
 };
-use tokio::sync::watch;
 use tracing::{info, instrument};
 
 use crate::chat::{
@@ -53,31 +52,24 @@ use crate::chat::{
 #[derive(Clone)]
 pub struct ChatService {
     /// Persistence layer for sessions, messages, and channel bindings.
-    session_repo:     Arc<dyn SessionRepository>,
+    session_repo:      Arc<dyn SessionRepository>,
     /// Cached catalog of models fetched from OpenRouter.
-    model_catalog:    ModelCatalog,
-    /// Settings updater for persisting favorite models.
-    settings_updater: Arc<dyn rara_domain_shared::settings::SettingsUpdater>,
-    /// Watch receiver for runtime settings (used by list_models).
-    settings_rx:      watch::Receiver<Settings>,
+    model_catalog:     ModelCatalog,
+    /// Settings provider for reading and writing flat KV settings.
+    settings_provider: Arc<dyn SettingsProvider>,
 }
 
 impl ChatService {
     /// Create a new chat service with the given dependencies.
-    ///
-    /// The `settings_updater` is used for persisting user preferences such
-    /// as favorite models.
     #[must_use]
     pub fn new(
         session_repo: Arc<dyn SessionRepository>,
-        settings_updater: Arc<dyn rara_domain_shared::settings::SettingsUpdater>,
-        settings_rx: watch::Receiver<Settings>,
+        settings_provider: Arc<dyn SettingsProvider>,
     ) -> Self {
         Self {
             session_repo,
             model_catalog: ModelCatalog::new(),
-            settings_updater,
-            settings_rx,
+            settings_provider,
         }
     }
 
@@ -86,26 +78,21 @@ impl ChatService {
     /// List available models, dynamically fetching from OpenRouter when an
     /// API key is configured. Favorites are marked and sorted to the top.
     pub async fn list_models(&self) -> Vec<ChatModel> {
-        let settings = self.settings_rx.borrow().clone();
-        let api_key = settings.ai.openrouter_api_key.as_deref();
-        let favorites = &settings.ai.favorite_models;
-        self.model_catalog.list_models(api_key, favorites).await
+        let api_key = self.settings_provider.get(keys::LLM_OPENROUTER_API_KEY).await;
+        let favorites_json = self.settings_provider.get(keys::LLM_FAVORITE_MODELS).await;
+        let favorites: Vec<String> = favorites_json
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .unwrap_or_default();
+        self.model_catalog
+            .list_models(api_key.as_deref(), &favorites)
+            .await
     }
 
     /// Replace the user's favorite model list and persist to settings.
     pub async fn set_favorite_models(&self, ids: Vec<String>) -> Result<(), ChatError> {
-        use rara_domain_shared::settings::model::{AiRuntimeSettingsPatch, UpdateRequest};
-
-        let patch = UpdateRequest {
-            ai:           Some(AiRuntimeSettingsPatch {
-                favorite_models: Some(ids),
-                ..Default::default()
-            }),
-            telegram:     None,
-            agent:        None,
-        };
-        self.settings_updater
-            .update_settings(patch)
+        let json = serde_json::to_string(&ids).unwrap_or_default();
+        self.settings_provider
+            .set(keys::LLM_FAVORITE_MODELS, &json)
             .await
             .map_err(|e| ChatError::SessionError {
                 message: format!("failed to update favorite models: {e}"),
