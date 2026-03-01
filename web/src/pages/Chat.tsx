@@ -1149,7 +1149,8 @@ function ChatThread({
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const baseUrl = import.meta.env.VITE_API_URL || "";
       const host = baseUrl ? new URL(baseUrl).host : window.location.host;
-      const url = `${protocol}//${host}/api/v1/kernel/chat/ws?session_key=${encodeURIComponent(sessionKey)}&user_id=web-user`;
+      const token = localStorage.getItem('access_token') ?? '';
+      const url = `${protocol}//${host}/api/v1/kernel/chat/ws?session_key=${encodeURIComponent(sessionKey)}&token=${encodeURIComponent(token)}`;
 
       const ws = new WebSocket(url);
       wsRef.current = ws;

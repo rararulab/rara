@@ -14,6 +14,65 @@
  * limitations under the License.
  */
 
+// Auth
+export interface LoginRequest {
+  username: string;
+  password: string;
+}
+
+export interface RegisterRequest {
+  username: string;
+  password: string;
+  invite_code: string;
+}
+
+export interface RefreshRequest {
+  refresh_token: string;
+}
+
+export interface AuthResponse {
+  access_token: string;
+  refresh_token: string;
+  user: UserInfo;
+}
+
+export interface UserInfo {
+  id: string;
+  name: string;
+  role: string;
+  enabled: boolean;
+}
+
+export interface UserProfile extends UserInfo {
+  platforms: PlatformInfo[];
+}
+
+export interface PlatformInfo {
+  platform: string;
+  platform_user_id: string;
+  display_name: string | null;
+  linked_at: string;
+}
+
+export interface InviteCode {
+  id: string;
+  code: string;
+  created_by: string;
+  used_by: string | null;
+  expires_at: string;
+  created_at: string;
+}
+
+export interface LinkCodeResponse {
+  code: string;
+  expires_at: string;
+}
+
+export interface ChangePasswordRequest {
+  old_password: string;
+  new_password: string;
+}
+
 // Job Discovery
 export interface DiscoveryCriteria {
   keywords: string[];
