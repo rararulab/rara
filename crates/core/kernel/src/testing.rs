@@ -40,7 +40,7 @@ use crate::{
         noop_user_store::NoopUserStore,
     },
     device_registry::DeviceRegistry,
-    event_queue::EventQueue,
+    event_queue::InMemoryEventQueue,
     io::{pipe::PipeRegistry, stream::StreamHub},
     kernel::{Kernel, KernelConfig, KernelInner},
     process::{AgentManifest, ProcessTable, agent_registry::AgentRegistry},
@@ -149,7 +149,7 @@ impl TestKernelBuilder {
             approval:               Arc::new(crate::approval::ApprovalManager::new(
                 crate::approval::ApprovalPolicy::default(),
             )),
-            event_queue:            Arc::new(EventQueue::new(4096)),
+            event_queue:            Arc::new(InMemoryEventQueue::new(4096)),
         });
 
         // Use private constructor approach: build Kernel from its inner field.

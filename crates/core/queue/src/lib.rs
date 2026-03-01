@@ -12,24 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Kernel bootstrap — assembles a production-ready `Kernel` from external
-//! dependencies.
+//! `rara-queue` — pluggable event queue implementations for the kernel.
 //!
-//! The primary entry point is [`kernel::boot()`], which creates a
-//! fully-configured `Kernel` with its I/O subsystem (buses, stream hub,
-//! endpoint registry, ingress pipeline).
+//! Provides three [`EventQueue`](rara_kernel::event_queue::EventQueue)
+//! implementations:
+//!
+//! - [`MemoryQueue`](memory::MemoryQueue) — re-exports
+//!   `InMemoryEventQueue` from the kernel for convenience.
+//! - [`WalQueue`](wal::WalQueue) — file-system WAL (Write-Ahead Log)
+//!   with JSON-lines format for crash recovery.
+//! - [`HybridQueue`](hybrid::HybridQueue) — combines an in-memory
+//!   fast path with WAL persistence for durability.
 
-pub mod bus;
-pub mod components;
-pub mod error;
-pub mod kernel;
-pub mod manifests;
-pub mod mcp;
-pub mod outbox;
-pub mod queue;
-pub mod resolvers;
-pub mod skills;
-pub mod stream;
-pub mod tools;
-pub mod audit;
-pub mod user_store;
+pub mod hybrid;
+pub mod memory;
+pub mod wal;

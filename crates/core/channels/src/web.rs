@@ -740,7 +740,7 @@ impl EgressAdapter for WebAdapter {
 mod tests {
     use rara_kernel::{
         defaults::noop::{NoopIdentityResolver, NoopSessionResolver},
-        event_queue::EventQueue,
+        event_queue::InMemoryEventQueue,
         io::ingress::IdentityResolver,
     };
 
@@ -751,7 +751,7 @@ mod tests {
         Arc::new(IngressPipeline::with_event_queue(
             Arc::new(NoopIdentityResolver) as Arc<dyn IdentityResolver>,
             Arc::new(NoopSessionResolver) as Arc<dyn rara_kernel::io::ingress::SessionResolver>,
-            Arc::new(EventQueue::new(100)),
+            Arc::new(InMemoryEventQueue::new(100)),
         ))
     }
 

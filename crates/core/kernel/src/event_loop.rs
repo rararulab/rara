@@ -111,17 +111,23 @@ impl Kernel {
             tokio::select! {
                 _ = self.event_queue().wait() => {
                     let events = self.event_queue().drain(32).await;
-                    for event in events {
+                    for (event, wal_id) in events {
                         self.handle_event(event, &runtimes).await;
+                        if let Some(id) = wal_id {
+                            self.event_queue().mark_completed(id);
+                        }
                     }
                 }
                 _ = shutdown.cancelled() => {
                     info!("kernel event loop shutting down");
                     // Drain any remaining critical events.
                     let remaining = self.event_queue().drain(1024).await;
-                    for event in remaining {
+                    for (event, wal_id) in remaining {
                         if matches!(event, KernelEvent::SendSignal { .. } | KernelEvent::Shutdown) {
                             self.handle_event(event, &runtimes).await;
+                        }
+                        if let Some(id) = wal_id {
+                            self.event_queue().mark_completed(id);
                         }
                     }
                     break;

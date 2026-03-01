@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Unified event queue — tiered priority queue for all kernel interactions.
+//! Unified event queue trait — tiered priority queue for all kernel interactions.
 //!
-//! Replaces `InboundBus` + `OutboundBus` + `PriorityScheduler` + process
-//! mailboxes with a single event queue.
+//! Defines the [`EventQueue`] trait that all queue implementations must satisfy.
+//! The default in-memory implementation ([`InMemoryEventQueue`]) is provided for
+//! backward compatibility and testing.
 //!
 //! Events are auto-classified into three priority tiers:
 //! - **Critical**: signals (Interrupt, Kill, Pause, Resume), shutdown
@@ -30,6 +31,7 @@ use std::{
     },
 };
 
+use async_trait::async_trait;
 use tokio::sync;
 
 use crate::io::types::BusError;
@@ -38,16 +40,50 @@ use crate::io::types::BusError;
 pub use crate::unified_event::{KernelEvent, EventPriority};
 
 // ---------------------------------------------------------------------------
-// EventQueue
+// EventQueue trait
 // ---------------------------------------------------------------------------
 
-/// Tiered priority queue for all kernel interactions.
+/// Trait for tiered priority event queues.
+///
+/// Implementations must be `Send + Sync + 'static` to be shared across async
+/// tasks via `Arc<dyn EventQueue>`.
+#[async_trait]
+pub trait EventQueue: Send + Sync + 'static {
+    /// Push an event into the queue. Returns `BusError::Full` if at capacity.
+    async fn push(&self, event: KernelEvent) -> Result<(), BusError>;
+
+    /// Non-async push (for fire-and-forget signal sends).
+    fn try_push(&self, event: KernelEvent) -> Result<(), BusError>;
+
+    /// Drain up to `max` events from the queue, in priority order.
+    ///
+    /// Each returned pair is `(event, wal_id)`. The `wal_id` is `Some` for
+    /// events that were persisted to a WAL; the event loop should call
+    /// [`mark_completed`](Self::mark_completed) after processing each such
+    /// event. For in-memory-only queues, `wal_id` is always `None`.
+    async fn drain(&self, max: usize) -> Vec<(KernelEvent, Option<u64>)>;
+
+    /// Wait until events are available.
+    async fn wait(&self);
+
+    /// Current total pending count across all tiers.
+    fn pending_count(&self) -> usize;
+
+    /// Mark a WAL entry as completed. Default no-op for non-persistent queues.
+    fn mark_completed(&self, _wal_id: u64) {}
+}
+
+// ---------------------------------------------------------------------------
+// InMemoryEventQueue
+// ---------------------------------------------------------------------------
+
+/// Tiered priority queue for all kernel interactions (pure in-memory).
 ///
 /// Uses three `VecDeque`s (one per priority tier) protected by `std::sync::Mutex`
 /// (not tokio — critical sections are trivial push/pop operations).
 ///
 /// `tokio::sync::Notify` provides async wakeup when events are pushed.
-pub struct EventQueue {
+pub struct InMemoryEventQueue {
     /// Three tiers: [Critical, Normal, Low].
     queues:   [Mutex<VecDeque<KernelEvent>>; 3],
     /// Async notification for the event loop.
@@ -58,7 +94,7 @@ pub struct EventQueue {
     capacity: usize,
 }
 
-impl EventQueue {
+impl InMemoryEventQueue {
     /// Create a new event queue with the given maximum capacity.
     pub fn new(capacity: usize) -> Self {
         Self {
@@ -72,17 +108,15 @@ impl EventQueue {
             capacity,
         }
     }
+}
 
-    /// Push an event into the queue. Returns `BusError::Full` if at capacity.
-    ///
-    /// Automatically routes to the correct priority tier based on the event
-    /// variant.
-    pub async fn push(&self, event: KernelEvent) -> Result<(), BusError> {
+#[async_trait]
+impl EventQueue for InMemoryEventQueue {
+    async fn push(&self, event: KernelEvent) -> Result<(), BusError> {
         self.try_push(event)
     }
 
-    /// Non-async push (for fire-and-forget signal sends).
-    pub fn try_push(&self, event: KernelEvent) -> Result<(), BusError> {
+    fn try_push(&self, event: KernelEvent) -> Result<(), BusError> {
         let current = self.pending.load(Ordering::Acquire);
         if current >= self.capacity {
             return Err(BusError::Full);
@@ -98,21 +132,18 @@ impl EventQueue {
         Ok(())
     }
 
-    /// Drain up to `max` events from the queue, in priority order.
-    ///
-    /// Critical events are drained first, then Normal, then Low.
-    pub async fn drain(&self, max: usize) -> Vec<KernelEvent> {
+    async fn drain(&self, max: usize) -> Vec<(KernelEvent, Option<u64>)> {
         let mut result = Vec::with_capacity(max);
         let mut remaining = max;
 
-        // Drain in priority order: Critical (0) → Normal (1) → Low (2)
+        // Drain in priority order: Critical (0) -> Normal (1) -> Low (2)
         for tier in 0..3 {
             if remaining == 0 {
                 break;
             }
             let mut q = self.queues[tier].lock().expect("event queue lock poisoned");
             let n = remaining.min(q.len());
-            result.extend(q.drain(..n));
+            result.extend(q.drain(..n).map(|e| (e, None)));
             remaining -= n;
         }
 
@@ -124,25 +155,21 @@ impl EventQueue {
         result
     }
 
-    /// Wait until events are available.
-    ///
-    /// Returns immediately if events are already pending.
-    pub async fn wait(&self) {
+    async fn wait(&self) {
         if self.pending.load(Ordering::Acquire) > 0 {
             return;
         }
         self.notify.notified().await;
     }
 
-    /// Current total pending count across all tiers.
-    pub fn pending_count(&self) -> usize {
+    fn pending_count(&self) -> usize {
         self.pending.load(Ordering::Acquire)
     }
 }
 
-impl std::fmt::Debug for EventQueue {
+impl std::fmt::Debug for InMemoryEventQueue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("EventQueue")
+        f.debug_struct("InMemoryEventQueue")
             .field("pending", &self.pending_count())
             .field("capacity", &self.capacity)
             .finish()
@@ -181,7 +208,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_push_and_drain() {
-        let q = EventQueue::new(100);
+        let q = InMemoryEventQueue::new(100);
 
         q.push(KernelEvent::UserMessage(test_inbound("hello")))
             .await
@@ -199,7 +226,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_priority_ordering() {
-        let q = EventQueue::new(100);
+        let q = InMemoryEventQueue::new(100);
 
         // Push in reverse priority order: Low, Normal, Critical
         q.push(KernelEvent::UserMessage(test_inbound("low")))
@@ -230,16 +257,16 @@ mod tests {
         assert_eq!(events.len(), 3);
 
         // First should be Critical (SendSignal)
-        assert!(matches!(events[0], KernelEvent::SendSignal { .. }));
+        assert!(matches!(events[0].0, KernelEvent::SendSignal { .. }));
         // Second should be Normal (Deliver)
-        assert!(matches!(events[1], KernelEvent::Deliver(_)));
+        assert!(matches!(events[1].0, KernelEvent::Deliver(_)));
         // Third should be Low (UserMessage)
-        assert!(matches!(events[2], KernelEvent::UserMessage(_)));
+        assert!(matches!(events[2].0, KernelEvent::UserMessage(_)));
     }
 
     #[tokio::test]
     async fn test_capacity_full() {
-        let q = EventQueue::new(2);
+        let q = InMemoryEventQueue::new(2);
 
         q.push(KernelEvent::UserMessage(test_inbound("a")))
             .await
@@ -255,7 +282,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_wait_wakeup() {
-        let q = std::sync::Arc::new(EventQueue::new(100));
+        let q = std::sync::Arc::new(InMemoryEventQueue::new(100));
         let q2 = q.clone();
 
         let handle = tokio::spawn(async move {
@@ -274,7 +301,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drain_respects_limit() {
-        let q = EventQueue::new(100);
+        let q = InMemoryEventQueue::new(100);
 
         for i in 0..5 {
             q.push(KernelEvent::UserMessage(test_inbound(&format!("msg{i}"))))
@@ -289,7 +316,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_try_push_sync() {
-        let q = EventQueue::new(100);
+        let q = InMemoryEventQueue::new(100);
 
         q.try_push(KernelEvent::UserMessage(test_inbound("sync")))
             .unwrap();
@@ -301,7 +328,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_try_push_sync_full() {
-        let q = EventQueue::new(1);
+        let q = InMemoryEventQueue::new(1);
 
         q.try_push(KernelEvent::UserMessage(test_inbound("a")))
             .unwrap();
@@ -313,7 +340,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drain_empty_queue() {
-        let q = EventQueue::new(100);
+        let q = InMemoryEventQueue::new(100);
         let events = q.drain(10).await;
         assert_eq!(events.len(), 0);
         assert_eq!(q.pending_count(), 0);
@@ -321,7 +348,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_wait_returns_immediately_when_pending() {
-        let q = EventQueue::new(100);
+        let q = InMemoryEventQueue::new(100);
         q.push(KernelEvent::UserMessage(test_inbound("already")))
             .await
             .unwrap();
@@ -337,7 +364,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pending_count_tracks_push_and_drain() {
-        let q = EventQueue::new(100);
+        let q = InMemoryEventQueue::new(100);
         assert_eq!(q.pending_count(), 0);
 
         q.push(KernelEvent::UserMessage(test_inbound("a"))).await.unwrap();
@@ -362,7 +389,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shutdown_is_critical_priority() {
-        let q = EventQueue::new(100);
+        let q = InMemoryEventQueue::new(100);
 
         // Push a Low event first, then Shutdown (Critical)
         q.push(KernelEvent::UserMessage(test_inbound("low")))
@@ -373,13 +400,13 @@ mod tests {
         let events = q.drain(10).await;
         assert_eq!(events.len(), 2);
         // Shutdown should come first (Critical priority)
-        assert!(matches!(events[0], KernelEvent::Shutdown));
-        assert!(matches!(events[1], KernelEvent::UserMessage(_)));
+        assert!(matches!(events[0].0, KernelEvent::Shutdown));
+        assert!(matches!(events[1].0, KernelEvent::UserMessage(_)));
     }
 
     #[tokio::test]
     async fn test_all_priority_tiers_interleaved() {
-        let q = EventQueue::new(100);
+        let q = InMemoryEventQueue::new(100);
 
         // Push events in reverse priority order across all tiers
         // Low: UserMessage, Timer
@@ -436,21 +463,21 @@ mod tests {
         assert_eq!(q.pending_count(), 0);
 
         // Critical tier first (index 0, 1)
-        assert!(matches!(events[0], KernelEvent::SendSignal { .. }));
-        assert!(matches!(events[1], KernelEvent::Shutdown));
+        assert!(matches!(events[0].0, KernelEvent::SendSignal { .. }));
+        assert!(matches!(events[1].0, KernelEvent::Shutdown));
 
         // Normal tier next (index 2, 3)
-        assert!(matches!(events[2], KernelEvent::Deliver(_)));
-        assert!(matches!(events[3], KernelEvent::ChildCompleted { .. }));
+        assert!(matches!(events[2].0, KernelEvent::Deliver(_)));
+        assert!(matches!(events[3].0, KernelEvent::ChildCompleted { .. }));
 
         // Low tier last (index 4, 5)
-        assert!(matches!(events[4], KernelEvent::UserMessage(_)));
-        assert!(matches!(events[5], KernelEvent::Timer { .. }));
+        assert!(matches!(events[4].0, KernelEvent::UserMessage(_)));
+        assert!(matches!(events[5].0, KernelEvent::Timer { .. }));
     }
 
     #[tokio::test]
     async fn test_multiple_drains_consume_different_events() {
-        let q = EventQueue::new(100);
+        let q = InMemoryEventQueue::new(100);
 
         for i in 0..6 {
             q.push(KernelEvent::UserMessage(test_inbound(&format!("msg{i}"))))
@@ -472,9 +499,9 @@ mod tests {
 
     #[test]
     fn test_event_queue_debug_format() {
-        let q = EventQueue::new(50);
+        let q = InMemoryEventQueue::new(50);
         let debug = format!("{:?}", q);
-        assert!(debug.contains("EventQueue"));
+        assert!(debug.contains("InMemoryEventQueue"));
         assert!(debug.contains("pending: 0"));
         assert!(debug.contains("capacity: 50"));
     }

@@ -53,7 +53,7 @@ pub struct ProcessHandle {
     /// The identity under which this agent runs.
     principal:   Principal,
     /// Reference to the unified event queue for pushing syscalls.
-    event_queue: Arc<EventQueue>,
+    event_queue: Arc<dyn EventQueue>,
 }
 
 impl ProcessHandle {
@@ -62,7 +62,7 @@ impl ProcessHandle {
         agent_id: AgentId,
         session_id: SessionId,
         principal: Principal,
-        event_queue: Arc<EventQueue>,
+        event_queue: Arc<dyn EventQueue>,
     ) -> Self {
         Self {
             agent_id,

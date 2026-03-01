@@ -258,7 +258,7 @@ impl crate::tool::AgentTool for SpawnTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event_queue::EventQueue;
+    use crate::event_queue::InMemoryEventQueue;
     use crate::process::{AgentId, SessionId};
     use crate::process::principal::Principal;
     use crate::tool::AgentTool;
@@ -268,7 +268,7 @@ mod tests {
             AgentId::new(),
             SessionId::new("test-session"),
             Principal::user("test-user"),
-            Arc::new(EventQueue::new(4096)),
+            Arc::new(InMemoryEventQueue::new(4096)),
         ))
     }
 

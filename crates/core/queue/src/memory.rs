@@ -12,24 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Kernel bootstrap — assembles a production-ready `Kernel` from external
-//! dependencies.
+//! Re-export of the kernel's in-memory event queue.
 //!
-//! The primary entry point is [`kernel::boot()`], which creates a
-//! fully-configured `Kernel` with its I/O subsystem (buses, stream hub,
-//! endpoint registry, ingress pipeline).
+//! This module is a convenience alias so consumers of `rara-queue` can
+//! refer to the memory-only queue without importing `rara-kernel` directly.
 
-pub mod bus;
-pub mod components;
-pub mod error;
-pub mod kernel;
-pub mod manifests;
-pub mod mcp;
-pub mod outbox;
-pub mod queue;
-pub mod resolvers;
-pub mod skills;
-pub mod stream;
-pub mod tools;
-pub mod audit;
-pub mod user_store;
+pub use rara_kernel::event_queue::InMemoryEventQueue as MemoryQueue;
