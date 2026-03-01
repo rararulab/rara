@@ -142,6 +142,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        audit::InMemoryAuditLog,
         defaults::{
             noop::{NoopEventBus, NoopGuard, NoopMemory, NoopSessionRepository},
             noop_user_store::NoopUserStore,
@@ -190,6 +191,8 @@ mod tests {
             stream_hub:             Arc::new(StreamHub::new(16)),
             outbound_bus:           Arc::new(InMemoryOutboundBus::new(64))
                 as Arc<dyn crate::io::bus::OutboundBus>,
+            audit_log:              Arc::new(InMemoryAuditLog::default())
+                as Arc<dyn crate::audit::AuditLog>,
         })
     }
 

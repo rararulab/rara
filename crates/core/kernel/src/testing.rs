@@ -34,6 +34,7 @@ use dashmap::DashMap;
 use tokio::sync::Semaphore;
 
 use crate::{
+    audit::{AuditLog, InMemoryAuditLog},
     defaults::{
         noop::{NoopEventBus, NoopGuard, NoopMemory, NoopSessionRepository},
         noop_user_store::NoopUserStore,
@@ -135,6 +136,8 @@ impl TestKernelBuilder {
             stream_hub:             Arc::new(StreamHub::new(16)),
             outbound_bus:           Arc::new(InMemoryOutboundBus::new(64))
                 as Arc<dyn OutboundBus>,
+            audit_log:              Arc::new(InMemoryAuditLog::default())
+                as Arc<dyn AuditLog>,
         });
 
         // Use private constructor approach: build Kernel from its inner field.

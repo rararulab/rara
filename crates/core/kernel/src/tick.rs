@@ -239,6 +239,7 @@ mod tests {
             Arc::new(StreamHub::new(16)),
             Arc::new(NoopIdentityResolver) as Arc<dyn IdentityResolver>,
             Arc::new(NoopSessionResolver) as Arc<dyn SessionResolver>,
+            Arc::new(crate::audit::InMemoryAuditLog::default()) as Arc<dyn crate::audit::AuditLog>,
         ))
     }
 

@@ -24,6 +24,7 @@
 use std::sync::Arc;
 
 use rara_kernel::{
+    audit::{AuditLog, InMemoryAuditLog},
     io::{
         bus::{InboundBus, OutboundBus},
         ingress::{IdentityResolver, SessionResolver},
@@ -81,6 +82,8 @@ pub struct BootConfig {
     pub event_bus: Option<Arc<dyn rara_kernel::event::EventBus>>,
     /// Guard (optional — defaults to NoopGuard).
     pub guard: Option<Arc<dyn rara_kernel::guard::Guard>>,
+    /// Audit log (optional — defaults to InMemoryAuditLog).
+    pub audit_log: Option<Arc<dyn AuditLog>>,
 }
 
 impl Default for BootConfig {
@@ -104,6 +107,7 @@ impl Default for BootConfig {
             memory:            None,
             event_bus:         None,
             guard:             None,
+            audit_log:         None,
         }
     }
 }
@@ -145,6 +149,9 @@ pub fn boot(config: BootConfig) -> Kernel {
     let guard = config
         .guard
         .unwrap_or_else(crate::components::default_guard);
+    let audit_log: Arc<dyn AuditLog> = config
+        .audit_log
+        .unwrap_or_else(|| Arc::new(InMemoryAuditLog::default()));
 
     tracing::info!(
         inbound_capacity = config.inbound_capacity,
@@ -168,6 +175,7 @@ pub fn boot(config: BootConfig) -> Kernel {
         stream_hub,
         identity_resolver,
         session_resolver,
+        audit_log,
     )
 }
 

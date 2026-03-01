@@ -29,6 +29,7 @@ use jiff::Timestamp;
 use tokio::sync::Semaphore;
 use super::{AgentHandle, EventOps, GuardOps, MemoryOps, ProcessOps};
 use crate::{
+    audit::{AuditEvent, AuditEventType, MemoryOp},
     error::{KernelError, Result},
     event::KernelEvent,
     guard::GuardContext,
@@ -141,6 +142,20 @@ impl ScopedKernelHandle {
         self.inner
             .process_table
             .set_state(target_id, ProcessState::Cancelled)?;
+
+        // Audit: ProcessKilled
+        crate::audit::record_async(
+            &self.inner.audit_log,
+            AuditEvent {
+                timestamp:  Timestamp::now(),
+                agent_id:   target_id,
+                session_id: self.session_id.clone(),
+                user_id:    self.principal.user_id.clone(),
+                event_type: AuditEventType::ProcessKilled { by: self.agent_id },
+                details:    serde_json::Value::Null,
+            },
+        );
+
         Ok(())
     }
 }
@@ -237,11 +252,46 @@ impl ProcessOps for ScopedKernelHandle {
 impl MemoryOps for ScopedKernelHandle {
     fn mem_store(&self, key: &str, value: serde_json::Value) -> Result<()> {
         self.inner.shared_kv.insert(key.to_string(), value);
+
+        // Audit: MemoryAccess (SharedStore)
+        crate::audit::record_async(
+            &self.inner.audit_log,
+            AuditEvent {
+                timestamp:  Timestamp::now(),
+                agent_id:   self.agent_id,
+                session_id: self.session_id.clone(),
+                user_id:    self.principal.user_id.clone(),
+                event_type: AuditEventType::MemoryAccess {
+                    operation: MemoryOp::SharedStore,
+                    key:       key.to_string(),
+                },
+                details:    serde_json::Value::Null,
+            },
+        );
+
         Ok(())
     }
 
     fn mem_recall(&self, key: &str) -> Result<Option<serde_json::Value>> {
-        Ok(self.inner.shared_kv.get(key).map(|v| v.value().clone()))
+        let result = self.inner.shared_kv.get(key).map(|v| v.value().clone());
+
+        // Audit: MemoryAccess (SharedRecall)
+        crate::audit::record_async(
+            &self.inner.audit_log,
+            AuditEvent {
+                timestamp:  Timestamp::now(),
+                agent_id:   self.agent_id,
+                session_id: self.session_id.clone(),
+                user_id:    self.principal.user_id.clone(),
+                event_type: AuditEventType::MemoryAccess {
+                    operation: MemoryOp::SharedRecall,
+                    key:       key.to_string(),
+                },
+                details:    serde_json::Value::Null,
+            },
+        );
+
+        Ok(result)
     }
 }
 
@@ -304,6 +354,7 @@ mod tests {
 
     fn make_kernel_inner() -> Arc<KernelInner> {
         use crate::{
+            audit::InMemoryAuditLog,
             defaults::{
                 noop::{NoopEventBus, NoopGuard, NoopMemory, NoopSessionRepository},
                 noop_user_store::NoopUserStore,
@@ -331,6 +382,8 @@ mod tests {
             stream_hub:             Arc::new(StreamHub::new(1)),
             outbound_bus:           Arc::new(InMemoryOutboundBus::new(1))
                 as Arc<dyn crate::io::bus::OutboundBus>,
+            audit_log:              Arc::new(InMemoryAuditLog::default())
+                as Arc<dyn crate::audit::AuditLog>,
         })
     }
 
