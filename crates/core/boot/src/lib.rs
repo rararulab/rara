@@ -19,17 +19,20 @@
 //! fully-configured `Kernel` with its I/O subsystem (buses, stream hub,
 //! endpoint registry, ingress pipeline).
 
+pub mod audit;
 pub mod bus;
+pub mod coding_task;
 pub mod components;
 pub mod error;
 pub mod kernel;
 pub mod manifests;
 pub mod mcp;
+pub mod memory;
 pub mod outbox;
+pub mod providers;
 pub mod queue;
 pub mod resolvers;
 pub mod skills;
 pub mod stream;
 pub mod tools;
-pub mod audit;
 pub mod user_store;

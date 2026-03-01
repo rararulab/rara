@@ -14,9 +14,8 @@
 
 //! Unified application state shared by workers and routes.
 
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
-use async_trait::async_trait;
 use opendal::Operator;
 use snafu::{ResultExt, Whatever};
 use tracing::info;
@@ -40,7 +39,7 @@ pub struct AppState {
     pub contact_repo:        rara_channels::telegram::contacts::repository::ContactRepository,
 
     // -- LLM provider --
-    pub provider_registry: std::sync::Arc<rara_kernel::provider::ProviderRegistry>,
+    pub provider_registry: Arc<rara_kernel::provider::ProviderRegistry>,
 
     // -- infra --
     pub object_store: Operator,
@@ -93,7 +92,8 @@ impl AppState {
 
         // -- LLM provider registry -------------------------------------------
 
-        let provider_registry = build_provider_registry(&*settings_provider).await;
+        let provider_registry =
+            rara_boot::providers::build_provider_registry(&*settings_provider).await;
 
         // -- domain services -------------------------------------------------
 
@@ -117,123 +117,68 @@ impl AppState {
             .await
             .whatever_context("Failed to initialize session repository")?,
         );
-        let composio_auth_provider: Arc<dyn rara_composio::ComposioAuthProvider> =
-            Arc::new(SettingsComposioAuthProvider::new(settings_provider.clone()));
+        let composio_auth_provider =
+            rara_boot::providers::composio_auth_provider(settings_provider.clone());
         let contact_repo =
             rara_channels::telegram::contacts::repository::ContactRepository::new(pool.clone());
+
+        // -- primitive tools (Layer 1) ----------------------------------------
+
         let mut tool_registry = rara_kernel::tool::ToolRegistry::new();
         for tool in rara_boot::tools::default_primitives(rara_boot::tools::PrimitiveDeps {
             settings:               settings_provider.clone(),
             object_store:           object_store.clone(),
-            composio_auth_provider: composio_auth_provider.clone(),
+            composio_auth_provider,
         }) {
             tool_registry.register_primitive(tool);
         }
-        // mem0 now always uses the configured service URL (Consul/runtime settings),
-        // never the legacy on-demand pod mode.
-        info!("mem0 using direct connection to {}", mem0_base_url);
-        let mem0 = rara_memory::Mem0Client::new(mem0_base_url);
-        let memos = rara_memory::MemosClient::new(memos_base_url, memos_token);
-        let hindsight = rara_memory::HindsightClient::new(hindsight_base_url, hindsight_bank_id);
-        let memory_manager = Arc::new(rara_memory::MemoryManager::new(
-            mem0,
-            memos,
-            hindsight,
-            "default".to_owned(),
-        ));
-        info!("memory manager initialized");
 
-        // Layer 2: Services
-        tool_registry.register_service(Arc::new(crate::tools::services::MemorySearchTool::new(
-            Arc::clone(&memory_manager),
-        )));
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::MemoryDeepRecallTool::new(Arc::clone(&memory_manager)),
-        ));
-        tool_registry.register_service(Arc::new(crate::tools::services::MemoryWriteTool::new(
-            Arc::clone(&memory_manager),
-        )));
-        tool_registry.register_service(Arc::new(crate::tools::services::MemoryAddFactTool::new(
-            Arc::clone(&memory_manager),
-        )));
-        // -- codex agent dispatch (PG-backed via rara-coding-task) --------
-        let workspace_manager =
-            rara_workspace::WorkspaceManager::new(rara_paths::workspaces_dir().clone());
+        // -- memory -----------------------------------------------------------
+
+        let memory_manager = rara_boot::memory::init_memory_manager(
+            mem0_base_url,
+            memos_base_url,
+            memos_token,
+            hindsight_base_url,
+            hindsight_bank_id,
+        );
+        let recall_engine = rara_boot::memory::init_recall_engine();
+
+        // -- coding task service ----------------------------------------------
+
         let default_repo_url = std::env::var("RARA_DEFAULT_REPO_URL")
             .unwrap_or_else(|_| "https://github.com/crrow/job".to_owned());
-        let coding_task_service = rara_coding_task::service::wire(
+        let coding_task_service = rara_boot::coding_task::init_coding_task_service(
             pool.clone(),
-            workspace_manager,
             notify_client.clone(),
             settings_provider.clone(),
             default_repo_url,
         );
-        let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        tool_registry.register_service(Arc::new(crate::tools::services::CodexRunTool::new(
-            coding_task_service.clone(),
-        )));
-        tool_registry.register_service(Arc::new(crate::tools::services::ScreenshotTool::new(
-            notify_client.clone(),
-            settings_provider.clone(),
-            project_root,
-        )));
-        tool_registry.register_service(Arc::new(crate::tools::services::CodexStatusTool::new(
-            coding_task_service.clone(),
-        )));
-        tool_registry.register_service(Arc::new(crate::tools::services::CodexListTool::new(
-            coding_task_service.clone(),
-        )));
 
-        // -- skills registry (PG cache + incremental FS sync) --------------------
+        // -- skills registry --------------------------------------------------
+
         let skill_registry = rara_boot::skills::init_skill_registry(pool.clone());
 
-        tool_registry.register_service(Arc::new(crate::tools::services::ListSkillsTool::new(
-            skill_registry.clone(),
-        )));
-        tool_registry.register_service(Arc::new(crate::tools::services::CreateSkillTool::new(
-            skill_registry.clone(),
-        )));
-        tool_registry.register_service(Arc::new(crate::tools::services::DeleteSkillTool::new(
-            skill_registry.clone(),
-        )));
-
-        // -- MCP manager -------------------------------------------------------
+        // -- MCP manager ------------------------------------------------------
 
         let mcp_manager = rara_boot::mcp::init_mcp_manager()
             .await
             .whatever_context("Failed to initialize MCP manager")?;
 
-        // -- MCP management tools -----------------------------------------------
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::InstallMcpServerTool::new(mcp_manager.clone()),
-        ));
-        tool_registry.register_service(Arc::new(crate::tools::services::ListMcpServersTool::new(
-            mcp_manager.clone(),
-        )));
-        tool_registry.register_service(Arc::new(crate::tools::services::RemoveMcpServerTool::new(
-            mcp_manager.clone(),
-        )));
+        // -- service tools (Layer 2) ------------------------------------------
 
-        // -- recall strategy engine -------------------------------------------
-
-        let recall_engine = Arc::new(rara_memory::RecallStrategyEngine::new(
-            rara_memory::recall_engine::default_rules(),
-        ));
-        info!("Recall strategy engine initialized with default rules");
-
-        // Register recall strategy tools.
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::RecallStrategyAddTool::new(Arc::clone(&recall_engine)),
-        ));
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::RecallStrategyListTool::new(Arc::clone(&recall_engine)),
-        ));
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::RecallStrategyUpdateTool::new(Arc::clone(&recall_engine)),
-        ));
-        tool_registry.register_service(Arc::new(
-            crate::tools::services::RecallStrategyRemoveTool::new(Arc::clone(&recall_engine)),
-        ));
+        rara_boot::tools::register_service_tools(
+            &mut tool_registry,
+            rara_boot::tools::ServiceToolDeps {
+                memory_manager:     memory_manager.clone(),
+                recall_engine,
+                coding_task_service: coding_task_service.clone(),
+                skill_registry:     skill_registry.clone(),
+                mcp_manager:        mcp_manager.clone(),
+                notify_client:      notify_client.clone(),
+                settings:           settings_provider.clone(),
+            },
+        );
 
         let tools = Arc::new(tool_registry);
 
@@ -244,11 +189,10 @@ impl AppState {
         );
         info!("Chat service initialized");
 
-        // -- kernel ---------------------------------------------------------------
+        // -- kernel -----------------------------------------------------------
 
         let agent_registry = rara_boot::manifests::load_default_registry();
 
-        // User store — PgUserStore backed by the shared pool
         let user_store: Arc<dyn rara_kernel::process::user::UserStore> =
             Arc::new(rara_boot::user_store::PgUserStore::new(pool.clone()));
         rara_boot::user_store::ensure_default_users(&pool)
@@ -413,96 +357,4 @@ fn merge_openapi_router(
     let (r, a) = domain_router.split_for_parts();
     *router = std::mem::take(router).merge(r);
     api.merge(a);
-}
-
-// ---------------------------------------------------------------------------
-// ProviderRegistry builder from settings
-// ---------------------------------------------------------------------------
-
-/// Build a [`ProviderRegistry`] from runtime settings.
-///
-/// Reads `llm.provider` (default: `"openrouter"`) and `llm.models.default`
-/// to determine the default provider and model. Then registers all
-/// available providers based on configured API keys / base URLs.
-async fn build_provider_registry(
-    settings: &dyn rara_domain_shared::settings::SettingsProvider,
-) -> Arc<rara_kernel::provider::ProviderRegistry> {
-    use rara_domain_shared::settings::keys;
-    use rara_kernel::provider::{OpenAiProvider, ProviderRegistryBuilder};
-
-    let default_provider = settings
-        .get(keys::LLM_PROVIDER)
-        .await
-        .unwrap_or_else(|| "openrouter".to_owned());
-    let default_model = settings
-        .get(keys::LLM_MODELS_DEFAULT)
-        .await
-        .unwrap_or_else(|| "openai/gpt-4o-mini".to_owned());
-
-    let mut builder = ProviderRegistryBuilder::new(&default_provider, &default_model);
-
-    // -- openrouter ---------------------------------------------------------
-    if let Some(api_key) = settings.get(keys::LLM_OPENROUTER_API_KEY).await {
-        builder = builder.provider(
-            "openrouter",
-            Arc::new(OpenAiProvider::new(api_key)),
-        );
-    }
-
-    // -- ollama -------------------------------------------------------------
-    {
-        let base_url = settings
-            .get(keys::LLM_OLLAMA_BASE_URL)
-            .await
-            .unwrap_or_else(|| "http://localhost:11434".to_owned());
-        let config = async_openai::config::OpenAIConfig::new()
-            .with_api_base(format!("{}/v1", base_url))
-            .with_api_key("ollama");
-        builder = builder.provider(
-            "ollama",
-            Arc::new(OpenAiProvider::with_config(config)),
-        );
-    }
-
-    // -- codex (OpenAI via OAuth) -------------------------------------------
-    if let Ok(Some(tokens)) = rara_codex_oauth::load_tokens() {
-        let config =
-            async_openai::config::OpenAIConfig::new().with_api_key(&tokens.access_token);
-        builder = builder.provider(
-            "codex",
-            Arc::new(OpenAiProvider::with_config(config)),
-        );
-    }
-
-    info!("provider registry: default_provider={default_provider}, default_model={default_model}");
-    Arc::new(builder.build())
-}
-
-/// Composio auth provider that reads credentials from runtime settings.
-#[derive(Clone)]
-struct SettingsComposioAuthProvider {
-    settings: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
-}
-
-impl SettingsComposioAuthProvider {
-    fn new(settings: Arc<dyn rara_domain_shared::settings::SettingsProvider>) -> Self {
-        Self { settings }
-    }
-}
-
-#[async_trait]
-impl rara_composio::ComposioAuthProvider for SettingsComposioAuthProvider {
-    async fn acquire_auth(&self) -> anyhow::Result<rara_composio::ComposioAuth> {
-        use rara_domain_shared::settings::keys;
-        let api_key = self
-            .settings
-            .get(keys::COMPOSIO_API_KEY)
-            .await
-            .ok_or_else(|| anyhow::anyhow!("composio.api_key is not configured in settings"))?;
-        let entity_id = self.settings.get(keys::COMPOSIO_ENTITY_ID).await;
-        Ok(rara_composio::ComposioAuth::new(
-            api_key,
-            entity_id.as_deref(),
-        ))
-    }
 }

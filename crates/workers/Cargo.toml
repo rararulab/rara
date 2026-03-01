@@ -13,8 +13,6 @@ description = "Background worker implementations for job automation"
 
 [dependencies]
 anyhow.workspace = true
-async-openai = { workspace = true }
-async-trait.workspace = true
 axum = { workspace = true }
 base.workspace = true
 chrono = { workspace = true }
@@ -27,18 +25,15 @@ opendal.workspace = true
 rara-backend-admin = { workspace = true }
 rara-boot = { workspace = true }
 rara-channels = { workspace = true }
-rara-codex-oauth = { workspace = true }
 rara-coding-task = { workspace = true }
-rara-composio = { workspace = true }
 rara-domain-shared = { workspace = true }
 rara-kernel = { workspace = true }
 rara-mcp = { workspace = true }
-rara-memory = { workspace = true, features = ["k8s"] }
+rara-memory = { workspace = true }
 rara-paths = { workspace = true }
 rara-server = { workspace = true }
 rara-sessions = { workspace = true }
 rara-skills = { workspace = true }
-rara-workspace = { workspace = true }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -50,7 +45,6 @@ tracing.workspace = true
 ulid.workspace = true
 utoipa.workspace = true
 utoipa-axum.workspace = true
-uuid.workspace = true
 yunara-store = { workspace = true }
 
 [lints]

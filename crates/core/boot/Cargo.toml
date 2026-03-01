@@ -18,20 +18,25 @@ k8s = ["rara-k8s"]
 [dependencies]
 anyhow.workspace = true
 argon2.workspace = true
+async-openai = { workspace = true }
 async-trait.workspace = true
 chrono.workspace = true
 jiff.workspace = true
 lettre.workspace = true
 opendal.workspace = true
 rara-agents.workspace = true
+rara-codex-oauth = { workspace = true }
+rara-coding-task = { workspace = true }
 rara-composio.workspace = true
 rara-domain-shared.workspace = true
 rara-k8s = { workspace = true, optional = true }
 rara-kernel.workspace = true
 rara-mcp.workspace = true
+rara-memory = { workspace = true }
 rara-paths.workspace = true
 rara-queue.workspace = true
 rara-skills.workspace = true
+rara-workspace = { workspace = true }
 rand.workspace = true
 reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }
