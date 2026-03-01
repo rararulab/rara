@@ -140,6 +140,15 @@ impl MemoryManager {
         }
     }
 
+    /// Access the mem0 client.
+    pub(crate) fn mem0(&self) -> &Mem0Client { &self.mem0 }
+
+    /// Access the Memos client.
+    pub(crate) fn memos(&self) -> &MemosClient { &self.memos }
+
+    /// Access the Hindsight client.
+    pub(crate) fn hindsight(&self) -> &HindsightClient { &self.hindsight }
+
     /// Search across mem0 and Hindsight in parallel, then fuse results with
     /// Reciprocal Rank Fusion (RRF).
     ///

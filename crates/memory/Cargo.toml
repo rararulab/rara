@@ -16,13 +16,17 @@ default = []
 k8s = ["rara-k8s"]
 
 [dependencies]
+async-trait.workspace = true
 common-worker.workspace = true
+jiff.workspace = true
+rara-kernel.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+uuid.workspace = true
 
 # K8s Pod management (optional, behind "k8s" feature)
 rara-k8s = { workspace = true, optional = true }
