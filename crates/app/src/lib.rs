@@ -374,14 +374,8 @@ impl AppConfig {
 
         // -- Auth service + routes -------------------------------------------
         let jwt_secret = self.jwt_secret.clone().unwrap_or_else(|| {
-            use rand::Rng;
-            let secret: String = rand::rng()
-                .sample_iter(&rand::distr::Alphanumeric)
-                .take(32)
-                .map(char::from)
-                .collect();
-            warn!("JWT_SECRET not configured, using random secret (tokens will not survive restarts)");
-            secret
+            warn!("JWT_SECRET not configured, using default secret 'rara'");
+            "rara".to_string()
         });
         let jwt_config = rara_domain_user::jwt::JwtConfig::new(jwt_secret.clone());
         let auth_service =

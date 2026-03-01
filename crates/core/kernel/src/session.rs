@@ -325,4 +325,20 @@ pub trait SessionRepository: Send + Sync + 'static {
         account: &str,
         chat_id: &str,
     ) -> Result<Option<ChannelBinding>, SessionError>;
+
+    /// Resolve a channel binding by `(channel_type, chat_id)` only, ignoring
+    /// the account dimension.
+    ///
+    /// This is used by the session resolver during ingress, where the bot
+    /// account is not yet known. Returns the most recently updated binding
+    /// if multiple accounts serve the same chat.
+    async fn get_binding_by_chat(
+        &self,
+        channel_type: &str,
+        chat_id: &str,
+    ) -> Result<Option<ChannelBinding>, SessionError> {
+        // Default: no binding support — callers fall back to raw chat_id.
+        let _ = (channel_type, chat_id);
+        Ok(None)
+    }
 }

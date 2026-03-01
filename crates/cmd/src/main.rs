@@ -239,6 +239,11 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
         StreamEvent::ToolCallStart { name, .. } => CliEvent::ToolCallStart { name },
         StreamEvent::ToolCallEnd { .. } => CliEvent::ToolCallEnd,
         StreamEvent::Progress { stage } => CliEvent::Progress { text: stage },
+        StreamEvent::TurnMetrics { duration_ms, iterations, tool_calls, model } => {
+            CliEvent::Progress {
+                text: format!("[{model}] {iterations} iterations, {tool_calls} tool calls, {duration_ms}ms"),
+            }
+        }
     }
 }
 

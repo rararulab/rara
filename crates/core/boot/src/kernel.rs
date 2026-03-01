@@ -145,7 +145,7 @@ pub fn boot(config: BootConfig) -> Kernel {
         .unwrap_or_else(|| Arc::new(DefaultIdentityResolver::new(config.user_store.clone())));
     let session_resolver: Arc<dyn SessionResolver> = config
         .session_resolver
-        .unwrap_or_else(|| Arc::new(DefaultSessionResolver::new()));
+        .unwrap_or_else(|| Arc::new(DefaultSessionResolver::new(config.session_repo.clone())));
 
     // Components (use overrides or boot defaults)
     let memory = config

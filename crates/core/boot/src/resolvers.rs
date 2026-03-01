@@ -29,6 +29,7 @@ use rara_kernel::{
         types::IngestError,
     },
     process::{SessionId, principal::UserId, user::UserStore},
+    session::SessionRepository,
 };
 use tracing::debug;
 
@@ -120,20 +121,20 @@ impl IdentityResolver for DefaultIdentityResolver {
 // DefaultSessionResolver
 // ---------------------------------------------------------------------------
 
-/// Simple session resolver that maps each platform chat to its own session
-/// using the format `"{channel_type}:{platform_chat_id}"`.
+/// Session resolver that first consults [`ChannelBinding`]s in the database
+/// and falls back to the raw `platform_chat_id` when no binding exists.
 ///
-/// This mirrors the `tg:<chat_id>` convention used by the Telegram
-/// adapter.
-pub struct DefaultSessionResolver;
-
-impl DefaultSessionResolver {
-    /// Create a new resolver.
-    pub fn new() -> Self { Self }
+/// This allows the Telegram `/new` and `/sessions` commands to redirect
+/// subsequent messages to the correct session after re-binding.
+pub struct DefaultSessionResolver {
+    session_repo: Arc<dyn SessionRepository>,
 }
 
-impl Default for DefaultSessionResolver {
-    fn default() -> Self { Self::new() }
+impl DefaultSessionResolver {
+    /// Create a new resolver backed by the given session repository.
+    pub fn new(session_repo: Arc<dyn SessionRepository>) -> Self {
+        Self { session_repo }
+    }
 }
 
 #[async_trait]
@@ -141,14 +142,43 @@ impl SessionResolver for DefaultSessionResolver {
     async fn resolve(
         &self,
         _user: &UserId,
-        _channel_type: ChannelType,
+        channel_type: ChannelType,
         platform_chat_id: Option<&str>,
     ) -> Result<SessionId, IngestError> {
-        // Use the raw platform chat ID as the session key so that it
-        // matches the key the frontend uses for REST API lookups.
         let chat_id = platform_chat_id.unwrap_or("default");
-        let session_id = SessionId::new(chat_id.to_string());
-        Ok(session_id)
+
+        // Try channel binding lookup first (honours /new and /sessions switch).
+        if let Some(chat_id_str) = platform_chat_id {
+            let ch_label = channel_type.to_string();
+            match self
+                .session_repo
+                .get_binding_by_chat(&ch_label, chat_id_str)
+                .await
+            {
+                Ok(Some(binding)) => {
+                    debug!(
+                        channel = %channel_type,
+                        chat_id = chat_id_str,
+                        bound_session = %binding.session_key,
+                        "session resolved via channel binding"
+                    );
+                    return Ok(SessionId::new(binding.session_key.as_str()));
+                }
+                Ok(None) => {
+                    // No binding — fall through to raw chat_id.
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        channel = %channel_type,
+                        chat_id = chat_id_str,
+                        "channel binding lookup failed, falling back to raw chat_id"
+                    );
+                }
+            }
+        }
+
+        Ok(SessionId::new(chat_id.to_string()))
     }
 }
 
@@ -156,8 +186,10 @@ impl SessionResolver for DefaultSessionResolver {
 mod tests {
     use super::*;
     use rara_kernel::{
+        channel::types::ChatMessage,
         error::Result as KResult,
         process::user::{KernelUser, PlatformIdentity},
+        session::{ChannelBinding, SessionEntry, SessionError, SessionKey},
     };
 
     // -- In-memory UserStore for unit tests ---------------------------------
@@ -225,6 +257,57 @@ mod tests {
         }
     }
 
+    // -- Fake SessionRepository for unit tests ------------------------------
+
+    struct FakeSessionRepo {
+        bindings: Vec<ChannelBinding>,
+    }
+
+    impl FakeSessionRepo {
+        fn empty() -> Self { Self { bindings: vec![] } }
+
+        fn with_binding(channel_type: &str, chat_id: &str, session_key: &str) -> Self {
+            let now = chrono::Utc::now();
+            Self {
+                bindings: vec![ChannelBinding {
+                    channel_type: channel_type.to_string(),
+                    account:      "bot".to_string(),
+                    chat_id:      chat_id.to_string(),
+                    session_key:  SessionKey::new(session_key),
+                    created_at:   now,
+                    updated_at:   now,
+                }],
+            }
+        }
+    }
+
+    #[async_trait]
+    impl SessionRepository for FakeSessionRepo {
+        async fn create_session(&self, _: &SessionEntry) -> Result<SessionEntry, SessionError> { unimplemented!() }
+        async fn get_session(&self, _: &SessionKey) -> Result<Option<SessionEntry>, SessionError> { Ok(None) }
+        async fn list_sessions(&self, _: i64, _: i64) -> Result<Vec<SessionEntry>, SessionError> { Ok(vec![]) }
+        async fn update_session(&self, _: &SessionEntry) -> Result<SessionEntry, SessionError> { unimplemented!() }
+        async fn delete_session(&self, _: &SessionKey) -> Result<(), SessionError> { Ok(()) }
+        async fn append_message(&self, _: &SessionKey, _: &ChatMessage) -> Result<ChatMessage, SessionError> { unimplemented!() }
+        async fn read_messages(&self, _: &SessionKey, _: Option<i64>, _: Option<i64>) -> Result<Vec<ChatMessage>, SessionError> { Ok(vec![]) }
+        async fn clear_messages(&self, _: &SessionKey) -> Result<(), SessionError> { Ok(()) }
+        async fn fork_session(&self, _: &SessionKey, _: &SessionKey, _: i64) -> Result<SessionEntry, SessionError> { unimplemented!() }
+        async fn bind_channel(&self, _: &ChannelBinding) -> Result<ChannelBinding, SessionError> { unimplemented!() }
+        async fn get_channel_binding(&self, _: &str, _: &str, _: &str) -> Result<Option<ChannelBinding>, SessionError> { Ok(None) }
+
+        async fn get_binding_by_chat(
+            &self,
+            channel_type: &str,
+            chat_id: &str,
+        ) -> Result<Option<ChannelBinding>, SessionError> {
+            Ok(self
+                .bindings
+                .iter()
+                .find(|b| b.channel_type == channel_type && b.chat_id == chat_id)
+                .cloned())
+        }
+    }
+
     // -- Tests --------------------------------------------------------------
 
     #[tokio::test]
@@ -276,19 +359,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_session_resolver_with_chat_id() {
-        let resolver = DefaultSessionResolver::new();
+    async fn test_session_resolver_no_binding_falls_back() {
+        let repo = Arc::new(FakeSessionRepo::empty());
+        let resolver = DefaultSessionResolver::new(repo);
         let user = UserId("telegram:12345".to_string());
         let session_id = resolver
             .resolve(&user, ChannelType::Telegram, Some("chat-1"))
             .await
             .unwrap();
+        // No binding → raw chat_id used
         assert_eq!(session_id.to_string(), "chat-1");
     }
 
     #[tokio::test]
+    async fn test_session_resolver_with_binding() {
+        let repo = Arc::new(FakeSessionRepo::with_binding(
+            "telegram",
+            "12345",
+            "tg-12345-1700000000",
+        ));
+        let resolver = DefaultSessionResolver::new(repo);
+        let user = UserId("root".to_string());
+        let session_id = resolver
+            .resolve(&user, ChannelType::Telegram, Some("12345"))
+            .await
+            .unwrap();
+        // Binding found → bound session key used
+        assert_eq!(session_id.to_string(), "tg-12345-1700000000");
+    }
+
+    #[tokio::test]
     async fn test_session_resolver_default_chat_id() {
-        let resolver = DefaultSessionResolver::new();
+        let repo = Arc::new(FakeSessionRepo::empty());
+        let resolver = DefaultSessionResolver::new(repo);
         let user = UserId("web:user-abc".to_string());
         let session_id = resolver
             .resolve(&user, ChannelType::Web, None)

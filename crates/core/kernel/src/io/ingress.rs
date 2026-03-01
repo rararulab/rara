@@ -182,6 +182,14 @@ impl IngressPipeline {
             metadata: raw.metadata,
         };
 
+        tracing::info!(
+            channel = ?msg.source.channel_type,
+            user_id = %msg.user.0,
+            session_id = %msg.session_id,
+            content = %msg.content.as_text(),
+            "received user message from channel",
+        );
+
         // 4. Publish to EventQueue.
         self.event_queue
             .push(crate::unified_event::KernelEvent::UserMessage(msg))

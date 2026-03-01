@@ -349,6 +349,26 @@ impl crate::repository::SessionRepository for PgSessionRepository {
 
         Ok(row.map(Into::into))
     }
+
+    #[instrument(skip(self))]
+    async fn get_binding_by_chat(
+        &self,
+        channel_type: &str,
+        chat_id: &str,
+    ) -> Result<Option<ChannelBinding>, SessionError> {
+        let row = sqlx::query_as::<_, ChannelBindingRow>(
+            r"SELECT * FROM channel_binding
+               WHERE channel_type = $1 AND chat_id = $2
+               ORDER BY updated_at DESC
+               LIMIT 1",
+        )
+        .bind(channel_type)
+        .bind(chat_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(Into::into))
+    }
 }
 
 // ---------------------------------------------------------------------------
