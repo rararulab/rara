@@ -123,6 +123,8 @@ pub enum ProcessState {
     Running,
     /// Agent is waiting for child agent results (mailbox still open).
     Waiting,
+    /// Agent is suspended by a Pause signal. Messages are buffered.
+    Paused,
     /// Agent completed successfully.
     Completed,
     /// Agent failed with an error.
@@ -185,7 +187,16 @@ pub enum ProcessMessage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Signal {
     /// Interrupt the current operation (cancel in-flight LLM call).
+    /// The process stays alive and waits for the next message.
     Interrupt,
+    /// Graceful shutdown: finish current operation (with timeout), then exit.
+    Terminate,
+    /// Immediate termination via CancellationToken (already handled).
+    Kill,
+    /// Suspend message processing. Incoming messages are buffered.
+    Pause,
+    /// Resume message processing. Buffered messages are drained.
+    Resume,
 }
 
 /// A running agent instance in the process table.
@@ -300,7 +311,7 @@ impl ProcessTable {
             ProcessState::Completed | ProcessState::Failed | ProcessState::Cancelled => {
                 entry.finished_at = Some(Timestamp::now());
             }
-            ProcessState::Running | ProcessState::Waiting => {
+            ProcessState::Running | ProcessState::Waiting | ProcessState::Paused => {
                 // Non-terminal states: do not set finished_at.
             }
         }
@@ -700,6 +711,35 @@ system_prompt: "Hello"
             process.finished_at.is_none(),
             "Waiting state should not set finished_at"
         );
+    }
+
+    #[test]
+    fn test_process_state_paused_does_not_set_finished_at() {
+        let table = ProcessTable::new();
+        let p = test_process("paused-agent", None);
+        let id = p.agent_id;
+        table.insert(p);
+
+        table.set_state(id, ProcessState::Paused).unwrap();
+
+        let process = table.get(id).unwrap();
+        assert_eq!(process.state, ProcessState::Paused);
+        assert!(
+            process.finished_at.is_none(),
+            "Paused state should not set finished_at"
+        );
+    }
+
+    #[test]
+    fn test_signal_variants() {
+        // Verify all signal variants exist and are comparable.
+        assert_eq!(Signal::Interrupt, Signal::Interrupt);
+        assert_eq!(Signal::Terminate, Signal::Terminate);
+        assert_eq!(Signal::Kill, Signal::Kill);
+        assert_eq!(Signal::Pause, Signal::Pause);
+        assert_eq!(Signal::Resume, Signal::Resume);
+        assert_ne!(Signal::Interrupt, Signal::Terminate);
+        assert_ne!(Signal::Pause, Signal::Resume);
     }
 
     #[test]

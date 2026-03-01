@@ -35,7 +35,7 @@ use crate::{
     io::types::InboundMessage,
     kernel::{KernelInner, SpawnPermits},
     process::{
-        AgentId, AgentManifest, ProcessInfo, ProcessState, SessionId,
+        AgentId, AgentManifest, ProcessInfo, ProcessMessage, ProcessState, SessionId, Signal,
         principal::Principal,
     },
     provider::LlmProviderLoaderRef,
@@ -143,6 +143,22 @@ impl ScopedKernelHandle {
             .set_state(target_id, ProcessState::Cancelled)?;
         Ok(())
     }
+
+    /// Send a signal to a process via its mailbox.
+    fn send_signal(&self, target_id: AgentId, signal: Signal) -> Result<()> {
+        let tx =
+            self.inner
+                .process_table
+                .get_mailbox(&target_id)
+                .ok_or(KernelError::ProcessNotFound {
+                    id: format!("no mailbox for agent {target_id}"),
+                })?;
+        tx.try_send(ProcessMessage::Signal(signal)).map_err(|_| {
+            KernelError::ProcessNotFound {
+                id: format!("mailbox full or closed for agent {target_id}"),
+            }
+        })
+    }
 }
 
 #[async_trait]
@@ -230,6 +246,39 @@ impl ProcessOps for ScopedKernelHandle {
     }
 
     fn kill(&self, agent_id: AgentId) -> Result<()> { self.cancel_process(agent_id) }
+
+    fn pause(&self, agent_id: AgentId) -> Result<()> {
+        // Verify the process exists.
+        self.inner
+            .process_table
+            .get(agent_id)
+            .ok_or(KernelError::ProcessNotFound {
+                id: agent_id.to_string(),
+            })?;
+        self.send_signal(agent_id, Signal::Pause)
+    }
+
+    fn resume(&self, agent_id: AgentId) -> Result<()> {
+        // Verify the process exists.
+        self.inner
+            .process_table
+            .get(agent_id)
+            .ok_or(KernelError::ProcessNotFound {
+                id: agent_id.to_string(),
+            })?;
+        self.send_signal(agent_id, Signal::Resume)
+    }
+
+    fn interrupt(&self, agent_id: AgentId) -> Result<()> {
+        // Verify the process exists.
+        self.inner
+            .process_table
+            .get(agent_id)
+            .ok_or(KernelError::ProcessNotFound {
+                id: agent_id.to_string(),
+            })?;
+        self.send_signal(agent_id, Signal::Interrupt)
+    }
 
     fn children(&self) -> Vec<ProcessInfo> { self.inner.process_table.children_of(self.agent_id) }
 }
@@ -769,6 +818,153 @@ mod tests {
             .publish("test_event", serde_json::json!({"key": "value"}))
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn test_pause_sends_signal() {
+        let inner = make_kernel_inner();
+        let target_id = AgentId::new();
+
+        inner.process_table.insert(AgentProcess {
+            agent_id:    target_id,
+            parent_id:   None,
+            session_id:  SessionId::new("test"),
+            manifest:    test_manifest("target"),
+            principal:   Principal::user("test"),
+            env:         AgentEnv::default(),
+            state:       ProcessState::Running,
+            created_at:  Timestamp::now(),
+            finished_at: None,
+            result:      None,
+        });
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        inner.process_table.set_mailbox(target_id, tx);
+
+        let handle = ScopedKernelHandle {
+            agent_id:        AgentId::new(),
+            session_id:      SessionId::new("test"),
+            principal:       Principal::user("test"),
+            manifest:        test_manifest("test"),
+            allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner:           Arc::clone(&inner),
+        };
+
+        handle.pause(target_id).unwrap();
+
+        // Verify the signal was received.
+        let msg = rx.try_recv().unwrap();
+        assert!(
+            matches!(msg, ProcessMessage::Signal(Signal::Pause)),
+            "expected Pause signal, got: {:?}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_resume_sends_signal() {
+        let inner = make_kernel_inner();
+        let target_id = AgentId::new();
+
+        inner.process_table.insert(AgentProcess {
+            agent_id:    target_id,
+            parent_id:   None,
+            session_id:  SessionId::new("test"),
+            manifest:    test_manifest("target"),
+            principal:   Principal::user("test"),
+            env:         AgentEnv::default(),
+            state:       ProcessState::Paused,
+            created_at:  Timestamp::now(),
+            finished_at: None,
+            result:      None,
+        });
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        inner.process_table.set_mailbox(target_id, tx);
+
+        let handle = ScopedKernelHandle {
+            agent_id:        AgentId::new(),
+            session_id:      SessionId::new("test"),
+            principal:       Principal::user("test"),
+            manifest:        test_manifest("test"),
+            allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner:           Arc::clone(&inner),
+        };
+
+        handle.resume(target_id).unwrap();
+
+        let msg = rx.try_recv().unwrap();
+        assert!(
+            matches!(msg, ProcessMessage::Signal(Signal::Resume)),
+            "expected Resume signal, got: {:?}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_interrupt_sends_signal() {
+        let inner = make_kernel_inner();
+        let target_id = AgentId::new();
+
+        inner.process_table.insert(AgentProcess {
+            agent_id:    target_id,
+            parent_id:   None,
+            session_id:  SessionId::new("test"),
+            manifest:    test_manifest("target"),
+            principal:   Principal::user("test"),
+            env:         AgentEnv::default(),
+            state:       ProcessState::Running,
+            created_at:  Timestamp::now(),
+            finished_at: None,
+            result:      None,
+        });
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        inner.process_table.set_mailbox(target_id, tx);
+
+        let handle = ScopedKernelHandle {
+            agent_id:        AgentId::new(),
+            session_id:      SessionId::new("test"),
+            principal:       Principal::user("test"),
+            manifest:        test_manifest("test"),
+            allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner:           Arc::clone(&inner),
+        };
+
+        handle.interrupt(target_id).unwrap();
+
+        let msg = rx.try_recv().unwrap();
+        assert!(
+            matches!(msg, ProcessMessage::Signal(Signal::Interrupt)),
+            "expected Interrupt signal, got: {:?}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_signal_to_nonexistent_process() {
+        let inner = make_kernel_inner();
+        let handle = ScopedKernelHandle {
+            agent_id:        AgentId::new(),
+            session_id:      SessionId::new("test"),
+            principal:       Principal::user("test"),
+            manifest:        test_manifest("test"),
+            allowed_tools:   vec![],
+            tool_registry:   Arc::new(ToolRegistry::new()),
+            child_semaphore: Arc::new(Semaphore::new(5)),
+            inner:           Arc::clone(&inner),
+        };
+
+        let fake_id = AgentId::new();
+        assert!(handle.pause(fake_id).is_err());
+        assert!(handle.resume(fake_id).is_err());
+        assert!(handle.interrupt(fake_id).is_err());
     }
 
     /// Helper to create a test manifest.
