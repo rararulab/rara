@@ -28,6 +28,7 @@
 //! | Guard       | [`Guard`]        | Tool approval + output moderation |
 //! | Event Bus   | [`EventBus`]     | Inter-component event broadcasting |
 
+pub mod approval;
 pub mod audit;
 pub mod channel;
 pub mod defaults;
