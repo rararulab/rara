@@ -48,6 +48,7 @@ use tracing::info;
 
 use crate::{
     channel::types::ChannelType,
+    device_registry::DeviceRegistry,
     error::{KernelError, Result},
     event::EventBus,
     guard::Guard,
@@ -108,6 +109,8 @@ pub(crate) struct KernelInner {
     pub stream_hub:             Arc<StreamHub>,
     /// Outbound bus for publishing final responses.
     pub outbound_bus:           Arc<dyn OutboundBus>,
+    /// Device registry for hot-pluggable devices (MCP servers, APIs, etc.).
+    pub device_registry:        Arc<DeviceRegistry>,
 }
 
 impl KernelInner {
@@ -613,6 +616,7 @@ impl Kernel {
             session_repo,
             stream_hub: stream_hub.clone(),
             outbound_bus: outbound_bus.clone(),
+            device_registry: Arc::new(DeviceRegistry::new()),
         });
 
         Self {
@@ -740,6 +744,9 @@ impl Kernel {
 
     /// Access the kernel config.
     pub fn config(&self) -> &KernelConfig { &self.config }
+
+    /// Access the device registry (for hot-plugging devices).
+    pub fn device_registry(&self) -> &Arc<DeviceRegistry> { &self.inner.device_registry }
 
     /// Access the shared KernelInner (for constructing ScopedKernelHandles
     /// externally).

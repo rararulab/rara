@@ -32,6 +32,8 @@
 pub mod agent_output;
 pub mod channel;
 pub mod defaults;
+pub mod device;
+pub mod device_registry;
 pub mod error;
 pub mod event;
 pub mod guard;

@@ -121,6 +121,18 @@ pub enum KernelError {
     /// User account is disabled.
     #[snafu(display("user disabled: {name}"))]
     UserDisabled { name: String },
+
+    /// Device already registered in the registry.
+    #[snafu(display("device already registered: {id}"))]
+    DeviceAlreadyRegistered { id: String },
+
+    /// Device not found in the registry.
+    #[snafu(display("device not found: {id}"))]
+    DeviceNotFound { id: String },
+
+    /// Device health check or shutdown failed.
+    #[snafu(display("device error: {message}"))]
+    Device { message: String },
 }
 
 impl From<crate::memory::MemoryError> for KernelError {

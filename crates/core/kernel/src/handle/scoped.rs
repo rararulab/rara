@@ -331,6 +331,7 @@ mod tests {
             stream_hub:             Arc::new(StreamHub::new(1)),
             outbound_bus:           Arc::new(InMemoryOutboundBus::new(1))
                 as Arc<dyn crate::io::bus::OutboundBus>,
+            device_registry:        Arc::new(crate::device_registry::DeviceRegistry::new()),
         })
     }
 

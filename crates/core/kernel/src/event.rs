@@ -53,6 +53,11 @@ pub enum KernelEvent {
         reason:    String,
         timestamp: Timestamp,
     },
+    /// A device event (connected, disconnected, error, tools changed).
+    Device {
+        event:     crate::device::DeviceEvent,
+        timestamp: Timestamp,
+    },
 }
 
 /// Filter for subscribing to specific events.
