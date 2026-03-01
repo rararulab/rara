@@ -531,15 +531,17 @@ impl Kernel {
     /// The default root agent name used when `target_agent` is `None`.
     const ROOT_AGENT_NAME: &'static str = "rara";
 
-    /// Handle a user message: route by target agent name, find or spawn a
-    /// process, then start an LLM turn.
+    /// Handle a user message: route by session first, then by target agent
+    /// name, find or spawn a process, then start an LLM turn.
     ///
-    /// Routing priority:
-    /// 1. If `target_agent` is set, look up by that name; otherwise use "rara".
-    /// 2. Find a running process with that name via `ProcessTable::find_by_name`.
-    /// 3. If not found, look up the manifest by name and auto-spawn.
-    /// 4. If no manifest exists, fall back to `resolve_manifest_for_auto_spawn`
-    ///    (model repo lookup) for the root agent, or error for unknown agents.
+    /// Routing priority (session-first):
+    /// 1. If the session already has a bound agent process, route to it
+    ///    (existing conversation continues).
+    /// 2. Otherwise, resolve the target agent manifest by name (or default
+    ///    to "rara") and spawn a new process instance for this session.
+    ///
+    /// This allows the same agent manifest (e.g., "rara") to have multiple
+    /// concurrent process instances, each bound to a different session.
     async fn handle_user_message(&self, msg: InboundMessage, runtimes: &RuntimeTable) {
         let session_id = msg.session_id.clone();
         let user = msg.user.clone();
@@ -548,8 +550,8 @@ impl Kernel {
             .as_deref()
             .unwrap_or(Self::ROOT_AGENT_NAME);
 
-        // 1. Try to find an existing process by agent name.
-        let agent_id = if let Some(process) = self.process_table().find_by_name(target_name) {
+        // 1. Session-first: check if this session already has a bound agent.
+        let agent_id = if let Some(process) = self.process_table().find_by_session(&session_id) {
             let aid = process.agent_id;
 
             // Check if process is paused or already running — buffer the event.
@@ -569,7 +571,7 @@ impl Kernel {
             }
             aid
         } else {
-            // 2. Agent not running — try to spawn it.
+            // 2. New session — resolve manifest by target_agent name, spawn new instance.
             let manifest = if let Some(m) = self.inner().manifest_loader.get(target_name) {
                 m.clone()
             } else if target_name == Self::ROOT_AGENT_NAME {
@@ -1029,8 +1031,8 @@ impl Kernel {
         );
 
         // Now push a UserMessage event for the initial input so it gets
-        // processed by handle_user_message. Route to the specific agent that
-        // was just spawned (by manifest name) so the name-based router finds it.
+        // processed by handle_user_message. The session-first router will find
+        // the just-spawned process via the session_index binding.
         let inbound = InboundMessage::synthetic_to(
             input,
             crate::process::principal::UserId("system".to_string()),

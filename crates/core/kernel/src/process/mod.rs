@@ -782,10 +782,19 @@ mod tests {
 
     /// Helper to create a test process.
     fn test_process(name: &str, parent_id: Option<AgentId>) -> AgentProcess {
+        test_process_with_session(name, parent_id, "test-session")
+    }
+
+    /// Helper to create a test process with a specific session ID.
+    fn test_process_with_session(
+        name: &str,
+        parent_id: Option<AgentId>,
+        session: &str,
+    ) -> AgentProcess {
         AgentProcess {
             agent_id:      AgentId::new(),
             parent_id,
-            session_id:    SessionId::new("test-session"),
+            session_id:    SessionId::new(session),
             manifest:      test_manifest(name),
             principal:     Principal::user("test-user"),
             env:           AgentEnv::default(),
@@ -1386,5 +1395,114 @@ system_prompt: "Hello"
         // Remove p2 — now name_index should be cleared.
         table.remove(id2);
         assert!(table.find_by_name("shared-name").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Multi-session tests — same agent manifest, multiple process instances
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_same_agent_multiple_sessions() {
+        let table = ProcessTable::new();
+
+        // Spawn "rara" for session-1.
+        let p1 = test_process_with_session("rara", None, "session-1");
+        let id1 = p1.agent_id;
+        let sid1 = p1.session_id.clone();
+        table.insert(p1);
+
+        // Spawn "rara" for session-2.
+        let p2 = test_process_with_session("rara", None, "session-2");
+        let id2 = p2.agent_id;
+        let sid2 = p2.session_id.clone();
+        table.insert(p2);
+
+        // Two different AgentProcess instances exist.
+        assert_ne!(id1, id2);
+        assert_eq!(table.list().len(), 2);
+
+        // Session index routes to the correct instance.
+        assert_eq!(table.find_by_session(&sid1).unwrap().agent_id, id1);
+        assert_eq!(table.find_by_session(&sid2).unwrap().agent_id, id2);
+
+        // Name index only points to the most recent insertion.
+        assert_eq!(table.find_by_name("rara").unwrap().agent_id, id2);
+
+        // Both processes can be queried independently.
+        let p1_info = table.get(id1).unwrap();
+        let p2_info = table.get(id2).unwrap();
+        assert_eq!(p1_info.manifest.name, "rara");
+        assert_eq!(p2_info.manifest.name, "rara");
+        assert_eq!(p1_info.session_id, sid1);
+        assert_eq!(p2_info.session_id, sid2);
+    }
+
+    #[test]
+    fn test_existing_session_routes_to_same_agent() {
+        let table = ProcessTable::new();
+
+        // Insert an agent bound to session-1.
+        let p = test_process_with_session("rara", None, "session-1");
+        let agent_id = p.agent_id;
+        let session_id = p.session_id.clone();
+        table.insert(p);
+
+        // Repeated lookups by session always return the same agent.
+        assert_eq!(table.find_by_session(&session_id).unwrap().agent_id, agent_id);
+        assert_eq!(table.find_by_session(&session_id).unwrap().agent_id, agent_id);
+
+        // A different session returns None (no agent bound to it).
+        let other_session = SessionId::new("session-2");
+        assert!(table.find_by_session(&other_session).is_none());
+    }
+
+    #[test]
+    fn test_multi_session_independent_lifecycle() {
+        let table = ProcessTable::new();
+
+        // Spawn two instances of "rara" on different sessions.
+        let p1 = test_process_with_session("rara", None, "session-a");
+        let id1 = p1.agent_id;
+        let sid_a = p1.session_id.clone();
+        table.insert(p1);
+
+        let p2 = test_process_with_session("rara", None, "session-b");
+        let id2 = p2.agent_id;
+        let sid_b = p2.session_id.clone();
+        table.insert(p2);
+
+        // Complete session-a's process. Session-b's process should be unaffected.
+        table.set_state(id1, ProcessState::Completed).unwrap();
+        assert_eq!(table.get(id1).unwrap().state, ProcessState::Completed);
+        assert_eq!(table.get(id2).unwrap().state, ProcessState::Running);
+
+        // Remove session-a's process. Session-b still exists.
+        table.remove(id1);
+        assert!(table.find_by_session(&sid_a).is_none());
+        assert_eq!(table.find_by_session(&sid_b).unwrap().agent_id, id2);
+        assert_eq!(table.list().len(), 1);
+    }
+
+    #[test]
+    fn test_multi_session_remove_preserves_name_index() {
+        let table = ProcessTable::new();
+
+        // Spawn "rara" for session-1 (name index points to id1).
+        let p1 = test_process_with_session("rara", None, "session-1");
+        let id1 = p1.agent_id;
+        table.insert(p1);
+
+        // Spawn "rara" for session-2 (name index now points to id2).
+        let p2 = test_process_with_session("rara", None, "session-2");
+        let id2 = p2.agent_id;
+        table.insert(p2);
+
+        // Remove the older process (id1). Name index should still point to id2.
+        table.remove(id1);
+        assert_eq!(table.find_by_name("rara").unwrap().agent_id, id2);
+
+        // Remove the newer process (id2). Name index should be cleared.
+        table.remove(id2);
+        assert!(table.find_by_name("rara").is_none());
     }
 }
