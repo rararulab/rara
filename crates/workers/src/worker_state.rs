@@ -370,6 +370,11 @@ impl AppState {
             self.kernel.clone(),
         ));
 
+        // Kernel observability routes (stats, processes, approvals, audit).
+        router = router.merge(rara_backend_admin::kernel::router::kernel_routes(
+            self.kernel.clone(),
+        ));
+
         (router, api)
     }
 

@@ -26,6 +26,7 @@ pub mod coding_task;
 pub mod contacts;
 pub mod interview;
 pub mod job;
+pub mod kernel;
 pub mod mcp;
 pub mod resume;
 pub mod scheduler;
