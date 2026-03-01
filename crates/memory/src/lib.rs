@@ -89,6 +89,7 @@
 pub mod error;
 pub mod fusion;
 pub mod hindsight_client;
+pub mod kernel_impl;
 pub mod manager;
 pub mod mem0_client;
 pub mod memos_client;
