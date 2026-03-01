@@ -80,3 +80,5 @@ deploy/helm/*/Chart.lock
 .pytest_cache/
 .venv/
 .worktrees/
+
+.playwright-mcp/
