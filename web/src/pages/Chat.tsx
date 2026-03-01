@@ -111,12 +111,18 @@ interface ActiveToolCall {
   name: string;
 }
 
+interface CompletedTool {
+  id: string;
+  name: string;
+}
+
 interface StreamState {
   isStreaming: boolean;
   text: string;
   reasoning: string;
   isThinking: boolean;
   activeTools: ActiveToolCall[];
+  completedTools: CompletedTool[];
   error: string | null;
 }
 
@@ -1031,6 +1037,38 @@ function ChangeModelDialog({
 // StreamingBubble — live assistant response during SSE streaming
 // ---------------------------------------------------------------------------
 
+function ActivityTree({ stream }: { stream: StreamState }) {
+  if (
+    !stream.isStreaming &&
+    stream.activeTools.length === 0 &&
+    stream.completedTools.length === 0
+  ) {
+    return null;
+  }
+  return (
+    <div className="mb-2 rounded-lg border border-border/50 bg-muted/30 px-3 py-2 text-xs font-mono text-muted-foreground">
+      {stream.isThinking && (
+        <div className="flex items-center gap-1.5">
+          <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-yellow-500" />
+          Thinking...
+        </div>
+      )}
+      {stream.completedTools.map((t) => (
+        <div key={t.id} className="flex items-center gap-1.5 ml-3">
+          <span className="text-green-500">&#10003;</span>
+          <span>{t.name}</span>
+        </div>
+      ))}
+      {stream.activeTools.map((t) => (
+        <div key={t.id} className="flex items-center gap-1.5 ml-3">
+          <span className="inline-block h-1.5 w-1.5 animate-spin rounded-full border border-blue-500 border-t-transparent" />
+          <span>{t.name}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function StreamingBubble({ stream }: { stream: StreamState }) {
   return (
     <div className="flex gap-3">
@@ -1089,6 +1127,7 @@ const INITIAL_STREAM_STATE: StreamState = {
   reasoning: "",
   isThinking: false,
   activeTools: [],
+  completedTools: [],
   error: null,
 };
 
@@ -1202,12 +1241,19 @@ function ChatThread({
                 ],
               }));
               break;
-            case "tool_call_end":
-              setStream((s) => ({
-                ...s,
-                activeTools: s.activeTools.filter((t) => t.id !== event.id),
-              }));
+            case "tool_call_end": {
+              setStream((s) => {
+                const finished = s.activeTools.find((t) => t.id === event.id);
+                return {
+                  ...s,
+                  activeTools: s.activeTools.filter((t) => t.id !== event.id),
+                  completedTools: finished
+                    ? [...s.completedTools, { id: finished.id, name: finished.name }]
+                    : s.completedTools,
+                };
+              });
               break;
+            }
             case "progress":
               setStream((s) => ({
                 ...s,
@@ -1480,6 +1526,13 @@ function ChatThread({
                 />
               );
             })}
+
+            {/* Activity tree (real-time tool call trace) */}
+            {(stream.isStreaming ||
+              stream.activeTools.length > 0 ||
+              stream.completedTools.length > 0) && (
+              <ActivityTree stream={stream} />
+            )}
 
             {/* Live streaming assistant bubble */}
             {(stream.isStreaming || stream.text || stream.error) && (
