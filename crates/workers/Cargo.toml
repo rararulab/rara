@@ -57,4 +57,3 @@ yunara-store = { workspace = true }
 workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true

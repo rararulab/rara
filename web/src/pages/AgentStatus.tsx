@@ -16,21 +16,15 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
-import type { PromptFileView, ScheduledTask } from "@/api/types";
+import type { ScheduledTask } from "@/api/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Activity, Bot, Clock } from "lucide-react";
+import { Activity, Clock } from "lucide-react";
 
 export default function AgentStatus() {
   const agentJobsQuery = useQuery({
     queryKey: ["scheduler", "tasks"],
     queryFn: () => api.get<ScheduledTask[]>("/api/v1/scheduler/tasks"),
-  });
-  const soulPromptQuery = useQuery({
-    queryKey: ["prompt-admin", "agent/soul.md"],
-    queryFn: () => api.get<PromptFileView>("/api/v1/prompts/agent/soul.md"),
-    retry: false,
   });
 
   const agentJobCount = agentJobsQuery.data?.length ?? 0;
@@ -40,40 +34,11 @@ export default function AgentStatus() {
       <div>
         <h2 className="text-xl font-bold">Agent Status</h2>
         <p className="text-muted-foreground mt-1 text-sm">
-          Overview of the proactive agent and its scheduled tasks.
+          Overview of the agent and its scheduled tasks.
         </p>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {/* Proactive Agent Card */}
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">
-              Proactive Agent
-            </CardTitle>
-            <Bot className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            {soulPromptQuery.isLoading ? (
-              <Skeleton className="h-6 w-24" />
-            ) : (
-              <Badge
-                variant={
-                  soulPromptQuery.data?.content ? "default" : "secondary"
-                }
-              >
-                {soulPromptQuery.data?.content
-                  ? "Configured"
-                  : "Not Configured"}
-              </Badge>
-            )}
-            <p className="text-xs text-muted-foreground mt-2">
-              Soul prompt:{" "}
-              {soulPromptQuery.data?.content ? "Loaded" : "Not set"}
-            </p>
-          </CardContent>
-        </Card>
-
         {/* Scheduler Job Count Card */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">

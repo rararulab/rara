@@ -17,14 +17,14 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
-import type { AgentJob, AgentTrigger, ScheduledTask, TaskRunRecord } from "@/api/types";
+import type { ScheduledTask, TaskRunRecord } from "@/api/types";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
-import { Bot, Clock, History, CalendarClock, Timer, Repeat } from "lucide-react";
+import { Clock, History, CalendarClock } from "lucide-react";
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return "-";
@@ -214,83 +214,6 @@ function TaskCard({ task }: { task: ScheduledTask }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Agent Jobs (created by AI agent)
-// ---------------------------------------------------------------------------
-
-function formatTrigger(trigger: AgentTrigger): { icon: React.ReactNode; label: string } {
-  switch (trigger.type) {
-    case "cron":
-      return { icon: <Clock className="h-3.5 w-3.5" />, label: trigger.expr };
-    case "delay":
-      return { icon: <Timer className="h-3.5 w-3.5" />, label: `once at ${new Date(trigger.run_at).toLocaleString()}` };
-    case "interval":
-      return {
-        icon: <Repeat className="h-3.5 w-3.5" />,
-        label: trigger.seconds >= 3600
-          ? `every ${(trigger.seconds / 3600).toFixed(1)}h`
-          : trigger.seconds >= 60
-            ? `every ${Math.round(trigger.seconds / 60)}m`
-            : `every ${trigger.seconds}s`,
-      };
-  }
-}
-
-function AgentJobCard({ job }: { job: AgentJob }) {
-  const trigger = formatTrigger(job.trigger);
-
-  return (
-    <Card className="app-surface border-border/60">
-      <CardContent className="p-5 md:p-6">
-        <div className="space-y-4">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <p className="min-w-0 flex-1 text-base leading-7 text-foreground">
-              {job.message}
-            </p>
-            <Badge
-              variant={job.enabled ? "default" : "outline"}
-              className="shrink-0 self-start px-3 py-1 text-sm"
-            >
-              {job.enabled ? "Active" : "Disabled"}
-            </Badge>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="inline-flex items-center gap-1.5 rounded-lg border border-border/70 bg-background/60 px-2.5 py-1 text-muted-foreground">
-              {trigger.icon}
-              <span className="text-xs uppercase tracking-wide">Schedule</span>
-            </span>
-            <code className="rounded-lg border border-border/70 bg-muted/50 px-2.5 py-1.5 text-xs leading-5 text-foreground">
-              {trigger.label}
-            </code>
-          </div>
-
-          <div className="grid grid-cols-1 gap-2 text-sm text-muted-foreground md:grid-cols-2">
-            <div className="rounded-lg bg-background/40 px-3 py-2">
-              <span className="mr-1 text-xs uppercase tracking-wide text-muted-foreground/80">
-                Created
-              </span>
-              <span className="font-medium text-foreground/90">{formatDate(job.created_at)}</span>
-            </div>
-            <div className="rounded-lg bg-background/40 px-3 py-2">
-              <span className="mr-1 text-xs uppercase tracking-wide text-muted-foreground/80">
-                Last Run
-              </span>
-              <span className="font-medium text-foreground/90">
-                {job.last_run_at ? formatDate(job.last_run_at) : "-"}
-              </span>
-            </div>
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Exported panels for use in tab containers
-// ---------------------------------------------------------------------------
-
 /** Domain scheduled tasks panel (cron tasks with history). */
 export function DomainSchedulerPanel() {
   const tasksQuery = useQuery({
@@ -337,82 +260,19 @@ export function DomainSchedulerPanel() {
   );
 }
 
-/** Agent jobs panel (AI agent-created scheduled jobs). */
-export function AgentJobsPanel() {
-  const agentJobsQuery = useQuery({
-    queryKey: ["agent-scheduler", "jobs"],
-    queryFn: () => api.get<AgentJob[]>("/api/v1/agent-scheduler/jobs"),
-    refetchInterval: 30_000,
-  });
-
-  return (
-    <div className="space-y-4">
-      {agentJobsQuery.isLoading ? (
-        <div className="space-y-4">
-          {Array.from({ length: 2 }).map((_, i) => (
-            <Card key={i} className="data-panel">
-              <CardContent className="space-y-4 p-5 md:p-6">
-                <div className="flex items-start justify-between gap-4">
-                  <Skeleton className="h-6 w-3/4" />
-                  <Skeleton className="h-8 w-20 rounded-full" />
-                </div>
-                <Skeleton className="h-8 w-64 rounded-lg" />
-                <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-                  <Skeleton className="h-10 w-full rounded-lg" />
-                  <Skeleton className="h-10 w-full rounded-lg" />
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      ) : !agentJobsQuery.data?.length ? (
-        <Card className="empty-state-card">
-          <CardContent className="flex flex-col items-center justify-center py-0 text-muted-foreground">
-            <Bot className="h-10 w-10 mb-3 opacity-30" />
-            <p className="text-base">No agent jobs yet. The agent can create scheduled tasks via tools.</p>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-4">
-          {agentJobsQuery.data.map((job) => (
-            <AgentJobCard key={job.id} job={job} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function Scheduler() {
   return (
-    <div className="space-y-8">
-      <div className="space-y-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <Bot className="h-5 w-5 text-muted-foreground" />
-            <h1 className="text-2xl font-bold">Agent Jobs</h1>
-          </div>
-          <p className="text-muted-foreground mt-1">
-            Scheduled jobs created by the AI agent.
-          </p>
+    <div className="space-y-4">
+      <div>
+        <div className="flex items-center gap-2">
+          <CalendarClock className="h-5 w-5 text-muted-foreground" />
+          <h2 className="text-xl font-bold">Scheduled Tasks</h2>
         </div>
-        <AgentJobsPanel />
+        <p className="text-muted-foreground mt-1">
+          System cron tasks and their run history.
+        </p>
       </div>
-
-      <Separator />
-
-      <div className="space-y-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <CalendarClock className="h-5 w-5 text-muted-foreground" />
-            <h2 className="text-xl font-bold">Scheduled Tasks</h2>
-          </div>
-          <p className="text-muted-foreground mt-1">
-            System cron tasks and their run history.
-          </p>
-        </div>
-        <DomainSchedulerPanel />
-      </div>
+      <DomainSchedulerPanel />
     </div>
   );
 }

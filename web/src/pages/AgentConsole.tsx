@@ -20,7 +20,6 @@ import {
   Activity,
   Bot,
   Briefcase,
-  Clock,
   Ellipsis,
   Layers,
   Settings as SettingsIcon,
@@ -28,7 +27,6 @@ import {
 } from "lucide-react";
 import Chat from "@/pages/Chat";
 import AgentStatus from "@/pages/AgentStatus";
-import { AgentJobsPanel } from "@/pages/Scheduler";
 import CodingTasks from "@/pages/CodingTasks";
 import { cn } from "@/lib/utils";
 import { useServerStatus } from "@/hooks/use-server-status";
@@ -41,11 +39,6 @@ const TOP_TABS = [
 const OPS_TABS = [
   { key: "status", label: "Status", icon: <Activity className="h-4 w-4" /> },
   { key: "tasks", label: "Tasks", icon: <Terminal className="h-4 w-4" /> },
-  {
-    key: "scheduler",
-    label: "Scheduler",
-    icon: <Clock className="h-4 w-4" />,
-  },
 ];
 
 const OPS_UTILITY_ITEMS = [
@@ -272,11 +265,6 @@ export default function AgentConsole() {
               {activeOpsTab === "tasks" && (
                 <div className="w-full p-6">
                   <CodingTasks />
-                </div>
-              )}
-              {activeOpsTab === "scheduler" && (
-                <div className="w-full p-6">
-                  <AgentJobsPanel />
                 </div>
               )}
             </div>

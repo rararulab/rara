@@ -14,13 +14,9 @@
 
 //! Unified application state shared by workers and routes.
 
-use std::{
-    path::PathBuf,
-    sync::{Arc, RwLock},
-};
+use std::{path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
-use common_worker::IntervalOrNotifyHandle;
 use opendal::Operator;
 use snafu::{ResultExt, Whatever};
 use tracing::info;
@@ -55,9 +51,6 @@ pub struct AppState {
     // -- memory --
     pub memory_manager: Arc<rara_memory::MemoryManager>,
 
-    // -- agent scheduler --
-    pub agent_scheduler: Arc<crate::agent_scheduler::AgentScheduler>,
-
     // -- skills --
     pub skill_registry: rara_skills::registry::InMemoryRegistry,
 
@@ -82,8 +75,6 @@ pub struct AppState {
     // -- tool registry --
     pub tool_registry: Arc<rara_kernel::tool::ToolRegistry>,
 
-    // -- worker coordination --
-    pub proactive_notify: Arc<RwLock<Option<IntervalOrNotifyHandle>>>,
 }
 
 /// Build the system prompt for background worker agents.
@@ -213,23 +204,6 @@ impl AppState {
         tool_registry.register_service(Arc::new(crate::tools::services::MemoryAddFactTool::new(
             Arc::clone(&memory_manager),
         )));
-        // -- agent scheduler -------------------------------------------------
-        let agent_scheduler = Arc::new(crate::agent_scheduler::AgentScheduler::new(
-            rara_paths::agent_jobs_file().clone(),
-        ));
-        agent_scheduler.load().await.ok(); // tolerate missing file
-        info!("Agent scheduler loaded");
-
-        tool_registry.register_service(Arc::new(crate::tools::services::ScheduleAddTool::new(
-            agent_scheduler.clone(),
-        )));
-        tool_registry.register_service(Arc::new(crate::tools::services::ScheduleListTool::new(
-            agent_scheduler.clone(),
-        )));
-        tool_registry.register_service(Arc::new(crate::tools::services::ScheduleRemoveTool::new(
-            agent_scheduler.clone(),
-        )));
-
         // -- codex agent dispatch (PG-backed via rara-coding-task) --------
         let workspace_manager =
             rara_workspace::WorkspaceManager::new(rara_paths::workspaces_dir().clone());
@@ -386,7 +360,6 @@ impl AppState {
             llm_provider,
             object_store,
             memory_manager,
-            agent_scheduler,
             skill_registry,
             mcp_manager,
             pipeline_service,
@@ -395,7 +368,6 @@ impl AppState {
             user_store,
             prompt_repo,
             tool_registry: tools,
-            proactive_notify: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -455,11 +427,6 @@ impl AppState {
             rara_backend_admin::chat::routes(self.chat_service.clone()),
         );
         merge_openapi_router(&mut router, &mut api, crate::system_routes::routes());
-        merge_openapi_router(
-            &mut router,
-            &mut api,
-            crate::agent_scheduler_routes::routes(self.agent_scheduler.clone()),
-        );
 
         // skill_routes returns a plain axum::Router (no OpenAPI metadata).
         router = router.merge(rara_backend_admin::skills::skill_routes(

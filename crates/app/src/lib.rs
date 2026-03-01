@@ -301,35 +301,9 @@ impl AppConfig {
         // Read worker interval settings (applied at startup; restart to change).
         let worker_cfg = app_state.settings_svc.current().workers;
         info!(
-            agent_scheduler_secs = worker_cfg.agent_scheduler_interval_secs,
             pipeline_scheduler_secs = worker_cfg.pipeline_scheduler_interval_secs,
-            proactive_hours = worker_cfg.proactive_agent_interval_hours,
             "Worker intervals from settings"
         );
-
-        let proactive_handle = worker_manager
-            .fallible_worker(rara_workers::proactive::ProactiveAgentWorker)
-            .name("proactive-agent")
-            .eager()
-            .interval_or_notify(Duration::from_secs(
-                worker_cfg.proactive_agent_interval_hours * 3600,
-            ))
-            .spawn();
-        if let Ok(mut guard) = app_state.proactive_notify.write() {
-            *guard = Some(proactive_handle);
-        }
-
-        // -- agent scheduler worker -------------------------------------------
-
-        let _scheduler_handle = worker_manager
-            .fallible_worker(rara_workers::scheduled_agent::AgentSchedulerWorker::new(
-                app_state.agent_scheduler.clone(),
-            ))
-            .name("agent-scheduler")
-            .interval(Duration::from_secs(
-                worker_cfg.agent_scheduler_interval_secs,
-            ))
-            .spawn();
 
         // -- pipeline scheduler worker (checks cron from settings) ------------
 

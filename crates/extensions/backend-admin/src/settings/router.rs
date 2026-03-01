@@ -120,12 +120,10 @@ pub struct AgentSettingsAdminPatch {
 impl From<AgentSettingsAdminPatch> for AgentRuntimeSettingsPatch {
     fn from(value: AgentSettingsAdminPatch) -> Self {
         Self {
-            proactive_enabled: None,
-            proactive_cron:    None,
-            memory:            None,
-            composio:          value.composio.map(Into::into),
-            gmail:             None,
-            max_iterations:    None,
+            memory:         None,
+            composio:       value.composio.map(Into::into),
+            gmail:          None,
+            max_iterations: None,
         }
     }
 }

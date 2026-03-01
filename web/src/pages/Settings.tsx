@@ -999,7 +999,7 @@ export default function Settings() {
     : updateMutation.isPending;
 
   /** Well-known model keys displayed in the settings UI */
-  const MODEL_KEYS = ["default", "chat", "job", "pipeline", "proactive", "scheduled"] as const;
+  const MODEL_KEYS = ["default", "chat", "job", "pipeline"] as const;
 
   /** Update a single key in the modelMap */
   const setModelKey = (key: string, value: string | undefined) => {

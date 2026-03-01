@@ -1636,7 +1636,7 @@ export default function Chat({
     queryFn: fetchSessions,
   });
 
-  // Hide internal agent sessions (e.g. "agent:proactive") from the UI
+  // Hide internal agent sessions from the UI
   const sessions = (sessionsQuery.data ?? []).filter(
     (s) => !s.key.startsWith("agent:"),
   );

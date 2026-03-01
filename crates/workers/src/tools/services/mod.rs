@@ -17,7 +17,6 @@
 mod codex;
 mod mcp_tools;
 mod memory_tools;
-mod schedule_tools;
 mod screenshot;
 mod skill_tools;
 
@@ -28,6 +27,5 @@ pub use memory_tools::{
     RecallStrategyAddTool, RecallStrategyListTool, RecallStrategyRemoveTool,
     RecallStrategyUpdateTool,
 };
-pub use schedule_tools::{ScheduleAddTool, ScheduleListTool, ScheduleRemoveTool};
 pub use screenshot::ScreenshotTool;
 pub use skill_tools::{CreateSkillTool, DeleteSkillTool, ListSkillsTool};

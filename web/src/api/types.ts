@@ -143,22 +143,6 @@ export interface ScheduledTask {
   created_at: string;
 }
 
-// Agent Scheduler (jobs created by the AI agent)
-export interface AgentJob {
-  id: string;
-  message: string;
-  trigger: AgentTrigger;
-  session_key: string;
-  created_at: string;
-  last_run_at: string | null;
-  enabled: boolean;
-}
-
-export type AgentTrigger =
-  | { type: "cron"; expr: string }
-  | { type: "delay"; run_at: string }
-  | { type: "interval"; seconds: number };
-
 export interface TaskRunRecord {
   id: string;
   task_id: string;
