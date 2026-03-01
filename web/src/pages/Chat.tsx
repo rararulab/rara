@@ -1137,105 +1137,129 @@ function ChatThread({
   });
 
   // WebSocket connection management
+  // Uses a cleanedUp flag to handle React StrictMode double-mount gracefully,
+  // and auto-reconnects on transient disconnects.
   useEffect(() => {
     if (!sessionKey) return;
+    let cleanedUp = false;
 
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const baseUrl = import.meta.env.VITE_API_URL || "";
-    const host = baseUrl ? new URL(baseUrl).host : window.location.host;
-    const url = `${protocol}//${host}/api/v1/kernel/chat/ws?session_key=${encodeURIComponent(sessionKey)}&user_id=web-user`;
+    function connect() {
+      if (cleanedUp) return;
 
-    const ws = new WebSocket(url);
-    wsRef.current = ws;
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const baseUrl = import.meta.env.VITE_API_URL || "";
+      const host = baseUrl ? new URL(baseUrl).host : window.location.host;
+      const url = `${protocol}//${host}/api/v1/kernel/chat/ws?session_key=${encodeURIComponent(sessionKey)}&user_id=web-user`;
 
-    ws.onmessage = (e) => {
-      try {
-        const event = JSON.parse(e.data) as WebEvent;
-        switch (event.type) {
-          case "text_delta":
-            setStream((s) => ({ ...s, text: s.text + event.text }));
-            break;
-          case "reasoning_delta":
-            setStream((s) => ({
-              ...s,
-              reasoning: s.reasoning + event.text,
-            }));
-            break;
-          case "typing":
-            setStream((s) => ({ ...s, isThinking: true }));
-            break;
-          case "tool_call_start":
-            setStream((s) => ({
-              ...s,
-              activeTools: [
-                ...s.activeTools,
-                { id: event.id, name: event.name },
-              ],
-            }));
-            break;
-          case "tool_call_end":
-            setStream((s) => ({
-              ...s,
-              activeTools: s.activeTools.filter((t) => t.id !== event.id),
-            }));
-            break;
-          case "progress":
-            setStream((s) => ({
-              ...s,
-              isThinking: event.stage === "thinking",
-            }));
-            break;
-          case "done":
-          case "message":
-            setStream(INITIAL_STREAM_STATE);
-            queryClient.invalidateQueries({
-              queryKey: ["chat-messages", sessionKey],
-            });
-            queryClient.setQueryData<ChatSession[]>(
-              ["chat-sessions"],
-              (old) =>
-                old?.map((s) =>
-                  s.key === sessionKey
-                    ? {
-                        ...s,
-                        message_count: s.message_count + 2,
-                        updated_at: new Date().toISOString(),
-                      }
-                    : s,
-                ),
-            );
-            break;
-          case "error":
-            setStream((s) => ({
-              ...s,
-              isStreaming: false,
-              error: event.message,
-            }));
-            queryClient.invalidateQueries({
-              queryKey: ["chat-messages", sessionKey],
-            });
-            break;
+      const ws = new WebSocket(url);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        if (cleanedUp) {
+          ws.close();
+          return;
         }
-      } catch {
-        // Ignore non-JSON messages
-      }
-    };
+      };
 
-    ws.onerror = () => {
-      setStream((s) => ({
-        ...s,
-        isStreaming: false,
-        error: "WebSocket connection error",
-      }));
-    };
+      ws.onmessage = (e) => {
+        if (cleanedUp) return;
+        try {
+          const event = JSON.parse(e.data) as WebEvent;
+          switch (event.type) {
+            case "text_delta":
+              setStream((s) => ({ ...s, text: s.text + event.text }));
+              break;
+            case "reasoning_delta":
+              setStream((s) => ({
+                ...s,
+                reasoning: s.reasoning + event.text,
+              }));
+              break;
+            case "typing":
+              setStream((s) => ({ ...s, isThinking: true }));
+              break;
+            case "tool_call_start":
+              setStream((s) => ({
+                ...s,
+                activeTools: [
+                  ...s.activeTools,
+                  { id: event.id, name: event.name },
+                ],
+              }));
+              break;
+            case "tool_call_end":
+              setStream((s) => ({
+                ...s,
+                activeTools: s.activeTools.filter((t) => t.id !== event.id),
+              }));
+              break;
+            case "progress":
+              setStream((s) => ({
+                ...s,
+                isThinking: event.stage === "thinking",
+              }));
+              break;
+            case "done":
+            case "message":
+              setStream(INITIAL_STREAM_STATE);
+              queryClient.invalidateQueries({
+                queryKey: ["chat-messages", sessionKey],
+              });
+              queryClient.setQueryData<ChatSession[]>(
+                ["chat-sessions"],
+                (old) =>
+                  old?.map((s) =>
+                    s.key === sessionKey
+                      ? {
+                          ...s,
+                          message_count: s.message_count + 2,
+                          updated_at: new Date().toISOString(),
+                        }
+                      : s,
+                  ),
+              );
+              break;
+            case "error":
+              setStream((s) => ({
+                ...s,
+                isStreaming: false,
+                error: event.message,
+              }));
+              queryClient.invalidateQueries({
+                queryKey: ["chat-messages", sessionKey],
+              });
+              break;
+          }
+        } catch {
+          // Ignore non-JSON messages
+        }
+      };
 
-    ws.onclose = () => {
-      wsRef.current = null;
-    };
+      ws.onerror = () => {
+        if (cleanedUp) return;
+        setStream((s) => ({
+          ...s,
+          isStreaming: false,
+          error: "WebSocket connection error",
+        }));
+      };
+
+      ws.onclose = () => {
+        wsRef.current = null;
+        if (cleanedUp) return;
+        // Auto-reconnect after delay
+        setTimeout(() => connect(), 2000);
+      };
+    }
+
+    connect();
 
     return () => {
-      ws.close();
-      wsRef.current = null;
+      cleanedUp = true;
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
     };
   }, [sessionKey, queryClient]);
 
