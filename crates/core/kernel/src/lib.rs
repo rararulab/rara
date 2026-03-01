@@ -45,7 +45,7 @@ pub mod memory;
 pub mod model;
 pub mod model_repo;
 pub mod process;
-pub mod process_loop;
+pub(crate) mod agent_turn;
 pub mod prompt;
 pub mod provider;
 pub mod runner;

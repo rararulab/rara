@@ -480,19 +480,13 @@ impl KernelInner {
                                     inner.stream_hub.open(session_id.clone());
 
                                 // === Agent execution (cancellable by interrupt) ===
-                                let current_turn_cancel = turn_cancel.clone();
-                                let turn_result = tokio::select! {
-                                    result = crate::process_loop::run_agent_turn(
-                                        &handle,
-                                        user_text,
-                                        history,
-                                        &stream_handle,
-                                    ) => result,
-                                    _ = current_turn_cancel.cancelled() => {
-                                        info!(agent_id = %agent_id, "LLM turn interrupted");
-                                        Err("interrupted by user".to_string())
-                                    }
-                                };
+                                let turn_result = crate::agent_turn::run_inline_agent_loop(
+                                    &handle,
+                                    user_text,
+                                    history,
+                                    &stream_handle,
+                                    &turn_cancel,
+                                ).await;
 
                                 // Close stream.
                                 inner.stream_hub.close(stream_handle.stream_id());
@@ -656,18 +650,14 @@ impl KernelInner {
                                     agent_id = %agent_id,
                                     child_id = %child_id,
                                     output_len = result.output.len(),
-                                    iterations = result.iterations,
-                                    tool_calls = result.tool_calls,
-                                    "child result received, resuming parent"
+                                    "child result received (handled by SpawnTool)"
                                 );
 
-                                let _ = inner.process_table.set_state(
-                                    agent_id,
-                                    ProcessState::Running,
-                                );
-
-                                // Format child result as a system message injected
-                                // into the parent's conversation context.
+                                // Persist child result to conversation history
+                                // for audit/replay purposes. SpawnTool already
+                                // returned the child's output as a tool
+                                // response within the same LLM turn, so no
+                                // additional LLM turn is needed here.
                                 let child_result_text = format!(
                                     "[child_agent_result] child_id={child_id} \
                                      iterations={} tool_calls={}\n\n{}",
@@ -690,114 +680,6 @@ impl KernelInner {
                                         "failed to persist child result message"
                                     );
                                 }
-
-                                // Build history and run a new LLM turn so the
-                                // parent can reason about the child's output.
-                                let history =
-                                    match crate::runner::build_history_messages(
-                                        &conversation,
-                                    ) {
-                                        Ok(msgs) if !msgs.is_empty() => {
-                                            Some(msgs)
-                                        }
-                                        Ok(_) => None,
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                %e,
-                                                "failed to convert history"
-                                            );
-                                            None
-                                        }
-                                    };
-
-                                let resume_text = format!(
-                                    "Child agent {child_id} completed. \
-                                     Process the result above and continue."
-                                );
-
-                                let stream_handle =
-                                    inner.stream_hub.open(session_id.clone());
-
-                                let turn_result =
-                                    crate::process_loop::run_agent_turn(
-                                        &handle,
-                                        resume_text,
-                                        history,
-                                        &stream_handle,
-                                    )
-                                    .await;
-
-                                inner
-                                    .stream_hub
-                                    .close(stream_handle.stream_id());
-
-                                match turn_result {
-                                    Ok(turn) if !turn.text.is_empty() => {
-                                        let assistant_msg =
-                                            crate::channel::types::ChatMessage::assistant(
-                                                &turn.text,
-                                            );
-                                        conversation
-                                            .push(assistant_msg.clone());
-                                        if let Err(e) = inner
-                                            .session_repo
-                                            .append_message(
-                                                &session_id,
-                                                &assistant_msg,
-                                            )
-                                            .await
-                                        {
-                                            tracing::warn!(
-                                                %e,
-                                                "failed to persist assistant \
-                                                 message after child result"
-                                            );
-                                        }
-
-                                        let agent_result = AgentResult {
-                                            output: turn.text.clone(),
-                                            iterations: turn.iterations,
-                                            tool_calls: turn.tool_calls,
-                                        };
-                                        let _ = inner
-                                            .process_table
-                                            .set_result(
-                                                agent_id,
-                                                agent_result.clone(),
-                                            );
-
-                                        info!(
-                                            agent_id = %agent_id,
-                                            iterations = agent_result.iterations,
-                                            tool_calls = agent_result.tool_calls,
-                                            "child result processed"
-                                        );
-                                        last_result = Some(agent_result);
-                                    }
-                                    Ok(_) => {
-                                        // Empty result — nothing to update.
-                                    }
-                                    Err(err_msg) => {
-                                        tracing::error!(
-                                            agent_id = %agent_id,
-                                            error = %err_msg,
-                                            "LLM turn failed after child \
-                                             result"
-                                        );
-                                        let _ = inner
-                                            .process_table
-                                            .set_state(
-                                                agent_id,
-                                                ProcessState::Failed,
-                                            );
-                                    }
-                                }
-
-                                // Return to waiting for more messages.
-                                let _ = inner.process_table.set_state(
-                                    agent_id,
-                                    ProcessState::Waiting,
-                                );
                             }
                             crate::process::ProcessMessage::Signal(_) => {
                                 // Already handled above.
@@ -1740,13 +1622,15 @@ mod tests {
         // the ChildResult.
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-        // The parent should have made an additional LLM call from
-        // processing the ChildResult.
+        // ChildResult is now handled by SpawnTool (within the same LLM
+        // turn) — the process loop only persists the child result as a
+        // system message; no additional LLM call is triggered.
         let calls_after = llm.call_counts.lock().unwrap().len();
-        assert!(
-            calls_after > calls_before,
-            "parent should have made additional LLM call after child \
-             result delivery: before={calls_before}, after={calls_after}"
+        assert_eq!(
+            calls_after, calls_before,
+            "parent should NOT make additional LLM call after child \
+             result (SpawnTool handles it inline): \
+             before={calls_before}, after={calls_after}"
         );
 
         // Parent should still be alive.
@@ -1760,8 +1644,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_child_result_triggers_parent_llm_turn() {
-        // Verify that receiving a ChildResult causes the parent to make
-        // an additional LLM call (beyond the initial UserMessage turn).
+        // ChildResult no longer triggers an additional LLM turn — SpawnTool
+        // handles child output inline within the parent's LLM turn. This
+        // test verifies that ChildResult is persisted but does NOT cause
+        // an extra LLM call.
         let (kernel, llm) = make_kernel_with_stub_llm();
 
         let principal = Principal::user("test-user");
@@ -1801,15 +1687,15 @@ mod tests {
             .await
             .unwrap();
 
-        // Give the parent time to process the ChildResult and make the
-        // follow-up LLM call.
+        // Give the parent time to process the ChildResult.
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
         let total_calls = llm.call_counts.lock().unwrap().len();
-        assert!(
-            total_calls > initial_calls,
-            "parent should have made additional LLM call(s) after \
-             ChildResult: initial={initial_calls}, total={total_calls}"
+        assert_eq!(
+            total_calls, initial_calls,
+            "parent should NOT make additional LLM call(s) after \
+             ChildResult (SpawnTool handles it inline): \
+             initial={initial_calls}, total={total_calls}"
         );
     }
 
@@ -1941,6 +1827,7 @@ mod tests {
     #[tokio::test]
     async fn test_child_result_multiple_children() {
         // Parent receives ChildResult from multiple children sequentially.
+        // ChildResult no longer triggers LLM calls — only persists messages.
         let (kernel, llm) = make_kernel_with_stub_llm();
 
         let principal = Principal::user("test-user");
@@ -1984,10 +1871,11 @@ mod tests {
         }
 
         let total_calls = llm.call_counts.lock().unwrap().len();
-        assert!(
-            total_calls >= calls_after_init + 2,
-            "parent should have made at least 2 additional LLM calls \
-             for 2 child results: init={calls_after_init}, total={total_calls}"
+        assert_eq!(
+            total_calls, calls_after_init,
+            "parent should NOT make additional LLM calls for \
+             child results (SpawnTool handles them inline): \
+             init={calls_after_init}, total={total_calls}"
         );
 
         let state = kernel

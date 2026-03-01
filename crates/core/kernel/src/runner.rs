@@ -887,13 +887,13 @@ impl AgentRunner {
 }
 
 /// A tool call being incrementally assembled from streaming SSE chunks.
-struct PendingToolCall {
+pub(crate) struct PendingToolCall {
     /// Unique tool call identifier assigned by the model (e.g. "call_abc123").
-    id:            String,
+    pub(crate) id:            String,
     /// Tool function name (e.g. "web_search").
-    name:          String,
+    pub(crate) name:          String,
     /// Accumulated JSON argument string, built by concatenating fragments.
-    arguments_buf: String,
+    pub(crate) arguments_buf: String,
 }
 
 fn user_content_from_message_content(
@@ -993,7 +993,7 @@ pub(crate) fn build_history_messages(
 }
 
 /// Build a user message from [`UserContent`].
-fn build_user_message(content: &UserContent) -> Result<ChatCompletionRequestMessage> {
+pub(crate) fn build_user_message(content: &UserContent) -> Result<ChatCompletionRequestMessage> {
     match content {
         UserContent::Text(text) => {
             let msg = ChatCompletionRequestUserMessageArgs::default()
@@ -1039,7 +1039,7 @@ fn build_user_message(content: &UserContent) -> Result<ChatCompletionRequestMess
 }
 
 /// Build a tool response message.
-fn build_tool_response_message(
+pub(crate) fn build_tool_response_message(
     tool_call_id: &str,
     content: &str,
 ) -> Result<ChatCompletionRequestMessage> {
