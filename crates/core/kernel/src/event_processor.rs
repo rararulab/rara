@@ -129,7 +129,7 @@ mod tests {
     #[tokio::test]
     async fn test_processor_shutdown_drains_critical() {
         let queue = Arc::new(ShardQueue::new(100));
-        let processor = EventProcessor { id: 0, queue: queue.clone() };
+        let _processor = EventProcessor { id: 0, queue: queue.clone() };
 
         // Push some events before starting.
         queue.push(KernelEvent::UserMessage(test_inbound("will be dropped"))).unwrap();
