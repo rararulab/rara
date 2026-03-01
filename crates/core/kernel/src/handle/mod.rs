@@ -83,6 +83,15 @@ pub trait ProcessOps: Send + Sync {
     /// Kill an agent and its entire subtree.
     fn kill(&self, agent_id: AgentId) -> Result<()>;
 
+    /// Pause an agent process (suspend message processing, buffer incoming).
+    fn pause(&self, agent_id: AgentId) -> Result<()>;
+
+    /// Resume a paused agent process (drain buffered messages).
+    fn resume(&self, agent_id: AgentId) -> Result<()>;
+
+    /// Interrupt the current LLM turn (cancel in-flight call, process stays alive).
+    fn interrupt(&self, agent_id: AgentId) -> Result<()>;
+
     /// List child processes of the current agent.
     fn children(&self) -> Vec<ProcessInfo>;
 }

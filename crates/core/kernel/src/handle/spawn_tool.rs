@@ -324,6 +324,12 @@ mod tests {
 
         fn kill(&self, _agent_id: AgentId) -> crate::error::Result<()> { Ok(()) }
 
+        fn pause(&self, _agent_id: AgentId) -> crate::error::Result<()> { Ok(()) }
+
+        fn resume(&self, _agent_id: AgentId) -> crate::error::Result<()> { Ok(()) }
+
+        fn interrupt(&self, _agent_id: AgentId) -> crate::error::Result<()> { Ok(()) }
+
         fn children(&self) -> Vec<ProcessInfo> { vec![] }
     }
 

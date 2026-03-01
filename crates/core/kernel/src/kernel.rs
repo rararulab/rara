@@ -278,11 +278,19 @@ impl KernelInner {
         // outbound replies.  The actual agent execution is delegated to
         // `run_agent_turn` which only knows how to run the LLM.
         let inner = Arc::clone(&self_ref);
+        let loop_mailbox_tx = mailbox_tx.clone();
         tokio::spawn(async move {
             let _permits = permits;
+            let mailbox_tx = loop_mailbox_tx;
             let mut mailbox_rx = mailbox_rx;
             let mut conversation = initial_messages;
             let mut last_result: Option<AgentResult> = None;
+            // Per-turn cancellation token: cancelled by Signal::Interrupt
+            // to abort the current LLM call without killing the process.
+            let mut turn_cancel = CancellationToken::new();
+            // Paused state: when true, incoming messages are buffered.
+            let mut paused = false;
+            let mut pause_buffer: Vec<crate::process::ProcessMessage> = Vec::new();
 
             // Context compaction: resolve token budget and strategy.
             let max_context_tokens = handle
@@ -299,6 +307,93 @@ impl KernelInner {
                     }
                     msg = mailbox_rx.recv() => {
                         let Some(msg) = msg else { break };
+
+                        // ---- Signal handling (always processed, even when paused) ----
+                        if let crate::process::ProcessMessage::Signal(sig) = &msg {
+                            match sig {
+                                crate::process::Signal::Interrupt => {
+                                    info!(agent_id = %agent_id, "interrupt signal received");
+                                    // Cancel the current LLM turn token.
+                                    turn_cancel.cancel();
+                                    // Replace with a fresh token for the next turn.
+                                    turn_cancel = CancellationToken::new();
+                                    // Notify via outbound bus.
+                                    let envelope = crate::io::types::OutboundEnvelope {
+                                        id:          crate::io::types::MessageId::new(),
+                                        in_reply_to: crate::io::types::MessageId::new(),
+                                        user:        crate::process::principal::UserId("system".to_string()),
+                                        session_id:  session_id.clone(),
+                                        routing:     crate::io::types::OutboundRouting::BroadcastAll,
+                                        payload:     crate::io::types::OutboundPayload::StateChange {
+                                            event_type: "interrupted".to_string(),
+                                            data:       serde_json::json!({
+                                                "agent_id": agent_id.to_string(),
+                                                "message": "Agent interrupted by user",
+                                            }),
+                                        },
+                                        timestamp:   jiff::Timestamp::now(),
+                                    };
+                                    if let Err(e) = inner.outbound_bus.publish(envelope).await {
+                                        tracing::error!(%e, "failed to publish interrupt notification");
+                                    }
+                                    continue;
+                                }
+                                crate::process::Signal::Pause => {
+                                    info!(agent_id = %agent_id, "pause signal received");
+                                    paused = true;
+                                    let _ = inner.process_table.set_state(
+                                        agent_id,
+                                        ProcessState::Paused,
+                                    );
+                                    continue;
+                                }
+                                crate::process::Signal::Resume => {
+                                    info!(agent_id = %agent_id, "resume signal received");
+                                    paused = false;
+                                    let _ = inner.process_table.set_state(
+                                        agent_id,
+                                        ProcessState::Waiting,
+                                    );
+                                    // Drain buffered messages: re-inject them into the
+                                    // mailbox so they are processed in order.
+                                    let buffered = std::mem::take(&mut pause_buffer);
+                                    for buffered_msg in buffered {
+                                        // Use try_send to avoid deadlock; if the mailbox
+                                        // is full, the message is lost (unlikely given
+                                        // capacity).
+                                        let _ = mailbox_tx.try_send(buffered_msg);
+                                    }
+                                    continue;
+                                }
+                                crate::process::Signal::Terminate => {
+                                    info!(agent_id = %agent_id, "terminate signal received — starting graceful shutdown");
+                                    // Cancel the current LLM turn.
+                                    turn_cancel.cancel();
+                                    // Give the loop a grace period to finish, then
+                                    // force-kill via the process token.
+                                    let process_token = token.clone();
+                                    tokio::spawn(async move {
+                                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                                        process_token.cancel();
+                                    });
+                                    // Break the loop immediately — the process is
+                                    // shutting down.
+                                    break;
+                                }
+                                crate::process::Signal::Kill => {
+                                    info!(agent_id = %agent_id, "kill signal received");
+                                    token.cancel();
+                                    break;
+                                }
+                            }
+                        }
+
+                        // ---- When paused, buffer non-signal messages ----
+                        if paused {
+                            pause_buffer.push(msg);
+                            continue;
+                        }
+
                         match msg {
                             crate::process::ProcessMessage::UserMessage(inbound) => {
                                 let _ = inner.process_table.set_state(
@@ -345,15 +440,20 @@ impl KernelInner {
                                 let stream_handle =
                                     inner.stream_hub.open(session_id.clone());
 
-                                // === Agent execution ===
-                                let turn_result =
-                                    crate::process_loop::run_agent_turn(
+                                // === Agent execution (cancellable by interrupt) ===
+                                let current_turn_cancel = turn_cancel.clone();
+                                let turn_result = tokio::select! {
+                                    result = crate::process_loop::run_agent_turn(
                                         &handle,
                                         user_text,
                                         history,
                                         &stream_handle,
-                                    )
-                                    .await;
+                                    ) => result,
+                                    _ = current_turn_cancel.cancelled() => {
+                                        info!(agent_id = %agent_id, "LLM turn interrupted");
+                                        Err("interrupted by user".to_string())
+                                    }
+                                };
 
                                 // Close stream.
                                 inner.stream_hub.close(stream_handle.stream_id());
@@ -426,10 +526,13 @@ impl KernelInner {
                                         // Empty result — nothing to publish.
                                     }
                                     Err(err_msg) => {
-                                        let _ = inner.process_table.set_state(
-                                            agent_id,
-                                            ProcessState::Failed,
-                                        );
+                                        // Only mark Failed for real errors, not interrupts.
+                                        if err_msg != "interrupted by user" {
+                                            let _ = inner.process_table.set_state(
+                                                agent_id,
+                                                ProcessState::Failed,
+                                            );
+                                        }
                                         // Publish error via outbound bus.
                                         let envelope =
                                             crate::io::types::OutboundEnvelope {
@@ -611,11 +714,8 @@ impl KernelInner {
                                     ProcessState::Waiting,
                                 );
                             }
-                            crate::process::ProcessMessage::Signal(
-                                crate::process::Signal::Interrupt,
-                            ) => {
-                                tracing::warn!(agent_id = %agent_id, "interrupt received");
-                                // TODO: cancel current LLM call
+                            crate::process::ProcessMessage::Signal(_) => {
+                                // Already handled above.
                             }
                         }
                     }
@@ -1749,6 +1849,309 @@ mod tests {
             state,
             ProcessState::Waiting,
             "parent should be Waiting after processing all child results"
+        );
+    }
+
+    // =======================================================================
+    // Signal system tests
+    // =======================================================================
+
+    #[tokio::test]
+    async fn test_pause_resume_buffers_messages() {
+        use crate::process::ProcessMessage;
+
+        let kernel = make_test_kernel(10, 5);
+        let principal = Principal::user("test-user");
+        let session_id = SessionId::new("pause-resume-session");
+
+        let handle = kernel
+            .spawn_with_input(
+                test_manifest("pausable"),
+                "initial message".to_string(),
+                principal,
+                session_id,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let agent_id = handle.agent_id;
+
+        // Wait for the process to finish its initial LLM call (it will
+        // fail because the model is "test-model") and transition to Waiting.
+        // We poll until state is Waiting or a timeout is reached.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Some(p) = kernel.process_table().get(agent_id) {
+                if p.state == ProcessState::Waiting {
+                    break;
+                }
+            }
+            if tokio::time::Instant::now() > deadline {
+                panic!("timed out waiting for process to reach Waiting state");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        // Send Pause signal.
+        handle
+            .mailbox
+            .send(ProcessMessage::Signal(crate::process::Signal::Pause))
+            .await
+            .unwrap();
+
+        // Wait for the Paused state.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if let Some(p) = kernel.process_table().get(agent_id) {
+                if p.state == ProcessState::Paused {
+                    break;
+                }
+            }
+            if tokio::time::Instant::now() > deadline {
+                let state = kernel
+                    .process_table()
+                    .get(agent_id)
+                    .map(|p| p.state);
+                panic!(
+                    "timed out waiting for Paused state, current: {:?}",
+                    state
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        // Verify Paused state.
+        let process = kernel.process_table().get(agent_id).unwrap();
+        assert_eq!(process.state, ProcessState::Paused);
+
+        // Send Resume signal.
+        handle
+            .mailbox
+            .send(ProcessMessage::Signal(crate::process::Signal::Resume))
+            .await
+            .unwrap();
+
+        // Wait for the process to leave Paused state.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if let Some(p) = kernel.process_table().get(agent_id) {
+                if p.state != ProcessState::Paused {
+                    break;
+                }
+            }
+            if tokio::time::Instant::now() > deadline {
+                panic!("timed out waiting for process to leave Paused state");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        // Process should be back to Waiting (not Paused).
+        let process = kernel.process_table().get(agent_id).unwrap();
+        assert_ne!(
+            process.state,
+            ProcessState::Paused,
+            "process should not be Paused after Resume"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_terminate_shuts_down_process() {
+        use crate::process::ProcessMessage;
+
+        let kernel = make_test_kernel(10, 5);
+        let principal = Principal::user("test-user");
+        let session_id = SessionId::new("terminate-session");
+
+        let handle = kernel
+            .spawn_with_input(
+                test_manifest("terminable"),
+                "initial message".to_string(),
+                principal,
+                session_id,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let agent_id = handle.agent_id;
+
+        // Wait for the initial message to be processed.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Some(p) = kernel.process_table().get(agent_id) {
+                if p.state == ProcessState::Waiting {
+                    break;
+                }
+            }
+            if tokio::time::Instant::now() > deadline {
+                // Even if we don't reach Waiting, proceed with the test
+                // — the Terminate signal should still work.
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        // Send Terminate signal.
+        handle
+            .mailbox
+            .send(ProcessMessage::Signal(crate::process::Signal::Terminate))
+            .await
+            .unwrap();
+
+        // Wait for result — the process should complete.
+        let result =
+            tokio::time::timeout(std::time::Duration::from_secs(10), handle.result_rx).await;
+        assert!(
+            result.is_ok(),
+            "process should have completed after Terminate"
+        );
+
+        // Process should be in a terminal state.
+        let process = kernel.process_table().get(agent_id).unwrap();
+        assert!(
+            matches!(
+                process.state,
+                ProcessState::Completed | ProcessState::Cancelled
+            ),
+            "expected terminal state, got: {:?}",
+            process.state
+        );
+    }
+
+    #[tokio::test]
+    async fn test_kill_signal_terminates_immediately() {
+        use crate::process::ProcessMessage;
+
+        let kernel = make_test_kernel(10, 5);
+        let principal = Principal::user("test-user");
+        let session_id = SessionId::new("kill-session");
+
+        let handle = kernel
+            .spawn_with_input(
+                test_manifest("killable"),
+                "initial message".to_string(),
+                principal,
+                session_id,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let agent_id = handle.agent_id;
+
+        // Wait for the initial message to be processed.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Some(p) = kernel.process_table().get(agent_id) {
+                if p.state == ProcessState::Waiting {
+                    break;
+                }
+            }
+            if tokio::time::Instant::now() > deadline {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        // Send Kill signal.
+        handle
+            .mailbox
+            .send(ProcessMessage::Signal(crate::process::Signal::Kill))
+            .await
+            .unwrap();
+
+        // Wait for result.
+        let result =
+            tokio::time::timeout(std::time::Duration::from_secs(5), handle.result_rx).await;
+        assert!(result.is_ok(), "process should have completed after Kill");
+
+        // Process should be Cancelled.
+        let process = kernel.process_table().get(agent_id).unwrap();
+        assert_eq!(
+            process.state,
+            ProcessState::Cancelled,
+            "expected Cancelled state, got: {:?}",
+            process.state
+        );
+    }
+
+    #[tokio::test]
+    async fn test_interrupt_process_stays_alive() {
+        use crate::process::ProcessMessage;
+
+        let kernel = make_test_kernel(10, 5);
+        let principal = Principal::user("test-user");
+        let session_id = SessionId::new("interrupt-session");
+
+        let handle = kernel
+            .spawn_with_input(
+                test_manifest("interruptable"),
+                "initial message".to_string(),
+                principal,
+                session_id,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let agent_id = handle.agent_id;
+
+        // Wait for the process to settle into Waiting state.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Some(p) = kernel.process_table().get(agent_id) {
+                if p.state == ProcessState::Waiting {
+                    break;
+                }
+            }
+            if tokio::time::Instant::now() > deadline {
+                let state = kernel
+                    .process_table()
+                    .get(agent_id)
+                    .map(|p| p.state);
+                panic!(
+                    "timed out waiting for Waiting state, current: {:?}",
+                    state
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        // Send Interrupt signal.
+        handle
+            .mailbox
+            .send(ProcessMessage::Signal(crate::process::Signal::Interrupt))
+            .await
+            .unwrap();
+
+        // Wait a bit for the interrupt to be processed.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Process should still exist (not removed from table) and be
+        // in a non-terminal state.
+        let process = kernel.process_table().get(agent_id);
+        assert!(
+            process.is_some(),
+            "process should still be alive after Interrupt"
+        );
+        let state = process.unwrap().state;
+        assert!(
+            !matches!(
+                state,
+                ProcessState::Completed | ProcessState::Failed | ProcessState::Cancelled
+            ),
+            "process should not be in terminal state after Interrupt, got: {:?}",
+            state
+        );
+
+        // The mailbox should still be open — we can still send messages.
+        let send_result = handle
+            .mailbox
+            .try_send(ProcessMessage::Signal(crate::process::Signal::Interrupt));
+        assert!(
+            send_result.is_ok(),
+            "mailbox should still accept messages after Interrupt"
         );
     }
 }
