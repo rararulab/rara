@@ -1359,6 +1359,11 @@ function ChatThread({
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length, stream.isStreaming, stream.text]);
 
+  // Auto-focus textarea on session switch
+  useEffect(() => {
+    textareaRef.current?.focus();
+  }, [sessionKey]);
+
   // Auto-resize textarea
   useEffect(() => {
     const el = textareaRef.current;
@@ -1578,6 +1583,7 @@ function ChatThread({
             placeholder={isOnline ? "Type a message... (Enter to send, Shift+Enter for newline)" : "Server offline -- sending disabled"}
             rows={1}
             disabled={isBusy || !isOnline}
+            autoFocus
             className="flex-1 resize-none appearance-none border-0 bg-transparent px-2 py-2.5 text-sm text-foreground shadow-none placeholder:text-muted-foreground focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
           />
           <Button
@@ -1660,6 +1666,7 @@ function EmptyState({
             placeholder={isOnline ? "Type a message... (Enter to send, Shift+Enter for newline)" : "Server offline -- sending disabled"}
             rows={1}
             disabled={!isOnline}
+            autoFocus
             className="flex-1 resize-none appearance-none border-0 bg-transparent px-2 py-2.5 text-sm text-foreground shadow-none placeholder:text-muted-foreground focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
           />
           <Button
