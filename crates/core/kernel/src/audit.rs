@@ -25,7 +25,7 @@ use std::{collections::VecDeque, sync::Arc};
 
 use async_trait::async_trait;
 use jiff::Timestamp;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use crate::process::{AgentId, SessionId, principal::UserId};
@@ -35,7 +35,7 @@ use crate::process::{AgentId, SessionId, principal::UserId};
 // ---------------------------------------------------------------------------
 
 /// A single audit event recording an agent action.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEvent {
     /// When this event occurred.
     pub timestamp:  Timestamp,
@@ -52,7 +52,7 @@ pub struct AuditEvent {
 }
 
 /// Discriminated event types for agent actions.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AuditEventType {
     /// An agent process was spawned.
     ProcessSpawned {
@@ -81,7 +81,7 @@ pub enum AuditEventType {
 }
 
 /// Memory operation type.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MemoryOp {
     /// Store a value in agent-local memory.
     Store,
@@ -208,7 +208,7 @@ impl AuditLog for InMemoryAuditLog {
 }
 
 /// Extract the variant name from an `AuditEventType` for filtering.
-fn event_type_name(et: &AuditEventType) -> &'static str {
+pub fn event_type_name(et: &AuditEventType) -> &'static str {
     match et {
         AuditEventType::ProcessSpawned { .. } => "ProcessSpawned",
         AuditEventType::ProcessCompleted { .. } => "ProcessCompleted",

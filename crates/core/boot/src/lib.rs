@@ -29,4 +29,5 @@ pub mod resolvers;
 pub mod skills;
 pub mod stream;
 pub mod tools;
+pub mod audit;
 pub mod user_store;
