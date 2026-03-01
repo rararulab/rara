@@ -38,6 +38,7 @@ pub fn auth_routes(service: AuthService) -> axum::Router {
         .route("/api/v1/users/me", axum::routing::get(get_profile))
         .route("/api/v1/users/me/password", axum::routing::put(change_password))
         .route("/api/v1/users/me/link-code", axum::routing::post(generate_link_code))
+        .route("/api/v1/users/me/link-verify", axum::routing::post(verify_tg_link))
         // 管理路由 — 需要 Root 角色
         .route("/api/v1/admin/users", axum::routing::get(list_users))
         .route("/api/v1/admin/invite-codes", axum::routing::post(create_invite_code).get(list_invite_codes))
@@ -105,6 +106,17 @@ async fn generate_link_code(
 ) -> Result<Json<LinkCode>, AuthError> {
     let link = service.generate_link_code(user.user_id, &req.direction).await?;
     Ok(Json(link))
+}
+
+/// 验证 TG→Web 链接码
+#[instrument(skip(service, req))]
+async fn verify_tg_link(
+    State(service): State<AuthService>,
+    user: AuthUser,
+    Json(req): Json<LinkVerifyRequest>,
+) -> Result<StatusCode, AuthError> {
+    service.verify_and_complete_tg_link(user.user_id, &req.code).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// 列出所有用户（管理接口）

@@ -113,3 +113,9 @@ pub struct LinkCodeInfo {
 pub struct GenerateLinkCodeRequest {
     pub direction: String,
 }
+
+/// TG→Web 链接验证请求
+#[derive(Debug, Deserialize)]
+pub struct LinkVerifyRequest {
+    pub code: String,
+}

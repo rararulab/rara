@@ -33,6 +33,7 @@ rara-sessions = { workspace = true }
 rara-workers = { workspace = true }
 serde = { workspace = true }
 snafu = { workspace = true }
+sqlx = { workspace = true }
 teloxide = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

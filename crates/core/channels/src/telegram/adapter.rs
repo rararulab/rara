@@ -73,6 +73,7 @@ use tokio::sync::{RwLock, watch};
 use tracing::{error, info, warn};
 
 use crate::telegram::contacts::ContactTracker;
+use crate::telegram::link::TelegramLinkService;
 
 /// Long-polling timeout in seconds (Telegram server-side wait).
 const POLL_TIMEOUT_SECS: u32 = 30;
@@ -153,6 +154,8 @@ pub struct TelegramAdapter {
     config:            Arc<StdRwLock<TelegramConfig>>,
     /// Optional contact tracker for recording username-to-chat_id mappings.
     contact_tracker:   Option<Arc<dyn ContactTracker>>,
+    /// Optional link service for handling `/link` commands.
+    link_service:      Option<Arc<TelegramLinkService>>,
 }
 
 impl TelegramAdapter {
@@ -176,6 +179,7 @@ impl TelegramAdapter {
             callback_handlers: Vec::new(),
             config: Arc::new(StdRwLock::new(TelegramConfig::default())),
             contact_tracker: None,
+            link_service: None,
         }
     }
 
@@ -258,6 +262,15 @@ impl TelegramAdapter {
     /// for outbound notification routing.
     pub fn with_contact_tracker(mut self, tracker: Arc<dyn ContactTracker>) -> Self {
         self.contact_tracker = Some(tracker);
+        self
+    }
+
+    /// Set a link service for handling `/link` commands.
+    ///
+    /// When set, the adapter intercepts `/link` commands before they reach
+    /// the ingress pipeline and handles account linking directly.
+    pub fn with_link_service(mut self, service: TelegramLinkService) -> Self {
+        self.link_service = Some(Arc::new(service));
         self
     }
 
@@ -389,6 +402,7 @@ impl ChannelAdapter for TelegramAdapter {
         let bot_username = Arc::clone(&self.bot_username);
         let config = Arc::clone(&self.config);
         let contact_tracker = self.contact_tracker.clone();
+        let link_service = self.link_service.clone();
 
         tokio::spawn(async move {
             polling_loop(
@@ -400,6 +414,7 @@ impl ChannelAdapter for TelegramAdapter {
                 bot_username,
                 config,
                 contact_tracker,
+                link_service,
             )
             .await;
         });
@@ -454,6 +469,7 @@ async fn polling_loop(
     bot_username: Arc<RwLock<Option<String>>>,
     config: Arc<StdRwLock<TelegramConfig>>,
     contact_tracker: Option<Arc<dyn ContactTracker>>,
+    link_service: Option<Arc<TelegramLinkService>>,
 ) {
     let mut offset: Option<i32> = None;
     let mut retry_delay = INITIAL_RETRY_DELAY;
@@ -507,6 +523,7 @@ async fn polling_loop(
                     let bot_username = Arc::clone(&bot_username);
                     let config = Arc::clone(&config);
                     let tracker = contact_tracker.clone();
+                    let link_svc = link_service.clone();
                     tokio::spawn(async move {
                         handle_update(
                             update,
@@ -516,6 +533,7 @@ async fn polling_loop(
                             &bot_username,
                             &config,
                             tracker.as_ref(),
+                            link_svc.as_ref(),
                         )
                         .await;
                     });
@@ -550,6 +568,7 @@ async fn handle_update(
     bot_username: &Arc<RwLock<Option<String>>>,
     config: &Arc<StdRwLock<TelegramConfig>>,
     contact_tracker: Option<&Arc<dyn ContactTracker>>,
+    link_service: Option<&Arc<TelegramLinkService>>,
 ) {
     // Read a snapshot of the runtime config for this update.
     let cfg = match config.read() {
@@ -629,6 +648,51 @@ async fn handle_update(
         }
 
         drop(username_guard);
+    }
+
+    // Intercept /link commands before they reach the ingress pipeline.
+    if let Some(link_svc) = link_service {
+        if let Some(text) = msg.text() {
+            let trimmed = text.trim();
+            if trimmed == "/link" || trimmed.starts_with("/link ") || trimmed.starts_with("/link@") {
+                // Extract display name from the Telegram user.
+                let display_name = msg.from.as_ref().map(|u| {
+                    if let Some(ref last) = u.last_name {
+                        format!("{} {last}", u.first_name)
+                    } else {
+                        u.first_name.clone()
+                    }
+                });
+
+                // Parse: "/link" or "/link <code>" or "/link@botname <code>"
+                let parts: Vec<&str> = trimmed.splitn(2, ' ').collect();
+                let code = if parts.len() > 1 {
+                    Some(parts[1].trim())
+                } else {
+                    None
+                };
+
+                let reply = if let Some(code) = code {
+                    // web→TG: user provides a code from the web UI
+                    match link_svc
+                        .handle_link_code(code, chat_id, display_name.as_deref())
+                        .await
+                    {
+                        Ok(msg) => msg,
+                        Err(e) => e,
+                    }
+                } else {
+                    // TG→web: generate a code for the user
+                    match link_svc.handle_link_request(chat_id).await {
+                        Ok(msg) => msg,
+                        Err(e) => e,
+                    }
+                };
+
+                let _ = bot.send_message(ChatId(chat_id), &reply).await;
+                return;
+            }
+        }
     }
 
     // Convert to RawPlatformMessage.
