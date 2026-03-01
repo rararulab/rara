@@ -886,6 +886,22 @@ impl Kernel {
 
         let Some(mut rt) = runtimes.get_mut(&agent_id) else {
             warn!(agent_id = %agent_id, "runtime not found for LLM turn");
+            // Send error back to the user instead of silently dropping.
+            let envelope = OutboundEnvelope {
+                id:          MessageId::new(),
+                in_reply_to: msg.id.clone(),
+                user:        msg.user.clone(),
+                session_id:  msg.session_id.clone(),
+                routing:     OutboundRouting::BroadcastAll,
+                payload:     OutboundPayload::Error {
+                    code:    "runtime_not_found".to_string(),
+                    message: format!("agent runtime not found: {agent_id}"),
+                },
+                timestamp:   jiff::Timestamp::now(),
+            };
+            if let Err(e) = self.event_queue().try_push(KernelEvent::Deliver(envelope)) {
+                error!(%e, "failed to push runtime-not-found error Deliver");
+            }
             return;
         };
 
@@ -1190,10 +1206,13 @@ impl Kernel {
                 info!(agent_id = %agent_id, error = %err_msg, "turn completed (error)");
 
                 if err_msg != "interrupted by user" {
-                    let _ = inner
-                        .process_table
-                        .set_state(agent_id, ProcessState::Failed);
-
+                    // NOTE: We intentionally do NOT set_state(Failed) here.
+                    // The unconditional set_state(Waiting) below makes errors
+                    // recoverable (process can accept new messages). Setting
+                    // Failed first would create a race window where a parallel
+                    // processor (handling UserMessage) observes the terminal
+                    // Failed state, removes the process from the table, and
+                    // spawns a replacement — orphaning the runtime.
                     crate::audit::record_async(
                         &inner.audit_log,
                         AuditEvent {
