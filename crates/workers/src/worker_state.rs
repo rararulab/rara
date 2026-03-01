@@ -358,6 +358,7 @@ impl AppState {
                 max_concurrency:        16,
                 default_child_limit:    4,
                 default_max_iterations: 25,
+                memory_quota_per_agent: 1000,
                 ..Default::default()
             },
             llm_provider:     llm_provider.clone(),

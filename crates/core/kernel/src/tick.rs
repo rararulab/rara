@@ -289,6 +289,7 @@ mod tests {
             max_concurrency:        16,
             default_child_limit:    5,
             default_max_iterations: 5,
+            memory_quota_per_agent: 1000,
             ..Default::default()
         };
         let mut loader = ManifestLoader::new();

@@ -89,14 +89,47 @@ pub trait ProcessOps: Send + Sync {
 
 /// Cross-agent shared memory operations.
 ///
-/// Provides a simple key-value store that is shared across all agents
-/// in the same session, enabling inter-agent data passing.
+/// Provides a namespaced key-value store for agents. By default, each agent
+/// has its own isolated namespace — `mem_store`/`mem_recall` auto-prefix
+/// keys with the agent's ID.
+///
+/// For explicit cross-agent data sharing, use `shared_store`/`shared_recall`
+/// with a [`KvScope`](crate::memory::KvScope) that controls visibility and
+/// permission requirements.
 pub trait MemoryOps: Send + Sync {
-    /// Store a value in shared memory.
+    /// Store a value in this agent's private namespace.
+    ///
+    /// The key is automatically prefixed with `"agent:{agent_id}:"` so that
+    /// different agents cannot accidentally overwrite each other's data.
     fn mem_store(&self, key: &str, value: serde_json::Value) -> Result<()>;
 
-    /// Recall a value from shared memory.
+    /// Recall a value from this agent's private namespace.
+    ///
+    /// Only returns values stored by the same agent (auto-prefixed lookup).
     fn mem_recall(&self, key: &str) -> Result<Option<serde_json::Value>>;
+
+    /// Store a value in an explicit shared scope.
+    ///
+    /// Permission rules:
+    /// - `KvScope::Global` — requires Root or Admin role
+    /// - `KvScope::Team(name)` — requires Root or Admin role
+    /// - `KvScope::Agent(id)` — regular agents can only write to their own ID;
+    ///   Root/Admin can write to any agent's scope
+    fn shared_store(
+        &self,
+        scope: crate::memory::KvScope,
+        key: &str,
+        value: serde_json::Value,
+    ) -> Result<()>;
+
+    /// Recall a value from an explicit shared scope.
+    ///
+    /// Permission rules are the same as `shared_store`.
+    fn shared_recall(
+        &self,
+        scope: crate::memory::KvScope,
+        key: &str,
+    ) -> Result<Option<serde_json::Value>>;
 }
 
 /// Event bus operations.
