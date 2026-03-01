@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
-import { useState } from "react";
+import { useState, Fragment } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
+  ChevronDown,
+  ChevronRight,
   Clock,
   Cpu,
   Hash,
@@ -76,6 +78,35 @@ interface ProcessStats {
 }
 
 // ---------------------------------------------------------------------------
+// Turn Trace types (matching Rust backend)
+// ---------------------------------------------------------------------------
+
+interface ToolCallTrace {
+  name: string;
+  id: string;
+  duration_ms: number;
+  success: boolean;
+}
+
+interface IterationTrace {
+  index: number;
+  first_token_ms: number | null;
+  stream_ms: number;
+  text_preview: string;
+  tool_calls: ToolCallTrace[];
+}
+
+interface TurnTrace {
+  duration_ms: number;
+  model: string;
+  iterations: IterationTrace[];
+  final_text_len: number;
+  total_tool_calls: number;
+  success: boolean;
+  error: string | null;
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -125,6 +156,76 @@ function stateColor(state: string): "default" | "secondary" | "destructive" | "o
 }
 
 // ---------------------------------------------------------------------------
+// TurnTraceTree
+// ---------------------------------------------------------------------------
+
+function TurnTraceTree({ traces }: { traces: TurnTrace[] }) {
+  return (
+    <div className="space-y-2 font-mono text-xs">
+      {traces.map((turn, ti) => (
+        <div key={ti} className="rounded-lg border border-border/50 p-3">
+          {/* Turn header */}
+          <div className="flex items-center gap-2 font-medium">
+            <span className={turn.success ? "text-green-500" : "text-red-500"}>
+              {turn.success ? "\u25CF" : "\u2717"}
+            </span>
+            <span>Turn {ti + 1}</span>
+            <span className="text-muted-foreground">
+              ({turn.model}, {(turn.duration_ms / 1000).toFixed(1)}s,{" "}
+              {turn.final_text_len} chars)
+            </span>
+          </div>
+          {/* Iterations */}
+          {turn.iterations.map((iter) => (
+            <div
+              key={iter.index}
+              className="ml-4 mt-1 border-l border-border/30 pl-3"
+            >
+              <div className="text-muted-foreground">
+                Iter {iter.index}
+                {iter.first_token_ms != null &&
+                  ` \u00b7 TTFT ${iter.first_token_ms}ms`}
+                {` \u00b7 stream ${iter.stream_ms}ms`}
+              </div>
+              {/* Tool calls */}
+              {iter.tool_calls.map((tc) => (
+                <div key={tc.id} className="ml-3 flex items-center gap-1.5">
+                  <span
+                    className={
+                      tc.success ? "text-green-500" : "text-red-500"
+                    }
+                  >
+                    {tc.success ? "\u2713" : "\u2717"}
+                  </span>
+                  <span>{tc.name}</span>
+                  <span className="text-muted-foreground">
+                    ({tc.duration_ms}ms)
+                  </span>
+                </div>
+              ))}
+              {/* Text preview */}
+              {iter.text_preview && (
+                <div className="ml-3 mt-0.5 max-w-md truncate text-muted-foreground/70">
+                  &quot;{iter.text_preview}&quot;
+                </div>
+              )}
+            </div>
+          ))}
+          {turn.error && (
+            <div className="ml-4 mt-1 text-red-500">Error: {turn.error}</div>
+          )}
+        </div>
+      ))}
+      {traces.length === 0 && (
+        <div className="text-muted-foreground italic">
+          No turns recorded yet
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -132,6 +233,7 @@ const AUTO_REFRESH_INTERVAL = 5_000;
 
 export default function KernelTop() {
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [selectedProcess, setSelectedProcess] = useState<string | null>(null);
 
   const statsQuery = useQuery({
     queryKey: ["kernel-stats"],
@@ -145,12 +247,27 @@ export default function KernelTop() {
     refetchInterval: autoRefresh ? AUTO_REFRESH_INTERVAL : false,
   });
 
+  const turnsQuery = useQuery({
+    queryKey: ["process-turns", selectedProcess],
+    queryFn: () =>
+      api.get<TurnTrace[]>(
+        `/api/v1/kernel/processes/${selectedProcess}/turns`,
+      ),
+    enabled: !!selectedProcess,
+    refetchInterval: autoRefresh ? AUTO_REFRESH_INTERVAL : false,
+  });
+
   const stats = statsQuery.data;
   const processes = processesQuery.data ?? [];
 
   const handleRefresh = () => {
     statsQuery.refetch();
     processesQuery.refetch();
+    if (selectedProcess) turnsQuery.refetch();
+  };
+
+  const handleRowClick = (agentId: string) => {
+    setSelectedProcess((prev) => (prev === agentId ? null : agentId));
   };
 
   return (
@@ -310,6 +427,7 @@ export default function KernelTop() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-6" />
                   <TableHead>Agent</TableHead>
                   <TableHead>State</TableHead>
                   <TableHead className="text-right">Uptime</TableHead>
@@ -321,41 +439,85 @@ export default function KernelTop() {
               </TableHeader>
               <TableBody>
                 {processes.map((p) => (
-                  <TableRow key={p.agent_id}>
-                    <TableCell>
-                      <div>
-                        <span className="font-medium">{p.manifest_name}</span>
-                        {p.parent_id && (
-                          <span className="ml-1.5 text-xs text-muted-foreground">
-                            (child)
-                          </span>
+                  <Fragment key={p.agent_id}>
+                    <TableRow
+                      className="cursor-pointer transition-colors hover:bg-muted/50"
+                      data-state={selectedProcess === p.agent_id ? "selected" : undefined}
+                      onClick={() => handleRowClick(p.agent_id)}
+                    >
+                      <TableCell className="w-6 px-2">
+                        {selectedProcess === p.agent_id ? (
+                          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                        ) : (
+                          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
                         )}
-                      </div>
-                      <span className="font-mono text-xs text-muted-foreground">
-                        {p.agent_id.slice(0, 8)}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={stateColor(p.state)} className="text-xs">
-                        {p.state}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs">
-                      {formatUptime(p.uptime_ms)}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs">
-                      {p.llm_calls}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs">
-                      {p.tool_calls}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs">
-                      {formatTokens(p.tokens_consumed)}
-                    </TableCell>
-                    <TableCell className="text-right text-xs text-muted-foreground">
-                      {formatRelativeTime(p.last_activity)}
-                    </TableCell>
-                  </TableRow>
+                      </TableCell>
+                      <TableCell>
+                        <div>
+                          <span className="font-medium">
+                            {p.manifest_name}
+                          </span>
+                          {p.parent_id && (
+                            <span className="ml-1.5 text-xs text-muted-foreground">
+                              (child)
+                            </span>
+                          )}
+                        </div>
+                        <span className="font-mono text-xs text-muted-foreground">
+                          {p.agent_id.slice(0, 8)}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant={stateColor(p.state)}
+                          className="text-xs"
+                        >
+                          {p.state}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-xs">
+                        {formatUptime(p.uptime_ms)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-xs">
+                        {p.llm_calls}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-xs">
+                        {p.tool_calls}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-xs">
+                        {formatTokens(p.tokens_consumed)}
+                      </TableCell>
+                      <TableCell className="text-right text-xs text-muted-foreground">
+                        {formatRelativeTime(p.last_activity)}
+                      </TableCell>
+                    </TableRow>
+                    {selectedProcess === p.agent_id && (
+                      <TableRow>
+                        <TableCell colSpan={8} className="bg-muted/20 p-4">
+                          <div className="space-y-3">
+                            <div className="flex items-center gap-2 text-sm font-medium">
+                              <Zap className="h-3.5 w-3.5" />
+                              Turn Traces
+                            </div>
+                            {turnsQuery.isLoading ? (
+                              <div className="space-y-2">
+                                <Skeleton className="h-16 w-full" />
+                                <Skeleton className="h-16 w-full" />
+                              </div>
+                            ) : turnsQuery.isError ? (
+                              <div className="text-sm text-muted-foreground italic">
+                                Failed to load turn traces
+                              </div>
+                            ) : (
+                              <TurnTraceTree
+                                traces={turnsQuery.data ?? []}
+                              />
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </Fragment>
                 ))}
               </TableBody>
             </Table>
