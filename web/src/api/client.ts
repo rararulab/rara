@@ -145,7 +145,8 @@ async function requestBlob(path: string, options?: RequestInit & { timeoutMs?: n
 import type {
   SettingsMap, SettingValue, SettingsPatch,
   LoginRequest, RegisterRequest, RefreshRequest,
-  AuthResponse, UserProfile, ChangePasswordRequest, LinkCodeResponse,
+  AuthResponse, UserProfile, UserInfo, PlatformInfo,
+  InviteCode, ChangePasswordRequest, LinkCodeResponse,
 } from './types';
 
 export const api = {
@@ -172,6 +173,13 @@ export const authApi = {
     request<void>('/api/v1/users/me/password', { method: 'PUT', body: JSON.stringify(data) }),
   generateLinkCode: (direction: string) =>
     request<LinkCodeResponse>('/api/v1/users/me/link-code', { method: 'POST', body: JSON.stringify({ direction }) }),
+};
+
+export const adminApi = {
+  listUsers: () => request<(UserInfo & { platforms?: PlatformInfo[] })[]>('/api/v1/admin/users'),
+  disableUser: (id: string) => request<void>(`/api/v1/admin/users/${id}`, { method: 'DELETE' }),
+  createInviteCode: () => request<InviteCode>('/api/v1/admin/invite-codes', { method: 'POST' }),
+  listInviteCodes: () => request<InviteCode[]>('/api/v1/admin/invite-codes'),
 };
 
 export const settingsApi = {
