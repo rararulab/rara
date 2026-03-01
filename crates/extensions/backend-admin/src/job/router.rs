@@ -12,18 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! HTTP API routes for job discovery and bot integration.
+//! HTTP API routes for job discovery.
 
 use std::collections::HashSet;
 
 use axum::{Json, extract::State, http::StatusCode};
 use utoipa_axum::{router::OpenApiRouter, routes};
-use uuid::Uuid;
 
 use super::{
     error::SourceError,
     service::JobService,
-    types::{DiscoveryCriteria, DiscoveryJobResponse, NormalizedJob},
+    types::{DiscoveryCriteria, DiscoveryJobResponse},
 };
 
 // ===========================================================================
@@ -84,59 +83,3 @@ async fn discover_jobs(
     Ok((StatusCode::OK, Json(response)))
 }
 
-// ===========================================================================
-// Bot internal routes
-// ===========================================================================
-
-/// Bot internal routes (JD parsing).
-pub fn bot_routes(service: JobService) -> OpenApiRouter {
-    OpenApiRouter::new()
-        .routes(routes!(parse_jd_from_bot))
-        .with_state(service)
-}
-
-#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
-struct BotJdParseRequest {
-    text: String,
-}
-
-#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
-struct BotJdParseResponse {
-    id:      Uuid,
-    title:   String,
-    company: String,
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/v1/internal/bot/jd-parse",
-    tag = "internal",
-    request_body = BotJdParseRequest,
-    responses(
-        (status = 200, description = "Parsed job description", body = BotJdParseResponse),
-    )
-)]
-async fn parse_jd_from_bot(
-    State(service): State<JobService>,
-    Json(req): Json<BotJdParseRequest>,
-) -> Result<(StatusCode, Json<BotJdParseResponse>), (StatusCode, String)> {
-    if req.text.trim().is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "text must not be empty".to_owned()));
-    }
-
-    let saved: NormalizedJob = service.parse_jd(&req.text).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to parse jd: {e}"),
-        )
-    })?;
-
-    Ok((
-        StatusCode::OK,
-        Json(BotJdParseResponse {
-            id:      saved.id,
-            title:   saved.title,
-            company: saved.company,
-        }),
-    ))
-}

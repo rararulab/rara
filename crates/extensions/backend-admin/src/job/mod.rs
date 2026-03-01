@@ -26,14 +26,13 @@ pub mod types;
 
 use std::sync::Arc;
 
-pub use router::{bot_routes, discovery_routes};
+pub use router::discovery_routes;
 pub use service::JobService;
 use sqlx::PgPool;
 
 /// Wire the unified [`JobService`] with all dependencies.
 pub fn wire_job_service(
     pool: PgPool,
-    ai_service: crate::ai_tasks::TaskAgentService,
 ) -> Result<service::JobService, error::SourceError> {
     let driver = jobspy::JobSpyDriver::new()?;
     let japandev_driver = japandev::JapanDevDriver::new(japandev::JapanDevConfig::default());
@@ -43,6 +42,5 @@ pub fn wire_job_service(
         driver,
         Some(japandev_driver),
         job_repo,
-        ai_service,
     ))
 }

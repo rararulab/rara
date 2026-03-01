@@ -14,11 +14,10 @@
 
 //! # rara-backend-admin
 //!
-//! Unified HTTP admin routes for all backend subsystems: settings, prompts,
+//! Unified HTTP admin routes for all backend subsystems: settings,
 //! models, MCP servers, skills, coding tasks, and all domain routes
 //! (resume, application, interview, scheduler, analytics, job, chat).
 
-pub mod ai_tasks;
 pub mod analytics;
 pub mod application;
 pub mod chat;

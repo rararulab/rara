@@ -17,8 +17,6 @@
 //! This crate contains concrete worker implementations that orchestrate
 //! domain services for background processing tasks.
 
-pub mod jd_parser;
 pub mod system_routes;
 pub mod tools;
-pub mod types;
 pub mod worker_state;

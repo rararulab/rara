@@ -25,9 +25,6 @@ use yunara_store::db::DBStore;
 /// Shared application state used by workers and HTTP routes.
 #[derive(Clone)]
 pub struct AppState {
-    // -- AI --
-    pub ai_service: rara_backend_admin::ai_tasks::TaskAgentService,
-
     // -- domain services --
     pub resume_service:      rara_backend_admin::resume::ResumeAppService,
     pub application_service: rara_backend_admin::application::service::ApplicationService,
@@ -66,37 +63,8 @@ pub struct AppState {
     // -- user store --
     pub user_store: Arc<dyn rara_kernel::process::user::UserStore>,
 
-    // -- prompt repo --
-    pub prompt_repo: Arc<dyn rara_kernel::prompt::PromptRepo>,
-
     // -- tool registry --
     pub tool_registry: Arc<rara_kernel::tool::ToolRegistry>,
-
-}
-
-/// Build the system prompt for background worker agents.
-///
-/// Reads `workers/agent_policy.md` and `agent/soul.md` from the prompt repo
-/// and combines them.
-pub async fn build_worker_policy(
-    prompt_repo: &dyn rara_kernel::prompt::PromptRepo,
-) -> String {
-    let policy = prompt_repo
-        .get("workers/agent_policy.md")
-        .await
-        .map(|e| e.content)
-        .unwrap_or_default();
-    let soul = prompt_repo
-        .get("agent/soul.md")
-        .await
-        .map(|e| e.content)
-        .unwrap_or_default();
-
-    if soul.trim().is_empty() {
-        policy
-    } else {
-        format!("{soul}\n\n# Operational Policy\n{policy}")
-    }
 }
 
 impl AppState {
@@ -123,25 +91,10 @@ impl AppState {
             Arc::new(settings_svc.clone());
         info!("Runtime settings service loaded");
 
-        // -- prompt repo -------------------------------------------------------
-
-        let prompt_repo: Arc<dyn rara_kernel::prompt::PromptRepo> = Arc::new(
-            rara_kernel::prompt::BuiltinPromptRepo::new(rara_kernel::prompt::all_builtin_prompts()),
-        );
-        info!("Prompt repository initialized");
-
         // -- LLM provider ----------------------------------------------------
 
         let llm_provider: rara_kernel::provider::LlmProviderLoaderRef =
             Arc::new(SettingsLlmProviderLoader::new(settings_provider.clone()));
-
-        // -- AI task agents --------------------------------------------------
-
-        let ai_service = rara_backend_admin::ai_tasks::TaskAgentService::new(
-            settings_provider.clone(),
-            llm_provider.clone(),
-            prompt_repo.clone(),
-        );
 
         // -- domain services -------------------------------------------------
 
@@ -151,7 +104,7 @@ impl AppState {
         let scheduler_service = rara_backend_admin::scheduler::wire_scheduler_service(pool.clone());
         let analytics_service = rara_backend_admin::analytics::wire_analytics_service(pool.clone());
         let job_service =
-            rara_backend_admin::job::wire_job_service(pool.clone(), ai_service.clone())
+            rara_backend_admin::job::wire_job_service(pool.clone())
                 .whatever_context("Failed to initialize job service")?;
         info!("Job service initialized");
 
@@ -322,7 +275,6 @@ impl AppState {
         info!("Kernel initialized");
 
         Ok(Self {
-            ai_service,
             resume_service,
             application_service,
             interview_service,
@@ -342,7 +294,6 @@ impl AppState {
             coding_task_service,
             kernel,
             user_store,
-            prompt_repo,
             tool_registry: tools,
         })
     }
@@ -381,11 +332,6 @@ impl AppState {
             &mut router,
             &mut api,
             rara_backend_admin::job::discovery_routes(self.job_service.clone()),
-        );
-        merge_openapi_router(
-            &mut router,
-            &mut api,
-            rara_backend_admin::job::bot_routes(self.job_service.clone()),
         );
         merge_openapi_router(
             &mut router,
