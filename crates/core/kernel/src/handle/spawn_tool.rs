@@ -283,7 +283,7 @@ mod tests {
 
     fn make_test_manifest_loader() -> Arc<ManifestLoader> {
         let mut loader = ManifestLoader::new();
-        loader.load_bundled();
+        loader.load_manifests(crate::testing::test_manifests());
         Arc::new(loader)
     }
 
@@ -309,9 +309,8 @@ mod tests {
         let tool = SpawnTool::new(handle, loader);
 
         let agents = tool.available_agents();
+        assert!(agents.contains(&"rara".to_string()));
         assert!(agents.contains(&"scout".to_string()));
-        assert!(agents.contains(&"planner".to_string()));
-        assert!(agents.contains(&"worker".to_string()));
     }
 
     #[tokio::test]

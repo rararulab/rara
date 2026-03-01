@@ -43,7 +43,7 @@ use crate::{
     event_queue::EventQueue,
     io::{pipe::PipeRegistry, stream::StreamHub},
     kernel::{Kernel, KernelConfig, KernelInner},
-    process::{ProcessTable, manifest_loader::ManifestLoader},
+    process::{AgentManifest, ProcessTable, manifest_loader::ManifestLoader},
     provider::LlmProviderLoaderRef,
     session::SessionRepository,
     tool::{AgentToolRef, ToolRegistry},
@@ -65,7 +65,7 @@ impl TestKernelBuilder {
     /// Create a new builder with default Noop components.
     pub fn new() -> Self {
         let mut manifest_loader = ManifestLoader::new();
-        manifest_loader.load_bundled();
+        manifest_loader.load_manifests(test_manifests());
 
         Self {
             config: KernelConfig {
@@ -156,4 +156,38 @@ impl TestKernelBuilder {
 
 impl Default for TestKernelBuilder {
     fn default() -> Self { Self::new() }
+}
+
+/// Create minimal test manifests (no external YAML dependencies).
+pub fn test_manifests() -> Vec<AgentManifest> {
+    vec![
+        AgentManifest {
+            name: "rara".to_string(),
+            description: "Test chat agent".to_string(),
+            model: "openai/gpt-4o-mini".to_string(),
+            system_prompt: "You are a helpful assistant.".to_string(),
+            provider_hint: None,
+            max_iterations: Some(25),
+            tools: vec![],
+            max_children: None,
+            max_context_tokens: None,
+            priority: Default::default(),
+            metadata: Default::default(),
+            sandbox: None,
+        },
+        AgentManifest {
+            name: "scout".to_string(),
+            description: "Test scout agent".to_string(),
+            model: "deepseek/deepseek-chat".to_string(),
+            system_prompt: "You are a scout agent.".to_string(),
+            provider_hint: None,
+            max_iterations: Some(15),
+            tools: vec!["read_file".to_string(), "grep".to_string()],
+            max_children: None,
+            max_context_tokens: None,
+            priority: Default::default(),
+            metadata: Default::default(),
+            sandbox: None,
+        },
+    ]
 }

@@ -16,33 +16,29 @@
 
 use std::path::Path;
 
-use rara_agents::AgentRegistry;
 use rara_kernel::process::manifest_loader::ManifestLoader;
 use tracing::info;
 
-/// Load agent manifests from the predefined [`AgentRegistry`], then overlay
+/// Load agent manifests: code-defined agents from `rara-agents`, then overlay
 /// user-defined agents from the default data directory (`<data_dir>/agents`).
 ///
-/// The loading order is:
-/// 1. Kernel bundled defaults (YAML, for backward compatibility)
-/// 2. [`AgentRegistry`] entries (Rust-defined, overrides bundled YAML)
-/// 3. User directory YAML files (overrides everything above)
+/// Loading order:
+/// 1. Code-defined agents (rara, etc.) from `rara_agents`
+/// 2. User directory YAML files (overrides code-defined)
 pub fn load_default_manifests() -> ManifestLoader {
     let mut loader = ManifestLoader::new();
-    loader.load_bundled();
-    loader.load_manifests(AgentRegistry::all().into_iter().map(|e| e.manifest));
+    loader.load_manifests(std::iter::once(rara_agents::rara()));
     let user_dir = rara_paths::data_dir().join("agents");
     let _ = loader.load_dir(&user_dir);
     info!(count = loader.list().len(), "agent manifests loaded");
     loader
 }
 
-/// Load agent manifests from the predefined [`AgentRegistry`], then overlay
+/// Load agent manifests from code-defined agents, then overlay
 /// user-defined agents from a custom directory.
 pub fn load_manifests_from(dir: &Path) -> ManifestLoader {
     let mut loader = ManifestLoader::new();
-    loader.load_bundled();
-    loader.load_manifests(AgentRegistry::all().into_iter().map(|e| e.manifest));
+    loader.load_manifests(std::iter::once(rara_agents::rara()));
     let _ = loader.load_dir(dir);
     loader
 }

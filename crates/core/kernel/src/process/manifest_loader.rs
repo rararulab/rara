@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! ManifestLoader — loads [`AgentManifest`] definitions from YAML files.
+//! ManifestLoader — loads [`AgentManifest`] definitions.
 //!
 //! Supports two sources:
-//! - **Bundled**: compiled into the binary via `include_str!`
-//! - **User directory**: loaded at runtime from a filesystem path
+//! - **Code-defined**: loaded via [`load_manifests`](ManifestLoader::load_manifests)
+//! - **User directory**: YAML files loaded at runtime from a filesystem path
 
 use std::path::Path;
 
@@ -25,10 +25,10 @@ use tracing::warn;
 use super::AgentManifest;
 use crate::error::{KernelError, Result};
 
-/// Loads [`AgentManifest`] definitions from YAML files.
+/// Loads [`AgentManifest`] definitions.
 ///
 /// Manifests are identified by name. Later loads override earlier ones with
-/// the same name, enabling user-defined overrides of bundled defaults.
+/// the same name, enabling user-defined overrides of code-defined defaults.
 pub struct ManifestLoader {
     manifests: Vec<AgentManifest>,
 }
@@ -41,26 +41,10 @@ impl ManifestLoader {
         }
     }
 
-    /// Load all bundled agent manifests (compiled into the binary).
-    pub fn load_bundled(&mut self) {
-        let sources = [
-            include_str!("defaults/rara.yaml"),
-            include_str!("defaults/scout.yaml"),
-            include_str!("defaults/planner.yaml"),
-            include_str!("defaults/worker.yaml"),
-        ];
-        for src in sources {
-            match serde_yaml::from_str::<AgentManifest>(src) {
-                Ok(m) => self.manifests.push(m),
-                Err(e) => warn!(error = %e, "failed to parse bundled agent manifest"),
-            }
-        }
-    }
-
     /// Load user-defined manifests from a directory.
     ///
     /// Later loads override earlier ones with the same name, allowing users
-    /// to customize bundled agent definitions.
+    /// to customize code-defined agent definitions.
     ///
     /// Returns the number of manifests successfully loaded.
     pub fn load_dir(&mut self, dir: &Path) -> Result<usize> {
@@ -84,7 +68,6 @@ impl ManifestLoader {
                 })?;
                 match serde_yaml::from_str::<AgentManifest>(&content) {
                     Ok(m) => {
-                        // Override existing manifest with same name
                         self.manifests.retain(|existing| existing.name != m.name);
                         self.manifests.push(m);
                         count += 1;
@@ -102,11 +85,10 @@ impl ManifestLoader {
         Ok(count)
     }
 
-    /// Load manifests from an external source (e.g., an agent registry).
+    /// Load manifests from code-defined sources.
     ///
     /// Each manifest is inserted by name. If a manifest with the same name
-    /// already exists, it is replaced (last-write-wins), enabling external
-    /// registries to override bundled defaults.
+    /// already exists, it is replaced (last-write-wins).
     pub fn load_manifests(&mut self, manifests: impl IntoIterator<Item = AgentManifest>) {
         for manifest in manifests {
             self.manifests.retain(|m| m.name != manifest.name);
@@ -134,27 +116,62 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_manifest_loader_bundled() {
+    fn test_manifest_loader_load_manifests() {
         let mut loader = ManifestLoader::new();
-        loader.load_bundled();
+        let manifest = AgentManifest {
+            name: "test-agent".to_string(),
+            description: "test".to_string(),
+            model: "gpt-4".to_string(),
+            system_prompt: "You are a test agent.".to_string(),
+            provider_hint: None,
+            max_iterations: Some(5),
+            tools: vec![],
+            max_children: None,
+            max_context_tokens: None,
+            priority: Default::default(),
+            metadata: Default::default(),
+            sandbox: None,
+        };
+        loader.load_manifests(std::iter::once(manifest));
+        assert_eq!(loader.list().len(), 1);
+        assert_eq!(loader.get("test-agent").unwrap().model, "gpt-4");
+    }
 
-        assert_eq!(loader.list().len(), 4);
-        assert!(loader.get("rara").is_some());
-        assert!(loader.get("scout").is_some());
-        assert!(loader.get("planner").is_some());
-        assert!(loader.get("worker").is_some());
-        assert!(loader.get("nonexistent").is_none());
-
-        let rara = loader.get("rara").unwrap();
-        assert_eq!(rara.model, "openai/gpt-4o-mini");
-        assert_eq!(rara.max_iterations, Some(25));
-        assert!(rara.tools.is_empty());
-
-        let scout = loader.get("scout").unwrap();
-        assert_eq!(scout.model, "deepseek/deepseek-chat");
-        assert!(scout.tools.contains(&"read_file".to_string()));
-        assert!(scout.tools.contains(&"grep".to_string()));
-        assert_eq!(scout.max_iterations, Some(15));
+    #[test]
+    fn test_manifest_loader_override() {
+        let mut loader = ManifestLoader::new();
+        let m1 = AgentManifest {
+            name: "agent".to_string(),
+            description: "v1".to_string(),
+            model: "gpt-3.5".to_string(),
+            system_prompt: "v1".to_string(),
+            provider_hint: None,
+            max_iterations: Some(5),
+            tools: vec![],
+            max_children: None,
+            max_context_tokens: None,
+            priority: Default::default(),
+            metadata: Default::default(),
+            sandbox: None,
+        };
+        let m2 = AgentManifest {
+            name: "agent".to_string(),
+            description: "v2".to_string(),
+            model: "gpt-4".to_string(),
+            system_prompt: "v2".to_string(),
+            provider_hint: None,
+            max_iterations: Some(10),
+            tools: vec![],
+            max_children: None,
+            max_context_tokens: None,
+            priority: Default::default(),
+            metadata: Default::default(),
+            sandbox: None,
+        };
+        loader.load_manifests(std::iter::once(m1));
+        loader.load_manifests(std::iter::once(m2));
+        assert_eq!(loader.list().len(), 1);
+        assert_eq!(loader.get("agent").unwrap().model, "gpt-4");
     }
 
     #[test]
@@ -163,7 +180,6 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
-        // Write a custom manifest
         fs::write(
             dir.join("custom.yaml"),
             r#"
@@ -178,7 +194,6 @@ max_iterations: 5
         )
         .unwrap();
 
-        // Write a non-yaml file (should be skipped)
         fs::write(dir.join("readme.txt"), "not a manifest").unwrap();
 
         let mut loader = ManifestLoader::new();
@@ -189,48 +204,6 @@ max_iterations: 5
         assert_eq!(custom.model, "gpt-4");
         assert_eq!(custom.max_iterations, Some(5));
 
-        // Cleanup
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn test_manifest_loader_dir_override() {
-        let dir = std::env::temp_dir().join("manifest_loader_override_test");
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-
-        // Write a scout override
-        fs::write(
-            dir.join("scout.yaml"),
-            r#"
-name: scout
-description: "Overridden scout"
-model: "gpt-4-turbo"
-system_prompt: "You are an overridden scout."
-tools:
-  - read_file
-max_iterations: 30
-"#,
-        )
-        .unwrap();
-
-        let mut loader = ManifestLoader::new();
-        loader.load_bundled();
-        assert_eq!(loader.get("scout").unwrap().model, "deepseek/deepseek-chat");
-
-        let count = loader.load_dir(&dir).unwrap();
-        assert_eq!(count, 1);
-
-        // Scout should be overridden
-        let scout = loader.get("scout").unwrap();
-        assert_eq!(scout.model, "gpt-4-turbo");
-        assert_eq!(scout.max_iterations, Some(30));
-
-        // Other bundled manifests remain
-        assert!(loader.get("planner").is_some());
-        assert!(loader.get("worker").is_some());
-
-        // Cleanup
         let _ = fs::remove_dir_all(&dir);
     }
 

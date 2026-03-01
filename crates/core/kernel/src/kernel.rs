@@ -562,7 +562,7 @@ mod tests {
         };
 
         let mut loader = ManifestLoader::new();
-        loader.load_bundled();
+        loader.load_manifests(crate::testing::test_manifests());
 
         Kernel::new(
             config,
@@ -622,9 +622,8 @@ mod tests {
     #[test]
     fn test_kernel_manifest_loader() {
         let kernel = make_test_kernel(10, 5);
+        assert!(kernel.manifest_loader().get("rara").is_some());
         assert!(kernel.manifest_loader().get("scout").is_some());
-        assert!(kernel.manifest_loader().get("planner").is_some());
-        assert!(kernel.manifest_loader().get("worker").is_some());
         assert!(kernel.manifest_loader().get("nonexistent").is_none());
     }
 

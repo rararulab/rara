@@ -43,6 +43,36 @@ use uuid::Uuid;
 use crate::error::Result;
 
 // ---------------------------------------------------------------------------
+// AgentRole
+// ---------------------------------------------------------------------------
+
+/// Classification of an agent's functional role.
+///
+/// Roles enable callers to look up agents by function rather than by name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AgentRole {
+    /// User-facing conversational agent (default chat entry point).
+    Chat,
+    /// Codebase recon / investigation agent.
+    Scout,
+    /// Task planning agent.
+    Planner,
+    /// Execution / coding agent.
+    Worker,
+}
+
+impl std::fmt::Display for AgentRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AgentRole::Chat => write!(f, "chat"),
+            AgentRole::Scout => write!(f, "scout"),
+            AgentRole::Planner => write!(f, "planner"),
+            AgentRole::Worker => write!(f, "worker"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Priority
 // ---------------------------------------------------------------------------
 

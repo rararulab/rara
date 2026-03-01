@@ -62,7 +62,7 @@ pub use error::{KernelError, Result};
 pub use handle::{AgentHandle, process_handle::ProcessHandle, spawn_tool::SpawnTool};
 pub use kernel::{Kernel, KernelConfig};
 pub use process::{
-    AgentId, AgentProcess, MetricsSnapshot, Priority, ProcessInfo, ProcessState,
+    AgentId, AgentProcess, AgentRole, MetricsSnapshot, Priority, ProcessInfo, ProcessState,
     ProcessStats, ProcessTable, RuntimeMetrics, SandboxConfig, SessionId, Signal, SystemStats,
     manifest_loader::ManifestLoader,
     principal::{Principal, Role, UserId},
