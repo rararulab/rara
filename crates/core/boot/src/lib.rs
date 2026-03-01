@@ -25,6 +25,7 @@ pub mod error;
 pub mod kernel;
 pub mod manifests;
 pub mod mcp;
+pub mod outbox;
 pub mod resolvers;
 pub mod skills;
 pub mod stream;
