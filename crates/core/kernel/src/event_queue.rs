@@ -71,6 +71,13 @@ pub trait EventQueue: Send + Sync + 'static {
 
     /// Mark a WAL entry as completed. Default no-op for non-persistent queues.
     fn mark_completed(&self, _wal_id: u64) {}
+
+    /// Whether this queue is a sharded event queue.
+    ///
+    /// Returns `true` for [`ShardedEventQueue`](crate::sharded_event_queue::ShardedEventQueue),
+    /// `false` for all other implementations. Used by the kernel event loop
+    /// to decide between single-processor and multi-processor modes.
+    fn is_sharded(&self) -> bool { false }
 }
 
 // ---------------------------------------------------------------------------
