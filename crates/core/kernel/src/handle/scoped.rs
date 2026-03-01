@@ -305,7 +305,9 @@ mod tests {
     fn make_kernel_inner() -> Arc<KernelInner> {
         use crate::{
             defaults::{
-                noop::{NoopEventBus, NoopGuard, NoopMemory, NoopSessionRepository},
+                noop::{
+                    NoopEventBus, NoopGuard, NoopMemory, NoopModelRepo, NoopSessionRepository,
+                },
                 noop_user_store::NoopUserStore,
             },
             io::{memory_bus::InMemoryOutboundBus, stream::StreamHub},
@@ -328,6 +330,8 @@ mod tests {
             shared_kv:              DashMap::new(),
             user_store:             Arc::new(NoopUserStore),
             session_repo:           Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
+            model_repo:             Arc::new(NoopModelRepo)
+                as Arc<dyn crate::model_repo::ModelRepo>,
             stream_hub:             Arc::new(StreamHub::new(1)),
             outbound_bus:           Arc::new(InMemoryOutboundBus::new(1))
                 as Arc<dyn crate::io::bus::OutboundBus>,

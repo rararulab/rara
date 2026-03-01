@@ -20,6 +20,7 @@ common-worker = { workspace = true }
 config = { workspace = true }
 object-store = { workspace = true }
 opendal = { workspace = true }
+rara-backend-admin = { workspace = true }
 rara-boot = { workspace = true }
 rara-channels = { workspace = true }
 rara-consul = { workspace = true }

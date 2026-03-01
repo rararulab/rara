@@ -98,6 +98,7 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:25555',
         changeOrigin: true,
+        ws: true,
         configure: (proxy) => {
           proxy.on('proxyRes', (proxyRes, req) => {
             if (req.url?.includes('/health')) {

@@ -86,7 +86,10 @@ impl FallibleWorker<AppState> for ProactiveAgentWorker {
 
         // 4. Build manifest and spawn via Kernel (fire-and-forget)
         let policy = crate::worker_state::build_worker_policy(state.prompt_repo.as_ref()).await;
-        let model = settings.ai.model_for_key("proactive");
+        let Some(model) = settings.ai.model_for_key("proactive") else {
+            warn!("no model configured for key 'proactive' — skipping proactive agent");
+            return Ok(());
+        };
         let provider_hint = settings.ai.provider.clone();
         let max_iterations = settings
             .agent

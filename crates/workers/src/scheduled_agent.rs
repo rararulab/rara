@@ -57,7 +57,10 @@ impl FallibleWorker<AppState> for AgentSchedulerWorker {
         );
 
         let policy = crate::worker_state::build_worker_policy(state.prompt_repo.as_ref()).await;
-        let model = settings.ai.model_for_key("scheduled");
+        let Some(model) = settings.ai.model_for_key("scheduled") else {
+            warn!("no model configured for key 'scheduled' — skipping scheduled jobs");
+            return Ok(());
+        };
         let provider_hint = settings.ai.provider.clone();
         let max_iterations = settings
             .agent

@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 
 use rara_domain_shared::settings::model::{AiRuntimeSettingsPatch, UpdateRequest};
-use rara_kernel::model_repo::{HARDCODED_DEFAULT_MODEL, ModelEntry, ModelRepo, ModelRepoError};
+use rara_kernel::model_repo::{ModelEntry, ModelRepo, ModelRepoError};
 
 use crate::settings::SettingsSvc;
 
@@ -33,7 +33,7 @@ impl SettingsModelRepo {
 
 #[async_trait::async_trait]
 impl ModelRepo for SettingsModelRepo {
-    async fn get(&self, key: &str) -> String {
+    async fn get(&self, key: &str) -> Option<String> {
         let settings = self.settings_svc.current();
         settings
             .ai
@@ -41,7 +41,6 @@ impl ModelRepo for SettingsModelRepo {
             .get(key)
             .or_else(|| settings.ai.models.get("default"))
             .cloned()
-            .unwrap_or_else(|| HARDCODED_DEFAULT_MODEL.to_owned())
     }
 
     async fn set(&self, key: &str, model: &str) -> Result<(), ModelRepoError> {

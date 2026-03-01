@@ -33,6 +33,7 @@ use crate::{
         Result as MemResult, knowledge::KnowledgeMemory, learning::LearningMemory,
         state::StateMemory, types::*,
     },
+    model_repo::{ModelEntry, ModelRepo, ModelRepoError},
     process::{SessionId, principal::UserId},
     session::{
         ChannelBinding, SessionEntry, SessionError, SessionKey, SessionRepository,
@@ -357,5 +358,37 @@ impl SessionResolver for NoopSessionResolver {
     ) -> Result<SessionId, IngestError> {
         let chat_id = platform_chat_id.unwrap_or("default");
         Ok(SessionId::new(format!("{}:{}", channel_type, chat_id)))
+    }
+}
+
+// ---- NoopModelRepo ----
+
+/// A no-op model repo for testing — always returns `None`.
+pub struct NoopModelRepo;
+
+#[async_trait]
+impl ModelRepo for NoopModelRepo {
+    async fn get(&self, _key: &str) -> Option<String> {
+        None
+    }
+
+    async fn set(&self, _key: &str, _model: &str) -> Result<(), ModelRepoError> {
+        Ok(())
+    }
+
+    async fn remove(&self, _key: &str) -> Result<(), ModelRepoError> {
+        Ok(())
+    }
+
+    async fn list(&self) -> Vec<ModelEntry> {
+        vec![]
+    }
+
+    async fn fallback_models(&self) -> Vec<String> {
+        vec![]
+    }
+
+    async fn set_fallback_models(&self, _models: Vec<String>) -> Result<(), ModelRepoError> {
+        Ok(())
     }
 }

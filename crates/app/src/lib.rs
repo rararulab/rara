@@ -349,7 +349,7 @@ impl AppConfig {
                 Some(adapter)
             }
             Ok(None) => {
-                info!("Telegram not configured (TELEGRAM_BOT_TOKEN unset), skipping");
+                info!("Telegram not configured (bot_token unset in settings), skipping");
                 None
             }
             Err(e) => {
@@ -359,6 +359,11 @@ impl AppConfig {
         };
 
         // -- Kernel (boot + start) --------------------------------------------
+
+        let model_repo: std::sync::Arc<dyn rara_kernel::model_repo::ModelRepo> =
+            std::sync::Arc::new(rara_backend_admin::models::SettingsModelRepo::new(
+                app_state.settings_svc.clone(),
+            ));
 
         let mut kernel = rara_boot::kernel::boot(rara_boot::kernel::BootConfig {
             llm_provider:  app_state.llm_provider.clone(),
@@ -370,6 +375,7 @@ impl AppConfig {
             },
             user_store:    rara_boot::components::default_user_store(),
             session_repo:  app_state.session_repo.clone(),
+            model_repo,
             ..Default::default()
         });
 
@@ -514,8 +520,8 @@ impl AppConfig {
     async fn try_build_telegram(
         state: &rara_workers::worker_state::AppState,
     ) -> Result<Option<Arc<rara_channels::telegram::TelegramAdapter>>, Whatever> {
-        let token = match std::env::var("TELEGRAM_BOT_TOKEN") {
-            Ok(t) if !t.is_empty() => t,
+        let token = match state.settings_svc.current().telegram.bot_token.clone() {
+            Some(t) if !t.is_empty() => t,
             _ => return Ok(None),
         };
 

@@ -55,7 +55,7 @@ pub struct ModelListView {
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ModelValueView {
     pub key:   String,
-    pub model: String,
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
@@ -186,7 +186,7 @@ async fn set_model(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(ModelValueView {
         key,
-        model: req.model,
+        model: Some(req.model),
     }))
 }
 

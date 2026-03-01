@@ -29,9 +29,6 @@ pub mod model_keys {
     pub const SCHEDULED: &str = "scheduled";
 }
 
-/// The hardcoded default model used when nothing else is configured.
-pub const HARDCODED_DEFAULT_MODEL: &str = "openai/gpt-4o";
-
 /// A single key-model mapping entry.
 pub struct ModelEntry {
     pub key:   String,
@@ -53,8 +50,10 @@ pub enum ModelRepoError {
 pub trait ModelRepo: Send + Sync + 'static {
     /// Get the model for the given key.
     ///
-    /// Falls back to the `"default"` key, then to [`HARDCODED_DEFAULT_MODEL`].
-    async fn get(&self, key: &str) -> String;
+    /// Returns `None` if no model is configured for the key (or the
+    /// `"default"` fallback key). Callers must handle the missing-model
+    /// case explicitly.
+    async fn get(&self, key: &str) -> Option<String>;
 
     /// Assign a model to a key.
     async fn set(&self, key: &str, model: &str) -> Result<(), ModelRepoError>;

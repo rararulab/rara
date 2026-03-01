@@ -72,13 +72,13 @@ impl AISettings {
 
     /// Resolve the model for the given key.
     ///
-    /// Falls back to the `"default"` key, then to the hardcoded default.
-    pub fn model_for_key(&self, key: &str) -> String {
+    /// Falls back to the `"default"` key. Returns `None` if neither the
+    /// specific key nor the `"default"` key is configured.
+    pub fn model_for_key(&self, key: &str) -> Option<String> {
         self.models
             .get(key)
             .or_else(|| self.models.get("default"))
             .cloned()
-            .unwrap_or_else(|| "openai/gpt-4o".to_owned())
     }
 }
 
@@ -515,10 +515,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn model_for_key_falls_back_to_hardcoded_default() {
+    fn model_for_key_returns_none_when_unconfigured() {
         let ai = AISettings::default();
-        assert_eq!(ai.model_for_key("job"), "openai/gpt-4o");
-        assert_eq!(ai.model_for_key("chat"), "openai/gpt-4o");
+        assert_eq!(ai.model_for_key("job"), None);
+        assert_eq!(ai.model_for_key("chat"), None);
     }
 
     #[test]
@@ -536,8 +536,8 @@ mod tests {
             models: HashMap::from([("default".to_owned(), "anthropic/claude-sonnet-4".to_owned())]),
             ..Default::default()
         };
-        assert_eq!(ai.model_for_key("job"), "anthropic/claude-sonnet-4");
-        assert_eq!(ai.model_for_key("chat"), "anthropic/claude-sonnet-4");
+        assert_eq!(ai.model_for_key("job").as_deref(), Some("anthropic/claude-sonnet-4"));
+        assert_eq!(ai.model_for_key("chat").as_deref(), Some("anthropic/claude-sonnet-4"));
     }
 
     #[test]
@@ -550,8 +550,8 @@ mod tests {
             ]),
             ..Default::default()
         };
-        assert_eq!(ai.model_for_key("job"), "openai/gpt-4o");
-        assert_eq!(ai.model_for_key("chat"), "openai/gpt-4o-mini");
+        assert_eq!(ai.model_for_key("job").as_deref(), Some("openai/gpt-4o"));
+        assert_eq!(ai.model_for_key("chat").as_deref(), Some("openai/gpt-4o-mini"));
     }
 
     #[test]
@@ -563,9 +563,9 @@ mod tests {
             ]),
             ..Default::default()
         };
-        assert_eq!(ai.model_for_key("job"), "openai/gpt-4o");
+        assert_eq!(ai.model_for_key("job").as_deref(), Some("openai/gpt-4o"));
         // Chat falls back to default key
-        assert_eq!(ai.model_for_key("chat"), "anthropic/claude-sonnet-4");
+        assert_eq!(ai.model_for_key("chat").as_deref(), Some("anthropic/claude-sonnet-4"));
     }
 
     #[test]

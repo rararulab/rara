@@ -127,7 +127,15 @@ impl TickLoop {
         };
 
         // No existing process — spawn a new one
-        let manifest = self.default_manifest();
+        let Some(manifest) = self.resolve_manifest().await else {
+            error!(
+                session_id = %session_id,
+                "no model configured for key '{}' — cannot spawn agent; \
+                 configure a model via settings",
+                crate::model_repo::model_keys::CHAT,
+            );
+            return;
+        };
         let principal = Principal::user(user_id);
 
         match self
@@ -152,19 +160,27 @@ impl TickLoop {
         }
     }
 
-    /// Default manifest for auto-spawned agents.
-    fn default_manifest(&self) -> AgentManifest {
-        AgentManifest {
+    /// Resolve the manifest for auto-spawned agents.
+    ///
+    /// Returns `None` if no model is configured — the caller must handle
+    /// this as an error (user needs to configure a model via settings).
+    async fn resolve_manifest(&self) -> Option<AgentManifest> {
+        let model = self
+            .kernel
+            .model_repo()
+            .get(crate::model_repo::model_keys::CHAT)
+            .await?;
+        Some(AgentManifest {
             name:           "io-agent".to_string(),
             description:    "I/O bus agent".to_string(),
-            model:          "default".to_string(),
+            model,
             system_prompt:  "You are a helpful assistant.".to_string(),
             provider_hint:  None,
             max_iterations: Some(25),
             tools:          vec![],
             max_children:   None,
             metadata:       serde_json::Value::Null,
-        }
+        })
     }
 }
 
@@ -190,11 +206,42 @@ mod tests {
             types::{ChannelSource, MessageId},
         },
         kernel::{Kernel, KernelConfig},
+        model_repo::{ModelEntry, ModelRepo, ModelRepoError},
         process::{SessionId, manifest_loader::ManifestLoader, principal::UserId},
         provider::{EnvLlmProviderLoader, LlmProviderLoaderRef},
         session::SessionRepository,
         tool::ToolRegistry,
     };
+
+    /// A test ModelRepo that always returns a configured model.
+    struct TestModelRepo;
+
+    #[async_trait::async_trait]
+    impl ModelRepo for TestModelRepo {
+        async fn get(&self, _key: &str) -> Option<String> {
+            Some("test-model".to_string())
+        }
+
+        async fn set(&self, _key: &str, _model: &str) -> Result<(), ModelRepoError> {
+            Ok(())
+        }
+
+        async fn remove(&self, _key: &str) -> Result<(), ModelRepoError> {
+            Ok(())
+        }
+
+        async fn list(&self) -> Vec<ModelEntry> {
+            vec![]
+        }
+
+        async fn fallback_models(&self) -> Vec<String> {
+            vec![]
+        }
+
+        async fn set_fallback_models(&self, _models: Vec<String>) -> Result<(), ModelRepoError> {
+            Ok(())
+        }
+    }
 
     /// Helper: build a test InboundMessage.
     fn test_inbound(session: &str, text: &str) -> InboundMessage {
@@ -234,6 +281,7 @@ mod tests {
             loader,
             Arc::new(NoopUserStore),
             Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
+            Arc::new(TestModelRepo) as Arc<dyn crate::model_repo::ModelRepo>,
             Arc::new(InMemoryInboundBus::new(128)) as Arc<dyn InboundBus>,
             Arc::new(InMemoryOutboundBus::new(64)) as Arc<dyn OutboundBus>,
             Arc::new(StreamHub::new(16)),

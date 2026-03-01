@@ -187,6 +187,8 @@ mod tests {
             shared_kv:              DashMap::new(),
             user_store:             Arc::new(NoopUserStore),
             session_repo:           Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
+            model_repo:             Arc::new(crate::defaults::noop::NoopModelRepo)
+                as Arc<dyn crate::model_repo::ModelRepo>,
             stream_hub:             Arc::new(StreamHub::new(16)),
             outbound_bus:           Arc::new(InMemoryOutboundBus::new(64))
                 as Arc<dyn crate::io::bus::OutboundBus>,

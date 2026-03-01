@@ -263,7 +263,10 @@ impl PipelineService {
 
         let settings = self.settings_svc.current();
         let provider_hint = settings.ai.provider.clone();
-        let model = settings.ai.model_for_key("pipeline");
+        let model = settings
+            .ai
+            .model_for_key("pipeline")
+            .ok_or(PipelineError::AiNotConfigured)?;
 
         // Build pipeline-specific tool registry (includes report_pipeline_stats).
         let mut tools = self.build_pipeline_tools().await;

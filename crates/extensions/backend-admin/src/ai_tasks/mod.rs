@@ -100,7 +100,10 @@ impl TaskAgentService {
         key: &str,
     ) -> Result<(Arc<dyn rara_kernel::provider::LlmProvider>, String), TaskAgentError> {
         let current = self.settings_rx.borrow().clone();
-        let model = current.ai.model_for_key(key);
+        let model = current
+            .ai
+            .model_for_key(key)
+            .ok_or(TaskAgentError::NotConfigured)?;
 
         let provider = self
             .llm_provider

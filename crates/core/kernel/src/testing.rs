@@ -35,11 +35,12 @@ use tokio::sync::Semaphore;
 
 use crate::{
     defaults::{
-        noop::{NoopEventBus, NoopGuard, NoopMemory, NoopSessionRepository},
+        noop::{NoopEventBus, NoopGuard, NoopMemory, NoopModelRepo, NoopSessionRepository},
         noop_user_store::NoopUserStore,
     },
     io::{bus::OutboundBus, memory_bus::InMemoryOutboundBus, stream::StreamHub},
     kernel::{Kernel, KernelConfig, KernelInner},
+    model_repo::ModelRepo,
     process::{ProcessTable, manifest_loader::ManifestLoader},
     provider::LlmProviderLoaderRef,
     session::SessionRepository,
@@ -132,6 +133,7 @@ impl TestKernelBuilder {
             user_store:             Arc::new(NoopUserStore),
             session_repo:           Arc::new(NoopSessionRepository)
                 as Arc<dyn SessionRepository>,
+            model_repo:             Arc::new(NoopModelRepo) as Arc<dyn ModelRepo>,
             stream_hub:             Arc::new(StreamHub::new(16)),
             outbound_bus:           Arc::new(InMemoryOutboundBus::new(64))
                 as Arc<dyn OutboundBus>,

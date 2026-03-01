@@ -30,6 +30,7 @@ use rara_kernel::{
         stream::StreamHub,
     },
     kernel::{Kernel, KernelConfig},
+    model_repo::ModelRepo,
     process::{manifest_loader::ManifestLoader, user::UserStore},
     provider::LlmProviderLoaderRef,
     session::SessionRepository,
@@ -61,6 +62,8 @@ pub struct BootConfig {
     pub user_store: Arc<dyn UserStore>,
     /// Session repository for conversation history.
     pub session_repo: Arc<dyn SessionRepository>,
+    /// Model repository for runtime model resolution.
+    pub model_repo: Arc<dyn ModelRepo>,
 
     // -- I/O capacities (optional, have sensible defaults) -------------------
     /// Inbound bus capacity.
@@ -85,7 +88,7 @@ pub struct BootConfig {
 
 impl Default for BootConfig {
     fn default() -> Self {
-        use rara_kernel::defaults::noop::{NoopSessionRepository};
+        use rara_kernel::defaults::noop::{NoopModelRepo, NoopSessionRepository};
         use rara_kernel::defaults::noop_user_store::NoopUserStore;
         use rara_kernel::provider::EnvLlmProviderLoader;
 
@@ -96,6 +99,7 @@ impl Default for BootConfig {
             manifest_loader:   ManifestLoader::new(),
             user_store:        Arc::new(NoopUserStore) as Arc<dyn UserStore>,
             session_repo:      Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
+            model_repo:        Arc::new(NoopModelRepo) as Arc<dyn ModelRepo>,
             inbound_capacity:  1024,
             outbound_capacity: 256,
             stream_capacity:   64,
@@ -163,6 +167,7 @@ pub fn boot(config: BootConfig) -> Kernel {
         config.manifest_loader,
         config.user_store,
         config.session_repo,
+        config.model_repo,
         inbound_bus,
         outbound_bus,
         stream_hub,

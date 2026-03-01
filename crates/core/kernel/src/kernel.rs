@@ -104,6 +104,8 @@ pub(crate) struct KernelInner {
     pub user_store:             Arc<dyn UserStore>,
     /// Session repository for conversation history.
     pub session_repo:           Arc<dyn SessionRepository>,
+    /// Model repository for runtime model resolution.
+    pub model_repo:             Arc<dyn crate::model_repo::ModelRepo>,
     /// Stream hub for real-time streaming events.
     pub stream_hub:             Arc<StreamHub>,
     /// Outbound bus for publishing final responses.
@@ -576,6 +578,7 @@ impl Kernel {
         manifest_loader: ManifestLoader,
         user_store: Arc<dyn UserStore>,
         session_repo: Arc<dyn SessionRepository>,
+        model_repo: Arc<dyn crate::model_repo::ModelRepo>,
         inbound_bus: Arc<dyn InboundBus>,
         outbound_bus: Arc<dyn OutboundBus>,
         stream_hub: Arc<StreamHub>,
@@ -611,6 +614,7 @@ impl Kernel {
             shared_kv: DashMap::new(),
             user_store,
             session_repo,
+            model_repo,
             stream_hub: stream_hub.clone(),
             outbound_bus: outbound_bus.clone(),
         });
@@ -741,6 +745,9 @@ impl Kernel {
     /// Access the kernel config.
     pub fn config(&self) -> &KernelConfig { &self.config }
 
+    /// Access the model repository for runtime model resolution.
+    pub fn model_repo(&self) -> &Arc<dyn crate::model_repo::ModelRepo> { &self.inner.model_repo }
+
     /// Access the shared KernelInner (for constructing ScopedKernelHandles
     /// externally).
     pub(crate) fn inner(&self) -> &Arc<KernelInner> { &self.inner }
@@ -854,7 +861,7 @@ mod tests {
     use super::*;
     use crate::{
         defaults::{
-            noop::{NoopEventBus, NoopGuard, NoopMemory, NoopSessionRepository},
+            noop::{NoopEventBus, NoopGuard, NoopMemory, NoopModelRepo, NoopSessionRepository},
             noop_user_store::NoopUserStore,
         },
         io::memory_bus::{InMemoryInboundBus, InMemoryOutboundBus},
@@ -882,6 +889,7 @@ mod tests {
             loader,
             Arc::new(NoopUserStore),
             Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
+            Arc::new(NoopModelRepo) as Arc<dyn crate::model_repo::ModelRepo>,
             Arc::new(InMemoryInboundBus::new(128)) as Arc<dyn InboundBus>,
             Arc::new(InMemoryOutboundBus::new(64)) as Arc<dyn OutboundBus>,
             Arc::new(StreamHub::new(16)),
