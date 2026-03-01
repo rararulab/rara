@@ -28,12 +28,15 @@ pub mod manifest_loader;
 pub mod principal;
 pub mod user;
 
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use dashmap::DashMap;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -298,6 +301,168 @@ impl From<&AgentProcess> for ProcessInfo {
     }
 }
 
+// ---------------------------------------------------------------------------
+// RuntimeMetrics — per-process atomic counters
+// ---------------------------------------------------------------------------
+
+/// Per-process runtime metrics using atomic counters for lock-free updates.
+///
+/// These counters are incremented during process execution and read when
+/// building [`ProcessStats`] snapshots. Atomics avoid locking overhead on
+/// the hot path (every LLM call, every tool call, every message).
+pub struct RuntimeMetrics {
+    /// Number of messages received by this process.
+    pub messages_received: AtomicU64,
+    /// Number of LLM completion calls made.
+    pub llm_calls: AtomicU64,
+    /// Number of tool calls executed.
+    pub tool_calls: AtomicU64,
+    /// Approximate total tokens consumed (prompt + completion).
+    pub tokens_consumed: AtomicU64,
+    /// Timestamp of the most recent activity.
+    pub last_activity: Mutex<Option<Timestamp>>,
+}
+
+impl RuntimeMetrics {
+    /// Create a new zeroed metrics instance.
+    pub fn new() -> Self {
+        Self {
+            messages_received: AtomicU64::new(0),
+            llm_calls:         AtomicU64::new(0),
+            tool_calls:        AtomicU64::new(0),
+            tokens_consumed:   AtomicU64::new(0),
+            last_activity:     Mutex::new(None),
+        }
+    }
+
+    /// Record a message received event.
+    pub fn record_message(&self) {
+        self.messages_received.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record an LLM call completion.
+    pub fn record_llm_call(&self) {
+        self.llm_calls.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record tool calls made during a turn.
+    pub fn record_tool_calls(&self, count: u64) {
+        self.tool_calls.fetch_add(count, Ordering::Relaxed);
+    }
+
+    /// Record tokens consumed.
+    pub fn record_tokens(&self, count: u64) {
+        self.tokens_consumed.fetch_add(count, Ordering::Relaxed);
+    }
+
+    /// Update the last activity timestamp to now.
+    pub async fn touch(&self) {
+        let mut guard = self.last_activity.lock().await;
+        *guard = Some(Timestamp::now());
+    }
+
+    /// Take a snapshot of the current counters.
+    pub async fn snapshot(&self) -> MetricsSnapshot {
+        MetricsSnapshot {
+            messages_received: self.messages_received.load(Ordering::Relaxed),
+            llm_calls:         self.llm_calls.load(Ordering::Relaxed),
+            tool_calls:        self.tool_calls.load(Ordering::Relaxed),
+            tokens_consumed:   self.tokens_consumed.load(Ordering::Relaxed),
+            last_activity:     *self.last_activity.lock().await,
+        }
+    }
+}
+
+impl Default for RuntimeMetrics {
+    fn default() -> Self { Self::new() }
+}
+
+impl std::fmt::Debug for RuntimeMetrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RuntimeMetrics")
+            .field("messages_received", &self.messages_received.load(Ordering::Relaxed))
+            .field("llm_calls", &self.llm_calls.load(Ordering::Relaxed))
+            .field("tool_calls", &self.tool_calls.load(Ordering::Relaxed))
+            .field("tokens_consumed", &self.tokens_consumed.load(Ordering::Relaxed))
+            .finish()
+    }
+}
+
+/// Point-in-time snapshot of [`RuntimeMetrics`] (all plain values, no atomics).
+#[derive(Debug, Clone, Serialize)]
+pub struct MetricsSnapshot {
+    pub messages_received: u64,
+    pub llm_calls:         u64,
+    pub tool_calls:        u64,
+    pub tokens_consumed:   u64,
+    pub last_activity:     Option<Timestamp>,
+}
+
+// ---------------------------------------------------------------------------
+// ProcessStats — rich per-process introspection (like /proc/<pid>/status)
+// ---------------------------------------------------------------------------
+
+/// Extended runtime statistics for a single agent process.
+///
+/// Combines static metadata from [`AgentProcess`] with live counters from
+/// [`RuntimeMetrics`]. This is the `/proc/<pid>/status` equivalent.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProcessStats {
+    /// Unique process identifier.
+    pub agent_id:          AgentId,
+    /// Session this process belongs to.
+    pub session_id:        SessionId,
+    /// The manifest name (agent definition name).
+    pub manifest_name:     String,
+    /// Current lifecycle state.
+    pub state:             ProcessState,
+    /// Parent process, if any.
+    pub parent_id:         Option<AgentId>,
+    /// IDs of child processes.
+    pub children:          Vec<AgentId>,
+    /// When this process was created.
+    pub created_at:        Timestamp,
+    /// How long this process has been alive (milliseconds).
+    pub uptime_ms:         u64,
+    // -- Runtime metrics --
+    /// Number of messages received by this process.
+    pub messages_received: u64,
+    /// Number of LLM completion calls made.
+    pub llm_calls:         u64,
+    /// Number of tool calls executed.
+    pub tool_calls:        u64,
+    /// Approximate total tokens consumed.
+    pub tokens_consumed:   u64,
+    /// Timestamp of the most recent activity.
+    pub last_activity:     Option<Timestamp>,
+}
+
+// ---------------------------------------------------------------------------
+// SystemStats — kernel-wide aggregate metrics (like /proc/stat)
+// ---------------------------------------------------------------------------
+
+/// Kernel-wide aggregate statistics.
+///
+/// Provides a high-level overview of the kernel's current state, analogous
+/// to `/proc/stat` or `/proc/meminfo` in Linux.
+#[derive(Debug, Clone, Serialize)]
+pub struct SystemStats {
+    /// Number of currently active (Running or Waiting) processes.
+    pub active_processes:          usize,
+    /// Total number of processes ever spawned.
+    pub total_spawned:             u64,
+    /// Total number of processes that completed successfully.
+    pub total_completed:           u64,
+    /// Total number of processes that failed.
+    pub total_failed:              u64,
+    /// Number of global semaphore permits currently available.
+    pub global_semaphore_available: usize,
+    /// Sum of tokens consumed across all tracked processes.
+    pub total_tokens_consumed:     u64,
+    /// Kernel uptime in milliseconds.
+    pub uptime_ms:                 u64,
+}
+
 /// In-memory process table — the kernel's view of all running agents.
 ///
 /// Thread-safe via `DashMap`. Supports concurrent reads and writes from
@@ -315,27 +480,44 @@ pub struct ProcessTable {
     /// Cancellation tokens for graceful process termination.
     /// Parent token cancel → all child tokens cancel automatically.
     cancellation_tokens: DashMap<AgentId, CancellationToken>,
+    /// Per-process runtime metrics (atomic counters for lock-free updates).
+    metrics:       DashMap<AgentId, std::sync::Arc<RuntimeMetrics>>,
+    /// Monotonically increasing counter of total processes ever spawned.
+    total_spawned:    AtomicU64,
+    /// Total processes that completed successfully.
+    total_completed:  AtomicU64,
+    /// Total processes that failed.
+    total_failed:     AtomicU64,
 }
 
 impl ProcessTable {
     /// Create an empty process table.
     pub fn new() -> Self {
         Self {
-            processes:     DashMap::new(),
-            session_index: DashMap::new(),
-            mailboxes:     DashMap::new(),
+            processes:           DashMap::new(),
+            session_index:       DashMap::new(),
+            mailboxes:           DashMap::new(),
             cancellation_tokens: DashMap::new(),
+            metrics:             DashMap::new(),
+            total_spawned:       AtomicU64::new(0),
+            total_completed:     AtomicU64::new(0),
+            total_failed:        AtomicU64::new(0),
         }
     }
 
     /// Insert a process into the table.
     ///
     /// Automatically updates the session index so `find_by_session` can
-    /// locate this process.
+    /// locate this process, creates a [`RuntimeMetrics`] entry, and
+    /// increments the total spawned counter.
     pub fn insert(&self, process: AgentProcess) {
+        let agent_id = process.agent_id;
         self.session_index
-            .insert(process.session_id.clone(), process.agent_id);
-        self.processes.insert(process.agent_id, process);
+            .insert(process.session_id.clone(), agent_id);
+        self.metrics
+            .insert(agent_id, std::sync::Arc::new(RuntimeMetrics::new()));
+        self.total_spawned.fetch_add(1, Ordering::Relaxed);
+        self.processes.insert(agent_id, process);
     }
 
     /// Get a clone of a process by ID.
@@ -345,15 +527,30 @@ impl ProcessTable {
 
     /// Transition a process to a new state.
     ///
-    /// Automatically sets `finished_at` when transitioning to a terminal state.
+    /// Automatically sets `finished_at` when transitioning to a terminal state
+    /// and increments aggregate completed/failed counters.
     pub fn set_state(&self, id: AgentId, state: ProcessState) -> Result<()> {
         let mut entry = self
             .processes
             .get_mut(&id)
             .ok_or(crate::error::KernelError::AgentNotFound { id: id.0 })?;
+        let prev_state = entry.state;
         entry.state = state;
         match state {
-            ProcessState::Completed | ProcessState::Failed | ProcessState::Cancelled => {
+            ProcessState::Completed => {
+                entry.finished_at = Some(Timestamp::now());
+                // Only count transition once (guard against double-set).
+                if prev_state != ProcessState::Completed {
+                    self.total_completed.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            ProcessState::Failed => {
+                entry.finished_at = Some(Timestamp::now());
+                if prev_state != ProcessState::Failed {
+                    self.total_failed.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            ProcessState::Cancelled => {
                 entry.finished_at = Some(Timestamp::now());
             }
             ProcessState::Running | ProcessState::Waiting | ProcessState::Paused => {
@@ -375,7 +572,8 @@ impl ProcessTable {
 
     /// Remove a process from the table, returning it if it existed.
     ///
-    /// Also cleans up the session index and mailbox entries.
+    /// Also cleans up the session index, mailbox, cancellation token, and
+    /// metrics entries.
     pub fn remove(&self, id: AgentId) -> Option<AgentProcess> {
         let removed = self.processes.remove(&id).map(|(_, p)| p);
         if let Some(ref process) = removed {
@@ -383,6 +581,7 @@ impl ProcessTable {
                 .remove_if(&process.session_id, |_, agent_id| *agent_id == id);
             self.mailboxes.remove(&id);
             self.cancellation_tokens.remove(&id);
+            self.metrics.remove(&id);
         }
         removed
     }
@@ -451,6 +650,93 @@ impl ProcessTable {
     /// Remove the cancellation token for a process that ended naturally.
     pub fn clear_cancellation_token(&self, id: &AgentId) {
         self.cancellation_tokens.remove(id);
+    }
+
+    // ----- Metrics methods -----
+
+    /// Get a shared reference to the metrics for a process.
+    pub fn get_metrics(&self, id: &AgentId) -> Option<std::sync::Arc<RuntimeMetrics>> {
+        self.metrics.get(id).map(|m| std::sync::Arc::clone(m.value()))
+    }
+
+    /// Build a [`ProcessStats`] snapshot for a single process.
+    ///
+    /// Combines static process metadata with live runtime metrics.
+    pub async fn process_stats(&self, id: AgentId) -> Option<ProcessStats> {
+        let process = self.get(id)?;
+        let metrics_snapshot = if let Some(m) = self.get_metrics(&id) {
+            m.snapshot().await
+        } else {
+            MetricsSnapshot {
+                messages_received: 0,
+                llm_calls:         0,
+                tool_calls:        0,
+                tokens_consumed:   0,
+                last_activity:     None,
+            }
+        };
+        let children: Vec<AgentId> = self
+            .processes
+            .iter()
+            .filter(|p| p.parent_id == Some(id))
+            .map(|p| p.agent_id)
+            .collect();
+        let uptime_ms = Timestamp::now()
+            .since(process.created_at)
+            .ok()
+            .map(|span| span.get_milliseconds().unsigned_abs())
+            .unwrap_or(0);
+
+        Some(ProcessStats {
+            agent_id:          process.agent_id,
+            session_id:        process.session_id,
+            manifest_name:     process.manifest.name,
+            state:             process.state,
+            parent_id:         process.parent_id,
+            children,
+            created_at:        process.created_at,
+            uptime_ms,
+            messages_received: metrics_snapshot.messages_received,
+            llm_calls:         metrics_snapshot.llm_calls,
+            tool_calls:        metrics_snapshot.tool_calls,
+            tokens_consumed:   metrics_snapshot.tokens_consumed,
+            last_activity:     metrics_snapshot.last_activity,
+        })
+    }
+
+    /// Build [`ProcessStats`] for all processes currently in the table.
+    pub async fn all_process_stats(&self) -> Vec<ProcessStats> {
+        let ids: Vec<AgentId> = self.processes.iter().map(|p| p.agent_id).collect();
+        let mut stats = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(s) = self.process_stats(id).await {
+                stats.push(s);
+            }
+        }
+        stats
+    }
+
+    /// Get the total number of processes ever spawned.
+    pub fn total_spawned(&self) -> u64 {
+        self.total_spawned.load(Ordering::Relaxed)
+    }
+
+    /// Get the total number of processes that completed successfully.
+    pub fn total_completed(&self) -> u64 {
+        self.total_completed.load(Ordering::Relaxed)
+    }
+
+    /// Get the total number of processes that failed.
+    pub fn total_failed(&self) -> u64 {
+        self.total_failed.load(Ordering::Relaxed)
+    }
+
+    /// Sum of tokens consumed across all currently tracked processes.
+    pub fn total_tokens_consumed(&self) -> u64 {
+        self.metrics
+            .iter()
+            .map(|m| m.value().tokens_consumed.load(Ordering::Relaxed))
+            .sum()
     }
 
     /// Send a message to the agent process handling a given session.
@@ -862,5 +1148,195 @@ system_prompt: "Hello"
         // Remove clears mailbox too
         table.remove(agent_id);
         assert!(table.get_mailbox(&agent_id).is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // /proc API tests — RuntimeMetrics, ProcessStats, aggregate counters
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_runtime_metrics_record_message() {
+        let m = RuntimeMetrics::new();
+        assert_eq!(m.messages_received.load(Ordering::Relaxed), 0);
+        m.record_message();
+        m.record_message();
+        assert_eq!(m.messages_received.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn test_runtime_metrics_record_llm_and_tools() {
+        let m = RuntimeMetrics::new();
+        m.record_llm_call();
+        m.record_tool_calls(3);
+        m.record_tokens(100);
+        assert_eq!(m.llm_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(m.tool_calls.load(Ordering::Relaxed), 3);
+        assert_eq!(m.tokens_consumed.load(Ordering::Relaxed), 100);
+    }
+
+    #[tokio::test]
+    async fn test_runtime_metrics_touch_and_snapshot() {
+        let m = RuntimeMetrics::new();
+        // Initially no last_activity
+        let snap = m.snapshot().await;
+        assert!(snap.last_activity.is_none());
+
+        // Touch updates last_activity
+        m.touch().await;
+        let snap = m.snapshot().await;
+        assert!(snap.last_activity.is_some());
+    }
+
+    #[test]
+    fn test_insert_creates_metrics() {
+        let table = ProcessTable::new();
+        let p = test_process("metrics-test", None);
+        let id = p.agent_id;
+        table.insert(p);
+
+        let metrics = table.get_metrics(&id);
+        assert!(metrics.is_some());
+        let m = metrics.unwrap();
+        assert_eq!(m.messages_received.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_insert_increments_total_spawned() {
+        let table = ProcessTable::new();
+        assert_eq!(table.total_spawned(), 0);
+
+        table.insert(test_process("a", None));
+        assert_eq!(table.total_spawned(), 1);
+
+        table.insert(test_process("b", None));
+        assert_eq!(table.total_spawned(), 2);
+    }
+
+    #[test]
+    fn test_set_state_increments_completed_and_failed() {
+        let table = ProcessTable::new();
+
+        let p1 = test_process("ok", None);
+        let id1 = p1.agent_id;
+        table.insert(p1);
+
+        let p2 = test_process("fail", None);
+        let id2 = p2.agent_id;
+        table.insert(p2);
+
+        table.set_state(id1, ProcessState::Completed).unwrap();
+        assert_eq!(table.total_completed(), 1);
+        assert_eq!(table.total_failed(), 0);
+
+        table.set_state(id2, ProcessState::Failed).unwrap();
+        assert_eq!(table.total_completed(), 1);
+        assert_eq!(table.total_failed(), 1);
+    }
+
+    #[test]
+    fn test_set_state_does_not_double_count() {
+        let table = ProcessTable::new();
+        let p = test_process("double", None);
+        let id = p.agent_id;
+        table.insert(p);
+
+        table.set_state(id, ProcessState::Completed).unwrap();
+        table.set_state(id, ProcessState::Completed).unwrap();
+        assert_eq!(table.total_completed(), 1, "should not double-count");
+    }
+
+    #[test]
+    fn test_remove_clears_metrics() {
+        let table = ProcessTable::new();
+        let p = test_process("rm-metrics", None);
+        let id = p.agent_id;
+        table.insert(p);
+
+        assert!(table.get_metrics(&id).is_some());
+        table.remove(id);
+        assert!(table.get_metrics(&id).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_process_stats_populated_correctly() {
+        let table = ProcessTable::new();
+
+        let parent = test_process("planner", None);
+        let parent_id = parent.agent_id;
+        table.insert(parent);
+
+        let child = test_process("worker", Some(parent_id));
+        let child_id = child.agent_id;
+        table.insert(child);
+
+        // Record some metrics on the parent
+        let metrics = table.get_metrics(&parent_id).unwrap();
+        metrics.record_message();
+        metrics.record_llm_call();
+        metrics.record_tool_calls(2);
+        metrics.record_tokens(500);
+        metrics.touch().await;
+
+        let stats = table.process_stats(parent_id).await.unwrap();
+        assert_eq!(stats.agent_id, parent_id);
+        assert_eq!(stats.manifest_name, "planner");
+        assert_eq!(stats.state, ProcessState::Running);
+        assert!(stats.parent_id.is_none());
+        assert_eq!(stats.children, vec![child_id]);
+        assert_eq!(stats.messages_received, 1);
+        assert_eq!(stats.llm_calls, 1);
+        assert_eq!(stats.tool_calls, 2);
+        assert_eq!(stats.tokens_consumed, 500);
+        assert!(stats.last_activity.is_some());
+        // uptime should be a reasonable value (just check it's been set)
+        let _ = stats.uptime_ms;
+    }
+
+    #[tokio::test]
+    async fn test_process_stats_nonexistent_returns_none() {
+        let table = ProcessTable::new();
+        assert!(table.process_stats(AgentId::new()).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_all_process_stats_returns_all() {
+        let table = ProcessTable::new();
+        table.insert(test_process("a", None));
+        table.insert(test_process("b", None));
+        table.insert(test_process("c", None));
+
+        let all = table.all_process_stats().await;
+        assert_eq!(all.len(), 3);
+    }
+
+    #[test]
+    fn test_total_tokens_consumed_aggregates() {
+        let table = ProcessTable::new();
+
+        let p1 = test_process("a", None);
+        let id1 = p1.agent_id;
+        table.insert(p1);
+
+        let p2 = test_process("b", None);
+        let id2 = p2.agent_id;
+        table.insert(p2);
+
+        table.get_metrics(&id1).unwrap().record_tokens(100);
+        table.get_metrics(&id2).unwrap().record_tokens(200);
+
+        assert_eq!(table.total_tokens_consumed(), 300);
+    }
+
+    #[tokio::test]
+    async fn test_process_stats_serializes_to_json() {
+        let table = ProcessTable::new();
+        let p = test_process("json-test", None);
+        let id = p.agent_id;
+        table.insert(p);
+
+        let stats = table.process_stats(id).await.unwrap();
+        let json = serde_json::to_string(&stats).unwrap();
+        assert!(json.contains("\"manifest_name\":\"json-test\""));
+        assert!(json.contains("\"messages_received\":0"));
     }
 }
