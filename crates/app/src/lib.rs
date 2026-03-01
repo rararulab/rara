@@ -383,11 +383,14 @@ impl AppConfig {
             warn!("JWT_SECRET not configured, using random secret (tokens will not survive restarts)");
             secret
         });
-        let jwt_config = rara_domain_user::jwt::JwtConfig::new(jwt_secret);
+        let jwt_config = rara_domain_user::jwt::JwtConfig::new(jwt_secret.clone());
         let auth_service =
             rara_domain_user::service::AuthService::new(pool.clone(), jwt_config.clone());
         let auth_routes = rara_domain_user::router::auth_routes(auth_service)
             .layer(axum::Extension(jwt_config));
+
+        // Inject JWT secret into WebAdapter for WebSocket auth.
+        web_adapter.set_jwt_secret(jwt_secret).await;
 
         let routes_fn: Box<dyn Fn(axum::Router) -> axum::Router + Send + Sync> =
             Box::new(move |router| {
@@ -552,7 +555,14 @@ impl AppConfig {
             _ => return Ok(None),
         };
 
-        let bot = teloxide::Bot::new(&token);
+        let proxy = std::env::var("HTTPS_PROXY")
+            .or_else(|_| std::env::var("HTTP_PROXY"))
+            .or_else(|_| std::env::var("ALL_PROXY"))
+            .ok()
+            .filter(|v| !v.is_empty());
+        if let Some(ref p) = proxy {
+            info!(proxy = %p, "telegram adapter: using proxy");
+        }
 
         // Read initial settings for primary/group chat IDs.
         let chat_id: Option<i64> = settings
@@ -581,10 +591,15 @@ impl AppConfig {
         );
 
         let adapter = Arc::new(
-            rara_channels::telegram::TelegramAdapter::new(bot, vec![])
-                .with_config(tg_config)
-                .with_contact_tracker(contact_tracker)
-                .with_link_service(link_service),
+            rara_channels::telegram::TelegramAdapter::with_proxy(
+                &token,
+                vec![],
+                proxy.as_deref(),
+            )
+            .whatever_context("failed to build telegram adapter")?
+            .with_config(tg_config)
+            .with_contact_tracker(contact_tracker)
+            .with_link_service(link_service),
         );
 
         // Spawn a background task to hot-reload config from settings.

@@ -115,6 +115,10 @@ pub enum WebEvent {
 #[derive(Debug, Deserialize)]
 pub struct SessionQuery {
     pub session_key: String,
+    /// JWT access token (preferred). When provided, the user identity is
+    /// extracted from the token claims instead of `user_id`.
+    #[serde(default)]
+    pub token:       Option<String>,
     #[serde(default = "default_user_id")]
     pub user_id:     String,
 }
@@ -158,6 +162,8 @@ pub struct WebAdapter {
     stream_hub:        Arc<RwLock<Option<Arc<rara_kernel::io::stream::StreamHub>>>>,
     /// EndpointRegistry for tracking connected users (set during startup).
     endpoint_registry: Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
+    /// JWT secret for verifying WebSocket auth tokens.
+    jwt_secret:        Arc<RwLock<Option<String>>>,
     /// Shutdown signal sender.
     shutdown_tx:       watch::Sender<bool>,
     /// Shutdown signal receiver (cloneable).
@@ -173,6 +179,7 @@ impl WebAdapter {
             sink: Arc::new(RwLock::new(None)),
             stream_hub: Arc::new(RwLock::new(None)),
             endpoint_registry: Arc::new(RwLock::new(None)),
+            jwt_secret: Arc::new(RwLock::new(None)),
             shutdown_tx,
             shutdown_rx,
         }
@@ -190,6 +197,12 @@ impl WebAdapter {
         *guard = Some(registry);
     }
 
+    /// Set the JWT secret for verifying WebSocket auth tokens.
+    pub async fn set_jwt_secret(&self, secret: String) {
+        let mut guard = self.jwt_secret.write().await;
+        *guard = Some(secret);
+    }
+
     /// Returns an [`axum::Router`] with WebSocket, SSE, and message endpoints.
     ///
     /// Mount this into your application:
@@ -202,6 +215,7 @@ impl WebAdapter {
             sink:              Arc::clone(&self.sink),
             stream_hub:        Arc::clone(&self.stream_hub),
             endpoint_registry: Arc::clone(&self.endpoint_registry),
+            jwt_secret:        Arc::clone(&self.jwt_secret),
             shutdown_rx:       self.shutdown_rx.clone(),
         };
 
@@ -257,12 +271,42 @@ struct WebAdapterState {
     sink:              Arc<RwLock<Option<Arc<IngressPipeline>>>>,
     stream_hub:        Arc<RwLock<Option<Arc<rara_kernel::io::stream::StreamHub>>>>,
     endpoint_registry: Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
+    jwt_secret:        Arc<RwLock<Option<String>>>,
     shutdown_rx:       watch::Receiver<bool>,
 }
 
 // ---------------------------------------------------------------------------
 // Helper: build endpoint for a Web connection
 // ---------------------------------------------------------------------------
+
+/// Decode a JWT token and extract the username claim.
+///
+/// Only accepts `"access"` tokens. Returns the `name` field from the claims.
+fn decode_jwt_username(secret: &str, token: &str) -> Result<String, String> {
+    use jsonwebtoken::{Algorithm, DecodingKey, Validation};
+
+    #[derive(Deserialize)]
+    struct MinimalClaims {
+        name:       String,
+        token_type: String,
+    }
+
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.validate_exp = true;
+
+    let data = jsonwebtoken::decode::<MinimalClaims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &validation,
+    )
+    .map_err(|e| format!("{e}"))?;
+
+    if data.claims.token_type != "access" {
+        return Err("not an access token".to_owned());
+    }
+
+    Ok(data.claims.name)
+}
 
 /// Build a Web endpoint and its associated UserId for endpoint registration.
 ///
@@ -276,10 +320,11 @@ fn web_endpoint_for(session_key: &str) -> Endpoint {
     }
 }
 
-/// Compute the UserId as the identity resolver would.
+/// Compute the UserId matching what the identity resolver returns.
 ///
-/// Mirrors `AppIdentityResolver`: `"web:{platform_user_id}"`.
-fn web_user_id(user_id: &str) -> UserId { UserId(format!("web:{user_id}")) }
+/// For authenticated web users, the `user_id` is the real kernel username
+/// (extracted from JWT), so no prefix is needed.
+fn web_user_id(user_id: &str) -> UserId { UserId(user_id.to_string()) }
 
 /// Register a web endpoint in the registry (if available).
 async fn register_endpoint(registry: &RwLock<Option<Arc<EndpointRegistry>>>, user_id: &str, session_key: &str) {
@@ -327,9 +372,33 @@ fn build_raw_platform_message(
 
 async fn ws_handler(
     ws: WebSocketUpgrade,
-    Query(params): Query<SessionQuery>,
+    Query(mut params): Query<SessionQuery>,
     State(state): State<WebAdapterState>,
 ) -> Response {
+    // If a JWT token is provided, decode it to extract the real user identity.
+    if let Some(ref token) = params.token {
+        if !token.is_empty() {
+            let guard = state.jwt_secret.read().await;
+            if let Some(ref secret) = *guard {
+                match decode_jwt_username(secret, token) {
+                    Ok(name) => {
+                        info!(session_key = %params.session_key, user = %name, "WebSocket auth via JWT");
+                        params.user_id = name;
+                    }
+                    Err(e) => {
+                        warn!(session_key = %params.session_key, error = %e, "JWT decode failed, rejecting");
+                        return axum::response::Response::builder()
+                            .status(axum::http::StatusCode::UNAUTHORIZED)
+                            .body(axum::body::Body::from("invalid or expired token"))
+                            .unwrap();
+                    }
+                }
+            } else {
+                warn!("JWT secret not configured, ignoring token");
+            }
+        }
+    }
+
     info!(
         session_key = %params.session_key,
         user_id = %params.user_id,
@@ -479,7 +548,7 @@ fn spawn_stream_forwarder(
             }
         };
 
-        let session_id = rara_kernel::process::SessionId::new(format!("web:{}", session_key));
+        let session_id = rara_kernel::process::SessionId::new(session_key.clone());
 
         // Poll until stream appears (process_loop opens it asynchronously).
         let mut attempts = 0;
@@ -979,7 +1048,7 @@ mod tests {
         };
 
         let msg = PlatformOutbound::Reply {
-            session_key:   "web:web:my-chat".to_owned(), // wrong double-prefix
+            session_key:   "web:my-chat".to_owned(),
             content:       "hello via egress".to_owned(),
             attachments:   vec![],
             reply_context: None,

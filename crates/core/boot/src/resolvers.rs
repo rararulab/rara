@@ -102,13 +102,9 @@ impl IdentityResolver for DefaultIdentityResolver {
 
         // 2. Channel-specific fallback.
         match channel_type {
-            // Web channel: the platform_user_id typically comes from a JWT
-            // and is already the real username.  Synthesise a UserId so
-            // existing web flows keep working.
-            ChannelType::Web => {
-                let user_id = UserId(format!("{}:{}", channel_type, platform_user_id));
-                Ok(user_id)
-            }
+            // Web channel: the platform_user_id comes from JWT and is
+            // already the real kernel username (e.g. "root").
+            ChannelType::Web => Ok(UserId(platform_user_id.to_string())),
             // Non-web channels require a linked platform identity.
             _ => Err(IngestError::IdentityResolutionFailed {
                 message: format!(
@@ -145,12 +141,13 @@ impl SessionResolver for DefaultSessionResolver {
     async fn resolve(
         &self,
         _user: &UserId,
-        channel_type: ChannelType,
+        _channel_type: ChannelType,
         platform_chat_id: Option<&str>,
     ) -> Result<SessionId, IngestError> {
-        // Simple: use "channel_type:chat_id" as the session key.
+        // Use the raw platform chat ID as the session key so that it
+        // matches the key the frontend uses for REST API lookups.
         let chat_id = platform_chat_id.unwrap_or("default");
-        let session_id = SessionId::new(format!("{}:{}", channel_type, chat_id));
+        let session_id = SessionId::new(chat_id.to_string());
         Ok(session_id)
     }
 }
@@ -260,10 +257,11 @@ mod tests {
         let store = Arc::new(FakeUserStore::empty());
         let resolver = DefaultIdentityResolver::new(store);
         let uid = resolver
-            .resolve(ChannelType::Web, "user-abc", None)
+            .resolve(ChannelType::Web, "root", None)
             .await
             .unwrap();
-        assert_eq!(uid.0, "web:user-abc");
+        // Web channel uses the JWT username directly (no prefix).
+        assert_eq!(uid.0, "root");
     }
 
     #[tokio::test]
@@ -285,7 +283,7 @@ mod tests {
             .resolve(&user, ChannelType::Telegram, Some("chat-1"))
             .await
             .unwrap();
-        assert_eq!(session_id.to_string(), "telegram:chat-1");
+        assert_eq!(session_id.to_string(), "chat-1");
     }
 
     #[tokio::test]
@@ -296,6 +294,6 @@ mod tests {
             .resolve(&user, ChannelType::Web, None)
             .await
             .unwrap();
-        assert_eq!(session_id.to_string(), "web:default");
+        assert_eq!(session_id.to_string(), "default");
     }
 }

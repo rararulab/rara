@@ -183,6 +183,30 @@ impl TelegramAdapter {
         }
     }
 
+    /// Build a [`teloxide::Bot`] with an optional proxy, then wrap it in an
+    /// adapter.
+    ///
+    /// The proxy URL is passed to [`reqwest::Proxy::all`] (supports
+    /// `http://`, `https://`, `socks5://`).
+    pub fn with_proxy(
+        token: &str,
+        allowed_chat_ids: Vec<i64>,
+        proxy: Option<&str>,
+    ) -> Result<Self, anyhow::Error> {
+        let bot = match proxy {
+            Some(url) => {
+                let client = teloxide::net::default_reqwest_settings()
+                    .proxy(reqwest::Proxy::all(url)?)
+                    // Override the 17s default — must exceed POLL_TIMEOUT_SECS (30s).
+                    .timeout(std::time::Duration::from_secs(POLL_TIMEOUT_SECS as u64 + 30))
+                    .build()?;
+                teloxide::Bot::with_client(token, client)
+            }
+            None => teloxide::Bot::new(token),
+        };
+        Ok(Self::new(bot, allowed_chat_ids))
+    }
+
     /// Create a new Telegram adapter with a custom polling timeout.
     pub fn with_polling_timeout(mut self, timeout_secs: u32) -> Self {
         self.polling_timeout = timeout_secs;
