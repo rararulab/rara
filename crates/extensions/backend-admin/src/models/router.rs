@@ -154,7 +154,7 @@ async fn set_fallbacks(
     get,
     path = "/api/v1/models/{key}",
     tag = "models",
-    params(("key" = String, Path, description = "Model key (e.g. chat, job, pipeline)")),
+    params(("key" = String, Path, description = "Model key (e.g. chat, job)")),
     responses(
         (status = 200, description = "Model for key", body = ModelValueView),
     )

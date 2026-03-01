@@ -160,7 +160,6 @@ export interface RuntimeSettingsView {
       entity_id: string | null;
     };
   };
-  job_pipeline?: JobPipelineSettings;
   updated_at: string | null;
 }
 
@@ -170,13 +169,6 @@ export interface RuntimeSettingsPatch {
       api_key?: string;
       entity_id?: string;
     };
-  };
-  job_pipeline?: {
-    job_preferences?: string;
-    score_threshold_auto?: number;
-    score_threshold_notify?: number;
-    resume_project_path?: string;
-    pipeline_cron?: string;
   };
 }
 
@@ -384,14 +376,6 @@ export interface CreateMcpServerRequest {
   tool_timeout_secs?: number;
 }
 
-// Job Pipeline Settings
-export interface JobPipelineSettings {
-  job_preferences: string | null;
-  score_threshold_auto: number;
-  score_threshold_notify: number;
-  resume_project_path: string | null;
-}
-
 // Gmail Settings
 export interface GmailSettings {
   configured: boolean;
@@ -409,84 +393,6 @@ export interface GmailAdminUpdateRequest {
   app_password?: string;
   auto_send_enabled?: boolean;
 }
-
-// Pipeline Status
-export interface PipelineStatus {
-  running: boolean;
-}
-
-// Pipeline Run (from backend)
-export interface PipelineRun {
-  id: string;
-  status: "Running" | "Completed" | "Failed" | "Cancelled";
-  started_at: string;
-  finished_at: string | null;
-  jobs_found: number;
-  jobs_scored: number;
-  jobs_applied: number;
-  jobs_notified: number;
-  summary: string | null;
-  error: string | null;
-}
-
-// Pipeline Discovered Job (with details from job table JOIN)
-export interface PipelineDiscoveredJob {
-  id: string;
-  run_id: string;
-  job_id: string;
-  score: number | null;
-  action: "Discovered" | "Notified" | "Applied" | "Skipped";
-  created_at: string;
-  // Job details from JOIN
-  title: string;
-  company: string;
-  location: string | null;
-  url: string | null;
-  description: string | null;
-  posted_at: string | null;
-}
-
-// Discovered Jobs Stats
-export interface DiscoveredJobsStats {
-  total: number;
-  by_action: {
-    discovered: number;
-    notified: number;
-    applied: number;
-    skipped: number;
-  };
-  scored_count: number;
-  avg_score: number | null;
-}
-
-export interface PaginatedDiscoveredJobs {
-  items: PipelineDiscoveredJob[];
-  total: number;
-  limit: number;
-  offset: number;
-}
-
-// Pipeline Run Event (stored in DB)
-export interface PipelineRunEvent {
-  id: number;
-  run_id: string;
-  seq: number;
-  event_type: string;
-  payload: Record<string, unknown>;
-  created_at: string;
-}
-
-// Pipeline Stream Event (SSE)
-export type PipelineStreamEvent =
-  | { type: "started"; run_id: string }
-  | { type: "iteration"; index: number }
-  | { type: "thinking" }
-  | { type: "thinking_done" }
-  | { type: "tool_call_start"; id: string; name: string; arguments?: unknown }
-  | { type: "tool_call_end"; id: string; name: string; success: boolean; error?: string; result?: unknown }
-  | { type: "text_delta"; text: string }
-  | { type: "done"; summary: string; iterations: number; tool_calls: number }
-  | { type: "error"; message: string };
 
 // Coding Tasks
 export type CodingTaskStatus = 'Pending' | 'Cloning' | 'Running' | 'Completed' | 'Failed' | 'Merged' | 'MergeFailed';

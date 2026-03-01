@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Job domain module -- discovery, normalization, and pipeline management.
+//! Job domain module -- discovery and normalization.
 
 pub mod dedup;
 pub mod error;

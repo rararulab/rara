@@ -25,10 +25,6 @@ pub struct Settings {
     pub telegram:     TelegramSettings,
     #[serde(default)]
     pub agent:        AgentSettings,
-    #[serde(default)]
-    pub job_pipeline: JobPipelineSettings,
-    #[serde(default)]
-    pub workers:      WorkerSettings,
     pub updated_at:   Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -43,7 +39,7 @@ pub struct AISettings {
     #[serde(default)]
     pub ollama_base_url:    Option<String>,
     /// Key-based model assignments (e.g. `"chat" -> "openai/gpt-4o"`).
-    /// Well-known keys: `default`, `chat`, `job`, `pipeline`.
+    /// Well-known keys: `default`, `chat`, `job`.
     #[serde(default)]
     pub models:             HashMap<String, String>,
     /// Global fallback model list, tried in order when the primary fails.
@@ -87,9 +83,9 @@ pub struct TelegramSettings {
     pub bot_token:               Option<String>,
     pub chat_id:                 Option<i64>,
     pub allowed_group_chat_id:   Option<i64>,
-    /// Dedicated Telegram channel/group ID for automated notifications
-    /// (e.g. pipeline results). When set, pipeline notifications are sent
-    /// directly via the Bot API instead of going through PGMQ.
+    /// Dedicated Telegram channel/group ID for automated notifications.
+    /// When set, notifications are sent directly via the Bot API instead
+    /// of going through PGMQ.
     #[serde(default)]
     pub notification_channel_id: Option<i64>,
 }
@@ -154,35 +150,6 @@ pub struct ComposioSettings {
     pub entity_id: Option<String>,
 }
 
-/// Job pipeline runtime settings.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default)]
-pub struct JobPipelineSettings {
-    /// Markdown describing target roles, tech stack, preferences.
-    pub job_preferences:        Option<String>,
-    /// Auto-apply score threshold (default 85).
-    pub score_threshold_auto:   u8,
-    /// Notification score threshold (default 60).
-    pub score_threshold_notify: u8,
-    /// Local path to typst resume project.
-    pub resume_project_path:    Option<String>,
-    /// Cron expression for automatic pipeline runs (5-field format). `None` =
-    /// disabled.
-    pub pipeline_cron:          Option<String>,
-}
-
-impl Default for JobPipelineSettings {
-    fn default() -> Self {
-        Self {
-            job_preferences:        None,
-            score_threshold_auto:   85,
-            score_threshold_notify: 60,
-            resume_project_path:    None,
-            pipeline_cron:          None,
-        }
-    }
-}
-
 /// Gmail SMTP runtime settings.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
@@ -195,33 +162,12 @@ pub struct GmailSettings {
     pub auto_send_enabled: bool,
 }
 
-/// Worker poll interval settings.
-///
-/// These control how often background workers wake up and check for work.
-/// Changes take effect after service restart.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default)]
-pub struct WorkerSettings {
-    /// Pipeline scheduler poll interval in seconds (default 60).
-    pub pipeline_scheduler_interval_secs: u64,
-}
-
-impl Default for WorkerSettings {
-    fn default() -> Self {
-        Self {
-            pipeline_scheduler_interval_secs: 60,
-        }
-    }
-}
-
 /// Partial update payload for runtime settings writes.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct UpdateRequest {
     pub ai:           Option<AiRuntimeSettingsPatch>,
     pub telegram:     Option<TelegramRuntimeSettingsPatch>,
     pub agent:        Option<AgentRuntimeSettingsPatch>,
-    pub job_pipeline: Option<JobPipelineRuntimeSettingsPatch>,
-    pub workers:      Option<WorkerRuntimeSettingsPatch>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
@@ -279,24 +225,10 @@ pub struct ComposioRuntimeSettingsPatch {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
-pub struct JobPipelineRuntimeSettingsPatch {
-    pub job_preferences:        Option<String>,
-    pub score_threshold_auto:   Option<u8>,
-    pub score_threshold_notify: Option<u8>,
-    pub resume_project_path:    Option<String>,
-    pub pipeline_cron:          Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 pub struct GmailRuntimeSettingsPatch {
     pub address:           Option<String>,
     pub app_password:      Option<String>,
     pub auto_send_enabled: Option<bool>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
-pub struct WorkerRuntimeSettingsPatch {
-    pub pipeline_scheduler_interval_secs: Option<u64>,
 }
 
 impl Settings {
@@ -393,29 +325,6 @@ impl Settings {
             }
         }
 
-        if let Some(jp) = patch.job_pipeline {
-            if let Some(prefs) = jp.job_preferences {
-                self.job_pipeline.job_preferences = normalize_text(Some(prefs));
-            }
-            if let Some(threshold) = jp.score_threshold_auto {
-                self.job_pipeline.score_threshold_auto = threshold;
-            }
-            if let Some(threshold) = jp.score_threshold_notify {
-                self.job_pipeline.score_threshold_notify = threshold;
-            }
-            if let Some(path) = jp.resume_project_path {
-                self.job_pipeline.resume_project_path = normalize_text(Some(path));
-            }
-            if let Some(cron) = jp.pipeline_cron {
-                self.job_pipeline.pipeline_cron = normalize_text(Some(cron));
-            }
-        }
-
-        if let Some(w) = patch.workers {
-            if let Some(v) = w.pipeline_scheduler_interval_secs {
-                self.workers.pipeline_scheduler_interval_secs = v;
-            }
-        }
     }
 
     /// Sanitize values by trimming and dropping empty strings.
@@ -450,12 +359,6 @@ impl Settings {
         self.agent.composio.entity_id = normalize_text(self.agent.composio.entity_id.take());
         self.agent.gmail.address = normalize_text(self.agent.gmail.address.take());
         self.agent.gmail.app_password = normalize_secret(self.agent.gmail.app_password.take());
-
-        self.job_pipeline.job_preferences =
-            normalize_text(self.job_pipeline.job_preferences.take());
-        self.job_pipeline.resume_project_path =
-            normalize_text(self.job_pipeline.resume_project_path.take());
-        self.job_pipeline.pipeline_cron = normalize_text(self.job_pipeline.pipeline_cron.take());
     }
 }
 
@@ -562,8 +465,6 @@ mod tests {
             }),
             telegram:     None,
             agent:        None,
-            job_pipeline: None,
-            workers:      None,
         });
         assert_eq!(
             settings.ai.models.get("chat").map(String::as_str),
@@ -590,8 +491,6 @@ mod tests {
             }),
             telegram:     None,
             agent:        None,
-            job_pipeline: None,
-            workers:      None,
         });
         assert_eq!(settings.ai.models.get("job"), None);
     }
@@ -631,8 +530,6 @@ mod tests {
             }),
             telegram:     None,
             agent:        None,
-            job_pipeline: None,
-            workers:      None,
         });
         assert_eq!(
             settings.ai.fallback_models,
@@ -687,8 +584,6 @@ mod tests {
                 gmail:          None,
                 max_iterations: None,
             }),
-            job_pipeline: None,
-            workers:      None,
         });
 
         assert_eq!(
@@ -710,85 +605,6 @@ mod tests {
         assert_eq!(
             settings.agent.memory.hindsight_bank_id,
             Some("my-bank".to_owned())
-        );
-    }
-
-    // -- job_pipeline tests ---------------------------------------------------
-
-    #[test]
-    fn job_pipeline_default_values() {
-        let settings = Settings::default();
-        assert_eq!(settings.job_pipeline.job_preferences, None);
-        assert_eq!(settings.job_pipeline.score_threshold_auto, 85);
-        assert_eq!(settings.job_pipeline.score_threshold_notify, 60);
-        assert_eq!(settings.job_pipeline.resume_project_path, None);
-    }
-
-    #[test]
-    fn apply_patch_job_pipeline_settings() {
-        let mut settings = Settings::default();
-        settings.apply_patch(UpdateRequest {
-            ai:           None,
-            telegram:     None,
-            agent:        None,
-            job_pipeline: Some(JobPipelineRuntimeSettingsPatch {
-                job_preferences:        Some("Rust backend, distributed systems".to_owned()),
-                score_threshold_auto:   Some(90),
-                score_threshold_notify: Some(70),
-                resume_project_path:    Some("/home/user/resume".to_owned()),
-                pipeline_cron:          None,
-            }),
-            workers:      None,
-        });
-        assert_eq!(
-            settings.job_pipeline.job_preferences,
-            Some("Rust backend, distributed systems".to_owned())
-        );
-        assert_eq!(settings.job_pipeline.score_threshold_auto, 90);
-        assert_eq!(settings.job_pipeline.score_threshold_notify, 70);
-        assert_eq!(
-            settings.job_pipeline.resume_project_path,
-            Some("/home/user/resume".to_owned())
-        );
-    }
-
-    #[test]
-    fn apply_patch_job_pipeline_partial() {
-        let mut settings = Settings::default();
-        settings.apply_patch(UpdateRequest {
-            ai:           None,
-            telegram:     None,
-            agent:        None,
-            job_pipeline: Some(JobPipelineRuntimeSettingsPatch {
-                job_preferences:        None,
-                score_threshold_auto:   Some(95),
-                score_threshold_notify: None,
-                resume_project_path:    None,
-                pipeline_cron:          None,
-            }),
-            workers:      None,
-        });
-        assert_eq!(settings.job_pipeline.score_threshold_auto, 95);
-        assert_eq!(settings.job_pipeline.score_threshold_notify, 60);
-    }
-
-    #[test]
-    fn normalize_job_pipeline_settings() {
-        let mut settings = Settings {
-            job_pipeline: JobPipelineSettings {
-                job_preferences:        Some("  ".to_owned()),
-                score_threshold_auto:   85,
-                score_threshold_notify: 60,
-                resume_project_path:    Some("  /home/user/resume  ".to_owned()),
-                pipeline_cron:          None,
-            },
-            ..Default::default()
-        };
-        settings.normalize();
-        assert_eq!(settings.job_pipeline.job_preferences, None);
-        assert_eq!(
-            settings.job_pipeline.resume_project_path,
-            Some("/home/user/resume".to_owned())
         );
     }
 
@@ -818,8 +634,6 @@ mod tests {
                 }),
                 max_iterations: None,
             }),
-            job_pipeline: None,
-            workers:      None,
         });
         assert_eq!(
             settings.agent.gmail.address,
@@ -849,31 +663,6 @@ mod tests {
     fn serde_default_backward_compat() {
         let json = r#"{"ai":{},"telegram":{}}"#;
         let settings: Settings = serde_json::from_str(json).unwrap();
-        assert_eq!(settings.job_pipeline, JobPipelineSettings::default());
         assert_eq!(settings.agent.gmail, GmailSettings::default());
-        assert_eq!(settings.workers, WorkerSettings::default());
-    }
-
-    // -- worker settings tests ------------------------------------------------
-
-    #[test]
-    fn worker_settings_default_values() {
-        let settings = Settings::default();
-        assert_eq!(settings.workers.pipeline_scheduler_interval_secs, 60);
-    }
-
-    #[test]
-    fn apply_patch_worker_settings() {
-        let mut settings = Settings::default();
-        settings.apply_patch(UpdateRequest {
-            ai:           None,
-            telegram:     None,
-            agent:        None,
-            job_pipeline: None,
-            workers:      Some(WorkerRuntimeSettingsPatch {
-                pipeline_scheduler_interval_secs: Some(90),
-            }),
-        });
-        assert_eq!(settings.workers.pipeline_scheduler_interval_secs, 90);
     }
 }

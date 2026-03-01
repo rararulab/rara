@@ -999,7 +999,7 @@ export default function Settings() {
     : updateMutation.isPending;
 
   /** Well-known model keys displayed in the settings UI */
-  const MODEL_KEYS = ["default", "chat", "job", "pipeline"] as const;
+  const MODEL_KEYS = ["default", "chat", "job"] as const;
 
   /** Update a single key in the modelMap */
   const setModelKey = (key: string, value: string | undefined) => {
@@ -2443,7 +2443,7 @@ export default function Settings() {
                     className="h-11"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Telegram channel ID for automated notifications (e.g. pipeline results).
+                    Telegram channel ID for automated notifications.
                     Leave empty to use private chat.
                   </p>
                 </div>
@@ -2516,7 +2516,7 @@ export default function Settings() {
                   <div>
                     <p className="text-sm font-medium">Auto-Send</p>
                     <p className="text-xs text-muted-foreground">
-                      Allow the pipeline to send emails automatically.
+                      Allow the agent to send emails automatically.
                     </p>
                   </div>
                   <Switch

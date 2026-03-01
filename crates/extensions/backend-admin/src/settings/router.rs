@@ -14,8 +14,7 @@
 
 use axum::{Json, extract::State, http::StatusCode};
 use rara_domain_shared::settings::model::{
-    AgentRuntimeSettingsPatch, ComposioRuntimeSettingsPatch, JobPipelineRuntimeSettingsPatch,
-    Settings, UpdateRequest,
+    AgentRuntimeSettingsPatch, ComposioRuntimeSettingsPatch, Settings, UpdateRequest,
 };
 use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -73,7 +72,6 @@ async fn update_settings(
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct RuntimeSettingsView {
     pub agent:        AgentSettingsView,
-    pub job_pipeline: JobPipelineSettingsView,
     #[schema(value_type = Option<String>)]
     pub updated_at:   Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -89,25 +87,15 @@ pub struct ComposioSettingsView {
     pub entity_id: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
-pub struct JobPipelineSettingsView {
-    pub job_preferences:        Option<String>,
-    pub score_threshold_auto:   u8,
-    pub score_threshold_notify: u8,
-    pub resume_project_path:    Option<String>,
-}
-
 #[derive(Debug, Clone, Default, serde::Deserialize, utoipa::ToSchema)]
 pub struct SettingsAdminUpdateRequest {
     pub agent:        Option<AgentSettingsAdminPatch>,
-    pub job_pipeline: Option<JobPipelineRuntimeSettingsPatch>,
 }
 
 impl From<SettingsAdminUpdateRequest> for UpdateRequest {
     fn from(value: SettingsAdminUpdateRequest) -> Self {
         let mut req = UpdateRequest::default();
         req.agent = value.agent.map(Into::into);
-        req.job_pipeline = value.job_pipeline;
         req
     }
 }
@@ -151,12 +139,6 @@ impl From<Settings> for RuntimeSettingsView {
                     api_key:   value.agent.composio.api_key,
                     entity_id: value.agent.composio.entity_id,
                 },
-            },
-            job_pipeline: JobPipelineSettingsView {
-                job_preferences:        value.job_pipeline.job_preferences,
-                score_threshold_auto:   value.job_pipeline.score_threshold_auto,
-                score_threshold_notify: value.job_pipeline.score_threshold_notify,
-                resume_project_path:    value.job_pipeline.resume_project_path,
             },
             updated_at:   value.updated_at,
         }

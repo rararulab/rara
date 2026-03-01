@@ -51,8 +51,6 @@ impl ModelRepo for SettingsModelRepo {
             }),
             telegram:     None,
             agent:        None,
-            job_pipeline: None,
-            workers:      None,
         };
         self.settings_svc
             .update(patch)
@@ -71,8 +69,6 @@ impl ModelRepo for SettingsModelRepo {
             }),
             telegram:     None,
             agent:        None,
-            job_pipeline: None,
-            workers:      None,
         };
         self.settings_svc
             .update(patch)
@@ -108,8 +104,6 @@ impl ModelRepo for SettingsModelRepo {
             }),
             telegram:     None,
             agent:        None,
-            job_pipeline: None,
-            workers:      None,
         };
         self.settings_svc
             .update(patch)

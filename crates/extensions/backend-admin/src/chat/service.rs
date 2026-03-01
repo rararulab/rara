@@ -103,8 +103,6 @@ impl ChatService {
             }),
             telegram:     None,
             agent:        None,
-            job_pipeline: None,
-            workers:      None,
         };
         self.settings_updater
             .update_settings(patch)

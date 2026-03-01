@@ -46,8 +46,6 @@ pub enum ChannelType {
     Scheduled,
     /// Internally-triggered proactive task.
     Proactive,
-    /// Pipeline execution.
-    Pipeline,
     /// Internal synthetic message (workers, SpawnTool, etc.).
     Internal,
 }
@@ -62,7 +60,6 @@ impl ChannelType {
             Self::Api => "api",
             Self::Scheduled => "scheduled",
             Self::Proactive => "proactive",
-            Self::Pipeline => "pipeline",
             Self::Internal => "internal",
         }
     }

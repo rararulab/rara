@@ -18,7 +18,6 @@
 //! domain services for background processing tasks.
 
 pub mod jd_parser;
-pub mod pipeline_scheduler;
 pub mod system_routes;
 pub mod tools;
 pub mod types;

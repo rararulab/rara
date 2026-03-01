@@ -298,23 +298,6 @@ impl AppConfig {
         let mut worker_manager =
             common_worker::Manager::with_state_and_config(app_state.clone(), manager_config);
 
-        // Read worker interval settings (applied at startup; restart to change).
-        let worker_cfg = app_state.settings_svc.current().workers;
-        info!(
-            pipeline_scheduler_secs = worker_cfg.pipeline_scheduler_interval_secs,
-            "Worker intervals from settings"
-        );
-
-        // -- pipeline scheduler worker (checks cron from settings) ------------
-
-        let _pipeline_scheduler_handle = worker_manager
-            .fallible_worker(rara_workers::pipeline_scheduler::PipelineSchedulerWorker::new())
-            .name("pipeline-scheduler")
-            .interval(Duration::from_secs(
-                worker_cfg.pipeline_scheduler_interval_secs,
-            ))
-            .spawn();
-
         // -- telegram adapter (optional) --------------------------------------
 
         let telegram_adapter = match Self::try_build_telegram(&app_state).await {

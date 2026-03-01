@@ -120,11 +120,6 @@ pub fn all_builtin_prompts() -> Vec<PromptSpec> {
             description:     "Resume optimizer system prompt",
             default_content: include_str!("defaults/ai/resume_optimizer.system.md"),
         },
-        PromptSpec {
-            name:            "pipeline/pipeline.md",
-            description:     "Job pipeline agent system prompt",
-            default_content: include_str!("defaults/pipeline/pipeline.md"),
-        },
     ]
 }
 

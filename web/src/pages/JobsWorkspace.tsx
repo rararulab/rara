@@ -18,11 +18,9 @@ import { useSearchParams } from "react-router";
 import {
   Briefcase,
   FileText,
-  Globe,
   LayoutDashboard,
   MessageSquare,
   Search,
-  Workflow,
 } from "lucide-react";
 import { TabBar } from "@/components/TabBar";
 import type { Tab } from "@/components/TabBar";
@@ -31,20 +29,8 @@ import Applications from "@/pages/Applications";
 import Resumes from "@/pages/Resumes";
 import Interviews from "@/pages/Interviews";
 import Dashboard from "@/pages/Dashboard";
-import Pipeline from "@/pages/Pipeline";
-import DiscoveredJobs from "@/pages/DiscoveredJobs";
 
 const JOBS_TABS: Tab[] = [
-  {
-    key: "pipeline",
-    label: "Pipeline",
-    icon: <Workflow className="h-4 w-4" />,
-  },
-  {
-    key: "discovered",
-    label: "Discovered",
-    icon: <Globe className="h-4 w-4" />,
-  },
   {
     key: "discovery",
     label: "Discovery",
@@ -79,8 +65,6 @@ export default function JobsWorkspace() {
       <TabBar tabs={JOBS_TABS} activeTab={activeTab} onTabChange={setTab} />
       <div className="flex-1 min-h-0 overflow-auto">
         <div className="p-6">
-          {activeTab === "pipeline" && <Pipeline />}
-          {activeTab === "discovered" && <DiscoveredJobs />}
           {activeTab === "discovery" && <JobDiscovery />}
           {activeTab === "applications" && <Applications />}
           {activeTab === "resumes" && <Resumes />}

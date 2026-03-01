@@ -187,7 +187,7 @@ export default function Dashboard() {
         </div>
         <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Dashboard</h1>
         <p className="mt-2 text-muted-foreground">
-          Overview of your job search pipeline.
+          Overview of your job search progress.
         </p>
       </div>
 

@@ -57,9 +57,6 @@ pub struct AppState {
     // -- MCP --
     pub mcp_manager: rara_mcp::manager::mgr::McpManager,
 
-    // -- pipeline --
-    pub pipeline_service: rara_backend_admin::pipeline::service::PipelineService,
-
     // -- coding tasks --
     pub coding_task_service: rara_coding_task::service::CodingTaskService,
 
@@ -262,28 +259,6 @@ impl AppState {
             mcp_manager.clone(),
         )));
 
-        // -- pipeline service ---------------------------------------------------
-
-        let pipeline_service = rara_backend_admin::pipeline::service::PipelineService::new(
-            settings_svc.clone(),
-            llm_provider.clone(),
-            ai_service.clone(),
-            job_service.clone(),
-            pool.clone(),
-            notify_client.clone(),
-            composio_auth_provider,
-            mcp_manager.clone(),
-            prompt_repo.clone(),
-        );
-        info!("Pipeline service initialized");
-
-        // Register pipeline control tools on the main rara agent.
-        rara_backend_admin::pipeline::register_rara_tools(
-            &mut tool_registry,
-            &pipeline_service,
-            &settings_svc,
-        );
-
         // -- recall strategy engine -------------------------------------------
 
         let recall_engine = Arc::new(rara_memory::RecallStrategyEngine::new(
@@ -362,7 +337,6 @@ impl AppState {
             memory_manager,
             skill_registry,
             mcp_manager,
-            pipeline_service,
             coding_task_service,
             kernel,
             user_store,
@@ -442,12 +416,6 @@ impl AppState {
         router = router.merge(rara_backend_admin::coding_task::routes(
             self.coding_task_service.clone(),
         ));
-
-        // Pipeline routes (OpenAPI).
-        let (pipeline_router, pipeline_api) =
-            rara_backend_admin::pipeline::routes(self.pipeline_service.clone()).split_for_parts();
-        router = router.merge(pipeline_router);
-        api.merge(pipeline_api);
 
         // Model admin routes (OpenAPI).
         let model_repo: std::sync::Arc<dyn rara_kernel::model_repo::ModelRepo> =

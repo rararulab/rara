@@ -24,7 +24,6 @@ pub mod model_keys {
     pub const DEFAULT: &str = "default";
     pub const CHAT: &str = "chat";
     pub const JOB: &str = "job";
-    pub const PIPELINE: &str = "pipeline";
     pub const PROACTIVE: &str = "proactive";
     pub const SCHEDULED: &str = "scheduled";
 }
