@@ -86,6 +86,9 @@ interface ToolCallTrace {
   id: string;
   duration_ms: number;
   success: boolean;
+  arguments: Record<string, unknown>;
+  result_preview: string;
+  error: string | null;
 }
 
 interface IterationTrace {
@@ -159,6 +162,53 @@ function stateColor(state: string): "default" | "secondary" | "destructive" | "o
 // TurnTraceTree
 // ---------------------------------------------------------------------------
 
+function ToolCallDetail({ tc }: { tc: ToolCallTrace }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="ml-3">
+      <div
+        className="flex cursor-pointer items-center gap-1.5"
+        onClick={() => setExpanded((v) => !v)}
+      >
+        <span className={tc.success ? "text-green-500" : "text-red-500"}>
+          {tc.success ? "\u2713" : "\u2717"}
+        </span>
+        <span>{tc.name}</span>
+        <span className="text-muted-foreground">({tc.duration_ms}ms)</span>
+        <span className="text-muted-foreground/50">
+          {expanded ? "\u25BC" : "\u25B6"}
+        </span>
+      </div>
+      {tc.error && (
+        <div className="ml-5 mt-0.5 text-red-400">Error: {tc.error}</div>
+      )}
+      {expanded && (
+        <div className="ml-5 mt-1 space-y-1">
+          <details className="group">
+            <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+              Arguments
+            </summary>
+            <pre className="mt-1 max-h-40 overflow-auto rounded bg-muted/30 p-2 text-[10px] leading-tight">
+              {JSON.stringify(tc.arguments, null, 2)}
+            </pre>
+          </details>
+          {tc.result_preview && (
+            <details className="group">
+              <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                Result
+              </summary>
+              <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/30 p-2 text-[10px] leading-tight">
+                {tc.result_preview}
+              </pre>
+            </details>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TurnTraceTree({ traces }: { traces: TurnTrace[] }) {
   return (
     <div className="space-y-2 font-mono text-xs">
@@ -189,19 +239,7 @@ function TurnTraceTree({ traces }: { traces: TurnTrace[] }) {
               </div>
               {/* Tool calls */}
               {iter.tool_calls.map((tc) => (
-                <div key={tc.id} className="ml-3 flex items-center gap-1.5">
-                  <span
-                    className={
-                      tc.success ? "text-green-500" : "text-red-500"
-                    }
-                  >
-                    {tc.success ? "\u2713" : "\u2717"}
-                  </span>
-                  <span>{tc.name}</span>
-                  <span className="text-muted-foreground">
-                    ({tc.duration_ms}ms)
-                  </span>
-                </div>
+                <ToolCallDetail key={tc.id} tc={tc} />
               ))}
               {/* Text preview */}
               {iter.text_preview && (

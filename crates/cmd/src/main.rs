@@ -237,7 +237,12 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
         StreamEvent::TextDelta(t) => CliEvent::TextDelta { text: t },
         StreamEvent::ReasoningDelta(t) => CliEvent::ReasoningDelta { text: t },
         StreamEvent::ToolCallStart { name, .. } => CliEvent::ToolCallStart { name },
-        StreamEvent::ToolCallEnd { .. } => CliEvent::ToolCallEnd,
+        StreamEvent::ToolCallEnd { error, .. } => {
+            if let Some(ref err) = error {
+                eprintln!("\x1b[31m[tool error] {}\x1b[0m", err);
+            }
+            CliEvent::ToolCallEnd
+        }
         StreamEvent::Progress { stage } => CliEvent::Progress { text: stage },
         StreamEvent::TurnMetrics { duration_ms, iterations, tool_calls, model } => {
             CliEvent::Progress {

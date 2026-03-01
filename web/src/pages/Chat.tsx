@@ -93,8 +93,8 @@ type WebEvent =
   | { type: "error"; message: string }
   | { type: "text_delta"; text: string }
   | { type: "reasoning_delta"; text: string }
-  | { type: "tool_call_start"; name: string; id: string }
-  | { type: "tool_call_end"; id: string }
+  | { type: "tool_call_start"; name: string; id: string; arguments: Record<string, unknown> }
+  | { type: "tool_call_end"; id: string; result_preview: string; success: boolean; error: string | null }
   | { type: "progress"; stage: string }
   | { type: "done" }
   | { type: "turn_metrics"; duration_ms: number; iterations: number; tool_calls: number; model: string };
@@ -109,11 +109,15 @@ interface TurnMetrics {
 interface ActiveToolCall {
   id: string;
   name: string;
+  arguments: Record<string, unknown>;
 }
 
 interface CompletedTool {
   id: string;
   name: string;
+  success: boolean;
+  result_preview: string;
+  error: string | null;
 }
 
 interface StreamState {
@@ -1042,17 +1046,31 @@ function ActivityTree({ stream }: { stream: StreamState }) {
     return null;
   }
   return (
-    <div className="mb-2 rounded-lg border border-border/50 bg-muted/30 px-3 py-2 text-xs font-mono text-muted-foreground space-y-0.5">
+    <div className="mb-2 rounded-lg border border-border/50 bg-muted/30 px-3 py-2 text-xs font-mono text-muted-foreground space-y-1">
       {stream.completedTools.map((t) => (
-        <div key={t.id} className="flex items-center gap-1.5">
-          <span className="text-green-500">&#10003;</span>
-          <span>{t.name}</span>
+        <div key={t.id}>
+          <div className="flex items-center gap-1.5">
+            <span className={t.success ? "text-green-500" : "text-red-500"}>
+              {t.success ? "\u2713" : "\u2717"}
+            </span>
+            <span>{t.name}</span>
+          </div>
+          {t.error && (
+            <div className="ml-5 text-red-400">{t.error}</div>
+          )}
         </div>
       ))}
       {stream.activeTools.map((t) => (
-        <div key={t.id} className="flex items-center gap-1.5">
-          <span className="inline-block h-1.5 w-1.5 animate-spin rounded-full border border-blue-500 border-t-transparent" />
-          <span>{t.name}</span>
+        <div key={t.id}>
+          <div className="flex items-center gap-1.5">
+            <span className="inline-block h-1.5 w-1.5 animate-spin rounded-full border border-blue-500 border-t-transparent" />
+            <span>{t.name}</span>
+            {Object.keys(t.arguments).length > 0 && (
+              <span className="text-muted-foreground/60 truncate max-w-[200px]">
+                ({Object.keys(t.arguments).join(", ")})
+              </span>
+            )}
+          </div>
         </div>
       ))}
     </div>
@@ -1227,7 +1245,7 @@ function ChatThread({
                 ...s,
                 activeTools: [
                   ...s.activeTools,
-                  { id: event.id, name: event.name },
+                  { id: event.id, name: event.name, arguments: event.arguments },
                 ],
               }));
               break;
@@ -1238,7 +1256,13 @@ function ChatThread({
                   ...s,
                   activeTools: s.activeTools.filter((t) => t.id !== event.id),
                   completedTools: finished
-                    ? [...s.completedTools, { id: finished.id, name: finished.name }]
+                    ? [...s.completedTools, {
+                        id: finished.id,
+                        name: finished.name,
+                        success: event.success,
+                        result_preview: event.result_preview,
+                        error: event.error,
+                      }]
                     : s.completedTools,
                 };
               });
