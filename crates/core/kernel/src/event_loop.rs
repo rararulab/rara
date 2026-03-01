@@ -142,12 +142,13 @@ impl Kernel {
                 manifest,
                 input,
                 principal,
-                session_id,
                 parent_id,
                 reply_tx,
             } => {
+                // SpawnAgent from ProcessHandle::spawn() — subagent, no
+                // channel binding.
                 let result = self
-                    .handle_spawn_agent(manifest, input, principal, session_id, parent_id, runtimes)
+                    .handle_spawn_agent(manifest, input, principal, None, parent_id, runtimes)
                     .await;
                 let _ = reply_tx.send(result);
             }
@@ -620,7 +621,7 @@ impl Kernel {
                     manifest,
                     msg.content.as_text(),
                     principal,
-                    session_id.clone(),
+                    Some(session_id.clone()), // channel session binding
                     None,
                     runtimes,
                 )
@@ -764,6 +765,17 @@ impl Kernel {
     ) {
         let inner = self.inner();
 
+        // Determine the egress session: use the channel_session_id if this
+        // process has one (root process), otherwise fall back to the
+        // process's own session. Subagents without a channel binding won't
+        // have egress delivery — their results flow back to the parent via
+        // ChildCompleted.
+        let egress_session_id = inner
+            .process_table
+            .get(agent_id)
+            .and_then(|p| p.channel_session_id.clone())
+            .unwrap_or_else(|| session_id.clone());
+
         // Update metrics.
         if let Some(metrics) = inner.process_table.get_metrics(&agent_id) {
             metrics.touch().await;
@@ -779,7 +791,7 @@ impl Kernel {
                     metrics.record_tokens(estimated_tokens);
                 }
 
-                // Persist assistant reply.
+                // Persist assistant reply to the process's own session.
                 let assistant_msg = ChatMessage::assistant(&turn.text);
                 if let Some(mut rt) = runtimes.get_mut(&agent_id) {
                     rt.conversation.push(assistant_msg.clone());
@@ -799,12 +811,12 @@ impl Kernel {
                 };
                 let _ = inner.process_table.set_result(agent_id, result.clone());
 
-                // Push Deliver event for the reply.
+                // Push Deliver event for the reply — use egress session for routing.
                 let envelope = OutboundEnvelope {
                     id:          MessageId::new(),
                     in_reply_to,
                     user:        user.clone(),
-                    session_id:  session_id.clone(),
+                    session_id:  egress_session_id.clone(),
                     routing:     OutboundRouting::BroadcastAll,
                     payload:     OutboundPayload::Reply {
                         content:     crate::channel::types::MessageContent::Text(turn.text),
@@ -873,12 +885,12 @@ impl Kernel {
                     );
                 }
 
-                // Deliver error.
+                // Deliver error — use egress session for routing.
                 let envelope = OutboundEnvelope {
                     id:          MessageId::new(),
                     in_reply_to,
                     user:        user.clone(),
-                    session_id:  session_id.clone(),
+                    session_id:  egress_session_id.clone(),
                     routing:     OutboundRouting::BroadcastAll,
                     payload:     OutboundPayload::Error {
                         code:    "agent_error".to_string(),
@@ -914,12 +926,20 @@ impl Kernel {
     // -----------------------------------------------------------------------
 
     /// Handle a SpawnAgent event — create a new process and its runtime.
+    ///
+    /// `channel_session_id` is the external channel binding (e.g.,
+    /// `web:chat123`). Set for root processes that entered via a channel
+    /// adapter; `None` for subagents spawned by other agents.
+    ///
+    /// Every process gets its own `agent:{id}` session for conversation
+    /// isolation. Only processes with a `channel_session_id` are inserted
+    /// into the `session_index` for inbound message routing.
     async fn handle_spawn_agent(
         &self,
         manifest: AgentManifest,
         input: String,
         principal: Principal,
-        session_id: SessionId,
+        channel_session_id: Option<SessionId>,
         parent_id: Option<AgentId>,
         runtimes: &RuntimeTable,
     ) -> Result<AgentId> {
@@ -937,11 +957,14 @@ impl Kernel {
                 message: "global concurrency limit reached".to_string(),
             })?;
 
-        // Ensure session exists + load initial history.
-        inner.ensure_session(&session_id).await;
-        let initial_messages = inner.load_session_messages(&session_id).await;
-
         let agent_id = AgentId::new();
+
+        // Each process gets its own session — context isolation.
+        let session_id = SessionId::new(format!("agent:{}", agent_id));
+        inner.ensure_session(&session_id).await;
+        // Clean start: no loaded history. Task input arrives as synthetic
+        // message (below) or is injected directly into the conversation.
+        let initial_messages = vec![];
 
         // Audit: ProcessSpawned
         crate::audit::record_async(
@@ -967,6 +990,7 @@ impl Kernel {
             agent_id,
             parent_id,
             session_id: session_id.clone(),
+            channel_session_id: channel_session_id.clone(),
             manifest: manifest.clone(),
             principal: principal.clone(),
             env: AgentEnv::default(),
@@ -990,7 +1014,7 @@ impl Kernel {
             CancellationToken::new()
         };
 
-        // Build ProcessHandle.
+        // Build ProcessHandle — uses the process's own session.
         let child_limit = manifest
             .max_children
             .unwrap_or(inner.default_child_limit);
@@ -1027,16 +1051,25 @@ impl Kernel {
             agent_id = %agent_id,
             manifest = %manifest.name,
             session_id = %session_id,
+            channel_session_id = ?channel_session_id,
             "process spawned via event loop"
         );
 
-        // Now push a UserMessage event for the initial input so it gets
-        // processed by handle_user_message. The session-first router will find
-        // the just-spawned process via the session_index binding.
+        // Deliver the initial input to the spawned process.
+        //
+        // For root processes (channel_session_id.is_some()), push a synthetic
+        // UserMessage — the session-first router finds the process via
+        // session_index (bound to the channel session above).
+        //
+        // For subagents (channel_session_id.is_none()), also push a synthetic
+        // UserMessage using the process's own agent-scoped session and target
+        // the agent by name. handle_user_message will fall through to the
+        // name-based lookup path and find this process.
+        let msg_session = channel_session_id.unwrap_or(session_id);
         let inbound = InboundMessage::synthetic_to(
             input,
             crate::process::principal::UserId("system".to_string()),
-            session_id,
+            msg_session,
             manifest.name.clone(),
         );
         if let Err(e) = self
@@ -1071,11 +1104,11 @@ impl Kernel {
                     // Replace with a fresh token for the next turn.
                     rt.turn_cancel = CancellationToken::new();
                 }
-                // Notify via Deliver event.
+                // Notify via Deliver event — use channel session for egress.
                 let session_id = inner
                     .process_table
                     .get(target)
-                    .map(|p| p.session_id.clone())
+                    .and_then(|p| p.channel_session_id.clone())
                     .unwrap_or_else(|| SessionId::new("unknown"));
                 let envelope = OutboundEnvelope {
                     id:          MessageId::new(),

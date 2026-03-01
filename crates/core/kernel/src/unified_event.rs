@@ -270,13 +270,16 @@ pub enum KernelEvent {
     // === Process control ===
 
     /// Request to spawn a new agent process.
+    ///
+    /// The kernel generates a fresh `agent:{id}` session for the new process.
+    /// Callers no longer specify a session — this ensures each process gets
+    /// context isolation (subagent session isolation).
     SpawnAgent {
-        manifest:   AgentManifest,
-        input:      String,
-        principal:  Principal,
-        session_id: SessionId,
-        parent_id:  Option<AgentId>,
-        reply_tx:   oneshot::Sender<crate::error::Result<AgentId>>,
+        manifest:  AgentManifest,
+        input:     String,
+        principal: Principal,
+        parent_id: Option<AgentId>,
+        reply_tx:  oneshot::Sender<crate::error::Result<AgentId>>,
     },
 
     /// Send a control signal to an agent process.
@@ -350,8 +353,8 @@ impl std::fmt::Debug for KernelEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UserMessage(msg) => write!(f, "UserMessage(session={})", msg.session_id),
-            Self::SpawnAgent { manifest, session_id, .. } => {
-                write!(f, "SpawnAgent(name={}, session={})", manifest.name, session_id)
+            Self::SpawnAgent { manifest, .. } => {
+                write!(f, "SpawnAgent(name={})", manifest.name)
             }
             Self::SendSignal { target, signal } => {
                 write!(f, "SendSignal(target={}, signal={:?})", target, signal)

@@ -164,14 +164,12 @@ async fn test_stream_hub_receives_text_deltas() {
     let (kernel, cancel) = start_test_kernel(vec![]);
     let manifest = test_manifest("stream-text-agent", "Reply in one sentence.");
     let principal = Principal::user("test-user");
-    let session_id = SessionId::new("io-stream-text");
 
     let agent_id = kernel
         .spawn_with_input(
             manifest,
             "Say hello in one sentence.".to_string(),
             principal,
-            session_id.clone(),
             None,
         )
         .await
@@ -209,14 +207,12 @@ async fn test_stream_hub_tool_call_events() {
         "You are a tool-using assistant. ALWAYS call echo_tool when asked, then reply briefly.",
     );
     let principal = Principal::user("test-user");
-    let session_id = SessionId::new("io-stream-tools");
 
     let agent_id = kernel
         .spawn_with_input(
             manifest,
             "Call echo_tool with {\"text\":\"stream-test\"} and reply.".to_string(),
             principal,
-            session_id,
             None,
         )
         .await
@@ -259,16 +255,12 @@ async fn test_multi_session_isolation() {
     let manifest1 = test_manifest("session-1-agent", "Reply with exactly: session one");
     let manifest2 = test_manifest("session-2-agent", "Reply with exactly: session two");
 
-    let session_id1 = SessionId::new("io-session-1");
-    let session_id2 = SessionId::new("io-session-2");
-
-    // Spawn two agents on different sessions concurrently.
+    // Spawn two agents — each gets its own isolated session.
     let agent_id1 = kernel
         .spawn_with_input(
             manifest1,
             "Which session are you?".to_string(),
             principal.clone(),
-            session_id1,
             None,
         )
         .await
@@ -279,7 +271,6 @@ async fn test_multi_session_isolation() {
             manifest2,
             "Which session are you?".to_string(),
             principal,
-            session_id2,
             None,
         )
         .await

@@ -97,13 +97,15 @@ impl ProcessHandle {
     // ========================================================================
 
     /// Spawn a child agent via the unified event queue.
+    ///
+    /// The kernel generates a fresh isolated session for the child — it does
+    /// NOT inherit this process's session.
     pub async fn spawn(&self, manifest: AgentManifest, input: String) -> Result<AgentHandle> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let event = KernelEvent::SpawnAgent {
             manifest,
             input,
             principal: self.principal.clone(),
-            session_id: self.session_id.clone(),
             parent_id: Some(self.agent_id),
             reply_tx,
         };
