@@ -185,7 +185,7 @@ impl InboundMessage {
 // ---------------------------------------------------------------------------
 
 /// A binary attachment for outbound messages.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Attachment {
     /// Raw binary data.
     pub data:      Vec<u8>,
@@ -203,7 +203,7 @@ pub struct Attachment {
 ///
 /// Contains routing information so egress can determine which channels
 /// should receive this message.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutboundEnvelope {
     /// Unique envelope identifier (ULID).
     pub id:          MessageId,
@@ -242,7 +242,8 @@ pub enum OutboundRouting {
 // ---------------------------------------------------------------------------
 
 /// The payload carried by an outbound envelope.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum OutboundPayload {
     /// A complete reply to deliver.
     Reply {
