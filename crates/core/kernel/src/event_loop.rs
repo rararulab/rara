@@ -32,7 +32,6 @@ use crate::{
     audit::{AuditEvent, AuditEventType, MemoryOp},
     channel::types::ChatMessage,
     error::{KernelError, Result},
-    guard::GuardContext,
     handle::process_handle::ProcessHandle,
     io::{
         pipe::{self, PipeEntry},
@@ -338,9 +337,9 @@ impl Kernel {
                 let _ = reply_tx.send(result);
             }
 
-            Syscall::RequiresApproval { tool_name: _, reply_tx } => {
-                // Heuristic: return false (no approval required by default).
-                let _ = reply_tx.send(false);
+            Syscall::RequiresApproval { tool_name, reply_tx } => {
+                let result = inner.approval.requires_approval(&tool_name);
+                let _ = reply_tx.send(result);
             }
 
             Syscall::RequestApproval {
@@ -350,20 +349,26 @@ impl Kernel {
                 summary,
                 reply_tx,
             } => {
-                let guard_ctx = GuardContext {
-                    agent_id: agent_id.0,
-                    user_id: uuid::Uuid::nil(),
-                    session_id: uuid::Uuid::nil(),
+                let approval = Arc::clone(&inner.approval);
+                let policy = approval.policy();
+                let req = crate::approval::ApprovalRequest {
+                    id:           uuid::Uuid::new_v4(),
+                    agent_id,
+                    tool_name:    tool_name.clone(),
+                    tool_args:    serde_json::json!({"summary": &summary}),
+                    summary,
+                    risk_level:   crate::approval::ApprovalManager::classify_risk(&tool_name),
+                    requested_at: Timestamp::now(),
+                    timeout_secs: policy.timeout_secs,
                 };
-                let verdict = inner
-                    .guard
-                    .check_tool(
-                        &guard_ctx,
-                        &tool_name,
-                        &serde_json::json!({"summary": summary}),
-                    )
-                    .await;
-                let _ = reply_tx.send(Ok(verdict.is_allow()));
+
+                // Spawn a task so the event loop is not blocked while waiting
+                // for human approval.
+                tokio::spawn(async move {
+                    let decision = approval.request_approval(req).await;
+                    let approved = matches!(decision, crate::approval::ApprovalDecision::Approved);
+                    let _ = reply_tx.send(Ok(approved));
+                });
             }
 
             Syscall::GetManifest { agent_id, reply_tx } => {

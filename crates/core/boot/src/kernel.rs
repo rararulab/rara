@@ -24,6 +24,7 @@
 use std::sync::Arc;
 
 use rara_kernel::{
+    approval::{ApprovalManager, ApprovalPolicy},
     audit::{AuditLog, InMemoryAuditLog},
     io::{
         ingress::{IdentityResolver, SessionResolver},
@@ -81,6 +82,8 @@ pub struct BootConfig {
     pub guard: Option<Arc<dyn rara_kernel::guard::Guard>>,
     /// Audit log (optional — defaults to InMemoryAuditLog).
     pub audit_log: Option<Arc<dyn AuditLog>>,
+    /// Approval manager (optional — defaults to ApprovalManager with default policy).
+    pub approval: Option<Arc<ApprovalManager>>,
 }
 
 impl Default for BootConfig {
@@ -108,6 +111,7 @@ impl Default for BootConfig {
             event_bus:         None,
             guard:             None,
             audit_log:         None,
+            approval:          None,
         }
     }
 }
@@ -147,6 +151,9 @@ pub fn boot(config: BootConfig) -> Kernel {
     let audit_log: Arc<dyn AuditLog> = config
         .audit_log
         .unwrap_or_else(|| Arc::new(InMemoryAuditLog::default()));
+    let approval = config
+        .approval
+        .unwrap_or_else(|| Arc::new(ApprovalManager::new(ApprovalPolicy::default())));
 
     tracing::info!(
         stream_capacity = config.stream_capacity,
@@ -168,6 +175,7 @@ pub fn boot(config: BootConfig) -> Kernel {
         identity_resolver,
         session_resolver,
         audit_log,
+        approval,
     )
 }
 

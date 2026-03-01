@@ -117,6 +117,8 @@ pub(crate) struct KernelInner {
     pub device_registry:        Arc<DeviceRegistry>,
     /// Structured audit log for agent behavior tracking.
     pub audit_log:              Arc<dyn AuditLog>,
+    /// Approval manager for gating dangerous tool executions.
+    pub approval:               Arc<crate::approval::ApprovalManager>,
     /// Unified event queue (tiered priority) for all kernel interactions.
     pub event_queue:            Arc<EventQueue>,
 }
@@ -275,6 +277,7 @@ impl Kernel {
         identity_resolver: Arc<dyn IdentityResolver>,
         session_resolver: Arc<dyn SessionResolver>,
         audit_log: Arc<dyn AuditLog>,
+        approval: Arc<crate::approval::ApprovalManager>,
     ) -> Self {
         info!(
             max_concurrency = config.max_concurrency,
@@ -312,6 +315,7 @@ impl Kernel {
             pipe_registry: Arc::new(PipeRegistry::new()),
             device_registry: Arc::new(DeviceRegistry::new()),
             audit_log,
+            approval,
             event_queue: event_queue.clone(),
         });
 
@@ -447,6 +451,9 @@ impl Kernel {
     /// Access the audit log.
     pub fn audit_log(&self) -> &Arc<dyn AuditLog> { &self.inner.audit_log }
 
+    /// Access the approval manager.
+    pub fn approval(&self) -> &Arc<crate::approval::ApprovalManager> { &self.inner.approval }
+
     /// Query the audit log for events matching the given filter.
     pub async fn audit_query(&self, filter: AuditFilter) -> Vec<AuditEvent> {
         self.inner.audit_log.query(filter).await
@@ -578,6 +585,9 @@ mod tests {
             Arc::new(crate::defaults::noop::NoopIdentityResolver) as Arc<dyn IdentityResolver>,
             Arc::new(crate::defaults::noop::NoopSessionResolver) as Arc<dyn SessionResolver>,
             Arc::new(InMemoryAuditLog::default()) as Arc<dyn AuditLog>,
+            Arc::new(crate::approval::ApprovalManager::new(
+                crate::approval::ApprovalPolicy::default(),
+            )),
         )
     }
 

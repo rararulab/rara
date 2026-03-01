@@ -28,6 +28,7 @@
 //! | Guard       | [`Guard`]        | Tool approval + output moderation |
 //! | Event Bus   | [`EventBus`]     | Inter-component event broadcasting |
 
+pub mod approval;
 pub mod audit;
 pub mod channel;
 pub mod defaults;
@@ -55,6 +56,9 @@ pub mod tool;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
+pub use approval::{
+    ApprovalDecision, ApprovalManager, ApprovalPolicy, ApprovalRequest, ApprovalResponse, RiskLevel,
+};
 pub use error::{KernelError, Result};
 // New process model re-exports
 pub use handle::{AgentHandle, process_handle::ProcessHandle, spawn_tool::SpawnTool};

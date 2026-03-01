@@ -146,6 +146,9 @@ impl TestKernelBuilder {
             device_registry:        Arc::new(DeviceRegistry::new()),
             audit_log:              Arc::new(InMemoryAuditLog::default())
                 as Arc<dyn AuditLog>,
+            approval:               Arc::new(crate::approval::ApprovalManager::new(
+                crate::approval::ApprovalPolicy::default(),
+            )),
             event_queue:            Arc::new(EventQueue::new(4096)),
         });
 
