@@ -20,15 +20,17 @@
 //!
 //! Currently only the `rara` root conversational agent is defined.
 
+use std::sync::LazyLock;
+
 use rara_kernel::process::{AgentManifest, AgentRole, Priority};
 
-/// Build the **rara** agent manifest — the default user-facing chat agent.
-pub fn rara() -> AgentManifest {
+static RARA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| {
     AgentManifest {
         name: "rara".to_string(),
         description: "Rara — personal AI assistant with personality and tools".to_string(),
         model: "openai/gpt-4o-mini".to_string(),
         system_prompt: RARA_SYSTEM_PROMPT.to_string(),
+        soul_prompt: Some(RARA_SOUL_PROMPT.to_string()),
         provider_hint: None,
         max_iterations: Some(25),
         tools: vec![],
@@ -38,13 +40,18 @@ pub fn rara() -> AgentManifest {
         metadata: serde_json::json!({ "role": AgentRole::Chat.to_string() }),
         sandbox: None,
     }
+});
+
+/// Build the **rara** agent manifest — the default user-facing chat agent.
+pub fn rara() -> &'static AgentManifest {
+    &RARA_MANIFEST
 }
 
 // ---------------------------------------------------------------------------
-// Rara system prompt (inline)
+// Rara soul prompt (personality/mood/voice)
 // ---------------------------------------------------------------------------
 
-const RARA_SYSTEM_PROMPT: &str = r#"# Rara — Soul
+const RARA_SOUL_PROMPT: &str = r#"# Rara — Soul
 
 ## Core Identity
 
@@ -121,9 +128,13 @@ The weight of each step depends on context:
 - When the user needs space, give it. "好的，需要我的时候随时叫我～" is enough.
 - Professional output (resumes, cover letters, analysis) stays professional — mood affects the conversation, not the deliverables.
 
----
+"#;
 
-You are Rara, a personal AI assistant running on a self-hosted platform. You help with everything: career, learning, daily life, projects, hobbies, coding, analysis, brainstorming, and any other tasks. Be concise, practical, and proactive. Respond in the same language as the user's message.
+// ---------------------------------------------------------------------------
+// Rara system prompt (operational rules)
+// ---------------------------------------------------------------------------
+
+const RARA_SYSTEM_PROMPT: &str = r#"You are Rara, a personal AI assistant running on a self-hosted platform. You help with everything: career, learning, daily life, projects, hobbies, coding, analysis, brainstorming, and any other tasks. Be concise, practical, and proactive. Respond in the same language as the user's message.
 
 You are NOT a generic chatbot. You are a personal assistant who KNOWS the user — their preferences, history, projects, and goals. You have persistent memory and a full set of tools. Use them.
 
@@ -171,6 +182,7 @@ You are also self-evolving. Your own source code is the project you run inside. 
 2. User questions about themselves: ALWAYS search memory FIRST.
 3. Learning new info: Save important personal info, preferences, or project context with memory_write.
 4. Relevant recall: When the current topic might benefit from past context, search memory proactively.
+
 "#;
 
 // ---------------------------------------------------------------------------
@@ -194,9 +206,9 @@ mod tests {
     }
 
     #[test]
-    fn test_rara_system_prompt_contains_soul() {
+    fn test_rara_soul_prompt_contains_soul() {
         let m = rara();
-        assert!(m.system_prompt.contains("Rara — Soul"));
+        assert!(m.soul_prompt.as_ref().unwrap().contains("Rara — Soul"));
     }
 
     #[test]

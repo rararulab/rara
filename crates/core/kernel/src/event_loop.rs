@@ -1259,6 +1259,7 @@ impl Kernel {
             description:        "I/O bus agent".to_string(),
             model,
             system_prompt:      "You are a helpful assistant.".to_string(),
+            soul_prompt:    None,
             provider_hint:      None,
             max_iterations:     Some(25),
             tools:              vec![],

@@ -202,6 +202,9 @@ pub struct AgentManifest {
     pub model:          String,
     /// System prompt defining agent behavior.
     pub system_prompt:  String,
+    /// Optional personality/mood/voice prompt (prepended to system_prompt when building LLM messages).
+    #[serde(default)]
+    pub soul_prompt:    Option<String>,
     /// Optional hint for provider selection.
     #[serde(default)]
     pub provider_hint:  Option<String>,
@@ -799,6 +802,7 @@ mod tests {
             description:    format!("Test agent: {name}"),
             model:          "test-model".to_string(),
             system_prompt:  "You are a test agent.".to_string(),
+            soul_prompt:    None,
             provider_hint:  None,
             max_iterations: Some(10),
             tools:          vec!["read_file".to_string()],

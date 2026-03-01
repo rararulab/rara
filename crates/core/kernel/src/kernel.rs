@@ -600,6 +600,7 @@ mod tests {
             description:    format!("Test agent: {name}"),
             model:          "test-model".to_string(),
             system_prompt:  "You are a test agent.".to_string(),
+            soul_prompt:    None,
             provider_hint:  None,
             max_iterations: Some(5),
             tools:          vec![],

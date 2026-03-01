@@ -80,13 +80,17 @@ pub(crate) async fn run_inline_agent_loop(
 
     let max_iterations = manifest.max_iterations.unwrap_or(25);
     let model = &manifest.model;
-    let system_prompt = &manifest.system_prompt;
+    // Build effective system prompt (prepend soul_prompt if present)
+    let effective_prompt = match &manifest.soul_prompt {
+        Some(soul) => format!("{soul}\n\n---\n\n{}", manifest.system_prompt),
+        None => manifest.system_prompt.clone(),
+    };
     let provider_hint = manifest.provider_hint.as_deref();
 
     // Build initial messages: system + optional history + user
     let mut messages: Vec<ChatCompletionRequestMessage> = {
         let sys_msg = ChatCompletionRequestSystemMessageArgs::default()
-            .content(system_prompt.as_str())
+            .content(effective_prompt.as_str())
             .build()
             .map_err(|e| format!("failed to build system message: {e}"))?;
         let mut msgs = vec![sys_msg.into()];
@@ -417,6 +421,7 @@ mod tests {
             description:         "Test agent".to_string(),
             model:               "test-model".to_string(),
             system_prompt:       "You are a test agent.".to_string(),
+            soul_prompt:    None,
             provider_hint:       None,
             max_iterations:      Some(5),
             tools:               vec![],

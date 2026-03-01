@@ -27,7 +27,7 @@ use tracing::info;
 /// 2. User directory YAML files (overrides code-defined)
 pub fn load_default_manifests() -> ManifestLoader {
     let mut loader = ManifestLoader::new();
-    loader.load_manifests(std::iter::once(rara_agents::rara()));
+    loader.load_manifests(std::iter::once(rara_agents::rara().clone()));
     let user_dir = rara_paths::data_dir().join("agents");
     let _ = loader.load_dir(&user_dir);
     info!(count = loader.list().len(), "agent manifests loaded");
@@ -38,7 +38,7 @@ pub fn load_default_manifests() -> ManifestLoader {
 /// user-defined agents from a custom directory.
 pub fn load_manifests_from(dir: &Path) -> ManifestLoader {
     let mut loader = ManifestLoader::new();
-    loader.load_manifests(std::iter::once(rara_agents::rara()));
+    loader.load_manifests(std::iter::once(rara_agents::rara().clone()));
     let _ = loader.load_dir(dir);
     loader
 }
