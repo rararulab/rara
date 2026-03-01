@@ -315,6 +315,29 @@ export interface CreateMcpServerRequest {
 }
 
 
+// Agents
+export interface AgentResponse {
+  name: string;
+  description: string;
+  model: string | null;
+  role: string | null;
+  provider_hint: string | null;
+  max_iterations: number | null;
+  tools: string[];
+  builtin: boolean;
+}
+
+export interface CreateAgentRequest {
+  name: string;
+  description: string;
+  model: string;
+  system_prompt: string;
+  soul_prompt?: string;
+  provider_hint?: string;
+  max_iterations?: number;
+  tools?: string[];
+}
+
 // Coding Tasks
 export type CodingTaskStatus = 'Pending' | 'Cloning' | 'Running' | 'Completed' | 'Failed' | 'Merged' | 'MergeFailed';
 export type AgentType = 'Codex' | 'Claude';

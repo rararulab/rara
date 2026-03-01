@@ -71,9 +71,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { useTheme, type Theme } from "@/hooks/use-theme";
 import Skills from "@/pages/Skills";
+import Agents from "@/pages/Agents";
 import McpServers from "@/pages/McpServers";
 
-type SettingsPage = "general" | "providers" | "skills" | "mcp" | "channels" | "tools";
+type SettingsPage = "general" | "providers" | "agents" | "skills" | "mcp" | "channels" | "tools";
 type ToastState = { kind: "success" | "error"; message: string } | null;
 
 // Well-known setting keys (must match backend keys module)
@@ -258,7 +259,7 @@ export default function Settings() {
   const queryClient = useQueryClient();
   const [activeCategory, setActiveCategory] = useState<SettingsPage>(() => {
     const section = searchParams.get("section");
-    const allowed: SettingsPage[] = ["general", "providers", "skills", "mcp", "channels", "tools"];
+    const allowed: SettingsPage[] = ["general", "providers", "agents", "skills", "mcp", "channels", "tools"];
     return allowed.includes(section as SettingsPage) ? (section as SettingsPage) : "general";
   });
   const [toast, setToast] = useState<ToastState>(null);
@@ -461,7 +462,8 @@ export default function Settings() {
   }> = [
     { id: "general", label: "General", icon: <Palette className="h-4 w-4" />, summary: "Appearance and documentation" },
     { id: "providers", label: "Providers", icon: <Sparkles className="h-4 w-4" />, summary: "LLM provider and model config" },
-{ id: "skills", label: "Skills", icon: <Bot className="h-4 w-4" />, summary: "Installed skills and management" },
+    { id: "agents", label: "Agents", icon: <Users className="h-4 w-4" />, summary: "Agent definitions and overrides" },
+    { id: "skills", label: "Skills", icon: <Bot className="h-4 w-4" />, summary: "Installed skills and management" },
     { id: "mcp", label: "MCP Servers", icon: <ExternalLink className="h-4 w-4" />, summary: "Tool server connections" },
     { id: "channels", label: "Channels", icon: <MessageSquare className="h-4 w-4" />, summary: "Telegram, Gmail, contacts" },
     { id: "tools", label: "Tools", icon: <Settings2 className="h-4 w-4" />, summary: "Composio, memory integrations" },
@@ -678,6 +680,13 @@ export default function Settings() {
               toast={groupToasts["llm-models"] ?? null}
             />
           </>
+        )}
+
+        {/* ── Agents ── */}
+        {activeCategory === "agents" && (
+          <div className="data-panel p-4">
+            <Agents />
+          </div>
         )}
 
         {/* ── Skills ── */}
