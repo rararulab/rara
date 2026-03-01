@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use dashmap::DashMap;
 
@@ -6,13 +9,17 @@ use super::AgentManifest;
 use crate::error::{KernelError, Result};
 
 pub struct AgentRegistry {
-    builtin: Vec<AgentManifest>,
+    builtin: HashMap<String, AgentManifest>,
     custom: DashMap<String, AgentManifest>,
     agents_dir: PathBuf,
 }
 
 impl AgentRegistry {
     pub fn new(builtin: Vec<AgentManifest>, agents_dir: PathBuf) -> Self {
+        let builtin = builtin
+            .into_iter()
+            .map(|m| (m.name.clone(), m))
+            .collect();
         Self {
             builtin,
             custom: DashMap::new(),
@@ -29,7 +36,7 @@ impl AgentRegistry {
         for manifest in loader.list() {
             let name = manifest.name.clone();
             // Only add to custom if not already a builtin
-            if !registry.builtin.iter().any(|b| b.name == name) {
+            if !registry.builtin.contains_key(&name) {
                 registry.custom.insert(name, manifest.clone());
             }
         }
@@ -41,21 +48,15 @@ impl AgentRegistry {
         if let Some(m) = self.custom.get(name) {
             return Some(m.value().clone());
         }
-        self.builtin.iter().find(|m| m.name == name).cloned()
+        self.builtin.get(name).cloned()
     }
 
     pub fn list(&self) -> Vec<AgentManifest> {
-        let mut result: Vec<AgentManifest> = self.builtin.clone();
+        let mut result: HashMap<String, AgentManifest> = self.builtin.clone();
         for entry in self.custom.iter() {
-            let name = entry.key();
-            // Custom shadows builtin — replace if name matches
-            if let Some(pos) = result.iter().position(|m| &m.name == name) {
-                result[pos] = entry.value().clone();
-            } else {
-                result.push(entry.value().clone());
-            }
+            result.insert(entry.key().clone(), entry.value().clone());
         }
-        result
+        result.into_values().collect()
     }
 
     pub fn register(&self, manifest: AgentManifest) -> Result<()> {
@@ -77,7 +78,7 @@ impl AgentRegistry {
     }
 
     pub fn unregister(&self, name: &str) -> Result<()> {
-        if self.builtin.iter().any(|m| m.name == name) {
+        if self.builtin.contains_key(name) {
             return Err(KernelError::Other {
                 message: format!("cannot unregister builtin agent: {name}").into(),
             });
@@ -88,6 +89,10 @@ impl AgentRegistry {
             let _ = std::fs::remove_file(&path);
         }
         Ok(())
+    }
+
+    pub fn is_builtin(&self, name: &str) -> bool {
+        self.builtin.contains_key(name)
     }
 
     pub fn agents_dir(&self) -> &Path {

@@ -365,6 +365,11 @@ impl AppState {
             self.coding_task_service.clone(),
         ));
 
+        // Agent registry routes (plain axum::Router, no OpenAPI metadata).
+        router = router.merge(rara_backend_admin::agents::agent_routes(
+            self.kernel.clone(),
+        ));
+
         (router, api)
     }
 

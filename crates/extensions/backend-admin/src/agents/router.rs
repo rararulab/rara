@@ -1,0 +1,180 @@
+use std::sync::Arc;
+
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::get,
+};
+use rara_kernel::Kernel;
+use rara_kernel::process::AgentManifest;
+use serde::{Deserialize, Serialize};
+
+// ---------------------------------------------------------------------------
+// Response types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct AgentResponse {
+    pub name:           String,
+    pub description:    String,
+    pub model:          String,
+    pub role:           Option<String>,
+    pub provider_hint:  Option<String>,
+    pub max_iterations: Option<usize>,
+    pub tools:          Vec<String>,
+    pub builtin:        bool,
+}
+
+impl AgentResponse {
+    fn from_manifest(m: &AgentManifest, builtin: bool) -> Self {
+        Self {
+            name:           m.name.clone(),
+            description:    m.description.clone(),
+            model:          m.model.clone(),
+            role:           m.role.map(|r| format!("{r:?}")),
+            provider_hint:  m.provider_hint.clone(),
+            max_iterations: m.max_iterations,
+            tools:          m.tools.clone(),
+            builtin,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateAgentRequest {
+    pub name:           String,
+    pub description:    String,
+    pub model:          String,
+    pub system_prompt:  String,
+    #[serde(default)]
+    pub soul_prompt:    Option<String>,
+    #[serde(default)]
+    pub provider_hint:  Option<String>,
+    #[serde(default)]
+    pub max_iterations: Option<usize>,
+    #[serde(default)]
+    pub tools:          Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Error
+// ---------------------------------------------------------------------------
+
+enum AgentError {
+    NotFound(String),
+    Conflict(String),
+    Internal(String),
+}
+
+impl IntoResponse for AgentError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::NotFound(msg) => {
+                (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": msg }))).into_response()
+            }
+            Self::Conflict(msg) => {
+                (StatusCode::CONFLICT, Json(serde_json::json!({ "error": msg }))).into_response()
+            }
+            Self::Internal(msg) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": msg })))
+                    .into_response()
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Router
+// ---------------------------------------------------------------------------
+
+pub fn agent_routes(kernel: Arc<Kernel>) -> Router {
+    Router::new()
+        .route("/api/v1/agents", get(list_agents).post(create_agent))
+        .route(
+            "/api/v1/agents/{name}",
+            get(get_agent).delete(delete_agent),
+        )
+        .with_state(kernel)
+}
+
+// ---------------------------------------------------------------------------
+// Handlers
+// ---------------------------------------------------------------------------
+
+async fn list_agents(State(kernel): State<Arc<Kernel>>) -> Json<Vec<AgentResponse>> {
+    let registry = kernel.agent_registry();
+    let agents = registry
+        .list()
+        .into_iter()
+        .map(|m| {
+            let builtin = registry.is_builtin(&m.name);
+            AgentResponse::from_manifest(&m, builtin)
+        })
+        .collect();
+    Json(agents)
+}
+
+async fn get_agent(
+    State(kernel): State<Arc<Kernel>>,
+    Path(name): Path<String>,
+) -> Result<Json<AgentResponse>, AgentError> {
+    let registry = kernel.agent_registry();
+    let manifest = registry
+        .get(&name)
+        .ok_or_else(|| AgentError::NotFound(format!("agent not found: {name}")))?;
+    let builtin = registry.is_builtin(&name);
+    Ok(Json(AgentResponse::from_manifest(&manifest, builtin)))
+}
+
+async fn create_agent(
+    State(kernel): State<Arc<Kernel>>,
+    Json(req): Json<CreateAgentRequest>,
+) -> Result<(StatusCode, Json<AgentResponse>), AgentError> {
+    let registry = kernel.agent_registry();
+
+    if registry.get(&req.name).is_some() {
+        return Err(AgentError::Conflict(format!(
+            "agent already exists: {}",
+            req.name
+        )));
+    }
+
+    let manifest = AgentManifest {
+        name:               req.name,
+        role:               None,
+        description:        req.description,
+        model:              req.model,
+        system_prompt:      req.system_prompt,
+        soul_prompt:        req.soul_prompt,
+        provider_hint:      req.provider_hint,
+        max_iterations:     req.max_iterations,
+        tools:              req.tools,
+        max_children:       None,
+        max_context_tokens: None,
+        priority:           Default::default(),
+        metadata:           Default::default(),
+        sandbox:            None,
+    };
+
+    registry
+        .register(manifest.clone())
+        .map_err(|e| AgentError::Internal(e.to_string()))?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(AgentResponse::from_manifest(&manifest, false)),
+    ))
+}
+
+async fn delete_agent(
+    State(kernel): State<Arc<Kernel>>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, AgentError> {
+    let registry = kernel.agent_registry();
+    registry
+        .unregister(&name)
+        .map_err(|e| AgentError::Conflict(e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}

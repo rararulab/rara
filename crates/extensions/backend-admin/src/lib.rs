@@ -18,6 +18,7 @@
 //! models, MCP servers, skills, coding tasks, and all domain routes
 //! (resume, application, interview, scheduler, analytics, job, chat).
 
+pub mod agents;
 pub mod analytics;
 pub mod application;
 pub mod chat;

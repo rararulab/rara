@@ -18,9 +18,9 @@
 //! |--------|----------------------------|------------------------|
 //! | GET    | `/api/v1/settings`         | list all               |
 //! | PATCH  | `/api/v1/settings`         | batch update           |
-//! | GET    | `/api/v1/settings/*key`    | get one                |
-//! | PUT    | `/api/v1/settings/*key`    | set one                |
-//! | DELETE | `/api/v1/settings/*key`    | delete one             |
+//! | GET    | `/api/v1/settings/{*key}`  | get one                |
+//! | PUT    | `/api/v1/settings/{*key}`  | set one                |
+//! | DELETE | `/api/v1/settings/{*key}`  | delete one             |
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -45,7 +45,7 @@ pub fn routes(svc: SettingsSvc) -> OpenApiRouter {
 
     let settings_router = axum::Router::new()
         .route("/api/v1/settings", get(list_settings).patch(batch_update_settings))
-        .route("/api/v1/settings/*key", get(get_setting).put(set_setting).delete(delete_setting))
+        .route("/api/v1/settings/{*key}", get(get_setting).put(set_setting).delete(delete_setting))
         .with_state(provider);
 
     OpenApiRouter::from(settings_router)
