@@ -30,7 +30,7 @@ use rara_kernel::{
         stream::StreamHub,
     },
     kernel::{Kernel, KernelConfig},
-    process::{manifest_loader::ManifestLoader, user::UserStore},
+    process::{agent_registry::AgentRegistry, user::UserStore},
     provider::LlmProviderLoaderRef,
     session::SessionRepository,
     tool::ToolRegistry,
@@ -55,8 +55,8 @@ pub struct BootConfig {
     pub llm_provider:  LlmProviderLoaderRef,
     /// Global tool registry.
     pub tool_registry: Arc<ToolRegistry>,
-    /// Agent manifest loader.
-    pub manifest_loader: ManifestLoader,
+    /// Agent registry.
+    pub agent_registry: AgentRegistry,
     /// User store for permission checks.
     pub user_store: Arc<dyn UserStore>,
     /// Session repository for conversation history.
@@ -93,7 +93,10 @@ impl Default for BootConfig {
             kernel_config:     KernelConfig::default(),
             llm_provider:      Arc::new(EnvLlmProviderLoader::default()) as LlmProviderLoaderRef,
             tool_registry:     Arc::new(ToolRegistry::new()),
-            manifest_loader:   ManifestLoader::new(),
+            agent_registry:    AgentRegistry::new(
+                vec![],
+                rara_paths::data_dir().join("agents"),
+            ),
             user_store:        Arc::new(NoopUserStore) as Arc<dyn UserStore>,
             session_repo:      Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
             settings:          Arc::new(NoopSettingsProvider)
@@ -157,7 +160,7 @@ pub fn boot(config: BootConfig) -> Kernel {
         memory,
         event_bus,
         guard,
-        config.manifest_loader,
+        config.agent_registry,
         config.user_store,
         config.session_repo,
         config.settings,

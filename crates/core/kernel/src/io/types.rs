@@ -27,7 +27,7 @@ use snafu::Snafu;
 
 use crate::{
     channel::types::{ChannelType, MessageContent},
-    process::{SessionId, principal::UserId},
+    process::{AgentId, SessionId, principal::UserId},
 };
 
 // ---------------------------------------------------------------------------
@@ -121,6 +121,9 @@ pub struct InboundMessage {
     pub user:          UserId,
     /// Session this message belongs to.
     pub session_id:    SessionId,
+    /// Direct process targeting (agent-to-agent communication).
+    /// When set, routing bypasses session/name resolution entirely.
+    pub target_agent_id: Option<AgentId>,
     /// Target agent name. `None` means route to the default root agent ("rara").
     pub target_agent:  Option<String>,
     /// Message content (text or multimodal).
@@ -146,6 +149,7 @@ impl InboundMessage {
             },
             user,
             session_id,
+            target_agent_id: None,
             target_agent:  None,
             content:       MessageContent::Text(text),
             reply_context: None,
@@ -154,7 +158,7 @@ impl InboundMessage {
         }
     }
 
-    /// Create a synthetic internal message addressed to a specific agent.
+    /// Create a synthetic internal message addressed to a specific agent by name.
     pub fn synthetic_to(
         text: String,
         user: UserId,
@@ -171,7 +175,35 @@ impl InboundMessage {
             },
             user,
             session_id,
+            target_agent_id: None,
             target_agent:  Some(target_agent),
+            content:       MessageContent::Text(text),
+            reply_context: None,
+            timestamp:     jiff::Timestamp::now(),
+            metadata:      HashMap::new(),
+        }
+    }
+
+    /// Create a synthetic internal message addressed to a specific agent by ID
+    /// (agent-to-agent communication).
+    pub fn synthetic_to_id(
+        text: String,
+        user: UserId,
+        session_id: SessionId,
+        target_id: AgentId,
+    ) -> Self {
+        Self {
+            id:            MessageId::new(),
+            source:        ChannelSource {
+                channel_type:        ChannelType::Internal,
+                platform_message_id: None,
+                platform_user_id:    user.0.clone(),
+                platform_chat_id:    None,
+            },
+            user,
+            session_id,
+            target_agent_id: Some(target_id),
+            target_agent:  None,
             content:       MessageContent::Text(text),
             reply_context: None,
             timestamp:     jiff::Timestamp::now(),

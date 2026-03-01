@@ -385,5 +385,5 @@ async fn test_kernel_builder_creates_kernel() {
     assert_eq!(kernel.config().max_concurrency, 4);
     assert_eq!(kernel.config().default_max_iterations, 10);
     assert_eq!(kernel.tool_registry().len(), 1);
-    assert!(kernel.manifest_loader().get("scout").is_some());
+    assert!(kernel.agent_registry().get("scout").is_some());
 }

@@ -28,40 +28,31 @@ use serde::Deserialize;
 use tracing::{info, warn};
 
 use super::{AgentHandle, process_handle::ProcessHandle};
-use crate::process::{AgentManifest, manifest_loader::ManifestLoader};
+use crate::process::{AgentManifest, agent_registry::AgentRegistry};
 
-/// An `AgentTool` implementation that allows LLMs to spawn child agents.
-///
-/// The tool wraps a `ProcessHandle` (via `Arc`) and the `ManifestLoader`
-/// for resolving agent names to manifests.
 pub struct SpawnTool {
-    /// Process handle for spawning children.
-    handle:          Arc<ProcessHandle>,
-    /// Manifest loader for looking up named agent definitions.
-    manifest_loader: Arc<ManifestLoader>,
+    handle:         Arc<ProcessHandle>,
+    agent_registry: Arc<AgentRegistry>,
 }
 
 impl SpawnTool {
-    /// Create a new SpawnTool.
-    pub fn new(handle: Arc<ProcessHandle>, manifest_loader: Arc<ManifestLoader>) -> Self {
+    pub fn new(handle: Arc<ProcessHandle>, agent_registry: Arc<AgentRegistry>) -> Self {
         Self {
             handle,
-            manifest_loader,
+            agent_registry,
         }
     }
 
-    /// Available agent names for the JSON schema description.
     fn available_agents(&self) -> Vec<String> {
-        self.manifest_loader
+        self.agent_registry
             .list()
             .iter()
             .map(|m| m.name.clone())
             .collect()
     }
 
-    /// Resolve a manifest by name from the loader.
     fn resolve_manifest(&self, name: &str) -> Result<AgentManifest, anyhow::Error> {
-        self.manifest_loader.get(name).cloned().ok_or_else(|| {
+        self.agent_registry.get(name).ok_or_else(|| {
             anyhow::anyhow!(
                 "unknown agent: '{}'. Available agents: {:?}",
                 name,
@@ -281,17 +272,18 @@ mod tests {
         ))
     }
 
-    fn make_test_manifest_loader() -> Arc<ManifestLoader> {
-        let mut loader = ManifestLoader::new();
-        loader.load_manifests(crate::testing::test_manifests());
-        Arc::new(loader)
+    fn make_test_agent_registry() -> Arc<AgentRegistry> {
+        Arc::new(AgentRegistry::new(
+            crate::testing::test_manifests(),
+            std::env::temp_dir().join("spawn_tool_test_agents"),
+        ))
     }
 
     #[test]
     fn test_spawn_tool_metadata() {
         let handle = make_test_handle();
-        let loader = make_test_manifest_loader();
-        let tool = SpawnTool::new(handle, loader);
+        let registry = make_test_agent_registry();
+        let tool = SpawnTool::new(handle, registry);
 
         assert_eq!(tool.name(), "spawn_agent");
         assert!(tool.description().contains("Spawn"));
@@ -305,8 +297,8 @@ mod tests {
     #[test]
     fn test_spawn_tool_available_agents() {
         let handle = make_test_handle();
-        let loader = make_test_manifest_loader();
-        let tool = SpawnTool::new(handle, loader);
+        let registry = make_test_agent_registry();
+        let tool = SpawnTool::new(handle, registry);
 
         let agents = tool.available_agents();
         assert!(agents.contains(&"rara".to_string()));
@@ -316,8 +308,8 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_tool_unknown_agent() {
         let handle = make_test_handle();
-        let loader = make_test_manifest_loader();
-        let tool = SpawnTool::new(handle, loader);
+        let registry = make_test_agent_registry();
+        let tool = SpawnTool::new(handle, registry);
 
         let params = serde_json::json!({
             "agent": "nonexistent_agent",
