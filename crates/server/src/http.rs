@@ -262,6 +262,23 @@ async fn api_health_handler() -> axum::Json<serde_json::Value> {
     }))
 }
 
+/// Prometheus metrics endpoint — returns all registered metrics in text format.
+async fn metrics_handler() -> impl IntoResponse {
+    use prometheus::{Encoder, TextEncoder};
+    let encoder = TextEncoder::new();
+    let mut buffer = Vec::new();
+    let metric_families = prometheus::gather();
+    encoder.encode(&metric_families, &mut buffer).unwrap();
+    (
+        StatusCode::OK,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        buffer,
+    )
+}
+
 /// Add health routes to the router
 ///
 /// This function adds health check endpoints for API monitoring and readiness
@@ -271,6 +288,7 @@ pub fn health_routes(router: Router) -> Router {
     router
         .route("/api/v1/health", get(api_health_handler))
         .route("/api/health", get(api_health_handler))
+        .route("/metrics", get(metrics_handler))
 }
 
 #[cfg(test)]
