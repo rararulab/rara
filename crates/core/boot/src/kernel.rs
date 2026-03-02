@@ -160,6 +160,9 @@ pub fn boot(config: BootConfig) -> Kernel {
         .approval
         .unwrap_or_else(|| Arc::new(ApprovalManager::new(ApprovalPolicy::default())));
 
+    // Eagerly register all Prometheus metrics so /metrics shows them immediately.
+    rara_kernel::metrics::init();
+
     tracing::info!(
         stream_capacity = config.stream_capacity,
         "booting kernel via boot::kernel::boot()"

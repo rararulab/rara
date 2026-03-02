@@ -556,9 +556,6 @@ impl Kernel {
     /// stream hub, endpoint registry, etc. The event loop runs until the
     /// `cancel_token` is cancelled.
     pub fn start(self, cancel_token: CancellationToken) -> Arc<Self> {
-        // Eagerly register all Prometheus metrics so /metrics shows them immediately.
-        crate::metrics::init();
-
         let kernel = Arc::new(self);
 
         // Unified event loop — parallel multi-processor mode via ShardedEventQueue.
