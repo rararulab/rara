@@ -117,7 +117,7 @@ pub struct Kernel {
     config: KernelConfig,
     // -- Core subsystems (previously in KernelInner) -----------------------
     /// The global process table tracking all running agents.
-    process_table:     ProcessTable,
+    process_table:     Arc<ProcessTable>,
     /// Global semaphore limiting total concurrent agent processes.
     global_semaphore:  Arc<Semaphore>,
     /// Multi-provider LLM registry with per-agent overrides.
@@ -213,7 +213,7 @@ impl Kernel {
         let global_semaphore = Arc::new(Semaphore::new(config.max_concurrency));
         Self {
             config,
-            process_table: ProcessTable::new(),
+            process_table: Arc::new(ProcessTable::new()),
             global_semaphore,
             provider_registry,
             tool_registry,
@@ -243,8 +243,10 @@ impl Kernel {
     /// Pushes a `KernelEvent::SpawnAgent` into the event queue and waits
     /// for the reply. The kernel generates a fresh isolated session for
     /// the new process.
+    ///
+    /// External callers should use [`KernelHandle::spawn_with_input`] instead.
     #[tracing::instrument(skip_all, fields(manifest_name = %manifest.name))]
-    pub async fn spawn_with_input(
+    pub(crate) async fn spawn_with_input(
         &self,
         manifest: AgentManifest,
         input: String,
@@ -272,8 +274,10 @@ impl Kernel {
     }
 
     /// Spawn a named agent by looking up its manifest.
+    ///
+    /// External callers should use [`KernelHandle::spawn_named`] instead.
     #[tracing::instrument(skip(self, input, principal, parent_id))]
-    pub async fn spawn_named(
+    pub(crate) async fn spawn_named(
         &self,
         agent_name: &str,
         input: String,
@@ -460,7 +464,7 @@ impl Kernel {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn for_testing(
         config: KernelConfig,
-        process_table: ProcessTable,
+        process_table: Arc<ProcessTable>,
         global_semaphore: Arc<Semaphore>,
         provider_registry: ProviderRegistryRef,
         tool_registry: ToolRegistryRef,
@@ -535,12 +539,26 @@ impl Kernel {
 
     /// Create a [`KernelHandle`] for external callers.
     ///
-    /// The handle is cheap to clone (two `Arc`s) and routes all mutations
-    /// through the event queue.
+    /// The handle is cheap to clone (all `Arc`s) and routes all mutations
+    /// through the event queue, while exposing read-only accessors for
+    /// kernel subsystems.
     pub fn handle(&self) -> crate::handle::kernel_handle::KernelHandle {
         crate::handle::kernel_handle::KernelHandle::new(
             self.event_queue.clone(),
             Arc::clone(&self.agent_registry),
+            Arc::clone(&self.process_table),
+            Arc::clone(&self.ingress_pipeline),
+            Arc::clone(&self.stream_hub),
+            Arc::clone(&self.endpoint_registry),
+            Arc::clone(&self.audit),
+            Arc::clone(&self.settings),
+            Arc::clone(&self.security),
+            self.config.clone(),
+            Arc::clone(&self.provider_registry),
+            Arc::clone(&self.tool_registry),
+            Arc::clone(&self.device_registry),
+            Arc::clone(&self.global_semaphore),
+            self.started_at,
         )
     }
 
@@ -560,13 +578,18 @@ impl Kernel {
     /// Start the unified event loop as a background task.
     ///
     /// Consumes `self` by value, wraps it in `Arc`, spawns the event loop,
-    /// and returns the shared `Arc<Kernel>` for callers to use.
+    /// and returns `(Arc<Kernel>, KernelHandle)`.
     ///
-    /// The returned `Arc<Kernel>` can be used to access the ingress pipeline,
-    /// stream hub, endpoint registry, etc. The event loop runs until the
-    /// `cancel_token` is cancelled.
-    pub fn start(self, cancel_token: CancellationToken) -> Arc<Self> {
+    /// The `KernelHandle` is the preferred external API — it provides
+    /// read-only accessors and mutation methods that flow through the event
+    /// queue. The `Arc<Kernel>` is retained for internal use and backwards
+    /// compatibility during the migration period.
+    pub fn start(
+        self,
+        cancel_token: CancellationToken,
+    ) -> (Arc<Self>, crate::handle::kernel_handle::KernelHandle) {
         let kernel = Arc::new(self);
+        let handle = kernel.handle();
 
         // Unified event loop — parallel multi-processor mode via ShardedEventQueue.
         tokio::spawn({
@@ -578,7 +601,7 @@ impl Kernel {
         });
 
         info!("kernel event loop started");
-        kernel
+        (kernel, handle)
     }
 }
 
@@ -640,7 +663,7 @@ mod tests {
     ) -> (Arc<Kernel>, CancellationToken) {
         let kernel = make_test_kernel(max_concurrency, child_limit);
         let cancel = CancellationToken::new();
-        let arc = kernel.start(cancel.clone());
+        let (arc, _handle) = kernel.start(cancel.clone());
         (arc, cancel)
     }
 
@@ -1161,7 +1184,7 @@ mod tests {
     async fn test_check_guard_batch_denies_dangerous_tools() {
         let kernel = make_guarded_kernel();
         let cancel = CancellationToken::new();
-        let kernel = kernel.start(cancel.clone());
+        let (kernel, _handle) = kernel.start(cancel.clone());
 
         let principal = Principal::user("test-user");
         let agent_id = kernel
@@ -1224,7 +1247,7 @@ mod tests {
     async fn test_check_guard_batch_allows_all_safe_tools() {
         let kernel = make_guarded_kernel();
         let cancel = CancellationToken::new();
-        let kernel = kernel.start(cancel.clone());
+        let (kernel, _handle) = kernel.start(cancel.clone());
 
         let principal = Principal::user("test-user");
         let agent_id = kernel
@@ -1275,7 +1298,7 @@ mod tests {
     async fn test_check_guard_batch_empty_checks() {
         let kernel = make_guarded_kernel();
         let cancel = CancellationToken::new();
-        let kernel = kernel.start(cancel.clone());
+        let (kernel, _handle) = kernel.start(cancel.clone());
 
         let principal = Principal::user("test-user");
         let agent_id = kernel

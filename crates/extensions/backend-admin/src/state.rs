@@ -73,13 +73,13 @@ impl BackendState {
 
     /// Build all domain API routes and the OpenAPI spec.
     ///
-    /// Kernel-dependent routes (`agents`, `kernel`) require a reference to
-    /// the running kernel.  Skill, MCP, and coding-task routes need their
-    /// respective service handles from
-    /// [`RaraState`](rara_boot::state::RaraState).
+    /// Kernel-dependent routes (`agents`, `kernel`) use the `KernelHandle`
+    /// for read-only access and mutation through the event queue.
+    /// Skill, MCP, and coding-task routes need their respective service
+    /// handles from [`RaraState`](rara_boot::state::RaraState).
     pub fn routes(
         &self,
-        kernel: &Arc<rara_kernel::Kernel>,
+        kernel_handle: &rara_kernel::KernelHandle,
         skill_registry: &rara_skills::registry::InMemoryRegistry,
         mcp_manager: &rara_mcp::manager::mgr::McpManager,
         coding_task_service: &rara_coding_task::service::CodingTaskService,
@@ -119,10 +119,10 @@ impl BackendState {
         router = router.merge(crate::coding_task::routes(coding_task_service.clone()));
 
         // Agent registry routes (plain axum::Router, no OpenAPI metadata).
-        router = router.merge(crate::agents::agent_routes(kernel.clone()));
+        router = router.merge(crate::agents::agent_routes(kernel_handle.clone()));
 
         // Kernel observability routes (stats, processes, approvals, audit).
-        router = router.merge(crate::kernel::router::kernel_routes(kernel.clone()));
+        router = router.merge(crate::kernel::router::kernel_routes(kernel_handle.clone()));
 
         (router, api)
     }

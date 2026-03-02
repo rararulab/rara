@@ -339,13 +339,13 @@ impl AppConfig {
             .await;
 
         // Start kernel I/O subsystem (TickLoop + Egress).
-        // start() consumes self and returns Arc<Kernel>.
+        // start() consumes self and returns (Arc<Kernel>, KernelHandle).
         let cancellation_token = CancellationToken::new();
-        let kernel = kernel.start(cancellation_token.clone());
+        let (_kernel_arc, kernel_handle) = kernel.start(cancellation_token.clone());
 
-        // Now build routes with the running kernel.
+        // Now build routes with the KernelHandle.
         let (domain_routes, openapi) = backend.routes(
-            &kernel,
+            &kernel_handle,
             &rara.skill_registry,
             &rara.mcp_manager,
             &rara.coding_task_service,
@@ -421,7 +421,10 @@ impl AppConfig {
         // Start channel adapters with the kernel's ingress pipeline.
         if let Some(ref tg_adapter) = telegram_adapter {
             use rara_kernel::channel::adapter::ChannelAdapter as _;
-            match tg_adapter.start(kernel.ingress_pipeline().clone()).await {
+            match tg_adapter
+                .start(kernel_handle.ingress_pipeline().clone())
+                .await
+            {
                 Ok(()) => info!("Telegram adapter started"),
                 Err(e) => warn!(
                     error = %e,
@@ -431,7 +434,10 @@ impl AppConfig {
         }
         {
             use rara_kernel::channel::adapter::ChannelAdapter as _;
-            match web_adapter.start(kernel.ingress_pipeline().clone()).await {
+            match web_adapter
+                .start(kernel_handle.ingress_pipeline().clone())
+                .await
+            {
                 Ok(()) => info!("WebAdapter started"),
                 Err(e) => warn!(
                     error = %e,
@@ -449,9 +455,9 @@ impl AppConfig {
             shutdown_tx:        Some(shutdown_tx),
             running:            Arc::clone(&running),
             cancellation_token: cancellation_token.clone(),
-            ingress_pipeline:   Some(kernel.ingress_pipeline().clone()),
-            endpoint_registry:  Some(kernel.endpoint_registry().clone()),
-            stream_hub:         Some(kernel.stream_hub().clone()),
+            ingress_pipeline:   Some(kernel_handle.ingress_pipeline().clone()),
+            endpoint_registry:  Some(kernel_handle.endpoint_registry().clone()),
+            stream_hub:         Some(kernel_handle.stream_hub().clone()),
         };
 
         // -- shutdown loop ---------------------------------------------------

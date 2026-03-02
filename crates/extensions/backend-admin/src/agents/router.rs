@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -21,7 +19,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use rara_kernel::{Kernel, process::AgentManifest};
+use rara_kernel::{KernelHandle, process::AgentManifest};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -107,19 +105,19 @@ impl IntoResponse for AgentError {
 // Router
 // ---------------------------------------------------------------------------
 
-pub fn agent_routes(kernel: Arc<Kernel>) -> Router {
+pub fn agent_routes(handle: KernelHandle) -> Router {
     Router::new()
         .route("/api/v1/agents", get(list_agents).post(create_agent))
         .route("/api/v1/agents/{name}", get(get_agent).delete(delete_agent))
-        .with_state(kernel)
+        .with_state(handle)
 }
 
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
 
-async fn list_agents(State(kernel): State<Arc<Kernel>>) -> Json<Vec<AgentResponse>> {
-    let registry = kernel.agent_registry();
+async fn list_agents(State(handle): State<KernelHandle>) -> Json<Vec<AgentResponse>> {
+    let registry = handle.agent_registry();
     let agents = registry
         .list()
         .into_iter()
@@ -132,10 +130,10 @@ async fn list_agents(State(kernel): State<Arc<Kernel>>) -> Json<Vec<AgentRespons
 }
 
 async fn get_agent(
-    State(kernel): State<Arc<Kernel>>,
+    State(handle): State<KernelHandle>,
     Path(name): Path<String>,
 ) -> Result<Json<AgentResponse>, AgentError> {
-    let registry = kernel.agent_registry();
+    let registry = handle.agent_registry();
     let manifest = registry
         .get(&name)
         .ok_or_else(|| AgentError::NotFound(format!("agent not found: {name}")))?;
@@ -144,10 +142,10 @@ async fn get_agent(
 }
 
 async fn create_agent(
-    State(kernel): State<Arc<Kernel>>,
+    State(handle): State<KernelHandle>,
     Json(req): Json<CreateAgentRequest>,
 ) -> Result<(StatusCode, Json<AgentResponse>), AgentError> {
-    let registry = kernel.agent_registry();
+    let registry = handle.agent_registry();
 
     if registry.get(&req.name).is_some() {
         return Err(AgentError::Conflict(format!(
@@ -184,10 +182,10 @@ async fn create_agent(
 }
 
 async fn delete_agent(
-    State(kernel): State<Arc<Kernel>>,
+    State(handle): State<KernelHandle>,
     Path(name): Path<String>,
 ) -> Result<StatusCode, AgentError> {
-    let registry = kernel.agent_registry();
+    let registry = handle.agent_registry();
     registry
         .unregister(&name)
         .map_err(|e| AgentError::Conflict(e.to_string()))?;

@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use axum::{
     Json, Router,
     extract::{
@@ -22,7 +20,7 @@ use axum::{
     },
     routing::get,
 };
-use rara_kernel::{Kernel, audit::AuditFilter};
+use rara_kernel::{KernelHandle, audit::AuditFilter};
 use serde::Deserialize;
 
 use super::problem::ProblemDetails;
@@ -43,7 +41,7 @@ fn default_audit_limit() -> usize { 50 }
 // Router
 // ---------------------------------------------------------------------------
 
-pub fn kernel_routes(kernel: Arc<Kernel>) -> Router {
+pub fn kernel_routes(handle: KernelHandle) -> Router {
     Router::new()
         .route("/api/v1/kernel/stats", get(get_stats))
         .route("/api/v1/kernel/processes", get(list_processes))
@@ -57,7 +55,7 @@ pub fn kernel_routes(kernel: Arc<Kernel>) -> Router {
         )
         .route("/api/v1/kernel/approvals", get(list_approvals))
         .route("/api/v1/kernel/audit", get(query_audit))
-        .with_state(kernel)
+        .with_state(handle)
 }
 
 // ---------------------------------------------------------------------------
@@ -65,19 +63,19 @@ pub fn kernel_routes(kernel: Arc<Kernel>) -> Router {
 // ---------------------------------------------------------------------------
 
 async fn get_stats(
-    State(kernel): State<Arc<Kernel>>,
+    State(handle): State<KernelHandle>,
 ) -> Result<Json<rara_kernel::process::SystemStats>, ProblemDetails> {
-    Ok(Json(kernel.system_stats()))
+    Ok(Json(handle.system_stats()))
 }
 
 async fn list_processes(
-    State(kernel): State<Arc<Kernel>>,
+    State(handle): State<KernelHandle>,
 ) -> Result<Json<Vec<rara_kernel::process::ProcessStats>>, ProblemDetails> {
-    Ok(Json(kernel.list_processes().await))
+    Ok(Json(handle.list_processes().await))
 }
 
 async fn get_process_turns(
-    State(kernel): State<Arc<Kernel>>,
+    State(handle): State<KernelHandle>,
     Path(agent_id): Path<String>,
 ) -> Result<Json<Vec<rara_kernel::agent_turn::TurnTrace>>, ProblemDetails> {
     let aid = rara_kernel::process::AgentId(
@@ -85,34 +83,34 @@ async fn get_process_turns(
             .map_err(|e| ProblemDetails::bad_request(format!("invalid agent_id: {e}")))?,
     );
     // Verify the process exists before returning traces.
-    if kernel.process_table().get(aid).is_none() {
+    if handle.process_table().get(aid).is_none() {
         return Err(ProblemDetails::not_found(
             "Process Not Found",
             format!("process not found: {agent_id}"),
         ));
     }
-    Ok(Json(kernel.get_process_turns(aid)))
+    Ok(Json(handle.get_process_turns(aid)))
 }
 
 async fn list_approvals(
-    State(kernel): State<Arc<Kernel>>,
+    State(handle): State<KernelHandle>,
 ) -> Result<Json<Vec<rara_kernel::approval::ApprovalRequest>>, ProblemDetails> {
-    Ok(Json(kernel.approval().list_pending()))
+    Ok(Json(handle.security().approval().list_pending()))
 }
 
 async fn query_audit(
-    State(kernel): State<Arc<Kernel>>,
+    State(handle): State<KernelHandle>,
     Query(params): Query<AuditQuery>,
 ) -> Result<Json<Vec<rara_kernel::audit::AuditEvent>>, ProblemDetails> {
     let filter = AuditFilter {
         limit: params.limit,
         ..Default::default()
     };
-    Ok(Json(kernel.audit_query(filter).await))
+    Ok(Json(handle.audit_query(filter).await))
 }
 
 async fn stream_process(
-    State(kernel): State<Arc<Kernel>>,
+    State(handle): State<KernelHandle>,
     Path(agent_id): Path<String>,
     ws: WebSocketUpgrade,
 ) -> Result<impl axum::response::IntoResponse, ProblemDetails> {
@@ -121,14 +119,14 @@ async fn stream_process(
             .map_err(|e| ProblemDetails::bad_request(format!("invalid agent_id: {e}")))?,
     );
 
-    let process = kernel.process_table().get(aid).ok_or_else(|| {
+    let process = handle.process_table().get(aid).ok_or_else(|| {
         ProblemDetails::not_found(
             "Process Not Found",
             format!("process not found: {agent_id}"),
         )
     })?;
     let session_id = process.session_id.clone();
-    let stream_hub = kernel.stream_hub().clone();
+    let stream_hub = handle.stream_hub().clone();
 
     Ok(ws.on_upgrade(move |socket| handle_process_stream(socket, stream_hub, session_id)))
 }
