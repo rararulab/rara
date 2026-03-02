@@ -44,6 +44,9 @@ pub mod keys {
     pub const MEMORY_MEMOS_TOKEN: &str = "memory.memos.token";
     pub const MEMORY_HINDSIGHT_BASE_URL: &str = "memory.hindsight.base_url";
     pub const MEMORY_HINDSIGHT_BANK_ID: &str = "memory.hindsight.bank_id";
+    pub const FS_ALLOWED_DIRECTORIES: &str = "fs.allowed_directories";
+    pub const FS_READ_ONLY_DIRECTORIES: &str = "fs.read_only_directories";
+    pub const FS_DENIED_DIRECTORIES: &str = "fs.denied_directories";
 }
 
 /// Unified trait for reading and writing flat KV settings.

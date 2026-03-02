@@ -23,6 +23,7 @@ pub mod audit;
 pub mod agentfs;pub mod bus;
 pub mod coding_task;
 pub mod components;
+pub mod guard;
 pub mod error;
 pub mod kernel;
 pub mod manifests;

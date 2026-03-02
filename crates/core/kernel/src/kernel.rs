@@ -1166,6 +1166,8 @@ mod tests {
                 crate::approval::ApprovalPolicy::default(),
             )),
             None,
+            None,
+            None,
         )
     }
 

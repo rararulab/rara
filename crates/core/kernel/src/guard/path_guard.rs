@@ -26,6 +26,7 @@
 //! form. This prevents symlink and `..` traversal attacks.
 
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -41,7 +42,7 @@ use crate::{
 /// Wraps an inner [`Guard`] implementation: path checks run first, then
 /// the inner guard is consulted for non-path-related decisions.
 pub struct PathGuard {
-    config:    SandboxConfig,
+    config:    RwLock<SandboxConfig>,
     workspace: PathBuf,
     inner:     Box<dyn Guard>,
 }
@@ -52,10 +53,15 @@ impl PathGuard {
     /// The `workspace` path is always allowed for read/write access.
     pub fn new(config: SandboxConfig, workspace: PathBuf, inner: Box<dyn Guard>) -> Self {
         Self {
-            config,
+            config: RwLock::new(config),
             workspace,
             inner,
         }
+    }
+
+    /// Update the sandbox config at runtime (called by settings subscriber).
+    pub fn update_config(&self, new_config: SandboxConfig) {
+        *self.config.write().unwrap() = new_config;
     }
 
     /// Check if a path is allowed for the given operation.
@@ -71,13 +77,15 @@ impl PathGuard {
     /// 4. Workspace directory is always allowed.
     /// 5. Everything else is denied.
     pub fn check_access(&self, path: &Path, write: bool) -> Result<(), KernelError> {
+        let config = self.config.read().unwrap();
+
         // Normalize the path: try to resolve it relative to known existing
         // prefixes so that non-existent child paths still compare correctly
         // on systems with symlinked temp dirs (e.g., macOS /var -> /private/var).
         let canonical = resolve_against_parents(path);
 
         // 1. Denied paths take highest precedence.
-        if self.matches_any(&canonical, &self.config.denied_paths) {
+        if self.matches_any_paths(&canonical, &config.denied_paths) {
             return Err(KernelError::SandboxAccessDenied {
                 path:      path.display().to_string(),
                 operation: if write { "write" } else { "read" }.to_string(),
@@ -85,7 +93,7 @@ impl PathGuard {
         }
 
         // 2. Read-only paths: reads OK, writes denied.
-        if self.matches_any(&canonical, &self.config.read_only_paths) {
+        if self.matches_any_paths(&canonical, &config.read_only_paths) {
             if write {
                 return Err(KernelError::SandboxAccessDenied {
                     path:      path.display().to_string(),
@@ -96,7 +104,7 @@ impl PathGuard {
         }
 
         // 3. Allowed paths: both reads and writes OK.
-        if self.matches_any(&canonical, &self.config.allowed_paths) {
+        if self.matches_any_paths(&canonical, &config.allowed_paths) {
             return Ok(());
         }
 
@@ -141,7 +149,7 @@ impl PathGuard {
     }
 
     /// Check if a canonical path starts with any of the configured prefixes.
-    fn matches_any(&self, canonical: &Path, prefixes: &[String]) -> bool {
+    fn matches_any_paths(&self, canonical: &Path, prefixes: &[String]) -> bool {
         prefixes.iter().any(|prefix| {
             let prefix_canonical = resolve_against_parents(Path::new(prefix));
             canonical.starts_with(&prefix_canonical)
@@ -662,5 +670,31 @@ system_prompt: "Hello"
 "#;
         let manifest: crate::process::AgentManifest = serde_yaml::from_str(yaml).unwrap();
         assert!(manifest.sandbox.is_none());
+    }
+
+    #[test]
+    fn test_update_config_at_runtime() {
+        let (guard, workspace) = make_guard(vec![], vec![], vec![]);
+
+        // Initially, an external path should be denied.
+        let external_dir = std::env::temp_dir().join(format!("dynamic-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&external_dir).unwrap();
+        let file = external_dir.join("data.txt");
+        assert!(guard.check_access(&file, false).is_err(), "should be denied before update");
+
+        // Update config to allow the external directory.
+        guard.update_config(SandboxConfig {
+            allowed_paths:      vec![external_dir.to_str().unwrap().to_string()],
+            read_only_paths:    vec![],
+            denied_paths:       vec![],
+            isolated_workspace: true,
+        });
+
+        // Now it should be allowed.
+        assert!(guard.check_access(&file, false).is_ok(), "should be allowed after update");
+        assert!(guard.check_access(&file, true).is_ok(), "write should be allowed after update");
+
+        let _ = fs::remove_dir_all(&workspace);
+        let _ = fs::remove_dir_all(&external_dir);
     }
 }

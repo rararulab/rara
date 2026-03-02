@@ -278,11 +278,30 @@ impl AppConfig {
         // PathGuard wraps NoopGuard with file-system access control.
         let workspace_path = std::env::current_dir()
             .whatever_context("Failed to determine current working directory")?;
-        let path_guard = rara_kernel::guard::path_guard::PathGuard::new(
-            rara_kernel::process::SandboxConfig::default(),
+        let sandbox_config = rara_boot::guard::sandbox_config_from_settings(
+            settings_provider.as_ref(),
+        ).await;
+        let path_guard = Arc::new(rara_kernel::guard::path_guard::PathGuard::new(
+            sandbox_config,
             workspace_path,
             Box::new(rara_kernel::defaults::noop_guard::NoopGuard),
-        );
+        ));
+
+        // Hot-reload: subscribe to settings changes and update PathGuard
+        {
+            let guard_ref = path_guard.clone();
+            let settings_ref = settings_provider.clone();
+            tokio::spawn(async move {
+                let mut rx = settings_ref.subscribe();
+                while rx.changed().await.is_ok() {
+                    let new_config = rara_boot::guard::sandbox_config_from_settings(
+                        settings_ref.as_ref(),
+                    ).await;
+                    guard_ref.update_config(new_config);
+                    tracing::info!("PathGuard sandbox config reloaded from settings");
+                }
+            });
+        }
 
 
         // -- AgentFS for persistent KV + tool call audit ---------------------
@@ -311,7 +330,7 @@ impl AppConfig {
             user_store:        rara.user_store.clone(),
             session_repo:      rara.session_repo.clone(),
             settings:          settings_provider.clone(),
-            guard:             Some(Arc::new(path_guard)),
+            guard:             Some(path_guard as Arc<dyn rara_kernel::guard::Guard>),
             kv_backend,
             tool_call_recorder: tool_recorder,            ..Default::default()
         });
