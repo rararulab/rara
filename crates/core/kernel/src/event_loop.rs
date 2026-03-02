@@ -168,6 +168,11 @@ impl Kernel {
 
     /// Dispatch a single event to its handler.
     pub(crate) async fn handle_event(&self, event: KernelEvent, runtimes: &RuntimeTable) {
+        let event_type = event.variant_name();
+        crate::metrics::EVENT_PROCESSED
+            .with_label_values(&[event_type])
+            .inc();
+
         match event {
             KernelEvent::UserMessage(msg) => {
                 self.handle_user_message(msg, runtimes).await;
@@ -234,6 +239,9 @@ impl Kernel {
     /// All business logic lives here, executed by the kernel event loop.
     async fn handle_syscall(&self, syscall: Syscall, runtimes: &RuntimeTable) {
         let syscall_type = syscall.variant_name();
+        crate::metrics::SYSCALL_TOTAL
+            .with_label_values(&[syscall_type])
+            .inc();
         let syscall_agent_id = syscall.agent_id();
         let span = debug_span!(
             "handle_syscall",
@@ -1089,12 +1097,22 @@ impl Kernel {
         // state below (Completed vs Failed).
         let mut turn_failed = false;
 
+        let agent_name = inner
+            .process_table
+            .get(agent_id)
+            .map(|p| p.manifest.name.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+
         match result {
             Ok(turn) if !turn.text.is_empty() => {
                 span.record("success", true);
                 span.record("iterations", turn.iterations);
                 span.record("tool_calls", turn.tool_calls);
                 span.record("reply_len", turn.text.len());
+
+                crate::metrics::TURN_TOTAL
+                    .with_label_values(&[&agent_name, &turn.model])
+                    .inc();
 
                 // Store turn trace for observability.
                 inner.process_table.push_turn_trace(agent_id, turn.trace.clone());
@@ -1361,6 +1379,13 @@ impl Kernel {
             turn_traces: vec![],
         };
         inner.process_table.insert(process);
+
+        crate::metrics::PROCESS_SPAWNED
+            .with_label_values(&[&manifest.name])
+            .inc();
+        crate::metrics::PROCESS_ACTIVE
+            .with_label_values(&[&manifest.name])
+            .inc();
 
         // Create process-level cancellation token.
         // Child processes derive their token from the parent's, so cancelling
@@ -1644,6 +1669,15 @@ impl Kernel {
     /// Removing the runtime from the table drops the `process_cancel` token
     /// naturally, so no explicit cancellation-token cleanup is needed.
     async fn cleanup_process(&self, agent_id: AgentId, runtimes: &RuntimeTable) {
+        if let Some(process) = self.inner().process_table.get(agent_id) {
+            crate::metrics::PROCESS_ACTIVE
+                .with_label_values(&[&process.manifest.name])
+                .dec();
+            crate::metrics::PROCESS_COMPLETED
+                .with_label_values(&[&process.manifest.name, &process.state.to_string()])
+                .inc();
+        }
+
         let rt = runtimes.remove(&agent_id);
         if let Some((_, rt)) = rt {
             // Notify parent if this is a child process.
