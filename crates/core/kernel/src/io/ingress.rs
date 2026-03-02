@@ -136,6 +136,7 @@ impl IngressPipeline {
 
     /// Ingest a raw platform message into the kernel pipeline.
     pub async fn ingest(&self, raw: RawPlatformMessage) -> Result<(), IngestError> {
+        let channel_label = format!("{:?}", raw.channel_type);
         let span = tracing::info_span!(
             "ingress",
             channel = ?raw.channel_type,
@@ -199,7 +200,13 @@ impl IngressPipeline {
                 other => IngestError::Internal {
                     message: other.to_string(),
                 },
-            })
+            })?;
+
+        crate::metrics::MESSAGE_INBOUND
+            .with_label_values(&[&channel_label])
+            .inc();
+
+        Ok(())
     }
 }
 

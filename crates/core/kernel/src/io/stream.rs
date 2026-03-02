@@ -151,8 +151,10 @@ impl StreamHub {
     /// Open a new stream for an agent execution run.
     ///
     /// Returns a [`StreamHandle`] that the executor uses to emit events.
+    #[tracing::instrument(skip(self), fields(stream_id = tracing::field::Empty))]
     pub fn open(&self, session_id: SessionId) -> StreamHandle {
         let stream_id = StreamId::new();
+        tracing::Span::current().record("stream_id", stream_id.0.as_str());
         let (tx, _) = broadcast::channel(self.capacity);
         let entry = StreamEntry {
             session_id,
@@ -166,6 +168,7 @@ impl StreamHub {
     ///
     /// This is precise — only the specified stream is removed, not other
     /// streams on the same session.
+    #[tracing::instrument(skip(self))]
     pub fn close(&self, stream_id: &StreamId) { self.streams.remove(stream_id); }
 
     /// Subscribe to all active streams for a given session.

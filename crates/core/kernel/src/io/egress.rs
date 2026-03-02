@@ -234,6 +234,13 @@ impl Egress {
     ///
     /// Also used directly by `Kernel::handle_deliver()` in the unified
     /// event loop, bypassing the outbound bus subscribe loop.
+    #[tracing::instrument(
+        skip(adapters, endpoints, envelope),
+        fields(
+            user_id = %envelope.user.0,
+            session_id = %envelope.session_id,
+        )
+    )]
     pub async fn deliver(
         adapters: &HashMap<ChannelType, Arc<dyn EgressAdapter>>,
         endpoints: &Arc<EndpointRegistry>,
@@ -253,7 +260,11 @@ impl Egress {
                     )
                     .await
                     {
-                        Ok(Ok(())) => {}
+                        Ok(Ok(())) => {
+                            crate::metrics::MESSAGE_OUTBOUND
+                                .with_label_values(&[&format!("{:?}", endpoint.channel_type)])
+                                .inc();
+                        }
                         Ok(Err(e)) => {
                             tracing::warn!(?endpoint, %e, "delivery failed");
                         }
