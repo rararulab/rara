@@ -684,7 +684,7 @@ mod tests {
         );
         let kernel = TestKernelBuilder::new().provider_registry(registry).build();
         let cancel = CancellationToken::new();
-        let kernel = kernel.start(cancel.clone());
+        let (kernel, _handle) = kernel.start(cancel.clone());
 
         let manifest = test_manifest();
         let agent_id = kernel

@@ -32,6 +32,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rara_kernel::{
+    KernelHandle,
     io::stream::{StreamEvent, StreamHub},
     process::{AgentId, AgentManifest, AgentResult, ProcessState, SessionId, principal::Principal},
     provider::{LlmProviderLoaderRef, OllamaProviderLoader, ProviderRegistryBuilder},
@@ -108,13 +109,10 @@ impl AgentTool for EchoTool {
 /// Helper: build and start a kernel with the real Ollama provider and optional
 /// tools.
 ///
-/// Returns the started kernel (wrapped in Arc) and a cancellation token.
+/// Returns the `KernelHandle` and a cancellation token.
 fn start_test_kernel(
     tools: Vec<Arc<dyn AgentTool>>,
-) -> (
-    Arc<rara_kernel::Kernel>,
-    tokio_util::sync::CancellationToken,
-) {
+) -> (KernelHandle, tokio_util::sync::CancellationToken) {
     let model = ollama_model();
     let registry = Arc::new(
         ProviderRegistryBuilder::new("ollama", &model)
@@ -140,21 +138,21 @@ fn start_test_kernel(
     }
     let kernel = builder.build();
     let cancel = tokio_util::sync::CancellationToken::new();
-    let arc = kernel.start(cancel.clone());
-    (arc, cancel)
+    let (_arc, handle) = kernel.start(cancel.clone());
+    (handle, cancel)
 }
 
 /// Poll until the process reaches `Completed` state and has a result, or
 /// timeout.
 async fn wait_for_result(
-    kernel: &rara_kernel::Kernel,
+    handle: &KernelHandle,
     agent_id: AgentId,
     timeout_secs: u64,
 ) -> AgentResult {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     loop {
         if tokio::time::Instant::now() > deadline {
-            let state = kernel
+            let state = handle
                 .process_table()
                 .get(agent_id)
                 .map(|p| format!("{:?}", p.state))
@@ -164,7 +162,7 @@ async fn wait_for_result(
                  {state})"
             );
         }
-        if let Some(p) = kernel.process_table().get(agent_id) {
+        if let Some(p) = handle.process_table().get(agent_id) {
             if matches!(p.state, ProcessState::Completed) {
                 if let Some(result) = p.result {
                     return result;
@@ -185,11 +183,11 @@ async fn wait_for_result(
 #[tokio::test]
 #[ignore = "requires running Ollama instance"]
 async fn test_stream_hub_receives_text_deltas() {
-    let (kernel, cancel) = start_test_kernel(vec![]);
+    let (handle, cancel) = start_test_kernel(vec![]);
     let manifest = test_manifest("stream-text-agent", "Reply in one sentence.");
     let principal = Principal::user("test-user");
 
-    let agent_id = kernel
+    let agent_id = handle
         .spawn_with_input(
             manifest,
             "Say hello in one sentence.".to_string(),
@@ -200,7 +198,7 @@ async fn test_stream_hub_receives_text_deltas() {
         .expect("spawn failed");
 
     // Wait for the agent to finish processing via ProcessTable polling.
-    let result = wait_for_result(&kernel, agent_id, 60).await;
+    let result = wait_for_result(&handle, agent_id, 60).await;
 
     // Verify result was produced (which means stream events were emitted
     // internally).
@@ -210,12 +208,7 @@ async fn test_stream_hub_receives_text_deltas() {
     );
 
     // Clean up: send Kill signal to stop the process.
-    let _ = kernel
-        .event_queue()
-        .try_push(rara_kernel::unified_event::KernelEvent::SendSignal {
-            target: agent_id,
-            signal: rara_kernel::process::Signal::Kill,
-        });
+    let _ = handle.send_signal(agent_id, rara_kernel::process::Signal::Kill);
     cancel.cancel();
 }
 
@@ -226,14 +219,14 @@ async fn test_stream_hub_receives_text_deltas() {
 #[tokio::test]
 #[ignore = "requires running Ollama instance"]
 async fn test_stream_hub_tool_call_events() {
-    let (kernel, cancel) = start_test_kernel(vec![Arc::new(EchoTool)]);
+    let (handle, cancel) = start_test_kernel(vec![Arc::new(EchoTool)]);
     let manifest = test_manifest(
         "stream-tool-agent",
         "You are a tool-using assistant. ALWAYS call echo_tool when asked, then reply briefly.",
     );
     let principal = Principal::user("test-user");
 
-    let agent_id = kernel
+    let agent_id = handle
         .spawn_with_input(
             manifest,
             "Call echo_tool with {\"text\":\"stream-test\"} and reply.".to_string(),
@@ -243,7 +236,7 @@ async fn test_stream_hub_tool_call_events() {
         .await
         .expect("spawn failed");
 
-    let result = wait_for_result(&kernel, agent_id, 60).await;
+    let result = wait_for_result(&handle, agent_id, 60).await;
 
     // If the model made tool calls, the streaming pipeline internally emitted
     // ToolCallStart/ToolCallEnd events via the StreamHandle.
@@ -258,12 +251,7 @@ async fn test_stream_hub_tool_call_events() {
     );
 
     // Clean up: send Kill signal to stop the process.
-    let _ = kernel
-        .event_queue()
-        .try_push(rara_kernel::unified_event::KernelEvent::SendSignal {
-            target: agent_id,
-            signal: rara_kernel::process::Signal::Kill,
-        });
+    let _ = handle.send_signal(agent_id, rara_kernel::process::Signal::Kill);
     cancel.cancel();
 }
 
@@ -274,14 +262,14 @@ async fn test_stream_hub_tool_call_events() {
 #[tokio::test]
 #[ignore = "requires running Ollama instance"]
 async fn test_multi_session_isolation() {
-    let (kernel, cancel) = start_test_kernel(vec![]);
+    let (handle, cancel) = start_test_kernel(vec![]);
     let principal = Principal::user("test-user");
 
     let manifest1 = test_manifest("session-1-agent", "Reply with exactly: session one");
     let manifest2 = test_manifest("session-2-agent", "Reply with exactly: session two");
 
     // Spawn two agents — each gets its own isolated session.
-    let agent_id1 = kernel
+    let agent_id1 = handle
         .spawn_with_input(
             manifest1,
             "Which session are you?".to_string(),
@@ -291,7 +279,7 @@ async fn test_multi_session_isolation() {
         .await
         .expect("spawn 1 failed");
 
-    let agent_id2 = kernel
+    let agent_id2 = handle
         .spawn_with_input(
             manifest2,
             "Which session are you?".to_string(),
@@ -302,8 +290,8 @@ async fn test_multi_session_isolation() {
         .expect("spawn 2 failed");
 
     // Both should complete independently (run sequentially to avoid 429).
-    let result1 = wait_for_result(&kernel, agent_id1, 60).await;
-    let result2 = wait_for_result(&kernel, agent_id2, 60).await;
+    let result1 = wait_for_result(&handle, agent_id1, 60).await;
+    let result2 = wait_for_result(&handle, agent_id2, 60).await;
 
     // Both should produce output.
     assert!(
@@ -317,13 +305,7 @@ async fn test_multi_session_isolation() {
 
     // Clean up: send Kill signal to stop each process.
     for id in [agent_id1, agent_id2] {
-        let _ =
-            kernel
-                .event_queue()
-                .try_push(rara_kernel::unified_event::KernelEvent::SendSignal {
-                    target: id,
-                    signal: rara_kernel::process::Signal::Kill,
-                });
+        let _ = handle.send_signal(id, rara_kernel::process::Signal::Kill);
     }
     cancel.cancel();
 }

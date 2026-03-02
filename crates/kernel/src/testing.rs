@@ -125,7 +125,7 @@ impl TestKernelBuilder {
         let max_concurrency = self.config.max_concurrency;
         Kernel::for_testing(
             self.config,
-            ProcessTable::new(),
+            Arc::new(ProcessTable::new()),
             Arc::new(Semaphore::new(max_concurrency)),
             provider_registry,
             Arc::new(self.tool_registry),
