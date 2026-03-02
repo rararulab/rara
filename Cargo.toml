@@ -118,7 +118,6 @@ members = [
     "crates/domain/user",
     "crates/server",
     "crates/paths",
-
     "crates/sessions",
     "crates/memory",
     "crates/skills",
@@ -126,12 +125,11 @@ members = [
     "crates/integrations/codex-oauth",
     "crates/integrations/keyring-store",
     "crates/integrations/pg-credential-store",
-    "crates/core/agents",
-    "crates/core/boot",
-    "crates/core/channels",
-    "crates/core/kernel",
-    "crates/core/queue",
-
+    "crates/agents",
+    "crates/boot",
+    "crates/channels",
+    "crates/kernel",
+    "crates/queue",
     "crates/integrations/k8s",
     "crates/integrations/composio",
     "crates/extensions/workspace",
@@ -232,12 +230,12 @@ common-worker = { path = "crates/common/worker" }
 crawl4ai = { path = "crates/common/crawl4ai" }
 
 object-store = { path = "crates/common/object-store" }
-rara-agents = { path = "crates/core/agents" }
+rara-agents = { path = "crates/agents" }
 rara-api = { path = "api" }
 rara-app = { path = "crates/app" }
 rara-backend-admin = { path = "crates/extensions/backend-admin" }
-rara-boot = { path = "crates/core/boot" }
-rara-channels = { path = "crates/core/channels" }
+rara-boot = { path = "crates/boot" }
+rara-channels = { path = "crates/channels" }
 rara-cli = { path = "crates/cmd" }
 rara-codex-oauth = { path = "crates/integrations/codex-oauth" }
 rara-coding-task = { path = "crates/extensions/coding-task" }
@@ -248,14 +246,14 @@ rara-domain-user = { path = "crates/domain/user" }
 rara-error = { path = "crates/common/error" }
 rara-git = { path = "crates/extensions/rara-git" }
 rara-k8s = { path = "crates/integrations/k8s" }
-rara-kernel = { path = "crates/core/kernel" }
+rara-kernel = { path = "crates/kernel" }
 rara-keyring-store = { path = "crates/integrations/keyring-store" }
 rara-mcp = { path = "crates/integrations/mcp" }
 rara-memory = { path = "crates/memory" }
 rara-model = { path = "crates/rara-model" }
 rara-paths = { path = "crates/paths" }
 rara-pg-credential-store = { path = "crates/integrations/pg-credential-store" }
-rara-queue = { path = "crates/core/queue" }
+rara-queue = { path = "crates/queue" }
 rara-server = { path = "crates/server" }
 rara-sessions = { path = "crates/sessions" }
 rara-skills = { path = "crates/skills" }
