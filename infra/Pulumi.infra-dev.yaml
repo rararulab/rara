@@ -1,0 +1,14 @@
+config:
+  rara:namespace: rara
+  rara:domain: rara.local
+  rara:postgresql.password: postgres
+  rara:postgresql.database: rara
+  rara:minio.rootUser: minioadmin
+  rara:minio.rootPassword: minioadmin
+  rara:langfuse.publicKey: ""
+  rara:langfuse.secretKey: ""
+  rara:hindsight.llmProvider: ollama
+  rara:hindsight.llmModel: "qwen3.5:cloud"
+  rara:hindsight.llmBaseUrl: "http://rara-infra-ollama:11434/v1"
+  rara:mem0.ollamaBaseUrl: "http://rara-infra-ollama:11434"
+  rara:mem0.ollamaModel: "qwen3.5:cloud"

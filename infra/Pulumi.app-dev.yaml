@@ -1,0 +1,8 @@
+config:
+  rara:namespace: rara
+  rara:domain: rara.local
+  rara:backend.imageTag: latest
+  rara:backend.imagePullPolicy: IfNotPresent
+  rara:frontend.imageTag: latest
+  rara:frontend.imagePullPolicy: IfNotPresent
+  rara:consul.address: "http://consul-server:8500"
