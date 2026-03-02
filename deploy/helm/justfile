@@ -220,7 +220,7 @@ hosts:
     LB_IP=$(kubectl get svc {{ RELEASE }}-traefik -n {{ NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
     if [ -z "$LB_IP" ]; then echo "ERROR: Traefik LoadBalancer IP not found"; exit 1; fi
     DOMAIN=$(helm get values {{ RELEASE }} -n {{ NAMESPACE }} -o json 2>/dev/null | jq -r '.global.domain // "rara.local"')
-    SERVICES="grafana prometheus alertmanager langfuse quickwit consul minio traefik tempo memos hindsight ollama"
+    SERVICES="grafana prometheus alertmanager langfuse quickwit consul minio traefik tempo memos hindsight ollama app api"
     HOSTS_LINE="${LB_IP}  $(for s in $SERVICES; do printf "%s.${DOMAIN} " "$s"; done)"
     MARKER="# rara-infra managed"
     # Remove old entries
@@ -423,3 +423,100 @@ doctor:
     if [ "$skip" -gt 0 ]; then printf "  – %d skipped" "$skip"; fi
     echo ""
     if [ "$fail" -gt 0 ]; then exit 1; else exit 0; fi
+
+# ==========================================================================
+# rara-app chart
+# ==========================================================================
+
+APP_CHART := "rara-app"
+APP_RELEASE := env("APP_HELM_RELEASE", "rara-app")
+APP_VALUES_DEV := "rara-app/values-dev.yaml"
+
+# --- Images ---------------------------------------------------------------
+
+GHCR_REPO := "ghcr.io/crrow"
+IMAGE_TAG := env("IMAGE_TAG", "latest")
+
+[doc("build backend Docker image")]
+[group("🐳 Images")]
+build-backend:
+    docker build -t {{ GHCR_REPO }}/job:{{ IMAGE_TAG }} -f ../../docker/Dockerfile ../..
+
+[doc("build frontend Docker image")]
+[group("🐳 Images")]
+build-frontend:
+    docker build -t {{ GHCR_REPO }}/job-web:{{ IMAGE_TAG }} -f ../../docker/web.Dockerfile ../..
+
+[doc("build both images")]
+[group("🐳 Images")]
+build-images: build-backend build-frontend
+
+[doc("push backend image to GHCR")]
+[group("🐳 Images")]
+push-backend:
+    docker push {{ GHCR_REPO }}/job:{{ IMAGE_TAG }}
+
+[doc("push frontend image to GHCR")]
+[group("🐳 Images")]
+push-frontend:
+    docker push {{ GHCR_REPO }}/job-web:{{ IMAGE_TAG }}
+
+[doc("push both images to GHCR")]
+[group("🐳 Images")]
+push-images: push-backend push-frontend
+
+[doc("build and push both images")]
+[group("🐳 Images")]
+ship: build-images push-images
+
+# --- rara-app Helm --------------------------------------------------------
+
+[doc("lint rara-app chart")]
+[group("✅ Validate (app)")]
+app-lint:
+    helm lint {{ APP_CHART }}
+
+[doc("lint rara-app chart with dev overlay")]
+[group("✅ Validate (app)")]
+app-lint-dev:
+    helm lint {{ APP_CHART }} -f {{ APP_VALUES_DEV }}
+
+[doc("render rara-app templates locally")]
+[group("✅ Validate (app)")]
+app-template:
+    helm template {{ APP_RELEASE }} {{ APP_CHART }}
+
+[doc("render rara-app templates with dev overlay")]
+[group("✅ Validate (app)")]
+app-template-dev:
+    helm template {{ APP_RELEASE }} {{ APP_CHART }} -f {{ APP_VALUES_DEV }}
+
+[doc("install rara-app (dev values)")]
+[group("🚀 Deploy (app)")]
+app-install-dev:
+    helm install {{ APP_RELEASE }} {{ APP_CHART }} -n {{ NAMESPACE }} --wait --timeout 5m -f {{ APP_VALUES_DEV }}
+
+[doc("upgrade rara-app (dev values)")]
+[group("🚀 Deploy (app)")]
+app-upgrade-dev *ARGS:
+    helm upgrade {{ APP_RELEASE }} {{ APP_CHART }} -n {{ NAMESPACE }} --wait --timeout 5m -f {{ APP_VALUES_DEV }} {{ ARGS }}
+
+[doc("uninstall rara-app")]
+[group("🚀 Deploy (app)")]
+app-uninstall:
+    helm uninstall {{ APP_RELEASE }} -n {{ NAMESPACE }}
+
+[doc("show rara-app release status")]
+[group("📊 Status (app)")]
+app-status:
+    helm status {{ APP_RELEASE }} -n {{ NAMESPACE }}
+
+[doc("restart backend pods (rolling restart)")]
+[group("🚀 Deploy (app)")]
+app-restart-backend:
+    kubectl rollout restart deployment {{ APP_RELEASE }}-rara-app-backend -n {{ NAMESPACE }}
+
+[doc("restart frontend pods (rolling restart)")]
+[group("🚀 Deploy (app)")]
+app-restart-frontend:
+    kubectl rollout restart deployment {{ APP_RELEASE }}-rara-app-frontend -n {{ NAMESPACE }}
