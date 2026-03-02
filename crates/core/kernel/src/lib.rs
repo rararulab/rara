@@ -46,6 +46,7 @@ pub mod kernel;
 pub mod unified_event;
 pub mod llm;
 pub mod memory;
+pub mod metrics;
 pub mod model;
 pub mod process;
 pub mod agent_turn;
