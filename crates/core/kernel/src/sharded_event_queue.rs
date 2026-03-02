@@ -84,8 +84,8 @@ fn num_cpus() -> usize {
 
 /// Sharded event queue with N agent shards + 1 global queue.
 ///
-/// Implements [`EventQueue`] for backward compatibility while providing
-/// internal access to individual shards for the multi-processor event loop.
+/// Implements [`EventQueue`] and provides internal access to individual
+/// shards for the multi-processor event loop.
 ///
 /// All shard queues are stored as `Arc<ShardQueue>` so that
 /// [`EventProcessor`](crate::event_processor::EventProcessor) tasks can
@@ -158,8 +158,7 @@ impl EventQueue for ShardedEventQueue {
     }
 
     async fn drain(&self, max: usize) -> Vec<(KernelEvent, Option<u64>)> {
-        // For backward compat (single-loop drain), drain from global first,
-        // then round-robin across shards.
+        // Drain from global first, then round-robin across shards.
         let mut result = Vec::with_capacity(max);
         let mut remaining = max;
 
@@ -192,8 +191,8 @@ impl EventQueue for ShardedEventQueue {
             return;
         }
 
-        // Wait on the global queue's notify (fallback for single-loop mode).
-        // In multi-processor mode, each EventProcessor waits on its own shard.
+        // Wait on the global queue's notify.
+        // Each EventProcessor also waits on its own shard independently.
         self.global.wait().await;
     }
 

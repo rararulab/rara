@@ -251,9 +251,9 @@ pub struct Kernel {
     pub(crate) egress_adapters: HashMap<ChannelType, Arc<dyn EgressAdapter>>,
     /// Unified event queue for all kernel interactions.
     event_queue:       Arc<dyn EventQueue>,
-    /// Optional sharded event queue (for multi-processor mode).
-    /// When present, `event_queue` points to the same object.
-    sharded_queue:     Option<Arc<crate::sharded_event_queue::ShardedEventQueue>>,
+    /// Sharded event queue for multi-processor event loop.
+    /// The `event_queue` field points to the same object (via `Arc<dyn EventQueue>`).
+    sharded_queue:     Arc<crate::sharded_event_queue::ShardedEventQueue>,
     /// When this kernel was created (for uptime calculation).
     started_at:        Timestamp,
 }
@@ -281,7 +281,6 @@ impl Kernel {
         session_resolver: Arc<dyn SessionResolver>,
         audit_log: Arc<dyn AuditLog>,
         approval: Arc<crate::approval::ApprovalManager>,
-        event_queue: Option<Arc<dyn EventQueue>>,
         sharded_queue: Option<Arc<crate::sharded_event_queue::ShardedEventQueue>>,
     ) -> Self {
         info!(
@@ -293,16 +292,13 @@ impl Kernel {
 
         let endpoint_registry = Arc::new(EndpointRegistry::new());
 
-        // Determine the event queue: prefer sharded if provided, then fall
-        // back to the generic event_queue param, then default InMemoryEventQueue.
-        let (event_queue, sharded_queue): (Arc<dyn EventQueue>, Option<Arc<crate::sharded_event_queue::ShardedEventQueue>>) =
-            if let Some(sq) = sharded_queue {
-                (sq.clone() as Arc<dyn EventQueue>, Some(sq))
-            } else if let Some(eq) = event_queue {
-                (eq, None)
-            } else {
-                (Arc::new(crate::event_queue::InMemoryEventQueue::new(4096)), None)
-            };
+        // Always use a ShardedEventQueue — create a default one if not provided.
+        let sharded_queue = sharded_queue.unwrap_or_else(|| {
+            Arc::new(crate::sharded_event_queue::ShardedEventQueue::new(
+                crate::sharded_event_queue::ShardedEventQueueConfig::default(),
+            ))
+        });
+        let event_queue: Arc<dyn EventQueue> = sharded_queue.clone();
 
         let ingress_pipeline = Arc::new(IngressPipeline::with_event_queue(
             identity_resolver,
@@ -496,7 +492,13 @@ impl Kernel {
             Arc::new(crate::defaults::noop::NoopIdentityResolver);
         let session_resolver: Arc<dyn SessionResolver> =
             Arc::new(crate::defaults::noop::NoopSessionResolver);
-        let event_queue = inner.event_queue.clone();
+
+        // Always create a ShardedEventQueue so the parallel event loop works.
+        let sharded_queue = Arc::new(crate::sharded_event_queue::ShardedEventQueue::new(
+            crate::sharded_event_queue::ShardedEventQueueConfig::default(),
+        ));
+        let event_queue: Arc<dyn EventQueue> = sharded_queue.clone();
+
         let ingress_pipeline = Arc::new(IngressPipeline::with_event_queue(
             identity_resolver,
             session_resolver,
@@ -512,7 +514,7 @@ impl Kernel {
             endpoint_registry,
             egress_adapters: HashMap::new(),
             event_queue,
-            sharded_queue: None,
+            sharded_queue,
             started_at: Timestamp::now(),
         }
     }
@@ -533,12 +535,9 @@ impl Kernel {
     /// Access the unified event queue.
     pub fn event_queue(&self) -> &Arc<dyn EventQueue> { &self.event_queue }
 
-    /// Access the sharded event queue, if configured.
-    ///
-    /// Returns `Some` when the kernel was created with a
-    /// [`ShardedEventQueue`](crate::sharded_event_queue::ShardedEventQueue).
-    pub(crate) fn sharded_queue(&self) -> Option<&Arc<crate::sharded_event_queue::ShardedEventQueue>> {
-        self.sharded_queue.as_ref()
+    /// Access the sharded event queue.
+    pub(crate) fn sharded_queue(&self) -> &Arc<crate::sharded_event_queue::ShardedEventQueue> {
+        &self.sharded_queue
     }
 
     /// Register an egress adapter for a channel type.
@@ -559,8 +558,7 @@ impl Kernel {
     pub fn start(self, cancel_token: CancellationToken) -> Arc<Self> {
         let kernel = Arc::new(self);
 
-        // Unified event loop — uses Arc variant to enable parallel processing
-        // when a sharded queue is configured.
+        // Unified event loop — parallel multi-processor mode via ShardedEventQueue.
         tokio::spawn({
             let k = kernel.clone();
             let token = cancel_token;
@@ -623,7 +621,6 @@ mod tests {
             Arc::new(crate::approval::ApprovalManager::new(
                 crate::approval::ApprovalPolicy::default(),
             )),
-            None,
             None,
         )
     }

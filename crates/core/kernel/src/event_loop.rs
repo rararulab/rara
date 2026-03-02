@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Unified event loop — single `Kernel::run()` that processes all
+//! Unified event loop — parallel multi-processor loop that processes all
 //! [`KernelEvent`](crate::unified_event::KernelEvent) variants.
 //!
-//! This replaces the separate TickLoop + process_loop + Egress subscribe loop
-//! with a single event-driven loop. The kernel directly manages process state
+//! Uses [`ShardedEventQueue`](crate::sharded_event_queue::ShardedEventQueue) to
+//! route events to N+1 [`EventProcessor`](crate::event_processor::EventProcessor)
+//! tasks for parallel processing. The kernel directly manages process state
 //! (conversation, turn cancellation, pause buffer) instead of delegating to
 //! per-process tokio tasks.
 
@@ -26,7 +27,7 @@ use dashmap::DashMap;
 use jiff::Timestamp;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug_span, error, info, info_span, warn, Instrument};
+use tracing::{debug_span, error, info, info_span, warn};
 
 use crate::{
     audit::{AuditEvent, AuditEventType, MemoryOp},
@@ -96,21 +97,8 @@ pub(crate) type RuntimeTable = DashMap<AgentId, ProcessRuntime>;
 // ---------------------------------------------------------------------------
 
 impl Kernel {
-    /// Run the unified event loop until shutdown.
-    ///
-    /// If the kernel was created with a [`ShardedEventQueue`], spawns N+1
-    /// [`EventProcessor`] tasks (1 global + N shard) for parallel processing.
-    /// Otherwise, falls back to the single-loop behavior for backward
-    /// compatibility.
-    ///
-    /// Replaces: TickLoop + process_loop + Egress subscribe loop.
-    pub async fn run_event_loop(&self, shutdown: CancellationToken) {
-        let runtimes: Arc<RuntimeTable> = Arc::new(DashMap::new());
-        self.run_single_event_loop(&runtimes, shutdown).await;
-    }
-
-    /// Run the event loop with an `Arc<Kernel>`, enabling true parallel
-    /// processing when a sharded queue is configured.
+    /// Run the event loop with an `Arc<Kernel>`, spawning N+1 parallel
+    /// [`EventProcessor`] tasks (1 global + N shard).
     ///
     /// Called from [`start()`](Kernel::start) which already wraps Kernel in Arc.
     pub(crate) async fn run_event_loop_arc(
@@ -118,60 +106,8 @@ impl Kernel {
         shutdown: CancellationToken,
     ) {
         let runtimes: Arc<RuntimeTable> = Arc::new(DashMap::new());
-
-        // Clone the sharded queue Arc before moving kernel into the parallel path.
-        let sharded = kernel.sharded_queue().cloned();
-        if let Some(sq) = sharded {
-            Self::run_parallel_event_loop(kernel, sq, runtimes, shutdown)
-                .await;
-        } else {
-            kernel.run_single_event_loop(&runtimes, shutdown).await;
-        }
-    }
-
-    /// Single-processor event loop (backward compatible).
-    async fn run_single_event_loop(
-        &self,
-        runtimes: &RuntimeTable,
-        shutdown: CancellationToken,
-    ) {
-        info!("kernel event loop started (single-processor mode)");
-        loop {
-            tokio::select! {
-                _ = self.event_queue().wait() => {
-                    let events = self.event_queue().drain(32).await;
-                    for (event, wal_id) in events {
-                        let event_type = event.variant_name();
-                        let span = info_span!(
-                            "handle_event",
-                            processor_id = 0u64,
-                            event_type,
-                        );
-                        self.handle_event(event, runtimes)
-                            .instrument(span)
-                            .await;
-                        if let Some(id) = wal_id {
-                            self.event_queue().mark_completed(id);
-                        }
-                    }
-                }
-                _ = shutdown.cancelled() => {
-                    info!("kernel event loop shutting down");
-                    // Drain any remaining critical events.
-                    let remaining = self.event_queue().drain(1024).await;
-                    for (event, wal_id) in remaining {
-                        if matches!(event, KernelEvent::SendSignal { .. } | KernelEvent::Shutdown) {
-                            self.handle_event(event, runtimes).await;
-                        }
-                        if let Some(id) = wal_id {
-                            self.event_queue().mark_completed(id);
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-        info!("kernel event loop stopped");
+        let sq = Arc::clone(kernel.sharded_queue());
+        Self::run_parallel_event_loop(kernel, sq, runtimes, shutdown).await;
     }
 
     /// Multi-processor event loop — spawns N+1 independent tokio tasks.
