@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -28,6 +28,7 @@
 //! | Guard       | [`Guard`]        | Tool approval + output moderation |
 //! | Event Bus   | [`EventBus`]     | Inter-component event broadcasting |
 
+pub mod agent_turn;
 pub mod approval;
 pub mod audit;
 pub mod channel;
@@ -43,19 +44,19 @@ pub mod guard;
 pub mod handle;
 pub mod io;
 pub mod kernel;
-pub mod kv;pub mod unified_event;
+pub mod kv;
 pub mod llm;
 pub mod memory;
 pub mod metrics;
 pub mod model;
 pub mod process;
-pub mod agent_turn;
 pub mod provider;
 pub mod runner;
 pub mod session;
 pub(crate) mod shard_queue;
 pub mod sharded_event_queue;
 pub mod tool;
+pub mod unified_event;
 
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

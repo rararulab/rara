@@ -21,9 +21,8 @@ use std::path::Path;
 
 use anyhow::Context;
 use async_trait::async_trait;
-use serde_json::json;
-
 use rara_kernel::tool::AgentTool;
+use serde_json::json;
 
 /// Layer 1 primitive: write content to a file.
 pub struct WriteFileTool;

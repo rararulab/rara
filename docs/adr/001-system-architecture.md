@@ -2,7 +2,7 @@
 
 - **Status**: Proposed
 - **Date**: 2026-02-08
-- **Issue**: [#4 - System Architecture and Module Boundary Design](https://github.com/crrow/job/issues/4)
+- **Issue**: [#4 - System Architecture and Module Boundary Design](https://github.com/rararulab/rara/issues/4)
 
 ## Context
 

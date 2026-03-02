@@ -19,9 +19,8 @@
 
 use anyhow::Context;
 use async_trait::async_trait;
-use serde_json::json;
-
 use rara_kernel::tool::AgentTool;
+use serde_json::json;
 
 /// Maximum total output size in bytes (50 KB).
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;

@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -89,9 +89,9 @@ pub enum StreamEvent {
     /// Turn metrics summary (emitted before stream close).
     TurnMetrics {
         duration_ms: u64,
-        iterations: usize,
-        tool_calls: usize,
-        model: String,
+        iterations:  usize,
+        tool_calls:  usize,
+        model:       String,
     },
 }
 
@@ -243,7 +243,9 @@ mod tests {
 
         let (_, mut rx) = subs.into_iter().next().unwrap();
 
-        handle.emit(StreamEvent::TextDelta { text: "hello".to_string() });
+        handle.emit(StreamEvent::TextDelta {
+            text: "hello".to_string(),
+        });
         handle.emit(StreamEvent::Progress {
             stage: "thinking".to_string(),
         });
@@ -263,7 +265,9 @@ mod tests {
         let handle = hub.open(session);
 
         // Emit without any subscriber — should not panic.
-        handle.emit(StreamEvent::TextDelta { text: "ignored".to_string() });
+        handle.emit(StreamEvent::TextDelta {
+            text: "ignored".to_string(),
+        });
         handle.emit(StreamEvent::ToolCallStart {
             name:      "read_file".to_string(),
             id:        "tc-1".to_string(),

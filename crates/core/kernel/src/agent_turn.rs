@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,15 +21,13 @@
 //! caller's task, emitting [`StreamEvent`]s directly and supporting
 //! cancellation via `tokio::select!` on a [`CancellationToken`].
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Instant;
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use async_openai::types::chat::{
     ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
     ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
-    ChatCompletionRequestSystemMessageArgs, ChatCompletionToolChoiceOption, FinishReason,
-    FunctionCall, CreateChatCompletionRequestArgs, ToolChoiceOptions,
+    ChatCompletionRequestSystemMessageArgs, ChatCompletionToolChoiceOption,
+    CreateChatCompletionRequestArgs, FinishReason, FunctionCall, ToolChoiceOptions,
 };
 use futures::StreamExt;
 use tokio_util::sync::CancellationToken;
@@ -57,40 +55,40 @@ fn truncate_preview(s: &str, max_bytes: usize) -> String {
 /// Trace of a single tool call within an iteration.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ToolCallTrace {
-    pub name: String,
-    pub id: String,
-    pub duration_ms: u64,
-    pub success: bool,
-    pub arguments: serde_json::Value,
+    pub name:           String,
+    pub id:             String,
+    pub duration_ms:    u64,
+    pub success:        bool,
+    pub arguments:      serde_json::Value,
     pub result_preview: String,
-    pub error: Option<String>,
+    pub error:          Option<String>,
 }
 
 /// Trace of a single LLM iteration within a turn.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct IterationTrace {
-    pub index: usize,
+    pub index:          usize,
     pub first_token_ms: Option<u64>,
-    pub stream_ms: u64,
+    pub stream_ms:      u64,
     /// First 200 chars of accumulated text.
-    pub text_preview: String,
+    pub text_preview:   String,
     /// Full accumulated text for this iteration (the agent's "thinking").
     pub reasoning_text: Option<String>,
-    pub tool_calls: Vec<ToolCallTrace>,
+    pub tool_calls:     Vec<ToolCallTrace>,
 }
 
 /// Complete trace of a single agent turn.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TurnTrace {
-    pub duration_ms: u64,
-    pub model: String,
+    pub duration_ms:      u64,
+    pub model:            String,
     /// The user message that triggered this turn.
-    pub input_text: Option<String>,
-    pub iterations: Vec<IterationTrace>,
-    pub final_text_len: usize,
+    pub input_text:       Option<String>,
+    pub iterations:       Vec<IterationTrace>,
+    pub final_text_len:   usize,
     pub total_tool_calls: usize,
-    pub success: bool,
-    pub error: Option<String>,
+    pub success:          bool,
+    pub error:            Option<String>,
 }
 
 /// Result of a single agent turn.
@@ -313,7 +311,10 @@ pub(crate) async fn run_inline_agent_loop(
                         first_token_at = Some(Instant::now());
                         iter_span.record(
                             "first_token_ms",
-                            first_token_at.unwrap().duration_since(stream_start).as_millis() as u64,
+                            first_token_at
+                                .unwrap()
+                                .duration_since(stream_start)
+                                .as_millis() as u64,
                         );
                     }
                     accumulated_text.push_str(text);
@@ -325,14 +326,13 @@ pub(crate) async fn run_inline_agent_loop(
             if let Some(ref tool_calls_delta) = choice.delta.tool_calls {
                 for tc in tool_calls_delta {
                     let idx = tc.index;
-                    let entry =
-                        pending_tool_calls
-                            .entry(idx)
-                            .or_insert_with(|| PendingToolCall {
-                                id:            String::new(),
-                                name:          String::new(),
-                                arguments_buf: String::new(),
-                            });
+                    let entry = pending_tool_calls
+                        .entry(idx)
+                        .or_insert_with(|| PendingToolCall {
+                            id:            String::new(),
+                            name:          String::new(),
+                            arguments_buf: String::new(),
+                        });
                     if let Some(ref id) = tc.id {
                         if !id.is_empty() {
                             entry.id = id.clone();
@@ -372,8 +372,8 @@ pub(crate) async fn run_inline_agent_loop(
 
         // Terminal response (no tool calls)
         if !has_tool_calls {
-            let first_token_ms = first_token_at
-                .map(|t| t.duration_since(stream_start).as_millis() as u64);
+            let first_token_ms =
+                first_token_at.map(|t| t.duration_since(stream_start).as_millis() as u64);
             let stream_ms = stream_start.elapsed().as_millis() as u64;
             let text_preview: String = accumulated_text.chars().take(200).collect();
             iteration_traces.push(IterationTrace {
@@ -385,14 +385,14 @@ pub(crate) async fn run_inline_agent_loop(
                 tool_calls: vec![],
             });
             let trace = TurnTrace {
-                duration_ms: turn_start.elapsed().as_millis() as u64,
-                model: model.clone(),
-                input_text: Some(input_text.clone()),
-                iterations: iteration_traces,
-                final_text_len: accumulated_text.len(),
+                duration_ms:      turn_start.elapsed().as_millis() as u64,
+                model:            model.clone(),
+                input_text:       Some(input_text.clone()),
+                iterations:       iteration_traces,
+                final_text_len:   accumulated_text.len(),
                 total_tool_calls: tool_calls_made,
-                success: true,
-                error: None,
+                success:          true,
+                error:            None,
             };
             return Ok(AgentTurnResult {
                 text: accumulated_text,
@@ -440,21 +440,20 @@ pub(crate) async fn run_inline_agent_loop(
         let mut valid_tool_calls = Vec::new();
         for tool_call in tool_call_list {
             tool_calls_made += 1;
-            let args =
-                match serde_json::from_str::<serde_json::Value>(&tool_call.arguments_buf) {
-                    Ok(args) => args,
-                    Err(err) => {
-                        let error_message = format!("invalid tool arguments: {err}");
-                        messages.push(
-                            build_tool_response_message(
-                                &tool_call.id,
-                                &serde_json::json!({ "error": error_message }).to_string(),
-                            )
-                            .map_err(|e| format!("failed to build tool response: {e}"))?,
-                        );
-                        continue;
-                    }
-                };
+            let args = match serde_json::from_str::<serde_json::Value>(&tool_call.arguments_buf) {
+                Ok(args) => args,
+                Err(err) => {
+                    let error_message = format!("invalid tool arguments: {err}");
+                    messages.push(
+                        build_tool_response_message(
+                            &tool_call.id,
+                            &serde_json::json!({ "error": error_message }).to_string(),
+                        )
+                        .map_err(|e| format!("failed to build tool response: {e}"))?,
+                    );
+                    continue;
+                }
+            };
 
             stream_handle.emit(StreamEvent::ToolCallStart {
                 name:      tool_call.name.clone(),
@@ -473,7 +472,9 @@ pub(crate) async fn run_inline_agent_loop(
             .collect();
 
         let verdicts = if !guard_checks.is_empty() {
-            handle.check_guard_batch(guard_checks).await
+            handle
+                .check_guard_batch(guard_checks)
+                .await
                 .unwrap_or_else(|_| vec![crate::guard::Verdict::Allow; valid_tool_calls.len()])
         } else {
             vec![]
@@ -482,7 +483,11 @@ pub(crate) async fn run_inline_agent_loop(
         // Execute all tool calls concurrently (with timing for traces)
         let tool_futures: Vec<_> = valid_tool_calls
             .iter()
-            .zip(verdicts.iter().chain(std::iter::repeat(&crate::guard::Verdict::Allow)))
+            .zip(
+                verdicts
+                    .iter()
+                    .chain(std::iter::repeat(&crate::guard::Verdict::Allow)),
+            )
             .map(|((_id, name, args), verdict)| {
                 let tool = tools.get(name);
                 let args = args.clone();
@@ -549,10 +554,10 @@ pub(crate) async fn run_inline_agent_loop(
             let result_preview = truncate_preview(&result_str, RESULT_PREVIEW_MAX_BYTES);
 
             stream_handle.emit(StreamEvent::ToolCallEnd {
-                id:             id.clone(),
+                id: id.clone(),
                 result_preview: result_preview.clone(),
                 success,
-                error:          err.clone(),
+                error: err.clone(),
             });
 
             // Fire-and-forget tool call audit recording.
@@ -583,8 +588,8 @@ pub(crate) async fn run_inline_agent_loop(
 
         // Collect iteration trace (with tool calls)
         {
-            let first_token_ms = first_token_at
-                .map(|t| t.duration_since(stream_start).as_millis() as u64);
+            let first_token_ms =
+                first_token_at.map(|t| t.duration_since(stream_start).as_millis() as u64);
             let stream_ms = stream_start.elapsed().as_millis() as u64;
             let text_preview: String = accumulated_text.chars().take(200).collect();
             iteration_traces.push(IterationTrace {
@@ -592,7 +597,11 @@ pub(crate) async fn run_inline_agent_loop(
                 first_token_ms,
                 stream_ms,
                 text_preview,
-                reasoning_text: if accumulated_text.is_empty() { None } else { Some(accumulated_text.clone()) },
+                reasoning_text: if accumulated_text.is_empty() {
+                    None
+                } else {
+                    Some(accumulated_text.clone())
+                },
                 tool_calls: tool_call_traces,
             });
         }
@@ -601,24 +610,23 @@ pub(crate) async fn run_inline_agent_loop(
     // Max iterations exhausted — return partial results
     warn!(
         max_iterations,
-        tool_calls_made,
-        "inline agent loop hit max iterations limit, returning partial results"
+        tool_calls_made, "inline agent loop hit max iterations limit, returning partial results"
     );
     let trace = TurnTrace {
-        duration_ms: turn_start.elapsed().as_millis() as u64,
-        model: model.clone(),
-        input_text: Some(input_text.clone()),
-        iterations: iteration_traces,
-        final_text_len: last_accumulated_text.len(),
+        duration_ms:      turn_start.elapsed().as_millis() as u64,
+        model:            model.clone(),
+        input_text:       Some(input_text.clone()),
+        iterations:       iteration_traces,
+        final_text_len:   last_accumulated_text.len(),
         total_tool_calls: tool_calls_made,
-        success: true,
-        error: None,
+        success:          true,
+        error:            None,
     };
     Ok(AgentTurnResult {
-        text:       last_accumulated_text,
+        text: last_accumulated_text,
         iterations: max_iterations,
         tool_calls: tool_calls_made,
-        model:      model.clone(),
+        model: model.clone(),
         trace,
     })
 }
@@ -640,10 +648,7 @@ mod tests {
     use crate::{
         handle::process_handle::ProcessHandle,
         kernel::Kernel,
-        process::{
-            AgentId, AgentManifest, SessionId,
-            principal::Principal,
-        },
+        process::{AgentId, AgentManifest, SessionId, principal::Principal},
         provider::{LlmProvider, ProviderRegistryBuilder},
         testing::TestKernelBuilder,
     };
@@ -677,9 +682,7 @@ mod tests {
                 .provider("test", provider)
                 .build(),
         );
-        let kernel = TestKernelBuilder::new()
-            .provider_registry(registry)
-            .build();
+        let kernel = TestKernelBuilder::new().provider_registry(registry).build();
         let cancel = CancellationToken::new();
         let kernel = kernel.start(cancel.clone());
 
@@ -858,8 +861,7 @@ mod tests {
     async fn test_run_inline_agent_loop_cancellation() {
         let provider = Arc::new(BlockingStreamingProvider) as Arc<dyn LlmProvider>;
 
-        let (kernel, _agent_id, cancel_kernel) =
-            setup_test_kernel_with_process(provider).await;
+        let (kernel, _agent_id, cancel_kernel) = setup_test_kernel_with_process(provider).await;
 
         let handle = Arc::new(ProcessHandle::new(
             _agent_id,

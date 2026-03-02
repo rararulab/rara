@@ -15,9 +15,9 @@
 //! Layer 2 service tools for managing agent skills.
 
 use async_trait::async_trait;
+use rara_kernel::tool::AgentTool;
 use rara_skills::registry::InMemoryRegistry;
 use serde_json::{Value, json};
-use rara_kernel::tool::AgentTool;
 
 /// Format a SKILL.md file with YAML frontmatter (new format).
 fn format_skill_md(

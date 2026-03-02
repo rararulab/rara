@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -31,9 +31,7 @@ pub use service::JobService;
 use sqlx::PgPool;
 
 /// Wire the unified [`JobService`] with all dependencies.
-pub fn wire_job_service(
-    pool: PgPool,
-) -> Result<service::JobService, error::SourceError> {
+pub fn wire_job_service(pool: PgPool) -> Result<service::JobService, error::SourceError> {
     let driver = jobspy::JobSpyDriver::new()?;
     let japandev_driver = japandev::JapanDevDriver::new(japandev::JapanDevConfig::default());
     let job_repo: Arc<dyn repository::JobRepository> =

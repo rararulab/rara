@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,11 +15,12 @@
 //! Telegram account linking service.
 //!
 //! Handles the `/link` command in the Telegram adapter:
-//! - `/link <code>` — web→TG direction: verify code and create platform identity
-//! - `/link` (no code) — TG→web direction: generate a code for the user to verify on web
+//! - `/link <code>` — web→TG direction: verify code and create platform
+//!   identity
+//! - `/link` (no code) — TG→web direction: generate a code for the user to
+//!   verify on web
 
-use rand::Rng;
-use rand::distr::Alphanumeric;
+use rand::{Rng, distr::Alphanumeric};
 use sqlx::PgPool;
 use tracing::info;
 
@@ -33,9 +34,7 @@ pub struct TelegramLinkService {
 }
 
 impl TelegramLinkService {
-    pub fn new(pool: PgPool, base_url: String) -> Self {
-        Self { pool, base_url }
-    }
+    pub fn new(pool: PgPool, base_url: String) -> Self { Self { pool, base_url } }
 
     /// Handle `/link <code>` — web_to_tg direction.
     ///
@@ -48,14 +47,12 @@ impl TelegramLinkService {
         display_name: Option<&str>,
     ) -> Result<String, String> {
         // Verify link code exists and is not expired.
-        let row = sqlx::query_as::<_, LinkCodeRow>(
-            "SELECT * FROM link_codes WHERE code = $1",
-        )
-        .bind(code)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| format!("database error: {e}"))?
-        .ok_or_else(|| "Invalid or expired link code.".to_string())?;
+        let row = sqlx::query_as::<_, LinkCodeRow>("SELECT * FROM link_codes WHERE code = $1")
+            .bind(code)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| format!("database error: {e}"))?
+            .ok_or_else(|| "Invalid or expired link code.".to_string())?;
 
         if row.expires_at < chrono::Utc::now() {
             return Err("Link code has expired.".to_string());
@@ -68,9 +65,9 @@ impl TelegramLinkService {
         // Create platform identity binding.
         let identity_id = uuid::Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO user_platform_identities (id, user_id, platform, platform_user_id, display_name) \
-             VALUES ($1, $2, 'telegram', $3, $4) \
-             ON CONFLICT (platform, platform_user_id) DO UPDATE SET user_id = $2, display_name = $4",
+            "INSERT INTO user_platform_identities (id, user_id, platform, platform_user_id, \
+             display_name) VALUES ($1, $2, 'telegram', $3, $4) ON CONFLICT (platform, \
+             platform_user_id) DO UPDATE SET user_id = $2, display_name = $4",
         )
         .bind(identity_id)
         .bind(row.user_id)
@@ -102,8 +99,8 @@ impl TelegramLinkService {
         let platform_data = serde_json::json!({ "chat_id": chat_id });
 
         sqlx::query(
-            "INSERT INTO link_codes (code, user_id, direction, platform_data, expires_at) \
-             VALUES ($1, (SELECT id FROM kernel_users WHERE name = 'system'), $2, $3, $4)",
+            "INSERT INTO link_codes (code, user_id, direction, platform_data, expires_at) VALUES \
+             ($1, (SELECT id FROM kernel_users WHERE name = 'system'), $2, $3, $4)",
         )
         .bind(&code)
         .bind("tg_to_web")
@@ -117,7 +114,8 @@ impl TelegramLinkService {
         info!(chat_id = %chat_id, code = %code, "tg_to_web link code generated");
 
         Ok(format!(
-            "To link your Telegram account, open this URL in your browser (expires in 5 minutes):\n\n{}",
+            "To link your Telegram account, open this URL in your browser (expires in 5 \
+             minutes):\n\n{}",
             url
         ))
     }

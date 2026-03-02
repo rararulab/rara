@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ use anyhow::{Result, anyhow};
 use base::process_group::ProcessGroupGuard;
 use futures::FutureExt;
 use oauth2::TokenResponse;
+use rara_keyring_store::KeyringStoreRef;
 use reqwest::header::{AUTHORIZATION, HeaderMap};
 use rmcp::{
     RoleClient,
@@ -45,8 +46,6 @@ use tokio::{
     sync::Mutex,
 };
 use tracing::{info, warn};
-
-use rara_keyring_store::KeyringStoreRef;
 
 use crate::{
     logging_client_handler::{LoggingClientHandler, SendElicitation},
@@ -703,8 +702,14 @@ impl RmcpClient {
             StreamableHttpClientTransportConfig::with_uri(url),
         );
 
-        let persistor =
-            OAuthPersistor::new(server_name, url, auth_manager, store_mode, store, Some(tokens));
+        let persistor = OAuthPersistor::new(
+            server_name,
+            url,
+            auth_manager,
+            store_mode,
+            store,
+            Some(tokens),
+        );
 
         Ok((transport, persistor))
     }

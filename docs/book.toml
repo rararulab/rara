@@ -10,8 +10,8 @@ build-dir = "book"
 [output.html]
 default-theme = "ayu"
 preferred-dark-theme = "ayu"
-git-repository-url = "https://github.com/crrow/job"
-edit-url-template = "https://github.com/crrow/job/edit/main/docs/{path}"
+git-repository-url = "https://github.com/rararulab/rara"
+edit-url-template = "https://github.com/rararulab/rara/edit/main/docs/{path}"
 additional-js = ["mermaid.min.js", "mermaid-init.js"]
 
 [preprocessor]

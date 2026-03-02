@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -37,7 +37,11 @@ pub async fn init_mcp_manager(
         .map_err(|e| BootError::McpRegistry {
             message: e.to_string(),
         })?;
-    let manager = McpManager::new(Arc::new(registry), OAuthCredentialsStoreMode::default(), credential_store);
+    let manager = McpManager::new(
+        Arc::new(registry),
+        OAuthCredentialsStoreMode::default(),
+        credential_store,
+    );
     let started = manager.start_enabled().await;
     if started.is_empty() {
         info!("no MCP servers to start");

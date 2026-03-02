@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -45,10 +45,7 @@ pub async fn build_provider_registry(
 
     // -- openrouter ---------------------------------------------------------
     if let Some(api_key) = settings.get(keys::LLM_OPENROUTER_API_KEY).await {
-        builder = builder.provider(
-            "openrouter",
-            Arc::new(OpenAiProvider::new(api_key)),
-        );
+        builder = builder.provider("openrouter", Arc::new(OpenAiProvider::new(api_key)));
     }
 
     // -- ollama -------------------------------------------------------------
@@ -60,20 +57,13 @@ pub async fn build_provider_registry(
         let config = async_openai::config::OpenAIConfig::new()
             .with_api_base(format!("{}/v1", base_url))
             .with_api_key("ollama");
-        builder = builder.provider(
-            "ollama",
-            Arc::new(OpenAiProvider::with_config(config)),
-        );
+        builder = builder.provider("ollama", Arc::new(OpenAiProvider::with_config(config)));
     }
 
     // -- codex (OpenAI via OAuth) -------------------------------------------
     if let Ok(Some(tokens)) = rara_codex_oauth::load_tokens(credential_store).await {
-        let config =
-            async_openai::config::OpenAIConfig::new().with_api_key(&tokens.access_token);
-        builder = builder.provider(
-            "codex",
-            Arc::new(OpenAiProvider::with_config(config)),
-        );
+        let config = async_openai::config::OpenAIConfig::new().with_api_key(&tokens.access_token);
+        builder = builder.provider("codex", Arc::new(OpenAiProvider::with_config(config)));
     }
 
     info!("provider registry: default_provider={default_provider}, default_model={default_model}");

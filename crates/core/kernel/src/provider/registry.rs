@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -39,7 +39,7 @@ pub struct AgentLlmConfig {
     /// Override provider name (e.g., `"ollama"`, `"openrouter"`).
     pub provider: Option<String>,
     /// Override model identifier (e.g., `"qwen3:32b"`).
-    pub model: Option<String>,
+    pub model:    Option<String>,
 }
 
 /// Named provider map with default selection and per-agent overrides.
@@ -47,13 +47,13 @@ pub struct AgentLlmConfig {
 /// Thread-safe and cheaply cloneable via `Arc` wrapping.
 pub struct ProviderRegistry {
     /// Named provider instances (e.g., `"openrouter"` -> OpenAiProvider).
-    providers: HashMap<String, Arc<dyn LlmProvider>>,
+    providers:        HashMap<String, Arc<dyn LlmProvider>>,
     /// Default provider name (must exist in `providers`).
     default_provider: String,
     /// Default model identifier.
-    default_model: String,
+    default_model:    String,
     /// Per-agent overrides keyed by agent manifest name.
-    agent_overrides: HashMap<String, AgentLlmConfig>,
+    agent_overrides:  HashMap<String, AgentLlmConfig>,
 }
 
 impl std::fmt::Debug for ProviderRegistry {
@@ -72,8 +72,10 @@ impl ProviderRegistry {
     /// Resolve a provider + model for a given agent.
     ///
     /// Resolution priority:
-    /// - **Provider**: `agent_overrides[name].provider` > `manifest_provider_hint` > `default_provider`
-    /// - **Model**: `agent_overrides[name].model` > `manifest_model` > `default_model`
+    /// - **Provider**: `agent_overrides[name].provider` >
+    ///   `manifest_provider_hint` > `default_provider`
+    /// - **Model**: `agent_overrides[name].model` > `manifest_model` >
+    ///   `default_model`
     ///
     /// Returns `(Arc<dyn LlmProvider>, model_name)` or an error if the
     /// resolved provider name is not registered.
@@ -106,14 +108,10 @@ impl ProviderRegistry {
     }
 
     /// Get the default provider name.
-    pub fn default_provider(&self) -> &str {
-        &self.default_provider
-    }
+    pub fn default_provider(&self) -> &str { &self.default_provider }
 
     /// Get the default model name.
-    pub fn default_model(&self) -> &str {
-        &self.default_model
-    }
+    pub fn default_model(&self) -> &str { &self.default_model }
 
     /// List all registered provider names.
     pub fn provider_names(&self) -> Vec<&str> {
@@ -136,42 +134,31 @@ impl ProviderRegistry {
 ///     .build();
 /// ```
 pub struct ProviderRegistryBuilder {
-    providers: HashMap<String, Arc<dyn LlmProvider>>,
+    providers:        HashMap<String, Arc<dyn LlmProvider>>,
     default_provider: String,
-    default_model: String,
-    agent_overrides: HashMap<String, AgentLlmConfig>,
+    default_model:    String,
+    agent_overrides:  HashMap<String, AgentLlmConfig>,
 }
 
 impl ProviderRegistryBuilder {
     /// Create a new builder with the given default provider and model names.
-    pub fn new(
-        default_provider: impl Into<String>,
-        default_model: impl Into<String>,
-    ) -> Self {
+    pub fn new(default_provider: impl Into<String>, default_model: impl Into<String>) -> Self {
         Self {
-            providers: HashMap::new(),
+            providers:        HashMap::new(),
             default_provider: default_provider.into(),
-            default_model: default_model.into(),
-            agent_overrides: HashMap::new(),
+            default_model:    default_model.into(),
+            agent_overrides:  HashMap::new(),
         }
     }
 
     /// Register a named provider instance.
-    pub fn provider(
-        mut self,
-        name: impl Into<String>,
-        provider: Arc<dyn LlmProvider>,
-    ) -> Self {
+    pub fn provider(mut self, name: impl Into<String>, provider: Arc<dyn LlmProvider>) -> Self {
         self.providers.insert(name.into(), provider);
         self
     }
 
     /// Register a per-agent LLM override.
-    pub fn agent_override(
-        mut self,
-        agent_name: impl Into<String>,
-        config: AgentLlmConfig,
-    ) -> Self {
+    pub fn agent_override(mut self, agent_name: impl Into<String>, config: AgentLlmConfig) -> Self {
         self.agent_overrides.insert(agent_name.into(), config);
         self
     }
@@ -179,10 +166,10 @@ impl ProviderRegistryBuilder {
     /// Build the [`ProviderRegistry`].
     pub fn build(self) -> ProviderRegistry {
         ProviderRegistry {
-            providers: self.providers,
+            providers:        self.providers,
             default_provider: self.default_provider,
-            default_model: self.default_model,
-            agent_overrides: self.agent_overrides,
+            default_model:    self.default_model,
+            agent_overrides:  self.agent_overrides,
         }
     }
 }
@@ -244,14 +231,14 @@ mod tests {
                 "rara",
                 AgentLlmConfig {
                     provider: Some("ollama".to_string()),
-                    model: Some("qwen3:32b".to_string()),
+                    model:    Some("qwen3:32b".to_string()),
                 },
             )
             .agent_override(
                 "scout",
                 AgentLlmConfig {
                     provider: None,
-                    model: Some("deepseek/deepseek-chat".to_string()),
+                    model:    Some("deepseek/deepseek-chat".to_string()),
                 },
             )
             .build()
@@ -267,9 +254,7 @@ mod tests {
     #[test]
     fn resolve_manifest_model_overrides_default() {
         let reg = make_registry();
-        let (_, model) = reg
-            .resolve("unknown-agent", None, Some("gpt-4"))
-            .unwrap();
+        let (_, model) = reg.resolve("unknown-agent", None, Some("gpt-4")).unwrap();
         assert_eq!(model, "gpt-4");
     }
 
@@ -302,8 +287,7 @@ mod tests {
 
     #[test]
     fn resolve_unknown_provider_errors() {
-        let reg = ProviderRegistryBuilder::new("nonexistent", "model")
-            .build();
+        let reg = ProviderRegistryBuilder::new("nonexistent", "model").build();
         let result = reg.resolve("agent", None, None);
         assert!(result.is_err());
     }

@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -189,9 +189,8 @@ impl ChatArgs {
         let forwarder_hub = stream_hub.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_millis(100));
-            let mut active_streams: std::collections::HashSet<
-                rara_kernel::io::stream::StreamId,
-            > = std::collections::HashSet::new();
+            let mut active_streams: std::collections::HashSet<rara_kernel::io::stream::StreamId> =
+                std::collections::HashSet::new();
             loop {
                 interval.tick().await;
                 let subs = forwarder_hub.subscribe_session(&forwarder_session_id);
@@ -225,13 +224,7 @@ impl ChatArgs {
         eprintln!("Type your message and press Enter. Ctrl+C to exit.\n");
 
         // Run the REPL loop.
-        run_repl(
-            event_rx,
-            ingress_pipeline,
-            session_key,
-            user_id_str,
-        )
-        .await;
+        run_repl(event_rx, ingress_pipeline, session_key, user_id_str).await;
 
         // Cleanup.
         app_handle.shutdown();
@@ -255,11 +248,16 @@ fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
             CliEvent::ToolCallEnd
         }
         StreamEvent::Progress { stage } => CliEvent::Progress { text: stage },
-        StreamEvent::TurnMetrics { duration_ms, iterations, tool_calls, model } => {
-            CliEvent::Progress {
-                text: format!("[{model}] {iterations} iterations, {tool_calls} tool calls, {duration_ms}ms"),
-            }
-        }
+        StreamEvent::TurnMetrics {
+            duration_ms,
+            iterations,
+            tool_calls,
+            model,
+        } => CliEvent::Progress {
+            text: format!(
+                "[{model}] {iterations} iterations, {tool_calls} tool calls, {duration_ms}ms"
+            ),
+        },
     }
 }
 

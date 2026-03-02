@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -42,24 +42,22 @@ use tracing::debug;
 /// Resolution strategy per channel:
 ///
 /// 1. Look up `user_store.get_by_platform(channel, platform_user_id)`.
-/// 2. If a linked user is found, return `UserId(user.name)` — the real
-///    kernel username (e.g. `"root"`).
+/// 2. If a linked user is found, return `UserId(user.name)` — the real kernel
+///    username (e.g. `"root"`).
 /// 3. If **not** found:
 ///    - **Web** channel: fall through to the old synthetic format
-///      `"web:<platform_user_id>"` for backward compatibility (the Web
-///      adapter already sends the real username from JWT).
+///      `"web:<platform_user_id>"` for backward compatibility (the Web adapter
+///      already sends the real username from JWT).
 ///    - All other channels (Telegram, CLI, …): return
-///      `IdentityResolutionFailed` — the user must link their platform
-///      account first.
+///      `IdentityResolutionFailed` — the user must link their platform account
+///      first.
 pub struct DefaultIdentityResolver {
     user_store: Arc<dyn UserStore>,
 }
 
 impl DefaultIdentityResolver {
     /// Create a new resolver backed by the given user store.
-    pub fn new(user_store: Arc<dyn UserStore>) -> Self {
-        Self { user_store }
-    }
+    pub fn new(user_store: Arc<dyn UserStore>) -> Self { Self { user_store } }
 }
 
 #[async_trait]
@@ -132,9 +130,7 @@ pub struct DefaultSessionResolver {
 
 impl DefaultSessionResolver {
     /// Create a new resolver backed by the given session repository.
-    pub fn new(session_repo: Arc<dyn SessionRepository>) -> Self {
-        Self { session_repo }
-    }
+    pub fn new(session_repo: Arc<dyn SessionRepository>) -> Self { Self { session_repo } }
 }
 
 #[async_trait]
@@ -184,13 +180,14 @@ impl SessionResolver for DefaultSessionResolver {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rara_kernel::{
         channel::types::ChatMessage,
         error::Result as KResult,
         process::user::{KernelUser, PlatformIdentity},
         session::{ChannelBinding, SessionEntry, SessionError, SessionKey},
     };
+
+    use super::*;
 
     // -- In-memory UserStore for unit tests ---------------------------------
 
@@ -225,9 +222,7 @@ mod tests {
 
     #[async_trait]
     impl UserStore for FakeUserStore {
-        async fn get_by_id(&self, _id: uuid::Uuid) -> KResult<Option<KernelUser>> {
-            Ok(None)
-        }
+        async fn get_by_id(&self, _id: uuid::Uuid) -> KResult<Option<KernelUser>> { Ok(None) }
 
         async fn get_by_name(&self, name: &str) -> KResult<Option<KernelUser>> {
             Ok(self.users.iter().find(|u| u.name == name).cloned())
@@ -247,11 +242,17 @@ mod tests {
         }
 
         async fn create(&self, _user: &KernelUser) -> KResult<()> { Ok(()) }
+
         async fn update(&self, _user: &KernelUser) -> KResult<()> { Ok(()) }
+
         async fn delete(&self, _id: uuid::Uuid) -> KResult<()> { Ok(()) }
+
         async fn list(&self) -> KResult<Vec<KernelUser>> { Ok(vec![]) }
+
         async fn link_platform(&self, _identity: &PlatformIdentity) -> KResult<()> { Ok(()) }
+
         async fn unlink_platform(&self, _id: uuid::Uuid) -> KResult<()> { Ok(()) }
+
         async fn list_platforms(&self, _user_id: uuid::Uuid) -> KResult<Vec<PlatformIdentity>> {
             Ok(vec![])
         }
@@ -283,17 +284,64 @@ mod tests {
 
     #[async_trait]
     impl SessionRepository for FakeSessionRepo {
-        async fn create_session(&self, _: &SessionEntry) -> Result<SessionEntry, SessionError> { unimplemented!() }
-        async fn get_session(&self, _: &SessionKey) -> Result<Option<SessionEntry>, SessionError> { Ok(None) }
-        async fn list_sessions(&self, _: i64, _: i64) -> Result<Vec<SessionEntry>, SessionError> { Ok(vec![]) }
-        async fn update_session(&self, _: &SessionEntry) -> Result<SessionEntry, SessionError> { unimplemented!() }
+        async fn create_session(&self, _: &SessionEntry) -> Result<SessionEntry, SessionError> {
+            unimplemented!()
+        }
+
+        async fn get_session(&self, _: &SessionKey) -> Result<Option<SessionEntry>, SessionError> {
+            Ok(None)
+        }
+
+        async fn list_sessions(&self, _: i64, _: i64) -> Result<Vec<SessionEntry>, SessionError> {
+            Ok(vec![])
+        }
+
+        async fn update_session(&self, _: &SessionEntry) -> Result<SessionEntry, SessionError> {
+            unimplemented!()
+        }
+
         async fn delete_session(&self, _: &SessionKey) -> Result<(), SessionError> { Ok(()) }
-        async fn append_message(&self, _: &SessionKey, _: &ChatMessage) -> Result<ChatMessage, SessionError> { unimplemented!() }
-        async fn read_messages(&self, _: &SessionKey, _: Option<i64>, _: Option<i64>) -> Result<Vec<ChatMessage>, SessionError> { Ok(vec![]) }
+
+        async fn append_message(
+            &self,
+            _: &SessionKey,
+            _: &ChatMessage,
+        ) -> Result<ChatMessage, SessionError> {
+            unimplemented!()
+        }
+
+        async fn read_messages(
+            &self,
+            _: &SessionKey,
+            _: Option<i64>,
+            _: Option<i64>,
+        ) -> Result<Vec<ChatMessage>, SessionError> {
+            Ok(vec![])
+        }
+
         async fn clear_messages(&self, _: &SessionKey) -> Result<(), SessionError> { Ok(()) }
-        async fn fork_session(&self, _: &SessionKey, _: &SessionKey, _: i64) -> Result<SessionEntry, SessionError> { unimplemented!() }
-        async fn bind_channel(&self, _: &ChannelBinding) -> Result<ChannelBinding, SessionError> { unimplemented!() }
-        async fn get_channel_binding(&self, _: &str, _: &str, _: &str) -> Result<Option<ChannelBinding>, SessionError> { Ok(None) }
+
+        async fn fork_session(
+            &self,
+            _: &SessionKey,
+            _: &SessionKey,
+            _: i64,
+        ) -> Result<SessionEntry, SessionError> {
+            unimplemented!()
+        }
+
+        async fn bind_channel(&self, _: &ChannelBinding) -> Result<ChannelBinding, SessionError> {
+            unimplemented!()
+        }
+
+        async fn get_channel_binding(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<Option<ChannelBinding>, SessionError> {
+            Ok(None)
+        }
 
         async fn get_binding_by_chat(
             &self,

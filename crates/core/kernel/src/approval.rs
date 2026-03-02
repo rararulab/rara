@@ -1,4 +1,19 @@
-//! Execution approval manager — gates dangerous operations behind human approval.
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Execution approval manager — gates dangerous operations behind human
+//! approval.
 
 use std::sync::RwLock;
 
@@ -61,17 +76,17 @@ pub struct ApprovalPolicy {
     /// Tool names that always require human approval.
     pub require_approval: Vec<String>,
     /// Default timeout in seconds for approval requests.
-    pub timeout_secs: u64,
+    pub timeout_secs:     u64,
     /// If true, auto-approve all requests (bypass mode).
-    pub auto_approve: bool,
+    pub auto_approve:     bool,
 }
 
 impl Default for ApprovalPolicy {
     fn default() -> Self {
         Self {
             require_approval: vec!["bash".to_string(), "shell_exec".to_string()],
-            timeout_secs: 120,
-            auto_approve: false,
+            timeout_secs:     120,
+            auto_approve:     false,
         }
     }
 }
@@ -118,8 +133,9 @@ impl ApprovalManager {
 
     /// Submit an approval request. Blocks until resolved or timed out.
     ///
-    /// If `auto_approve` is enabled in the policy, returns `Approved` immediately.
-    /// If the agent already has `MAX_PENDING_PER_AGENT` pending requests, returns `Denied`.
+    /// If `auto_approve` is enabled in the policy, returns `Approved`
+    /// immediately. If the agent already has `MAX_PENDING_PER_AGENT`
+    /// pending requests, returns `Denied`.
     pub async fn request_approval(&self, req: ApprovalRequest) -> ApprovalDecision {
         // Auto-approve bypass
         {
@@ -145,7 +161,13 @@ impl ApprovalManager {
         let id = req.id;
 
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.pending.insert(id, PendingRequest { request: req, sender: tx });
+        self.pending.insert(
+            id,
+            PendingRequest {
+                request: req,
+                sender:  tx,
+            },
+        );
 
         info!(request_id = %id, "approval request submitted, waiting for resolution");
 
@@ -162,7 +184,8 @@ impl ApprovalManager {
         }
     }
 
-    /// Resolve a pending request (called by external API / TG callback / WebSocket).
+    /// Resolve a pending request (called by external API / TG callback /
+    /// WebSocket).
     pub fn resolve(
         &self,
         request_id: Uuid,
@@ -187,13 +210,14 @@ impl ApprovalManager {
 
     /// List all pending requests (for dashboard / API).
     pub fn list_pending(&self) -> Vec<ApprovalRequest> {
-        self.pending.iter().map(|r| r.value().request.clone()).collect()
+        self.pending
+            .iter()
+            .map(|r| r.value().request.clone())
+            .collect()
     }
 
     /// Number of pending requests.
-    pub fn pending_count(&self) -> usize {
-        self.pending.len()
-    }
+    pub fn pending_count(&self) -> usize { self.pending.len() }
 
     /// Update the approval policy (hot-reload).
     pub fn update_policy(&self, policy: ApprovalPolicy) {
@@ -202,7 +226,10 @@ impl ApprovalManager {
 
     /// Get a copy of the current policy.
     pub fn policy(&self) -> ApprovalPolicy {
-        self.policy.read().unwrap_or_else(|e| e.into_inner()).clone()
+        self.policy
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Classify the risk level of a tool invocation.
@@ -226,19 +253,17 @@ mod tests {
 
     use super::*;
 
-    fn default_manager() -> ApprovalManager {
-        ApprovalManager::new(ApprovalPolicy::default())
-    }
+    fn default_manager() -> ApprovalManager { ApprovalManager::new(ApprovalPolicy::default()) }
 
     fn make_request(agent_name: &str, tool_name: &str, timeout_secs: u64) -> ApprovalRequest {
         let _ = agent_name;
         ApprovalRequest {
-            id:           Uuid::new_v4(),
-            agent_id:     AgentId::new(),
-            tool_name:    tool_name.to_string(),
-            tool_args:    serde_json::json!({}),
-            summary:      format!("execute {tool_name}"),
-            risk_level:   ApprovalManager::classify_risk(tool_name),
+            id: Uuid::new_v4(),
+            agent_id: AgentId::new(),
+            tool_name: tool_name.to_string(),
+            tool_args: serde_json::json!({}),
+            summary: format!("execute {tool_name}"),
+            risk_level: ApprovalManager::classify_risk(tool_name),
             requested_at: Timestamp::now(),
             timeout_secs,
         }
@@ -256,8 +281,8 @@ mod tests {
     fn requires_approval_custom_policy() {
         let policy = ApprovalPolicy {
             require_approval: vec!["file_write".to_string()],
-            timeout_secs: 30,
-            auto_approve: false,
+            timeout_secs:     30,
+            auto_approve:     false,
         };
         let mgr = ApprovalManager::new(policy);
         assert!(mgr.requires_approval("file_write"));
@@ -268,8 +293,8 @@ mod tests {
     fn requires_approval_auto_approve_bypasses() {
         let policy = ApprovalPolicy {
             require_approval: vec!["bash".to_string()],
-            timeout_secs: 60,
-            auto_approve: true,
+            timeout_secs:     60,
+            auto_approve:     true,
         };
         let mgr = ApprovalManager::new(policy);
         assert!(!mgr.requires_approval("bash"));
@@ -278,10 +303,22 @@ mod tests {
     #[test]
     fn classify_risk_levels() {
         assert_eq!(ApprovalManager::classify_risk("bash"), RiskLevel::Critical);
-        assert_eq!(ApprovalManager::classify_risk("shell_exec"), RiskLevel::Critical);
-        assert_eq!(ApprovalManager::classify_risk("file_write"), RiskLevel::High);
-        assert_eq!(ApprovalManager::classify_risk("file_delete"), RiskLevel::High);
-        assert_eq!(ApprovalManager::classify_risk("web_fetch"), RiskLevel::Medium);
+        assert_eq!(
+            ApprovalManager::classify_risk("shell_exec"),
+            RiskLevel::Critical
+        );
+        assert_eq!(
+            ApprovalManager::classify_risk("file_write"),
+            RiskLevel::High
+        );
+        assert_eq!(
+            ApprovalManager::classify_risk("file_delete"),
+            RiskLevel::High
+        );
+        assert_eq!(
+            ApprovalManager::classify_risk("web_fetch"),
+            RiskLevel::Medium
+        );
         assert_eq!(ApprovalManager::classify_risk("file_read"), RiskLevel::Low);
         assert_eq!(ApprovalManager::classify_risk("unknown"), RiskLevel::Low);
     }
@@ -307,8 +344,8 @@ mod tests {
 
         mgr.update_policy(ApprovalPolicy {
             require_approval: vec!["file_write".to_string()],
-            timeout_secs: 30,
-            auto_approve: false,
+            timeout_secs:     30,
+            auto_approve:     false,
         });
 
         assert!(!mgr.requires_approval("bash"));
@@ -320,8 +357,8 @@ mod tests {
     async fn request_approval_auto_approve() {
         let policy = ApprovalPolicy {
             require_approval: vec!["bash".to_string()],
-            timeout_secs: 60,
-            auto_approve: true,
+            timeout_secs:     60,
+            auto_approve:     true,
         };
         let mgr = ApprovalManager::new(policy);
         let req = make_request("agent-1", "bash", 60);
@@ -402,7 +439,9 @@ mod tests {
         let req_other = make_request("agent-2", "bash", 300);
         let other_id = req_other.id;
         let mgr2 = Arc::clone(&mgr);
-        tokio::spawn(async move { mgr2.request_approval(req_other).await; });
+        tokio::spawn(async move {
+            mgr2.request_approval(req_other).await;
+        });
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         assert_eq!(mgr.pending_count(), MAX_PENDING_PER_AGENT + 1);
 
@@ -421,7 +460,9 @@ mod tests {
         let tool = req.tool_name.clone();
 
         let mgr2 = Arc::clone(&mgr);
-        tokio::spawn(async move { mgr2.request_approval(req).await; });
+        tokio::spawn(async move {
+            mgr2.request_approval(req).await;
+        });
 
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 

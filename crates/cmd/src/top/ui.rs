@@ -1,3 +1,17 @@
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -32,7 +46,10 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     let status_icon = if app.connected {
         Span::styled(" CONNECTED ", Style::default().fg(Color::Green))
     } else {
-        Span::styled(" DISCONNECTED ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+        Span::styled(
+            " DISCONNECTED ",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )
     };
 
     let stats_text = if let Some(ref s) = app.stats {
@@ -50,7 +67,12 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     let line = Line::from(vec![
-        Span::styled("rara-top", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "rara-top",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         status_icon,
         Span::raw(stats_text),
     ]);
@@ -114,7 +136,11 @@ fn render_processes_table(frame: &mut Frame, area: Rect, app: &App) {
         Cell::from("Tools"),
         Cell::from("Msgs"),
     ])
-    .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+    .style(
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    );
 
     let rows: Vec<Row> = app
         .processes
@@ -147,13 +173,11 @@ fn render_processes_table(frame: &mut Frame, area: Rect, app: &App) {
         Constraint::Length(6),
     ];
 
-    let table = Table::new(rows, widths)
-        .header(header)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" Processes ({}) ", app.processes.len())),
-        );
+    let table = Table::new(rows, widths).header(header).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" Processes ({}) ", app.processes.len())),
+    );
 
     frame.render_widget(table, area);
 }
@@ -164,7 +188,11 @@ fn render_agents_table(frame: &mut Frame, area: Rect, app: &App) {
         Cell::from("Role"),
         Cell::from("Description"),
     ])
-    .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+    .style(
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    );
 
     let rows: Vec<Row> = app
         .agents
@@ -192,13 +220,11 @@ fn render_agents_table(frame: &mut Frame, area: Rect, app: &App) {
         Constraint::Fill(1),
     ];
 
-    let table = Table::new(rows, widths)
-        .header(header)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" Agents ({}) ", app.agents.len())),
-        );
+    let table = Table::new(rows, widths).header(header).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" Agents ({}) ", app.agents.len())),
+    );
 
     frame.render_widget(table, area);
 }
@@ -211,7 +237,11 @@ fn render_approvals_table(frame: &mut Frame, area: Rect, app: &App) {
         Cell::from("Risk"),
         Cell::from("Requested"),
     ])
-    .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+    .style(
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    );
 
     let rows: Vec<Row> = app
         .approvals
@@ -241,13 +271,11 @@ fn render_approvals_table(frame: &mut Frame, area: Rect, app: &App) {
         Constraint::Fill(1),
     ];
 
-    let table = Table::new(rows, widths)
-        .header(header)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" Approvals ({}) ", app.approvals.len())),
-        );
+    let table = Table::new(rows, widths).header(header).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" Approvals ({}) ", app.approvals.len())),
+    );
 
     frame.render_widget(table, area);
 }
@@ -259,7 +287,11 @@ fn render_audit_table(frame: &mut Frame, area: Rect, app: &App) {
         Cell::from("Event"),
         Cell::from("Details"),
     ])
-    .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+    .style(
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    );
 
     let rows: Vec<Row> = app
         .audit
@@ -289,13 +321,11 @@ fn render_audit_table(frame: &mut Frame, area: Rect, app: &App) {
         Constraint::Fill(1),
     ];
 
-    let table = Table::new(rows, widths)
-        .header(header)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" Audit ({}) ", app.audit.len())),
-        );
+    let table = Table::new(rows, widths).header(header).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" Audit ({}) ", app.audit.len())),
+    );
 
     frame.render_widget(table, area);
 }

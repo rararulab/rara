@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,11 +25,5 @@ pub fn init_coding_task_service(
 ) -> rara_coding_task::service::CodingTaskService {
     let workspace_manager =
         rara_workspace::WorkspaceManager::new(rara_paths::workspaces_dir().clone());
-    rara_coding_task::service::wire(
-        pool,
-        workspace_manager,
-        notify,
-        settings,
-        default_repo_url,
-    )
+    rara_coding_task::service::wire(pool, workspace_manager, notify, settings, default_repo_url)
 }

@@ -17,12 +17,12 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use rara_kernel::tool::AgentTool;
 use rara_mcp::manager::{
     mgr::McpManager,
     registry::{McpServerConfig, TransportType},
 };
 use serde_json::{Value, json};
-use rara_kernel::tool::AgentTool;
 
 // ---------------------------------------------------------------------------
 // InstallMcpServerTool

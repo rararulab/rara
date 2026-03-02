@@ -1,4 +1,6 @@
 backend:
+  image:
+    pullPolicy: IfNotPresent
   resources:
     requests:
       cpu: 100m
@@ -8,6 +10,8 @@ backend:
       memory: 1Gi
 
 frontend:
+  image:
+    pullPolicy: IfNotPresent
   resources:
     requests:
       cpu: 25m

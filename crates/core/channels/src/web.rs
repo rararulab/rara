@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -115,9 +115,9 @@ pub enum WebEvent {
     /// Turn metrics summary (sent before Done).
     TurnMetrics {
         duration_ms: u64,
-        iterations: usize,
-        tool_calls: usize,
-        model: String,
+        iterations:  usize,
+        tool_calls:  usize,
+        model:       String,
     },
     /// Stream completed (no more deltas).
     Done,
@@ -343,7 +343,11 @@ fn web_endpoint_for(session_key: &str) -> Endpoint {
 fn web_user_id(user_id: &str) -> UserId { UserId(user_id.to_string()) }
 
 /// Register a web endpoint in the registry (if available).
-async fn register_endpoint(registry: &RwLock<Option<Arc<EndpointRegistry>>>, user_id: &str, session_key: &str) {
+async fn register_endpoint(
+    registry: &RwLock<Option<Arc<EndpointRegistry>>>,
+    user_id: &str,
+    session_key: &str,
+) {
     let guard = registry.read().await;
     if let Some(ref reg) = *guard {
         reg.register(&web_user_id(user_id), web_endpoint_for(session_key));
@@ -351,7 +355,11 @@ async fn register_endpoint(registry: &RwLock<Option<Arc<EndpointRegistry>>>, use
 }
 
 /// Unregister a web endpoint from the registry (if available).
-async fn unregister_endpoint(registry: &RwLock<Option<Arc<EndpointRegistry>>>, user_id: &str, session_key: &str) {
+async fn unregister_endpoint(
+    registry: &RwLock<Option<Arc<EndpointRegistry>>>,
+    user_id: &str,
+    session_key: &str,
+) {
     let guard = registry.read().await;
     if let Some(ref reg) = *guard {
         reg.unregister(&web_user_id(user_id), &web_endpoint_for(session_key));
@@ -589,17 +597,41 @@ fn spawn_stream_forwarder(
                 while let Ok(event) = rx.recv().await {
                     let web_event = match event {
                         StreamEvent::TextDelta { text: t } => WebEvent::TextDelta { text: t },
-                        StreamEvent::ReasoningDelta { text: t } => WebEvent::ReasoningDelta { text: t },
-                        StreamEvent::ToolCallStart { name, id, arguments } => {
-                            WebEvent::ToolCallStart { name, id, arguments }
+                        StreamEvent::ReasoningDelta { text: t } => {
+                            WebEvent::ReasoningDelta { text: t }
                         }
-                        StreamEvent::ToolCallEnd { id, result_preview, success, error } => {
-                            WebEvent::ToolCallEnd { id, result_preview, success, error }
-                        }
+                        StreamEvent::ToolCallStart {
+                            name,
+                            id,
+                            arguments,
+                        } => WebEvent::ToolCallStart {
+                            name,
+                            id,
+                            arguments,
+                        },
+                        StreamEvent::ToolCallEnd {
+                            id,
+                            result_preview,
+                            success,
+                            error,
+                        } => WebEvent::ToolCallEnd {
+                            id,
+                            result_preview,
+                            success,
+                            error,
+                        },
                         StreamEvent::Progress { stage } => WebEvent::Progress { stage },
-                        StreamEvent::TurnMetrics { duration_ms, iterations, tool_calls, model } => {
-                            WebEvent::TurnMetrics { duration_ms, iterations, tool_calls, model }
-                        }
+                        StreamEvent::TurnMetrics {
+                            duration_ms,
+                            iterations,
+                            tool_calls,
+                            model,
+                        } => WebEvent::TurnMetrics {
+                            duration_ms,
+                            iterations,
+                            tool_calls,
+                            model,
+                        },
                     };
                     WebAdapter::broadcast_event(&sessions, &session_key, &web_event);
                 }
@@ -621,7 +653,12 @@ async fn sse_handler(
     info!(session_key = %params.session_key, "SSE connection opened");
 
     // Register this connection in the EndpointRegistry.
-    register_endpoint(&state.endpoint_registry, &params.user_id, &params.session_key).await;
+    register_endpoint(
+        &state.endpoint_registry,
+        &params.user_id,
+        &params.session_key,
+    )
+    .await;
 
     let tx = WebAdapter::get_or_create_session(&state.sessions, &params.session_key);
     let rx = tx.subscribe();
@@ -1044,8 +1081,7 @@ mod tests {
 
     #[tokio::test]
     async fn register_endpoint_noop_when_no_registry() {
-        let registry_lock: Arc<RwLock<Option<Arc<EndpointRegistry>>>> =
-            Arc::new(RwLock::new(None));
+        let registry_lock: Arc<RwLock<Option<Arc<EndpointRegistry>>>> = Arc::new(RwLock::new(None));
 
         // Should not panic when registry is None.
         register_endpoint(&registry_lock, "user-1", "sess-1").await;

@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,8 @@
 // limitations under the License.
 
 //! Sharded event queue — routes events to N agent-sharded queues + 1 global
-//! queue for parallel processing by [`EventProcessor`](crate::event_processor)s.
+//! queue for parallel processing by
+//! [`EventProcessor`](crate::event_processor)s.
 //!
 //! Event classification:
 //! - **Global**: `UserMessage`, `SpawnAgent`, `Timer`, `Shutdown`, `Deliver`
@@ -30,9 +31,7 @@ use std::sync::{
 use async_trait::async_trait;
 
 use crate::{
-    event_queue::EventQueue,
-    io::types::BusError,
-    shard_queue::ShardQueue,
+    event_queue::EventQueue, io::types::BusError, shard_queue::ShardQueue,
     unified_event::KernelEvent,
 };
 
@@ -57,9 +56,9 @@ pub(crate) enum ShardTarget {
 #[derive(Debug, Clone)]
 pub struct ShardedEventQueueConfig {
     /// Number of agent shards. Each shard gets its own `EventProcessor`.
-    pub num_shards: usize,
+    pub num_shards:      usize,
     /// Per-shard capacity (total across all tiers within one shard).
-    pub shard_capacity: usize,
+    pub shard_capacity:  usize,
     /// Global queue capacity.
     pub global_capacity: usize,
 }
@@ -68,8 +67,8 @@ impl Default for ShardedEventQueueConfig {
     fn default() -> Self {
         let num_shards = num_cpus().max(2) / 2;
         Self {
-            num_shards: num_shards.max(1),
-            shard_capacity: 2048,
+            num_shards:      num_shards.max(1),
+            shard_capacity:  2048,
             global_capacity: 2048,
         }
     }
@@ -92,9 +91,9 @@ fn num_cpus() -> usize {
 /// hold references to them independently.
 pub struct ShardedEventQueue {
     /// Per-agent shards. Events are routed by `agent_id % num_shards`.
-    shards: Vec<Arc<ShardQueue>>,
+    shards:        Vec<Arc<ShardQueue>>,
     /// Global queue for non-agent-scoped events.
-    global: Arc<ShardQueue>,
+    global:        Arc<ShardQueue>,
     /// Total pending events across all shards + global (aggregated).
     total_pending: AtomicUsize,
 }
@@ -124,26 +123,18 @@ impl ShardedEventQueue {
     }
 
     /// Access a specific shard by index (Arc-wrapped for task sharing).
-    pub(crate) fn shard(&self, idx: usize) -> &Arc<ShardQueue> {
-        &self.shards[idx]
-    }
+    pub(crate) fn shard(&self, idx: usize) -> &Arc<ShardQueue> { &self.shards[idx] }
 
     /// Access the global queue (Arc-wrapped for task sharing).
-    pub(crate) fn global(&self) -> &Arc<ShardQueue> {
-        &self.global
-    }
+    pub(crate) fn global(&self) -> &Arc<ShardQueue> { &self.global }
 
     /// Number of agent shards.
-    pub(crate) fn num_shards(&self) -> usize {
-        self.shards.len()
-    }
+    pub(crate) fn num_shards(&self) -> usize { self.shards.len() }
 }
 
 #[async_trait]
 impl EventQueue for ShardedEventQueue {
-    async fn push(&self, event: KernelEvent) -> Result<(), BusError> {
-        self.try_push(event)
-    }
+    async fn push(&self, event: KernelEvent) -> Result<(), BusError> { self.try_push(event) }
 
     fn try_push(&self, event: KernelEvent) -> Result<(), BusError> {
         let target = self.classify(&event);
@@ -196,13 +187,9 @@ impl EventQueue for ShardedEventQueue {
         self.global.wait().await;
     }
 
-    fn pending_count(&self) -> usize {
-        self.total_pending.load(Ordering::Acquire)
-    }
+    fn pending_count(&self) -> usize { self.total_pending.load(Ordering::Acquire) }
 
-    fn is_sharded(&self) -> bool {
-        true
-    }
+    fn is_sharded(&self) -> bool { true }
 }
 
 impl std::fmt::Debug for ShardedEventQueue {
@@ -216,12 +203,14 @@ impl std::fmt::Debug for ShardedEventQueue {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::io::types::InboundMessage;
-    use crate::process::{AgentId, SessionId, Signal, principal::UserId};
-    use crate::channel::types::{ChannelType, MessageContent};
-    use crate::io::types::{ChannelSource, MessageId};
     use std::collections::HashMap;
+
+    use super::*;
+    use crate::{
+        channel::types::{ChannelType, MessageContent},
+        io::types::{ChannelSource, InboundMessage, MessageId},
+        process::{AgentId, SessionId, Signal, principal::UserId},
+    };
 
     fn test_inbound(text: &str) -> InboundMessage {
         InboundMessage {
@@ -265,7 +254,7 @@ mod tests {
         let q = make_queue(4);
         let (tx, _rx) = tokio::sync::oneshot::channel();
         let event = KernelEvent::SpawnAgent {
-            manifest: crate::process::AgentManifest {
+            manifest:  crate::process::AgentManifest {
                 name:               "test".to_string(),
                 role:               None,
                 description:        "test".to_string(),
@@ -342,24 +331,24 @@ mod tests {
         let event = KernelEvent::TurnCompleted {
             agent_id,
             session_id: SessionId::new("s1"),
-            result:     Ok(crate::agent_turn::AgentTurnResult {
+            result: Ok(crate::agent_turn::AgentTurnResult {
                 text:       "done".to_string(),
                 iterations: 1,
                 tool_calls: 0,
                 model:      "test".to_string(),
                 trace:      crate::agent_turn::TurnTrace {
-                    duration_ms: 0,
-                    model: "test".to_string(),
-                    input_text: None,
-                    iterations: vec![],
-                    final_text_len: 4,
+                    duration_ms:      0,
+                    model:            "test".to_string(),
+                    input_text:       None,
+                    iterations:       vec![],
+                    final_text_len:   4,
                     total_tool_calls: 0,
-                    success: true,
-                    error: None,
+                    success:          true,
+                    error:            None,
                 },
             }),
             in_reply_to: MessageId::new(),
-            user:        UserId("u1".to_string()),
+            user: UserId("u1".to_string()),
         };
         let expected_shard = agent_id.0.as_u128() as usize % 4;
         assert_eq!(q.classify(&event), ShardTarget::Shard(expected_shard));
@@ -372,7 +361,7 @@ mod tests {
         let event = KernelEvent::ChildCompleted {
             parent_id,
             child_id: AgentId::new(),
-            result:   crate::process::AgentResult {
+            result: crate::process::AgentResult {
                 output:     "done".to_string(),
                 iterations: 1,
                 tool_calls: 0,
@@ -421,8 +410,12 @@ mod tests {
         let q = make_queue(4);
 
         // Push 2 global events
-        q.push(KernelEvent::UserMessage(test_inbound("a"))).await.unwrap();
-        q.push(KernelEvent::UserMessage(test_inbound("b"))).await.unwrap();
+        q.push(KernelEvent::UserMessage(test_inbound("a")))
+            .await
+            .unwrap();
+        q.push(KernelEvent::UserMessage(test_inbound("b")))
+            .await
+            .unwrap();
 
         // Push 1 sharded event
         q.push(KernelEvent::SendSignal {
@@ -440,7 +433,9 @@ mod tests {
         let q = make_queue(4);
 
         // Push 1 global event
-        q.push(KernelEvent::UserMessage(test_inbound("global"))).await.unwrap();
+        q.push(KernelEvent::UserMessage(test_inbound("global")))
+            .await
+            .unwrap();
 
         // Push 1 sharded event
         q.push(KernelEvent::SendSignal {
@@ -460,24 +455,33 @@ mod tests {
     #[tokio::test]
     async fn test_capacity_per_shard() {
         let q = ShardedEventQueue::new(ShardedEventQueueConfig {
-            num_shards:     1,
-            shard_capacity: 2,
+            num_shards:      1,
+            shard_capacity:  2,
             global_capacity: 100,
         });
 
         let target = AgentId::new();
 
         // Fill the single shard
-        q.push(KernelEvent::SendSignal { target, signal: Signal::Interrupt })
-            .await
-            .unwrap();
-        q.push(KernelEvent::SendSignal { target, signal: Signal::Interrupt })
-            .await
-            .unwrap();
+        q.push(KernelEvent::SendSignal {
+            target,
+            signal: Signal::Interrupt,
+        })
+        .await
+        .unwrap();
+        q.push(KernelEvent::SendSignal {
+            target,
+            signal: Signal::Interrupt,
+        })
+        .await
+        .unwrap();
 
         // Third should fail
         let result = q
-            .push(KernelEvent::SendSignal { target, signal: Signal::Interrupt })
+            .push(KernelEvent::SendSignal {
+                target,
+                signal: Signal::Interrupt,
+            })
             .await;
         assert!(result.is_err());
     }

@@ -32,14 +32,14 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio_util::sync::CancellationToken;
 use rara_kernel::{
+    Kernel,
     process::{AgentId, AgentManifest, AgentResult, ProcessState, principal::Principal},
     provider::{OllamaProviderLoader, ProviderRegistryBuilder},
     testing::TestKernelBuilder,
     tool::AgentTool,
-    Kernel,
 };
+use tokio_util::sync::CancellationToken;
 
 /// Default Ollama base URL (OpenAI-compatible API endpoint).
 const OLLAMA_BASE_URL: &str = "https://ollama.rara.local/v1";
@@ -49,8 +49,7 @@ const OLLAMA_MODEL: &str = "qwen3.5:cloud";
 
 /// Helper: build an OllamaProviderLoader from env or defaults.
 fn ollama_loader() -> OllamaProviderLoader {
-    let base_url =
-        std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| OLLAMA_BASE_URL.to_string());
+    let base_url = std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| OLLAMA_BASE_URL.to_string());
     OllamaProviderLoader::new(base_url)
 }
 
@@ -86,7 +85,9 @@ struct EchoTool;
 impl AgentTool for EchoTool {
     fn name(&self) -> &str { "echo_tool" }
 
-    fn description(&self) -> &str { "Echoes back the input as-is. Always call this tool when asked." }
+    fn description(&self) -> &str {
+        "Echoes back the input as-is. Always call this tool when asked."
+    }
 
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
@@ -112,14 +113,17 @@ fn build_kernel(tools: Vec<Arc<dyn AgentTool>>) -> (Arc<Kernel>, CancellationTok
     let model = ollama_model();
     let registry = Arc::new(
         ProviderRegistryBuilder::new("ollama", &model)
-            .provider("ollama", Arc::new(rara_kernel::provider::OpenAiProvider::with_config(
-                async_openai::config::OpenAIConfig::new()
-                    .with_api_key("ollama")
-                    .with_api_base(
-                        std::env::var("OLLAMA_BASE_URL")
-                            .unwrap_or_else(|_| OLLAMA_BASE_URL.to_string()),
-                    ),
-            )))
+            .provider(
+                "ollama",
+                Arc::new(rara_kernel::provider::OpenAiProvider::with_config(
+                    async_openai::config::OpenAIConfig::new()
+                        .with_api_key("ollama")
+                        .with_api_base(
+                            std::env::var("OLLAMA_BASE_URL")
+                                .unwrap_or_else(|_| OLLAMA_BASE_URL.to_string()),
+                        ),
+                )),
+            )
             .build(),
     );
     let mut builder = TestKernelBuilder::new()
@@ -135,12 +139,9 @@ fn build_kernel(tools: Vec<Arc<dyn AgentTool>>) -> (Arc<Kernel>, CancellationTok
     (arc, cancel)
 }
 
-/// Poll until the process reaches `Completed` state and has a result, or timeout.
-async fn wait_for_result(
-    kernel: &Kernel,
-    agent_id: AgentId,
-    timeout_secs: u64,
-) -> AgentResult {
+/// Poll until the process reaches `Completed` state and has a result, or
+/// timeout.
+async fn wait_for_result(kernel: &Kernel, agent_id: AgentId, timeout_secs: u64) -> AgentResult {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
 
     loop {
@@ -151,7 +152,8 @@ async fn wait_for_result(
                 .map(|p| format!("{:?}", p.state))
                 .unwrap_or_else(|| "not found".to_string());
             panic!(
-                "timed out after {timeout_secs}s waiting for agent {agent_id} result (state: {state})"
+                "timed out after {timeout_secs}s waiting for agent {agent_id} result (state: \
+                 {state})"
             );
         }
         if let Some(p) = kernel.process_table().get(agent_id) {
@@ -176,7 +178,10 @@ async fn wait_for_result(
 #[ignore = "requires running Ollama instance"]
 async fn test_spawn_plain_text_receives_result() {
     let (kernel, cancel) = build_kernel(vec![]);
-    let manifest = test_manifest("plain-agent", "You are a concise assistant. Reply in one sentence.");
+    let manifest = test_manifest(
+        "plain-agent",
+        "You are a concise assistant. Reply in one sentence.",
+    );
     let principal = Principal::user("test-user");
 
     let agent_id = kernel
@@ -211,15 +216,16 @@ async fn test_spawn_with_tool_makes_tool_call() {
     let (kernel, cancel) = build_kernel(vec![Arc::new(EchoTool)]);
     let manifest = test_manifest(
         "tool-agent",
-        "You are a tool-using assistant. When the user asks you to echo something, \
-         ALWAYS call echo_tool with the text, then summarize the result.",
+        "You are a tool-using assistant. When the user asks you to echo something, ALWAYS call \
+         echo_tool with the text, then summarize the result.",
     );
     let principal = Principal::user("test-user");
 
     let agent_id = kernel
         .spawn_with_input(
             manifest,
-            "Please call echo_tool with {\"text\":\"integration-test\"} and tell me the result.".to_string(),
+            "Please call echo_tool with {\"text\":\"integration-test\"} and tell me the result."
+                .to_string(),
             principal,
             None,
         )
@@ -253,12 +259,7 @@ async fn test_process_state_transitions() {
     let principal = Principal::user("test-user");
 
     let agent_id = kernel
-        .spawn_with_input(
-            manifest,
-            "Say hello.".to_string(),
-            principal,
-            None,
-        )
+        .spawn_with_input(manifest, "Say hello.".to_string(), principal, None)
         .await
         .expect("spawn failed");
 
@@ -327,12 +328,7 @@ async fn test_cancellation_stops_process() {
     let principal = Principal::user("test-user");
 
     let agent_id = kernel
-        .spawn_with_input(
-            manifest,
-            "Say hello.".to_string(),
-            principal,
-            None,
-        )
+        .spawn_with_input(manifest, "Say hello.".to_string(), principal, None)
         .await
         .expect("spawn failed");
 
@@ -340,19 +336,22 @@ async fn test_cancellation_stops_process() {
     let _result = wait_for_result(&kernel, agent_id, 60).await;
 
     // Cancel via Kill signal through the event queue.
-    let _ = kernel.event_queue().try_push(
-        rara_kernel::unified_event::KernelEvent::SendSignal {
+    let _ = kernel
+        .event_queue()
+        .try_push(rara_kernel::unified_event::KernelEvent::SendSignal {
             target: agent_id,
             signal: rara_kernel::process::Signal::Kill,
-        },
-    );
+        });
 
     // Give a moment for the event loop to process.
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     let process = kernel.process_table().get(agent_id).unwrap();
     assert!(
-        matches!(process.state, ProcessState::Cancelled | ProcessState::Completed),
+        matches!(
+            process.state,
+            ProcessState::Cancelled | ProcessState::Completed
+        ),
         "expected Cancelled state after token cancel, got {:?}",
         process.state
     );
@@ -404,7 +403,9 @@ async fn test_multi_turn_via_event_queue() {
     );
     kernel
         .event_queue()
-        .push(rara_kernel::unified_event::KernelEvent::UserMessage(second_msg))
+        .push(rara_kernel::unified_event::KernelEvent::UserMessage(
+            second_msg,
+        ))
         .await
         .expect("failed to push second message");
 
@@ -450,12 +451,7 @@ async fn test_multiple_agents_different_sessions() {
 
     let manifest1 = test_manifest("agent-1", "Reply with exactly: done");
     let id1 = kernel
-        .spawn_with_input(
-            manifest1,
-            "Say done.".to_string(),
-            principal.clone(),
-            None,
-        )
+        .spawn_with_input(manifest1, "Say done.".to_string(), principal.clone(), None)
         .await
         .expect("spawn 1 failed");
 
@@ -464,12 +460,7 @@ async fn test_multiple_agents_different_sessions() {
 
     let manifest2 = test_manifest("agent-2", "Reply with exactly: done");
     let id2 = kernel
-        .spawn_with_input(
-            manifest2,
-            "Say done.".to_string(),
-            principal,
-            None,
-        )
+        .spawn_with_input(manifest2, "Say done.".to_string(), principal, None)
         .await
         .expect("spawn 2 failed");
 
@@ -490,12 +481,7 @@ async fn test_spawn_named_agent() {
     let principal = Principal::user("test-user");
 
     let agent_id = kernel
-        .spawn_named(
-            "scout",
-            "List 3 colors.".to_string(),
-            principal,
-            None,
-        )
+        .spawn_named("scout", "List 3 colors.".to_string(), principal, None)
         .await
         .expect("spawn_named failed");
 
@@ -539,14 +525,17 @@ async fn test_global_concurrency_limit() {
     let model = ollama_model();
     let registry = Arc::new(
         ProviderRegistryBuilder::new("ollama", &model)
-            .provider("ollama", Arc::new(rara_kernel::provider::OpenAiProvider::with_config(
-                async_openai::config::OpenAIConfig::new()
-                    .with_api_key("ollama")
-                    .with_api_base(
-                        std::env::var("OLLAMA_BASE_URL")
-                            .unwrap_or_else(|_| OLLAMA_BASE_URL.to_string()),
-                    ),
-            )))
+            .provider(
+                "ollama",
+                Arc::new(rara_kernel::provider::OpenAiProvider::with_config(
+                    async_openai::config::OpenAIConfig::new()
+                        .with_api_key("ollama")
+                        .with_api_base(
+                            std::env::var("OLLAMA_BASE_URL")
+                                .unwrap_or_else(|_| OLLAMA_BASE_URL.to_string()),
+                        ),
+                )),
+            )
             .build(),
     );
     let kernel = TestKernelBuilder::new()
@@ -587,12 +576,7 @@ async fn test_global_concurrency_limit() {
 
     // Third spawn should fail (capacity exhausted).
     let h3 = kernel
-        .spawn_with_input(
-            manifest,
-            "Essay topic 3.".to_string(),
-            principal,
-            None,
-        )
+        .spawn_with_input(manifest, "Essay topic 3.".to_string(), principal, None)
         .await;
 
     assert!(

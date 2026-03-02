@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -34,9 +34,7 @@ use crate::{
         state::StateMemory, types::*,
     },
     process::{SessionId, principal::UserId},
-    session::{
-        ChannelBinding, SessionEntry, SessionError, SessionKey, SessionRepository,
-    },
+    session::{ChannelBinding, SessionEntry, SessionError, SessionKey, SessionRepository},
 };
 
 // ---- NoopGuard ----
@@ -232,17 +230,11 @@ pub struct NoopSessionRepository;
 
 #[async_trait]
 impl SessionRepository for NoopSessionRepository {
-    async fn create_session(
-        &self,
-        entry: &SessionEntry,
-    ) -> Result<SessionEntry, SessionError> {
+    async fn create_session(&self, entry: &SessionEntry) -> Result<SessionEntry, SessionError> {
         Ok(entry.clone())
     }
 
-    async fn get_session(
-        &self,
-        _key: &SessionKey,
-    ) -> Result<Option<SessionEntry>, SessionError> {
+    async fn get_session(&self, _key: &SessionKey) -> Result<Option<SessionEntry>, SessionError> {
         Ok(None)
     }
 
@@ -254,16 +246,11 @@ impl SessionRepository for NoopSessionRepository {
         Ok(vec![])
     }
 
-    async fn update_session(
-        &self,
-        entry: &SessionEntry,
-    ) -> Result<SessionEntry, SessionError> {
+    async fn update_session(&self, entry: &SessionEntry) -> Result<SessionEntry, SessionError> {
         Ok(entry.clone())
     }
 
-    async fn delete_session(&self, _key: &SessionKey) -> Result<(), SessionError> {
-        Ok(())
-    }
+    async fn delete_session(&self, _key: &SessionKey) -> Result<(), SessionError> { Ok(()) }
 
     async fn append_message(
         &self,
@@ -282,9 +269,7 @@ impl SessionRepository for NoopSessionRepository {
         Ok(vec![])
     }
 
-    async fn clear_messages(&self, _session_key: &SessionKey) -> Result<(), SessionError> {
-        Ok(())
-    }
+    async fn clear_messages(&self, _session_key: &SessionKey) -> Result<(), SessionError> { Ok(()) }
 
     async fn fork_session(
         &self,
@@ -306,10 +291,7 @@ impl SessionRepository for NoopSessionRepository {
         })
     }
 
-    async fn bind_channel(
-        &self,
-        binding: &ChannelBinding,
-    ) -> Result<ChannelBinding, SessionError> {
+    async fn bind_channel(&self, binding: &ChannelBinding) -> Result<ChannelBinding, SessionError> {
         Ok(binding.clone())
     }
 
@@ -367,17 +349,11 @@ pub struct NoopSettingsProvider;
 
 #[async_trait]
 impl rara_domain_shared::settings::SettingsProvider for NoopSettingsProvider {
-    async fn get(&self, _key: &str) -> Option<String> {
-        None
-    }
+    async fn get(&self, _key: &str) -> Option<String> { None }
 
-    async fn set(&self, _key: &str, _value: &str) -> anyhow::Result<()> {
-        Ok(())
-    }
+    async fn set(&self, _key: &str, _value: &str) -> anyhow::Result<()> { Ok(()) }
 
-    async fn delete(&self, _key: &str) -> anyhow::Result<()> {
-        Ok(())
-    }
+    async fn delete(&self, _key: &str) -> anyhow::Result<()> { Ok(()) }
 
     async fn list(&self) -> std::collections::HashMap<String, String> {
         std::collections::HashMap::new()

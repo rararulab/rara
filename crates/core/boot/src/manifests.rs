@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,10 +16,7 @@
 
 use std::path::Path;
 
-use rara_kernel::process::{
-    agent_registry::AgentRegistry,
-    manifest_loader::ManifestLoader,
-};
+use rara_kernel::process::{agent_registry::AgentRegistry, manifest_loader::ManifestLoader};
 use tracing::info;
 
 /// Load agent manifests and build an AgentRegistry.
@@ -28,10 +25,7 @@ use tracing::info;
 /// User-defined YAML files from `<data_dir>/agents` are loaded via
 /// ManifestLoader and fed into the registry as custom agents.
 pub fn load_default_registry() -> AgentRegistry {
-    let builtin = vec![
-        rara_agents::rara().clone(),
-        rara_agents::nana().clone(),
-    ];
+    let builtin = vec![rara_agents::rara().clone(), rara_agents::nana().clone()];
     let agents_dir = rara_paths::data_dir().join("agents");
     let mut loader = ManifestLoader::new();
     let _ = loader.load_dir(&agents_dir);
@@ -42,10 +36,7 @@ pub fn load_default_registry() -> AgentRegistry {
 
 /// Load agent manifests from code-defined agents and a custom directory.
 pub fn load_registry_from(dir: &Path) -> AgentRegistry {
-    let builtin = vec![
-        rara_agents::rara().clone(),
-        rara_agents::nana().clone(),
-    ];
+    let builtin = vec![rara_agents::rara().clone(), rara_agents::nana().clone()];
     let mut loader = ManifestLoader::new();
     let _ = loader.load_dir(dir);
     AgentRegistry::init(builtin, &loader, dir.to_path_buf())

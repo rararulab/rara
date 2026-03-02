@@ -15,10 +15,10 @@
 //! Tool implementations and factory functions.
 //!
 //! - **Primitives** (Layer 1): basic I/O, file operations, HTTP, etc.
-//! - **Services** (Layer 2): complex business workflows built on domain services.
+//! - **Services** (Layer 2): complex business workflows built on domain
+//!   services.
 
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use rara_domain_shared::settings::SettingsProvider;
 use rara_kernel::tool::{AgentToolRef, ToolRegistry};
@@ -88,13 +88,13 @@ pub fn default_primitives(deps: PrimitiveDeps) -> Vec<AgentToolRef> {
 
 /// Dependencies required to construct Layer 2 service tools.
 pub struct ServiceToolDeps {
-    pub memory_manager:     Arc<rara_memory::MemoryManager>,
-    pub recall_engine:      Arc<rara_memory::RecallStrategyEngine>,
+    pub memory_manager:      Arc<rara_memory::MemoryManager>,
+    pub recall_engine:       Arc<rara_memory::RecallStrategyEngine>,
     pub coding_task_service: rara_coding_task::service::CodingTaskService,
-    pub skill_registry:     rara_skills::registry::InMemoryRegistry,
-    pub mcp_manager:        rara_mcp::manager::mgr::McpManager,
-    pub notify_client:      rara_domain_shared::notify::client::NotifyClient,
-    pub settings:           Arc<dyn SettingsProvider>,
+    pub skill_registry:      rara_skills::registry::InMemoryRegistry,
+    pub mcp_manager:         rara_mcp::manager::mgr::McpManager,
+    pub notify_client:       rara_domain_shared::notify::client::NotifyClient,
+    pub settings:            Arc<dyn SettingsProvider>,
 }
 
 /// Register all Layer 2 service tools into the given [`ToolRegistry`].
@@ -102,15 +102,29 @@ pub fn register_service_tools(registry: &mut ToolRegistry, deps: ServiceToolDeps
     let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     // Memory tools
-    registry.register_service(Arc::new(services::MemorySearchTool::new(Arc::clone(&deps.memory_manager))));
-    registry.register_service(Arc::new(services::MemoryDeepRecallTool::new(Arc::clone(&deps.memory_manager))));
-    registry.register_service(Arc::new(services::MemoryWriteTool::new(Arc::clone(&deps.memory_manager))));
-    registry.register_service(Arc::new(services::MemoryAddFactTool::new(Arc::clone(&deps.memory_manager))));
+    registry.register_service(Arc::new(services::MemorySearchTool::new(Arc::clone(
+        &deps.memory_manager,
+    ))));
+    registry.register_service(Arc::new(services::MemoryDeepRecallTool::new(Arc::clone(
+        &deps.memory_manager,
+    ))));
+    registry.register_service(Arc::new(services::MemoryWriteTool::new(Arc::clone(
+        &deps.memory_manager,
+    ))));
+    registry.register_service(Arc::new(services::MemoryAddFactTool::new(Arc::clone(
+        &deps.memory_manager,
+    ))));
 
     // Codex tools
-    registry.register_service(Arc::new(services::CodexRunTool::new(deps.coding_task_service.clone())));
-    registry.register_service(Arc::new(services::CodexStatusTool::new(deps.coding_task_service.clone())));
-    registry.register_service(Arc::new(services::CodexListTool::new(deps.coding_task_service)));
+    registry.register_service(Arc::new(services::CodexRunTool::new(
+        deps.coding_task_service.clone(),
+    )));
+    registry.register_service(Arc::new(services::CodexStatusTool::new(
+        deps.coding_task_service.clone(),
+    )));
+    registry.register_service(Arc::new(services::CodexListTool::new(
+        deps.coding_task_service,
+    )));
 
     // Screenshot
     registry.register_service(Arc::new(services::ScreenshotTool::new(
@@ -120,18 +134,38 @@ pub fn register_service_tools(registry: &mut ToolRegistry, deps: ServiceToolDeps
     )));
 
     // Skill tools
-    registry.register_service(Arc::new(services::ListSkillsTool::new(deps.skill_registry.clone())));
-    registry.register_service(Arc::new(services::CreateSkillTool::new(deps.skill_registry.clone())));
-    registry.register_service(Arc::new(services::DeleteSkillTool::new(deps.skill_registry)));
+    registry.register_service(Arc::new(services::ListSkillsTool::new(
+        deps.skill_registry.clone(),
+    )));
+    registry.register_service(Arc::new(services::CreateSkillTool::new(
+        deps.skill_registry.clone(),
+    )));
+    registry.register_service(Arc::new(services::DeleteSkillTool::new(
+        deps.skill_registry,
+    )));
 
     // MCP tools
-    registry.register_service(Arc::new(services::InstallMcpServerTool::new(deps.mcp_manager.clone())));
-    registry.register_service(Arc::new(services::ListMcpServersTool::new(deps.mcp_manager.clone())));
-    registry.register_service(Arc::new(services::RemoveMcpServerTool::new(deps.mcp_manager)));
+    registry.register_service(Arc::new(services::InstallMcpServerTool::new(
+        deps.mcp_manager.clone(),
+    )));
+    registry.register_service(Arc::new(services::ListMcpServersTool::new(
+        deps.mcp_manager.clone(),
+    )));
+    registry.register_service(Arc::new(services::RemoveMcpServerTool::new(
+        deps.mcp_manager,
+    )));
 
     // Recall strategy tools
-    registry.register_service(Arc::new(services::RecallStrategyAddTool::new(Arc::clone(&deps.recall_engine))));
-    registry.register_service(Arc::new(services::RecallStrategyListTool::new(Arc::clone(&deps.recall_engine))));
-    registry.register_service(Arc::new(services::RecallStrategyUpdateTool::new(Arc::clone(&deps.recall_engine))));
-    registry.register_service(Arc::new(services::RecallStrategyRemoveTool::new(deps.recall_engine)));
+    registry.register_service(Arc::new(services::RecallStrategyAddTool::new(Arc::clone(
+        &deps.recall_engine,
+    ))));
+    registry.register_service(Arc::new(services::RecallStrategyListTool::new(Arc::clone(
+        &deps.recall_engine,
+    ))));
+    registry.register_service(Arc::new(services::RecallStrategyUpdateTool::new(
+        Arc::clone(&deps.recall_engine),
+    )));
+    registry.register_service(Arc::new(services::RecallStrategyRemoveTool::new(
+        deps.recall_engine,
+    )));
 }

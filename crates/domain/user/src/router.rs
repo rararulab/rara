@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,10 +22,12 @@ use axum::{
 use tracing::instrument;
 use uuid::Uuid;
 
-use crate::error::AuthError;
-use crate::middleware::{AuthUser, RequireRoot};
-use crate::service::AuthService;
-use crate::types::*;
+use crate::{
+    error::AuthError,
+    middleware::{AuthUser, RequireRoot},
+    service::AuthService,
+    types::*,
+};
 
 /// 构建认证和用户管理路由（plain axum::Router）
 pub fn auth_routes(service: AuthService) -> axum::Router {
@@ -104,7 +106,9 @@ async fn generate_link_code(
     user: AuthUser,
     Json(req): Json<GenerateLinkCodeRequest>,
 ) -> Result<Json<LinkCode>, AuthError> {
-    let link = service.generate_link_code(user.user_id, &req.direction).await?;
+    let link = service
+        .generate_link_code(user.user_id, &req.direction)
+        .await?;
     Ok(Json(link))
 }
 
@@ -115,7 +119,9 @@ async fn verify_tg_link(
     user: AuthUser,
     Json(req): Json<LinkVerifyRequest>,
 ) -> Result<StatusCode, AuthError> {
-    service.verify_and_complete_tg_link(user.user_id, &req.code).await?;
+    service
+        .verify_and_complete_tg_link(user.user_id, &req.code)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

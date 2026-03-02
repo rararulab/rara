@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,13 +17,12 @@
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 
-use crate::error::AuthError;
-use crate::types::UserInfo;
+use crate::{error::AuthError, types::UserInfo};
 
 /// JWT 配置
 #[derive(Debug, Clone)]
 pub struct JwtConfig {
-    pub secret:                  String,
+    pub secret:                    String,
     pub access_token_expiry_secs:  u64,
     pub refresh_token_expiry_secs: u64,
 }
@@ -34,8 +33,8 @@ impl JwtConfig {
     pub fn new(secret: String) -> Self {
         Self {
             secret,
-            access_token_expiry_secs:  3600,      // 1h
-            refresh_token_expiry_secs: 604_800,    // 7d
+            access_token_expiry_secs: 3600,     // 1h
+            refresh_token_expiry_secs: 604_800, // 7d
         }
     }
 }
@@ -119,9 +118,7 @@ pub fn decode_token(config: &JwtConfig, token: &str) -> Result<Claims, AuthError
 mod tests {
     use super::*;
 
-    fn test_config() -> JwtConfig {
-        JwtConfig::new("test-secret-key-for-jwt-testing".to_string())
-    }
+    fn test_config() -> JwtConfig { JwtConfig::new("test-secret-key-for-jwt-testing".to_string()) }
 
     fn test_user() -> UserInfo {
         UserInfo {

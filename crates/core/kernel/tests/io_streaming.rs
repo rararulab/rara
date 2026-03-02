@@ -47,8 +47,7 @@ const OLLAMA_MODEL: &str = "qwen3.5:cloud";
 
 /// Helper: build an OllamaProviderLoader from env or defaults.
 fn ollama_loader() -> OllamaProviderLoader {
-    let base_url =
-        std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| OLLAMA_BASE_URL.to_string());
+    let base_url = std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| OLLAMA_BASE_URL.to_string());
     OllamaProviderLoader::new(base_url)
 }
 
@@ -84,7 +83,9 @@ struct EchoTool;
 impl AgentTool for EchoTool {
     fn name(&self) -> &str { "echo_tool" }
 
-    fn description(&self) -> &str { "Echoes back the input as-is. Always call this tool when asked." }
+    fn description(&self) -> &str {
+        "Echoes back the input as-is. Always call this tool when asked."
+    }
 
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
@@ -104,23 +105,30 @@ impl AgentTool for EchoTool {
     }
 }
 
-/// Helper: build and start a kernel with the real Ollama provider and optional tools.
+/// Helper: build and start a kernel with the real Ollama provider and optional
+/// tools.
 ///
 /// Returns the started kernel (wrapped in Arc) and a cancellation token.
 fn start_test_kernel(
     tools: Vec<Arc<dyn AgentTool>>,
-) -> (Arc<rara_kernel::Kernel>, tokio_util::sync::CancellationToken) {
+) -> (
+    Arc<rara_kernel::Kernel>,
+    tokio_util::sync::CancellationToken,
+) {
     let model = ollama_model();
     let registry = Arc::new(
         ProviderRegistryBuilder::new("ollama", &model)
-            .provider("ollama", Arc::new(rara_kernel::provider::OpenAiProvider::with_config(
-                async_openai::config::OpenAIConfig::new()
-                    .with_api_key("ollama")
-                    .with_api_base(
-                        std::env::var("OLLAMA_BASE_URL")
-                            .unwrap_or_else(|_| OLLAMA_BASE_URL.to_string()),
-                    ),
-            )))
+            .provider(
+                "ollama",
+                Arc::new(rara_kernel::provider::OpenAiProvider::with_config(
+                    async_openai::config::OpenAIConfig::new()
+                        .with_api_key("ollama")
+                        .with_api_base(
+                            std::env::var("OLLAMA_BASE_URL")
+                                .unwrap_or_else(|_| OLLAMA_BASE_URL.to_string()),
+                        ),
+                )),
+            )
             .build(),
     );
     let mut builder = TestKernelBuilder::new()
@@ -136,7 +144,8 @@ fn start_test_kernel(
     (arc, cancel)
 }
 
-/// Poll until the process reaches `Completed` state and has a result, or timeout.
+/// Poll until the process reaches `Completed` state and has a result, or
+/// timeout.
 async fn wait_for_result(
     kernel: &rara_kernel::Kernel,
     agent_id: AgentId,
@@ -151,7 +160,8 @@ async fn wait_for_result(
                 .map(|p| format!("{:?}", p.state))
                 .unwrap_or_else(|| "not found".to_string());
             panic!(
-                "timed out after {timeout_secs}s waiting for agent {agent_id} result (state: {state})"
+                "timed out after {timeout_secs}s waiting for agent {agent_id} result (state: \
+                 {state})"
             );
         }
         if let Some(p) = kernel.process_table().get(agent_id) {
@@ -192,19 +202,20 @@ async fn test_stream_hub_receives_text_deltas() {
     // Wait for the agent to finish processing via ProcessTable polling.
     let result = wait_for_result(&kernel, agent_id, 60).await;
 
-    // Verify result was produced (which means stream events were emitted internally).
+    // Verify result was produced (which means stream events were emitted
+    // internally).
     assert!(
         !result.output.trim().is_empty(),
         "agent should produce output via streaming pipeline"
     );
 
     // Clean up: send Kill signal to stop the process.
-    let _ = kernel.event_queue().try_push(
-        rara_kernel::unified_event::KernelEvent::SendSignal {
+    let _ = kernel
+        .event_queue()
+        .try_push(rara_kernel::unified_event::KernelEvent::SendSignal {
             target: agent_id,
             signal: rara_kernel::process::Signal::Kill,
-        },
-    );
+        });
     cancel.cancel();
 }
 
@@ -247,12 +258,12 @@ async fn test_stream_hub_tool_call_events() {
     );
 
     // Clean up: send Kill signal to stop the process.
-    let _ = kernel.event_queue().try_push(
-        rara_kernel::unified_event::KernelEvent::SendSignal {
+    let _ = kernel
+        .event_queue()
+        .try_push(rara_kernel::unified_event::KernelEvent::SendSignal {
             target: agent_id,
             signal: rara_kernel::process::Signal::Kill,
-        },
-    );
+        });
     cancel.cancel();
 }
 
@@ -306,12 +317,13 @@ async fn test_multi_session_isolation() {
 
     // Clean up: send Kill signal to stop each process.
     for id in [agent_id1, agent_id2] {
-        let _ = kernel.event_queue().try_push(
-            rara_kernel::unified_event::KernelEvent::SendSignal {
-                target: id,
-                signal: rara_kernel::process::Signal::Kill,
-            },
-        );
+        let _ =
+            kernel
+                .event_queue()
+                .try_push(rara_kernel::unified_event::KernelEvent::SendSignal {
+                    target: id,
+                    signal: rara_kernel::process::Signal::Kill,
+                });
     }
     cancel.cancel();
 }
@@ -411,7 +423,11 @@ async fn test_runner_streaming_tool_events() {
                 got_tool_end = true;
                 assert!(success, "tool call should succeed");
             }
-            RunnerEvent::Done { text, tool_calls_made, .. } => {
+            RunnerEvent::Done {
+                text,
+                tool_calls_made,
+                ..
+            } => {
                 assert!(!text.trim().is_empty(), "Done should have text");
                 assert!(*tool_calls_made > 0, "should have made tool calls");
                 got_done = true;
@@ -451,9 +467,15 @@ async fn test_stream_hub_full_lifecycle() {
     let (_, mut rx) = subs.into_iter().next().unwrap();
 
     // Emit events.
-    handle.emit(StreamEvent::Progress { stage: "starting".to_string() });
-    handle.emit(StreamEvent::TextDelta { text: "Hello ".to_string() });
-    handle.emit(StreamEvent::TextDelta { text: "world!".to_string() });
+    handle.emit(StreamEvent::Progress {
+        stage: "starting".to_string(),
+    });
+    handle.emit(StreamEvent::TextDelta {
+        text: "Hello ".to_string(),
+    });
+    handle.emit(StreamEvent::TextDelta {
+        text: "world!".to_string(),
+    });
     handle.emit(StreamEvent::ToolCallStart {
         name:      "echo_tool".to_string(),
         id:        "tc-1".to_string(),
@@ -480,7 +502,9 @@ async fn test_stream_hub_full_lifecycle() {
     assert!(matches!(e4, StreamEvent::ToolCallStart { ref name, .. } if name == "echo_tool"));
 
     let e5 = rx.recv().await.unwrap();
-    assert!(matches!(e5, StreamEvent::ToolCallEnd { ref id, success, .. } if id == "tc-1" && success));
+    assert!(
+        matches!(e5, StreamEvent::ToolCallEnd { ref id, success, .. } if id == "tc-1" && success)
+    );
 
     // Close the stream.
     hub.close(&stream_id);

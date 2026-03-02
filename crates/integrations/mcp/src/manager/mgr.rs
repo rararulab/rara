@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
+use rara_keyring_store::KeyringStoreRef;
 use rmcp::model::{
     CallToolResult, ListResourcesResult, ReadResourceRequestParams, ReadResourceResult, Tool,
 };
@@ -26,8 +27,6 @@ use tracing::{info, instrument, warn};
 
 #[cfg(feature = "k8s")]
 use crate::manager::managed_client::PodRegistry;
-use rara_keyring_store::KeyringStoreRef;
-
 use crate::{
     manager::{
         erm::ElicitationRequestManager,

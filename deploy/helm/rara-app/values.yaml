@@ -14,9 +14,9 @@ secret:
   jwtSecret: "change-me-in-production"
 
 backend:
-  replicas: 1
+  replicas: true
   image:
-    repository: ghcr.io/crrow/job
+    repository: ghcr.io/rararulab/rara
     tag: ""
     pullPolicy: Always
   service:
@@ -33,9 +33,9 @@ backend:
       memory: 2Gi
 
 frontend:
-  replicas: 1
+  replicas: true
   image:
-    repository: ghcr.io/crrow/job-web
+    repository: ghcr.io/rararulab/rara-web
     tag: ""
     pullPolicy: Always
   service:

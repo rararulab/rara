@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,14 +18,15 @@ use argon2::{
     Argon2, PasswordHash, PasswordHasher, PasswordVerifier,
     password_hash::{SaltString, rand_core::OsRng},
 };
-use rand::Rng;
-use rand::distr::Alphanumeric;
+use rand::{Rng, distr::Alphanumeric};
 use sqlx::PgPool;
 use tracing::info;
 
-use crate::error::AuthError;
-use crate::jwt::{JwtConfig, encode_access_token, encode_refresh_token, decode_token};
-use crate::types::*;
+use crate::{
+    error::AuthError,
+    jwt::{JwtConfig, decode_token, encode_access_token, encode_refresh_token},
+    types::*,
+};
 
 // -- DB row types (chrono at DB boundary) ------------------------------------
 
@@ -124,9 +125,7 @@ pub struct AuthService {
 }
 
 impl AuthService {
-    pub fn new(pool: PgPool, jwt_config: JwtConfig) -> Self {
-        Self { pool, jwt_config }
-    }
+    pub fn new(pool: PgPool, jwt_config: JwtConfig) -> Self { Self { pool, jwt_config } }
 
     pub fn jwt_config(&self) -> &JwtConfig { &self.jwt_config }
 
@@ -139,14 +138,21 @@ impl AuthService {
         .bind(&req.username)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| AuthError::InternalError { message: e.to_string() })?
+        .map_err(|e| AuthError::InternalError {
+            message: e.to_string(),
+        })?
         .ok_or(AuthError::InvalidCredentials)?;
 
         if !row.enabled {
-            return Err(AuthError::UserDisabled { username: req.username });
+            return Err(AuthError::UserDisabled {
+                username: req.username,
+            });
         }
 
-        let hash = row.password_hash.as_deref().ok_or(AuthError::InvalidCredentials)?;
+        let hash = row
+            .password_hash
+            .as_deref()
+            .ok_or(AuthError::InvalidCredentials)?;
         verify_password(&req.password, hash)?;
 
         let user_info = row_to_user_info(&row);
@@ -171,21 +177,26 @@ impl AuthService {
         .bind(&req.username)
         .fetch_one(&self.pool)
         .await
-        .map_err(|e| AuthError::InternalError { message: e.to_string() })?;
+        .map_err(|e| AuthError::InternalError {
+            message: e.to_string(),
+        })?;
 
         if exists {
-            return Err(AuthError::UsernameAlreadyExists { username: req.username });
+            return Err(AuthError::UsernameAlreadyExists {
+                username: req.username,
+            });
         }
 
         // 验证邀请码
-        let invite = sqlx::query_as::<_, InviteCodeRow>(
-            "SELECT * FROM invite_codes WHERE code = $1",
-        )
-        .bind(&req.invite_code)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| AuthError::InternalError { message: e.to_string() })?
-        .ok_or(AuthError::InviteCodeInvalid)?;
+        let invite =
+            sqlx::query_as::<_, InviteCodeRow>("SELECT * FROM invite_codes WHERE code = $1")
+                .bind(&req.invite_code)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| AuthError::InternalError {
+                    message: e.to_string(),
+                })?
+                .ok_or(AuthError::InviteCodeInvalid)?;
 
         if invite.used_by.is_some() {
             return Err(AuthError::InviteCodeInvalid);
@@ -207,7 +218,9 @@ impl AuthService {
         .bind(&password_hash)
         .execute(&self.pool)
         .await
-        .map_err(|e| AuthError::InternalError { message: e.to_string() })?;
+        .map_err(|e| AuthError::InternalError {
+            message: e.to_string(),
+        })?;
 
         // 标记邀请码已使用
         sqlx::query("UPDATE invite_codes SET used_by = $1 WHERE id = $2")
@@ -215,7 +228,9 @@ impl AuthService {
             .bind(invite.id)
             .execute(&self.pool)
             .await
-            .map_err(|e| AuthError::InternalError { message: e.to_string() })?;
+            .map_err(|e| AuthError::InternalError {
+                message: e.to_string(),
+            })?;
 
         let user_info = UserInfo {
             id:      user_id,
@@ -256,8 +271,12 @@ impl AuthService {
         .bind(user_id)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| AuthError::InternalError { message: e.to_string() })?
-        .ok_or(AuthError::UserNotFound { username: claims.name.clone() })?;
+        .map_err(|e| AuthError::InternalError {
+            message: e.to_string(),
+        })?
+        .ok_or(AuthError::UserNotFound {
+            username: claims.name.clone(),
+        })?;
 
         if !row.enabled {
             return Err(AuthError::UserDisabled { username: row.name });
@@ -287,10 +306,17 @@ impl AuthService {
         .bind(user_id)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| AuthError::InternalError { message: e.to_string() })?
-        .ok_or(AuthError::InternalError { message: "user not found".to_string() })?;
+        .map_err(|e| AuthError::InternalError {
+            message: e.to_string(),
+        })?
+        .ok_or(AuthError::InternalError {
+            message: "user not found".to_string(),
+        })?;
 
-        let hash = row.password_hash.as_deref().ok_or(AuthError::InvalidCredentials)?;
+        let hash = row
+            .password_hash
+            .as_deref()
+            .ok_or(AuthError::InvalidCredentials)?;
         verify_password(&req.old_password, hash)?;
 
         let new_hash = hash_password(&req.new_password)?;
@@ -299,7 +325,9 @@ impl AuthService {
             .bind(user_id)
             .execute(&self.pool)
             .await
-            .map_err(|e| AuthError::InternalError { message: e.to_string() })?;
+            .map_err(|e| AuthError::InternalError {
+                message: e.to_string(),
+            })?;
 
         info!(user_id = %user_id, "password changed");
         Ok(())
@@ -314,8 +342,12 @@ impl AuthService {
         .bind(user_id)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| AuthError::InternalError { message: e.to_string() })?
-        .ok_or(AuthError::InternalError { message: "user not found".to_string() })?;
+        .map_err(|e| AuthError::InternalError {
+            message: e.to_string(),
+        })?
+        .ok_or(AuthError::InternalError {
+            message: "user not found".to_string(),
+        })?;
 
         let platform_rows = sqlx::query_as::<_, PlatformRow>(
             "SELECT * FROM user_platform_identities WHERE user_id = $1 ORDER BY linked_at",
@@ -323,7 +355,9 @@ impl AuthService {
         .bind(user_id)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| AuthError::InternalError { message: e.to_string() })?;
+        .map_err(|e| AuthError::InternalError {
+            message: e.to_string(),
+        })?;
 
         let platforms = platform_rows
             .into_iter()
@@ -350,15 +384,17 @@ impl AuthService {
         let expires_at = chrono::Utc::now() + chrono::Duration::days(7);
 
         let row = sqlx::query_as::<_, InviteCodeRow>(
-            "INSERT INTO invite_codes (code, created_by, expires_at) \
-             VALUES ($1, $2, $3) RETURNING *",
+            "INSERT INTO invite_codes (code, created_by, expires_at) VALUES ($1, $2, $3) \
+             RETURNING *",
         )
         .bind(&code)
         .bind(created_by)
         .bind(expires_at)
         .fetch_one(&self.pool)
         .await
-        .map_err(|e| AuthError::InternalError { message: e.to_string() })?;
+        .map_err(|e| AuthError::InternalError {
+            message: e.to_string(),
+        })?;
 
         info!(code = %code, "invite code generated");
         Ok(row_to_invite_code(row))
@@ -371,7 +407,9 @@ impl AuthService {
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| AuthError::InternalError { message: e.to_string() })?;
+        .map_err(|e| AuthError::InternalError {
+            message: e.to_string(),
+        })?;
 
         Ok(rows.into_iter().map(row_to_invite_code).collect())
     }
@@ -386,8 +424,8 @@ impl AuthService {
         let expires_at = chrono::Utc::now() + chrono::Duration::minutes(5);
 
         let row = sqlx::query_as::<_, LinkCodeRow>(
-            "INSERT INTO link_codes (code, user_id, direction, expires_at) \
-             VALUES ($1, $2, $3, $4) RETURNING *",
+            "INSERT INTO link_codes (code, user_id, direction, expires_at) VALUES ($1, $2, $3, \
+             $4) RETURNING *",
         )
         .bind(&code)
         .bind(user_id)
@@ -395,7 +433,9 @@ impl AuthService {
         .bind(expires_at)
         .fetch_one(&self.pool)
         .await
-        .map_err(|e| AuthError::InternalError { message: e.to_string() })?;
+        .map_err(|e| AuthError::InternalError {
+            message: e.to_string(),
+        })?;
 
         info!(code = %code, direction = %direction, "link code generated");
         Ok(row_to_link_code(row))
@@ -403,14 +443,14 @@ impl AuthService {
 
     /// 验证链接码
     pub async fn verify_link_code(&self, code: &str) -> Result<LinkCodeInfo, AuthError> {
-        let row = sqlx::query_as::<_, LinkCodeRow>(
-            "SELECT * FROM link_codes WHERE code = $1",
-        )
-        .bind(code)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| AuthError::InternalError { message: e.to_string() })?
-        .ok_or(AuthError::LinkCodeInvalid)?;
+        let row = sqlx::query_as::<_, LinkCodeRow>("SELECT * FROM link_codes WHERE code = $1")
+            .bind(code)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| AuthError::InternalError {
+                message: e.to_string(),
+            })?
+            .ok_or(AuthError::LinkCodeInvalid)?;
 
         if row.expires_at < chrono::Utc::now() {
             return Err(AuthError::LinkCodeInvalid);
@@ -431,7 +471,9 @@ impl AuthService {
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| AuthError::InternalError { message: e.to_string() })?;
+        .map_err(|e| AuthError::InternalError {
+            message: e.to_string(),
+        })?;
 
         Ok(rows.iter().map(row_to_user_info).collect())
     }
@@ -450,9 +492,9 @@ impl AuthService {
         // 2. 创建平台身份
         let identity_id = uuid::Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO user_platform_identities (id, user_id, platform, platform_user_id, display_name) \
-             VALUES ($1, $2, $3, $4, $5) \
-             ON CONFLICT (platform, platform_user_id) DO UPDATE SET user_id = $2, display_name = $5",
+            "INSERT INTO user_platform_identities (id, user_id, platform, platform_user_id, \
+             display_name) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (platform, platform_user_id) \
+             DO UPDATE SET user_id = $2, display_name = $5",
         )
         .bind(identity_id)
         .bind(link_info.user_id)
@@ -461,31 +503,32 @@ impl AuthService {
         .bind(display_name)
         .execute(&self.pool)
         .await
-        .map_err(|e| AuthError::InternalError { message: e.to_string() })?;
+        .map_err(|e| AuthError::InternalError {
+            message: e.to_string(),
+        })?;
 
         // 3. 删除已使用的链接码
         sqlx::query("DELETE FROM link_codes WHERE code = $1")
             .bind(code)
             .execute(&self.pool)
             .await
-            .map_err(|e| AuthError::InternalError { message: e.to_string() })?;
+            .map_err(|e| AuthError::InternalError {
+                message: e.to_string(),
+            })?;
 
         info!(platform = %platform, platform_user_id = %platform_user_id, "platform identity linked");
         Ok(())
     }
 
     /// 生成 TG→Web 方向的链接码（带 chat_id 平台数据）
-    pub async fn generate_tg_link_code(
-        &self,
-        chat_id: i64,
-    ) -> Result<LinkCode, AuthError> {
+    pub async fn generate_tg_link_code(&self, chat_id: i64) -> Result<LinkCode, AuthError> {
         let code = generate_random_code(6);
         let expires_at = chrono::Utc::now() + chrono::Duration::minutes(5);
         let platform_data = serde_json::json!({ "chat_id": chat_id });
 
         let row = sqlx::query_as::<_, LinkCodeRow>(
-            "INSERT INTO link_codes (code, user_id, direction, platform_data, expires_at) \
-             VALUES ($1, (SELECT id FROM kernel_users WHERE name = 'system'), $2, $3, $4) RETURNING *",
+            "INSERT INTO link_codes (code, user_id, direction, platform_data, expires_at) VALUES \
+             ($1, (SELECT id FROM kernel_users WHERE name = 'system'), $2, $3, $4) RETURNING *",
         )
         .bind(&code)
         .bind("tg_to_web")
@@ -493,7 +536,9 @@ impl AuthService {
         .bind(expires_at)
         .fetch_one(&self.pool)
         .await
-        .map_err(|e| AuthError::InternalError { message: e.to_string() })?;
+        .map_err(|e| AuthError::InternalError {
+            message: e.to_string(),
+        })?;
 
         info!(code = %code, chat_id = %chat_id, "tg link code generated");
         Ok(row_to_link_code(row))
@@ -523,23 +568,27 @@ impl AuthService {
         // 创建平台身份绑定
         let identity_id = uuid::Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO user_platform_identities (id, user_id, platform, platform_user_id, display_name) \
-             VALUES ($1, $2, 'telegram', $3, NULL) \
-             ON CONFLICT (platform, platform_user_id) DO UPDATE SET user_id = $2",
+            "INSERT INTO user_platform_identities (id, user_id, platform, platform_user_id, \
+             display_name) VALUES ($1, $2, 'telegram', $3, NULL) ON CONFLICT (platform, \
+             platform_user_id) DO UPDATE SET user_id = $2",
         )
         .bind(identity_id)
         .bind(user_id)
         .bind(chat_id.to_string())
         .execute(&self.pool)
         .await
-        .map_err(|e| AuthError::InternalError { message: e.to_string() })?;
+        .map_err(|e| AuthError::InternalError {
+            message: e.to_string(),
+        })?;
 
         // 删除已使用的链接码
         sqlx::query("DELETE FROM link_codes WHERE code = $1")
             .bind(code)
             .execute(&self.pool)
             .await
-            .map_err(|e| AuthError::InternalError { message: e.to_string() })?;
+            .map_err(|e| AuthError::InternalError {
+                message: e.to_string(),
+            })?;
 
         info!(user_id = %user_id, chat_id = %chat_id, "tg→web link completed");
         Ok(())
@@ -551,7 +600,9 @@ impl AuthService {
             .bind(user_id)
             .execute(&self.pool)
             .await
-            .map_err(|e| AuthError::InternalError { message: e.to_string() })?;
+            .map_err(|e| AuthError::InternalError {
+                message: e.to_string(),
+            })?;
 
         info!(user_id = %user_id, "user disabled");
         Ok(())

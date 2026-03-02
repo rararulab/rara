@@ -31,11 +31,9 @@ use std::sync::Arc;
 use async_openai::types::chat::CreateChatCompletionRequestArgs;
 use async_trait::async_trait;
 use futures::StreamExt;
-
 use rara_kernel::{
     provider::{
-        LlmProviderLoader, LlmProviderLoaderRef, OllamaProviderLoader,
-        ProviderRegistryBuilder,
+        LlmProviderLoader, LlmProviderLoaderRef, OllamaProviderLoader, ProviderRegistryBuilder,
     },
     runner::{AgentRunner, RunnerEvent, UserContent},
     testing::TestKernelBuilder,
@@ -50,8 +48,7 @@ const OLLAMA_MODEL: &str = "qwen3.5:cloud";
 
 /// Helper: build an OllamaProviderLoader from env or defaults.
 fn ollama_loader() -> OllamaProviderLoader {
-    let base_url =
-        std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| OLLAMA_BASE_URL.to_string());
+    let base_url = std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| OLLAMA_BASE_URL.to_string());
     OllamaProviderLoader::new(base_url)
 }
 
@@ -211,9 +208,7 @@ async fn test_agent_runner_with_ollama() {
         .llm_provider(loader)
         .model_name(model)
         .system_prompt("You are a concise assistant. Reply in one sentence.")
-        .user_content(UserContent::Text(
-            "What is 2 + 2?".to_string(),
-        ))
+        .user_content(UserContent::Text("What is 2 + 2?".to_string()))
         .max_iterations(3_usize)
         .build();
 
@@ -227,10 +222,7 @@ async fn test_agent_runner_with_ollama() {
         !text.trim().is_empty(),
         "expected non-empty response from AgentRunner"
     );
-    assert!(
-        !result.truncated,
-        "simple question should not truncate"
-    );
+    assert!(!result.truncated, "simple question should not truncate");
 }
 
 // ---------------------------------------------------------------------------
@@ -340,8 +332,7 @@ async fn test_tool_schema_with_ollama() {
 async fn test_kernel_builder_creates_kernel() {
     // Use a stub provider loader for this test — no real LLM needed.
     use async_openai::types::chat::{
-        ChatCompletionResponseStream, CreateChatCompletionRequest,
-        CreateChatCompletionResponse,
+        ChatCompletionResponseStream, CreateChatCompletionRequest, CreateChatCompletionResponse,
     };
 
     struct StubProvider;
@@ -369,7 +360,10 @@ async fn test_kernel_builder_creates_kernel() {
 
     let registry = Arc::new(
         ProviderRegistryBuilder::new("test", "test-model")
-            .provider("test", Arc::new(StubProvider) as Arc<dyn rara_kernel::provider::LlmProvider>)
+            .provider(
+                "test",
+                Arc::new(StubProvider) as Arc<dyn rara_kernel::provider::LlmProvider>,
+            )
             .build(),
     );
 

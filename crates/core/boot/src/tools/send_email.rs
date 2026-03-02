@@ -25,9 +25,8 @@ use lettre::{
     transport::smtp::authentication::Credentials,
 };
 use rara_domain_shared::settings::{SettingsProvider, keys};
-use serde_json::json;
-
 use rara_kernel::tool::AgentTool;
+use serde_json::json;
 
 /// Layer 1 primitive: send an email via Gmail SMTP.
 pub struct SendEmailTool {

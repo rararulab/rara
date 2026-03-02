@@ -1,3 +1,17 @@
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -9,17 +23,14 @@ use super::AgentManifest;
 use crate::error::{KernelError, Result};
 
 pub struct AgentRegistry {
-    builtin: HashMap<String, AgentManifest>,
-    custom: DashMap<String, AgentManifest>,
+    builtin:    HashMap<String, AgentManifest>,
+    custom:     DashMap<String, AgentManifest>,
     agents_dir: PathBuf,
 }
 
 impl AgentRegistry {
     pub fn new(builtin: Vec<AgentManifest>, agents_dir: PathBuf) -> Self {
-        let builtin = builtin
-            .into_iter()
-            .map(|m| (m.name.clone(), m))
-            .collect();
+        let builtin = builtin.into_iter().map(|m| (m.name.clone(), m)).collect();
         Self {
             builtin,
             custom: DashMap::new(),
@@ -72,7 +83,7 @@ impl AgentRegistry {
             message: format!("failed to serialize manifest: {e}").into(),
         })?;
         std::fs::write(&path, yaml).map_err(|e| KernelError::IO {
-            source: e,
+            source:   e,
             location: snafu::Location::new(file!(), line!(), 0),
         })?;
         self.custom.insert(name, manifest);
@@ -93,13 +104,9 @@ impl AgentRegistry {
         Ok(())
     }
 
-    pub fn is_builtin(&self, name: &str) -> bool {
-        self.builtin.contains_key(name)
-    }
+    pub fn is_builtin(&self, name: &str) -> bool { self.builtin.contains_key(name) }
 
-    pub fn agents_dir(&self) -> &Path {
-        &self.agents_dir
-    }
+    pub fn agents_dir(&self) -> &Path { &self.agents_dir }
 }
 
 #[cfg(test)]
@@ -156,7 +163,9 @@ mod tests {
             vec![test_manifest("rara")],
             std::env::temp_dir().join("agent_registry_test_list"),
         );
-        registry.custom.insert("scout".to_string(), test_manifest("scout"));
+        registry
+            .custom
+            .insert("scout".to_string(), test_manifest("scout"));
 
         let all = registry.list();
         assert_eq!(all.len(), 2);

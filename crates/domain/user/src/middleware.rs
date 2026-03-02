@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,13 +14,12 @@
 
 //! axum middleware extractors for JWT-based authentication.
 
-use axum::{
-    extract::FromRequestParts,
-    http::request::Parts,
-};
+use axum::{extract::FromRequestParts, http::request::Parts};
 
-use crate::error::AuthError;
-use crate::jwt::{JwtConfig, decode_token};
+use crate::{
+    error::AuthError,
+    jwt::{JwtConfig, decode_token},
+};
 
 /// 已认证用户 — 从 JWT token 中提取
 #[derive(Debug, Clone)]
@@ -60,11 +59,13 @@ impl<S: Send + Sync> FromRequestParts<S> for AuthUser {
                 return Err(AuthError::InvalidCredentials);
             }
 
-            let user_id = claims.sub.parse::<uuid::Uuid>().map_err(|_| {
-                AuthError::InternalError {
-                    message: "invalid user id in token".to_string(),
-                }
-            })?;
+            let user_id =
+                claims
+                    .sub
+                    .parse::<uuid::Uuid>()
+                    .map_err(|_| AuthError::InternalError {
+                        message: "invalid user id in token".to_string(),
+                    })?;
 
             Ok(AuthUser {
                 user_id,

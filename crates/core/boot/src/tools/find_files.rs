@@ -19,9 +19,8 @@
 
 use anyhow::Context;
 use async_trait::async_trait;
-use serde_json::json;
-
 use rara_kernel::tool::AgentTool;
+use serde_json::json;
 
 /// Default maximum number of file entries to return.
 const DEFAULT_LIMIT: usize = 500;

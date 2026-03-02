@@ -1,49 +1,101 @@
-# CLAUDE.md — Job Automation Platform Development Guide
+# CLAUDE.md — Rara Development Guide
 
 ## Communication
 - 用中文与用户交流
+
+## Project Identity
+
+Rara is a self-evolving, developer-first personal proactive agent built in Rust. It uses a kernel-inspired architecture with heartbeat-driven proactive behavior, 3-layer memory, and a skills system.
 
 ## Architecture
 
 ### Layer Hierarchy
 ```
-Layer 4 (Entry):      rara-cmd, rara-app
-Layer 3 (Interface):  rara-server (HTTP + gRPC)
-Layer 2 (Domain):     rara-domain-{job,ai,resume,application,interview,scheduler,chat,shared,analytics}
-Layer 1 (Infra):      rara-sessions, rara-agents, rara-workers, rara-model, telegram-bot
-Layer 0 (Foundation): base, error, paths
+Layer 5 (Entry):        rara-cmd, rara-app
+Layer 4 (Interface):    rara-server (HTTP + gRPC)
+Layer 3 (Core):         rara-kernel, rara-boot, rara-channels, rara-queue
+Layer 2 (Capabilities): rara-memory, rara-skills, rara-sessions
+Layer 1 (Extensions):   rara-git, rara-coding-task, rara-workspace, rara-backend-admin
+Layer 0 (Foundation):   base, rara-error, rara-paths, rara-model, yunara-store
 ```
+
+Cross-cutting integrations: `rara-mcp`, `rara-composio`, `rara-codex-oauth`, `rara-k8s`, `rara-consul`
 
 Dependencies flow **downward only**. Never upward.
 
-### Domain Crate Structure
+### Kernel Architecture
 
-Each domain crate is **self-contained** — owns types, errors, repository, service, routes, and migrations:
+`rara-kernel` is the central orchestrator with 6 core components:
+
+| Component   | Trait              | Purpose                              |
+|-------------|--------------------|--------------------------------------|
+| LLM         | `LlmApi`           | Chat completion requests             |
+| Tool        | `ToolRegistry`     | Tool registration + dispatch         |
+| Memory      | `Memory`           | 3-layer memory (State/Knowledge/Learning) |
+| Session     | `SessionRepository`| Conversation history persistence     |
+| Guard       | `Guard`            | Tool approval + output moderation    |
+| Event Bus   | `EventBus`         | Inter-component event broadcasting   |
+
+Key kernel abstractions: `Kernel`, `ProcessTable`, `AgentProcess`, `AgentHandle`, `ProcessHandle`, `EventLoop`, `ApprovalManager`.
+
+### Memory System
+
+3-layer memory via `rara-memory`:
+
+| Service       | Layer     | Role                                   |
+|---------------|-----------|----------------------------------------|
+| **mem0**      | State     | Structured fact extraction & auto-dedup|
+| **Memos**     | Storage   | Human-readable Markdown notes          |
+| **Hindsight** | Learning  | 4-network retain / recall / reflect    |
+
+### Skills System
+
+`rara-skills` handles skill discovery, parsing (SKILL.md with YAML frontmatter), installation from GitHub, and prompt generation for LLM injection.
+
+### Channel Adapters
+
+`rara-channels` provides `ChannelAdapter` implementations:
+- `TelegramAdapter` — Telegram Bot API via long polling
+- `WebAdapter` — WebSocket + SSE for web chat UI
+- `TerminalAdapter` — Local terminal interface
+
+### Extensions (Developer Capabilities)
+
+Each extension registers tools/services into the kernel:
+- `rara-git` — Git operations
+- `rara-coding-task` — Coding task management
+- `rara-workspace` — Workspace management
+- `rara-backend-admin` — Admin operations
+- `rara-k8s` — Kubernetes integration
+
+### Crate Structure Conventions
+
+Domain and capability crates are **self-contained** — own types, errors, repository, service, and routes:
 
 ```
-crates/domain/{name}/
+crates/{layer}/{name}/
   src/
-    lib.rs          # Module declarations
-    types.rs        # Domain types (includes From impls for DB conversion)
-    error.rs        # Errors using snafu, implements IntoResponse
-    repository.rs   # Repository trait
-    pg_repository.rs # PostgreSQL implementation
-    service.rs      # Business logic
-    router.rs       # axum routes (domain owns its HTTP layer)
+    lib.rs           # Module declarations
+    types.rs         # Domain types
+    error.rs         # Errors using snafu, implements IntoResponse
+    repository.rs    # Repository trait (if applicable)
+    pg_repository.rs # PostgreSQL implementation (if applicable)
+    service.rs       # Business logic
+    router.rs        # axum routes (if applicable)
   migrations/
   Cargo.toml
 ```
 
 ### Key Design Rules
 
-1. **Repository impls in domain crates** — NOT in `yunara-store`. `yunara-store` only provides `DBStore` (PgPool wrapper) and KV primitives.
+1. **Repository impls in their own crates** — NOT in `yunara-store`. `yunara-store` only provides `DBStore` (PgPool wrapper) and KV primitives.
 
-2. **Routes in domain crates** — Each domain crate defines its own `router.rs` with axum routes. `rara-app` composes them.
+2. **Routes in their own crates** — Each crate with HTTP endpoints defines its own `router.rs`. `rara-app` composes them.
 
-3. **Error handling uses `snafu`** — All library crates use `#[derive(Snafu)]`. Domain errors implement `axum::response::IntoResponse` directly.
+3. **Error handling uses `snafu`** — All library crates use `#[derive(Snafu)]`. Errors that surface via HTTP implement `axum::response::IntoResponse` directly.
    ```rust
    #[derive(Debug, Snafu)]
-   pub enum ChatError {
+   pub enum KernelError {
        #[snafu(display("session not found: {key}"))]
        NotFound { key: String },
        #[snafu(display("repository error: {source}"))]
@@ -51,7 +103,7 @@ crates/domain/{name}/
    }
    ```
 
-4. **`rara-app` is the composition root** — Wires services, routes, and workers via dependency injection.
+4. **`rara-app` is the composition root** — Wires kernel, services, channels, routes, and workers via `rara-boot`.
 
 5. **No re-exports** — Use full `use crate::` paths.
 
@@ -62,6 +114,7 @@ crates/domain/{name}/
 - **Stack**: React 19 + Tailwind v4 + shadcn/ui + TanStack Query v5 + React Router v7
 - **API client**: `web/src/api/client.ts` (fetch-based), types in `web/src/api/types.ts`
 - **Layout**: `DashboardLayout.tsx` with collapsible sidebar
+- **Key pages**: Chat, AgentConsole, KernelTop, Skills, McpServers, Settings, CodingTasks
 - **Dev server**: Vite proxies `/api` to `localhost:25555`
 - **Build check**: `cd web && npm run build`
 
@@ -82,10 +135,10 @@ This is the standard workflow for all feature/refactor work:
 
 #### Step 1: Create Issue
 ```bash
-gh issue create --title "feat(chat): model selector" \
-  --label "created-by:claude" --label "enhancement" --label "ui"
+gh issue create --title "feat(kernel): event queue sharding" \
+  --label "created-by:claude" --label "enhancement" --label "core"
 ```
-Labels: `created-by:claude` (required) + category (`enhancement`, `refactor`, `ui`, `backend`, `domain`).
+Labels: `created-by:claude` (required) + category (`enhancement`, `refactor`, `ui`, `backend`, `core`, `extension`).
 
 #### Step 2: Create Worktree
 ```bash
@@ -94,7 +147,7 @@ git worktree add .worktrees/issue-{N}-{short-name} -b issue-{N}-{short-name}
 
 #### Step 3: Dispatch Subagent
 - Subagent works **exclusively** in its worktree directory
-- Independent issues can be dispatched **in parallel** (e.g., #116 and #117 ran concurrently)
+- Independent issues can be dispatched **in parallel**
 - Subagent should commit its work before finishing
 
 #### Step 4: Verify Builds
@@ -129,7 +182,7 @@ When user requests involve multiple independent changes, split into separate iss
 
 ### Commit Style
 - Conventional commits: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`
-- Scope matches crate or area: `feat(chat):`, `fix(web):`, `refactor(sessions):`
+- Scope matches crate or area: `feat(kernel):`, `fix(web):`, `refactor(memory):`
 - Include `(#N)` issue reference in commit message
 - Include `Closes #N` in commit body
 
@@ -161,7 +214,7 @@ When user requests involve multiple independent changes, split into separate iss
 
 ## What NOT To Do
 
-- Do NOT put repository impls or routes in `yunara-store` — business logic stays in domain crates
+- Do NOT put repository impls or routes in `yunara-store` — business logic stays in its own crates
 - Do NOT use manual `impl Display` + `impl Error` — use `snafu`
 - Do NOT use mock repositories in tests — use `testcontainers`
 - Do NOT work directly on `main` — always use worktrees for subagent work

@@ -10,8 +10,8 @@ spec:
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
+      maxUnavailable: false
+      maxSurge: true
   selector:
     matchLabels:
       {{- include "rara-app.componentSelectorLabels" (dict "root" . "component" "backend") | nindent 6 }}

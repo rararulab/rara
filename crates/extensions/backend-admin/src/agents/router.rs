@@ -1,3 +1,17 @@
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::sync::Arc;
 
 use axum::{
@@ -7,8 +21,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use rara_kernel::Kernel;
-use rara_kernel::process::AgentManifest;
+use rara_kernel::{Kernel, process::AgentManifest};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -30,13 +43,13 @@ pub struct AgentResponse {
 impl AgentResponse {
     fn from_manifest(m: &AgentManifest, builtin: bool) -> Self {
         Self {
-            name:           m.name.clone(),
-            description:    m.description.clone(),
-            model:          m.model.clone(),
-            role:           m.role.map(|r| format!("{r:?}")),
-            provider_hint:  m.provider_hint.clone(),
+            name: m.name.clone(),
+            description: m.description.clone(),
+            model: m.model.clone(),
+            role: m.role.map(|r| format!("{r:?}")),
+            provider_hint: m.provider_hint.clone(),
             max_iterations: m.max_iterations,
-            tools:          m.tools.clone(),
+            tools: m.tools.clone(),
             builtin,
         }
     }
@@ -71,16 +84,21 @@ enum AgentError {
 impl IntoResponse for AgentError {
     fn into_response(self) -> Response {
         match self {
-            Self::NotFound(msg) => {
-                (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": msg }))).into_response()
-            }
-            Self::Conflict(msg) => {
-                (StatusCode::CONFLICT, Json(serde_json::json!({ "error": msg }))).into_response()
-            }
-            Self::Internal(msg) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": msg })))
-                    .into_response()
-            }
+            Self::NotFound(msg) => (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response(),
+            Self::Conflict(msg) => (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response(),
+            Self::Internal(msg) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response(),
         }
     }
 }
@@ -92,10 +110,7 @@ impl IntoResponse for AgentError {
 pub fn agent_routes(kernel: Arc<Kernel>) -> Router {
     Router::new()
         .route("/api/v1/agents", get(list_agents).post(create_agent))
-        .route(
-            "/api/v1/agents/{name}",
-            get(get_agent).delete(delete_agent),
-        )
+        .route("/api/v1/agents/{name}", get(get_agent).delete(delete_agent))
         .with_state(kernel)
 }
 

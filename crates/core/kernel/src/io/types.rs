@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -114,34 +114,35 @@ pub enum InteractionType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InboundMessage {
     /// Unique message identifier (ULID).
-    pub id:            MessageId,
+    pub id:              MessageId,
     /// Platform source details.
-    pub source:        ChannelSource,
+    pub source:          ChannelSource,
     /// Unified user identity (resolved by ingress).
-    pub user:          UserId,
+    pub user:            UserId,
     /// Session this message belongs to.
-    pub session_id:    SessionId,
+    pub session_id:      SessionId,
     /// Direct process targeting (agent-to-agent communication).
     /// When set, routing bypasses session/name resolution entirely.
     pub target_agent_id: Option<AgentId>,
-    /// Target agent name. `None` means route to the default root agent ("rara").
-    pub target_agent:  Option<String>,
+    /// Target agent name. `None` means route to the default root agent
+    /// ("rara").
+    pub target_agent:    Option<String>,
     /// Message content (text or multimodal).
-    pub content:       MessageContent,
+    pub content:         MessageContent,
     /// Optional reply/thread context for egress.
-    pub reply_context: Option<ReplyContext>,
+    pub reply_context:   Option<ReplyContext>,
     /// When this message was created.
-    pub timestamp:     jiff::Timestamp,
+    pub timestamp:       jiff::Timestamp,
     /// Extension metadata (adapter-specific fields only).
-    pub metadata:      HashMap<String, Value>,
+    pub metadata:        HashMap<String, Value>,
 }
 
 impl InboundMessage {
     /// Create a synthetic internal message (for workers, SpawnTool, etc.).
     pub fn synthetic(text: String, user: UserId, session_id: SessionId) -> Self {
         Self {
-            id:            MessageId::new(),
-            source:        ChannelSource {
+            id: MessageId::new(),
+            source: ChannelSource {
                 channel_type:        ChannelType::Internal,
                 platform_message_id: None,
                 platform_user_id:    user.0.clone(),
@@ -150,15 +151,16 @@ impl InboundMessage {
             user,
             session_id,
             target_agent_id: None,
-            target_agent:  None,
-            content:       MessageContent::Text(text),
+            target_agent: None,
+            content: MessageContent::Text(text),
             reply_context: None,
-            timestamp:     jiff::Timestamp::now(),
-            metadata:      HashMap::new(),
+            timestamp: jiff::Timestamp::now(),
+            metadata: HashMap::new(),
         }
     }
 
-    /// Create a synthetic internal message addressed to a specific agent by name.
+    /// Create a synthetic internal message addressed to a specific agent by
+    /// name.
     pub fn synthetic_to(
         text: String,
         user: UserId,
@@ -166,8 +168,8 @@ impl InboundMessage {
         target_agent: String,
     ) -> Self {
         Self {
-            id:            MessageId::new(),
-            source:        ChannelSource {
+            id: MessageId::new(),
+            source: ChannelSource {
                 channel_type:        ChannelType::Internal,
                 platform_message_id: None,
                 platform_user_id:    user.0.clone(),
@@ -176,11 +178,11 @@ impl InboundMessage {
             user,
             session_id,
             target_agent_id: None,
-            target_agent:  Some(target_agent),
-            content:       MessageContent::Text(text),
+            target_agent: Some(target_agent),
+            content: MessageContent::Text(text),
             reply_context: None,
-            timestamp:     jiff::Timestamp::now(),
-            metadata:      HashMap::new(),
+            timestamp: jiff::Timestamp::now(),
+            metadata: HashMap::new(),
         }
     }
 
@@ -193,8 +195,8 @@ impl InboundMessage {
         target_id: AgentId,
     ) -> Self {
         Self {
-            id:            MessageId::new(),
-            source:        ChannelSource {
+            id: MessageId::new(),
+            source: ChannelSource {
                 channel_type:        ChannelType::Internal,
                 platform_message_id: None,
                 platform_user_id:    user.0.clone(),
@@ -203,11 +205,11 @@ impl InboundMessage {
             user,
             session_id,
             target_agent_id: Some(target_id),
-            target_agent:  None,
-            content:       MessageContent::Text(text),
+            target_agent: None,
+            content: MessageContent::Text(text),
             reply_context: None,
-            timestamp:     jiff::Timestamp::now(),
-            metadata:      HashMap::new(),
+            timestamp: jiff::Timestamp::now(),
+            metadata: HashMap::new(),
         }
     }
 }

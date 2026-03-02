@@ -1,3 +1,17 @@
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::sync::Arc;
 
 use axum::{
@@ -8,8 +22,7 @@ use axum::{
     },
     routing::get,
 };
-use rara_kernel::Kernel;
-use rara_kernel::audit::AuditFilter;
+use rara_kernel::{Kernel, audit::AuditFilter};
 use serde::Deserialize;
 
 use super::problem::ProblemDetails;
@@ -24,9 +37,7 @@ pub struct AuditQuery {
     pub limit: usize,
 }
 
-fn default_audit_limit() -> usize {
-    50
-}
+fn default_audit_limit() -> usize { 50 }
 
 // ---------------------------------------------------------------------------
 // Router
@@ -110,21 +121,16 @@ async fn stream_process(
             .map_err(|e| ProblemDetails::bad_request(format!("invalid agent_id: {e}")))?,
     );
 
-    let process = kernel
-        .process_table()
-        .get(aid)
-        .ok_or_else(|| {
-            ProblemDetails::not_found(
-                "Process Not Found",
-                format!("process not found: {agent_id}"),
-            )
-        })?;
+    let process = kernel.process_table().get(aid).ok_or_else(|| {
+        ProblemDetails::not_found(
+            "Process Not Found",
+            format!("process not found: {agent_id}"),
+        )
+    })?;
     let session_id = process.session_id.clone();
     let stream_hub = kernel.stream_hub().clone();
 
-    Ok(ws.on_upgrade(move |socket| {
-        handle_process_stream(socket, stream_hub, session_id)
-    }))
+    Ok(ws.on_upgrade(move |socket| handle_process_stream(socket, stream_hub, session_id)))
 }
 
 async fn handle_process_stream(
@@ -135,9 +141,8 @@ async fn handle_process_stream(
     use tokio::time::Duration;
 
     let mut poll_interval = tokio::time::interval(Duration::from_millis(200));
-    let mut receivers: Vec<
-        tokio::sync::broadcast::Receiver<rara_kernel::io::stream::StreamEvent>,
-    > = Vec::new();
+    let mut receivers: Vec<tokio::sync::broadcast::Receiver<rara_kernel::io::stream::StreamEvent>> =
+        Vec::new();
 
     loop {
         // If no active receivers, try to subscribe

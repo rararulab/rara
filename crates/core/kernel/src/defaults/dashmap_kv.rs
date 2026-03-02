@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -34,16 +34,12 @@ impl DashMapKv {
 }
 
 impl Default for DashMapKv {
-    fn default() -> Self {
-        Self::new()
-    }
+    fn default() -> Self { Self::new() }
 }
 
 #[async_trait]
 impl KvBackend for DashMapKv {
-    async fn get(&self, key: &str) -> Option<Value> {
-        self.map.get(key).map(|v| v.value().clone())
-    }
+    async fn get(&self, key: &str) -> Option<Value> { self.map.get(key).map(|v| v.value().clone()) }
 
     async fn set(&self, key: &str, value: Value) -> anyhow::Result<()> {
         self.map.insert(key.to_owned(), value);
@@ -63,9 +59,7 @@ impl KvBackend for DashMapKv {
             .collect()
     }
 
-    async fn contains_key(&self, key: &str) -> bool {
-        self.map.contains_key(key)
-    }
+    async fn contains_key(&self, key: &str) -> bool { self.map.contains_key(key) }
 
     async fn count_prefix(&self, prefix: &str) -> usize {
         self.map

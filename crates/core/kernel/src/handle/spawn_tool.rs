@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -110,11 +110,7 @@ impl SpawnTool {
         let mut handles: Vec<(String, AgentHandle)> = Vec::new();
         for task_req in &tasks {
             let manifest = self.resolve_manifest(&task_req.agent)?;
-            match self
-                .handle
-                .spawn(manifest, task_req.task.clone())
-                .await
-            {
+            match self.handle.spawn(manifest, task_req.task.clone()).await {
                 Ok(handle) => handles.push((task_req.agent.clone(), handle)),
                 Err(e) => {
                     warn!(
@@ -258,10 +254,11 @@ impl crate::tool::AgentTool for SpawnTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event_queue::InMemoryEventQueue;
-    use crate::process::{AgentId, SessionId};
-    use crate::process::principal::Principal;
-    use crate::tool::AgentTool;
+    use crate::{
+        event_queue::InMemoryEventQueue,
+        process::{AgentId, SessionId, principal::Principal},
+        tool::AgentTool,
+    };
 
     fn make_test_handle() -> Arc<ProcessHandle> {
         Arc::new(ProcessHandle::new(

@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -48,8 +48,8 @@ use uuid::Uuid;
 use crate::{
     manager::MemoryManager,
     mem0_client::{
-        Mem0AddRequest, Mem0DeleteAllRequest, Mem0DeleteRequest, Mem0GetAllRequest,
-        Mem0GetRequest, Mem0HistoryRequest, Mem0Message, Mem0SearchRequest, Mem0UpdateRequest,
+        Mem0AddRequest, Mem0DeleteAllRequest, Mem0DeleteRequest, Mem0GetAllRequest, Mem0GetRequest,
+        Mem0HistoryRequest, Mem0Message, Mem0SearchRequest, Mem0UpdateRequest,
     },
 };
 
@@ -300,14 +300,14 @@ fn mem0_memories_to_facts(
 }
 
 /// Convert a single `Mem0Memory` to a `StateFact`.
-fn mem0_memory_to_fact(
-    m: crate::mem0_client::Mem0Memory,
-) -> rara_kernel::memory::types::StateFact {
+fn mem0_memory_to_fact(m: crate::mem0_client::Mem0Memory) -> rara_kernel::memory::types::StateFact {
     rara_kernel::memory::types::StateFact {
         id:         m.id.parse().unwrap_or_else(|_| Uuid::new_v4()),
         content:    m.memory,
         score:      m.score,
-        metadata:   m.metadata.map(|obj| serde_json::to_value(obj).unwrap_or_default()),
+        metadata:   m
+            .metadata
+            .map(|obj| serde_json::to_value(obj).unwrap_or_default()),
         created_at: parse_timestamp(&m.created_at),
         updated_at: parse_timestamp(&m.updated_at),
     }
@@ -420,10 +420,7 @@ fn memo_entry_to_note(
         .collect();
 
     // Parse the memo UID as a UUID. If that fails, generate a deterministic one.
-    let id = entry
-        .uid
-        .parse::<Uuid>()
-        .unwrap_or_else(|_| Uuid::new_v4());
+    let id = entry.uid.parse::<Uuid>().unwrap_or_else(|_| Uuid::new_v4());
 
     let created_at = entry
         .create_time

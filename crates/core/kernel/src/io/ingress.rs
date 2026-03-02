@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,7 +22,8 @@
 //! 2. **Session resolution** — resolve or create a
 //!    [`SessionId`](crate::process::SessionId) for this user + channel context.
 //! 3. **Event queue push** — build an [`InboundMessage`] and push it to the
-//!    [`EventQueue`](crate::event_queue::EventQueue) as a `KernelEvent::UserMessage`.
+//!    [`EventQueue`](crate::event_queue::EventQueue) as a
+//!    `KernelEvent::UserMessage`.
 //!
 //! Channel adapters only need to call [`IngressPipeline::ingest`] — all
 //! coordination lives here.

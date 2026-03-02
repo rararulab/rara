@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -40,7 +40,7 @@ use tokio::sync::Semaphore;
 use crate::{
     audit::{AuditLog, InMemoryAuditLog},
     defaults::{
-        noop::{NoopEventBus, NoopGuard, NoopMemory, NoopSettingsProvider, NoopSessionRepository},
+        noop::{NoopEventBus, NoopGuard, NoopMemory, NoopSessionRepository, NoopSettingsProvider},
         noop_user_store::NoopUserStore,
     },
     device_registry::DeviceRegistry,
@@ -74,14 +74,14 @@ impl TestKernelBuilder {
 
         Self {
             config: KernelConfig {
-                max_concurrency:        16,
-                default_child_limit:    8,
+                max_concurrency: 16,
+                default_child_limit: 8,
                 default_max_iterations: 25,
                 memory_quota_per_agent: 1000,
                 ..Default::default()
             },
             provider_registry: None,
-            tool_registry:     ToolRegistry::new(),
+            tool_registry: ToolRegistry::new(),
             agent_registry,
         }
     }
@@ -128,33 +128,31 @@ impl TestKernelBuilder {
         );
 
         let inner = Arc::new(KernelInner {
-            process_table:          Arc::new(ProcessTable::new()),
-            global_semaphore:       Arc::new(Semaphore::new(self.config.max_concurrency)),
-            default_child_limit:    self.config.default_child_limit,
+            process_table: Arc::new(ProcessTable::new()),
+            global_semaphore: Arc::new(Semaphore::new(self.config.max_concurrency)),
+            default_child_limit: self.config.default_child_limit,
             default_max_iterations: self.config.default_max_iterations,
             provider_registry,
-            tool_registry:          Arc::new(self.tool_registry),
-            memory:                 Arc::new(NoopMemory),
-            event_bus:              Arc::new(NoopEventBus),
-            guard:                  Arc::new(NoopGuard),
-            agent_registry:         Arc::new(self.agent_registry),
-            shared_kv:              Arc::new(crate::defaults::dashmap_kv::DashMapKv::new()),
-            tool_call_recorder:     Arc::new(crate::audit::NoopToolCallRecorder),
+            tool_registry: Arc::new(self.tool_registry),
+            memory: Arc::new(NoopMemory),
+            event_bus: Arc::new(NoopEventBus),
+            guard: Arc::new(NoopGuard),
+            agent_registry: Arc::new(self.agent_registry),
+            shared_kv: Arc::new(crate::defaults::dashmap_kv::DashMapKv::new()),
+            tool_call_recorder: Arc::new(crate::audit::NoopToolCallRecorder),
             memory_quota_per_agent: self.config.memory_quota_per_agent,
-            user_store:             Arc::new(NoopUserStore),
-            session_repo:           Arc::new(NoopSessionRepository)
-                as Arc<dyn SessionRepository>,
-            settings:               Arc::new(NoopSettingsProvider)
+            user_store: Arc::new(NoopUserStore),
+            session_repo: Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
+            settings: Arc::new(NoopSettingsProvider)
                 as Arc<dyn rara_domain_shared::settings::SettingsProvider>,
-            stream_hub:             Arc::new(StreamHub::new(16)),
-            pipe_registry:          Arc::new(PipeRegistry::new()),
-            device_registry:        Arc::new(DeviceRegistry::new()),
-            audit_log:              Arc::new(InMemoryAuditLog::default())
-                as Arc<dyn AuditLog>,
-            approval:               Arc::new(crate::approval::ApprovalManager::new(
+            stream_hub: Arc::new(StreamHub::new(16)),
+            pipe_registry: Arc::new(PipeRegistry::new()),
+            device_registry: Arc::new(DeviceRegistry::new()),
+            audit_log: Arc::new(InMemoryAuditLog::default()) as Arc<dyn AuditLog>,
+            approval: Arc::new(crate::approval::ApprovalManager::new(
                 crate::approval::ApprovalPolicy::default(),
             )),
-            event_queue:            Arc::new(InMemoryEventQueue::new(4096)),
+            event_queue: Arc::new(InMemoryEventQueue::new(4096)),
         });
 
         // Use private constructor approach: build Kernel from its inner field.

@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -39,12 +39,8 @@ pub trait KvBackend: Send + Sync {
     async fn list_prefix(&self, prefix: &str) -> Vec<(String, Value)>;
 
     /// Check whether a key exists without retrieving the value.
-    async fn contains_key(&self, key: &str) -> bool {
-        self.get(key).await.is_some()
-    }
+    async fn contains_key(&self, key: &str) -> bool { self.get(key).await.is_some() }
 
     /// Count keys with a given prefix.
-    async fn count_prefix(&self, prefix: &str) -> usize {
-        self.list_prefix(prefix).await.len()
-    }
+    async fn count_prefix(&self, prefix: &str) -> usize { self.list_prefix(prefix).await.len() }
 }

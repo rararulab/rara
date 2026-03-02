@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -78,7 +78,10 @@ impl SessionService {
     /// List available models, dynamically fetching from OpenRouter when an
     /// API key is configured. Favorites are marked and sorted to the top.
     pub async fn list_models(&self) -> Vec<ChatModel> {
-        let api_key = self.settings_provider.get(keys::LLM_OPENROUTER_API_KEY).await;
+        let api_key = self
+            .settings_provider
+            .get(keys::LLM_OPENROUTER_API_KEY)
+            .await;
         let favorites_json = self.settings_provider.get(keys::LLM_FAVORITE_MODELS).await;
         let favorites: Vec<String> = favorites_json
             .and_then(|v| serde_json::from_str(&v).ok())

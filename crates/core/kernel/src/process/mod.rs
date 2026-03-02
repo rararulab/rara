@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -32,7 +32,10 @@ pub mod user;
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::{Arc, atomic::{AtomicU64, Ordering}},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use dashmap::DashMap;
@@ -82,7 +85,9 @@ impl std::fmt::Display for AgentRole {
 /// Higher priority messages are processed before lower ones when the
 /// scheduler is draining the inbound bus. Critical messages bypass rate
 /// limiting entirely.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
 pub enum Priority {
     /// Background tasks, batch jobs.
     Low = 0,
@@ -196,55 +201,57 @@ pub type SessionId = crate::session::SessionKey;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentManifest {
     /// Unique name identifying this agent definition.
-    pub name:           String,
+    pub name:               String,
     /// Agent's functional role (chat, scout, planner, worker).
     #[serde(default)]
-    pub role:           Option<AgentRole>,
+    pub role:               Option<AgentRole>,
     /// Human-readable description.
-    pub description:    String,
+    pub description:        String,
     /// LLM model identifier (e.g., "deepseek/deepseek-chat", "gpt-4").
     ///
     /// `None` means "use the provider registry default". The kernel's
     /// `ProviderRegistry::resolve()` will fall through to the global
     /// default model when this is `None`.
     #[serde(default)]
-    pub model:          Option<String>,
+    pub model:              Option<String>,
     /// System prompt defining agent behavior.
-    pub system_prompt:  String,
-    /// Optional personality/mood/voice prompt (prepended to system_prompt when building LLM messages).
+    pub system_prompt:      String,
+    /// Optional personality/mood/voice prompt (prepended to system_prompt when
+    /// building LLM messages).
     #[serde(default)]
-    pub soul_prompt:    Option<String>,
+    pub soul_prompt:        Option<String>,
     /// Optional hint for provider selection.
     #[serde(default)]
-    pub provider_hint:  Option<String>,
+    pub provider_hint:      Option<String>,
     /// Maximum LLM iterations before forced completion.
     #[serde(default)]
-    pub max_iterations: Option<usize>,
+    pub max_iterations:     Option<usize>,
     /// Tool names this agent is allowed to use (empty = inherit parent's
     /// tools).
     #[serde(default)]
-    pub tools:          Vec<String>,
+    pub tools:              Vec<String>,
     /// Maximum number of concurrent child agents this agent can spawn.
     #[serde(default)]
-    pub max_children:        Option<usize>,
+    pub max_children:       Option<usize>,
     /// Maximum context window size in tokens.
     ///
     /// When the in-memory conversation history exceeds this budget, the
-    /// kernel applies a [`CompactionStrategy`](crate::memory::compaction::CompactionStrategy)
+    /// kernel applies a
+    /// [`CompactionStrategy`](crate::memory::compaction::CompactionStrategy)
     /// to trim it before sending to the LLM. Defaults to
     /// [`DEFAULT_MAX_CONTEXT_TOKENS`](crate::memory::compaction::DEFAULT_MAX_CONTEXT_TOKENS)
     /// (8192) when `None`.
     #[serde(default)]
-    pub max_context_tokens:  Option<usize>,
+    pub max_context_tokens: Option<usize>,
     /// Dispatch priority for scheduling.
     #[serde(default)]
-    pub priority:            Priority,
+    pub priority:           Priority,
     /// Arbitrary metadata for extension.
     #[serde(default)]
-    pub metadata:            serde_json::Value,
+    pub metadata:           serde_json::Value,
     /// Optional sandbox configuration for file access control.
     #[serde(default)]
-    pub sandbox:             Option<SandboxConfig>,
+    pub sandbox:            Option<SandboxConfig>,
 }
 
 /// Runtime state of an agent process.
@@ -362,23 +369,23 @@ pub struct AgentProcess {
     /// The agent definition driving this process.
     pub manifest:           AgentManifest,
     /// The identity under which this process runs.
-    pub principal:     principal::Principal,
+    pub principal:          principal::Principal,
     /// Per-process environment.
-    pub env:           AgentEnv,
+    pub env:                AgentEnv,
     /// Current lifecycle state.
-    pub state:         ProcessState,
+    pub state:              ProcessState,
     /// When this process was created.
-    pub created_at:    Timestamp,
+    pub created_at:         Timestamp,
     /// When this process finished (if terminal).
-    pub finished_at:   Option<Timestamp>,
+    pub finished_at:        Option<Timestamp>,
     /// Result of execution (set on completion/failure).
-    pub result:        Option<AgentResult>,
+    pub result:             Option<AgentResult>,
     /// Files created or modified by this agent (for resource tracking).
-    pub created_files: Vec<PathBuf>,
+    pub created_files:      Vec<PathBuf>,
     /// Per-process runtime metrics (atomic counters for lock-free updates).
-    pub metrics:       Arc<RuntimeMetrics>,
+    pub metrics:            Arc<RuntimeMetrics>,
     /// Detailed turn traces for observability (most recent 50 turns).
-    pub turn_traces:   Vec<crate::agent_turn::TurnTrace>,
+    pub turn_traces:        Vec<crate::agent_turn::TurnTrace>,
 }
 
 /// Summary info for listing processes.
@@ -419,13 +426,13 @@ pub struct RuntimeMetrics {
     /// Number of messages received by this process.
     pub messages_received: AtomicU64,
     /// Number of LLM completion calls made.
-    pub llm_calls: AtomicU64,
+    pub llm_calls:         AtomicU64,
     /// Number of tool calls executed.
-    pub tool_calls: AtomicU64,
+    pub tool_calls:        AtomicU64,
     /// Approximate total tokens consumed (prompt + completion).
-    pub tokens_consumed: AtomicU64,
+    pub tokens_consumed:   AtomicU64,
     /// Timestamp of the most recent activity.
-    pub last_activity: Mutex<Option<Timestamp>>,
+    pub last_activity:     Mutex<Option<Timestamp>>,
 }
 
 impl RuntimeMetrics {
@@ -441,14 +448,10 @@ impl RuntimeMetrics {
     }
 
     /// Record a message received event.
-    pub fn record_message(&self) {
-        self.messages_received.fetch_add(1, Ordering::Relaxed);
-    }
+    pub fn record_message(&self) { self.messages_received.fetch_add(1, Ordering::Relaxed); }
 
     /// Record an LLM call completion.
-    pub fn record_llm_call(&self) {
-        self.llm_calls.fetch_add(1, Ordering::Relaxed);
-    }
+    pub fn record_llm_call(&self) { self.llm_calls.fetch_add(1, Ordering::Relaxed); }
 
     /// Record tool calls made during a turn.
     pub fn record_tool_calls(&self, count: u64) {
@@ -485,10 +488,16 @@ impl Default for RuntimeMetrics {
 impl std::fmt::Debug for RuntimeMetrics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RuntimeMetrics")
-            .field("messages_received", &self.messages_received.load(Ordering::Relaxed))
+            .field(
+                "messages_received",
+                &self.messages_received.load(Ordering::Relaxed),
+            )
             .field("llm_calls", &self.llm_calls.load(Ordering::Relaxed))
             .field("tool_calls", &self.tool_calls.load(Ordering::Relaxed))
-            .field("tokens_consumed", &self.tokens_consumed.load(Ordering::Relaxed))
+            .field(
+                "tokens_consumed",
+                &self.tokens_consumed.load(Ordering::Relaxed),
+            )
             .finish()
     }
 }
@@ -555,19 +564,19 @@ pub struct ProcessStats {
 #[derive(Debug, Clone, Serialize)]
 pub struct SystemStats {
     /// Number of currently active (Running or Waiting) processes.
-    pub active_processes:          usize,
+    pub active_processes:           usize,
     /// Total number of processes ever spawned.
-    pub total_spawned:             u64,
+    pub total_spawned:              u64,
     /// Total number of processes that completed successfully.
-    pub total_completed:           u64,
+    pub total_completed:            u64,
     /// Total number of processes that failed.
-    pub total_failed:              u64,
+    pub total_failed:               u64,
     /// Number of global semaphore permits currently available.
     pub global_semaphore_available: usize,
     /// Sum of tokens consumed across all tracked processes.
-    pub total_tokens_consumed:     u64,
+    pub total_tokens_consumed:      u64,
     /// Kernel uptime in milliseconds.
-    pub uptime_ms:                 u64,
+    pub uptime_ms:                  u64,
 }
 
 /// In-memory process table — the kernel's view of all running agents.
@@ -579,32 +588,37 @@ pub struct SystemStats {
 /// a name index for fast agent name -> `AgentId` lookups, and
 /// a mailbox registry for sending messages to long-lived processes.
 pub struct ProcessTable {
-    processes:     DashMap<AgentId, AgentProcess>,
+    processes:       DashMap<AgentId, AgentProcess>,
     /// Maps a session to its currently active agent process.
-    session_index: DashMap<SessionId, AgentId>,
+    session_index:   DashMap<SessionId, AgentId>,
     /// Parent → Children index, O(1) child lookup.
-    children_index: DashMap<AgentId, Vec<AgentId>>,
+    children_index:  DashMap<AgentId, Vec<AgentId>>,
     /// Agent manifest name → Vec<AgentId> (1:N, observability only).
-    name_registry: DashMap<String, Vec<AgentId>>,
+    name_registry:   DashMap<String, Vec<AgentId>>,
     /// Monotonically increasing counter of total processes ever spawned.
-    total_spawned:    AtomicU64,
+    total_spawned:   AtomicU64,
     /// Total processes that completed successfully.
-    total_completed:  AtomicU64,
+    total_completed: AtomicU64,
     /// Total processes that failed.
-    total_failed:     AtomicU64,
+    total_failed:    AtomicU64,
 }
 
 impl ProcessTable {
+    /// Maximum number of turn traces retained per process.
+    const MAX_TURN_TRACES: usize = 50;
+    /// How long terminal processes remain visible before being reaped.
+    const TERMINAL_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
     /// Create an empty process table.
     pub fn new() -> Self {
         Self {
-            processes:           DashMap::new(),
-            session_index:       DashMap::new(),
-            children_index:      DashMap::new(),
-            name_registry:       DashMap::new(),
-            total_spawned:       AtomicU64::new(0),
-            total_completed:     AtomicU64::new(0),
-            total_failed:        AtomicU64::new(0),
+            processes:       DashMap::new(),
+            session_index:   DashMap::new(),
+            children_index:  DashMap::new(),
+            name_registry:   DashMap::new(),
+            total_spawned:   AtomicU64::new(0),
+            total_completed: AtomicU64::new(0),
+            total_failed:    AtomicU64::new(0),
         }
     }
 
@@ -617,12 +631,18 @@ impl ProcessTable {
         }
         // Children index: register under parent
         if let Some(parent_id) = process.parent_id {
-            self.children_index.entry(parent_id).or_default().push(agent_id);
+            self.children_index
+                .entry(parent_id)
+                .or_default()
+                .push(agent_id);
         }
         // Initialize empty children list for this process
         self.children_index.entry(agent_id).or_default();
         // Name registry (1:N)
-        self.name_registry.entry(process.manifest.name.clone()).or_default().push(agent_id);
+        self.name_registry
+            .entry(process.manifest.name.clone())
+            .or_default()
+            .push(agent_id);
         self.total_spawned.fetch_add(1, Ordering::Relaxed);
         self.processes.insert(agent_id, process);
     }
@@ -661,7 +681,10 @@ impl ProcessTable {
             ProcessState::Cancelled => {
                 entry.finished_at = Some(Timestamp::now());
             }
-            ProcessState::Running | ProcessState::Idle | ProcessState::Waiting | ProcessState::Paused => {
+            ProcessState::Running
+            | ProcessState::Idle
+            | ProcessState::Waiting
+            | ProcessState::Paused => {
                 // Non-terminal states: do not set finished_at.
             }
         }
@@ -706,11 +729,13 @@ impl ProcessTable {
 
     /// List all children of a given parent (O(1) lookup via children_index).
     pub fn children_of(&self, parent_id: AgentId) -> Vec<ProcessInfo> {
-        let child_ids = self.children_index
+        let child_ids = self
+            .children_index
             .get(&parent_id)
             .map(|ids| ids.clone())
             .unwrap_or_default();
-        child_ids.iter()
+        child_ids
+            .iter()
             .filter_map(|id| self.processes.get(id).map(|p| ProcessInfo::from(p.value())))
             .collect()
     }
@@ -722,9 +747,6 @@ impl ProcessTable {
             .map(|p| ProcessInfo::from(p.value()))
             .collect()
     }
-
-    /// Maximum number of turn traces retained per process.
-    const MAX_TURN_TRACES: usize = 50;
 
     /// Push a turn trace onto a process, evicting the oldest if at capacity.
     pub fn push_turn_trace(&self, id: AgentId, trace: crate::agent_turn::TurnTrace) {
@@ -760,7 +782,8 @@ impl ProcessTable {
         self.get(*agent_id)
     }
 
-    /// Find agent processes by manifest name (returns the most recently inserted).
+    /// Find agent processes by manifest name (returns the most recently
+    /// inserted).
     pub fn find_by_name(&self, name: &str) -> Option<AgentProcess> {
         let ids = self.name_registry.get(name)?;
         ids.last().and_then(|id| self.get(*id))
@@ -797,7 +820,8 @@ impl ProcessTable {
     pub async fn process_stats(&self, id: AgentId) -> Option<ProcessStats> {
         let process = self.get(id)?;
         let metrics_snapshot = process.metrics.snapshot().await;
-        let children: Vec<AgentId> = self.children_index
+        let children: Vec<AgentId> = self
+            .children_index
             .get(&id)
             .map(|ids| ids.clone())
             .unwrap_or_default();
@@ -808,20 +832,20 @@ impl ProcessTable {
             .unwrap_or(0);
 
         Some(ProcessStats {
-            agent_id:          process.agent_id,
-            session_id:        process.session_id,
-            manifest_name:     process.manifest.name,
-            state:             process.state,
-            parent_id:         process.parent_id,
+            agent_id: process.agent_id,
+            session_id: process.session_id,
+            manifest_name: process.manifest.name,
+            state: process.state,
+            parent_id: process.parent_id,
             children,
-            created_at:        process.created_at,
-            finished_at:       process.finished_at,
+            created_at: process.created_at,
+            finished_at: process.finished_at,
             uptime_ms,
             messages_received: metrics_snapshot.messages_received,
-            llm_calls:         metrics_snapshot.llm_calls,
-            tool_calls:        metrics_snapshot.tool_calls,
-            tokens_consumed:   metrics_snapshot.tokens_consumed,
-            last_activity:     metrics_snapshot.last_activity,
+            llm_calls: metrics_snapshot.llm_calls,
+            tool_calls: metrics_snapshot.tool_calls,
+            tokens_consumed: metrics_snapshot.tokens_consumed,
+            last_activity: metrics_snapshot.last_activity,
         })
     }
 
@@ -841,9 +865,6 @@ impl ProcessTable {
         }
         stats
     }
-
-    /// How long terminal processes remain visible before being reaped.
-    const TERMINAL_TTL: std::time::Duration = std::time::Duration::from_secs(60);
 
     /// Remove terminal processes whose `finished_at` is older than `max_age`.
     ///
@@ -880,19 +901,13 @@ impl ProcessTable {
     }
 
     /// Get the total number of processes ever spawned.
-    pub fn total_spawned(&self) -> u64 {
-        self.total_spawned.load(Ordering::Relaxed)
-    }
+    pub fn total_spawned(&self) -> u64 { self.total_spawned.load(Ordering::Relaxed) }
 
     /// Get the total number of processes that completed successfully.
-    pub fn total_completed(&self) -> u64 {
-        self.total_completed.load(Ordering::Relaxed)
-    }
+    pub fn total_completed(&self) -> u64 { self.total_completed.load(Ordering::Relaxed) }
 
     /// Get the total number of processes that failed.
-    pub fn total_failed(&self) -> u64 {
-        self.total_failed.load(Ordering::Relaxed)
-    }
+    pub fn total_failed(&self) -> u64 { self.total_failed.load(Ordering::Relaxed) }
 
     /// Sum of tokens consumed across all currently tracked processes.
     pub fn total_tokens_consumed(&self) -> u64 {
@@ -901,7 +916,6 @@ impl ProcessTable {
             .map(|p| p.metrics.tokens_consumed.load(Ordering::Relaxed))
             .sum()
     }
-
 }
 
 impl Default for ProcessTable {
@@ -916,20 +930,20 @@ mod tests {
     /// Helper to create a test manifest.
     fn test_manifest(name: &str) -> AgentManifest {
         AgentManifest {
-            name:           name.to_string(),
-        role:           None,
-            description:    format!("Test agent: {name}"),
-            model:          Some("test-model".to_string()),
-            system_prompt:  "You are a test agent.".to_string(),
-            soul_prompt:    None,
-            provider_hint:  None,
-            max_iterations: Some(10),
-            tools:          vec!["read_file".to_string()],
-            max_children:        None,
-            max_context_tokens:  None,
-            priority:            Priority::default(),
-            metadata:            serde_json::Value::Null,
-            sandbox:             None,
+            name:               name.to_string(),
+            role:               None,
+            description:        format!("Test agent: {name}"),
+            model:              Some("test-model".to_string()),
+            system_prompt:      "You are a test agent.".to_string(),
+            soul_prompt:        None,
+            provider_hint:      None,
+            max_iterations:     Some(10),
+            tools:              vec!["read_file".to_string()],
+            max_children:       None,
+            max_context_tokens: None,
+            priority:           Priority::default(),
+            metadata:           serde_json::Value::Null,
+            sandbox:            None,
         }
     }
 
@@ -937,24 +951,25 @@ mod tests {
         test_process_with_session(name, parent_id, "test-session")
     }
 
-    /// Helper to create a test process simulating a subagent (no channel session).
+    /// Helper to create a test process simulating a subagent (no channel
+    /// session).
     fn test_subagent(name: &str, parent_id: AgentId) -> AgentProcess {
         let agent_id = AgentId::new();
         AgentProcess {
             agent_id,
-            parent_id:          Some(parent_id),
-            session_id:         SessionId::new(format!("agent:{}", agent_id)),
+            parent_id: Some(parent_id),
+            session_id: SessionId::new(format!("agent:{}", agent_id)),
             channel_session_id: None,
-            manifest:           test_manifest(name),
-            principal:          Principal::user("test-user"),
-            env:                AgentEnv::default(),
-            state:              ProcessState::Running,
-            created_at:         Timestamp::now(),
-            finished_at:        None,
-            result:             None,
-            created_files:      vec![],
-            metrics:            Arc::new(RuntimeMetrics::new()),
-            turn_traces:        vec![],
+            manifest: test_manifest(name),
+            principal: Principal::user("test-user"),
+            env: AgentEnv::default(),
+            state: ProcessState::Running,
+            created_at: Timestamp::now(),
+            finished_at: None,
+            result: None,
+            created_files: vec![],
+            metrics: Arc::new(RuntimeMetrics::new()),
+            turn_traces: vec![],
         }
     }
 
@@ -968,18 +983,18 @@ mod tests {
         AgentProcess {
             agent_id,
             parent_id,
-            session_id:         SessionId::new(format!("agent:{}", agent_id)),
+            session_id: SessionId::new(format!("agent:{}", agent_id)),
             channel_session_id: Some(SessionId::new(channel_session)),
-            manifest:           test_manifest(name),
-            principal:          Principal::user("test-user"),
-            env:                AgentEnv::default(),
-            state:              ProcessState::Running,
-            created_at:         Timestamp::now(),
-            finished_at:        None,
-            result:             None,
-            created_files:      vec![],
-            metrics:            Arc::new(RuntimeMetrics::new()),
-            turn_traces:        vec![],
+            manifest: test_manifest(name),
+            principal: Principal::user("test-user"),
+            env: AgentEnv::default(),
+            state: ProcessState::Running,
+            created_at: Timestamp::now(),
+            finished_at: None,
+            result: None,
+            created_files: vec![],
+            metrics: Arc::new(RuntimeMetrics::new()),
+            turn_traces: vec![],
         }
     }
 
@@ -1672,8 +1687,14 @@ system_prompt: "Hello"
         table.insert(p);
 
         // Repeated lookups by channel session always return the same agent.
-        assert_eq!(table.find_by_session(&channel_sid).unwrap().agent_id, agent_id);
-        assert_eq!(table.find_by_session(&channel_sid).unwrap().agent_id, agent_id);
+        assert_eq!(
+            table.find_by_session(&channel_sid).unwrap().agent_id,
+            agent_id
+        );
+        assert_eq!(
+            table.find_by_session(&channel_sid).unwrap().agent_id,
+            agent_id
+        );
 
         // A different session returns None (no agent bound to it).
         let other_session = SessionId::new("session-2");
@@ -1752,7 +1773,10 @@ system_prompt: "Hello"
         // The subagent's own session is NOT in session_index.
         assert!(table.find_by_session(&child_session).is_none());
         // The parent's channel session still routes to the parent.
-        assert_eq!(table.find_by_session(&channel_sid).unwrap().agent_id, parent_id);
+        assert_eq!(
+            table.find_by_session(&channel_sid).unwrap().agent_id,
+            parent_id
+        );
         // But the subagent is reachable via get().
         assert!(table.get(child_id).is_some());
         assert_eq!(table.get(child_id).unwrap().parent_id, Some(parent_id));
@@ -1773,7 +1797,10 @@ system_prompt: "Hello"
 
         // Remove subagent — parent's channel session binding must survive.
         table.remove(child_id);
-        assert_eq!(table.find_by_session(&channel_sid).unwrap().agent_id, parent_id);
+        assert_eq!(
+            table.find_by_session(&channel_sid).unwrap().agent_id,
+            parent_id
+        );
     }
 
     #[test]
@@ -1903,10 +1930,7 @@ system_prompt: "Hello"
         // Manually backdate finished_at to ensure reaping works.
         {
             let mut entry = table.processes.get_mut(&id).unwrap();
-            let past = Timestamp::from_second(
-                Timestamp::now().as_second() - 120,
-            )
-            .unwrap();
+            let past = Timestamp::from_second(Timestamp::now().as_second() - 120).unwrap();
             entry.finished_at = Some(past);
         }
 

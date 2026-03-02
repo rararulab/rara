@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -62,7 +62,6 @@ pub enum EventPriority {
 /// reply channel for the kernel event loop to respond on.
 pub enum Syscall {
     // -- Process queries --
-
     /// Query the status of a target agent process.
     QueryStatus {
         target:   AgentId,
@@ -76,7 +75,6 @@ pub enum Syscall {
     },
 
     // -- Memory --
-
     /// Store a value in the agent's private memory namespace.
     MemStore {
         agent_id:   AgentId,
@@ -114,7 +112,6 @@ pub enum Syscall {
     },
 
     // -- Pipe --
-
     /// Create an anonymous pipe between two agents.
     CreatePipe {
         owner:    AgentId,
@@ -137,7 +134,6 @@ pub enum Syscall {
     },
 
     // -- Guard --
-
     /// Check whether a tool requires approval before execution.
     RequiresApproval {
         tool_name: String,
@@ -162,7 +158,6 @@ pub enum Syscall {
     },
 
     // -- Context queries (used by agent_turn) --
-
     /// Get the manifest for an agent process.
     GetManifest {
         agent_id: AgentId,
@@ -186,7 +181,6 @@ pub enum Syscall {
     },
 
     // -- Event publishing --
-
     /// Publish an event to the kernel event bus.
     PublishEvent {
         agent_id:   AgentId,
@@ -202,7 +196,8 @@ pub enum Syscall {
         result:      serde_json::Value,
         success:     bool,
         duration_ms: u64,
-    },}
+    },
+}
 
 impl Syscall {
     /// Extract the primary `AgentId` from this syscall variant.
@@ -229,7 +224,8 @@ impl Syscall {
             Self::GetToolRegistry { .. } => "get_tool_registry",
             Self::ResolveProvider { .. } => "resolve_provider",
             Self::PublishEvent { .. } => "publish_event",
-            Self::RecordToolCall { .. } => "record_tool_call",        }
+            Self::RecordToolCall { .. } => "record_tool_call",
+        }
     }
 
     pub fn agent_id(&self) -> AgentId {
@@ -247,13 +243,10 @@ impl Syscall {
             | Self::GetManifest { agent_id, .. }
             | Self::ResolveProvider { agent_id, .. }
             | Self::GetToolRegistry { agent_id, .. } => *agent_id,
-            Self::CreatePipe { owner, .. }
-            | Self::CreateNamedPipe { owner, .. } => *owner,
+            Self::CreatePipe { owner, .. } | Self::CreateNamedPipe { owner, .. } => *owner,
             Self::ConnectPipe { connector, .. } => *connector,
             // Agent-less syscalls — route to a fixed nil shard.
-            Self::RequiresApproval { .. } => {
-                AgentId(uuid::Uuid::nil())
-            }
+            Self::RequiresApproval { .. } => AgentId(uuid::Uuid::nil()),
         }
     }
 }
@@ -273,14 +266,24 @@ impl std::fmt::Debug for Syscall {
             Self::MemRecall { agent_id, key, .. } => {
                 write!(f, "Syscall::MemRecall(agent={}, key={})", agent_id, key)
             }
-            Self::SharedStore { agent_id, scope, key, .. } => {
+            Self::SharedStore {
+                agent_id,
+                scope,
+                key,
+                ..
+            } => {
                 write!(
                     f,
                     "Syscall::SharedStore(agent={}, scope={:?}, key={})",
                     agent_id, scope, key
                 )
             }
-            Self::SharedRecall { agent_id, scope, key, .. } => {
+            Self::SharedRecall {
+                agent_id,
+                scope,
+                key,
+                ..
+            } => {
                 write!(
                     f,
                     "Syscall::SharedRecall(agent={}, scope={:?}, key={})",
@@ -297,7 +300,9 @@ impl std::fmt::Debug for Syscall {
                     owner, name
                 )
             }
-            Self::ConnectPipe { connector, name, .. } => {
+            Self::ConnectPipe {
+                connector, name, ..
+            } => {
                 write!(
                     f,
                     "Syscall::ConnectPipe(connector={}, name={})",
@@ -307,18 +312,25 @@ impl std::fmt::Debug for Syscall {
             Self::RequiresApproval { tool_name, .. } => {
                 write!(f, "Syscall::RequiresApproval(tool={})", tool_name)
             }
-            Self::RequestApproval { agent_id, tool_name, .. } => {
+            Self::RequestApproval {
+                agent_id,
+                tool_name,
+                ..
+            } => {
                 write!(
                     f,
                     "Syscall::RequestApproval(agent={}, tool={})",
                     agent_id, tool_name
                 )
             }
-            Self::CheckGuardBatch { agent_id, checks, .. } => {
+            Self::CheckGuardBatch {
+                agent_id, checks, ..
+            } => {
                 write!(
                     f,
                     "Syscall::CheckGuardBatch(agent={}, checks={})",
-                    agent_id, checks.len()
+                    agent_id,
+                    checks.len()
                 )
             }
             Self::GetManifest { agent_id, .. } => {
@@ -330,20 +342,30 @@ impl std::fmt::Debug for Syscall {
             Self::ResolveProvider { agent_id, .. } => {
                 write!(f, "Syscall::ResolveProvider(agent={})", agent_id)
             }
-            Self::PublishEvent { agent_id, event_type, .. } => {
+            Self::PublishEvent {
+                agent_id,
+                event_type,
+                ..
+            } => {
                 write!(
                     f,
                     "Syscall::PublishEvent(agent={}, type={})",
                     agent_id, event_type
                 )
             }
-            Self::RecordToolCall { agent_id, tool_name, success, .. } => {
+            Self::RecordToolCall {
+                agent_id,
+                tool_name,
+                success,
+                ..
+            } => {
                 write!(
                     f,
                     "Syscall::RecordToolCall(agent={}, tool={}, success={})",
                     agent_id, tool_name, success
                 )
-            }        }
+            }
+        }
     }
 }
 
@@ -358,12 +380,10 @@ impl std::fmt::Debug for Syscall {
 /// and processed by the single `Kernel::run()` event loop.
 pub enum KernelEvent {
     // === Input: from external sources ===
-
     /// A new user message from a channel adapter (via IngressPipeline).
     UserMessage(InboundMessage),
 
     // === Process control ===
-
     /// Request to spawn a new agent process.
     ///
     /// The kernel generates a fresh `agent:{id}` session for the new process.
@@ -378,13 +398,9 @@ pub enum KernelEvent {
     },
 
     /// Send a control signal to an agent process.
-    SendSignal {
-        target: AgentId,
-        signal: Signal,
-    },
+    SendSignal { target: AgentId, signal: Signal },
 
     // === Internal callbacks: from async task completion ===
-
     /// An LLM turn completed (success or failure).
     TurnCompleted {
         agent_id:    AgentId,
@@ -402,19 +418,16 @@ pub enum KernelEvent {
     },
 
     // === Output ===
-
     /// Deliver an outbound envelope to egress.
     Deliver(OutboundEnvelope),
 
     // === Syscall: ProcessHandle → kernel event loop ===
-
     /// A syscall from a ProcessHandle. All handle interactions go through
     /// here so that the kernel event loop is the single owner of mutable
     /// state.
     Syscall(Syscall),
 
     // === System ===
-
     /// Timer event (reserved for future use).
     Timer {
         name:    String,
@@ -472,9 +485,9 @@ impl KernelEvent {
             | Self::ChildCompleted { .. }
             | Self::Deliver(_)
             | Self::Syscall(_) => EventPriority::Normal,
-            Self::UserMessage(_)
-            | Self::SpawnAgent { .. }
-            | Self::Timer { .. } => EventPriority::Low,
+            Self::UserMessage(_) | Self::SpawnAgent { .. } | Self::Timer { .. } => {
+                EventPriority::Low
+            }
         }
     }
 }
@@ -492,8 +505,16 @@ impl std::fmt::Debug for KernelEvent {
             Self::TurnCompleted { agent_id, .. } => {
                 write!(f, "TurnCompleted(agent={})", agent_id)
             }
-            Self::ChildCompleted { parent_id, child_id, .. } => {
-                write!(f, "ChildCompleted(parent={}, child={})", parent_id, child_id)
+            Self::ChildCompleted {
+                parent_id,
+                child_id,
+                ..
+            } => {
+                write!(
+                    f,
+                    "ChildCompleted(parent={}, child={})",
+                    parent_id, child_id
+                )
             }
             Self::Deliver(env) => write!(f, "Deliver(session={})", env.session_id),
             Self::Syscall(syscall) => write!(f, "{:?}", syscall),
@@ -577,7 +598,12 @@ impl PersistableEvent {
     ///
     /// For `SpawnAgent`, a fresh oneshot channel is created. The caller
     /// receives the `Receiver` to await the spawn result.
-    pub fn into_kernel_event(self) -> (KernelEvent, Option<oneshot::Receiver<crate::error::Result<AgentId>>>) {
+    pub fn into_kernel_event(
+        self,
+    ) -> (
+        KernelEvent,
+        Option<oneshot::Receiver<crate::error::Result<AgentId>>>,
+    ) {
         match self {
             Self::UserMessage(msg) => (KernelEvent::UserMessage(msg), None),
             Self::SpawnAgent {
@@ -596,20 +622,21 @@ impl PersistableEvent {
                 };
                 (event, Some(rx))
             }
-            Self::Timer { name, payload } => {
-                (KernelEvent::Timer { name, payload }, None)
-            }
+            Self::Timer { name, payload } => (KernelEvent::Timer { name, payload }, None),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::channel::types::{ChannelType, MessageContent};
-    use crate::io::types::{ChannelSource, MessageId};
-    use crate::process::principal::UserId;
     use std::collections::HashMap;
+
+    use super::*;
+    use crate::{
+        channel::types::{ChannelType, MessageContent},
+        io::types::{ChannelSource, MessageId},
+        process::principal::UserId,
+    };
 
     fn test_inbound(text: &str) -> InboundMessage {
         InboundMessage {
@@ -680,7 +707,9 @@ mod tests {
         let (kernel_event, rx) = restored.into_kernel_event();
         assert!(rx.is_some()); // fresh oneshot created
         match kernel_event {
-            KernelEvent::SpawnAgent { manifest: m, input, .. } => {
+            KernelEvent::SpawnAgent {
+                manifest: m, input, ..
+            } => {
                 assert_eq!(m.name, "test-agent");
                 assert_eq!(input, "do something");
             }
@@ -712,11 +741,13 @@ mod tests {
     #[test]
     fn transient_events_are_not_persistable() {
         // SendSignal
-        assert!(PersistableEvent::from_kernel_event(&KernelEvent::SendSignal {
-            target: AgentId::new(),
-            signal: Signal::Kill,
-        })
-        .is_none());
+        assert!(
+            PersistableEvent::from_kernel_event(&KernelEvent::SendSignal {
+                target: AgentId::new(),
+                signal: Signal::Kill,
+            })
+            .is_none()
+        );
 
         // Shutdown
         assert!(PersistableEvent::from_kernel_event(&KernelEvent::Shutdown).is_none());
@@ -734,7 +765,7 @@ mod tests {
     fn agent_id_for_spawn_agent_is_none() {
         let (tx, _rx) = oneshot::channel();
         let event = KernelEvent::SpawnAgent {
-            manifest: AgentManifest {
+            manifest:  AgentManifest {
                 name:               "test".to_string(),
                 role:               None,
                 description:        "test".to_string(),
@@ -788,24 +819,24 @@ mod tests {
         let event = KernelEvent::TurnCompleted {
             agent_id,
             session_id: SessionId::new("s1"),
-            result:     Ok(crate::agent_turn::AgentTurnResult {
+            result: Ok(crate::agent_turn::AgentTurnResult {
                 text:       "done".to_string(),
                 iterations: 1,
                 tool_calls: 0,
                 model:      "test".to_string(),
                 trace:      crate::agent_turn::TurnTrace {
-                    duration_ms: 0,
-                    model: "test".to_string(),
-                    input_text: None,
-                    iterations: vec![],
-                    final_text_len: 4,
+                    duration_ms:      0,
+                    model:            "test".to_string(),
+                    input_text:       None,
+                    iterations:       vec![],
+                    final_text_len:   4,
                     total_tool_calls: 0,
-                    success: true,
-                    error: None,
+                    success:          true,
+                    error:            None,
                 },
             }),
             in_reply_to: MessageId::new(),
-            user:        UserId("u1".to_string()),
+            user: UserId("u1".to_string()),
         };
         assert_eq!(event.agent_id(), Some(agent_id));
     }
@@ -816,7 +847,7 @@ mod tests {
         let event = KernelEvent::ChildCompleted {
             parent_id,
             child_id: AgentId::new(),
-            result:   crate::process::AgentResult {
+            result: crate::process::AgentResult {
                 output:     "done".to_string(),
                 iterations: 1,
                 tool_calls: 0,
@@ -848,7 +879,10 @@ mod tests {
     fn syscall_agent_id_for_query_status() {
         let target = AgentId::new();
         let (tx, _rx) = oneshot::channel();
-        let syscall = Syscall::QueryStatus { target, reply_tx: tx };
+        let syscall = Syscall::QueryStatus {
+            target,
+            reply_tx: tx,
+        };
         assert_eq!(syscall.agent_id(), target);
     }
 
@@ -859,10 +893,10 @@ mod tests {
         let syscall = Syscall::MemStore {
             agent_id,
             session_id: SessionId::new("s1"),
-            principal:  Principal::user("test"),
-            key:        "k".to_string(),
-            value:      serde_json::Value::Null,
-            reply_tx:   tx,
+            principal: Principal::user("test"),
+            key: "k".to_string(),
+            value: serde_json::Value::Null,
+            reply_tx: tx,
         };
         assert_eq!(syscall.agent_id(), agent_id);
     }
@@ -881,7 +915,10 @@ mod tests {
     fn syscall_agent_id_for_get_tool_registry() {
         let agent_id = AgentId::new();
         let (tx, _rx) = oneshot::channel();
-        let syscall = Syscall::GetToolRegistry { agent_id, reply_tx: tx };
+        let syscall = Syscall::GetToolRegistry {
+            agent_id,
+            reply_tx: tx,
+        };
         assert_eq!(syscall.agent_id(), agent_id);
     }
 
@@ -890,7 +927,11 @@ mod tests {
         let owner = AgentId::new();
         let target = AgentId::new();
         let (tx, _rx) = oneshot::channel();
-        let syscall = Syscall::CreatePipe { owner, target, reply_tx: tx };
+        let syscall = Syscall::CreatePipe {
+            owner,
+            target,
+            reply_tx: tx,
+        };
         assert_eq!(syscall.agent_id(), owner);
     }
 

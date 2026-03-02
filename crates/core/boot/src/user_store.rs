@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,10 +15,12 @@
 //! PostgreSQL-backed [`UserStore`] implementation and boot-time user
 //! initialization.
 
-use argon2::{Argon2, PasswordHasher, password_hash::{SaltString, rand_core::OsRng}};
+use argon2::{
+    Argon2, PasswordHasher,
+    password_hash::{SaltString, rand_core::OsRng},
+};
 use async_trait::async_trait;
-use rand::Rng;
-use rand::distr::Alphanumeric;
+use rand::{Rng, distr::Alphanumeric};
 use rara_kernel::{
     error::{KernelError, Result},
     process::{
@@ -320,18 +322,15 @@ pub async fn ensure_default_users(
 }
 
 /// 确保 root 用户有密码。如果没有，生成一个随机密码并打印。
-async fn ensure_root_password(
-    pool: &PgPool,
-) -> std::result::Result<(), crate::error::BootError> {
-    let hash: Option<String> = sqlx::query_scalar(
-        "SELECT password_hash FROM kernel_users WHERE name = 'root'",
-    )
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| crate::error::BootError::UserStore {
-        message: e.to_string(),
-    })?
-    .flatten();
+async fn ensure_root_password(pool: &PgPool) -> std::result::Result<(), crate::error::BootError> {
+    let hash: Option<String> =
+        sqlx::query_scalar("SELECT password_hash FROM kernel_users WHERE name = 'root'")
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| crate::error::BootError::UserStore {
+                message: e.to_string(),
+            })?
+            .flatten();
 
     if hash.is_some() {
         return Ok(());
@@ -362,11 +361,11 @@ async fn ensure_root_password(
             message: e.to_string(),
         })?;
 
-    println!("\u{256c}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2557}");
-    println!("\u{2551}  Root credentials (SAVE THESE!)         \u{2551}");
-    println!("\u{2551}  Username: root                         \u{2551}");
-    println!("\u{2551}  Password: {password:<28}  \u{2551}");
-    println!("\u{255a}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{255d}");
+    println!("╬══════════════════════════════════════════╗");
+    println!("║  Root credentials (SAVE THESE!)         ║");
+    println!("║  Username: root                         ║");
+    println!("║  Password: {password:<28}  ║");
+    println!("╚══════════════════════════════════════════╝");
 
     info!("kernel: root password initialized");
     Ok(())

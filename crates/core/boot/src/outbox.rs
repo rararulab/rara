@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -94,10 +94,9 @@ impl OutboxStore for PgOutboxStore {
         let target = serde_json::to_value(&envelope).map_err(|e| BusError::Internal {
             message: format!("outbox serialize envelope: {e}"),
         })?;
-        let payload =
-            serde_json::to_value(&envelope.payload).map_err(|e| BusError::Internal {
-                message: format!("outbox serialize payload: {e}"),
-            })?;
+        let payload = serde_json::to_value(&envelope.payload).map_err(|e| BusError::Internal {
+            message: format!("outbox serialize payload: {e}"),
+        })?;
         let created_at = jiff_to_chrono(envelope.timestamp);
 
         sqlx::query(
@@ -120,11 +119,8 @@ impl OutboxStore for PgOutboxStore {
 
     async fn drain_pending(&self, max: usize) -> Vec<OutboundEnvelope> {
         let rows = sqlx::query_as::<_, OutboxRow>(
-            "SELECT id, channel_type, target, payload, status, created_at, delivered_at \
-             FROM kernel_outbox \
-             WHERE status = 0 \
-             ORDER BY created_at ASC \
-             LIMIT $1",
+            "SELECT id, channel_type, target, payload, status, created_at, delivered_at FROM \
+             kernel_outbox WHERE status = 0 ORDER BY created_at ASC LIMIT $1",
         )
         .bind(max as i64)
         .fetch_all(&self.pool)

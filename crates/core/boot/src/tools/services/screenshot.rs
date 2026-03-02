@@ -14,8 +14,7 @@
 
 //! Layer 2 service tool for capturing web page screenshots via Playwright.
 
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 use rara_domain_shared::{
@@ -25,8 +24,8 @@ use rara_domain_shared::{
     },
     settings::{SettingsProvider, keys},
 };
-use serde_json::json;
 use rara_kernel::tool::AgentTool;
+use serde_json::json;
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -157,7 +156,10 @@ impl AgentTool for ScreenshotTool {
 
         // Send to Telegram if requested.
         if send {
-            let chat_id: Option<i64> = self.settings.get(keys::TELEGRAM_CHAT_ID).await
+            let chat_id: Option<i64> = self
+                .settings
+                .get(keys::TELEGRAM_CHAT_ID)
+                .await
                 .and_then(|v| v.parse().ok());
 
             let caption_text = caption.unwrap_or_else(|| format!("Screenshot: {url}"));

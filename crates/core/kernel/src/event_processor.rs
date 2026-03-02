@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,19 +19,18 @@
 //! handlers.
 //!
 //! The sharded event loop spawns N+1 processors:
-//! - 1 **global processor** for UserMessage, SpawnAgent, Timer, Shutdown, Deliver
-//! - N **shard processors** for agent-scoped events (Syscall, TurnCompleted, etc.)
+//! - 1 **global processor** for UserMessage, SpawnAgent, Timer, Shutdown,
+//!   Deliver
+//! - N **shard processors** for agent-scoped events (Syscall, TurnCompleted,
+//!   etc.)
 
 use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
-use tracing::{info, info_span, warn, Instrument};
+use tracing::{Instrument, info, info_span, warn};
 
 use crate::{
-    event_loop::RuntimeTable,
-    kernel::Kernel,
-    shard_queue::ShardQueue,
-    unified_event::KernelEvent,
+    event_loop::RuntimeTable, kernel::Kernel, shard_queue::ShardQueue, unified_event::KernelEvent,
 };
 
 /// A single event processor that drains and processes events from one
@@ -41,7 +40,7 @@ use crate::{
 /// across different agent shards.
 pub(crate) struct EventProcessor {
     /// Processor identifier (0 = global, 1..=N = shard processors).
-    pub id: usize,
+    pub id:    usize,
     /// The shard queue this processor drains from.
     pub queue: Arc<ShardQueue>,
 }
@@ -51,12 +50,7 @@ impl EventProcessor {
     ///
     /// Drains events from the shard queue in batches of up to 32 and
     /// dispatches each to `kernel.handle_event()`.
-    pub async fn run(
-        &self,
-        kernel: &Kernel,
-        runtimes: &RuntimeTable,
-        shutdown: CancellationToken,
-    ) {
+    pub async fn run(&self, kernel: &Kernel, runtimes: &RuntimeTable, shutdown: CancellationToken) {
         info!(processor_id = self.id, "event processor started");
 
         loop {
@@ -107,12 +101,14 @@ impl EventProcessor {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::io::types::InboundMessage;
-    use crate::process::{SessionId, principal::UserId};
-    use crate::channel::types::{ChannelType, MessageContent};
-    use crate::io::types::{ChannelSource, MessageId};
     use std::collections::HashMap;
+
+    use super::*;
+    use crate::{
+        channel::types::{ChannelType, MessageContent},
+        io::types::{ChannelSource, InboundMessage, MessageId},
+        process::{SessionId, principal::UserId},
+    };
 
     fn test_inbound(text: &str) -> InboundMessage {
         InboundMessage {
@@ -137,10 +133,15 @@ mod tests {
     #[tokio::test]
     async fn test_processor_shutdown_drains_critical() {
         let queue = Arc::new(ShardQueue::new(100));
-        let _processor = EventProcessor { id: 0, queue: queue.clone() };
+        let _processor = EventProcessor {
+            id:    0,
+            queue: queue.clone(),
+        };
 
         // Push some events before starting.
-        queue.push(KernelEvent::UserMessage(test_inbound("will be dropped"))).unwrap();
+        queue
+            .push(KernelEvent::UserMessage(test_inbound("will be dropped")))
+            .unwrap();
         queue.push(KernelEvent::Shutdown).unwrap();
 
         let shutdown = CancellationToken::new();

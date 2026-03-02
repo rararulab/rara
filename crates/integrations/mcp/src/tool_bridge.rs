@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Bridge between MCP server tools and the [`rara_kernel::tool::AgentTool`] trait.
+//! Bridge between MCP server tools and the [`rara_kernel::tool::AgentTool`]
+//! trait.
 //!
 //! Each [`McpToolBridge`] wraps a single MCP tool from a connected server and
 //! implements [`AgentTool`] so it can be registered directly in a

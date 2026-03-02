@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -41,10 +41,9 @@ use std::{
     },
 };
 
+use rara_kernel::unified_event::PersistableEvent;
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
-
-use rara_kernel::unified_event::PersistableEvent;
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -290,10 +289,7 @@ impl WalQueue {
             completed.clear();
         }
 
-        tracing::debug!(
-            kept = kept_count,
-            "WAL truncated"
-        );
+        tracing::debug!(kept = kept_count, "WAL truncated");
 
         Ok(())
     }
@@ -304,11 +300,7 @@ impl WalQueue {
 
 impl std::fmt::Debug for WalQueue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let completed_count = self
-            .completed
-            .lock()
-            .map(|c| c.len())
-            .unwrap_or(0);
+        let completed_count = self.completed.lock().map(|c| c.len()).unwrap_or(0);
         f.debug_struct("WalQueue")
             .field("path", &self.path)
             .field("next_id", &self.next_id.load(Ordering::Relaxed))
@@ -320,13 +312,15 @@ impl std::fmt::Debug for WalQueue {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::HashMap;
+
     use rara_kernel::{
         channel::types::{ChannelType, MessageContent},
         io::types::{ChannelSource, InboundMessage, MessageId},
         process::{SessionId, principal::UserId},
     };
-    use std::collections::HashMap;
+
+    use super::*;
 
     fn test_persistable_event(text: &str) -> PersistableEvent {
         PersistableEvent::UserMessage(InboundMessage {

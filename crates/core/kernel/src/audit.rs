@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -75,9 +75,15 @@ pub enum AuditEventType {
         duration_ms: u64,
     },
     /// A memory operation was performed.
-    MemoryAccess { operation: MemoryOp, key: String },
+    MemoryAccess {
+        operation: MemoryOp,
+        key:       String,
+    },
     /// A signal was sent to another process.
-    SignalSent { target_id: AgentId, signal: String },
+    SignalSent {
+        target_id: AgentId,
+        signal:    String,
+    },
 }
 
 /// Memory operation type.
@@ -104,7 +110,8 @@ pub struct AuditFilter {
     pub agent_id:   Option<AgentId>,
     /// Only return events from this user.
     pub user_id:    Option<UserId>,
-    /// Only return events matching this event type name (e.g. "ProcessSpawned").
+    /// Only return events matching this event type name (e.g.
+    /// "ProcessSpawned").
     pub event_type: Option<String>,
     /// Only return events after this timestamp.
     pub since:      Option<Timestamp>,
@@ -239,7 +246,6 @@ pub fn record_async(audit_log: &Arc<dyn AuditLog>, event: AuditEvent) {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // ToolCallRecorder — dedicated tool call audit trail
 // ---------------------------------------------------------------------------
@@ -290,12 +296,12 @@ mod tests {
 
     fn make_event(agent_id: AgentId, user: &str, event_type: AuditEventType) -> AuditEvent {
         AuditEvent {
-            timestamp:  Timestamp::now(),
+            timestamp: Timestamp::now(),
             agent_id,
             session_id: SessionId::new("test-session"),
-            user_id:    UserId(user.to_string()),
+            user_id: UserId(user.to_string()),
             event_type,
-            details:    serde_json::Value::Null,
+            details: serde_json::Value::Null,
         }
     }
 
@@ -361,7 +367,7 @@ mod tests {
         let filtered = log
             .query(AuditFilter {
                 agent_id: Some(a1),
-                limit:    100,
+                limit: 100,
                 ..Default::default()
             })
             .await;
@@ -397,7 +403,7 @@ mod tests {
         let filtered = log
             .query(AuditFilter {
                 user_id: Some(UserId("alice".to_string())),
-                limit:   100,
+                limit: 100,
                 ..Default::default()
             })
             .await;
@@ -442,7 +448,7 @@ mod tests {
         let filtered = log
             .query(AuditFilter {
                 event_type: Some("ToolCall".to_string()),
-                limit:      100,
+                limit: 100,
                 ..Default::default()
             })
             .await;
@@ -559,10 +565,10 @@ mod tests {
 
         let filtered = log
             .query(AuditFilter {
-                agent_id:   Some(target_agent),
-                user_id:    Some(UserId("alice".to_string())),
+                agent_id: Some(target_agent),
+                user_id: Some(UserId("alice".to_string())),
                 event_type: Some("ToolCall".to_string()),
-                limit:      100,
+                limit: 100,
                 ..Default::default()
             })
             .await;
@@ -614,13 +620,13 @@ mod tests {
         );
         assert_eq!(
             event_type_name(&AuditEventType::ProcessCompleted {
-                result: "x".to_string()
+                result: "x".to_string(),
             }),
             "ProcessCompleted"
         );
         assert_eq!(
             event_type_name(&AuditEventType::ProcessFailed {
-                error: "x".to_string()
+                error: "x".to_string(),
             }),
             "ProcessFailed"
         );

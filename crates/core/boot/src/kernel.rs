@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -51,19 +51,19 @@ use crate::resolvers::{DefaultIdentityResolver, DefaultSessionResolver};
 pub struct BootConfig {
     // -- core kernel config --------------------------------------------------
     /// Kernel concurrency / iteration limits.
-    pub kernel_config: KernelConfig,
+    pub kernel_config:     KernelConfig,
     /// Multi-provider LLM registry.
     pub provider_registry: Arc<ProviderRegistry>,
     /// Global tool registry.
-    pub tool_registry: Arc<ToolRegistry>,
+    pub tool_registry:     Arc<ToolRegistry>,
     /// Agent registry.
-    pub agent_registry: Arc<AgentRegistry>,
+    pub agent_registry:    Arc<AgentRegistry>,
     /// User store for permission checks.
-    pub user_store: Arc<dyn UserStore>,
+    pub user_store:        Arc<dyn UserStore>,
     /// Session repository for conversation history.
-    pub session_repo: Arc<dyn SessionRepository>,
+    pub session_repo:      Arc<dyn SessionRepository>,
     /// Flat KV settings provider.
-    pub settings: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
+    pub settings:          Arc<dyn rara_domain_shared::settings::SettingsProvider>,
 
     // -- I/O capacities (optional, have sensible defaults) -------------------
     /// Per-stream broadcast capacity.
@@ -71,57 +71,65 @@ pub struct BootConfig {
 
     // -- optional overrides for resolvers / components -----------------------
     /// Identity resolver (optional — defaults to `DefaultIdentityResolver`).
-    pub identity_resolver: Option<Arc<dyn IdentityResolver>>,
+    pub identity_resolver:  Option<Arc<dyn IdentityResolver>>,
     /// Session resolver (optional — defaults to `DefaultSessionResolver`).
-    pub session_resolver:  Option<Arc<dyn SessionResolver>>,
+    pub session_resolver:   Option<Arc<dyn SessionResolver>>,
     /// Memory implementation (optional — defaults to NoopMemory).
-    pub memory:  Option<Arc<dyn rara_kernel::memory::Memory>>,
+    pub memory:             Option<Arc<dyn rara_kernel::memory::Memory>>,
     /// Event bus (optional — defaults to BroadcastEventBus).
-    pub event_bus: Option<Arc<dyn rara_kernel::event::EventBus>>,
+    pub event_bus:          Option<Arc<dyn rara_kernel::event::EventBus>>,
     /// Guard (optional — defaults to NoopGuard).
-    pub guard: Option<Arc<dyn rara_kernel::guard::Guard>>,
+    pub guard:              Option<Arc<dyn rara_kernel::guard::Guard>>,
     /// Audit log (optional — defaults to InMemoryAuditLog).
-    pub audit_log: Option<Arc<dyn AuditLog>>,
-    /// Approval manager (optional — defaults to ApprovalManager with default policy).
-    pub approval: Option<Arc<ApprovalManager>>,
-    /// Sharded event queue (optional — defaults to ShardedEventQueue with default config).
-    pub sharded_queue: Option<Arc<rara_kernel::sharded_event_queue::ShardedEventQueue>>,
+    pub audit_log:          Option<Arc<dyn AuditLog>>,
+    /// Approval manager (optional — defaults to ApprovalManager with default
+    /// policy).
+    pub approval:           Option<Arc<ApprovalManager>>,
+    /// Sharded event queue (optional — defaults to ShardedEventQueue with
+    /// default config).
+    pub sharded_queue:      Option<Arc<rara_kernel::sharded_event_queue::ShardedEventQueue>>,
     /// KV backend (optional — defaults to in-memory DashMapKv).
-    pub kv_backend: Option<Arc<dyn rara_kernel::kv::KvBackend>>,
+    pub kv_backend:         Option<Arc<dyn rara_kernel::kv::KvBackend>>,
     /// Tool call recorder (optional — defaults to NoopToolCallRecorder).
-    pub tool_call_recorder: Option<Arc<dyn rara_kernel::audit::ToolCallRecorder>>,}
+    pub tool_call_recorder: Option<Arc<dyn rara_kernel::audit::ToolCallRecorder>>,
+}
 
 impl Default for BootConfig {
     fn default() -> Self {
-        use rara_kernel::defaults::noop::{NoopSettingsProvider, NoopSessionRepository};
-        use rara_kernel::defaults::noop_user_store::NoopUserStore;
-        use rara_kernel::provider::ProviderRegistryBuilder;
+        use rara_kernel::{
+            defaults::{
+                noop::{NoopSessionRepository, NoopSettingsProvider},
+                noop_user_store::NoopUserStore,
+            },
+            provider::ProviderRegistryBuilder,
+        };
 
         Self {
-            kernel_config:     KernelConfig::default(),
-            provider_registry: Arc::new(
+            kernel_config:      KernelConfig::default(),
+            provider_registry:  Arc::new(
                 ProviderRegistryBuilder::new("openrouter", "openai/gpt-4o-mini").build(),
             ),
-            tool_registry:     Arc::new(ToolRegistry::new()),
-            agent_registry:    Arc::new(AgentRegistry::new(
+            tool_registry:      Arc::new(ToolRegistry::new()),
+            agent_registry:     Arc::new(AgentRegistry::new(
                 vec![],
                 rara_paths::data_dir().join("agents"),
             )),
-            user_store:        Arc::new(NoopUserStore) as Arc<dyn UserStore>,
-            session_repo:      Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
-            settings:          Arc::new(NoopSettingsProvider)
+            user_store:         Arc::new(NoopUserStore) as Arc<dyn UserStore>,
+            session_repo:       Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
+            settings:           Arc::new(NoopSettingsProvider)
                 as Arc<dyn rara_domain_shared::settings::SettingsProvider>,
-            stream_capacity:   64,
-            identity_resolver: None,
-            session_resolver:  None,
-            memory:            None,
-            event_bus:         None,
-            guard:             None,
-            audit_log:         None,
-            approval:          None,
-            sharded_queue:     None,
-            kv_backend:        None,
-            tool_call_recorder: None,        }
+            stream_capacity:    64,
+            identity_resolver:  None,
+            session_resolver:   None,
+            memory:             None,
+            event_bus:          None,
+            guard:              None,
+            audit_log:          None,
+            approval:           None,
+            sharded_queue:      None,
+            kv_backend:         None,
+            tool_call_recorder: None,
+        }
     }
 }
 
@@ -136,8 +144,7 @@ impl Default for BootConfig {
 /// and ingress pipeline. Call [`Kernel::register_adapter`] to add egress
 /// adapters, then [`Kernel::start`] to spawn the unified event loop.
 pub fn boot(config: BootConfig) -> Kernel {
-    let stream_hub: Arc<StreamHub> =
-        crate::stream::default_stream_hub(config.stream_capacity);
+    let stream_hub: Arc<StreamHub> = crate::stream::default_stream_hub(config.stream_capacity);
 
     // Resolvers
     let identity_resolver: Arc<dyn IdentityResolver> = config
@@ -190,7 +197,8 @@ pub fn boot(config: BootConfig) -> Kernel {
         approval,
         config.sharded_queue,
         config.kv_backend,
-        config.tool_call_recorder,    )
+        config.tool_call_recorder,
+    )
 }
 
 #[cfg(test)]
@@ -208,8 +216,8 @@ mod tests {
     fn test_boot_custom_config() {
         let config = BootConfig {
             kernel_config: KernelConfig {
-                max_concurrency:        4,
-                default_child_limit:    2,
+                max_concurrency: 4,
+                default_child_limit: 2,
                 default_max_iterations: 10,
                 memory_quota_per_agent: 1000,
                 ..Default::default()

@@ -12,20 +12,20 @@ categories.workspace = true
 description = "Application orchestration and lifecycle management for job"
 
 [dependencies]
+agentfs-sdk = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
-agentfs-sdk = { workspace = true }
 base = { workspace = true }
 common-runtime = { workspace = true }
 common-worker = { workspace = true }
 config = { workspace = true }
 object-store = { workspace = true }
 opendal = { workspace = true }
+rand.workspace = true
 rara-backend-admin = { workspace = true }
 rara-boot = { workspace = true }
 rara-channels = { workspace = true }
 rara-consul = { workspace = true }
-rand.workspace = true
 rara-domain-shared = { workspace = true }
 rara-domain-user = { workspace = true }
 rara-kernel = { workspace = true }

@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -65,14 +65,13 @@ use futures::{
     FutureExt,
     future::{BoxFuture, Shared},
 };
+use rara_keyring_store::KeyringStoreRef;
 use rmcp::model::{
     ClientCapabilities, ElicitationCapability, FormElicitationCapability, Implementation,
     InitializeRequestParams, ProtocolVersion, Tool,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-
-use rara_keyring_store::KeyringStoreRef;
 
 use crate::{
     client::RmcpClient,

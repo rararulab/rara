@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -226,9 +226,9 @@ pub struct PipeEntry {
 /// [`take_parked_reader`](Self::take_parked_reader).
 pub struct PipeRegistry {
     /// All active pipes keyed by PipeId.
-    pipes: DashMap<PipeId, PipeEntry>,
+    pipes:          DashMap<PipeId, PipeEntry>,
     /// Named pipe index: name -> PipeId.
-    named: DashMap<String, PipeId>,
+    named:          DashMap<String, PipeId>,
     /// Parked readers for named pipes (take-once via Mutex<Option>).
     parked_readers: DashMap<PipeId, Mutex<Option<PipeReader>>>,
 }
@@ -244,9 +244,7 @@ impl PipeRegistry {
     }
 
     /// Register a pipe entry.
-    pub fn register(&self, pipe_id: PipeId, entry: PipeEntry) {
-        self.pipes.insert(pipe_id, entry);
-    }
+    pub fn register(&self, pipe_id: PipeId, entry: PipeEntry) { self.pipes.insert(pipe_id, entry); }
 
     /// Register a named pipe (also adds to the pipe table).
     pub fn register_named(&self, name: String, pipe_id: PipeId, entry: PipeEntry) {
@@ -381,7 +379,10 @@ mod tests {
     async fn test_pipe_error_message() {
         let (writer, mut reader) = pipe(16);
 
-        writer.send_error("something went wrong".to_string()).await.unwrap();
+        writer
+            .send_error("something went wrong".to_string())
+            .await
+            .unwrap();
 
         let msg = reader.recv().await.unwrap();
         assert_eq!(msg, PipeMessage::Error("something went wrong".to_string()));
@@ -465,7 +466,7 @@ mod tests {
             pipe_id.clone(),
             PipeEntry {
                 owner,
-                reader:     None,
+                reader: None,
                 created_at: Timestamp::now(),
             },
         );
@@ -487,7 +488,7 @@ mod tests {
             pipe_id.clone(),
             PipeEntry {
                 owner,
-                reader:     None,
+                reader: None,
                 created_at: Timestamp::now(),
             },
         );
@@ -512,7 +513,7 @@ mod tests {
             pipe_id.clone(),
             PipeEntry {
                 owner,
-                reader:     None,
+                reader: None,
                 created_at: Timestamp::now(),
             },
         );
@@ -543,7 +544,7 @@ mod tests {
             pipe_id.clone(),
             PipeEntry {
                 owner,
-                reader:     None,
+                reader: None,
                 created_at: Timestamp::now(),
             },
         );

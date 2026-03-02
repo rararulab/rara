@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,8 +17,7 @@
 //! Each setting is stored as a separate row in `kv_table` with a
 //! `settings.` prefix (e.g. `settings.llm.provider`).
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use snafu::{ResultExt, Whatever};
 use sqlx::PgPool;
@@ -34,7 +33,8 @@ const LEGACY_KV_KEY: &str = "runtime_settings.v1";
 
 /// Service that manages flat KV settings with PostgreSQL persistence.
 ///
-/// Implements [`SettingsProvider`](rara_domain_shared::settings::SettingsProvider).
+/// Implements
+/// [`SettingsProvider`](rara_domain_shared::settings::SettingsProvider).
 #[derive(Clone)]
 pub struct SettingsSvc {
     kv:   KVStore,
@@ -85,22 +85,15 @@ impl SettingsSvc {
             .await
             .whatever_context("failed to remove legacy settings key")?;
 
-        info!(
-            count = pairs.len(),
-            "legacy settings migration complete"
-        );
+        info!(count = pairs.len(), "legacy settings migration complete");
         Ok(())
     }
 
     /// Notify subscribers after a mutation.
-    fn notify(&self) {
-        let _ = self.tx.send(());
-    }
+    fn notify(&self) { let _ = self.tx.send(()); }
 
     /// Return a `watch::Receiver<()>` for change notifications.
-    pub fn watch_receiver(&self) -> watch::Receiver<()> {
-        self.tx.subscribe()
-    }
+    pub fn watch_receiver(&self) -> watch::Receiver<()> { self.tx.subscribe() }
 }
 
 #[async_trait::async_trait]
@@ -132,13 +125,12 @@ impl rara_domain_shared::settings::SettingsProvider for SettingsSvc {
 
     async fn list(&self) -> HashMap<String, String> {
         // Query all rows with the settings prefix.
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT key, value FROM kv_table WHERE key LIKE $1",
-        )
-        .bind(format!("{PREFIX}%"))
-        .fetch_all(&self.pool)
-        .await
-        .unwrap_or_default();
+        let rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT key, value FROM kv_table WHERE key LIKE $1")
+                .bind(format!("{PREFIX}%"))
+                .fetch_all(&self.pool)
+                .await
+                .unwrap_or_default();
 
         rows.into_iter()
             .filter_map(|(k, v)| {
@@ -151,10 +143,7 @@ impl rara_domain_shared::settings::SettingsProvider for SettingsSvc {
             .collect()
     }
 
-    async fn batch_update(
-        &self,
-        patches: HashMap<String, Option<String>>,
-    ) -> anyhow::Result<()> {
+    async fn batch_update(&self, patches: HashMap<String, Option<String>>) -> anyhow::Result<()> {
         for (key, value) in &patches {
             let prefixed = format!("{PREFIX}{key}");
             match value {
@@ -176,9 +165,7 @@ impl rara_domain_shared::settings::SettingsProvider for SettingsSvc {
         Ok(())
     }
 
-    fn subscribe(&self) -> watch::Receiver<()> {
-        self.tx.subscribe()
-    }
+    fn subscribe(&self) -> watch::Receiver<()> { self.tx.subscribe() }
 }
 
 // ---------------------------------------------------------------------------
@@ -292,16 +279,10 @@ mod legacy {
             out.push(("telegram.chat_id".to_owned(), v.to_string()));
         }
         if let Some(v) = s.telegram.allowed_group_chat_id {
-            out.push((
-                "telegram.allowed_group_chat_id".to_owned(),
-                v.to_string(),
-            ));
+            out.push(("telegram.allowed_group_chat_id".to_owned(), v.to_string()));
         }
         if let Some(v) = s.telegram.notification_channel_id {
-            out.push((
-                "telegram.notification_channel_id".to_owned(),
-                v.to_string(),
-            ));
+            out.push(("telegram.notification_channel_id".to_owned(), v.to_string()));
         }
 
         // Composio settings

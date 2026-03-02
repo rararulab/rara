@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -122,7 +122,10 @@ pub async fn load_tokens(store: &dyn KeyringStore) -> Result<Option<StoredCodexT
 }
 
 /// Save Codex tokens to credential store.
-pub async fn save_tokens(store: &dyn KeyringStore, tokens: &StoredCodexTokens) -> Result<(), String> {
+pub async fn save_tokens(
+    store: &dyn KeyringStore,
+    tokens: &StoredCodexTokens,
+) -> Result<(), String> {
     let raw = serde_json::to_string(tokens).map_err(|e| e.to_string())?;
     store
         .save(CODEX_KEYRING_SERVICE, CODEX_TOKEN_ACCOUNT, &raw)
@@ -366,7 +369,10 @@ async fn handle_callback(
     axum::response::Redirect::to(&redirect_url)
 }
 
-async fn handle_callback_inner(query: &CallbackQuery, store: &dyn KeyringStore) -> Result<(), String> {
+async fn handle_callback_inner(
+    query: &CallbackQuery,
+    store: &dyn KeyringStore,
+) -> Result<(), String> {
     if let Some(ref oauth_err) = query.error {
         return Err(format!("provider returned error: {oauth_err}"));
     }

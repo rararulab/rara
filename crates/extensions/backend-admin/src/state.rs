@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -59,17 +59,14 @@ impl BackendState {
         let interview_service = crate::interview::wire_interview_service(pool.clone());
         let scheduler_service = crate::scheduler::wire_scheduler_service(pool.clone());
         let analytics_service = crate::analytics::wire_analytics_service(pool.clone());
-        let job_service =
-            crate::job::wire_job_service(pool.clone())
-                .whatever_context("Failed to initialize job service")?;
+        let job_service = crate::job::wire_job_service(pool.clone())
+            .whatever_context("Failed to initialize job service")?;
         info!("Job service initialized");
 
         // -- session service (renamed from ChatService) ----------------------
 
-        let session_service = crate::chat::service::SessionService::new(
-            session_repo,
-            settings_provider,
-        );
+        let session_service =
+            crate::chat::service::SessionService::new(session_repo, settings_provider);
         info!("Session service initialized");
 
         // -- contacts ---------------------------------------------------------
@@ -95,7 +92,8 @@ impl BackendState {
     ///
     /// Kernel-dependent routes (`agents`, `kernel`) require a reference to
     /// the running kernel.  Skill, MCP, and coding-task routes need their
-    /// respective service handles from [`RaraState`](rara_boot::state::RaraState).
+    /// respective service handles from
+    /// [`RaraState`](rara_boot::state::RaraState).
     pub fn routes(
         &self,
         kernel: &Arc<rara_kernel::Kernel>,

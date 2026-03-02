@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -60,12 +60,12 @@ fn row_to_event(row: AuditRow) -> Option<AuditEvent> {
     let event_type: AuditEventType = serde_json::from_value(tagged).ok()?;
 
     Some(AuditEvent {
-        timestamp:  chrono_to_jiff(row.timestamp),
-        agent_id:   AgentId(row.agent_id),
+        timestamp: chrono_to_jiff(row.timestamp),
+        agent_id: AgentId(row.agent_id),
         session_id: SessionId::new(row.session_id),
-        user_id:    UserId(row.user_id),
+        user_id: UserId(row.user_id),
         event_type,
-        details:    row.details,
+        details: row.details,
     })
 }
 
@@ -110,9 +110,8 @@ impl AuditLog for PgAuditLog {
             let timestamp = jiff_to_chrono(event.timestamp);
 
             if let Err(e) = sqlx::query(
-                "INSERT INTO kernel_audit_events \
-                 (timestamp, agent_id, session_id, user_id, event_type, event_data, details) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                "INSERT INTO kernel_audit_events (timestamp, agent_id, session_id, user_id, \
+                 event_type, event_data, details) VALUES ($1, $2, $3, $4, $5, $6, $7)",
             )
             .bind(timestamp)
             .bind(event.agent_id.0)
@@ -132,9 +131,8 @@ impl AuditLog for PgAuditLog {
     async fn query(&self, filter: AuditFilter) -> Vec<AuditEvent> {
         // Build dynamic query with optional WHERE clauses.
         let mut sql = String::from(
-            "SELECT id, timestamp, agent_id, session_id, user_id, \
-             event_type, event_data, details, created_at \
-             FROM kernel_audit_events WHERE 1=1",
+            "SELECT id, timestamp, agent_id, session_id, user_id, event_type, event_data, \
+             details, created_at FROM kernel_audit_events WHERE 1=1",
         );
         let mut param_idx = 0u32;
         // We'll track which params to bind later.
@@ -202,10 +200,11 @@ impl AuditLog for PgAuditLog {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rara_kernel::audit::{AuditEventType, MemoryOp};
     use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::postgres::Postgres;
+
+    use super::*;
 
     async fn setup_db() -> (PgPool, testcontainers::ContainerAsync<Postgres>) {
         let container = Postgres::default().start().await.unwrap();
@@ -223,12 +222,12 @@ mod tests {
 
     fn make_event(agent_id: AgentId, user: &str, event_type: AuditEventType) -> AuditEvent {
         AuditEvent {
-            timestamp:  jiff::Timestamp::now(),
+            timestamp: jiff::Timestamp::now(),
             agent_id,
             session_id: SessionId::new("test-session"),
-            user_id:    UserId(user.to_string()),
+            user_id: UserId(user.to_string()),
             event_type,
-            details:    serde_json::Value::Null,
+            details: serde_json::Value::Null,
         }
     }
 
@@ -315,7 +314,7 @@ mod tests {
         let filtered = log
             .query(AuditFilter {
                 agent_id: Some(a1),
-                limit:    100,
+                limit: 100,
                 ..Default::default()
             })
             .await;
@@ -357,7 +356,7 @@ mod tests {
         let filtered = log
             .query(AuditFilter {
                 user_id: Some(UserId("alice".to_string())),
-                limit:   100,
+                limit: 100,
                 ..Default::default()
             })
             .await;
@@ -412,7 +411,7 @@ mod tests {
         let filtered = log
             .query(AuditFilter {
                 event_type: Some("ToolCall".to_string()),
-                limit:      100,
+                limit: 100,
                 ..Default::default()
             })
             .await;
@@ -573,10 +572,10 @@ mod tests {
 
         let filtered = log
             .query(AuditFilter {
-                agent_id:   Some(target_agent),
-                user_id:    Some(UserId("alice".to_string())),
+                agent_id: Some(target_agent),
+                user_id: Some(UserId("alice".to_string())),
                 event_type: Some("ToolCall".to_string()),
-                limit:      100,
+                limit: 100,
                 ..Default::default()
             })
             .await;

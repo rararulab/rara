@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,12 +19,13 @@
 //! fully-configured `Kernel` with its I/O subsystem (buses, stream hub,
 //! endpoint registry, ingress pipeline).
 
+pub mod agentfs;
 pub mod audit;
-pub mod agentfs;pub mod bus;
+pub mod bus;
 pub mod coding_task;
 pub mod components;
-pub mod guard;
 pub mod error;
+pub mod guard;
 pub mod kernel;
 pub mod manifests;
 pub mod mcp;
@@ -34,7 +35,7 @@ pub mod providers;
 pub mod queue;
 pub mod resolvers;
 pub mod skills;
+pub mod state;
 pub mod stream;
 pub mod tools;
 pub mod user_store;
-pub mod state;

@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -36,7 +36,7 @@ impl WorkspaceManager {
     pub fn new(base_dir: PathBuf) -> Self { Self { base_dir } }
 
     /// Sanitize a repo URL into a directory name.
-    /// e.g. `"https://github.com/crrow/job"` → `"github.com-crrow-job"`
+    /// e.g. `"https://github.com/rararulab/rara"` → `"github.com-rararulab-rara"`
     fn repo_dir_name(repo_url: &str) -> String {
         repo_url
             .trim_end_matches('/')

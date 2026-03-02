@@ -19,6 +19,7 @@ web/dist/
 # CI / Docs
 .github/
 docs/
+!docs/book/
 *.md
 !CHANGELOG.md
 

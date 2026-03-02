@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -124,7 +124,9 @@ impl OAuthPersistor {
         };
 
         if last.as_ref() != Some(&stored) {
-            stored.save(self.inner.store_mode, &*self.inner.store).await?;
+            stored
+                .save(self.inner.store_mode, &*self.inner.store)
+                .await?;
             *last = Some(stored);
         }
 
@@ -277,11 +279,9 @@ impl StoredOAuthTokens {
                 }
             }
             OAuthCredentialsStoreMode::File => Self::load_from_file(server_name, url),
-            OAuthCredentialsStoreMode::Keyring => {
-                Self::load_from_store(server_name, url, store)
-                    .await
-                    .context("failed to read OAuth tokens from credential store")
-            }
+            OAuthCredentialsStoreMode::Keyring => Self::load_from_store(server_name, url, store)
+                .await
+                .context("failed to read OAuth tokens from credential store"),
         }
     }
 
@@ -417,11 +417,9 @@ impl StoredOAuthTokens {
                 Self::delete_from_file(server_name, url)
             }
             OAuthCredentialsStoreMode::File => Self::delete_from_file(server_name, url),
-            OAuthCredentialsStoreMode::Keyring => {
-                Self::delete_from_store(server_name, url, store)
-                    .await
-                    .context("failed to delete OAuth tokens from credential store")
-            }
+            OAuthCredentialsStoreMode::Keyring => Self::delete_from_store(server_name, url, store)
+                .await
+                .context("failed to delete OAuth tokens from credential store"),
         }
     }
 

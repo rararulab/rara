@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -35,8 +35,8 @@ use crate::{error::KernelError, io::ingress::IngressPipeline};
 ///    [`IngressPipeline`] (I/O Bus model).
 /// 2. **stop** — Graceful shutdown.
 ///
-/// Outbound delivery is handled by [`EgressAdapter`](crate::io::egress::EgressAdapter),
-/// not by this trait.
+/// Outbound delivery is handled by
+/// [`EgressAdapter`](crate::io::egress::EgressAdapter), not by this trait.
 ///
 /// # Optional UX hooks
 ///

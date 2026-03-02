@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,15 +22,14 @@
 use std::{path::PathBuf, sync::Arc};
 
 use rara_kernel::event_queue::EventQueue;
-use rara_queue::hybrid::HybridQueue;
-use rara_queue::memory::MemoryQueue;
+use rara_queue::{hybrid::HybridQueue, memory::MemoryQueue};
 
 /// Configuration for the event queue factory.
 pub struct QueueConfig {
     /// Maximum capacity across all priority tiers.
-    pub capacity: usize,
+    pub capacity:       usize,
     /// Optional WAL file path. When set, creates a HybridQueue.
-    pub wal_path: Option<PathBuf>,
+    pub wal_path:       Option<PathBuf>,
     /// Number of completed WAL entries before auto-truncation.
     /// Only relevant when `wal_path` is set.
     pub truncate_after: usize,

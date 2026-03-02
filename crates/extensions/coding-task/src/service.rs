@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -387,7 +387,10 @@ impl CodingTaskService {
             msg.push_str(&format!("\n\nError:\n{tail}"));
         }
 
-        let chat_id = self.settings.get(keys::TELEGRAM_CHAT_ID).await
+        let chat_id = self
+            .settings
+            .get(keys::TELEGRAM_CHAT_ID)
+            .await
             .and_then(|v| v.parse::<i64>().ok());
 
         let request = SendTelegramNotificationRequest {
@@ -442,11 +445,5 @@ pub fn wire(
     default_repo_url: String,
 ) -> CodingTaskService {
     let repo = Arc::new(crate::pg_repository::PgCodingTaskRepository::new(pool));
-    CodingTaskService::new(
-        repo,
-        workspace_manager,
-        notify,
-        settings,
-        default_repo_url,
-    )
+    CodingTaskService::new(repo, workspace_manager, notify, settings, default_repo_url)
 }

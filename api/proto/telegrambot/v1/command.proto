@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Crrow
+ * Copyright 2025 Rararulab
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ syntax = "proto3";
 
 package job.telegrambot.v1;
 
-option go_package = "github.com/crrow/job/pb/telegrambot/v1;telegrambotpb";
+option go_package = "github.com/rararulab/rara/pb/telegrambot/v1;telegrambotpb";
 option java_outer_classname = "TelegramBotCommandProto";
 option java_package = "com.job.api.telegrambot.v1";
 

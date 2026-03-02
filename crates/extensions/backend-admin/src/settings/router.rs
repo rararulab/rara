@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,8 +22,7 @@
 //! | PUT    | `/api/v1/settings/{*key}`  | set one                |
 //! | DELETE | `/api/v1/settings/{*key}`  | delete one             |
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use axum::{
     Json,
@@ -44,8 +43,14 @@ pub fn routes(svc: SettingsSvc) -> OpenApiRouter {
     let provider: SharedProvider = Arc::new(svc);
 
     let settings_router = axum::Router::new()
-        .route("/api/v1/settings", get(list_settings).patch(batch_update_settings))
-        .route("/api/v1/settings/{*key}", get(get_setting).put(set_setting).delete(delete_setting))
+        .route(
+            "/api/v1/settings",
+            get(list_settings).patch(batch_update_settings),
+        )
+        .route(
+            "/api/v1/settings/{*key}",
+            get(get_setting).put(set_setting).delete(delete_setting),
+        )
         .with_state(provider);
 
     OpenApiRouter::from(settings_router)
@@ -60,9 +65,7 @@ struct SetValueBody {
 
 // -- handlers ---------------------------------------------------------------
 
-async fn list_settings(
-    State(provider): State<SharedProvider>,
-) -> Json<HashMap<String, String>> {
+async fn list_settings(State(provider): State<SharedProvider>) -> Json<HashMap<String, String>> {
     Json(provider.list().await)
 }
 

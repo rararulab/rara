@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -69,11 +69,7 @@ pub trait CompactionStrategy: Send + Sync {
     ///
     /// Returns the compacted message list. If the history already fits,
     /// implementations should return it unchanged.
-    async fn compact(
-        &self,
-        messages: Vec<ChatMessage>,
-        max_tokens: usize,
-    ) -> Vec<ChatMessage>;
+    async fn compact(&self, messages: Vec<ChatMessage>, max_tokens: usize) -> Vec<ChatMessage>;
 }
 
 // ---------------------------------------------------------------------------
@@ -88,8 +84,8 @@ pub trait CompactionStrategy: Send + Sync {
 /// 1. Separate system messages (always preserved) from non-system messages.
 /// 2. If total tokens fit within budget, return as-is.
 /// 3. Otherwise, keep the last `N` non-system messages that fit the budget
-///    (reserving room for the summary message), and replace everything
-///    before them with a summary.
+///    (reserving room for the summary message), and replace everything before
+///    them with a summary.
 pub struct SlidingWindowCompaction;
 
 impl SlidingWindowCompaction {
@@ -109,8 +105,8 @@ impl SlidingWindowCompaction {
             .count();
 
         let mut summary = format!(
-            "[Earlier conversation compacted: {user_count} user message(s), \
-             {assistant_count} assistant message(s)"
+            "[Earlier conversation compacted: {user_count} user message(s), {assistant_count} \
+             assistant message(s)"
         );
         if tool_count > 0 {
             summary.push_str(&format!(", {tool_count} tool interaction(s)"));
@@ -119,11 +115,7 @@ impl SlidingWindowCompaction {
 
         // Append a brief excerpt from the last evicted user and assistant
         // messages to preserve some context.
-        if let Some(last_user) = evicted
-            .iter()
-            .rev()
-            .find(|m| m.role == MessageRole::User)
-        {
+        if let Some(last_user) = evicted.iter().rev().find(|m| m.role == MessageRole::User) {
             let text = last_user.content.as_text();
             let excerpt = truncate_str(&text, 200);
             summary.push_str(&format!("Last user topic: \"{excerpt}\". "));
@@ -162,14 +154,11 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
 
 #[async_trait]
 impl CompactionStrategy for SlidingWindowCompaction {
-    async fn compact(
-        &self,
-        messages: Vec<ChatMessage>,
-        max_tokens: usize,
-    ) -> Vec<ChatMessage> {
+    async fn compact(&self, messages: Vec<ChatMessage>, max_tokens: usize) -> Vec<ChatMessage> {
         // Step 1: separate system messages from the rest.
-        let (system_msgs, non_system_msgs): (Vec<_>, Vec<_>) =
-            messages.into_iter().partition(|m| m.role == MessageRole::System);
+        let (system_msgs, non_system_msgs): (Vec<_>, Vec<_>) = messages
+            .into_iter()
+            .partition(|m| m.role == MessageRole::System);
 
         let system_tokens: usize = system_msgs
             .iter()
@@ -287,8 +276,8 @@ mod tests {
     #[test]
     fn test_messages_token_count() {
         let messages = vec![
-            ChatMessage::user("hello"),       // 2 tokens
-            ChatMessage::assistant("world"),   // 2 tokens
+            ChatMessage::user("hello"),      // 2 tokens
+            ChatMessage::assistant("world"), // 2 tokens
         ];
         assert_eq!(messages_token_count(&messages), 4);
     }
@@ -318,9 +307,7 @@ mod tests {
         ];
         let original_len = messages.len();
 
-        let result = SlidingWindowCompaction
-            .compact(messages, 10000)
-            .await;
+        let result = SlidingWindowCompaction.compact(messages, 10000).await;
 
         // Should return unchanged
         assert_eq!(result.len(), original_len);
@@ -346,9 +333,7 @@ mod tests {
         assert!(total_before > 500);
 
         // Compact to a very tight budget.
-        let result = SlidingWindowCompaction
-            .compact(messages, 300)
-            .await;
+        let result = SlidingWindowCompaction.compact(messages, 300).await;
 
         // Result should be smaller.
         let total_after = messages_token_count(&result);
@@ -362,10 +347,9 @@ mod tests {
         assert_eq!(result[0].content.as_text(), "You are helpful.");
 
         // There should be a summary system message.
-        let has_summary = result.iter().any(|m| {
-            m.role == MessageRole::System
-                && m.content.as_text().contains("compacted")
-        });
+        let has_summary = result
+            .iter()
+            .any(|m| m.role == MessageRole::System && m.content.as_text().contains("compacted"));
         assert!(has_summary, "should contain a summary message");
 
         // The last message should be the most recent assistant message.
@@ -382,9 +366,7 @@ mod tests {
             ChatMessage::assistant("Long reply ".repeat(100).trim().to_string()),
         ];
 
-        let result = SlidingWindowCompaction
-            .compact(messages, 50)
-            .await;
+        let result = SlidingWindowCompaction.compact(messages, 50).await;
 
         // Both system messages should be preserved.
         let system_count = result
@@ -400,13 +382,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_sliding_window_single_message() {
-        let messages = vec![
-            ChatMessage::user("Just one message"),
-        ];
+        let messages = vec![ChatMessage::user("Just one message")];
 
-        let result = SlidingWindowCompaction
-            .compact(messages, 1)
-            .await;
+        let result = SlidingWindowCompaction.compact(messages, 1).await;
 
         // Should keep at least the last message even if over budget.
         assert!(!result.is_empty());
@@ -414,10 +392,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_maybe_compact_under_budget() {
-        let messages = vec![
-            ChatMessage::user("Hi"),
-            ChatMessage::assistant("Hello!"),
-        ];
+        let messages = vec![ChatMessage::user("Hi"), ChatMessage::assistant("Hello!")];
 
         let result = maybe_compact(messages.clone(), 10000, &SlidingWindowCompaction).await;
         assert_eq!(result.len(), 2);
@@ -441,7 +416,10 @@ mod tests {
         assert!(total_before > 1000);
 
         let result = maybe_compact(messages, 500, &SlidingWindowCompaction).await;
-        assert!(result.len() < 100, "should have fewer messages after compaction");
+        assert!(
+            result.len() < 100,
+            "should have fewer messages after compaction"
+        );
     }
 
     #[tokio::test]

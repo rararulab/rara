@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -27,10 +27,7 @@ use crate::{
     event_queue::EventQueue,
     io::pipe::{PipeReader, PipeWriter},
     memory::KvScope,
-    process::{
-        AgentId, AgentManifest, ProcessInfo, SessionId, Signal,
-        principal::Principal,
-    },
+    process::{AgentId, AgentManifest, ProcessInfo, SessionId, Signal, principal::Principal},
     provider::LlmProvider,
     tool::ToolRegistry,
     unified_event::{KernelEvent, Syscall},
@@ -85,11 +82,12 @@ impl ProcessHandle {
 
     /// Push a syscall event and await the reply.
     async fn syscall_push(&self, event: KernelEvent) -> Result<()> {
-        self.event_queue.push(event).await.map_err(|_| {
-            KernelError::Other {
+        self.event_queue
+            .push(event)
+            .await
+            .map_err(|_| KernelError::Other {
                 message: "event queue full for syscall".into(),
-            }
-        })
+            })
     }
 
     // ========================================================================
@@ -111,11 +109,9 @@ impl ProcessHandle {
         };
         self.syscall_push(event).await?;
 
-        let agent_id = reply_rx
-            .await
-            .map_err(|_| KernelError::SpawnFailed {
-                message: "spawn reply channel closed".to_string(),
-            })??;
+        let agent_id = reply_rx.await.map_err(|_| KernelError::SpawnFailed {
+            message: "spawn reply channel closed".to_string(),
+        })??;
 
         let (_result_tx, result_rx) = tokio::sync::oneshot::channel();
         Ok(AgentHandle {
@@ -304,10 +300,7 @@ impl ProcessHandle {
     }
 
     /// Create a named pipe that any agent can connect to.
-    pub async fn create_named_pipe(
-        &self,
-        name: &str,
-    ) -> Result<(PipeWriter, PipeReader)> {
+    pub async fn create_named_pipe(&self, name: &str) -> Result<(PipeWriter, PipeReader)> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.syscall_push(KernelEvent::Syscall(Syscall::CreateNamedPipe {
             owner: self.agent_id,
@@ -355,11 +348,7 @@ impl ProcessHandle {
     }
 
     /// Request approval for a tool execution.
-    pub async fn request_approval(
-        &self,
-        tool_name: &str,
-        summary: &str,
-    ) -> Result<bool> {
+    pub async fn request_approval(&self, tool_name: &str, summary: &str) -> Result<bool> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.syscall_push(KernelEvent::Syscall(Syscall::RequestApproval {
             agent_id: self.agent_id,
@@ -441,11 +430,7 @@ impl ProcessHandle {
     // ========================================================================
 
     /// Publish an event to the kernel event bus.
-    pub async fn publish(
-        &self,
-        event_type: &str,
-        payload: serde_json::Value,
-    ) -> Result<()> {
+    pub async fn publish(&self, event_type: &str, payload: serde_json::Value) -> Result<()> {
         self.syscall_push(KernelEvent::Syscall(Syscall::PublishEvent {
             agent_id: self.agent_id,
             event_type: event_type.to_string(),
@@ -472,7 +457,8 @@ impl ProcessHandle {
             duration_ms,
         }))
         .await
-    }}
+    }
+}
 
 impl std::fmt::Debug for ProcessHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

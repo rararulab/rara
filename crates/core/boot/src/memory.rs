@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -38,9 +38,8 @@ pub fn init_memory_manager(
 /// Create a [`RecallStrategyEngine`](rara_memory::RecallStrategyEngine) with
 /// default rules.
 pub fn init_recall_engine() -> Arc<rara_memory::RecallStrategyEngine> {
-    let engine = rara_memory::RecallStrategyEngine::new(
-        rara_memory::recall_engine::default_rules(),
-    );
+    let engine =
+        rara_memory::RecallStrategyEngine::new(rara_memory::recall_engine::default_rules());
     info!("Recall strategy engine initialized with default rules");
     Arc::new(engine)
 }

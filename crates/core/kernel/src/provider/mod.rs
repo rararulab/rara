@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -31,8 +31,10 @@ use async_openai::types::chat::{
 };
 use async_trait::async_trait;
 
-pub use self::openai::{OPENROUTER_API_BASE, OPENROUTER_API_KEY_ENV, OpenAiProvider};
-pub use self::registry::{AgentLlmConfig, ProviderRegistry, ProviderRegistryBuilder};
+pub use self::{
+    openai::{OPENROUTER_API_BASE, OPENROUTER_API_KEY_ENV, OpenAiProvider},
+    registry::{AgentLlmConfig, ProviderRegistry, ProviderRegistryBuilder},
+};
 use crate::error::Result;
 
 pub type LlmProviderRef = Arc<dyn LlmProvider>;
@@ -109,8 +111,7 @@ impl LlmProviderLoader for OllamaProviderLoader {
                 let config = async_openai::config::OpenAIConfig::new()
                     .with_api_key("ollama")
                     .with_api_base(&self.base_url);
-                let provider: Arc<dyn LlmProvider> =
-                    Arc::new(OpenAiProvider::with_config(config));
+                let provider: Arc<dyn LlmProvider> = Arc::new(OpenAiProvider::with_config(config));
                 Ok::<_, crate::error::KernelError>(provider)
             })
             .await?;

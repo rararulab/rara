@@ -1,45 +1,104 @@
-# Job Automation Backend
+# Rara
 
-后端服务项目，用于自动化职位发现、投递追踪、AI 简历优化与面试准备。
+A self-evolving, developer-first personal proactive agent built in Rust.
 
-## Project Direction
+Unlike generic AI assistants that wait for your commands, Rara proactively monitors your context, learns from interactions, and takes action on your behalf. Built with a kernel-inspired architecture, it's designed for developers who want an AI agent that grows with them.
 
-- 技术栈基线：`axum` + `tokio` + `sqlx` + PostgreSQL
-- 数据层基石：`crates/common/yunara-store`
-- 模块化策略：按业务域拆分为多个 workspace crate
-- 运行形态：长期运行 HTTP Server + 后台调度任务
-- 通知与人工闸门：Telegram（关键自动化动作先确认）
+## Highlights
 
-## Current Roadmap
+- **Proactive** — Heartbeat-driven background actions, not just request-response
+- **Self-evolving** — 3-layer memory (facts, notes, recall) + skills system that learns and adapts
+- **Developer-first** — Deep integration with Git, K8s, coding workflows, workspace management
+- **Multi-channel** — Telegram, Web Chat, Terminal interfaces
+- **Kernel architecture** — OS-inspired event loop, process table, sessions, and approval guards
 
-- Epic: [#3](https://github.com/crrow/job/issues/3)
-- 架构与数据：[#4](https://github.com/crrow/job/issues/4) / [#5](https://github.com/crrow/job/issues/5)
-- 存储与模块化：[#17](https://github.com/crrow/job/issues/17) / [#19](https://github.com/crrow/job/issues/19)
-- API 与基础设施：[#18](https://github.com/crrow/job/issues/18)
-- 模板清理与命名重构：[#16](https://github.com/crrow/job/issues/16)
+## Architecture
 
-## Development Notes
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        Channels                             │
+│              Telegram  ·  WebChat  ·  Terminal               │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+┌──────────────────────────▼──────────────────────────────────┐
+│                        Kernel                               │
+│  Event Loop  ·  Process Table  ·  Sessions  ·  Approval     │
+│  LLM API  ·  Tool Registry  ·  Memory  ·  Guard  ·  Events │
+└──┬───────────────┬───────────────┬──────────────────────────┘
+   │               │               │
+   ▼               ▼               ▼
+┌────────┐  ┌────────────┐  ┌──────────────┐
+│ Memory │  │   Skills   │  │  Extensions  │
+│        │  │            │  │              │
+│ mem0   │  │ discovery  │  │ git          │
+│ Memos  │  │ registry   │  │ coding-task  │
+│Hindsight│ │ install    │  │ workspace    │
+│        │  │ watcher    │  │ k8s          │
+└────────┘  └────────────┘  │ backend-admin│
+                            └──────────────┘
+   │               │               │
+   ▼               ▼               ▼
+┌─────────────────────────────────────────────────────────────┐
+│                      Integrations                           │
+│         MCP  ·  Composio  ·  OAuth  ·  Credential Store     │
+└─────────────────────────────────────────────────────────────┘
+```
 
-- 当前仓库仍包含 template 遗留代码，后续会在 #16 中清理，但会保留部分“代码风格样例”供新模块参考。
-- 项目未上线，可进行非兼容重构（例如 crate 重命名、存储切换、API 调整）。
-- 详细执行约束见 `AGENT.md`。
+### Crate Map
 
-## Runtime Modes
+| Layer | Crates | Purpose |
+|-------|--------|---------|
+| **Entry** | `rara-cmd`, `rara-app` | CLI binary and application composition root |
+| **Server** | `rara-server` | HTTP + gRPC endpoints |
+| **Core** | `rara-kernel`, `rara-boot`, `rara-channels`, `rara-queue` | Agent kernel, bootstrap, channel adapters, event queue |
+| **Capabilities** | `rara-memory`, `rara-skills`, `rara-sessions` | 3-layer memory, skill discovery/management, conversation persistence |
+| **Extensions** | `rara-git`, `rara-coding-task`, `rara-workspace`, `rara-backend-admin` | Developer-focused agent capabilities |
+| **Integrations** | `rara-mcp`, `rara-composio`, `rara-codex-oauth`, `rara-k8s` | External service adapters |
+| **Foundation** | `base`, `rara-error`, `rara-paths`, `rara-model` | Shared primitives, error types, paths, data models |
 
-- `job server`: 仅启动主服务（HTTP + gRPC + workers）
-- `job bot`: 仅启动 Telegram bot（bot dispatcher + bot command gRPC）
-- `job combined`: 在同一进程启动主服务和 Telegram bot
+## Getting Started
 
-### Telegram Bot Integration Boundary
+### Prerequisites
 
-- 主服务 -> bot：通过 gRPC `TelegramBotCommandService`
-- bot -> 主服务：通过 HTTP 调用
-  - `/api/v1/jobs/discover`
-  - `/api/v1/internal/bot/jd-parse`
+- Rust (see `rust-toolchain.toml` for version)
+- PostgreSQL 17+
+- Node.js 20+ (for web frontend)
+- [just](https://github.com/casey/just) (task runner)
 
-### Relevant Environment Variables
+### Development
 
-- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
-- `MAIN_SERVICE_HTTP_BASE` (default: `http://127.0.0.1:25555`)
-- `TELEGRAM_BOT_GRPC_BIND` (default: `127.0.0.1:50061`)
-- `TELEGRAM_BOT_GRPC_TARGET` (main service uses this to send telegram commands via bot gRPC)
+```bash
+# install dependencies and check
+just check
+
+# run the server (HTTP + background workers)
+just run
+
+# run the web frontend
+cd web && npm install && npm run dev
+
+# format and lint
+just fmt
+just clippy
+```
+
+### Configuration
+
+Copy `env.local.example` to `.env` and configure:
+
+- `DATABASE_URL` — PostgreSQL connection
+- `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` — Telegram channel
+- LLM provider API keys
+
+## Tech Stack
+
+- **Backend**: Rust, axum, tokio, sqlx, tonic (gRPC)
+- **Frontend**: React 19, Tailwind v4, shadcn/ui, TanStack Query v5
+- **Database**: PostgreSQL
+- **Memory**: mem0 (facts) + Memos (notes) + Hindsight (recall/reflect)
+- **Tools**: MCP protocol, Composio integration
+- **Deploy**: Docker Compose, Helm chart (K8s)
+
+## License
+
+Apache-2.0

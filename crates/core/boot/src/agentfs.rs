@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -52,9 +52,7 @@ pub struct AgentFsKv {
 }
 
 impl AgentFsKv {
-    pub fn new(agentfs: Arc<AgentFS>) -> Self {
-        Self { agentfs }
-    }
+    pub fn new(agentfs: Arc<AgentFS>) -> Self { Self { agentfs } }
 }
 
 #[async_trait]
@@ -102,9 +100,7 @@ pub struct AgentFsToolCallRecorder {
 }
 
 impl AgentFsToolCallRecorder {
-    pub fn new(agentfs: Arc<AgentFS>) -> Self {
-        Self { agentfs }
-    }
+    pub fn new(agentfs: Arc<AgentFS>) -> Self { Self { agentfs } }
 }
 
 #[async_trait]
@@ -132,11 +128,7 @@ impl rara_kernel::audit::ToolCallRecorder for AgentFsToolCallRecorder {
                         .success(call_id, Some(result.clone()))
                         .await;
                 } else {
-                    let _ = self
-                        .agentfs
-                        .tools
-                        .error(call_id, &result.to_string())
-                        .await;
+                    let _ = self.agentfs.tools.error(call_id, &result.to_string()).await;
                 }
             }
             Err(e) => {

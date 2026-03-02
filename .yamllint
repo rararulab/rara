@@ -1,12 +1,14 @@
 ---
 extends: default
 
+ignore: |
+    *.template.yaml
+    generated/
+    .github/
+    target/
+    deploy/helm/
+
 rules:
-  ignore: |
-      *.template.yaml
-      generated/
-      .github/
-      target/
   line-length:
     max: 240
     level: warning

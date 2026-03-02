@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,7 +16,8 @@
 //! [`KernelEvent`](crate::unified_event::KernelEvent) variants.
 //!
 //! Uses [`ShardedEventQueue`](crate::sharded_event_queue::ShardedEventQueue) to
-//! route events to N+1 [`EventProcessor`](crate::event_processor::EventProcessor)
+//! route events to N+1
+//! [`EventProcessor`](crate::event_processor::EventProcessor)
 //! tasks for parallel processing. The kernel directly manages process state
 //! (conversation, turn cancellation, pause buffer) instead of delegating to
 //! per-process tokio tasks.
@@ -42,8 +43,7 @@ use crate::{
     memory::KvScope,
     process::{
         AgentEnv, AgentId, AgentManifest, AgentProcess, AgentResult, ProcessInfo, ProcessState,
-        SessionId, Signal,
-        principal::Principal,
+        SessionId, Signal, principal::Principal,
     },
     unified_event::{KernelEvent, Syscall},
 };
@@ -60,30 +60,30 @@ use crate::{
 /// `CancellationToken` and `Vec<KernelEvent>`.
 pub(crate) struct ProcessRuntime {
     /// In-memory conversation history (ChatMessage list).
-    pub conversation: Vec<ChatMessage>,
+    pub conversation:       Vec<ChatMessage>,
     /// Per-turn cancellation token — cancelled by Signal::Interrupt to abort
     /// the current LLM call without killing the process.
-    pub turn_cancel: CancellationToken,
+    pub turn_cancel:        CancellationToken,
     /// Process-level cancellation token — cancelled by Signal::Kill or
     /// Signal::Terminate to shut down the entire process. Child processes
     /// use `parent_token.child_token()` so cancelling a parent cascades.
-    pub process_cancel: CancellationToken,
+    pub process_cancel:     CancellationToken,
     /// Whether this process is paused. When true, incoming messages are
     /// buffered in `pause_buffer` instead of being processed.
-    pub paused: bool,
+    pub paused:             bool,
     /// Buffered events received while the process was paused or busy.
-    pub pause_buffer: Vec<KernelEvent>,
+    pub pause_buffer:       Vec<KernelEvent>,
     /// The ProcessHandle for this process (needed to run LLM turns).
-    pub handle: Arc<ProcessHandle>,
+    pub handle:             Arc<ProcessHandle>,
     /// Per-agent semaphore limiting concurrent child processes.
-    pub child_semaphore: Arc<Semaphore>,
+    pub child_semaphore:    Arc<Semaphore>,
     /// Maximum context tokens for compaction.
     pub max_context_tokens: usize,
     /// Last successful result (for final output when process ends).
-    pub last_result: Option<AgentResult>,
+    pub last_result:        Option<AgentResult>,
     /// Global semaphore permit — dropped when this runtime is removed,
     /// automatically releasing one slot for new process spawns.
-    pub _global_permit: OwnedSemaphorePermit,
+    pub _global_permit:     OwnedSemaphorePermit,
 }
 
 /// Table of per-process runtime state, managed by the kernel event loop.
@@ -97,14 +97,21 @@ pub(crate) type RuntimeTable = DashMap<AgentId, ProcessRuntime>;
 // ---------------------------------------------------------------------------
 
 impl Kernel {
+    // -----------------------------------------------------------------------
+    // handle_user_message
+    // -----------------------------------------------------------------------
+
+    /// Agent name for admin/root users.
+    const ADMIN_AGENT_NAME: &'static str = "rara";
+    /// Agent name for regular users.
+    const USER_AGENT_NAME: &'static str = "nana";
+
     /// Run the event loop with an `Arc<Kernel>`, spawning N+1 parallel
     /// [`EventProcessor`] tasks (1 global + N shard).
     ///
-    /// Called from [`start()`](Kernel::start) which already wraps Kernel in Arc.
-    pub(crate) async fn run_event_loop_arc(
-        kernel: Arc<Kernel>,
-        shutdown: CancellationToken,
-    ) {
+    /// Called from [`start()`](Kernel::start) which already wraps Kernel in
+    /// Arc.
+    pub(crate) async fn run_event_loop_arc(kernel: Arc<Kernel>, shutdown: CancellationToken) {
         let runtimes: Arc<RuntimeTable> = Arc::new(DashMap::new());
         let sq = Arc::clone(kernel.sharded_queue());
         Self::run_parallel_event_loop(kernel, sq, runtimes, shutdown).await;
@@ -115,8 +122,10 @@ impl Kernel {
     /// Each task runs an [`EventProcessor`] draining its own shard queue,
     /// achieving true parallel event processing across different agents.
     ///
-    /// - **Processor 0** (global): UserMessage, SpawnAgent, Timer, Shutdown, Deliver
-    /// - **Processors 1..=N** (shards): Syscall, TurnCompleted, ChildCompleted, SendSignal
+    /// - **Processor 0** (global): UserMessage, SpawnAgent, Timer, Shutdown,
+    ///   Deliver
+    /// - **Processors 1..=N** (shards): Syscall, TurnCompleted, ChildCompleted,
+    ///   SendSignal
     async fn run_parallel_event_loop(
         kernel: Arc<Kernel>,
         sharded_queue: Arc<crate::sharded_event_queue::ShardedEventQueue>,
@@ -136,7 +145,10 @@ impl Kernel {
 
         // Global processor (id=0)
         {
-            let proc = EventProcessor { id: 0, queue: Arc::clone(sharded_queue.global()) };
+            let proc = EventProcessor {
+                id:    0,
+                queue: Arc::clone(sharded_queue.global()),
+            };
             let k = Arc::clone(&kernel);
             let rt = Arc::clone(&runtimes);
             let sd = shutdown.clone();
@@ -147,7 +159,10 @@ impl Kernel {
 
         // Shard processors (id=1..=N)
         for i in 0..num_shards {
-            let proc = EventProcessor { id: i + 1, queue: Arc::clone(sharded_queue.shard(i)) };
+            let proc = EventProcessor {
+                id:    i + 1,
+                queue: Arc::clone(sharded_queue.shard(i)),
+            };
             let k = Arc::clone(&kernel);
             let rt = Arc::clone(&runtimes);
             let sd = shutdown.clone();
@@ -202,7 +217,12 @@ impl Kernel {
                 user,
             } => {
                 self.handle_turn_completed(
-                    agent_id, session_id, result, in_reply_to, user, runtimes,
+                    agent_id,
+                    session_id,
+                    result,
+                    in_reply_to,
+                    user,
+                    runtimes,
                 )
                 .await;
             }
@@ -277,7 +297,8 @@ impl Kernel {
                 value,
                 reply_tx,
             } => {
-                let result = Self::do_mem_store(inner, agent_id, &session_id, &principal, &key, value).await;
+                let result =
+                    Self::do_mem_store(inner, agent_id, &session_id, &principal, &key, value).await;
                 let _ = reply_tx.send(result);
             }
 
@@ -287,7 +308,8 @@ impl Kernel {
                 reply_tx,
             } => {
                 let namespaced = format!("agent:{}:{}", agent_id.0, key);
-                let result = Ok(inner.shared_kv.get(&namespaced).await);                let _ = reply_tx.send(result);
+                let result = Ok(inner.shared_kv.get(&namespaced).await);
+                let _ = reply_tx.send(result);
             }
 
             Syscall::SharedStore {
@@ -363,21 +385,19 @@ impl Kernel {
                 reply_tx,
             } => {
                 let result = match inner.pipe_registry.resolve_name(&name) {
-                    Some(pipe_id) => {
-                        match inner.pipe_registry.take_parked_reader(&pipe_id) {
-                            Some(reader) => {
-                                inner.pipe_registry.set_reader(&pipe_id, connector);
-                                Ok(reader)
-                            }
-                            None => Err(KernelError::Other {
-                                message: format!(
-                                    "named pipe '{name}' has no parked reader \
-                                     (already taken or not parked)"
-                                )
-                                .into(),
-                            }),
+                    Some(pipe_id) => match inner.pipe_registry.take_parked_reader(&pipe_id) {
+                        Some(reader) => {
+                            inner.pipe_registry.set_reader(&pipe_id, connector);
+                            Ok(reader)
                         }
-                    }
+                        None => Err(KernelError::Other {
+                            message: format!(
+                                "named pipe '{name}' has no parked reader (already taken or not \
+                                 parked)"
+                            )
+                            .into(),
+                        }),
+                    },
                     None => Err(KernelError::Other {
                         message: format!("named pipe not found: {name}").into(),
                     }),
@@ -385,7 +405,10 @@ impl Kernel {
                 let _ = reply_tx.send(result);
             }
 
-            Syscall::RequiresApproval { tool_name, reply_tx } => {
+            Syscall::RequiresApproval {
+                tool_name,
+                reply_tx,
+            } => {
                 let result = inner.approval.requires_approval(&tool_name);
                 let _ = reply_tx.send(result);
             }
@@ -400,12 +423,12 @@ impl Kernel {
                 let approval = Arc::clone(&inner.approval);
                 let policy = approval.policy();
                 let req = crate::approval::ApprovalRequest {
-                    id:           uuid::Uuid::new_v4(),
+                    id: uuid::Uuid::new_v4(),
                     agent_id,
-                    tool_name:    tool_name.clone(),
-                    tool_args:    serde_json::json!({"summary": &summary}),
+                    tool_name: tool_name.clone(),
+                    tool_args: serde_json::json!({"summary": &summary}),
                     summary,
-                    risk_level:   crate::approval::ApprovalManager::classify_risk(&tool_name),
+                    risk_level: crate::approval::ApprovalManager::classify_risk(&tool_name),
                     requested_at: Timestamp::now(),
                     timeout_secs: policy.timeout_secs,
                 };
@@ -419,17 +442,26 @@ impl Kernel {
                 });
             }
 
-            Syscall::CheckGuardBatch { agent_id, session_id, checks, reply_tx } => {
-                let (user_id, session_uuid) = inner.process_table
+            Syscall::CheckGuardBatch {
+                agent_id,
+                session_id,
+                checks,
+                reply_tx,
+            } => {
+                let (user_id, session_uuid) = inner
+                    .process_table
                     .get(agent_id)
                     .map(|proc| {
-                        (proc.principal.user_id.0.clone(), proc.session_id.to_string())
+                        (
+                            proc.principal.user_id.0.clone(),
+                            proc.session_id.to_string(),
+                        )
                     })
                     .unwrap_or_else(|| (String::new(), session_id.to_string()));
 
                 let ctx = crate::guard::GuardContext {
-                    agent_id: agent_id.0,
-                    user_id: uuid::Uuid::parse_str(&user_id).unwrap_or(uuid::Uuid::nil()),
+                    agent_id:   agent_id.0,
+                    user_id:    uuid::Uuid::parse_str(&user_id).unwrap_or(uuid::Uuid::nil()),
                     session_id: uuid::Uuid::parse_str(&session_uuid).unwrap_or(uuid::Uuid::nil()),
                 };
 
@@ -489,9 +521,9 @@ impl Kernel {
                 inner
                     .event_bus
                     .publish(crate::event::KernelEvent::ToolExecuted {
-                        agent_id: agent_id.0,
+                        agent_id:  agent_id.0,
                         tool_name: format!("event:{event_type}"),
-                        success: true,
+                        success:   true,
                         timestamp: Timestamp::now(),
                     })
                     .await;
@@ -544,11 +576,13 @@ impl Kernel {
             }
         }
 
-        inner.shared_kv.set(&namespaced, value).await.map_err(|e| {
-            KernelError::Other {
+        inner
+            .shared_kv
+            .set(&namespaced, value)
+            .await
+            .map_err(|e| KernelError::Other {
                 message: format!("KV store error: {e}").into(),
-            }
-        })?;
+            })?;
 
         // Audit: MemoryAccess (Store)
         crate::audit::record_async(
@@ -560,7 +594,7 @@ impl Kernel {
                 user_id: principal.user_id.clone(),
                 event_type: AuditEventType::MemoryAccess {
                     operation: MemoryOp::Store,
-                    key: key.to_string(),
+                    key:       key.to_string(),
                 },
                 details: serde_json::Value::Null,
             },
@@ -568,6 +602,7 @@ impl Kernel {
 
         Ok(())
     }
+
     /// Validate scope permissions for shared memory operations.
     fn check_scope_permission(
         agent_id: AgentId,
@@ -579,7 +614,8 @@ impl Kernel {
                 if !principal.is_admin() {
                     return Err(KernelError::MemoryScopeDenied {
                         reason: format!(
-                            "agent {} (role {:?}) cannot access {:?} scope — requires Root or Admin",
+                            "agent {} (role {:?}) cannot access {:?} scope — requires Root or \
+                             Admin",
                             agent_id, principal.role, scope,
                         ),
                     });
@@ -619,11 +655,13 @@ impl Kernel {
     ) -> Result<()> {
         Self::check_scope_permission(agent_id, principal, scope)?;
         let scoped = Self::scoped_key(scope, key);
-        inner.shared_kv.set(&scoped, value).await.map_err(|e| {
-            KernelError::Other {
+        inner
+            .shared_kv
+            .set(&scoped, value)
+            .await
+            .map_err(|e| KernelError::Other {
                 message: format!("KV store error: {e}").into(),
-            }
-        })?;
+            })?;
         Ok(())
     }
 
@@ -639,14 +677,6 @@ impl Kernel {
         let scoped = Self::scoped_key(scope, key);
         Ok(inner.shared_kv.get(&scoped).await)
     }
-    // -----------------------------------------------------------------------
-    // handle_user_message
-    // -----------------------------------------------------------------------
-
-    /// Agent name for admin/root users.
-    const ADMIN_AGENT_NAME: &'static str = "rara";
-    /// Agent name for regular users.
-    const USER_AGENT_NAME: &'static str = "nana";
 
     /// Handle a user message with 3-path routing:
     ///
@@ -655,8 +685,8 @@ impl Kernel {
     /// 2. **Session addressing** (session_index match): deliver to bound
     ///    process — if terminal, clear binding and respawn transparently
     ///    (AutoGen lazy instantiation pattern).
-    /// 3. **Name addressing** (fallback): lookup AgentRegistry by name,
-    ///    always spawn a new process (Anthropic spawn-new pattern).
+    /// 3. **Name addressing** (fallback): lookup AgentRegistry by name, always
+    ///    spawn a new process (Anthropic spawn-new pattern).
     async fn handle_user_message(&self, msg: InboundMessage, runtimes: &RuntimeTable) {
         let span = info_span!(
             "handle_user_message",
@@ -706,9 +736,7 @@ impl Kernel {
                         routing:     OutboundRouting::BroadcastAll,
                         payload:     OutboundPayload::Error {
                             code:    "process_terminal".to_string(),
-                            message: format!(
-                                "process {} is {}", target_id, process.state
-                            ),
+                            message: format!("process {} is {}", target_id, process.state),
                         },
                         timestamp:   jiff::Timestamp::now(),
                     };
@@ -918,18 +946,20 @@ impl Kernel {
             .get(agent_id)
             .and_then(|p| p.channel_session_id.clone())
             .unwrap_or_else(|| session_id.clone());
-        let _ = self.event_queue().try_push(KernelEvent::Deliver(OutboundEnvelope {
-            id:          MessageId::new(),
-            in_reply_to: msg_id.clone(),
-            user:        user.clone(),
-            session_id:  egress_session_id.clone(),
-            routing:     OutboundRouting::BroadcastAll,
-            payload:     OutboundPayload::Progress {
-                stage:  "thinking".to_string(),
-                detail: Some(String::new()),
-            },
-            timestamp:   jiff::Timestamp::now(),
-        }));
+        let _ = self
+            .event_queue()
+            .try_push(KernelEvent::Deliver(OutboundEnvelope {
+                id:          MessageId::new(),
+                in_reply_to: msg_id.clone(),
+                user:        user.clone(),
+                session_id:  egress_session_id.clone(),
+                routing:     OutboundRouting::BroadcastAll,
+                payload:     OutboundPayload::Progress {
+                    stage:  "thinking".to_string(),
+                    detail: Some(String::new()),
+                },
+                timestamp:   jiff::Timestamp::now(),
+            }));
 
         // Record metrics.
         if let Some(metrics) = self.inner().process_table.get_metrics(&agent_id) {
@@ -967,7 +997,11 @@ impl Kernel {
             let session_id = session_id_persist.clone();
             let user_msg = user_msg.clone();
             async move {
-                if let Err(e) = inner.session_repo.append_message(&session_id, &user_msg).await {
+                if let Err(e) = inner
+                    .session_repo
+                    .append_message(&session_id, &user_msg)
+                    .await
+                {
                     warn!(%e, "failed to persist user message");
                 }
             }
@@ -1013,8 +1047,7 @@ impl Kernel {
                 let usr = user.clone();
                 let mid = msg_id.clone();
                 tokio::spawn(async move {
-                    let mut interval =
-                        tokio::time::interval(std::time::Duration::from_secs(4));
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(4));
                     interval.tick().await; // skip the immediate first tick
                     loop {
                         interval.tick().await;
@@ -1059,9 +1092,9 @@ impl Kernel {
             if let Ok(ref result) = turn_result {
                 stream_handle.emit(crate::io::stream::StreamEvent::TurnMetrics {
                     duration_ms: elapsed_ms,
-                    iterations: result.iterations,
-                    tool_calls: result.tool_calls,
-                    model: result.model.clone(),
+                    iterations:  result.iterations,
+                    tool_calls:  result.tool_calls,
+                    model:       result.model.clone(),
                 });
             }
 
@@ -1152,7 +1185,9 @@ impl Kernel {
                     .inc();
 
                 // Store turn trace for observability.
-                inner.process_table.push_turn_trace(agent_id, turn.trace.clone());
+                inner
+                    .process_table
+                    .push_turn_trace(agent_id, turn.trace.clone());
 
                 // Record metrics.
                 if let Some(metrics) = inner.process_table.get_metrics(&agent_id) {
@@ -1184,16 +1219,16 @@ impl Kernel {
 
                 // Push Deliver event for the reply — use egress session for routing.
                 let envelope = OutboundEnvelope {
-                    id:          MessageId::new(),
+                    id: MessageId::new(),
                     in_reply_to,
-                    user:        user.clone(),
-                    session_id:  egress_session_id.clone(),
-                    routing:     OutboundRouting::BroadcastAll,
-                    payload:     OutboundPayload::Reply {
+                    user: user.clone(),
+                    session_id: egress_session_id.clone(),
+                    routing: OutboundRouting::BroadcastAll,
+                    payload: OutboundPayload::Reply {
                         content:     crate::channel::types::MessageContent::Text(turn.text),
                         attachments: vec![],
                     },
-                    timestamp:   jiff::Timestamp::now(),
+                    timestamp: jiff::Timestamp::now(),
                 };
                 if let Err(e) = self.event_queue().try_push(KernelEvent::Deliver(envelope)) {
                     error!(%e, "failed to push Deliver event");
@@ -1203,14 +1238,14 @@ impl Kernel {
                 crate::audit::record_async(
                     &inner.audit_log,
                     AuditEvent {
-                        timestamp:  jiff::Timestamp::now(),
+                        timestamp: jiff::Timestamp::now(),
                         agent_id,
                         session_id: session_id.clone(),
-                        user_id:    user.clone(),
+                        user_id: user.clone(),
                         event_type: AuditEventType::ProcessCompleted {
                             result: result.output.clone(),
                         },
-                        details:    serde_json::json!({
+                        details: serde_json::json!({
                             "iterations": result.iterations,
                             "tool_calls": result.tool_calls,
                         }),
@@ -1237,7 +1272,9 @@ impl Kernel {
                 info!(agent_id = %agent_id, "turn completed (empty result)");
 
                 // Store turn trace for observability.
-                inner.process_table.push_turn_trace(agent_id, turn.trace.clone());
+                inner
+                    .process_table
+                    .push_turn_trace(agent_id, turn.trace.clone());
 
                 // Empty result — LLM call was made but produced no text.
                 if let Some(metrics) = inner.process_table.get_metrics(&agent_id) {
@@ -1254,30 +1291,30 @@ impl Kernel {
                     crate::audit::record_async(
                         &inner.audit_log,
                         AuditEvent {
-                            timestamp:  jiff::Timestamp::now(),
+                            timestamp: jiff::Timestamp::now(),
                             agent_id,
                             session_id: session_id.clone(),
-                            user_id:    user.clone(),
+                            user_id: user.clone(),
                             event_type: AuditEventType::ProcessFailed {
                                 error: err_msg.clone(),
                             },
-                            details:    serde_json::Value::Null,
+                            details: serde_json::Value::Null,
                         },
                     );
                 }
 
                 // Deliver error — use egress session for routing.
                 let envelope = OutboundEnvelope {
-                    id:          MessageId::new(),
+                    id: MessageId::new(),
                     in_reply_to,
-                    user:        user.clone(),
-                    session_id:  egress_session_id.clone(),
-                    routing:     OutboundRouting::BroadcastAll,
-                    payload:     OutboundPayload::Error {
+                    user: user.clone(),
+                    session_id: egress_session_id.clone(),
+                    routing: OutboundRouting::BroadcastAll,
+                    payload: OutboundPayload::Error {
                         code:    "agent_error".to_string(),
                         message: err_msg,
                     },
-                    timestamp:   jiff::Timestamp::now(),
+                    timestamp: jiff::Timestamp::now(),
                 };
                 if let Err(e) = self.event_queue().try_push(KernelEvent::Deliver(envelope)) {
                     error!(%e, "failed to push error Deliver event");
@@ -1306,9 +1343,7 @@ impl Kernel {
         } else {
             ProcessState::Completed
         };
-        let _ = inner
-            .process_table
-            .set_state(agent_id, terminal_state);
+        let _ = inner.process_table.set_state(agent_id, terminal_state);
 
         // Remove runtime — drops global semaphore permit, cancellation
         // tokens, and conversation buffer. The process entry stays in
@@ -1382,15 +1417,15 @@ impl Kernel {
         crate::audit::record_async(
             &inner.audit_log,
             AuditEvent {
-                timestamp:  jiff::Timestamp::now(),
+                timestamp: jiff::Timestamp::now(),
                 agent_id,
                 session_id: session_id.clone(),
-                user_id:    principal.user_id.clone(),
+                user_id: principal.user_id.clone(),
                 event_type: AuditEventType::ProcessSpawned {
                     manifest_name: manifest.name.clone(),
                     parent_id,
                 },
-                details:    serde_json::json!({
+                details: serde_json::json!({
                     "model": manifest.model,
                     "max_iterations": manifest.max_iterations,
                 }),
@@ -1437,9 +1472,7 @@ impl Kernel {
         };
 
         // Build ProcessHandle — uses the process's own session.
-        let child_limit = manifest
-            .max_children
-            .unwrap_or(inner.default_child_limit);
+        let child_limit = manifest.max_children.unwrap_or(inner.default_child_limit);
 
         let handle = Arc::new(ProcessHandle::new(
             agent_id,
@@ -1509,12 +1542,7 @@ impl Kernel {
     // -----------------------------------------------------------------------
 
     /// Handle a control signal sent to an agent process.
-    async fn handle_signal(
-        &self,
-        target: AgentId,
-        signal: Signal,
-        runtimes: &RuntimeTable,
-    ) {
+    async fn handle_signal(&self, target: AgentId, signal: Signal, runtimes: &RuntimeTable) {
         let span = info_span!(
             "handle_signal",
             agent_id = %target,
@@ -1540,19 +1568,19 @@ impl Kernel {
                     .and_then(|p| p.channel_session_id.clone())
                     .unwrap_or_else(|| SessionId::new("unknown"));
                 let envelope = OutboundEnvelope {
-                    id:          MessageId::new(),
+                    id: MessageId::new(),
                     in_reply_to: MessageId::new(),
-                    user:        crate::process::principal::UserId("system".to_string()),
+                    user: crate::process::principal::UserId("system".to_string()),
                     session_id,
-                    routing:     OutboundRouting::BroadcastAll,
-                    payload:     OutboundPayload::StateChange {
+                    routing: OutboundRouting::BroadcastAll,
+                    payload: OutboundPayload::StateChange {
                         event_type: "interrupted".to_string(),
                         data:       serde_json::json!({
                             "agent_id": target.to_string(),
                             "message": "Agent interrupted by user",
                         }),
                     },
-                    timestamp:   jiff::Timestamp::now(),
+                    timestamp: jiff::Timestamp::now(),
                 };
                 if let Err(e) = self.event_queue().try_push(KernelEvent::Deliver(envelope)) {
                     error!(%e, "failed to push interrupt notification");
@@ -1588,9 +1616,7 @@ impl Kernel {
                     rt.turn_cancel.cancel();
                 }
                 // Grace period then force-kill via process_cancel token.
-                let process_cancel = runtimes
-                    .get(&target)
-                    .map(|rt| rt.process_cancel.clone());
+                let process_cancel = runtimes.get(&target).map(|rt| rt.process_cancel.clone());
                 if let Some(token) = process_cancel {
                     tokio::spawn(async move {
                         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -1645,8 +1671,7 @@ impl Kernel {
 
         // Persist child result to parent's conversation history.
         let child_result_text = format!(
-            "[child_agent_result] child_id={child_id} \
-             iterations={} tool_calls={}\n\n{}",
+            "[child_agent_result] child_id={child_id} iterations={} tool_calls={}\n\n{}",
             result.iterations, result.tool_calls, result.output,
         );
         let child_msg = ChatMessage::system(&child_result_text);
@@ -1743,10 +1768,7 @@ impl Kernel {
     /// - Root / Admin users → "rara" (full-capability agent)
     /// - Regular users → "nana" (chat-only companion)
     /// - Unknown users → "nana" (safe default)
-    async fn default_agent_for_user(
-        &self,
-        user: &crate::process::principal::UserId,
-    ) -> String {
+    async fn default_agent_for_user(&self, user: &crate::process::principal::UserId) -> String {
         use crate::process::principal::Role;
 
         let inner = self.inner();
@@ -1782,26 +1804,22 @@ impl Kernel {
     /// Resolve a manifest for auto-spawning (when a user message arrives
     /// with no existing process).
     async fn resolve_manifest_for_auto_spawn(&self) -> Option<AgentManifest> {
-        let model = rara_domain_shared::settings::get_model(
-            self.settings().as_ref(),
-            "chat",
-        )
-        .await;
+        let model = rara_domain_shared::settings::get_model(self.settings().as_ref(), "chat").await;
         Some(AgentManifest {
-            name:               "io-agent".to_string(),
-        role:           None,
-            description:        "I/O bus agent".to_string(),
+            name: "io-agent".to_string(),
+            role: None,
+            description: "I/O bus agent".to_string(),
             model,
-            system_prompt:      "You are a helpful assistant.".to_string(),
-            soul_prompt:    None,
-            provider_hint:      None,
-            max_iterations:     Some(25),
-            tools:              vec![],
-            max_children:       None,
+            system_prompt: "You are a helpful assistant.".to_string(),
+            soul_prompt: None,
+            provider_hint: None,
+            max_iterations: Some(25),
+            tools: vec![],
+            max_children: None,
             max_context_tokens: None,
-            priority:           crate::process::Priority::default(),
-            metadata:           serde_json::Value::Null,
-            sandbox:            None,
+            priority: crate::process::Priority::default(),
+            metadata: serde_json::Value::Null,
+            sandbox: None,
         })
     }
 }

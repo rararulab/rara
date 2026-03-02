@@ -1,3 +1,17 @@
+// Copyright 2025 Rararulab
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! Guard construction helpers.
 
 use rara_domain_shared::settings::{SettingsProvider, keys};
@@ -7,22 +21,14 @@ use rara_kernel::process::SandboxConfig;
 ///
 /// Reads `fs.allowed_directories`, `fs.read_only_directories`, and
 /// `fs.denied_directories` (stored as JSON string arrays).
-pub async fn sandbox_config_from_settings(
-    settings: &dyn SettingsProvider,
-) -> SandboxConfig {
-    let allowed = parse_json_string_array(
-        settings.get(keys::FS_ALLOWED_DIRECTORIES).await,
-    );
-    let read_only = parse_json_string_array(
-        settings.get(keys::FS_READ_ONLY_DIRECTORIES).await,
-    );
-    let denied = parse_json_string_array(
-        settings.get(keys::FS_DENIED_DIRECTORIES).await,
-    );
+pub async fn sandbox_config_from_settings(settings: &dyn SettingsProvider) -> SandboxConfig {
+    let allowed = parse_json_string_array(settings.get(keys::FS_ALLOWED_DIRECTORIES).await);
+    let read_only = parse_json_string_array(settings.get(keys::FS_READ_ONLY_DIRECTORIES).await);
+    let denied = parse_json_string_array(settings.get(keys::FS_DENIED_DIRECTORIES).await);
     SandboxConfig {
-        allowed_paths: allowed,
-        read_only_paths: read_only,
-        denied_paths: denied,
+        allowed_paths:      allowed,
+        read_only_paths:    read_only,
+        denied_paths:       denied,
         isolated_workspace: false,
     }
 }

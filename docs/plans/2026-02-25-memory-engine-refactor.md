@@ -87,7 +87,7 @@ User sends message
 ```
 
 > **Note (2026-02-25)**: Per-turn `spawn_memory_reflection` was removed in
-> [#318](https://github.com/crrow/job/issues/318). Memory consolidation now
+> [#318](https://github.com/rararulab/rara/issues/318). Memory consolidation now
 > triggers only at session boundaries (inactivity ≥30 min) or via explicit
 > agent tools (`memory_add_fact`, `memory_write`).
 

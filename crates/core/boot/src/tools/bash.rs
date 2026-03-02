@@ -18,9 +18,8 @@
 //! directory.  Output is truncated to 50 KB / 2000 lines.
 
 use async_trait::async_trait;
-use serde_json::json;
-
 use rara_kernel::tool::AgentTool;
+use serde_json::json;
 
 /// Maximum output size in bytes (50 KB).
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;

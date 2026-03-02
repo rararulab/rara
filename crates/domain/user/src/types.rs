@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -92,10 +92,10 @@ pub struct InviteCode {
 /// 链接码信息
 #[derive(Debug, Serialize)]
 pub struct LinkCode {
-    pub id:        uuid::Uuid,
-    pub code:      String,
-    pub user_id:   uuid::Uuid,
-    pub direction: String,
+    pub id:         uuid::Uuid,
+    pub code:       String,
+    pub user_id:    uuid::Uuid,
+    pub direction:  String,
     pub expires_at: String,
     pub created_at: String,
 }
@@ -103,8 +103,8 @@ pub struct LinkCode {
 /// 链接码验证结果
 #[derive(Debug, Serialize)]
 pub struct LinkCodeInfo {
-    pub user_id:   uuid::Uuid,
-    pub direction: String,
+    pub user_id:       uuid::Uuid,
+    pub direction:     String,
     pub platform_data: Option<serde_json::Value>,
 }
 

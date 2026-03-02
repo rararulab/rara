@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -39,7 +39,6 @@ use std::{
 };
 
 use async_trait::async_trait;
-
 use rara_kernel::{
     event_queue::{EventQueue, KernelEvent},
     io::types::BusError,
@@ -138,16 +137,12 @@ impl HybridQueue {
     }
 
     /// Access the underlying WAL (for diagnostics/testing).
-    pub fn wal(&self) -> &WalQueue {
-        &self.wal
-    }
+    pub fn wal(&self) -> &WalQueue { &self.wal }
 }
 
 #[async_trait]
 impl EventQueue for HybridQueue {
-    async fn push(&self, event: KernelEvent) -> Result<(), BusError> {
-        self.try_push(event)
-    }
+    async fn push(&self, event: KernelEvent) -> Result<(), BusError> { self.try_push(event) }
 
     fn try_push(&self, event: KernelEvent) -> Result<(), BusError> {
         let current = self.pending.load(Ordering::Acquire);
@@ -156,14 +151,12 @@ impl EventQueue for HybridQueue {
         }
 
         // WAL persistence for durable events.
-        let wal_id = PersistableEvent::from_kernel_event(&event)
-            .and_then(|pe| {
-                match self.wal.append(&pe) {
-                    Ok(id) => Some(id),
-                    Err(e) => {
-                        tracing::warn!(error = %e, "WAL append failed; event is memory-only");
-                        None
-                    }
+        let wal_id =
+            PersistableEvent::from_kernel_event(&event).and_then(|pe| match self.wal.append(&pe) {
+                Ok(id) => Some(id),
+                Err(e) => {
+                    tracing::warn!(error = %e, "WAL append failed; event is memory-only");
+                    None
                 }
             });
 
@@ -215,9 +208,7 @@ impl EventQueue for HybridQueue {
         self.notify.notified().await;
     }
 
-    fn pending_count(&self) -> usize {
-        self.pending.load(Ordering::Acquire)
-    }
+    fn pending_count(&self) -> usize { self.pending.load(Ordering::Acquire) }
 
     fn mark_completed(&self, wal_id: u64) {
         if let Err(e) = self.wal.mark_completed(wal_id) {
@@ -238,13 +229,15 @@ impl std::fmt::Debug for HybridQueue {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::HashMap;
+
     use rara_kernel::{
         channel::types::{ChannelType, MessageContent},
         io::types::{ChannelSource, InboundMessage, MessageId},
         process::{AgentId, SessionId, Signal, principal::UserId},
     };
-    use std::collections::HashMap;
+
+    use super::*;
 
     fn test_inbound(text: &str) -> InboundMessage {
         InboundMessage {
@@ -409,8 +402,12 @@ mod tests {
     #[tokio::test]
     async fn hybrid_wait_wakeup() {
         let q = std::sync::Arc::new(
-            HybridQueue::open(100, tempfile::tempdir().unwrap().path().join("test.wal"), 50)
-                .unwrap(),
+            HybridQueue::open(
+                100,
+                tempfile::tempdir().unwrap().path().join("test.wal"),
+                50,
+            )
+            .unwrap(),
         );
         let q2 = q.clone();
 

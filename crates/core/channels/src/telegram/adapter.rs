@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -50,9 +50,7 @@ use rara_kernel::{
     channel::{
         adapter::ChannelAdapter,
         command::{CallbackHandler, CommandHandler},
-        types::{
-            AgentPhase, ChannelType, InlineButton, MessageContent, ReplyMarkup,
-        },
+        types::{AgentPhase, ChannelType, InlineButton, MessageContent, ReplyMarkup},
     },
     error::KernelError,
     io::{
@@ -72,8 +70,7 @@ use teloxide::{
 use tokio::sync::{RwLock, watch};
 use tracing::{error, info, warn};
 
-use crate::telegram::contacts::ContactTracker;
-use crate::telegram::link::TelegramLinkService;
+use crate::telegram::{contacts::ContactTracker, link::TelegramLinkService};
 
 /// Long-polling timeout in seconds (Telegram server-side wait).
 const POLL_TIMEOUT_SECS: u32 = 30;
@@ -678,7 +675,8 @@ async fn handle_update(
     if let Some(link_svc) = link_service {
         if let Some(text) = msg.text() {
             let trimmed = text.trim();
-            if trimmed == "/link" || trimmed.starts_with("/link ") || trimmed.starts_with("/link@") {
+            if trimmed == "/link" || trimmed.starts_with("/link ") || trimmed.starts_with("/link@")
+            {
                 // Extract display name from the Telegram user.
                 let display_name = msg.from.as_ref().map(|u| {
                     if let Some(ref last) = u.last_name {

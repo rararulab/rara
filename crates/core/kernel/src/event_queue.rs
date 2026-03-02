@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Unified event queue trait — tiered priority queue for all kernel interactions.
+//! Unified event queue trait — tiered priority queue for all kernel
+//! interactions.
 //!
-//! Defines the [`EventQueue`] trait that all queue implementations must satisfy.
-//! The default in-memory implementation ([`InMemoryEventQueue`]) is provided for
-//! backward compatibility and testing.
+//! Defines the [`EventQueue`] trait that all queue implementations must
+//! satisfy. The default in-memory implementation ([`InMemoryEventQueue`]) is
+//! provided for backward compatibility and testing.
 //!
 //! Events are auto-classified into three priority tiers:
 //! - **Critical**: signals (Interrupt, Kill, Pause, Resume), shutdown
@@ -35,9 +36,8 @@ use async_trait::async_trait;
 use tokio::sync;
 
 use crate::io::types::BusError;
-
 // Re-export the unified event from the sibling module.
-pub use crate::unified_event::{KernelEvent, EventPriority};
+pub use crate::unified_event::{EventPriority, KernelEvent};
 
 // ---------------------------------------------------------------------------
 // EventQueue trait
@@ -74,7 +74,8 @@ pub trait EventQueue: Send + Sync + 'static {
 
     /// Whether this queue is a sharded event queue.
     ///
-    /// Returns `true` for [`ShardedEventQueue`](crate::sharded_event_queue::ShardedEventQueue),
+    /// Returns `true` for
+    /// [`ShardedEventQueue`](crate::sharded_event_queue::ShardedEventQueue),
     /// `false` for all other implementations.
     fn is_sharded(&self) -> bool { false }
 }
@@ -85,8 +86,9 @@ pub trait EventQueue: Send + Sync + 'static {
 
 /// Tiered priority queue for all kernel interactions (pure in-memory).
 ///
-/// Uses three `VecDeque`s (one per priority tier) protected by `std::sync::Mutex`
-/// (not tokio — critical sections are trivial push/pop operations).
+/// Uses three `VecDeque`s (one per priority tier) protected by
+/// `std::sync::Mutex` (not tokio — critical sections are trivial push/pop
+/// operations).
 ///
 /// `tokio::sync::Notify` provides async wakeup when events are pushed.
 pub struct InMemoryEventQueue {
@@ -118,9 +120,7 @@ impl InMemoryEventQueue {
 
 #[async_trait]
 impl EventQueue for InMemoryEventQueue {
-    async fn push(&self, event: KernelEvent) -> Result<(), BusError> {
-        self.try_push(event)
-    }
+    async fn push(&self, event: KernelEvent) -> Result<(), BusError> { self.try_push(event) }
 
     fn try_push(&self, event: KernelEvent) -> Result<(), BusError> {
         let current = self.pending.load(Ordering::Acquire);
@@ -168,9 +168,7 @@ impl EventQueue for InMemoryEventQueue {
         self.notify.notified().await;
     }
 
-    fn pending_count(&self) -> usize {
-        self.pending.load(Ordering::Acquire)
-    }
+    fn pending_count(&self) -> usize { self.pending.load(Ordering::Acquire) }
 }
 
 impl std::fmt::Debug for InMemoryEventQueue {
@@ -184,31 +182,33 @@ impl std::fmt::Debug for InMemoryEventQueue {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::unified_event::KernelEvent;
-    use crate::io::types::InboundMessage;
-    use crate::process::{AgentId, SessionId, Signal, principal::UserId};
-    use crate::channel::types::{ChannelType, MessageContent};
-    use crate::io::types::{ChannelSource, MessageId};
     use std::collections::HashMap;
+
+    use super::*;
+    use crate::{
+        channel::types::{ChannelType, MessageContent},
+        io::types::{ChannelSource, InboundMessage, MessageId},
+        process::{AgentId, SessionId, Signal, principal::UserId},
+        unified_event::KernelEvent,
+    };
 
     fn test_inbound(text: &str) -> InboundMessage {
         InboundMessage {
-            id:            MessageId::new(),
-            source:        ChannelSource {
+            id:              MessageId::new(),
+            source:          ChannelSource {
                 channel_type:        ChannelType::Internal,
                 platform_message_id: None,
                 platform_user_id:    "test".to_string(),
                 platform_chat_id:    None,
             },
-            user:          UserId("u1".to_string()),
-            session_id:    SessionId::new("s1"),
+            user:            UserId("u1".to_string()),
+            session_id:      SessionId::new("s1"),
             target_agent_id: None,
-            target_agent:  None,
-            content:       MessageContent::Text(text.to_string()),
-            reply_context: None,
-            timestamp:     jiff::Timestamp::now(),
-            metadata:      HashMap::new(),
+            target_agent:    None,
+            content:         MessageContent::Text(text.to_string()),
+            reply_context:   None,
+            timestamp:       jiff::Timestamp::now(),
+            metadata:        HashMap::new(),
         }
     }
 
@@ -360,12 +360,9 @@ mod tests {
             .unwrap();
 
         // wait() should return immediately because there's a pending event
-        tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            q.wait(),
-        )
-        .await
-        .expect("wait() should return immediately when events pending");
+        tokio::time::timeout(std::time::Duration::from_millis(100), q.wait())
+            .await
+            .expect("wait() should return immediately when events pending");
     }
 
     #[tokio::test]
@@ -373,13 +370,19 @@ mod tests {
         let q = InMemoryEventQueue::new(100);
         assert_eq!(q.pending_count(), 0);
 
-        q.push(KernelEvent::UserMessage(test_inbound("a"))).await.unwrap();
+        q.push(KernelEvent::UserMessage(test_inbound("a")))
+            .await
+            .unwrap();
         assert_eq!(q.pending_count(), 1);
 
-        q.push(KernelEvent::UserMessage(test_inbound("b"))).await.unwrap();
+        q.push(KernelEvent::UserMessage(test_inbound("b")))
+            .await
+            .unwrap();
         assert_eq!(q.pending_count(), 2);
 
-        q.push(KernelEvent::UserMessage(test_inbound("c"))).await.unwrap();
+        q.push(KernelEvent::UserMessage(test_inbound("c")))
+            .await
+            .unwrap();
         assert_eq!(q.pending_count(), 3);
 
         // Drain 2

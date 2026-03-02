@@ -18,6 +18,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use rara_kernel::tool::AgentTool;
 use rara_memory::{
     MemoryManager,
     recall_engine::{
@@ -25,7 +26,6 @@ use rara_memory::{
     },
 };
 use serde_json::json;
-use rara_kernel::tool::AgentTool;
 
 /// Search unified memory layer (mem0 + Hindsight, fused with RRF).
 pub struct MemorySearchTool {

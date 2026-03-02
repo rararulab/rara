@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -42,7 +42,7 @@ pub struct RaraState {
     pub memory_manager:      Arc<rara_memory::MemoryManager>,
     pub skill_registry:      rara_skills::registry::InMemoryRegistry,
     pub mcp_manager:         rara_mcp::manager::mgr::McpManager,
-    pub coding_task_service:  rara_coding_task::service::CodingTaskService,
+    pub coding_task_service: rara_coding_task::service::CodingTaskService,
     pub object_store:        Operator,
     pub settings_provider:   Arc<dyn rara_domain_shared::settings::SettingsProvider>,
 }
@@ -94,8 +94,8 @@ impl RaraState {
 
         let mut tool_registry = rara_kernel::tool::ToolRegistry::new();
         for tool in crate::tools::default_primitives(crate::tools::PrimitiveDeps {
-            settings:               settings_provider.clone(),
-            object_store:           object_store.clone(),
+            settings: settings_provider.clone(),
+            object_store: object_store.clone(),
             composio_auth_provider,
         }) {
             tool_registry.register_primitive(tool);
@@ -115,7 +115,7 @@ impl RaraState {
         // -- coding task service ----------------------------------------------
 
         let default_repo_url = std::env::var("RARA_DEFAULT_REPO_URL")
-            .unwrap_or_else(|_| "https://github.com/crrow/job".to_owned());
+            .unwrap_or_else(|_| "https://github.com/rararulab/rara".to_owned());
         let coding_task_service = crate::coding_task::init_coding_task_service(
             pool.clone(),
             notify_client.clone(),
@@ -138,13 +138,13 @@ impl RaraState {
         crate::tools::register_service_tools(
             &mut tool_registry,
             crate::tools::ServiceToolDeps {
-                memory_manager:      memory_manager.clone(),
+                memory_manager: memory_manager.clone(),
                 recall_engine,
                 coding_task_service: coding_task_service.clone(),
-                skill_registry:      skill_registry.clone(),
-                mcp_manager:         mcp_manager.clone(),
+                skill_registry: skill_registry.clone(),
+                mcp_manager: mcp_manager.clone(),
                 notify_client,
-                settings:            settings_provider.clone(),
+                settings: settings_provider.clone(),
             },
         );
 

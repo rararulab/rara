@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,8 +25,10 @@
 //! configured prefix if its canonical form starts with the prefix's canonical
 //! form. This prevents symlink and `..` traversal attacks.
 
-use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::{
+    path::{Path, PathBuf},
+    sync::RwLock,
+};
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -341,7 +343,8 @@ mod tests {
         read_only: Vec<&str>,
         denied: Vec<&str>,
     ) -> (PathGuard, PathBuf) {
-        let workspace = std::env::temp_dir().join(format!("path-guard-test-{}", uuid::Uuid::new_v4()));
+        let workspace =
+            std::env::temp_dir().join(format!("path-guard-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&workspace).unwrap();
 
         let config = SandboxConfig {
@@ -371,11 +374,7 @@ mod tests {
         let allowed_dir = std::env::temp_dir().join(format!("allowed-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&allowed_dir).unwrap();
 
-        let (guard, workspace) = make_guard(
-            vec![allowed_dir.to_str().unwrap()],
-            vec![],
-            vec![],
-        );
+        let (guard, workspace) = make_guard(vec![allowed_dir.to_str().unwrap()], vec![], vec![]);
 
         let file = allowed_dir.join("data.txt");
         assert!(guard.check_access(&file, false).is_ok());
@@ -390,15 +389,17 @@ mod tests {
         let ro_dir = std::env::temp_dir().join(format!("readonly-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&ro_dir).unwrap();
 
-        let (guard, workspace) = make_guard(
-            vec![],
-            vec![ro_dir.to_str().unwrap()],
-            vec![],
-        );
+        let (guard, workspace) = make_guard(vec![], vec![ro_dir.to_str().unwrap()], vec![]);
 
         let file = ro_dir.join("config.toml");
-        assert!(guard.check_access(&file, false).is_ok(), "read should be allowed");
-        assert!(guard.check_access(&file, true).is_err(), "write should be denied");
+        assert!(
+            guard.check_access(&file, false).is_ok(),
+            "read should be allowed"
+        );
+        assert!(
+            guard.check_access(&file, true).is_err(),
+            "write should be denied"
+        );
 
         let _ = fs::remove_dir_all(&workspace);
         let _ = fs::remove_dir_all(&ro_dir);
@@ -468,7 +469,10 @@ mod tests {
         let (guard, workspace) = make_guard(vec![], vec![], vec![]);
 
         let result = guard.resolve("/etc/passwd");
-        assert!(result.is_err(), "absolute path outside workspace should fail");
+        assert!(
+            result.is_err(),
+            "absolute path outside workspace should fail"
+        );
 
         let _ = fs::remove_dir_all(&workspace);
     }
@@ -521,11 +525,7 @@ mod tests {
         let denied_dir = std::env::temp_dir().join(format!("guard-deny-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&denied_dir).unwrap();
 
-        let (guard, workspace) = make_guard(
-            vec![],
-            vec![],
-            vec![denied_dir.to_str().unwrap()],
-        );
+        let (guard, workspace) = make_guard(vec![], vec![], vec![denied_dir.to_str().unwrap()]);
 
         let ctx = GuardContext {
             agent_id:   uuid::Uuid::nil(),
@@ -565,11 +565,7 @@ mod tests {
         let ro_dir = std::env::temp_dir().join(format!("guard-ro-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&ro_dir).unwrap();
 
-        let (guard, workspace) = make_guard(
-            vec![],
-            vec![ro_dir.to_str().unwrap()],
-            vec![],
-        );
+        let (guard, workspace) = make_guard(vec![], vec![ro_dir.to_str().unwrap()], vec![]);
 
         let ctx = GuardContext {
             agent_id:   uuid::Uuid::nil(),
@@ -582,7 +578,10 @@ mod tests {
         // Read should be allowed.
         let args = serde_json::json!({"path": ro_file.to_str().unwrap()});
         let verdict = guard.check_tool(&ctx, "file_read", &args).await;
-        assert!(verdict.is_allow(), "reading read-only path should be allowed");
+        assert!(
+            verdict.is_allow(),
+            "reading read-only path should be allowed"
+        );
 
         // Write should be denied.
         let verdict = guard.check_tool(&ctx, "file_write", &args).await;
@@ -680,7 +679,10 @@ system_prompt: "Hello"
         let external_dir = std::env::temp_dir().join(format!("dynamic-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&external_dir).unwrap();
         let file = external_dir.join("data.txt");
-        assert!(guard.check_access(&file, false).is_err(), "should be denied before update");
+        assert!(
+            guard.check_access(&file, false).is_err(),
+            "should be denied before update"
+        );
 
         // Update config to allow the external directory.
         guard.update_config(SandboxConfig {
@@ -691,8 +693,14 @@ system_prompt: "Hello"
         });
 
         // Now it should be allowed.
-        assert!(guard.check_access(&file, false).is_ok(), "should be allowed after update");
-        assert!(guard.check_access(&file, true).is_ok(), "write should be allowed after update");
+        assert!(
+            guard.check_access(&file, false).is_ok(),
+            "should be allowed after update"
+        );
+        assert!(
+            guard.check_access(&file, true).is_ok(),
+            "write should be allowed after update"
+        );
 
         let _ = fs::remove_dir_all(&workspace);
         let _ = fs::remove_dir_all(&external_dir);

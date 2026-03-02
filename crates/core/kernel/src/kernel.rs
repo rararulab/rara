@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -53,16 +53,17 @@ use crate::{
     event::EventBus,
     event_queue::EventQueue,
     guard::Guard,
-    kv::KvBackend,    io::{
+    io::{
         egress::{EgressAdapter, EndpointRegistry},
         ingress::{IdentityResolver, IngressPipeline, SessionResolver},
         pipe::PipeRegistry,
         stream::StreamHub,
     },
+    kv::KvBackend,
     memory::Memory,
     process::{
-        AgentId, AgentManifest, ProcessState, ProcessTable,
-        SessionId, agent_registry::AgentRegistry, principal::Principal, user::UserStore,
+        AgentId, AgentManifest, ProcessState, ProcessTable, SessionId,
+        agent_registry::AgentRegistry, principal::Principal, user::UserStore,
     },
     provider::ProviderRegistry,
     session::SessionRepository,
@@ -187,7 +188,11 @@ impl KernelInner {
         &self,
         session_id: &SessionId,
     ) -> Vec<crate::channel::types::ChatMessage> {
-        match self.session_repo.read_messages(session_id, None, None).await {
+        match self
+            .session_repo
+            .read_messages(session_id, None, None)
+            .await
+        {
             Ok(msgs) => msgs,
             Err(e) => {
                 tracing::warn!(%e, "failed to load session messages");
@@ -195,9 +200,7 @@ impl KernelInner {
             }
         }
     }
-
 }
-
 
 // ---------------------------------------------------------------------------
 // KernelConfig
@@ -239,24 +242,25 @@ impl Default for KernelConfig {
 /// event loop and egress delivery as background tasks.
 pub struct Kernel {
     /// Shared kernel internals (process table, components, etc.).
-    inner:  Arc<KernelInner>,
+    inner: Arc<KernelInner>,
     /// Kernel configuration.
     config: KernelConfig,
     /// Ephemeral stream hub for real-time token deltas.
-    stream_hub:        Arc<StreamHub>,
+    stream_hub: Arc<StreamHub>,
     /// Ingress pipeline for adapters to push inbound messages.
-    ingress_pipeline:  Arc<IngressPipeline>,
+    ingress_pipeline: Arc<IngressPipeline>,
     /// Per-user endpoint registry (tracks connected channels).
     endpoint_registry: Arc<EndpointRegistry>,
     /// Registered egress adapters (mutable before start, consumed by start).
     pub(crate) egress_adapters: HashMap<ChannelType, Arc<dyn EgressAdapter>>,
     /// Unified event queue for all kernel interactions.
-    event_queue:       Arc<dyn EventQueue>,
+    event_queue: Arc<dyn EventQueue>,
     /// Sharded event queue for multi-processor event loop.
-    /// The `event_queue` field points to the same object (via `Arc<dyn EventQueue>`).
-    sharded_queue:     Arc<crate::sharded_event_queue::ShardedEventQueue>,
+    /// The `event_queue` field points to the same object (via `Arc<dyn
+    /// EventQueue>`).
+    sharded_queue: Arc<crate::sharded_event_queue::ShardedEventQueue>,
     /// When this kernel was created (for uptime calculation).
-    started_at:        Timestamp,
+    started_at: Timestamp,
 }
 
 impl Kernel {
@@ -284,7 +288,8 @@ impl Kernel {
         approval: Arc<crate::approval::ApprovalManager>,
         sharded_queue: Option<Arc<crate::sharded_event_queue::ShardedEventQueue>>,
         kv_backend: Option<Arc<dyn KvBackend>>,
-        tool_call_recorder: Option<Arc<dyn ToolCallRecorder>>,    ) -> Self {
+        tool_call_recorder: Option<Arc<dyn ToolCallRecorder>>,
+    ) -> Self {
         info!(
             max_concurrency = config.max_concurrency,
             default_child_limit = config.default_child_limit,
@@ -319,12 +324,10 @@ impl Kernel {
             event_bus,
             guard,
             agent_registry,
-            shared_kv: kv_backend.unwrap_or_else(|| {
-                Arc::new(crate::defaults::dashmap_kv::DashMapKv::new())
-            }),
-            tool_call_recorder: tool_call_recorder.unwrap_or_else(|| {
-                Arc::new(crate::audit::NoopToolCallRecorder)
-            }),
+            shared_kv: kv_backend
+                .unwrap_or_else(|| Arc::new(crate::defaults::dashmap_kv::DashMapKv::new())),
+            tool_call_recorder: tool_call_recorder
+                .unwrap_or_else(|| Arc::new(crate::audit::NoopToolCallRecorder)),
             memory_quota_per_agent: config.memory_quota_per_agent,
             user_store,
             session_repo,
@@ -390,13 +393,13 @@ impl Kernel {
         principal: Principal,
         parent_id: Option<AgentId>,
     ) -> Result<AgentId> {
-        let manifest = self
-            .inner
-            .agent_registry
-            .get(agent_name)
-            .ok_or(KernelError::ManifestNotFound {
-                name: agent_name.to_string(),
-            })?;
+        let manifest =
+            self.inner
+                .agent_registry
+                .get(agent_name)
+                .ok_or(KernelError::ManifestNotFound {
+                    name: agent_name.to_string(),
+                })?;
 
         self.spawn_with_input(manifest, input, principal, parent_id)
             .await
@@ -421,15 +424,14 @@ impl Kernel {
     pub fn config(&self) -> &KernelConfig { &self.config }
 
     /// Access the flat KV settings provider.
-    pub fn settings(&self) -> &Arc<dyn rara_domain_shared::settings::SettingsProvider> { &self.inner.settings }
+    pub fn settings(&self) -> &Arc<dyn rara_domain_shared::settings::SettingsProvider> {
+        &self.inner.settings
+    }
 
     /// Get detailed runtime statistics for a single process.
     ///
     /// Returns `None` if the process does not exist.
-    pub async fn process_stats(
-        &self,
-        agent_id: &AgentId,
-    ) -> Option<crate::process::ProcessStats> {
+    pub async fn process_stats(&self, agent_id: &AgentId) -> Option<crate::process::ProcessStats> {
         self.inner.process_table.process_stats(*agent_id).await
     }
 
@@ -444,7 +446,12 @@ impl Kernel {
         let active = pt
             .list()
             .iter()
-            .filter(|p| matches!(p.state, ProcessState::Running | ProcessState::Idle | ProcessState::Waiting))
+            .filter(|p| {
+                matches!(
+                    p.state,
+                    ProcessState::Running | ProcessState::Idle | ProcessState::Waiting
+                )
+            })
             .count();
 
         let uptime_ms = Timestamp::now()
@@ -454,12 +461,12 @@ impl Kernel {
             .unwrap_or(0);
 
         crate::process::SystemStats {
-            active_processes:           active,
-            total_spawned:              pt.total_spawned(),
-            total_completed:            pt.total_completed(),
-            total_failed:               pt.total_failed(),
+            active_processes: active,
+            total_spawned: pt.total_spawned(),
+            total_completed: pt.total_completed(),
+            total_failed: pt.total_failed(),
             global_semaphore_available: self.inner.global_semaphore.available_permits(),
-            total_tokens_consumed:      pt.total_tokens_consumed(),
+            total_tokens_consumed: pt.total_tokens_consumed(),
             uptime_ms,
         }
     }
@@ -585,7 +592,9 @@ mod tests {
     use crate::{
         audit::InMemoryAuditLog,
         defaults::{
-            noop::{NoopEventBus, NoopGuard, NoopMemory, NoopSettingsProvider, NoopSessionRepository},
+            noop::{
+                NoopEventBus, NoopGuard, NoopMemory, NoopSessionRepository, NoopSettingsProvider,
+            },
             noop_user_store::NoopUserStore,
         },
         process::principal::Principal,
@@ -606,9 +615,8 @@ mod tests {
             std::env::temp_dir().join("kernel_test_agents"),
         ));
 
-        let provider_registry = Arc::new(
-            ProviderRegistryBuilder::new("test", "test-model").build(),
-        );
+        let provider_registry =
+            Arc::new(ProviderRegistryBuilder::new("test", "test-model").build());
 
         Kernel::new(
             config,
@@ -620,7 +628,8 @@ mod tests {
             registry,
             Arc::new(NoopUserStore),
             Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
-            Arc::new(NoopSettingsProvider) as Arc<dyn rara_domain_shared::settings::SettingsProvider>,
+            Arc::new(NoopSettingsProvider)
+                as Arc<dyn rara_domain_shared::settings::SettingsProvider>,
             Arc::new(StreamHub::new(16)),
             Arc::new(crate::defaults::noop::NoopIdentityResolver) as Arc<dyn IdentityResolver>,
             Arc::new(crate::defaults::noop::NoopSessionResolver) as Arc<dyn SessionResolver>,
@@ -630,11 +639,12 @@ mod tests {
             )),
             None,
             None,
-            None,        )
+            None,
+        )
     }
 
-    /// Create a test kernel with its event loop running, returning an Arc<Kernel>
-    /// and a CancellationToken to shut it down.
+    /// Create a test kernel with its event loop running, returning an
+    /// Arc<Kernel> and a CancellationToken to shut it down.
     fn start_test_kernel(
         max_concurrency: usize,
         child_limit: usize,
@@ -647,20 +657,20 @@ mod tests {
 
     fn test_manifest(name: &str) -> AgentManifest {
         AgentManifest {
-            name:           name.to_string(),
-        role:           None,
-            description:    format!("Test agent: {name}"),
-            model:          Some("test-model".to_string()),
-            system_prompt:  "You are a test agent.".to_string(),
-            soul_prompt:    None,
-            provider_hint:  None,
-            max_iterations: Some(5),
-            tools:          vec![],
-            max_children:        None,
-            max_context_tokens:  None,
-            priority:            crate::process::Priority::default(),
-            metadata:            serde_json::Value::Null,
-            sandbox:             None,
+            name:               name.to_string(),
+            role:               None,
+            description:        format!("Test agent: {name}"),
+            model:              Some("test-model".to_string()),
+            system_prompt:      "You are a test agent.".to_string(),
+            soul_prompt:        None,
+            provider_hint:      None,
+            max_iterations:     Some(5),
+            tools:              vec![],
+            max_children:       None,
+            max_context_tokens: None,
+            priority:           crate::process::Priority::default(),
+            metadata:           serde_json::Value::Null,
+            sandbox:            None,
         }
     }
 
@@ -739,12 +749,7 @@ mod tests {
 
         // Third spawn should fail (global limit reached)
         let h3 = kernel
-            .spawn_with_input(
-                test_manifest("a3"),
-                "task 3".to_string(),
-                principal,
-                None,
-            )
+            .spawn_with_input(test_manifest("a3"), "task 3".to_string(), principal, None)
             .await;
         assert!(h3.is_err());
         let err = h3.unwrap_err();
@@ -763,12 +768,7 @@ mod tests {
         let principal = Principal::user("test-user");
 
         let result = kernel
-            .spawn_named(
-                "scout",
-                "find something".to_string(),
-                principal,
-                None,
-            )
+            .spawn_named("scout", "find something".to_string(), principal, None)
             .await;
         assert!(result.is_ok());
 
@@ -781,12 +781,7 @@ mod tests {
         let principal = Principal::user("test-user");
 
         let result = kernel
-            .spawn_named(
-                "nonexistent",
-                "task".to_string(),
-                principal,
-                None,
-            )
+            .spawn_named("nonexistent", "task".to_string(), principal, None)
             .await;
         assert!(result.is_err());
         assert!(
@@ -1131,8 +1126,8 @@ mod tests {
 
     fn make_guarded_kernel() -> Kernel {
         let config = KernelConfig {
-            max_concurrency:        10,
-            default_child_limit:    5,
+            max_concurrency: 10,
+            default_child_limit: 5,
             default_max_iterations: 5,
             memory_quota_per_agent: 1000,
             ..Default::default()
@@ -1143,9 +1138,8 @@ mod tests {
             std::env::temp_dir().join("kernel_guard_test_agents"),
         ));
 
-        let provider_registry = Arc::new(
-            ProviderRegistryBuilder::new("test", "test-model").build(),
-        );
+        let provider_registry =
+            Arc::new(ProviderRegistryBuilder::new("test", "test-model").build());
 
         Kernel::new(
             config,
@@ -1157,7 +1151,8 @@ mod tests {
             registry,
             Arc::new(NoopUserStore),
             Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
-            Arc::new(NoopSettingsProvider) as Arc<dyn rara_domain_shared::settings::SettingsProvider>,
+            Arc::new(NoopSettingsProvider)
+                as Arc<dyn rara_domain_shared::settings::SettingsProvider>,
             Arc::new(StreamHub::new(16)),
             Arc::new(crate::defaults::noop::NoopIdentityResolver) as Arc<dyn IdentityResolver>,
             Arc::new(crate::defaults::noop::NoopSessionResolver) as Arc<dyn SessionResolver>,
@@ -1195,7 +1190,10 @@ mod tests {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let checks = vec![
             ("safe_tool".to_string(), serde_json::json!({"arg": "val"})),
-            ("dangerous_delete".to_string(), serde_json::json!({"path": "/etc"})),
+            (
+                "dangerous_delete".to_string(),
+                serde_json::json!({"path": "/etc"}),
+            ),
             ("another_safe".to_string(), serde_json::json!({})),
         ];
 
@@ -1210,13 +1208,10 @@ mod tests {
         );
         kernel.event_queue().push(event).await.unwrap();
 
-        let verdicts = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            reply_rx,
-        )
-        .await
-        .expect("timeout waiting for guard verdict")
-        .expect("reply channel closed");
+        let verdicts = tokio::time::timeout(std::time::Duration::from_secs(2), reply_rx)
+            .await
+            .expect("timeout waiting for guard verdict")
+            .expect("reply channel closed");
 
         assert_eq!(verdicts.len(), 3);
         assert!(verdicts[0].is_allow(), "safe_tool should be allowed");
@@ -1255,7 +1250,10 @@ mod tests {
 
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let checks = vec![
-            ("read_file".to_string(), serde_json::json!({"path": "/tmp/test"})),
+            (
+                "read_file".to_string(),
+                serde_json::json!({"path": "/tmp/test"}),
+            ),
             ("grep".to_string(), serde_json::json!({"pattern": "hello"})),
         ];
 
@@ -1270,13 +1268,10 @@ mod tests {
         );
         kernel.event_queue().push(event).await.unwrap();
 
-        let verdicts = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            reply_rx,
-        )
-        .await
-        .expect("timeout")
-        .expect("channel closed");
+        let verdicts = tokio::time::timeout(std::time::Duration::from_secs(2), reply_rx)
+            .await
+            .expect("timeout")
+            .expect("channel closed");
 
         assert_eq!(verdicts.len(), 2);
         assert!(verdicts[0].is_allow());
@@ -1318,17 +1313,16 @@ mod tests {
         );
         kernel.event_queue().push(event).await.unwrap();
 
-        let verdicts = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            reply_rx,
-        )
-        .await
-        .expect("timeout")
-        .expect("channel closed");
+        let verdicts = tokio::time::timeout(std::time::Duration::from_secs(2), reply_rx)
+            .await
+            .expect("timeout")
+            .expect("channel closed");
 
-        assert!(verdicts.is_empty(), "empty checks should return empty verdicts");
+        assert!(
+            verdicts.is_empty(),
+            "empty checks should return empty verdicts"
+        );
 
         cancel.cancel();
     }
-
 }

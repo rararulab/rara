@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,57 +26,49 @@ use std::sync::LazyLock;
 
 use rara_kernel::process::{AgentManifest, AgentRole, Priority};
 
-static RARA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| {
-    AgentManifest {
-        name: "rara".to_string(),
-        role: Some(AgentRole::Chat),
-        description: "Rara — personal AI assistant with personality and tools".to_string(),
-        model: None,
-        system_prompt: RARA_SYSTEM_PROMPT.to_string(),
-        soul_prompt: Some(RARA_SOUL_PROMPT.to_string()),
-        provider_hint: None,
-        max_iterations: Some(25),
-        tools: vec![],
-        max_children: None,
-        max_context_tokens: None,
-        priority: Priority::default(),
-        metadata: serde_json::Value::Null,
-        sandbox: None,
-    }
+static RARA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
+    name:               "rara".to_string(),
+    role:               Some(AgentRole::Chat),
+    description:        "Rara — personal AI assistant with personality and tools".to_string(),
+    model:              None,
+    system_prompt:      RARA_SYSTEM_PROMPT.to_string(),
+    soul_prompt:        Some(RARA_SOUL_PROMPT.to_string()),
+    provider_hint:      None,
+    max_iterations:     Some(25),
+    tools:              vec![],
+    max_children:       None,
+    max_context_tokens: None,
+    priority:           Priority::default(),
+    metadata:           serde_json::Value::Null,
+    sandbox:            None,
 });
 
 /// Build the **rara** agent manifest — the default user-facing chat agent.
-pub fn rara() -> &'static AgentManifest {
-    &RARA_MANIFEST
-}
+pub fn rara() -> &'static AgentManifest { &RARA_MANIFEST }
 
 // ---------------------------------------------------------------------------
 // Nana — friendly chat companion
 // ---------------------------------------------------------------------------
 
-static NANA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| {
-    AgentManifest {
-        name: "nana".to_string(),
-        role: Some(AgentRole::Chat),
-        description: "Nana — friendly chat companion, rara's sister".to_string(),
-        model: None,
-        system_prompt: NANA_SYSTEM_PROMPT.to_string(),
-        soul_prompt: Some(NANA_SOUL_PROMPT.to_string()),
-        provider_hint: None,
-        max_iterations: Some(10),
-        tools: vec![],
-        max_children: Some(0),
-        max_context_tokens: None,
-        priority: Priority::default(),
-        metadata: serde_json::Value::Null,
-        sandbox: None,
-    }
+static NANA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
+    name:               "nana".to_string(),
+    role:               Some(AgentRole::Chat),
+    description:        "Nana — friendly chat companion, rara's sister".to_string(),
+    model:              None,
+    system_prompt:      NANA_SYSTEM_PROMPT.to_string(),
+    soul_prompt:        Some(NANA_SOUL_PROMPT.to_string()),
+    provider_hint:      None,
+    max_iterations:     Some(10),
+    tools:              vec![],
+    max_children:       Some(0),
+    max_context_tokens: None,
+    priority:           Priority::default(),
+    metadata:           serde_json::Value::Null,
+    sandbox:            None,
 });
 
 /// Build the **nana** agent manifest — a chat-only companion for regular users.
-pub fn nana() -> &'static AgentManifest {
-    &NANA_MANIFEST
-}
+pub fn nana() -> &'static AgentManifest { &NANA_MANIFEST }
 
 // ---------------------------------------------------------------------------
 // Rara soul prompt (personality/mood/voice)

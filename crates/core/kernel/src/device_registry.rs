@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -97,10 +97,10 @@ impl DeviceRegistry {
     /// Returns [`KernelError::DeviceNotFound`] if no device with the given ID
     /// exists.
     pub fn unregister(&self, id: &DeviceId) -> Result<DeviceEvent> {
-        let (_id, device) =
-            self.devices
-                .remove(id)
-                .ok_or_else(|| KernelError::DeviceNotFound { id: id.0.clone() })?;
+        let (_id, device) = self
+            .devices
+            .remove(id)
+            .ok_or_else(|| KernelError::DeviceNotFound { id: id.0.clone() })?;
 
         // Remove tool → device mappings for this device.
         let info = device.info();
@@ -189,7 +189,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::device::{DeviceType, DeviceStatus};
+    use crate::device::{DeviceStatus, DeviceType};
 
     /// A simple in-memory device for testing.
     struct FakeDevice {
@@ -203,9 +203,9 @@ mod tests {
     impl FakeDevice {
         fn new(id: &str, name: &str, tools: Vec<&str>, healthy: bool) -> Self {
             Self {
-                id:           DeviceId::new(id),
-                name:         name.to_string(),
-                device_type:  DeviceType::McpServer,
+                id: DeviceId::new(id),
+                name: name.to_string(),
+                device_type: DeviceType::McpServer,
                 capabilities: tools.into_iter().map(String::from).collect(),
                 healthy,
             }
@@ -462,19 +462,11 @@ mod tests {
         assert!(registry.is_empty());
 
         // Re-register with different tools.
-        let device2 = Arc::new(FakeDevice::new(
-            "d1",
-            "Device v2",
-            vec!["tool_b"],
-            true,
-        ));
+        let device2 = Arc::new(FakeDevice::new("d1", "Device v2", vec!["tool_b"], true));
         registry.register(device2).unwrap();
         assert_eq!(registry.len(), 1);
 
         assert!(registry.find_by_tool("tool_a").is_none());
-        assert_eq!(
-            registry.find_by_tool("tool_b"),
-            Some(DeviceId::new("d1"))
-        );
+        assert_eq!(registry.find_by_tool("tool_b"), Some(DeviceId::new("d1")));
     }
 }

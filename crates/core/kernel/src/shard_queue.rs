@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -28,10 +28,7 @@ use std::{
 
 use tokio::sync;
 
-use crate::{
-    io::types::BusError,
-    unified_event::KernelEvent,
-};
+use crate::{io::types::BusError, unified_event::KernelEvent};
 
 /// A single priority shard — 3-tier queue with async notification.
 ///
@@ -82,9 +79,7 @@ impl ShardQueue {
     }
 
     /// Non-blocking push (same as `push` since we never await).
-    pub fn try_push(&self, event: KernelEvent) -> Result<(), BusError> {
-        self.push(event)
-    }
+    pub fn try_push(&self, event: KernelEvent) -> Result<(), BusError> { self.push(event) }
 
     /// Drain up to `max` events from the queue, in priority order.
     ///
@@ -122,9 +117,7 @@ impl ShardQueue {
     }
 
     /// Current total pending count across all tiers.
-    pub fn pending_count(&self) -> usize {
-        self.pending.load(Ordering::Acquire)
-    }
+    pub fn pending_count(&self) -> usize { self.pending.load(Ordering::Acquire) }
 }
 
 impl std::fmt::Debug for ShardQueue {
@@ -138,13 +131,15 @@ impl std::fmt::Debug for ShardQueue {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::unified_event::KernelEvent;
-    use crate::io::types::InboundMessage;
-    use crate::process::{AgentId, SessionId, Signal, principal::UserId};
-    use crate::channel::types::{ChannelType, MessageContent};
-    use crate::io::types::{ChannelSource, MessageId};
     use std::collections::HashMap;
+
+    use super::*;
+    use crate::{
+        channel::types::{ChannelType, MessageContent},
+        io::types::{ChannelSource, InboundMessage, MessageId},
+        process::{AgentId, SessionId, Signal, principal::UserId},
+        unified_event::KernelEvent,
+    };
 
     fn test_inbound(text: &str) -> InboundMessage {
         InboundMessage {
@@ -170,8 +165,10 @@ mod tests {
     fn test_push_and_drain() {
         let q = ShardQueue::new(100);
 
-        q.push(KernelEvent::UserMessage(test_inbound("hello"))).unwrap();
-        q.push(KernelEvent::UserMessage(test_inbound("world"))).unwrap();
+        q.push(KernelEvent::UserMessage(test_inbound("hello")))
+            .unwrap();
+        q.push(KernelEvent::UserMessage(test_inbound("world")))
+            .unwrap();
 
         assert_eq!(q.pending_count(), 2);
 
@@ -185,7 +182,8 @@ mod tests {
         let q = ShardQueue::new(100);
 
         // Push in reverse priority order: Low, Normal, Critical
-        q.push(KernelEvent::UserMessage(test_inbound("low"))).unwrap();
+        q.push(KernelEvent::UserMessage(test_inbound("low")))
+            .unwrap();
         q.push(KernelEvent::Deliver(crate::io::types::OutboundEnvelope {
             id:          MessageId::new(),
             in_reply_to: MessageId::new(),
@@ -197,11 +195,13 @@ mod tests {
                 attachments: vec![],
             },
             timestamp:   jiff::Timestamp::now(),
-        })).unwrap();
+        }))
+        .unwrap();
         q.push(KernelEvent::SendSignal {
             target: AgentId::new(),
             signal: Signal::Interrupt,
-        }).unwrap();
+        })
+        .unwrap();
 
         let events = q.drain(10);
         assert_eq!(events.len(), 3);
@@ -238,7 +238,8 @@ mod tests {
         });
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        q.push(KernelEvent::UserMessage(test_inbound("wake"))).unwrap();
+        q.push(KernelEvent::UserMessage(test_inbound("wake")))
+            .unwrap();
 
         handle.await.unwrap();
     }
@@ -248,7 +249,8 @@ mod tests {
         let q = ShardQueue::new(100);
 
         for i in 0..5 {
-            q.push(KernelEvent::UserMessage(test_inbound(&format!("msg{i}")))).unwrap();
+            q.push(KernelEvent::UserMessage(test_inbound(&format!("msg{i}"))))
+                .unwrap();
         }
 
         let events = q.drain(3);
@@ -260,7 +262,8 @@ mod tests {
     fn test_try_push_sync() {
         let q = ShardQueue::new(100);
 
-        q.try_push(KernelEvent::UserMessage(test_inbound("sync"))).unwrap();
+        q.try_push(KernelEvent::UserMessage(test_inbound("sync")))
+            .unwrap();
 
         assert_eq!(q.pending_count(), 1);
         let events = q.drain(10);
@@ -271,7 +274,8 @@ mod tests {
     fn test_try_push_sync_full() {
         let q = ShardQueue::new(1);
 
-        q.try_push(KernelEvent::UserMessage(test_inbound("a"))).unwrap();
+        q.try_push(KernelEvent::UserMessage(test_inbound("a")))
+            .unwrap();
 
         let result = q.try_push(KernelEvent::UserMessage(test_inbound("b")));
         assert!(result.is_err());
@@ -289,15 +293,13 @@ mod tests {
     #[tokio::test]
     async fn test_wait_returns_immediately_when_pending() {
         let q = ShardQueue::new(100);
-        q.push(KernelEvent::UserMessage(test_inbound("already"))).unwrap();
+        q.push(KernelEvent::UserMessage(test_inbound("already")))
+            .unwrap();
 
         // wait() should return immediately because there's a pending event
-        tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            q.wait(),
-        )
-        .await
-        .expect("wait() should return immediately when events pending");
+        tokio::time::timeout(std::time::Duration::from_millis(100), q.wait())
+            .await
+            .expect("wait() should return immediately when events pending");
     }
 
     #[test]
@@ -327,7 +329,8 @@ mod tests {
         let q = ShardQueue::new(100);
 
         // Push a Low event first, then Shutdown (Critical)
-        q.push(KernelEvent::UserMessage(test_inbound("low"))).unwrap();
+        q.push(KernelEvent::UserMessage(test_inbound("low")))
+            .unwrap();
         q.push(KernelEvent::Shutdown).unwrap();
 
         let events = q.drain(10);

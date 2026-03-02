@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,8 @@
 //! ManifestLoader — loads [`AgentManifest`] definitions.
 //!
 //! Supports two sources:
-//! - **Code-defined**: loaded via [`load_manifests`](ManifestLoader::load_manifests)
+//! - **Code-defined**: loaded via
+//!   [`load_manifests`](ManifestLoader::load_manifests)
 //! - **User directory**: YAML files loaded at runtime from a filesystem path
 
 use std::path::Path;
@@ -136,7 +137,10 @@ mod tests {
         };
         loader.load_manifests(std::iter::once(manifest));
         assert_eq!(loader.list().len(), 1);
-        assert_eq!(loader.get("test-agent").unwrap().model, Some("gpt-4".to_string()));
+        assert_eq!(
+            loader.get("test-agent").unwrap().model,
+            Some("gpt-4".to_string())
+        );
     }
 
     #[test]
@@ -177,7 +181,10 @@ mod tests {
         loader.load_manifests(std::iter::once(m1));
         loader.load_manifests(std::iter::once(m2));
         assert_eq!(loader.list().len(), 1);
-        assert_eq!(loader.get("agent").unwrap().model, Some("gpt-4".to_string()));
+        assert_eq!(
+            loader.get("agent").unwrap().model,
+            Some("gpt-4".to_string())
+        );
     }
 
     #[test]

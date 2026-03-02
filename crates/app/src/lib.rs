@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,10 +20,9 @@ use std::{
     time::Duration,
 };
 
-use rara_kernel::io::{egress::EndpointRegistry, ingress::IngressPipeline, stream::StreamHub};
-
 use opendal::Operator;
 use rara_domain_shared::notify::client::NotifyClient;
+use rara_kernel::io::{egress::EndpointRegistry, ingress::IngressPipeline, stream::StreamHub};
 use rara_server::{
     grpc::{GrpcServerConfig, hello::HelloService, start_grpc_server},
     http::{RestServerConfig, health_routes, start_rest_server},
@@ -278,9 +277,8 @@ impl AppConfig {
         // PathGuard wraps NoopGuard with file-system access control.
         let workspace_path = std::env::current_dir()
             .whatever_context("Failed to determine current working directory")?;
-        let sandbox_config = rara_boot::guard::sandbox_config_from_settings(
-            settings_provider.as_ref(),
-        ).await;
+        let sandbox_config =
+            rara_boot::guard::sandbox_config_from_settings(settings_provider.as_ref()).await;
         let path_guard = Arc::new(rara_kernel::guard::path_guard::PathGuard::new(
             sandbox_config,
             workspace_path,
@@ -294,15 +292,13 @@ impl AppConfig {
             tokio::spawn(async move {
                 let mut rx = settings_ref.subscribe();
                 while rx.changed().await.is_ok() {
-                    let new_config = rara_boot::guard::sandbox_config_from_settings(
-                        settings_ref.as_ref(),
-                    ).await;
+                    let new_config =
+                        rara_boot::guard::sandbox_config_from_settings(settings_ref.as_ref()).await;
                     guard_ref.update_config(new_config);
                     tracing::info!("PathGuard sandbox config reloaded from settings");
                 }
             });
         }
-
 
         // -- AgentFS for persistent KV + tool call audit ---------------------
 
@@ -314,25 +310,32 @@ impl AppConfig {
             Ok(agentfs) => {
                 let agentfs = Arc::new(agentfs);
                 let agentfs_path = data_dir.join("agentfs");
-                info!("AgentFS initialized at {}", agentfs_path.display());                (
-                    Some(Arc::new(rara_boot::agentfs::AgentFsKv::new(agentfs.clone()))),
-                    Some(Arc::new(rara_boot::agentfs::AgentFsToolCallRecorder::new(agentfs))),
+                info!("AgentFS initialized at {}", agentfs_path.display());
+                (
+                    Some(Arc::new(rara_boot::agentfs::AgentFsKv::new(
+                        agentfs.clone(),
+                    ))),
+                    Some(Arc::new(rara_boot::agentfs::AgentFsToolCallRecorder::new(
+                        agentfs,
+                    ))),
                 )
             }
             Err(e) => {
                 warn!(error = %e, "AgentFS init failed, falling back to in-memory defaults");
                 (None, None)
             }
-        };        let mut kernel = rara_boot::kernel::boot(rara_boot::kernel::BootConfig {
+        };
+        let mut kernel = rara_boot::kernel::boot(rara_boot::kernel::BootConfig {
             provider_registry: rara.provider_registry.clone(),
-            tool_registry:     rara.tool_registry.clone(),
-            agent_registry:    Arc::new(rara_boot::manifests::load_default_registry()),
-            user_store:        rara.user_store.clone(),
-            session_repo:      rara.session_repo.clone(),
-            settings:          settings_provider.clone(),
-            guard:             Some(path_guard as Arc<dyn rara_kernel::guard::Guard>),
+            tool_registry: rara.tool_registry.clone(),
+            agent_registry: Arc::new(rara_boot::manifests::load_default_registry()),
+            user_store: rara.user_store.clone(),
+            session_repo: rara.session_repo.clone(),
+            settings: settings_provider.clone(),
+            guard: Some(path_guard as Arc<dyn rara_kernel::guard::Guard>),
             kv_backend,
-            tool_call_recorder: tool_recorder,            ..Default::default()
+            tool_call_recorder: tool_recorder,
+            ..Default::default()
         });
 
         // -- HTTP routes (need kernel Arc for agent/kernel routes) -----------
@@ -348,7 +351,9 @@ impl AppConfig {
             &backend.contact_repo,
             pool.clone(),
             &self.main_service_http_base,
-        ).await {
+        )
+        .await
+        {
             Ok(Some(adapter)) => {
                 info!("Telegram adapter built");
                 Some(adapter)
@@ -365,28 +370,19 @@ impl AppConfig {
 
         // Register egress adapters.
         if let Some(ref tg) = telegram_adapter {
-            use rara_kernel::channel::types::ChannelType;
-            use rara_kernel::io::egress::EgressAdapter;
-            kernel.register_adapter(
-                ChannelType::Telegram,
-                tg.clone() as Arc<dyn EgressAdapter>,
-            );
+            use rara_kernel::{channel::types::ChannelType, io::egress::EgressAdapter};
+            kernel.register_adapter(ChannelType::Telegram, tg.clone() as Arc<dyn EgressAdapter>);
         }
         {
-            use rara_kernel::channel::types::ChannelType;
-            use rara_kernel::io::egress::EgressAdapter;
+            use rara_kernel::{channel::types::ChannelType, io::egress::EgressAdapter};
             kernel.register_adapter(
                 ChannelType::Web,
                 web_adapter.clone() as Arc<dyn EgressAdapter>,
             );
         }
         if let Some(ref cli) = options.cli_adapter {
-            use rara_kernel::channel::types::ChannelType;
-            use rara_kernel::io::egress::EgressAdapter;
-            kernel.register_adapter(
-                ChannelType::Cli,
-                cli.clone() as Arc<dyn EgressAdapter>,
-            );
+            use rara_kernel::{channel::types::ChannelType, io::egress::EgressAdapter};
+            kernel.register_adapter(ChannelType::Cli, cli.clone() as Arc<dyn EgressAdapter>);
         }
 
         // Inject StreamHub / EndpointRegistry into WebAdapter before start.
@@ -420,8 +416,8 @@ impl AppConfig {
         let jwt_config = rara_domain_user::jwt::JwtConfig::new(jwt_secret.clone());
         let auth_service =
             rara_domain_user::service::AuthService::new(pool.clone(), jwt_config.clone());
-        let auth_routes = rara_domain_user::router::auth_routes(auth_service)
-            .layer(axum::Extension(jwt_config));
+        let auth_routes =
+            rara_domain_user::router::auth_routes(auth_service).layer(axum::Extension(jwt_config));
 
         // Inject JWT secret into WebAdapter for WebSocket auth.
         web_adapter.set_jwt_secret(jwt_secret).await;
@@ -475,8 +471,7 @@ impl AppConfig {
             runtime:          Some(worker_runtime),
             shutdown_timeout: Duration::from_secs(30),
         };
-        let mut worker_manager =
-            common_worker::Manager::with_state_and_config((), manager_config);
+        let mut worker_manager = common_worker::Manager::with_state_and_config((), manager_config);
 
         // Start channel adapters with the kernel's ingress pipeline.
         if let Some(ref tg_adapter) = telegram_adapter {
@@ -625,15 +620,11 @@ impl AppConfig {
         );
 
         let adapter = Arc::new(
-            rara_channels::telegram::TelegramAdapter::with_proxy(
-                &token,
-                vec![],
-                proxy.as_deref(),
-            )
-            .whatever_context("failed to build telegram adapter")?
-            .with_config(tg_config)
-            .with_contact_tracker(contact_tracker)
-            .with_link_service(link_service),
+            rara_channels::telegram::TelegramAdapter::with_proxy(&token, vec![], proxy.as_deref())
+                .whatever_context("failed to build telegram adapter")?
+                .with_config(tg_config)
+                .with_contact_tracker(contact_tracker)
+                .with_link_service(link_service),
         );
 
         // Spawn a background task to hot-reload config from settings.
@@ -688,9 +679,9 @@ impl AppConfig {
 /// Handle for controlling a running application.
 #[allow(dead_code)]
 pub struct AppHandle {
-    shutdown_tx:        Option<oneshot::Sender<()>>,
-    running:            Arc<AtomicBool>,
-    cancellation_token: CancellationToken,
+    shutdown_tx:           Option<oneshot::Sender<()>>,
+    running:               Arc<AtomicBool>,
+    cancellation_token:    CancellationToken,
     /// The ingress pipeline (for injecting inbound messages).
     pub ingress_pipeline:  Option<Arc<IngressPipeline>>,
     /// Per-user endpoint registry (for registering CLI endpoints).

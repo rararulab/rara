@@ -90,7 +90,7 @@ just proto-deps-update
 Generated Go code is in `gen/go/` with proper go_package options:
 
 ```go
-import hellov1 "github.com/crrow/job/gen/go/hello/v1"
+import hellov1 "github.com/rararulab/rara/gen/go/hello/v1"
 ```
 
 ### Java

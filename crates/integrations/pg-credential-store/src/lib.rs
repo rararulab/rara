@@ -1,4 +1,4 @@
-// Copyright 2025 Crrow
+// Copyright 2025 Rararulab
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,9 +30,7 @@ impl Debug for PgKeyringStore {
 }
 
 impl PgKeyringStore {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
+    pub fn new(pool: PgPool) -> Self { Self { pool } }
 }
 
 #[async_trait]
@@ -56,9 +54,9 @@ impl KeyringStore for PgKeyringStore {
     #[tracing::instrument(skip(self, value), fields(value_len = value.len()), level = "debug")]
     async fn save(&self, service: &str, account: &str, value: &str) -> Result<()> {
         sqlx::query(
-            "INSERT INTO credential_store (service, account, value, updated_at) \
-             VALUES ($1, $2, $3, now()) \
-             ON CONFLICT (service, account) DO UPDATE SET value = $3, updated_at = now()",
+            "INSERT INTO credential_store (service, account, value, updated_at) VALUES ($1, $2, \
+             $3, now()) ON CONFLICT (service, account) DO UPDATE SET value = $3, updated_at = \
+             now()",
         )
         .bind(service)
         .bind(account)
@@ -74,26 +72,26 @@ impl KeyringStore for PgKeyringStore {
 
     #[tracing::instrument(skip(self), level = "debug")]
     async fn delete(&self, service: &str, account: &str) -> Result<bool> {
-        let result = sqlx::query(
-            "DELETE FROM credential_store WHERE service = $1 AND account = $2",
-        )
-        .bind(service)
-        .bind(account)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| rara_keyring_store::Error::Pg {
-            source:   e,
-            location: snafu::Location::default(),
-        })?;
+        let result =
+            sqlx::query("DELETE FROM credential_store WHERE service = $1 AND account = $2")
+                .bind(service)
+                .bind(account)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| rara_keyring_store::Error::Pg {
+                    source:   e,
+                    location: snafu::Location::default(),
+                })?;
         Ok(result.rows_affected() > 0)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::postgres::Postgres;
+
+    use super::*;
 
     async fn setup() -> (PgPool, impl std::any::Any) {
         let container = Postgres::default().start().await.unwrap();

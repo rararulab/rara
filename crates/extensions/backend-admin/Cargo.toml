@@ -22,6 +22,7 @@ jobspy-sys = { workspace = true }
 llmfit-core = { workspace = true }
 opendal = { workspace = true }
 opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"] }
+rara-boot = { workspace = true }
 rara-channels = { workspace = true }
 rara-codex-oauth = { workspace = true }
 rara-coding-task = { workspace = true }
@@ -42,7 +43,6 @@ strum = { workspace = true }
 strum_macros = { workspace = true }
 tokio = { workspace = true, features = ["sync", "fs", "rt"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
-rara-boot = { workspace = true }
 tracing = { workspace = true }
 tracing-opentelemetry = "0.32.0"
 utoipa = { workspace = true }
