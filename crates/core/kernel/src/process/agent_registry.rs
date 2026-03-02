@@ -43,6 +43,7 @@ impl AgentRegistry {
         registry
     }
 
+    #[tracing::instrument(skip(self))]
     pub fn get(&self, name: &str) -> Option<AgentManifest> {
         // Custom first (shadow), then builtin
         if let Some(m) = self.custom.get(name) {
@@ -59,6 +60,7 @@ impl AgentRegistry {
         result.into_values().collect()
     }
 
+    #[tracing::instrument(skip(self, manifest), fields(agent_name = %manifest.name))]
     pub fn register(&self, manifest: AgentManifest) -> Result<()> {
         let name = manifest.name.clone();
         // Persist to YAML

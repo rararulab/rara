@@ -609,6 +609,7 @@ impl ProcessTable {
     }
 
     /// Insert a process into the table.
+    #[tracing::instrument(skip(self, process), fields(agent_id = %process.agent_id, agent_name = %process.manifest.name))]
     pub fn insert(&self, process: AgentProcess) {
         let agent_id = process.agent_id;
         if let Some(ref channel_sid) = process.channel_session_id {
@@ -635,6 +636,7 @@ impl ProcessTable {
     ///
     /// Automatically sets `finished_at` when transitioning to a terminal state
     /// and increments aggregate completed/failed counters.
+    #[tracing::instrument(skip(self), fields(new_state = %state))]
     pub fn set_state(&self, id: AgentId, state: ProcessState) -> Result<()> {
         let mut entry = self
             .processes
@@ -677,6 +679,7 @@ impl ProcessTable {
     }
 
     /// Remove a process from the table, returning it if it existed.
+    #[tracing::instrument(skip(self))]
     pub fn remove(&self, id: AgentId) -> Option<AgentProcess> {
         let removed = self.processes.remove(&id).map(|(_, p)| p);
         if let Some(ref process) = removed {
