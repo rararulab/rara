@@ -26,11 +26,16 @@
 //! - [`StreamHandle`] is held by the agent executor; dropping it does NOT
 //!   auto-close (use explicit `close` on `StreamHub`).
 
+use std::sync::Arc;
+
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 use crate::process::SessionId;
+
+/// Shared reference to the [`StreamHub`].
+pub type StreamHubRef = Arc<StreamHub>;
 
 // ---------------------------------------------------------------------------
 // StreamId

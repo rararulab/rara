@@ -14,6 +14,8 @@
 
 //! Event bus abstraction — inter-component event broadcasting.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use jiff::Timestamp;
 use tokio::sync::broadcast;
@@ -75,6 +77,8 @@ pub type EventStream = broadcast::Receiver<KernelEvent>;
 // ---------------------------------------------------------------------------
 // EventBus trait
 // ---------------------------------------------------------------------------
+
+pub type EventBusRef = Arc<dyn EventBus>;
 
 /// Inter-component event broadcasting.
 #[async_trait]

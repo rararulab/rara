@@ -20,6 +20,9 @@ use async_trait::async_trait;
 /// Reference-counted handle to an agent tool.
 pub type AgentToolRef = Arc<dyn AgentTool>;
 
+/// Shared reference to the [`ToolRegistry`].
+pub type ToolRegistryRef = Arc<ToolRegistry>;
+
 /// Agent-callable tool.
 #[async_trait]
 pub trait AgentTool: Send + Sync {

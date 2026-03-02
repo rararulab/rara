@@ -22,17 +22,19 @@
 //! # Architecture
 //!
 //! ```text
-//! Kernel (top-level)
+//! Kernel (top-level, behind Arc after start())
 //!   ├── ProcessTable  (all running agents)
 //!   ├── global_semaphore (max total concurrent agents)
 //!   ├── AgentRegistry   (named agent definitions)
-//!   └── KernelInner (shared state via Arc)
-//!         ├── LlmProviderLoader
-//!         ├── ToolRegistry
-//!         ├── Memory
-//!         ├── EventBus
-//!         ├── Guard
-//!         └── shared_kv (cross-agent KV)
+//!   ├── ProviderRegistry (multi-provider LLM)
+//!   ├── ToolRegistry
+//!   ├── Memory
+//!   ├── EventBus
+//!   ├── SecuritySubsystem (auth + authz + approval + guard)
+//!   ├── shared_kv (cross-agent KV)
+//!   ├── AuditSubsystem
+//!   ├── StreamHub + IngressPipeline + EndpointRegistry
+//!   └── EventQueue (sharded)
 //! ```
 //!
 //! Each spawned agent receives a [`ProcessHandle`] — a thin event pusher that
@@ -47,78 +49,354 @@ use tracing::info;
 
 use crate::{
     audit::{AuditEvent, AuditFilter, AuditLog},
+    audit_subsystem::AuditRef,
     channel::types::ChannelType,
-    device_registry::DeviceRegistry,
+    device_registry::{DeviceRegistry, DeviceRegistryRef},
     error::{KernelError, Result},
-    event::EventBus,
-    event_queue::EventQueue,
+    event::EventBusRef,
+    event_queue::EventQueueRef,
     io::{
-        egress::{EgressAdapter, EndpointRegistry},
-        ingress::{IdentityResolver, IngressPipeline, SessionResolver},
+        egress::{EgressAdapterRef, EndpointRegistry, EndpointRegistryRef},
+        ingress::{IdentityResolverRef, IngressPipeline, IngressPipelineRef, SessionResolverRef},
         pipe::PipeRegistry,
-        stream::StreamHub,
+        stream::StreamHubRef,
     },
-    kv::KvBackend,
-    memory::Memory,
+    kv::KvBackendRef,
+    memory::MemoryRef,
     process::{
         AgentId, AgentManifest, ProcessState, ProcessTable, SessionId,
-        agent_registry::AgentRegistry, principal::Principal,
+        agent_registry::AgentRegistryRef, principal::Principal,
     },
-    provider::ProviderRegistry,
-    session::SessionRepository,
-    tool::ToolRegistry,
+    provider::ProviderRegistryRef,
+    security::SecurityRef,
+    session::SessionRepoRef,
+    sharded_event_queue::ShardedQueueRef,
+    tool::ToolRegistryRef,
 };
 
 // ---------------------------------------------------------------------------
-// KernelInner — shared kernel state
+// KernelConfig
 // ---------------------------------------------------------------------------
 
-/// Shared kernel state accessed by the event loop via `Arc`.
-///
-/// This is the "real" kernel data — process table, component registries,
-/// I/O subsystems. `Kernel` wraps it with concurrency config and a public API.
-pub(crate) struct KernelInner {
-    /// The global process table tracking all running agents.
-    pub process_table:          Arc<ProcessTable>,
-    /// Global semaphore limiting total concurrent agent processes.
-    pub global_semaphore:       Arc<Semaphore>,
+/// Kernel configuration.
+#[derive(Debug, Clone, smart_default::SmartDefault)]
+pub struct KernelConfig {
+    /// Maximum number of concurrent agent processes globally.
+    #[default = 16]
+    pub max_concurrency:        usize,
     /// Default maximum number of children per agent.
+    #[default = 8]
     pub default_child_limit:    usize,
     /// Default max LLM iterations for spawned agents.
+    #[default = 25]
     pub default_max_iterations: usize,
-    /// Multi-provider LLM registry with per-agent overrides.
-    pub provider_registry:      Arc<ProviderRegistry>,
-    /// Global tool registry (spawned agents get filtered subsets).
-    pub tool_registry:          Arc<ToolRegistry>,
-    /// 3-layer memory (not used for cross-agent KV — see shared_kv).
-    pub memory:                 Arc<dyn Memory>,
-    /// Event bus for publishing kernel events.
-    pub event_bus:              Arc<dyn EventBus>,
-    /// Unified security subsystem (auth + authz + approval).
-    pub security:               Arc<crate::security::SecuritySubsystem>,
-    /// Agent registry for looking up named agent definitions.
-    pub agent_registry:         Arc<AgentRegistry>,
-    /// Cross-agent shared key-value store (trait-based, swappable backend).
-    pub shared_kv:              Arc<dyn KvBackend>,
-    /// Unified audit subsystem (logging + tool call recording).
-    pub audit:                  Arc<crate::audit_subsystem::AuditSubsystem>,
     /// Maximum number of KV entries per agent (0 = unlimited).
+    /// Applies to the agent-scoped namespace only.
+    #[default = 1000]
     pub memory_quota_per_agent: usize,
-    /// Session repository for conversation history.
-    pub session_repo:           Arc<dyn SessionRepository>,
-    /// Flat KV settings provider for runtime configuration.
-    pub settings:               Arc<dyn rara_domain_shared::settings::SettingsProvider>,
-    /// Stream hub for real-time streaming events.
-    pub stream_hub:             Arc<StreamHub>,
-    /// Inter-agent pipe registry for streaming data between agents.
-    pub pipe_registry:          Arc<PipeRegistry>,
-    /// Device registry for hot-pluggable devices (MCP servers, APIs, etc.).
-    pub device_registry:        Arc<DeviceRegistry>,
-    /// Unified event queue (tiered priority) for all kernel interactions.
-    pub event_queue:            Arc<dyn EventQueue>,
 }
 
-impl KernelInner {
+/// Shared reference to a [`SettingsProvider`](rara_domain_shared::settings::SettingsProvider).
+pub type SettingsRef = Arc<dyn rara_domain_shared::settings::SettingsProvider>;
+
+/// The unified agent orchestrator.
+///
+/// Acts as an OS kernel for agents: manages the process table, enforces
+/// concurrency limits, and provides the event loop as the single driver
+/// for all kernel activity.
+///
+/// The Kernel owns its I/O subsystem: stream hub, endpoint registry, and
+/// ingress pipeline. Call [`start()`](Self::start) to spawn the unified
+/// event loop and egress delivery as background tasks.
+///
+/// After [`start()`](Self::start), the Kernel lives behind `Arc<Kernel>`.
+/// Fields that were previously in a separate `KernelInner` are now
+/// flattened directly into this struct.
+pub struct Kernel {
+    /// Kernel configuration.
+    config: KernelConfig,
+    // -- Core subsystems (previously in KernelInner) -----------------------
+    /// The global process table tracking all running agents.
+    process_table:     ProcessTable,
+    /// Global semaphore limiting total concurrent agent processes.
+    global_semaphore:  Arc<Semaphore>,
+    /// Multi-provider LLM registry with per-agent overrides.
+    provider_registry: ProviderRegistryRef,
+    /// Global tool registry (spawned agents get filtered subsets).
+    tool_registry:     ToolRegistryRef,
+    /// 3-layer memory (not used for cross-agent KV — see shared_kv).
+    memory:            MemoryRef,
+    /// Event bus for publishing kernel events.
+    event_bus:         EventBusRef,
+    /// Unified security subsystem (auth + authz + approval).
+    security:          SecurityRef,
+    /// Agent registry for looking up named agent definitions.
+    agent_registry:    AgentRegistryRef,
+    /// Cross-agent shared key-value store (trait-based, swappable backend).
+    shared_kv:         KvBackendRef,
+    /// Unified audit subsystem (logging + tool call recording).
+    audit:             AuditRef,
+    /// Session repository for conversation history.
+    session_repo:      SessionRepoRef,
+    /// Flat KV settings provider for runtime configuration.
+    settings:          SettingsRef,
+    /// Inter-agent pipe registry for streaming data between agents.
+    pipe_registry:     PipeRegistry,
+    /// Device registry for hot-pluggable devices (MCP servers, APIs, etc.).
+    device_registry:   DeviceRegistryRef,
+    // -- I/O subsystem -----------------------------------------------------
+    /// Ephemeral stream hub for real-time token deltas.
+    stream_hub:        StreamHubRef,
+    /// Ingress pipeline for adapters to push inbound messages.
+    ingress_pipeline:  IngressPipelineRef,
+    /// Per-user endpoint registry (tracks connected channels).
+    endpoint_registry: EndpointRegistryRef,
+    /// Registered egress adapters (mutable before start, consumed by start).
+    pub(crate) egress_adapters: HashMap<ChannelType, EgressAdapterRef>,
+    /// Unified event queue for all kernel interactions.
+    event_queue:       EventQueueRef,
+    /// Sharded event queue for multi-processor event loop.
+    /// The `event_queue` field points to the same object (via `Arc<dyn
+    /// EventQueue>`).
+    sharded_queue:     ShardedQueueRef,
+    /// When this kernel was created (for uptime calculation).
+    started_at:        Timestamp,
+}
+
+impl Kernel {
+    /// Create a new Kernel with the given configuration, components, and I/O
+    /// subsystem.
+    ///
+    /// The I/O subsystem is fully assembled at construction time. Call
+    /// [`start()`](Self::start) to spawn the unified event loop.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        config: KernelConfig,
+        provider_registry: ProviderRegistryRef,
+        tool_registry: ToolRegistryRef,
+        memory: MemoryRef,
+        event_bus: EventBusRef,
+        security: SecurityRef,
+        agent_registry: AgentRegistryRef,
+        session_repo: SessionRepoRef,
+        settings: SettingsRef,
+        stream_hub: StreamHubRef,
+        identity_resolver: IdentityResolverRef,
+        session_resolver: SessionResolverRef,
+        audit: AuditRef,
+        sharded_queue: Option<ShardedQueueRef>,
+        kv_backend: Option<KvBackendRef>,
+    ) -> Self {
+        info!(
+            max_concurrency = config.max_concurrency,
+            default_child_limit = config.default_child_limit,
+            default_max_iterations = config.default_max_iterations,
+            "booting kernel"
+        );
+
+        let endpoint_registry = Arc::new(EndpointRegistry::new());
+
+        // Always use a ShardedEventQueue — create a default one if not provided.
+        let sharded_queue = sharded_queue.unwrap_or_else(|| {
+            Arc::new(crate::sharded_event_queue::ShardedEventQueue::new(
+                crate::sharded_event_queue::ShardedEventQueueConfig::default(),
+            ))
+        });
+        let event_queue: EventQueueRef = sharded_queue.clone();
+
+        let ingress_pipeline = Arc::new(IngressPipeline::with_event_queue(
+            identity_resolver,
+            session_resolver,
+            event_queue.clone(),
+        ));
+
+        let global_semaphore = Arc::new(Semaphore::new(config.max_concurrency));
+        Self {
+            config,
+            process_table: ProcessTable::new(),
+            global_semaphore,
+            provider_registry,
+            tool_registry,
+            memory,
+            event_bus,
+            security,
+            agent_registry,
+            shared_kv: kv_backend
+                .unwrap_or_else(|| Arc::new(crate::defaults::dashmap_kv::DashMapKv::new())),
+            audit,
+            session_repo,
+            settings,
+            pipe_registry: PipeRegistry::new(),
+            device_registry: Arc::new(DeviceRegistry::new()),
+            stream_hub,
+            ingress_pipeline,
+            endpoint_registry,
+            egress_adapters: HashMap::new(),
+            event_queue,
+            sharded_queue,
+            started_at: Timestamp::now(),
+        }
+    }
+
+    /// Spawn a new agent process via the unified event queue.
+    ///
+    /// Pushes a `KernelEvent::SpawnAgent` into the event queue and waits
+    /// for the reply. The kernel generates a fresh isolated session for
+    /// the new process.
+    #[tracing::instrument(skip_all, fields(manifest_name = %manifest.name))]
+    pub async fn spawn_with_input(
+        &self,
+        manifest: AgentManifest,
+        input: String,
+        principal: Principal,
+        parent_id: Option<AgentId>,
+    ) -> Result<AgentId> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let event = crate::unified_event::KernelEvent::SpawnAgent {
+            manifest,
+            input,
+            principal,
+            parent_id,
+            reply_tx,
+        };
+        self.event_queue
+            .push(event)
+            .await
+            .map_err(|_| KernelError::SpawnFailed {
+                message: "event queue full".to_string(),
+            })?;
+
+        reply_rx.await.map_err(|_| KernelError::SpawnFailed {
+            message: "spawn reply channel closed".to_string(),
+        })?
+    }
+
+    /// Spawn a named agent by looking up its manifest.
+    #[tracing::instrument(skip(self, input, principal, parent_id))]
+    pub async fn spawn_named(
+        &self,
+        agent_name: &str,
+        input: String,
+        principal: Principal,
+        parent_id: Option<AgentId>,
+    ) -> Result<AgentId> {
+        let manifest =
+            self.agent_registry
+                .get(agent_name)
+                .ok_or(KernelError::ManifestNotFound {
+                    name: agent_name.to_string(),
+                })?;
+
+        self.spawn_with_input(manifest, input, principal, parent_id)
+            .await
+    }
+
+    /// Access the process table for querying.
+    pub fn process_table(&self) -> &ProcessTable { &self.process_table }
+
+    /// Access the agent registry for looking up named manifests.
+    pub fn agent_registry(&self) -> &AgentRegistryRef { &self.agent_registry }
+
+    /// Access the tool registry.
+    pub fn tool_registry(&self) -> &ToolRegistryRef { &self.tool_registry }
+
+    /// Access the event bus.
+    pub fn event_bus(&self) -> &EventBusRef { &self.event_bus }
+
+    /// Access the memory subsystem.
+    pub fn memory(&self) -> &MemoryRef { &self.memory }
+
+    /// Access the kernel config.
+    pub fn config(&self) -> &KernelConfig { &self.config }
+
+    /// Access the flat KV settings provider.
+    pub fn settings(&self) -> &SettingsRef { &self.settings }
+
+    /// Get detailed runtime statistics for a single process.
+    ///
+    /// Returns `None` if the process does not exist.
+    pub async fn process_stats(&self, agent_id: &AgentId) -> Option<crate::process::ProcessStats> {
+        self.process_table.process_stats(*agent_id).await
+    }
+
+    /// List detailed runtime statistics for all processes.
+    pub async fn list_processes(&self) -> Vec<crate::process::ProcessStats> {
+        self.process_table.all_process_stats().await
+    }
+
+    /// Get kernel-wide aggregate statistics.
+    pub fn system_stats(&self) -> crate::process::SystemStats {
+        let pt = &self.process_table;
+        let active = pt
+            .list()
+            .iter()
+            .filter(|p| {
+                matches!(
+                    p.state,
+                    ProcessState::Running | ProcessState::Idle | ProcessState::Waiting
+                )
+            })
+            .count();
+
+        let uptime_ms = Timestamp::now()
+            .since(self.started_at)
+            .ok()
+            .map(|span| span.get_milliseconds().unsigned_abs())
+            .unwrap_or(0);
+
+        crate::process::SystemStats {
+            active_processes: active,
+            total_spawned: pt.total_spawned(),
+            total_completed: pt.total_completed(),
+            total_failed: pt.total_failed(),
+            global_semaphore_available: self.global_semaphore.available_permits(),
+            total_tokens_consumed: pt.total_tokens_consumed(),
+            uptime_ms,
+        }
+    }
+
+    /// Get the detailed turn traces for a specific agent process.
+    pub fn get_process_turns(&self, agent_id: AgentId) -> Vec<crate::agent_turn::TurnTrace> {
+        self.process_table.get_turn_traces(agent_id)
+    }
+
+    /// Access the device registry (for hot-plugging devices).
+    pub fn device_registry(&self) -> &DeviceRegistryRef { &self.device_registry }
+
+    /// Access the audit log.
+    pub fn audit_log(&self) -> &Arc<dyn AuditLog> { self.audit.audit_log() }
+
+    /// Access the unified audit subsystem.
+    pub fn audit(&self) -> &AuditRef { &self.audit }
+
+    /// Access the approval manager.
+    pub fn approval(&self) -> &Arc<crate::approval::ApprovalManager> {
+        self.security.approval()
+    }
+
+    /// Access the unified security subsystem.
+    pub fn security(&self) -> &SecurityRef { &self.security }
+
+    /// Query the audit log for events matching the given filter.
+    pub async fn audit_query(&self, filter: AuditFilter) -> Vec<AuditEvent> {
+        self.audit.query(filter).await
+    }
+
+    /// Access the global semaphore (used by event loop for spawn limits).
+    pub(crate) fn global_semaphore(&self) -> &Arc<Semaphore> { &self.global_semaphore }
+
+    /// Access the shared KV backend (used by event loop).
+    pub(crate) fn shared_kv(&self) -> &KvBackendRef { &self.shared_kv }
+
+    /// Access the session repository (used by event loop).
+    pub(crate) fn session_repo(&self) -> &SessionRepoRef { &self.session_repo }
+
+    /// Access the pipe registry (used by event loop).
+    pub(crate) fn pipe_registry(&self) -> &PipeRegistry { &self.pipe_registry }
+
+    /// Access the provider registry (used by event loop).
+    pub(crate) fn provider_registry(&self) -> &ProviderRegistryRef { &self.provider_registry }
+
     /// Ensure a session exists for the given ID, creating one if needed.
     ///
     /// Called at spawn time to set up the process's conversation environment.
@@ -154,6 +432,7 @@ impl KernelInner {
     ///
     /// Called at spawn time to provide the process with its initial
     /// conversation state. Returns an empty vec on error.
+    #[allow(dead_code)]
     pub(crate) async fn load_session_messages(
         &self,
         session_id: &SessionId,
@@ -170,319 +449,43 @@ impl KernelInner {
             }
         }
     }
-}
 
-// ---------------------------------------------------------------------------
-// KernelConfig
-// ---------------------------------------------------------------------------
-
-/// Kernel configuration.
-#[derive(Debug, Clone)]
-pub struct KernelConfig {
-    /// Maximum number of concurrent agent processes globally.
-    pub max_concurrency:        usize,
-    /// Default maximum number of children per agent.
-    pub default_child_limit:    usize,
-    /// Default max LLM iterations for spawned agents.
-    pub default_max_iterations: usize,
-    /// Maximum number of KV entries per agent (0 = unlimited).
-    /// Applies to the agent-scoped namespace only.
-    pub memory_quota_per_agent: usize,
-}
-
-impl Default for KernelConfig {
-    fn default() -> Self {
-        Self {
-            max_concurrency:        16,
-            default_child_limit:    8,
-            default_max_iterations: 25,
-            memory_quota_per_agent: 1000,
-        }
-    }
-}
-
-/// The unified agent orchestrator.
-///
-/// Acts as an OS kernel for agents: manages the process table, enforces
-/// concurrency limits, and provides the event loop as the single driver
-/// for all kernel activity.
-///
-/// The Kernel owns its I/O subsystem: stream hub, endpoint registry, and
-/// ingress pipeline. Call [`start()`](Self::start) to spawn the unified
-/// event loop and egress delivery as background tasks.
-pub struct Kernel {
-    /// Shared kernel internals (process table, components, etc.).
-    inner: Arc<KernelInner>,
-    /// Kernel configuration.
-    config: KernelConfig,
-    /// Ephemeral stream hub for real-time token deltas.
-    stream_hub: Arc<StreamHub>,
-    /// Ingress pipeline for adapters to push inbound messages.
-    ingress_pipeline: Arc<IngressPipeline>,
-    /// Per-user endpoint registry (tracks connected channels).
-    endpoint_registry: Arc<EndpointRegistry>,
-    /// Registered egress adapters (mutable before start, consumed by start).
-    pub(crate) egress_adapters: HashMap<ChannelType, Arc<dyn EgressAdapter>>,
-    /// Unified event queue for all kernel interactions.
-    event_queue: Arc<dyn EventQueue>,
-    /// Sharded event queue for multi-processor event loop.
-    /// The `event_queue` field points to the same object (via `Arc<dyn
-    /// EventQueue>`).
-    sharded_queue: Arc<crate::sharded_event_queue::ShardedEventQueue>,
-    /// When this kernel was created (for uptime calculation).
-    started_at: Timestamp,
-}
-
-impl Kernel {
-    /// Create a new Kernel with the given configuration, components, and I/O
-    /// subsystem.
-    ///
-    /// The I/O subsystem is fully assembled at construction time. Call
-    /// [`start()`](Self::start) to spawn the unified event loop.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        config: KernelConfig,
-        provider_registry: Arc<ProviderRegistry>,
-        tool_registry: Arc<ToolRegistry>,
-        memory: Arc<dyn Memory>,
-        event_bus: Arc<dyn EventBus>,
-        security: Arc<crate::security::SecuritySubsystem>,
-        agent_registry: Arc<AgentRegistry>,
-        session_repo: Arc<dyn SessionRepository>,
-        settings: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
-        stream_hub: Arc<StreamHub>,
-        identity_resolver: Arc<dyn IdentityResolver>,
-        session_resolver: Arc<dyn SessionResolver>,
-        audit: Arc<crate::audit_subsystem::AuditSubsystem>,
-        sharded_queue: Option<Arc<crate::sharded_event_queue::ShardedEventQueue>>,
-        kv_backend: Option<Arc<dyn KvBackend>>,
-    ) -> Self {
-        info!(
-            max_concurrency = config.max_concurrency,
-            default_child_limit = config.default_child_limit,
-            default_max_iterations = config.default_max_iterations,
-            "booting kernel"
-        );
-
-        let endpoint_registry = Arc::new(EndpointRegistry::new());
-
-        // Always use a ShardedEventQueue — create a default one if not provided.
-        let sharded_queue = sharded_queue.unwrap_or_else(|| {
-            Arc::new(crate::sharded_event_queue::ShardedEventQueue::new(
-                crate::sharded_event_queue::ShardedEventQueueConfig::default(),
-            ))
-        });
-        let event_queue: Arc<dyn EventQueue> = sharded_queue.clone();
-
-        let ingress_pipeline = Arc::new(IngressPipeline::with_event_queue(
-            identity_resolver,
-            session_resolver,
-            event_queue.clone(),
-        ));
-
-        let inner = Arc::new(KernelInner {
-            process_table: Arc::new(ProcessTable::new()),
-            global_semaphore: Arc::new(Semaphore::new(config.max_concurrency)),
-            default_child_limit: config.default_child_limit,
-            default_max_iterations: config.default_max_iterations,
-            provider_registry,
-            tool_registry,
-            memory,
-            event_bus,
-            security,
-            agent_registry,
-            shared_kv: kv_backend
-                .unwrap_or_else(|| Arc::new(crate::defaults::dashmap_kv::DashMapKv::new())),
-            audit,
-            memory_quota_per_agent: config.memory_quota_per_agent,
-            session_repo,
-            settings,
-            stream_hub: stream_hub.clone(),
-            pipe_registry: Arc::new(PipeRegistry::new()),
-            device_registry: Arc::new(DeviceRegistry::new()),
-            event_queue: event_queue.clone(),
-        });
-
-        Self {
-            inner,
-            config,
-            stream_hub,
-            ingress_pipeline,
-            endpoint_registry,
-            egress_adapters: HashMap::new(),
-            event_queue,
-            sharded_queue,
-            started_at: Timestamp::now(),
-        }
-    }
-
-    /// Spawn a new agent process via the unified event queue.
-    ///
-    /// Pushes a `KernelEvent::SpawnAgent` into the event queue and waits
-    /// for the reply. The kernel generates a fresh isolated session for
-    /// the new process.
-    pub async fn spawn_with_input(
-        &self,
-        manifest: AgentManifest,
-        input: String,
-        principal: Principal,
-        parent_id: Option<AgentId>,
-    ) -> Result<AgentId> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        let event = crate::unified_event::KernelEvent::SpawnAgent {
-            manifest,
-            input,
-            principal,
-            parent_id,
-            reply_tx,
-        };
-        self.event_queue
-            .push(event)
-            .await
-            .map_err(|_| KernelError::SpawnFailed {
-                message: "event queue full".to_string(),
-            })?;
-
-        reply_rx.await.map_err(|_| KernelError::SpawnFailed {
-            message: "spawn reply channel closed".to_string(),
-        })?
-    }
-
-    /// Spawn a named agent by looking up its manifest.
-    pub async fn spawn_named(
-        &self,
-        agent_name: &str,
-        input: String,
-        principal: Principal,
-        parent_id: Option<AgentId>,
-    ) -> Result<AgentId> {
-        let manifest =
-            self.inner
-                .agent_registry
-                .get(agent_name)
-                .ok_or(KernelError::ManifestNotFound {
-                    name: agent_name.to_string(),
-                })?;
-
-        self.spawn_with_input(manifest, input, principal, parent_id)
-            .await
-    }
-
-    /// Access the process table for querying.
-    pub fn process_table(&self) -> &ProcessTable { &self.inner.process_table }
-
-    /// Access the agent registry for looking up named manifests.
-    pub fn agent_registry(&self) -> &AgentRegistry { &self.inner.agent_registry }
-
-    /// Access the tool registry.
-    pub fn tool_registry(&self) -> &Arc<ToolRegistry> { &self.inner.tool_registry }
-
-    /// Access the event bus.
-    pub fn event_bus(&self) -> &Arc<dyn EventBus> { &self.inner.event_bus }
-
-    /// Access the memory subsystem.
-    pub fn memory(&self) -> &Arc<dyn Memory> { &self.inner.memory }
-
-    /// Access the kernel config.
-    pub fn config(&self) -> &KernelConfig { &self.config }
-
-    /// Access the flat KV settings provider.
-    pub fn settings(&self) -> &Arc<dyn rara_domain_shared::settings::SettingsProvider> {
-        &self.inner.settings
-    }
-
-    /// Get detailed runtime statistics for a single process.
-    ///
-    /// Returns `None` if the process does not exist.
-    pub async fn process_stats(&self, agent_id: &AgentId) -> Option<crate::process::ProcessStats> {
-        self.inner.process_table.process_stats(*agent_id).await
-    }
-
-    /// List detailed runtime statistics for all processes.
-    pub async fn list_processes(&self) -> Vec<crate::process::ProcessStats> {
-        self.inner.process_table.all_process_stats().await
-    }
-
-    /// Get kernel-wide aggregate statistics.
-    pub fn system_stats(&self) -> crate::process::SystemStats {
-        let pt = &self.inner.process_table;
-        let active = pt
-            .list()
-            .iter()
-            .filter(|p| {
-                matches!(
-                    p.state,
-                    ProcessState::Running | ProcessState::Idle | ProcessState::Waiting
-                )
-            })
-            .count();
-
-        let uptime_ms = Timestamp::now()
-            .since(self.started_at)
-            .ok()
-            .map(|span| span.get_milliseconds().unsigned_abs())
-            .unwrap_or(0);
-
-        crate::process::SystemStats {
-            active_processes: active,
-            total_spawned: pt.total_spawned(),
-            total_completed: pt.total_completed(),
-            total_failed: pt.total_failed(),
-            global_semaphore_available: self.inner.global_semaphore.available_permits(),
-            total_tokens_consumed: pt.total_tokens_consumed(),
-            uptime_ms,
-        }
-    }
-
-    /// Get the detailed turn traces for a specific agent process.
-    pub fn get_process_turns(&self, agent_id: AgentId) -> Vec<crate::agent_turn::TurnTrace> {
-        self.inner.process_table.get_turn_traces(agent_id)
-    }
-
-    /// Access the device registry (for hot-plugging devices).
-    pub fn device_registry(&self) -> &Arc<DeviceRegistry> { &self.inner.device_registry }
-
-    /// Access the audit log.
-    pub fn audit_log(&self) -> &Arc<dyn AuditLog> { self.inner.audit.audit_log() }
-
-    /// Access the unified audit subsystem.
-    pub fn audit(&self) -> &Arc<crate::audit_subsystem::AuditSubsystem> { &self.inner.audit }
-
-    /// Access the approval manager.
-    pub fn approval(&self) -> &Arc<crate::approval::ApprovalManager> {
-        self.inner.security.approval()
-    }
-
-    /// Access the unified security subsystem.
-    pub fn security(&self) -> &Arc<crate::security::SecuritySubsystem> { &self.inner.security }
-
-    /// Query the audit log for events matching the given filter.
-    pub async fn audit_query(&self, filter: AuditFilter) -> Vec<AuditEvent> {
-        self.inner.audit.query(filter).await
-    }
-
-    /// Access the shared KernelInner (used by event loop and tests).
-    pub(crate) fn inner(&self) -> &Arc<KernelInner> { &self.inner }
-
-    /// Construct a `Kernel` from a pre-built `KernelInner` and config.
+    /// Construct a `Kernel` for testing with minimal I/O subsystem.
     ///
     /// Used by [`crate::testing::TestKernelBuilder`] to assemble kernels in
     /// tests without going through the public `new()` constructor.
     ///
     /// Creates minimal I/O subsystem components (IngressPipeline,
-    /// EndpointRegistry) with Noop resolvers. The StreamHub and EventQueue
-    /// are cloned from `KernelInner`.
-    pub(crate) fn from_inner(inner: Arc<KernelInner>, config: KernelConfig) -> Self {
-        let identity_resolver: Arc<dyn IdentityResolver> =
+    /// EndpointRegistry) with Noop resolvers.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn for_testing(
+        config: KernelConfig,
+        process_table: ProcessTable,
+        global_semaphore: Arc<Semaphore>,
+        provider_registry: ProviderRegistryRef,
+        tool_registry: ToolRegistryRef,
+        memory: MemoryRef,
+        event_bus: EventBusRef,
+        security: SecurityRef,
+        agent_registry: AgentRegistryRef,
+        shared_kv: KvBackendRef,
+        audit: AuditRef,
+        session_repo: SessionRepoRef,
+        settings: SettingsRef,
+        stream_hub: StreamHubRef,
+        pipe_registry: PipeRegistry,
+        device_registry: DeviceRegistryRef,
+    ) -> Self {
+        let identity_resolver: IdentityResolverRef =
             Arc::new(crate::defaults::noop::NoopIdentityResolver);
-        let session_resolver: Arc<dyn SessionResolver> =
+        let session_resolver: SessionResolverRef =
             Arc::new(crate::defaults::noop::NoopSessionResolver);
 
         // Always create a ShardedEventQueue so the parallel event loop works.
         let sharded_queue = Arc::new(crate::sharded_event_queue::ShardedEventQueue::new(
             crate::sharded_event_queue::ShardedEventQueueConfig::default(),
         ));
-        let event_queue: Arc<dyn EventQueue> = sharded_queue.clone();
+        let event_queue: EventQueueRef = sharded_queue.clone();
 
         let ingress_pipeline = Arc::new(IngressPipeline::with_event_queue(
             identity_resolver,
@@ -492,9 +495,22 @@ impl Kernel {
         let endpoint_registry = Arc::new(EndpointRegistry::new());
 
         Self {
-            stream_hub: inner.stream_hub.clone(),
-            inner,
             config,
+            process_table,
+            global_semaphore,
+            provider_registry,
+            tool_registry,
+            memory,
+            event_bus,
+            security,
+            agent_registry,
+            shared_kv,
+            audit,
+            session_repo,
+            settings,
+            pipe_registry,
+            device_registry,
+            stream_hub,
             ingress_pipeline,
             endpoint_registry,
             egress_adapters: HashMap::new(),
@@ -507,28 +523,26 @@ impl Kernel {
     // -- I/O subsystem accessors -----------------------------------------
 
     /// Access the ingress pipeline (adapters need this to push messages).
-    pub fn ingress_pipeline(&self) -> &Arc<IngressPipeline> { &self.ingress_pipeline }
+    pub fn ingress_pipeline(&self) -> &IngressPipelineRef { &self.ingress_pipeline }
 
     /// Access the ephemeral stream hub (WebAdapter needs this for token
     /// deltas).
-    pub fn stream_hub(&self) -> &Arc<StreamHub> { &self.stream_hub }
+    pub fn stream_hub(&self) -> &StreamHubRef { &self.stream_hub }
 
     /// Access the endpoint registry (WebAdapter needs this for connection
     /// tracking).
-    pub fn endpoint_registry(&self) -> &Arc<EndpointRegistry> { &self.endpoint_registry }
+    pub fn endpoint_registry(&self) -> &EndpointRegistryRef { &self.endpoint_registry }
 
     /// Access the unified event queue.
-    pub fn event_queue(&self) -> &Arc<dyn EventQueue> { &self.event_queue }
+    pub fn event_queue(&self) -> &EventQueueRef { &self.event_queue }
 
     /// Access the sharded event queue.
-    pub(crate) fn sharded_queue(&self) -> &Arc<crate::sharded_event_queue::ShardedEventQueue> {
-        &self.sharded_queue
-    }
+    pub(crate) fn sharded_queue(&self) -> &ShardedQueueRef { &self.sharded_queue }
 
     /// Register an egress adapter for a channel type.
     ///
     /// Must be called **before** [`start()`](Self::start).
-    pub fn register_adapter(&mut self, channel_type: ChannelType, adapter: Arc<dyn EgressAdapter>) {
+    pub fn register_adapter(&mut self, channel_type: ChannelType, adapter: EgressAdapterRef) {
         self.egress_adapters.insert(channel_type, adapter);
     }
 
@@ -565,8 +579,10 @@ mod tests {
             noop::{NoopEventBus, NoopMemory, NoopSessionRepository, NoopSettingsProvider},
             noop_user_store::NoopUserStore,
         },
-        process::principal::Principal,
+        io::stream::StreamHub,
+        process::{agent_registry::AgentRegistry, principal::Principal},
         provider::ProviderRegistryBuilder,
+        tool::ToolRegistry,
     };
 
     fn make_test_kernel(max_concurrency: usize, child_limit: usize) -> Kernel {
@@ -594,12 +610,11 @@ mod tests {
             Arc::new(NoopEventBus),
             Arc::new(crate::security::SecuritySubsystem::noop()),
             registry,
-            Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
-            Arc::new(NoopSettingsProvider)
-                as Arc<dyn rara_domain_shared::settings::SettingsProvider>,
+            Arc::new(NoopSessionRepository) as SessionRepoRef,
+            Arc::new(NoopSettingsProvider) as SettingsRef,
             Arc::new(StreamHub::new(16)),
-            Arc::new(crate::defaults::noop::NoopIdentityResolver) as Arc<dyn IdentityResolver>,
-            Arc::new(crate::defaults::noop::NoopSessionResolver) as Arc<dyn SessionResolver>,
+            Arc::new(crate::defaults::noop::NoopIdentityResolver) as IdentityResolverRef,
+            Arc::new(crate::defaults::noop::NoopSessionResolver) as SessionResolverRef,
             Arc::new(crate::audit_subsystem::AuditSubsystem::noop()),
             None,
             None,
@@ -1120,12 +1135,11 @@ mod tests {
             Arc::new(NoopEventBus),
             security,
             registry,
-            Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
-            Arc::new(NoopSettingsProvider)
-                as Arc<dyn rara_domain_shared::settings::SettingsProvider>,
+            Arc::new(NoopSessionRepository) as SessionRepoRef,
+            Arc::new(NoopSettingsProvider) as SettingsRef,
             Arc::new(StreamHub::new(16)),
-            Arc::new(crate::defaults::noop::NoopIdentityResolver) as Arc<dyn IdentityResolver>,
-            Arc::new(crate::defaults::noop::NoopSessionResolver) as Arc<dyn SessionResolver>,
+            Arc::new(crate::defaults::noop::NoopIdentityResolver) as IdentityResolverRef,
+            Arc::new(crate::defaults::noop::NoopSessionResolver) as SessionResolverRef,
             Arc::new(crate::audit_subsystem::AuditSubsystem::noop()),
             None,
             None,

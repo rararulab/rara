@@ -1,5 +1,6 @@
 # Build artifacts
 target/
+.cargo/
 web/node_modules/
 web/dist/
 

@@ -59,7 +59,7 @@ spec:
               put_kv "rara/config/database/database_url" \
                 "{{ $ov.databaseUrl | default (printf "postgres://postgres:%s@%s-postgresql:5432/%s" .Values.postgresql.auth.postgresPassword .Release.Name .Values.postgresql.auth.database) }}"
               put_kv "rara/config/database/migration_dir" \
-                "{{ $ov.migrationDir | default "crates/rara-model/migrations" }}"
+                "{{ $ov.migrationDir | default "migrations" }}"
               # yamllint enable rule:line-length
 
               # ── HTTP / gRPC bind (0.0.0.0 for K8s containers) ──────

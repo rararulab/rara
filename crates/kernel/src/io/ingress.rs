@@ -33,6 +33,15 @@ use std::{collections::HashMap, sync::Arc};
 use async_trait::async_trait;
 use serde_json::Value;
 
+/// Shared reference to an [`IdentityResolver`] implementation.
+pub type IdentityResolverRef = Arc<dyn IdentityResolver>;
+
+/// Shared reference to a [`SessionResolver`] implementation.
+pub type SessionResolverRef = Arc<dyn SessionResolver>;
+
+/// Shared reference to the [`IngressPipeline`].
+pub type IngressPipelineRef = Arc<IngressPipeline>;
+
 use crate::{
     channel::types::{ChannelType, MessageContent},
     io::types::{BusError, ChannelSource, InboundMessage, IngestError, MessageId, ReplyContext},

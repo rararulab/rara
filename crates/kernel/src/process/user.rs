@@ -21,6 +21,8 @@
 //! - [`PlatformIdentity`] — external platform identity bindings
 //! - [`UserStore`] — persistence trait for user CRUD + platform lookups
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -124,6 +126,8 @@ impl KernelUser {
             || self.has_permission(&Permission::UseTool(tool_name.to_string()))
     }
 }
+
+pub type UserStoreRef = Arc<dyn UserStore>;
 
 /// Persistence trait for kernel user management.
 #[async_trait]

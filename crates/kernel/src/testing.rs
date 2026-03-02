@@ -40,12 +40,11 @@ use tokio::sync::Semaphore;
 use crate::{
     defaults::noop::{NoopEventBus, NoopMemory, NoopSessionRepository, NoopSettingsProvider},
     device_registry::DeviceRegistry,
-    event_queue::InMemoryEventQueue,
     io::{pipe::PipeRegistry, stream::StreamHub},
-    kernel::{Kernel, KernelConfig, KernelInner},
+    kernel::{Kernel, KernelConfig, SettingsRef},
     process::{AgentManifest, ProcessTable, agent_registry::AgentRegistry},
     provider::ProviderRegistry,
-    session::SessionRepository,
+    session::SessionRepoRef,
     tool::{AgentToolRef, ToolRegistry},
 };
 
@@ -123,32 +122,25 @@ impl TestKernelBuilder {
             "TestKernelBuilder requires a ProviderRegistry — call .provider_registry() first",
         );
 
-        let inner = Arc::new(KernelInner {
-            process_table: Arc::new(ProcessTable::new()),
-            global_semaphore: Arc::new(Semaphore::new(self.config.max_concurrency)),
-            default_child_limit: self.config.default_child_limit,
-            default_max_iterations: self.config.default_max_iterations,
+        let max_concurrency = self.config.max_concurrency;
+        Kernel::for_testing(
+            self.config,
+            ProcessTable::new(),
+            Arc::new(Semaphore::new(max_concurrency)),
             provider_registry,
-            tool_registry: Arc::new(self.tool_registry),
-            memory: Arc::new(NoopMemory),
-            event_bus: Arc::new(NoopEventBus),
-            security: Arc::new(crate::security::SecuritySubsystem::noop()),
-            agent_registry: Arc::new(self.agent_registry),
-            shared_kv: Arc::new(crate::defaults::dashmap_kv::DashMapKv::new()),
-            audit: Arc::new(crate::audit_subsystem::AuditSubsystem::noop()),
-            memory_quota_per_agent: self.config.memory_quota_per_agent,
-            session_repo: Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
-            settings: Arc::new(NoopSettingsProvider)
-                as Arc<dyn rara_domain_shared::settings::SettingsProvider>,
-            stream_hub: Arc::new(StreamHub::new(16)),
-            pipe_registry: Arc::new(PipeRegistry::new()),
-            device_registry: Arc::new(DeviceRegistry::new()),
-            event_queue: Arc::new(InMemoryEventQueue::new(4096)),
-        });
-
-        // Use private constructor approach: build Kernel from its inner field.
-        // We need access to the Kernel struct fields which are `pub(crate)`.
-        Kernel::from_inner(inner, self.config)
+            Arc::new(self.tool_registry),
+            Arc::new(NoopMemory),
+            Arc::new(NoopEventBus),
+            Arc::new(crate::security::SecuritySubsystem::noop()),
+            Arc::new(self.agent_registry),
+            Arc::new(crate::defaults::dashmap_kv::DashMapKv::new()),
+            Arc::new(crate::audit_subsystem::AuditSubsystem::noop()),
+            Arc::new(NoopSessionRepository) as SessionRepoRef,
+            Arc::new(NoopSettingsProvider) as SettingsRef,
+            Arc::new(StreamHub::new(16)),
+            PipeRegistry::new(),
+            Arc::new(DeviceRegistry::new()),
+        )
     }
 }
 

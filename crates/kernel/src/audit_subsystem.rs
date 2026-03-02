@@ -15,9 +15,12 @@
 //! Unified audit subsystem — event logging and tool call recording.
 //!
 //! Combines [`AuditLog`] and [`ToolCallRecorder`] into a single cohesive
-//! subsystem, replacing two flat fields on `KernelInner`.
+//! subsystem, replacing two flat fields on `Kernel`.
 
 use std::sync::Arc;
+
+/// Shared reference to the [`AuditSubsystem`].
+pub type AuditRef = Arc<AuditSubsystem>;
 
 use crate::{
     audit::{AuditEvent, AuditFilter, AuditLog, InMemoryAuditLog, NoopToolCallRecorder, ToolCallRecorder},

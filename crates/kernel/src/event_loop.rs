@@ -55,9 +55,9 @@ use crate::{
 /// Mutable runtime state for each agent process, managed by the kernel's
 /// event loop rather than by individual per-process tokio tasks.
 ///
-/// This is stored separately from `AgentProcess` (which lives in ProcessTable
-/// and must be Clone) because it contains non-Clone types like
-/// `CancellationToken` and `Vec<KernelEvent>`.
+/// Stored separately from `AgentProcess` (which lives in ProcessTable and must
+/// be Clone) because it contains non-Clone types like `CancellationToken` and
+/// `Vec<KernelEvent>`.
 pub(crate) struct ProcessRuntime {
     /// In-memory conversation history (ChatMessage list).
     pub conversation:       Vec<ChatMessage>,
@@ -183,7 +183,7 @@ impl Kernel {
 
     /// Dispatch a single event to its handler.
     pub(crate) async fn handle_event(&self, event: KernelEvent, runtimes: &RuntimeTable) {
-        let event_type = event.variant_name();
+        let event_type: &'static str = (&event).into();
         crate::metrics::EVENT_PROCESSED
             .with_label_values(&[event_type])
             .inc();
@@ -258,7 +258,7 @@ impl Kernel {
     ///
     /// All business logic lives here, executed by the kernel event loop.
     async fn handle_syscall(&self, syscall: Syscall, runtimes: &RuntimeTable) {
-        let syscall_type = syscall.variant_name();
+        let syscall_type: &'static str = (&syscall).into();
         crate::metrics::SYSCALL_TOTAL
             .with_label_values(&[syscall_type])
             .inc();
@@ -270,12 +270,10 @@ impl Kernel {
         );
         let _guard = span.enter();
 
-        let inner = self.inner();
-
         match syscall {
             Syscall::QueryStatus { target, reply_tx } => {
-                let result = inner
-                    .process_table
+                let result = self
+                    .process_table()
                     .get(target)
                     .map(|p| ProcessInfo::from(&p))
                     .ok_or(KernelError::ProcessNotFound {
@@ -285,7 +283,7 @@ impl Kernel {
             }
 
             Syscall::QueryChildren { parent, reply_tx } => {
-                let children = inner.process_table.children_of(parent);
+                let children = self.process_table().children_of(parent);
                 let _ = reply_tx.send(children);
             }
 
@@ -298,7 +296,7 @@ impl Kernel {
                 reply_tx,
             } => {
                 let result =
-                    Self::do_mem_store(inner, agent_id, &session_id, &principal, &key, value).await;
+                    self.do_mem_store(self.config().memory_quota_per_agent, agent_id, &session_id, &principal, &key, value).await;
                 let _ = reply_tx.send(result);
             }
 
@@ -308,7 +306,7 @@ impl Kernel {
                 reply_tx,
             } => {
                 let namespaced = format!("agent:{}:{}", agent_id.0, key);
-                let result = Ok(inner.shared_kv.get(&namespaced).await);
+                let result = Ok(self.shared_kv().get(&namespaced).await);
                 let _ = reply_tx.send(result);
             }
 
@@ -321,7 +319,7 @@ impl Kernel {
                 reply_tx,
             } => {
                 let result =
-                    Self::do_shared_store(inner, agent_id, &principal, &scope, &key, value).await;
+                    self.do_shared_store(agent_id, &principal, &scope, &key, value).await;
                 let _ = reply_tx.send(result);
             }
 
@@ -333,7 +331,7 @@ impl Kernel {
                 reply_tx,
             } => {
                 let result =
-                    Self::do_shared_recall(inner, agent_id, &principal, &scope, &key).await;
+                    self.do_shared_recall(agent_id, &principal, &scope, &key).await;
                 let _ = reply_tx.send(result);
             }
 
@@ -343,7 +341,7 @@ impl Kernel {
                 reply_tx,
             } => {
                 let (writer, reader) = pipe::pipe(64);
-                inner.pipe_registry.register(
+                self.pipe_registry().register(
                     writer.pipe_id().clone(),
                     PipeEntry {
                         owner,
@@ -359,7 +357,7 @@ impl Kernel {
                 name,
                 reply_tx,
             } => {
-                if inner.pipe_registry.resolve_name(&name).is_some() {
+                if self.pipe_registry().resolve_name(&name).is_some() {
                     let _ = reply_tx.send(Err(KernelError::Other {
                         message: format!("named pipe already exists: {name}").into(),
                     }));
@@ -367,7 +365,7 @@ impl Kernel {
                 }
                 let (writer, reader) = pipe::pipe(64);
                 let pipe_id = writer.pipe_id().clone();
-                inner.pipe_registry.register_named(
+                self.pipe_registry().register_named(
                     name,
                     pipe_id,
                     PipeEntry {
@@ -384,10 +382,10 @@ impl Kernel {
                 name,
                 reply_tx,
             } => {
-                let result = match inner.pipe_registry.resolve_name(&name) {
-                    Some(pipe_id) => match inner.pipe_registry.take_parked_reader(&pipe_id) {
+                let result = match self.pipe_registry().resolve_name(&name) {
+                    Some(pipe_id) => match self.pipe_registry().take_parked_reader(&pipe_id) {
                         Some(reader) => {
-                            inner.pipe_registry.set_reader(&pipe_id, connector);
+                            self.pipe_registry().set_reader(&pipe_id, connector);
                             Ok(reader)
                         }
                         None => Err(KernelError::Other {
@@ -409,7 +407,7 @@ impl Kernel {
                 tool_name,
                 reply_tx,
             } => {
-                let result = inner.security.requires_approval(&tool_name);
+                let result = self.security().requires_approval(&tool_name);
                 let _ = reply_tx.send(result);
             }
 
@@ -420,7 +418,7 @@ impl Kernel {
                 summary,
                 reply_tx,
             } => {
-                let approval = Arc::clone(inner.security.approval());
+                let approval = Arc::clone(self.security().approval());
                 let policy = approval.policy();
                 let req = crate::approval::ApprovalRequest {
                     id: uuid::Uuid::new_v4(),
@@ -448,8 +446,8 @@ impl Kernel {
                 checks,
                 reply_tx,
             } => {
-                let (user_id, session_uuid) = inner
-                    .process_table
+                let (user_id, session_uuid) = self
+                    .process_table()
                     .get(agent_id)
                     .map(|proc| {
                         (
@@ -465,7 +463,7 @@ impl Kernel {
                     session_id: uuid::Uuid::parse_str(&session_uuid).unwrap_or(uuid::Uuid::nil()),
                 };
 
-                let security = Arc::clone(&inner.security);
+                let security = Arc::clone(&self.security());
                 tokio::spawn(async move {
                     let verdicts = security.check_guard_batch(&ctx, &checks).await;
                     let _ = reply_tx.send(verdicts);
@@ -473,8 +471,8 @@ impl Kernel {
             }
 
             Syscall::GetManifest { agent_id, reply_tx } => {
-                let result = inner
-                    .process_table
+                let result = self
+                    .process_table()
                     .get(agent_id)
                     .map(|p| p.manifest.clone())
                     .ok_or(KernelError::ProcessNotFound {
@@ -484,11 +482,11 @@ impl Kernel {
             }
 
             Syscall::GetToolRegistry { agent_id, reply_tx } => {
-                let mut registry = inner.tool_registry.as_ref().clone();
+                let mut registry = self.tool_registry().as_ref().clone();
                 if let Some(rt) = runtimes.get(&agent_id) {
                     let syscall_tool = crate::handle::syscall_tool::SyscallTool::new(
                         Arc::clone(&rt.handle),
-                        Arc::clone(&inner.agent_registry),
+                        Arc::clone(self.agent_registry()),
                     );
                     registry.register_builtin(Arc::new(syscall_tool));
                 }
@@ -496,8 +494,8 @@ impl Kernel {
             }
 
             Syscall::ResolveProvider { agent_id, reply_tx } => {
-                let result = match inner.process_table.get(agent_id) {
-                    Some(process) => inner.provider_registry.resolve(
+                let result = match self.process_table().get(agent_id) {
+                    Some(process) => self.provider_registry().resolve(
                         &process.manifest.name,
                         process.manifest.provider_hint.as_deref(),
                         process.manifest.model.as_deref(),
@@ -514,8 +512,7 @@ impl Kernel {
                 event_type,
                 payload: _,
             } => {
-                inner
-                    .event_bus
+                self.event_bus()
                     .publish(crate::event::KernelEvent::ToolExecuted {
                         agent_id:  agent_id.0,
                         tool_name: format!("event:{event_type}"),
@@ -533,8 +530,13 @@ impl Kernel {
                 success,
                 duration_ms,
             } => {
-                inner
-                    .audit
+                let agent_name = self
+                    .process_table()
+                    .get(agent_id)
+                    .map(|p| p.manifest.name)
+                    .unwrap_or_else(|| "unknown".to_string());
+                crate::metrics::record_turn_tool_call(&agent_name, &tool_name);
+                self.audit()
                     .record_tool_call(agent_id, &tool_name, &args, &result, success, duration_ms)
                     .await;
             }
@@ -547,7 +549,8 @@ impl Kernel {
 
     /// Store a value in an agent's private memory namespace.
     async fn do_mem_store(
-        inner: &Arc<crate::kernel::KernelInner>,
+        &self,
+        memory_quota: usize,
         agent_id: AgentId,
         session_id: &SessionId,
         principal: &Principal,
@@ -557,11 +560,11 @@ impl Kernel {
         let namespaced = format!("agent:{}:{}", agent_id.0, key);
 
         // Check quota before inserting — only if this is a new key.
-        if !inner.shared_kv.contains_key(&namespaced).await {
-            let max = inner.memory_quota_per_agent;
+        if !self.shared_kv().contains_key(&namespaced).await {
+            let max = memory_quota;
             if max > 0 {
                 let prefix = format!("agent:{}:", agent_id.0);
-                let count = inner.shared_kv.count_prefix(&prefix).await;
+                let count = self.shared_kv().count_prefix(&prefix).await;
                 if count >= max {
                     return Err(KernelError::MemoryQuotaExceeded {
                         agent_id: agent_id.to_string(),
@@ -572,8 +575,7 @@ impl Kernel {
             }
         }
 
-        inner
-            .shared_kv
+        self.shared_kv()
             .set(&namespaced, value)
             .await
             .map_err(|e| KernelError::Other {
@@ -581,7 +583,7 @@ impl Kernel {
             })?;
 
         // Audit: MemoryAccess (Store)
-        inner.audit.record(AuditEvent {
+        self.audit().record(AuditEvent {
             timestamp: Timestamp::now(),
             agent_id,
             session_id: session_id.clone(),
@@ -639,7 +641,7 @@ impl Kernel {
 
     /// Store a value in a shared (scoped) memory namespace.
     async fn do_shared_store(
-        inner: &Arc<crate::kernel::KernelInner>,
+        &self,
         agent_id: AgentId,
         principal: &Principal,
         scope: &KvScope,
@@ -648,8 +650,7 @@ impl Kernel {
     ) -> Result<()> {
         Self::check_scope_permission(agent_id, principal, scope)?;
         let scoped = Self::scoped_key(scope, key);
-        inner
-            .shared_kv
+        self.shared_kv()
             .set(&scoped, value)
             .await
             .map_err(|e| KernelError::Other {
@@ -660,7 +661,7 @@ impl Kernel {
 
     /// Recall a value from a shared (scoped) memory namespace.
     async fn do_shared_recall(
-        inner: &Arc<crate::kernel::KernelInner>,
+        &self,
         agent_id: AgentId,
         principal: &Principal,
         scope: &KvScope,
@@ -668,7 +669,7 @@ impl Kernel {
     ) -> Result<Option<serde_json::Value>> {
         Self::check_scope_permission(agent_id, principal, scope)?;
         let scoped = Self::scoped_key(scope, key);
-        Ok(inner.shared_kv.get(&scoped).await)
+        Ok(self.shared_kv().get(&scoped).await)
     }
 
     /// Handle a user message with 3-path routing:
@@ -720,7 +721,6 @@ impl Kernel {
             span.record("routing_path", "id_addressing");
             match self.process_table().get(target_id) {
                 Some(process) if process.state.is_terminal() => {
-                    // Terminal process — return error (A2A pattern).
                     let envelope = OutboundEnvelope {
                         id:          MessageId::new(),
                         in_reply_to: msg.id.clone(),
@@ -826,7 +826,7 @@ impl Kernel {
             self.default_agent_for_user(&msg.user).await
         };
 
-        let manifest = if let Some(m) = self.inner().agent_registry.get(&target_name) {
+        let manifest = if let Some(m) = self.agent_registry().get(&target_name) {
             m
         } else if target_name == Self::ADMIN_AGENT_NAME {
             match self.resolve_manifest_for_auto_spawn().await {
@@ -887,18 +887,13 @@ impl Kernel {
 
     /// Start an LLM turn for the given agent, spawning the work as an async
     /// task that pushes `TurnCompleted` back into the EventQueue when done.
+    #[tracing::instrument(skip_all, fields(agent_id = %agent_id, session_id = %msg.session_id))]
     async fn start_llm_turn(
         &self,
         agent_id: AgentId,
         msg: InboundMessage,
         runtimes: &RuntimeTable,
     ) {
-        let span = info_span!(
-            "start_llm_turn",
-            agent_id = %agent_id,
-            session_id = %msg.session_id,
-        );
-        let _guard = span.enter();
 
         let Some(mut rt) = runtimes.get_mut(&agent_id) else {
             warn!(agent_id = %agent_id, "runtime not found for LLM turn");
@@ -927,15 +922,13 @@ impl Kernel {
 
         // Set state to Running.
         let _ = self
-            .inner()
-            .process_table
+            .process_table()
             .set_state(agent_id, ProcessState::Running);
 
         // Send a typing / progress indicator so the user sees feedback
         // while the LLM is thinking (e.g. Telegram "typing..." bubble).
         let egress_session_id = self
-            .inner()
-            .process_table
+            .process_table()
             .get(agent_id)
             .and_then(|p| p.channel_session_id.clone())
             .unwrap_or_else(|| session_id.clone());
@@ -948,14 +941,14 @@ impl Kernel {
                 session_id:  egress_session_id.clone(),
                 routing:     OutboundRouting::BroadcastAll,
                 payload:     OutboundPayload::Progress {
-                    stage:  "thinking".to_string(),
-                    detail: Some(String::new()),
+                    stage:  "thinking".to_string(), // tODO: standardize stage names
+                    detail: Some(String::new()),    // An empty Some ???
                 },
                 timestamp:   jiff::Timestamp::now(),
             }));
 
         // Record metrics.
-        if let Some(metrics) = self.inner().process_table.get_metrics(&agent_id) {
+        if let Some(metrics) = self.process_table().get_metrics(&agent_id) {
             metrics.record_message();
         }
 
@@ -982,26 +975,24 @@ impl Kernel {
         let user_text = msg.content.as_text();
         let user_msg = ChatMessage::user(&user_text);
         rt.conversation.push(user_msg.clone());
-        let inner = Arc::clone(self.inner());
         let session_id_persist = session_id.clone();
         // Persist in background to avoid blocking event loop.
-        tokio::spawn({
-            let inner = inner.clone();
+        {
+            let session_repo = Arc::clone(self.session_repo());
             let session_id = session_id_persist.clone();
             let user_msg = user_msg.clone();
-            async move {
-                if let Err(e) = inner
-                    .session_repo
+            tokio::spawn(async move {
+                if let Err(e) = session_repo
                     .append_message(&session_id, &user_msg)
                     .await
                 {
                     warn!(%e, "failed to persist user message");
                 }
-            }
-        });
+            });
+        }
 
         // Open stream.
-        let stream_handle = inner.stream_hub.open(session_id.clone());
+        let stream_handle = self.stream_hub().open(session_id.clone());
 
         // Clone what we need for the spawned task.
         let handle = Arc::clone(&rt.handle);
@@ -1009,6 +1000,7 @@ impl Kernel {
         let event_queue = self.event_queue().clone();
         let stream_id = stream_handle.stream_id().clone();
         let typing_session_id = egress_session_id;
+        let stream_hub_ref = Arc::clone(self.stream_hub());
 
         // Drop the DashMap guard before spawning.
         drop(rt);
@@ -1092,7 +1084,7 @@ impl Kernel {
             }
 
             // Close stream.
-            inner.stream_hub.close(&stream_id);
+            stream_hub_ref.close(&stream_id);
 
             // Push TurnCompleted back into the event queue.
             let result = match turn_result {
@@ -1118,6 +1110,7 @@ impl Kernel {
 
     /// Handle an LLM turn completion — persist result, deliver reply, drain
     /// pause buffer.
+    #[tracing::instrument(skip_all, fields(agent_id = %agent_id, session_id = %session_id, success, iterations, tool_calls, reply_len))]
     async fn handle_turn_completed(
         &self,
         agent_id: AgentId,
@@ -1127,32 +1120,21 @@ impl Kernel {
         user: crate::process::principal::UserId,
         runtimes: &RuntimeTable,
     ) {
-        let span = info_span!(
-            "handle_turn_completed",
-            agent_id = %agent_id,
-            session_id = %session_id,
-            success = tracing::field::Empty,
-            iterations = tracing::field::Empty,
-            tool_calls = tracing::field::Empty,
-            reply_len = tracing::field::Empty,
-        );
-        let _guard = span.enter();
-
-        let inner = self.inner();
+        let span = tracing::Span::current();
 
         // Determine the egress session: use the channel_session_id if this
         // process has one (root process), otherwise fall back to the
         // process's own session. Subagents without a channel binding won't
         // have egress delivery — their results flow back to the parent via
         // ChildCompleted.
-        let egress_session_id = inner
-            .process_table
+        let egress_session_id = self
+            .process_table()
             .get(agent_id)
             .and_then(|p| p.channel_session_id.clone())
             .unwrap_or_else(|| session_id.clone());
 
         // Update metrics.
-        if let Some(metrics) = inner.process_table.get_metrics(&agent_id) {
+        if let Some(metrics) = self.process_table().get_metrics(&agent_id) {
             metrics.touch().await;
         }
 
@@ -1160,8 +1142,8 @@ impl Kernel {
         // state below (Completed vs Failed).
         let mut turn_failed = false;
 
-        let agent_name = inner
-            .process_table
+        let agent_name = self
+            .process_table()
             .get(agent_id)
             .map(|p| p.manifest.name.clone())
             .unwrap_or_else(|| "unknown".to_string());
@@ -1173,17 +1155,27 @@ impl Kernel {
                 span.record("tool_calls", turn.tool_calls);
                 span.record("reply_len", turn.text.len());
 
-                crate::metrics::TURN_TOTAL
-                    .with_label_values(&[&agent_name, &turn.model])
-                    .inc();
+                let estimated_input_tokens = turn
+                    .trace
+                    .input_text
+                    .as_deref()
+                    .map(|text| (text.len() as u64).saturating_div(4).max(1))
+                    .unwrap_or(0);
+                let estimated_output_tokens = (turn.text.len() as u64).saturating_div(4).max(1);
+                crate::metrics::record_turn_metrics(
+                    &agent_name,
+                    &turn.model,
+                    turn.trace.duration_ms,
+                    estimated_input_tokens,
+                    estimated_output_tokens,
+                );
 
                 // Store turn trace for observability.
-                inner
-                    .process_table
+                self.process_table()
                     .push_turn_trace(agent_id, turn.trace.clone());
 
                 // Record metrics.
-                if let Some(metrics) = inner.process_table.get_metrics(&agent_id) {
+                if let Some(metrics) = self.process_table().get_metrics(&agent_id) {
                     metrics.record_llm_call();
                     metrics.record_tool_calls(turn.tool_calls as u64);
                     let estimated_tokens = (turn.text.len() as u64).saturating_div(4).max(1);
@@ -1195,8 +1187,8 @@ impl Kernel {
                 if let Some(mut rt) = runtimes.get_mut(&agent_id) {
                     rt.conversation.push(assistant_msg.clone());
                 }
-                if let Err(e) = inner
-                    .session_repo
+                if let Err(e) = self
+                    .session_repo()
                     .append_message(&session_id, &assistant_msg)
                     .await
                 {
@@ -1208,7 +1200,7 @@ impl Kernel {
                     iterations: turn.iterations,
                     tool_calls: turn.tool_calls,
                 };
-                let _ = inner.process_table.set_result(agent_id, result.clone());
+                let _ = self.process_table().set_result(agent_id, result.clone());
 
                 // Push Deliver event for the reply — use egress session for routing.
                 let envelope = OutboundEnvelope {
@@ -1228,7 +1220,7 @@ impl Kernel {
                 }
 
                 // Audit: ProcessCompleted
-                inner.audit.record(AuditEvent {
+                self.audit().record(AuditEvent {
                     timestamp: jiff::Timestamp::now(),
                     agent_id,
                     session_id: session_id.clone(),
@@ -1262,12 +1254,11 @@ impl Kernel {
                 info!(agent_id = %agent_id, "turn completed (empty result)");
 
                 // Store turn trace for observability.
-                inner
-                    .process_table
+                self.process_table()
                     .push_turn_trace(agent_id, turn.trace.clone());
 
                 // Empty result — LLM call was made but produced no text.
-                if let Some(metrics) = inner.process_table.get_metrics(&agent_id) {
+                if let Some(metrics) = self.process_table().get_metrics(&agent_id) {
                     metrics.record_llm_call();
                     metrics.record_tool_calls(turn.tool_calls as u64);
                 }
@@ -1278,7 +1269,7 @@ impl Kernel {
                 warn!(agent_id = %agent_id, error = %err_msg, "turn completed (error)");
 
                 if err_msg != "interrupted by user" {
-                    inner.audit.record(AuditEvent {
+                    self.audit().record(AuditEvent {
                         timestamp: jiff::Timestamp::now(),
                         agent_id,
                         session_id: session_id.clone(),
@@ -1330,7 +1321,7 @@ impl Kernel {
         } else {
             ProcessState::Completed
         };
-        let _ = inner.process_table.set_state(agent_id, terminal_state);
+        let _ = self.process_table().set_state(agent_id, terminal_state);
 
         // Remove runtime — drops global semaphore permit, cancellation
         // tokens, and conversation buffer. The process entry stays in
@@ -1359,6 +1350,7 @@ impl Kernel {
     /// Every process gets its own `agent:{id}` session for conversation
     /// isolation. Only processes with a `channel_session_id` are inserted
     /// into the `session_index` for inbound message routing.
+    #[tracing::instrument(skip_all, fields(manifest_name = %manifest.name, parent_id = ?parent_id, agent_id))]
     async fn handle_spawn_agent(
         &self,
         manifest: AgentManifest,
@@ -1368,22 +1360,13 @@ impl Kernel {
         parent_id: Option<AgentId>,
         runtimes: &RuntimeTable,
     ) -> Result<AgentId> {
-        let span = info_span!(
-            "handle_spawn_agent",
-            manifest_name = %manifest.name,
-            parent_id = ?parent_id,
-            agent_id = tracing::field::Empty,
-        );
-        let _guard = span.enter();
-
-        let inner = self.inner();
 
         // Validate principal.
-        inner.security.validate_principal(&principal).await?;
+        self.security().validate_principal(&principal).await?;
 
         // Acquire global semaphore.
-        let global_permit = inner
-            .global_semaphore
+        let global_permit = self
+            .global_semaphore()
             .clone()
             .try_acquire_owned()
             .map_err(|_| KernelError::SpawnLimitReached {
@@ -1391,17 +1374,17 @@ impl Kernel {
             })?;
 
         let agent_id = AgentId::new();
-        span.record("agent_id", tracing::field::display(&agent_id));
+        tracing::Span::current().record("agent_id", tracing::field::display(&agent_id));
 
         // Each process gets its own session — context isolation.
         let session_id = SessionId::new(format!("agent:{}", agent_id));
-        inner.ensure_session(&session_id).await;
+        self.ensure_session(&session_id).await;
         // Clean start: no loaded history. Task input arrives as synthetic
         // message (below) or is injected directly into the conversation.
         let initial_messages = vec![];
 
         // Audit: ProcessSpawned
-        inner.audit.record(AuditEvent {
+        self.audit().record(AuditEvent {
             timestamp: jiff::Timestamp::now(),
             agent_id,
             session_id: session_id.clone(),
@@ -1434,7 +1417,7 @@ impl Kernel {
             metrics,
             turn_traces: vec![],
         };
-        inner.process_table.insert(process);
+        self.process_table().insert(process);
 
         crate::metrics::PROCESS_SPAWNED
             .with_label_values(&[&manifest.name])
@@ -1456,13 +1439,13 @@ impl Kernel {
         };
 
         // Build ProcessHandle — uses the process's own session.
-        let child_limit = manifest.max_children.unwrap_or(inner.default_child_limit);
+        let child_limit = manifest.max_children.unwrap_or(self.config().default_child_limit);
 
         let handle = Arc::new(ProcessHandle::new(
             agent_id,
             session_id.clone(),
             principal.clone(),
-            inner.event_queue.clone(),
+            self.event_queue().clone(),
         ));
 
         let max_context_tokens = manifest
@@ -1526,15 +1509,8 @@ impl Kernel {
     // -----------------------------------------------------------------------
 
     /// Handle a control signal sent to an agent process.
+    #[tracing::instrument(skip_all, fields(agent_id = %target, signal = ?signal))]
     async fn handle_signal(&self, target: AgentId, signal: Signal, runtimes: &RuntimeTable) {
-        let span = info_span!(
-            "handle_signal",
-            agent_id = %target,
-            signal = ?signal,
-        );
-        let _guard = span.enter();
-
-        let inner = self.inner();
 
         match signal {
             Signal::Interrupt => {
@@ -1546,8 +1522,8 @@ impl Kernel {
                     rt.turn_cancel = CancellationToken::new();
                 }
                 // Notify via Deliver event — use channel session for egress.
-                let session_id = inner
-                    .process_table
+                let session_id = self
+                    .process_table()
                     .get(target)
                     .and_then(|p| p.channel_session_id.clone())
                     .unwrap_or_else(|| SessionId::new("unknown"));
@@ -1575,7 +1551,7 @@ impl Kernel {
                 if let Some(mut rt) = runtimes.get_mut(&target) {
                     rt.paused = true;
                 }
-                let _ = inner.process_table.set_state(target, ProcessState::Paused);
+                let _ = self.process_table().set_state(target, ProcessState::Paused);
             }
             Signal::Resume => {
                 info!(agent_id = %target, "resume signal");
@@ -1585,7 +1561,7 @@ impl Kernel {
                 } else {
                     vec![]
                 };
-                let _ = inner.process_table.set_state(target, ProcessState::Idle);
+                let _ = self.process_table().set_state(target, ProcessState::Idle);
                 if !buffered.is_empty() {
                     for event in buffered {
                         if let Err(e) = self.event_queue().try_push(event) {
@@ -1615,8 +1591,8 @@ impl Kernel {
                 if let Some(rt) = runtimes.get(&target) {
                     rt.process_cancel.cancel();
                 }
-                let _ = inner
-                    .process_table
+                let _ = self
+                    .process_table()
                     .set_state(target, ProcessState::Cancelled);
                 self.cleanup_process(target, runtimes).await;
             }
@@ -1629,6 +1605,7 @@ impl Kernel {
 
     /// Handle a child agent completion — persist result to parent's
     /// conversation.
+    #[tracing::instrument(skip_all, fields(parent_id = %parent_id, child_id = %child_id, output_len = result.output.len()))]
     async fn handle_child_completed(
         &self,
         parent_id: AgentId,
@@ -1636,15 +1613,6 @@ impl Kernel {
         result: AgentResult,
         runtimes: &RuntimeTable,
     ) {
-        let span = info_span!(
-            "handle_child_completed",
-            parent_id = %parent_id,
-            child_id = %child_id,
-            output_len = result.output.len(),
-        );
-        let _guard = span.enter();
-
-        let inner = self.inner();
 
         info!(
             parent_id = %parent_id,
@@ -1664,14 +1632,14 @@ impl Kernel {
             rt.conversation.push(child_msg.clone());
         }
 
-        let session_id = inner
-            .process_table
+        let session_id = self
+            .process_table()
             .get(parent_id)
             .map(|p| p.session_id.clone())
             .unwrap_or_else(|| SessionId::new("unknown"));
 
-        if let Err(e) = inner
-            .session_repo
+        if let Err(e) = self
+            .session_repo()
             .append_message(&session_id, &child_msg)
             .await
         {
@@ -1684,6 +1652,7 @@ impl Kernel {
     // -----------------------------------------------------------------------
 
     /// Handle a Deliver event — call Egress::deliver directly.
+    #[tracing::instrument(skip_all, fields(session_id = %envelope.session_id, payload_type))]
     async fn handle_deliver(&self, envelope: OutboundEnvelope) {
         let payload_type = match &envelope.payload {
             OutboundPayload::Reply { .. } => "reply",
@@ -1691,12 +1660,7 @@ impl Kernel {
             OutboundPayload::StateChange { .. } => "state_change",
             OutboundPayload::Error { .. } => "error",
         };
-        let span = info_span!(
-            "handle_deliver",
-            session_id = %envelope.session_id,
-            payload_type,
-        );
-        let _guard = span.enter();
+        tracing::Span::current().record("payload_type", payload_type);
 
         crate::io::egress::Egress::deliver(
             &self.egress_adapters,
@@ -1715,7 +1679,7 @@ impl Kernel {
     /// Removing the runtime from the table drops the `process_cancel` token
     /// naturally, so no explicit cancellation-token cleanup is needed.
     async fn cleanup_process(&self, agent_id: AgentId, runtimes: &RuntimeTable) {
-        if let Some(process) = self.inner().process_table.get(agent_id) {
+        if let Some(process) = self.process_table().get(agent_id) {
             crate::metrics::PROCESS_ACTIVE
                 .with_label_values(&[&process.manifest.name])
                 .dec();
@@ -1727,7 +1691,7 @@ impl Kernel {
         let rt = runtimes.remove(&agent_id);
         if let Some((_, rt)) = rt {
             // Notify parent if this is a child process.
-            if let Some(process) = self.inner().process_table.get(agent_id) {
+            if let Some(process) = self.process_table().get(agent_id) {
                 if let Some(parent_id) = process.parent_id {
                     let result = rt.last_result.unwrap_or(AgentResult {
                         output:     "process ended".to_string(),
@@ -1755,8 +1719,7 @@ impl Kernel {
     async fn default_agent_for_user(&self, user: &crate::process::principal::UserId) -> String {
         use crate::process::principal::Role;
 
-        let inner = self.inner();
-        match inner.security.resolve_user_role(user).await {
+        match self.security().resolve_user_role(user).await {
             Role::Root | Role::Admin => Self::ADMIN_AGENT_NAME.to_string(),
             Role::User => Self::USER_AGENT_NAME.to_string(),
         }

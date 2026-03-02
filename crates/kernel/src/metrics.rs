@@ -166,9 +166,43 @@ pub fn init() {
     lazy_static::initialize(&MESSAGE_OUTBOUND);
 }
 
+/// Record aggregate metrics for a completed LLM turn.
+pub fn record_turn_metrics(
+    agent_name: &str,
+    model: &str,
+    duration_ms: u64,
+    input_tokens: u64,
+    output_tokens: u64,
+) {
+    TURN_TOTAL.with_label_values(&[agent_name, model]).inc();
+    TURN_DURATION_SECONDS
+        .with_label_values(&[agent_name, model])
+        .observe(duration_ms as f64 / 1_000.0);
+    TURN_TOKENS_INPUT
+        .with_label_values(&[model])
+        .inc_by(input_tokens);
+    TURN_TOKENS_OUTPUT
+        .with_label_values(&[model])
+        .inc_by(output_tokens);
+}
+
+/// Record a tool call during an LLM turn.
+pub fn record_turn_tool_call(agent_name: &str, tool_name: &str) {
+    TURN_TOOL_CALLS
+        .with_label_values(&[agent_name, tool_name])
+        .inc();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn metric_family(name: &str) -> prometheus::proto::MetricFamily {
+        prometheus::gather()
+            .into_iter()
+            .find(|family| family.name() == name)
+            .unwrap_or_else(|| panic!("missing metric family: {name}"))
+    }
 
     #[test]
     fn test_init_does_not_panic() { init(); }
@@ -185,5 +219,89 @@ mod tests {
         assert!(names.contains(&"kernel_process_spawned_total"));
         assert!(names.contains(&"kernel_turn_total"));
         assert!(names.contains(&"kernel_message_inbound_total"));
+    }
+
+    #[test]
+    fn test_record_turn_metrics_emits_all_series() {
+        let agent_name = format!("agent-{}", ulid::Ulid::new());
+        let model = format!("model-{}", ulid::Ulid::new());
+        let tool_name = format!("tool-{}", ulid::Ulid::new());
+
+        record_turn_metrics(&agent_name, &model, 1_250, 11, 23);
+        record_turn_tool_call(&agent_name, &tool_name);
+
+        let turn_total = metric_family("kernel_turn_total");
+        assert!(turn_total.get_metric().iter().any(|metric| {
+            let has_agent_label = metric
+                .get_label()
+                .iter()
+                .any(|label| label.name() == AGENT_NAME_LABEL && label.value() == agent_name);
+            let has_model_label = metric
+                .get_label()
+                .iter()
+                .any(|label| label.name() == MODEL_LABEL && label.value() == model);
+            has_agent_label
+                && has_model_label
+                && metric
+                    .get_counter()
+                    .as_ref()
+                    .map_or(0.0, prometheus::proto::Counter::value)
+                    >= 1.0
+        }));
+
+        let turn_duration = metric_family("kernel_turn_duration_seconds");
+        assert!(turn_duration
+            .get_metric()
+            .iter()
+            .any(|metric| {
+                metric
+                    .get_histogram()
+                    .as_ref()
+                    .map_or(0, prometheus::proto::Histogram::sample_count)
+                    >= 1
+            }));
+
+        let turn_tool_calls = metric_family("kernel_turn_tool_calls_total");
+        assert!(turn_tool_calls.get_metric().iter().any(|metric| {
+            let has_agent_label = metric
+                .get_label()
+                .iter()
+                .any(|label| label.name() == AGENT_NAME_LABEL && label.value() == agent_name);
+            let has_tool_label = metric
+                .get_label()
+                .iter()
+                .any(|label| label.name() == TOOL_NAME_LABEL && label.value() == tool_name);
+            has_agent_label
+                && has_tool_label
+                && metric
+                    .get_counter()
+                    .as_ref()
+                    .map_or(0.0, prometheus::proto::Counter::value)
+                    >= 1.0
+        }));
+
+        let turn_tokens_input = metric_family("kernel_turn_tokens_input_total");
+        assert!(turn_tokens_input
+            .get_metric()
+            .iter()
+            .any(|metric| {
+                metric
+                    .get_counter()
+                    .as_ref()
+                    .map_or(0.0, prometheus::proto::Counter::value)
+                    >= 11.0
+            }));
+
+        let turn_tokens_output = metric_family("kernel_turn_tokens_output_total");
+        assert!(turn_tokens_output
+            .get_metric()
+            .iter()
+            .any(|metric| {
+                metric
+                    .get_counter()
+                    .as_ref()
+                    .map_or(0.0, prometheus::proto::Counter::value)
+                    >= 23.0
+            }));
     }
 }

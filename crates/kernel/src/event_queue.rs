@@ -27,7 +27,7 @@
 use std::{
     collections::VecDeque,
     sync::{
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
 };
@@ -36,6 +36,9 @@ use async_trait::async_trait;
 use tokio::sync;
 
 use crate::io::types::BusError;
+
+/// Shared reference to an [`EventQueue`] implementation.
+pub type EventQueueRef = Arc<dyn EventQueue>;
 // Re-export the unified event from the sibling module.
 pub use crate::unified_event::{EventPriority, KernelEvent};
 

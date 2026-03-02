@@ -17,8 +17,13 @@
 //! The default implementation uses an in-memory `DashMap` (volatile).
 //! Production deployments can swap in a persistent backend (e.g., AgentFS).
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde_json::Value;
+
+/// Shared reference to a [`KvBackend`] implementation.
+pub type KvBackendRef = Arc<dyn KvBackend>;
 
 /// Backend for the kernel's shared key-value store.
 ///

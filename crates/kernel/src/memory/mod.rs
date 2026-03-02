@@ -44,11 +44,15 @@ pub mod learning;
 pub mod state;
 pub mod types;
 
+use std::sync::Arc;
+
 pub use error::{MemoryError, Result};
 pub use knowledge::KnowledgeMemory;
 pub use learning::LearningMemory;
 pub use state::StateMemory;
 pub use types::*;
+
+pub type MemoryRef = Arc<dyn Memory>;
 
 /// Unified memory trait — combines all three memory layers.
 ///

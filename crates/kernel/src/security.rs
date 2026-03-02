@@ -19,28 +19,33 @@
 
 use std::sync::Arc;
 
+/// Shared reference to the [`SecuritySubsystem`].
+pub type SecurityRef = Arc<SecuritySubsystem>;
+
 use crate::{
     approval::ApprovalManager,
     error::{KernelError, Result},
-    guard::{Guard, GuardContext, Verdict},
-    process::principal::{Principal, Role, UserId},
-    process::user::{Permission, UserStore},
+    guard::{Guard, GuardContext, GuardRef, Verdict},
+    process::{
+        principal::{Principal, Role, UserId},
+        user::{Permission, UserStore, UserStoreRef},
+    },
 };
 
 /// Unified security subsystem — authentication, authorization, and approval.
 pub struct SecuritySubsystem {
-    user_store: Arc<dyn UserStore>,
-    guard:      Arc<dyn Guard>,
+    user_store: UserStoreRef,
+    guard:      GuardRef,
     approval:   Arc<ApprovalManager>,
 }
 
 impl SecuritySubsystem {
-    pub fn new(
-        user_store: Arc<dyn UserStore>,
-        guard: Arc<dyn Guard>,
-        approval: Arc<ApprovalManager>,
-    ) -> Self {
-        Self { user_store, guard, approval }
+    pub fn new(user_store: UserStoreRef, guard: GuardRef, approval: Arc<ApprovalManager>) -> Self {
+        Self {
+            user_store,
+            guard,
+            approval,
+        }
     }
 
     /// Validate that the principal's user exists, is enabled, and has Spawn
@@ -103,26 +108,22 @@ impl SecuritySubsystem {
     }
 
     /// Access the approval manager.
-    pub fn approval(&self) -> &Arc<ApprovalManager> {
-        &self.approval
-    }
+    pub fn approval(&self) -> &Arc<ApprovalManager> { &self.approval }
 
     /// Access the guard.
-    pub fn guard(&self) -> &Arc<dyn Guard> {
-        &self.guard
-    }
+    pub fn guard(&self) -> &Arc<dyn Guard> { &self.guard }
 
     /// Access the user store.
-    pub fn user_store(&self) -> &Arc<dyn UserStore> {
-        &self.user_store
-    }
+    pub fn user_store(&self) -> &Arc<dyn UserStore> { &self.user_store }
 
     /// Create a no-op security subsystem for testing.
     pub fn noop() -> Self {
         Self {
             user_store: Arc::new(crate::defaults::noop_user_store::NoopUserStore),
-            guard: Arc::new(crate::defaults::noop::NoopGuard),
-            approval: Arc::new(ApprovalManager::new(crate::approval::ApprovalPolicy::default())),
+            guard:      Arc::new(crate::defaults::noop::NoopGuard),
+            approval:   Arc::new(ApprovalManager::new(
+                crate::approval::ApprovalPolicy::default(),
+            )),
         }
     }
 }

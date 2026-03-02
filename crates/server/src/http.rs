@@ -12,13 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::Duration;
+use std::{
+    sync::LazyLock,
+    time::{Duration, Instant},
+};
 
 use axum::{
     Router,
-    extract::DefaultBodyLimit,
+    extract::{DefaultBodyLimit, MatchedPath, Request},
     http::{Method, StatusCode, Uri},
-    response::IntoResponse,
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::get,
 };
 use base::readable_size::ReadableSize;
@@ -42,6 +46,40 @@ pub const DEFAULT_MAX_HTTP_BODY_SIZE: ReadableSize = ReadableSize::mb(100);
 
 /// Default request timeout in seconds.
 pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 60;
+
+static HTTP_SERVER_REQUEST_DURATION_SECONDS: LazyLock<prometheus::HistogramVec> =
+    LazyLock::new(|| {
+        prometheus::register_histogram_vec!(
+            "http_server_request_duration_seconds",
+            "HTTP server request duration in seconds",
+            &[
+                "http_request_method",
+                "http_route",
+                "http_response_status_code",
+            ],
+            vec![0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
+        )
+        .unwrap()
+    });
+
+async fn observe_http_metrics(request: Request, next: Next) -> Response {
+    let method = request.method().clone();
+    let route = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|matched| matched.as_str().to_string())
+        .unwrap_or_else(|| request.uri().path().to_string());
+    let started_at = Instant::now();
+
+    let response = next.run(request).await;
+    let status = response.status();
+
+    HTTP_SERVER_REQUEST_DURATION_SECONDS
+        .with_label_values(&[method.as_str(), &route, status.as_str()])
+        .observe(started_at.elapsed().as_secs_f64());
+
+    response
+}
 
 /// Configuration options for a REST server
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, SmartDefault, bon::Builder)]
@@ -155,6 +193,7 @@ where
         .route("/health", get(health_check))
         .merge(api_router)
         .fallback(route_not_found)
+        .layer(middleware::from_fn(observe_http_metrics))
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|request: &axum::http::Request<_>| {
@@ -521,6 +560,47 @@ mod tests {
         let body: serde_json::Value = response.json().await.unwrap();
         assert_eq!(body["error"], "route_not_found");
         assert_eq!(body["path"], "/api/v1/not-exists");
+
+        handler.shutdown();
+        handler.wait_for_stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_metrics_include_http_request_histogram() {
+        init_test_logging();
+
+        let port = get_available_port().await;
+        let config = RestServerConfig {
+            bind_address: format!("127.0.0.1:{port}"),
+            ..RestServerConfig::default()
+        };
+        let handlers = vec![health_routes];
+
+        let mut handler = start_rest_server(config, handlers).await.unwrap();
+        handler.wait_for_start().await.unwrap();
+
+        let client = reqwest::Client::new();
+        let health_response = client
+            .get(format!("http://127.0.0.1:{port}/api/v1/health"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(health_response.status(), 200);
+
+        let metrics = client
+            .get(format!("http://127.0.0.1:{port}/metrics"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+
+        assert!(metrics.contains("http_server_request_duration_seconds_bucket"));
+        assert!(metrics.contains("http_server_request_duration_seconds_count"));
+        assert!(metrics.contains("http_request_method=\"GET\""));
+        assert!(metrics.contains("http_route=\"/api/v1/health\""));
+        assert!(metrics.contains("http_response_status_code=\"200\""));
 
         handler.shutdown();
         handler.wait_for_stop().await.unwrap();

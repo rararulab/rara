@@ -226,6 +226,12 @@ pub struct Egress;
 
 use std::sync::Arc;
 
+/// Shared reference to an [`EgressAdapter`] implementation.
+pub type EgressAdapterRef = Arc<dyn EgressAdapter>;
+
+/// Shared reference to the [`EndpointRegistry`].
+pub type EndpointRegistryRef = Arc<EndpointRegistry>;
+
 impl Egress {
     /// Deliver a single outbound envelope to all resolved targets.
     ///

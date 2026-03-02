@@ -58,7 +58,7 @@ impl EventProcessor {
                 _ = self.queue.wait() => {
                     let events = self.queue.drain(32);
                     for (event, wal_id) in events {
-                        let event_type = event.variant_name();
+                        let event_type: &'static str = (&event).into();
                         let span = info_span!(
                             "handle_event",
                             processor_id = self.id,

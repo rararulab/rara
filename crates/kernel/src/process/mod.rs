@@ -53,7 +53,8 @@ use crate::error::Result;
 /// Classification of an agent's functional role.
 ///
 /// Roles enable callers to look up agents by function rather than by name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, strum::Display)]
+#[strum(serialize_all = "snake_case")]
 pub enum AgentRole {
     /// User-facing conversational agent (default chat entry point).
     Chat,
@@ -63,17 +64,6 @@ pub enum AgentRole {
     Planner,
     /// Execution / coding agent.
     Worker,
-}
-
-impl std::fmt::Display for AgentRole {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AgentRole::Chat => write!(f, "chat"),
-            AgentRole::Scout => write!(f, "scout"),
-            AgentRole::Planner => write!(f, "planner"),
-            AgentRole::Worker => write!(f, "worker"),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -87,7 +77,9 @@ impl std::fmt::Display for AgentRole {
 /// limiting entirely.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+    strum::Display,
 )]
+#[strum(serialize_all = "snake_case")]
 pub enum Priority {
     /// Background tasks, batch jobs.
     Low = 0,
@@ -98,17 +90,6 @@ pub enum Priority {
     High = 2,
     /// System-critical messages (bypass rate limiting).
     Critical = 3,
-}
-
-impl std::fmt::Display for Priority {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Priority::Low => write!(f, "low"),
-            Priority::Normal => write!(f, "normal"),
-            Priority::High => write!(f, "high"),
-            Priority::Critical => write!(f, "critical"),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -204,7 +185,7 @@ pub struct AgentManifest {
     pub name:               String,
     /// Agent's functional role (chat, scout, planner, worker).
     #[serde(default)]
-    pub role:               Option<AgentRole>,
+    pub role: Option<AgentRole>,
     /// Human-readable description.
     pub description:        String,
     /// LLM model identifier (e.g., "deepseek/deepseek-chat", "gpt-4").
@@ -213,7 +194,7 @@ pub struct AgentManifest {
     /// `ProviderRegistry::resolve()` will fall through to the global
     /// default model when this is `None`.
     #[serde(default)]
-    pub model:              Option<String>,
+    pub model: Option<String>,
     /// System prompt defining agent behavior.
     pub system_prompt:      String,
     /// Optional personality/mood/voice prompt (prepended to system_prompt when
@@ -255,7 +236,8 @@ pub struct AgentManifest {
 }
 
 /// Runtime state of an agent process.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, strum::Display)]
+#[strum(serialize_all = "snake_case")]
 pub enum ProcessState {
     /// Agent is actively running (LLM loop in progress).
     Running,
@@ -277,20 +259,6 @@ impl ProcessState {
     /// Whether this state is terminal (process no longer accepts messages).
     pub fn is_terminal(self) -> bool {
         matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
-    }
-}
-
-impl std::fmt::Display for ProcessState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ProcessState::Running => write!(f, "running"),
-            ProcessState::Idle => write!(f, "idle"),
-            ProcessState::Waiting => write!(f, "waiting"),
-            ProcessState::Paused => write!(f, "paused"),
-            ProcessState::Completed => write!(f, "completed"),
-            ProcessState::Failed => write!(f, "failed"),
-            ProcessState::Cancelled => write!(f, "cancelled"),
-        }
     }
 }
 
@@ -331,7 +299,8 @@ impl Default for AgentEnv {
 // ---------------------------------------------------------------------------
 
 /// Control signals for agent processes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::Display)]
+#[strum(serialize_all = "snake_case")]
 pub enum Signal {
     /// Interrupt the current operation (cancel in-flight LLM call).
     /// The process stays alive and waits for the next message.

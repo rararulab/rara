@@ -43,7 +43,7 @@ use crate::{
 // ---------------------------------------------------------------------------
 
 /// Auto-inferred priority tier for event queue ordering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, strum::Display)]
 pub enum EventPriority {
     /// Signal, Shutdown — processed first.
     Critical = 0,
@@ -60,6 +60,8 @@ pub enum EventPriority {
 /// Syscall variants — all interactions that a `ProcessHandle` routes through
 /// the kernel event queue. Each variant carries identity fields plus a oneshot
 /// reply channel for the kernel event loop to respond on.
+#[derive(strum::IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 pub enum Syscall {
     // -- Process queries --
     /// Query the status of a target agent process.
@@ -206,29 +208,6 @@ impl Syscall {
     /// For agent-less syscalls (`RequiresApproval`, `GetToolRegistry`),
     /// returns a fixed nil UUID-based `AgentId` so they always hash to the
     /// same shard.
-    /// Return a static label for this syscall variant (zero-allocation).
-    pub fn variant_name(&self) -> &'static str {
-        match self {
-            Self::QueryStatus { .. } => "query_status",
-            Self::QueryChildren { .. } => "query_children",
-            Self::MemStore { .. } => "mem_store",
-            Self::MemRecall { .. } => "mem_recall",
-            Self::SharedStore { .. } => "shared_store",
-            Self::SharedRecall { .. } => "shared_recall",
-            Self::CreatePipe { .. } => "create_pipe",
-            Self::CreateNamedPipe { .. } => "create_named_pipe",
-            Self::ConnectPipe { .. } => "connect_pipe",
-            Self::RequiresApproval { .. } => "requires_approval",
-            Self::RequestApproval { .. } => "request_approval",
-            Self::CheckGuardBatch { .. } => "check_guard_batch",
-            Self::GetManifest { .. } => "get_manifest",
-            Self::GetToolRegistry { .. } => "get_tool_registry",
-            Self::ResolveProvider { .. } => "resolve_provider",
-            Self::PublishEvent { .. } => "publish_event",
-            Self::RecordToolCall { .. } => "record_tool_call",
-        }
-    }
-
     pub fn agent_id(&self) -> AgentId {
         match self {
             Self::QueryStatus { target, .. } => *target,
@@ -379,6 +358,8 @@ impl std::fmt::Debug for Syscall {
 /// Every interaction with the kernel — user messages, process control,
 /// internal callbacks, output delivery — is represented as a `KernelEvent`
 /// and processed by the single `Kernel::run()` event loop.
+#[derive(strum::IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 pub enum KernelEvent {
     // === Input: from external sources ===
     /// A new user message from a channel adapter (via IngressPipeline).
@@ -445,21 +426,6 @@ impl KernelEvent {
     /// Returns `None` for global events that are not agent-scoped
     /// (UserMessage, SpawnAgent, Timer, Shutdown, Deliver).
     /// Returns `Some(agent_id)` for events that target a specific agent.
-    /// Return a static label for this event variant (zero-allocation).
-    pub fn variant_name(&self) -> &'static str {
-        match self {
-            Self::UserMessage(_) => "user_message",
-            Self::SpawnAgent { .. } => "spawn_agent",
-            Self::SendSignal { .. } => "send_signal",
-            Self::TurnCompleted { .. } => "turn_completed",
-            Self::ChildCompleted { .. } => "child_completed",
-            Self::Deliver(_) => "deliver",
-            Self::Syscall(_) => "syscall",
-            Self::Timer { .. } => "timer",
-            Self::Shutdown => "shutdown",
-        }
-    }
-
     pub fn agent_id(&self) -> Option<AgentId> {
         match self {
             Self::SendSignal { target, .. } => Some(*target),

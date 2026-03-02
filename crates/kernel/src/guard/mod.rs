@@ -16,6 +16,8 @@
 
 pub mod path_guard;
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde_json::Value;
 use uuid::Uuid;
@@ -54,6 +56,8 @@ impl Verdict {
 // ---------------------------------------------------------------------------
 // Guard trait
 // ---------------------------------------------------------------------------
+
+pub type GuardRef = Arc<dyn Guard>;
 
 /// Intercepts tool execution and output for approval/moderation.
 #[async_trait]

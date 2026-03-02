@@ -39,6 +39,9 @@ use crate::error::Result;
 
 pub type LlmProviderRef = Arc<dyn LlmProvider>;
 
+/// Shared reference to the [`ProviderRegistry`].
+pub type ProviderRegistryRef = Arc<ProviderRegistry>;
+
 /// Trait abstracting an LLM provider capable of chat completions.
 ///
 /// Implementors wrap a concrete HTTP client (e.g. `async_openai::Client`)

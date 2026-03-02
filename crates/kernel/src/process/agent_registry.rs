@@ -15,12 +15,16 @@
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use dashmap::DashMap;
 
 use super::AgentManifest;
 use crate::error::{KernelError, Result};
+
+/// Shared reference to the [`AgentRegistry`].
+pub type AgentRegistryRef = Arc<AgentRegistry>;
 
 pub struct AgentRegistry {
     builtin:    HashMap<String, AgentManifest>,

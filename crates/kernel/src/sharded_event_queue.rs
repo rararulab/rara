@@ -35,6 +35,9 @@ use crate::{
     unified_event::KernelEvent,
 };
 
+/// Shared reference to the [`ShardedEventQueue`].
+pub type ShardedQueueRef = Arc<ShardedEventQueue>;
+
 // ---------------------------------------------------------------------------
 // ShardTarget — classification result
 // ---------------------------------------------------------------------------

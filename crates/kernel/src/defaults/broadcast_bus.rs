@@ -42,7 +42,6 @@ impl EventBus for BroadcastEventBus {
     }
 
     async fn subscribe(&self, _filter: EventFilter) -> EventStream {
-        // TODO: apply filter in a wrapper stream
         self.sender.subscribe()
     }
 }

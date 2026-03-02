@@ -38,6 +38,9 @@ use crate::{
 // DeviceRegistry
 // ---------------------------------------------------------------------------
 
+/// Shared reference to the [`DeviceRegistry`].
+pub type DeviceRegistryRef = Arc<DeviceRegistry>;
+
 /// Registry of hot-pluggable devices and their tool mappings.
 ///
 /// Provides thread-safe registration, unregistration, and lookup of devices.

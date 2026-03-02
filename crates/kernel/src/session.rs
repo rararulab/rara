@@ -18,10 +18,15 @@
 //! used across the kernel and downstream crates (rara-sessions, rara-boot,
 //! etc.). All session persistence goes through [`SessionRepository`].
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
+
+/// Shared reference to a [`SessionRepository`] implementation.
+pub type SessionRepoRef = Arc<dyn SessionRepository>;
 
 use crate::channel::types::ChatMessage;
 
