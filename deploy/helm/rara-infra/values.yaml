@@ -281,7 +281,7 @@ consul:
     name: consul
     datacenter: rara-dc1
   server:
-    replicas: true
+    replicas: 1
     storage: 5Gi
     storageClass: null
   client:
