@@ -26,6 +26,7 @@
 
 use std::sync::Arc;
 
+use futures::future::join_all;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info, info_span, warn};
 
@@ -57,16 +58,25 @@ impl EventProcessor {
             tokio::select! {
                 _ = self.queue.wait() => {
                     let events = self.queue.drain(32);
-                    for (event, wal_id) in events {
-                        let event_type: &'static str = (&event).into();
-                        let span = info_span!(
-                            "handle_event",
-                            processor_id = self.id,
-                            event_type,
-                        );
-                        kernel.handle_event(event, runtimes)
-                            .instrument(span)
-                            .await;
+                    let futures: Vec<_> = events
+                        .into_iter()
+                        .map(|(event, wal_id)| {
+                            let event_type: &'static str = (&event).into();
+                            let span = info_span!(
+                                "handle_event",
+                                processor_id = self.id,
+                                event_type,
+                            );
+                            async move {
+                                kernel.handle_event(event, runtimes)
+                                    .instrument(span)
+                                    .await;
+                                wal_id
+                            }
+                        })
+                        .collect();
+                    let wal_ids = join_all(futures).await;
+                    for wal_id in wal_ids {
                         if let Some(id) = wal_id {
                             kernel.event_queue().mark_completed(id);
                         }
