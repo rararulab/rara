@@ -52,6 +52,7 @@ pub mod model;
 pub mod process;
 pub mod provider;
 pub mod runner;
+pub mod security;
 pub mod session;
 pub(crate) mod shard_queue;
 pub mod sharded_event_queue;
@@ -65,6 +66,7 @@ pub use approval::{
     ApprovalDecision, ApprovalManager, ApprovalPolicy, ApprovalRequest, ApprovalResponse, RiskLevel,
 };
 pub use error::{KernelError, Result};
+pub use security::SecuritySubsystem;
 // New process model re-exports
 pub use handle::{AgentHandle, process_handle::ProcessHandle, syscall_tool::SyscallTool};
 pub use kernel::{Kernel, KernelConfig};

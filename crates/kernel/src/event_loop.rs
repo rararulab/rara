@@ -409,7 +409,7 @@ impl Kernel {
                 tool_name,
                 reply_tx,
             } => {
-                let result = inner.approval.requires_approval(&tool_name);
+                let result = inner.security.requires_approval(&tool_name);
                 let _ = reply_tx.send(result);
             }
 
@@ -420,7 +420,7 @@ impl Kernel {
                 summary,
                 reply_tx,
             } => {
-                let approval = Arc::clone(&inner.approval);
+                let approval = Arc::clone(inner.security.approval());
                 let policy = approval.policy();
                 let req = crate::approval::ApprovalRequest {
                     id: uuid::Uuid::new_v4(),
@@ -465,13 +465,9 @@ impl Kernel {
                     session_id: uuid::Uuid::parse_str(&session_uuid).unwrap_or(uuid::Uuid::nil()),
                 };
 
-                let guard = Arc::clone(&inner.guard);
+                let security = Arc::clone(&inner.security);
                 tokio::spawn(async move {
-                    let mut verdicts = Vec::with_capacity(checks.len());
-                    for (tool_name, args) in &checks {
-                        let verdict = guard.check_tool(&ctx, tool_name, args).await;
-                        verdicts.push(verdict);
-                    }
+                    let verdicts = security.check_guard_batch(&ctx, &checks).await;
                     let _ = reply_tx.send(verdicts);
                 });
             }
@@ -1392,7 +1388,7 @@ impl Kernel {
         let inner = self.inner();
 
         // Validate principal.
-        inner.validate_principal(&principal).await?;
+        inner.security.validate_principal(&principal).await?;
 
         // Acquire global semaphore.
         let global_permit = inner
@@ -1772,32 +1768,9 @@ impl Kernel {
         use crate::process::principal::Role;
 
         let inner = self.inner();
-
-        // Try looking up the user by their raw UserId string first.
-        let user_id_str = &user.0;
-
-        let kernel_user = match inner.user_store.get_by_name(user_id_str).await {
-            Ok(Some(u)) => Some(u),
-            _ => {
-                // UserId might be in "channel:name" format (e.g. "web:web-user").
-                // Try extracting the part after ':'.
-                if let Some((_prefix, name)) = user_id_str.split_once(':') {
-                    match inner.user_store.get_by_name(name).await {
-                        Ok(found) => found,
-                        Err(_) => None,
-                    }
-                } else {
-                    None
-                }
-            }
-        };
-
-        match kernel_user {
-            Some(u) => match u.role {
-                Role::Root | Role::Admin => Self::ADMIN_AGENT_NAME.to_string(),
-                Role::User => Self::USER_AGENT_NAME.to_string(),
-            },
-            None => Self::USER_AGENT_NAME.to_string(),
+        match inner.security.resolve_user_role(user).await {
+            Role::Root | Role::Admin => Self::ADMIN_AGENT_NAME.to_string(),
+            Role::User => Self::USER_AGENT_NAME.to_string(),
         }
     }
 

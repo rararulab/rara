@@ -52,7 +52,6 @@ use crate::{
     error::{KernelError, Result},
     event::EventBus,
     event_queue::EventQueue,
-    guard::Guard,
     io::{
         egress::{EgressAdapter, EndpointRegistry},
         ingress::{IdentityResolver, IngressPipeline, SessionResolver},
@@ -63,7 +62,7 @@ use crate::{
     memory::Memory,
     process::{
         AgentId, AgentManifest, ProcessState, ProcessTable, SessionId,
-        agent_registry::AgentRegistry, principal::Principal, user::UserStore,
+        agent_registry::AgentRegistry, principal::Principal,
     },
     provider::ProviderRegistry,
     session::SessionRepository,
@@ -95,8 +94,8 @@ pub(crate) struct KernelInner {
     pub memory:                 Arc<dyn Memory>,
     /// Event bus for publishing kernel events.
     pub event_bus:              Arc<dyn EventBus>,
-    /// Guard for tool approval checks.
-    pub guard:                  Arc<dyn Guard>,
+    /// Unified security subsystem (auth + authz + approval).
+    pub security:               Arc<crate::security::SecuritySubsystem>,
     /// Agent registry for looking up named agent definitions.
     pub agent_registry:         Arc<AgentRegistry>,
     /// Cross-agent shared key-value store (trait-based, swappable backend).
@@ -105,8 +104,6 @@ pub(crate) struct KernelInner {
     pub tool_call_recorder:     Arc<dyn ToolCallRecorder>,
     /// Maximum number of KV entries per agent (0 = unlimited).
     pub memory_quota_per_agent: usize,
-    /// User store for user management and permission validation.
-    pub user_store:             Arc<dyn UserStore>,
     /// Session repository for conversation history.
     pub session_repo:           Arc<dyn SessionRepository>,
     /// Flat KV settings provider for runtime configuration.
@@ -119,36 +116,11 @@ pub(crate) struct KernelInner {
     pub device_registry:        Arc<DeviceRegistry>,
     /// Structured audit log for agent behavior tracking.
     pub audit_log:              Arc<dyn AuditLog>,
-    /// Approval manager for gating dangerous tool executions.
-    pub approval:               Arc<crate::approval::ApprovalManager>,
     /// Unified event queue (tiered priority) for all kernel interactions.
     pub event_queue:            Arc<dyn EventQueue>,
 }
 
 impl KernelInner {
-    /// Validate that the principal's user exists, is enabled, and has Spawn
-    /// permission.
-    ///
-    /// Called by both `Kernel::spawn()` and `handle_syscall(SpawnAgent)`.
-    pub(crate) async fn validate_principal(&self, principal: &Principal) -> Result<()> {
-        let user = self
-            .user_store
-            .get_by_name(&principal.user_id.0)
-            .await?
-            .ok_or(KernelError::UserNotFound {
-                name: principal.user_id.0.clone(),
-            })?;
-        if !user.enabled {
-            return Err(KernelError::UserDisabled { name: user.name });
-        }
-        if !user.has_permission(&crate::process::user::Permission::Spawn) {
-            return Err(KernelError::PermissionDenied {
-                reason: format!("user '{}' lacks Spawn permission", user.name),
-            });
-        }
-        Ok(())
-    }
-
     /// Ensure a session exists for the given ID, creating one if needed.
     ///
     /// Called at spawn time to set up the process's conversation environment.
@@ -276,16 +248,14 @@ impl Kernel {
         tool_registry: Arc<ToolRegistry>,
         memory: Arc<dyn Memory>,
         event_bus: Arc<dyn EventBus>,
-        guard: Arc<dyn Guard>,
+        security: Arc<crate::security::SecuritySubsystem>,
         agent_registry: Arc<AgentRegistry>,
-        user_store: Arc<dyn UserStore>,
         session_repo: Arc<dyn SessionRepository>,
         settings: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
         stream_hub: Arc<StreamHub>,
         identity_resolver: Arc<dyn IdentityResolver>,
         session_resolver: Arc<dyn SessionResolver>,
         audit_log: Arc<dyn AuditLog>,
-        approval: Arc<crate::approval::ApprovalManager>,
         sharded_queue: Option<Arc<crate::sharded_event_queue::ShardedEventQueue>>,
         kv_backend: Option<Arc<dyn KvBackend>>,
         tool_call_recorder: Option<Arc<dyn ToolCallRecorder>>,
@@ -322,21 +292,19 @@ impl Kernel {
             tool_registry,
             memory,
             event_bus,
-            guard,
+            security,
             agent_registry,
             shared_kv: kv_backend
                 .unwrap_or_else(|| Arc::new(crate::defaults::dashmap_kv::DashMapKv::new())),
             tool_call_recorder: tool_call_recorder
                 .unwrap_or_else(|| Arc::new(crate::audit::NoopToolCallRecorder)),
             memory_quota_per_agent: config.memory_quota_per_agent,
-            user_store,
             session_repo,
             settings,
             stream_hub: stream_hub.clone(),
             pipe_registry: Arc::new(PipeRegistry::new()),
             device_registry: Arc::new(DeviceRegistry::new()),
             audit_log,
-            approval,
             event_queue: event_queue.clone(),
         });
 
@@ -483,7 +451,12 @@ impl Kernel {
     pub fn audit_log(&self) -> &Arc<dyn AuditLog> { &self.inner.audit_log }
 
     /// Access the approval manager.
-    pub fn approval(&self) -> &Arc<crate::approval::ApprovalManager> { &self.inner.approval }
+    pub fn approval(&self) -> &Arc<crate::approval::ApprovalManager> {
+        self.inner.security.approval()
+    }
+
+    /// Access the unified security subsystem.
+    pub fn security(&self) -> &Arc<crate::security::SecuritySubsystem> { &self.inner.security }
 
     /// Query the audit log for events matching the given filter.
     pub async fn audit_query(&self, filter: AuditFilter) -> Vec<AuditEvent> {
@@ -592,9 +565,7 @@ mod tests {
     use crate::{
         audit::InMemoryAuditLog,
         defaults::{
-            noop::{
-                NoopEventBus, NoopGuard, NoopMemory, NoopSessionRepository, NoopSettingsProvider,
-            },
+            noop::{NoopEventBus, NoopMemory, NoopSessionRepository, NoopSettingsProvider},
             noop_user_store::NoopUserStore,
         },
         process::principal::Principal,
@@ -624,9 +595,8 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(NoopMemory),
             Arc::new(NoopEventBus),
-            Arc::new(NoopGuard),
+            Arc::new(crate::security::SecuritySubsystem::noop()),
             registry,
-            Arc::new(NoopUserStore),
             Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
             Arc::new(NoopSettingsProvider)
                 as Arc<dyn rara_domain_shared::settings::SettingsProvider>,
@@ -634,9 +604,6 @@ mod tests {
             Arc::new(crate::defaults::noop::NoopIdentityResolver) as Arc<dyn IdentityResolver>,
             Arc::new(crate::defaults::noop::NoopSessionResolver) as Arc<dyn SessionResolver>,
             Arc::new(InMemoryAuditLog::default()) as Arc<dyn AuditLog>,
-            Arc::new(crate::approval::ApprovalManager::new(
-                crate::approval::ApprovalPolicy::default(),
-            )),
             None,
             None,
             None,
@@ -1141,15 +1108,22 @@ mod tests {
         let provider_registry =
             Arc::new(ProviderRegistryBuilder::new("test", "test-model").build());
 
+        let security = Arc::new(crate::security::SecuritySubsystem::new(
+            Arc::new(NoopUserStore),
+            Arc::new(DenyDangerousGuard),
+            Arc::new(crate::approval::ApprovalManager::new(
+                crate::approval::ApprovalPolicy::default(),
+            )),
+        ));
+
         Kernel::new(
             config,
             provider_registry,
             Arc::new(ToolRegistry::new()),
             Arc::new(NoopMemory),
             Arc::new(NoopEventBus),
-            Arc::new(DenyDangerousGuard),
+            security,
             registry,
-            Arc::new(NoopUserStore),
             Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
             Arc::new(NoopSettingsProvider)
                 as Arc<dyn rara_domain_shared::settings::SettingsProvider>,
@@ -1157,9 +1131,6 @@ mod tests {
             Arc::new(crate::defaults::noop::NoopIdentityResolver) as Arc<dyn IdentityResolver>,
             Arc::new(crate::defaults::noop::NoopSessionResolver) as Arc<dyn SessionResolver>,
             Arc::new(InMemoryAuditLog::default()) as Arc<dyn AuditLog>,
-            Arc::new(crate::approval::ApprovalManager::new(
-                crate::approval::ApprovalPolicy::default(),
-            )),
             None,
             None,
             None,

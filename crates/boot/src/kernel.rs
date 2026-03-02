@@ -171,6 +171,13 @@ pub fn boot(config: BootConfig) -> Kernel {
         .approval
         .unwrap_or_else(|| Arc::new(ApprovalManager::new(ApprovalPolicy::default())));
 
+    // Assemble the unified security subsystem.
+    let security = Arc::new(rara_kernel::security::SecuritySubsystem::new(
+        config.user_store,
+        guard,
+        approval,
+    ));
+
     // Eagerly register all Prometheus metrics so /metrics shows them immediately.
     rara_kernel::metrics::init();
 
@@ -185,16 +192,14 @@ pub fn boot(config: BootConfig) -> Kernel {
         config.tool_registry,
         memory,
         event_bus,
-        guard,
+        security,
         config.agent_registry,
-        config.user_store,
         config.session_repo,
         config.settings,
         stream_hub,
         identity_resolver,
         session_resolver,
         audit_log,
-        approval,
         config.sharded_queue,
         config.kv_backend,
         config.tool_call_recorder,

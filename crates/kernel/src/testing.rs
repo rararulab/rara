@@ -39,10 +39,7 @@ use tokio::sync::Semaphore;
 
 use crate::{
     audit::{AuditLog, InMemoryAuditLog},
-    defaults::{
-        noop::{NoopEventBus, NoopGuard, NoopMemory, NoopSessionRepository, NoopSettingsProvider},
-        noop_user_store::NoopUserStore,
-    },
+    defaults::noop::{NoopEventBus, NoopMemory, NoopSessionRepository, NoopSettingsProvider},
     device_registry::DeviceRegistry,
     event_queue::InMemoryEventQueue,
     io::{pipe::PipeRegistry, stream::StreamHub},
@@ -136,12 +133,11 @@ impl TestKernelBuilder {
             tool_registry: Arc::new(self.tool_registry),
             memory: Arc::new(NoopMemory),
             event_bus: Arc::new(NoopEventBus),
-            guard: Arc::new(NoopGuard),
+            security: Arc::new(crate::security::SecuritySubsystem::noop()),
             agent_registry: Arc::new(self.agent_registry),
             shared_kv: Arc::new(crate::defaults::dashmap_kv::DashMapKv::new()),
             tool_call_recorder: Arc::new(crate::audit::NoopToolCallRecorder),
             memory_quota_per_agent: self.config.memory_quota_per_agent,
-            user_store: Arc::new(NoopUserStore),
             session_repo: Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
             settings: Arc::new(NoopSettingsProvider)
                 as Arc<dyn rara_domain_shared::settings::SettingsProvider>,
@@ -149,9 +145,6 @@ impl TestKernelBuilder {
             pipe_registry: Arc::new(PipeRegistry::new()),
             device_registry: Arc::new(DeviceRegistry::new()),
             audit_log: Arc::new(InMemoryAuditLog::default()) as Arc<dyn AuditLog>,
-            approval: Arc::new(crate::approval::ApprovalManager::new(
-                crate::approval::ApprovalPolicy::default(),
-            )),
             event_queue: Arc::new(InMemoryEventQueue::new(4096)),
         });
 
