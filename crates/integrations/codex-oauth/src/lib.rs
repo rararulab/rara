@@ -29,7 +29,7 @@
 //! browser to the frontend settings page.
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use rara_keyring_store::{DefaultKeyringStore, KeyringStore};
+use rara_keyring_store::{KeyringStore, KeyringStoreRef};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -107,12 +107,12 @@ pub fn build_auth_url(state: &str, code_challenge: &str) -> Result<String, Strin
     Ok(url.into())
 }
 
-/// Load persisted Codex tokens from keyring.
-pub fn load_tokens() -> Result<Option<StoredCodexTokens>, String> {
-    let store = DefaultKeyringStore;
+/// Load persisted Codex tokens from credential store.
+pub async fn load_tokens(store: &dyn KeyringStore) -> Result<Option<StoredCodexTokens>, String> {
     let Some(raw) = store
         .load(CODEX_KEYRING_SERVICE, CODEX_TOKEN_ACCOUNT)
-        .map_err(|e| format!("keyring load failed: {e}"))?
+        .await
+        .map_err(|e| format!("credential store load failed: {e}"))?
     else {
         return Ok(None);
     };
@@ -121,21 +121,21 @@ pub fn load_tokens() -> Result<Option<StoredCodexTokens>, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Save Codex tokens to keyring.
-pub fn save_tokens(tokens: &StoredCodexTokens) -> Result<(), String> {
-    let store = DefaultKeyringStore;
+/// Save Codex tokens to credential store.
+pub async fn save_tokens(store: &dyn KeyringStore, tokens: &StoredCodexTokens) -> Result<(), String> {
     let raw = serde_json::to_string(tokens).map_err(|e| e.to_string())?;
     store
         .save(CODEX_KEYRING_SERVICE, CODEX_TOKEN_ACCOUNT, &raw)
-        .map_err(|e| format!("keyring save failed: {e}"))
+        .await
+        .map_err(|e| format!("credential store save failed: {e}"))
 }
 
-/// Delete persisted Codex tokens from keyring.
-pub fn clear_tokens() -> Result<(), String> {
-    let store = DefaultKeyringStore;
+/// Delete persisted Codex tokens from credential store.
+pub async fn clear_tokens(store: &dyn KeyringStore) -> Result<(), String> {
     let _ = store
         .delete(CODEX_KEYRING_SERVICE, CODEX_TOKEN_ACCOUNT)
-        .map_err(|e| format!("keyring delete failed: {e}"))?;
+        .await
+        .map_err(|e| format!("credential store delete failed: {e}"))?;
     Ok(())
 }
 
@@ -285,7 +285,7 @@ pub fn frontend_base_url() -> String {
 ///
 /// If a previous callback server is still running it is shut down first so
 /// that the port is freed. This makes repeated `/start` calls safe.
-pub async fn start_callback_server() -> Result<(), String> {
+pub async fn start_callback_server(store: KeyringStoreRef) -> Result<(), String> {
     // Shut down any previous callback server.
     let old_cancel = CALLBACK_SHUTDOWN.lock().ok().and_then(|mut g| g.take());
     if let Some(old) = old_cancel {
@@ -301,9 +301,11 @@ pub async fn start_callback_server() -> Result<(), String> {
         "/auth/callback",
         axum::routing::get({
             let cancel = cancel_for_handler;
+            let store = store.clone();
             move |query: axum::extract::Query<CallbackQuery>| {
                 let cancel = cancel.clone();
-                async move { handle_callback(query, cancel).await }
+                let store = store.clone();
+                async move { handle_callback(query, cancel, store).await }
             }
         }),
     );
@@ -344,12 +346,13 @@ struct CallbackQuery {
 async fn handle_callback(
     axum::extract::Query(query): axum::extract::Query<CallbackQuery>,
     cancel: tokio_util::sync::CancellationToken,
+    store: KeyringStoreRef,
 ) -> axum::response::Redirect {
     let frontend = frontend_base_url();
     let err_url = format!("{frontend}/settings?section=providers&codex_oauth=error");
     let ok_url = format!("{frontend}/settings?section=providers&codex_oauth=success");
 
-    let redirect_url = match handle_callback_inner(&query).await {
+    let redirect_url = match handle_callback_inner(&query, &*store).await {
         Ok(()) => ok_url,
         Err(e) => {
             tracing::warn!(error = %e, "codex oauth callback failed");
@@ -363,7 +366,7 @@ async fn handle_callback(
     axum::response::Redirect::to(&redirect_url)
 }
 
-async fn handle_callback_inner(query: &CallbackQuery) -> Result<(), String> {
+async fn handle_callback_inner(query: &CallbackQuery, store: &dyn KeyringStore) -> Result<(), String> {
     if let Some(ref oauth_err) = query.error {
         return Err(format!("provider returned error: {oauth_err}"));
     }
@@ -378,7 +381,7 @@ async fn handle_callback_inner(query: &CallbackQuery) -> Result<(), String> {
         .ok_or_else(|| "missing authorization code".to_owned())?;
 
     let tokens = exchange_authorization_code(code, &pending.code_verifier).await?;
-    save_tokens(&tokens)?;
+    save_tokens(store, &tokens).await?;
     clear_pending_oauth()?;
 
     tracing::info!("codex oauth tokens saved successfully");
