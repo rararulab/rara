@@ -1665,6 +1665,7 @@ impl Kernel {
         crate::io::egress::Egress::deliver(
             &self.egress_adapters,
             self.endpoint_registry(),
+            Some(self.security().user_store().as_ref()),
             envelope,
         )
         .await;
