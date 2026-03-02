@@ -272,6 +272,41 @@ build-docker:
         --file docker/Dockerfile \
         .
 
+[doc("build frontend Docker image")]
+[group("🐳 Docker")]
+build-web:
+    @echo "🐳 Building frontend Docker image..."
+    docker build \
+        --tag ghcr.io/rararulab/rara-web:latest \
+        --file docker/web.Dockerfile \
+        .
+
+[doc("build, push, and restart rara backend on K8s")]
+[group("🐳 Docker")]
+deploy-backend: build-base build-docker
+    @echo "📤 Pushing backend image to GHCR..."
+    docker tag {{DOCKER_TAG}} ghcr.io/rararulab/rara:latest
+    docker push ghcr.io/rararulab/rara:latest
+    @echo "♻️  Restarting backend deployment..."
+    kubectl rollout restart deployment/rara-app-backend -n rara
+    kubectl rollout status deployment/rara-app-backend -n rara --timeout=120s
+    @echo "✅ Backend deployed!"
+
+[doc("build, push, and restart rara frontend on K8s")]
+[group("🐳 Docker")]
+deploy-web: build-web
+    @echo "📤 Pushing frontend image to GHCR..."
+    docker push ghcr.io/rararulab/rara-web:latest
+    @echo "♻️  Restarting frontend deployment..."
+    kubectl rollout restart deployment/rara-app-frontend -n rara
+    kubectl rollout status deployment/rara-app-frontend -n rara --timeout=60s
+    @echo "✅ Frontend deployed!"
+
+[doc("build, push, and restart both backend and frontend on K8s")]
+[group("🐳 Docker")]
+deploy: deploy-backend deploy-web
+    @echo "✅ All deployments complete!"
+
 [group("🐳 Docker")]
 up:
     docker compose up --build -d
