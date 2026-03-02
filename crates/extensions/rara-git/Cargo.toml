@@ -10,7 +10,7 @@ workspace = true
 
 [dependencies]
 git2 = { workspace = true }
-rand_core = { version = "0.6", features = ["getrandom"] }
+rand_core = { version = "0.10", features = ["getrandom"] }
 rara-paths = { workspace = true }
 snafu.workspace = true
 ssh-key = { version = "0.6", features = ["ed25519", "rand_core"] }
