@@ -877,7 +877,7 @@ impl Kernel {
             id:          MessageId::new(),
             in_reply_to: msg_id.clone(),
             user:        user.clone(),
-            session_id:  egress_session_id,
+            session_id:  egress_session_id.clone(),
             routing:     OutboundRouting::BroadcastAll,
             payload:     OutboundPayload::Progress {
                 stage:  "thinking".to_string(),
@@ -936,6 +936,7 @@ impl Kernel {
         let turn_cancel = rt.turn_cancel.clone();
         let event_queue = self.event_queue().clone();
         let stream_id = stream_handle.stream_id().clone();
+        let typing_session_id = egress_session_id;
 
         // Drop the DashMap guard before spawning.
         drop(rt);
@@ -957,6 +958,37 @@ impl Kernel {
             let _guard = turn_span.enter();
             let start = std::time::Instant::now();
 
+            // Spawn a background task that refreshes the typing indicator every
+            // 4 seconds.  Telegram's `sendChatAction(typing)` expires after ~5s,
+            // so we re-send it periodically to keep the indicator visible while
+            // the LLM is reasoning.
+            let typing_refresh = {
+                let eq = event_queue.clone();
+                let sid = typing_session_id.clone();
+                let usr = user.clone();
+                let mid = msg_id.clone();
+                tokio::spawn(async move {
+                    let mut interval =
+                        tokio::time::interval(std::time::Duration::from_secs(4));
+                    interval.tick().await; // skip the immediate first tick
+                    loop {
+                        interval.tick().await;
+                        let _ = eq.try_push(KernelEvent::Deliver(OutboundEnvelope {
+                            id:          MessageId::new(),
+                            in_reply_to: mid.clone(),
+                            user:        usr.clone(),
+                            session_id:  sid.clone(),
+                            routing:     OutboundRouting::BroadcastAll,
+                            payload:     OutboundPayload::Progress {
+                                stage:  "thinking".to_string(),
+                                detail: Some(String::new()),
+                            },
+                            timestamp:   Timestamp::now(),
+                        }));
+                    }
+                })
+            };
+
             let turn_result = crate::agent_turn::run_inline_agent_loop(
                 &handle,
                 user_text,
@@ -965,6 +997,9 @@ impl Kernel {
                 &turn_cancel,
             )
             .await;
+
+            // Stop the typing refresh loop now that the turn is done.
+            typing_refresh.abort();
 
             // Record timing and result metrics on the span.
             let elapsed = start.elapsed();
