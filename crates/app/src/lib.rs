@@ -40,12 +40,13 @@ use yunara_store::{config::DatabaseConfig, db::DBStore};
 
 /// Static application configuration — immutable after startup.
 ///
-/// Loaded from Consul KV (when `CONSUL_HTTP_ADDR` is set) or
-/// `RARA__`-prefixed environment variables (local dev fallback).
+/// Loaded exclusively from Consul KV. All fields are required;
+/// missing keys cause startup failure with a clear error.
+///
 /// For runtime-changeable values (OpenRouter key, Telegram token, …) see
 /// `rara_backend_admin::settings::SettingsSvc`.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, bon::Builder, Deserialize)]
+#[builder(on(String, into))]
 pub struct AppConfig {
     /// Database connection pool.
     pub database:               DatabaseConfig,
@@ -58,38 +59,19 @@ pub struct AppConfig {
     pub object_store:           object_store::ObjectStoreConfig,
     /// Main service HTTP base URL (for telegram bot → main service calls).
     pub main_service_http_base: String,
-    /// Memory backend configuration (static, not runtime settings).
+    /// Memory backend configuration.
     pub memory:                 MemoryConfig,
     /// Langfuse observability (host, API keys).
     pub langfuse:               LangfuseConfig,
     /// General OTLP telemetry (Alloy/Tempo).
     pub telemetry:              TelemetryConfig,
-    /// JWT signing secret.  Falls back to random-per-run if not set.
+    /// JWT signing secret.
     pub jwt_secret:             Option<String>,
 }
 
-impl Default for AppConfig {
-    fn default() -> Self {
-        let mut object_store = object_store::ObjectStoreConfig::default();
-        object_store.bucket = "rara".to_owned();
-        Self {
-            database: DatabaseConfig::default(),
-            http: RestServerConfig::default(),
-            grpc: GrpcServerConfig::default(),
-            object_store,
-            main_service_http_base: "http://127.0.0.1:25555".to_owned(),
-            memory: MemoryConfig::default(),
-            langfuse: LangfuseConfig::default(),
-            telemetry: TelemetryConfig::default(),
-            jwt_secret: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, bon::Builder, Deserialize)]
+#[builder(on(String, into))]
 pub struct MemoryConfig {
-    /// mem0 base URL -- used in non-k8s mode (direct connection).
     pub mem0_base_url:      String,
     pub memos_base_url:     String,
     pub memos_token:        String,
@@ -97,56 +79,21 @@ pub struct MemoryConfig {
     pub hindsight_bank_id:  String,
 }
 
-impl Default for MemoryConfig {
-    fn default() -> Self {
-        Self {
-            mem0_base_url:      "http://localhost:8080".to_owned(),
-            memos_base_url:     "http://localhost:5230".to_owned(),
-            memos_token:        String::new(),
-            hindsight_base_url: "http://localhost:8888".to_owned(),
-            hindsight_bank_id:  "default".to_owned(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, bon::Builder, Deserialize)]
+#[builder(on(String, into))]
 pub struct LangfuseConfig {
     pub host:       String,
     pub public_key: Option<String>,
     pub secret_key: Option<String>,
 }
 
-impl Default for LangfuseConfig {
-    fn default() -> Self {
-        Self {
-            host:       "http://localhost:3000".to_owned(),
-            public_key: None,
-            secret_key: None,
-        }
-    }
-}
-
 /// General OTLP telemetry configuration (non-Langfuse).
-///
-/// Used when traces should be sent to a generic OTLP collector such as
-/// Alloy -> Tempo rather than to Langfuse.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, bon::Builder, Deserialize)]
 pub struct TelemetryConfig {
     /// OTLP endpoint URL (e.g. `http://alloy:4318/v1/traces`).
     pub otlp_endpoint: Option<String>,
-    /// Export protocol: `"http"` (default) or `"grpc"`.
+    /// Export protocol: `"http"` or `"grpc"`.
     pub otlp_protocol: Option<String>,
-}
-
-impl Default for TelemetryConfig {
-    fn default() -> Self {
-        Self {
-            otlp_endpoint: None,
-            otlp_protocol: None,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -165,37 +112,30 @@ pub struct StartOptions {
 }
 
 impl AppConfig {
-    /// Load config from Consul KV or environment variables.
+    /// Load config from Consul KV.
     ///
-    /// When `CONSUL_HTTP_ADDR` is set:
-    ///   1. Consul KV entries (highest priority)
-    ///   2. Code defaults
-    ///
-    /// When Consul is NOT configured (local dev):
-    ///   1. `RARA__`-prefixed environment variables (highest priority)
-    ///   2. Code defaults
+    /// Requires `CONSUL_HTTP_ADDR` environment variable to be set.
+    /// All config keys must be present in Consul; missing keys cause
+    /// a deserialization error at startup.
     pub async fn new() -> Result<Self, config::ConfigError> {
-        let consul_http_addr = base::env::var("CONSUL_HTTP_ADDR")
-            .map_err(|e| config::ConfigError::Message(e.to_string()))?;
+        let consul_addr = base::env::var("CONSUL_HTTP_ADDR")
+            .map_err(|e| config::ConfigError::Message(e.to_string()))?
+            .ok_or_else(|| {
+                config::ConfigError::Message("CONSUL_HTTP_ADDR is required but not set".to_string())
+            })?;
 
-        let builder = if let Some(addr) = consul_http_addr {
-            tracing::info!(%addr, "Loading configuration from Consul KV");
-            let consul_config = rara_consul::Config {
-                address: addr,
-                ..Default::default()
-            };
-            config::ConfigBuilder::<config::builder::AsyncState>::default()
-                .add_async_source(rara_consul::ConsulSource::new(consul_config))
-        } else {
-            tracing::info!("Consul not configured, loading from environment variables");
-            config::ConfigBuilder::<config::builder::AsyncState>::default().add_source(
-                config::Environment::with_prefix("RARA")
-                    .separator("__")
-                    .try_parsing(true),
-            )
+        tracing::info!(%consul_addr, "Loading configuration from Consul KV");
+        let consul_config = rara_consul::Config {
+            address: consul_addr,
+            ..Default::default()
         };
 
-        let cfg = builder.build().await?;
+        let cfg = config::ConfigBuilder::<config::builder::AsyncState>::default()
+            .add_async_source(rara_consul::ConsulSource::new(consul_config))
+            .build()
+            .await?;
+
+        tracing::info!(?cfg, "Raw configuration from Consul");
         cfg.try_deserialize()
     }
 
@@ -759,21 +699,44 @@ impl rara_channels::telegram::contacts::ContactTracker for ContactRepoTracker {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_config_defaults() {
-        let config = AppConfig::default();
-        assert_eq!(config.object_store.endpoint, "http://localhost:9000");
-        assert_eq!(config.object_store.bucket, "rara");
+    fn test_config() -> AppConfig {
+        AppConfig::builder()
+            .database(
+                DatabaseConfig::builder()
+                    .database_url("postgres://postgres:postgres@localhost:5432/rara_test")
+                    .migration_dir("crates/rara-model/migrations")
+                    .build(),
+            )
+            .http(RestServerConfig::default())
+            .grpc(GrpcServerConfig::default())
+            .object_store(object_store::ObjectStoreConfig::default())
+            .main_service_http_base("http://127.0.0.1:25555")
+            .memory(
+                MemoryConfig::builder()
+                    .mem0_base_url("http://localhost:8080")
+                    .memos_base_url("http://localhost:5230")
+                    .memos_token("")
+                    .hindsight_base_url("http://localhost:8888")
+                    .hindsight_bank_id("default")
+                    .build(),
+            )
+            .langfuse(
+                LangfuseConfig::builder()
+                    .host("http://localhost:3000")
+                    .build(),
+            )
+            .telemetry(TelemetryConfig::builder().build())
+            .build()
     }
 
     #[tokio::test]
     async fn test_app_handle_shutdown() {
-        let config = AppConfig::default();
+        let config = test_config();
         let Ok(handle) = config.start().await else {
             return;
         };
 
-        let mut handle = handle;
+        let mut handle: AppHandle = handle;
         assert!(handle.is_running());
 
         handle.shutdown();

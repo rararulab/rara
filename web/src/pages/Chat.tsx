@@ -20,7 +20,6 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   Bot,
-  Briefcase,
   ChevronDown,
   Ellipsis,
   ImagePlus,
@@ -203,7 +202,6 @@ function formatTime(iso: string): string {
 // ---------------------------------------------------------------------------
 
 const chatUtilityItems = [
-  { href: "/jobs", icon: Briefcase, label: "Jobs", newTab: true },
   { href: "/settings", icon: SettingsIcon, label: "Settings", newTab: true },
 ];
 

@@ -114,7 +114,7 @@ just consul-keys   # list current keys
 
 | Key | Env Var | Default | Description |
 |-----|---------|---------|-------------|
-| `database_url` | `RARA__DATABASE__DATABASE_URL` | `postgres://postgres:postgres@localhost:5432/job` | PostgreSQL connection string |
+| `database_url` | `RARA__DATABASE__DATABASE_URL` | `postgres://postgres:postgres@localhost:5432/rara` | PostgreSQL connection string |
 | `migration_dir` | `RARA__DATABASE__MIGRATION_DIR` | `crates/rara-model/migrations` | SQLx migration directory |
 | `max_connections` | `RARA__DATABASE__MAX_CONNECTIONS` | `10` | Connection pool max size |
 | `min_connections` | `RARA__DATABASE__MIN_CONNECTIONS` | `1` | Connection pool min idle |

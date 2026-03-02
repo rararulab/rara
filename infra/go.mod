@@ -12,19 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod error;
-pub mod pg_repository;
-pub mod repository;
-mod router;
-pub mod service;
-pub mod types;
+module github.com/rararulab/rara/infra
 
-pub use router::{DerivedRates, LatestQuery, SnapshotListQuery, routes};
-
-/// Wire up the analytics service with a PostgreSQL repository.
-#[must_use]
-pub fn wire_analytics_service(pool: sqlx::PgPool) -> service::AnalyticsService {
-    let repo: std::sync::Arc<dyn repository::AnalyticsRepository> =
-        std::sync::Arc::new(pg_repository::PgAnalyticsRepository::new(pool));
-    service::AnalyticsService::new(repo)
-}
+go 1.25.6

@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::convert::Infallible;
+
 use config::{Map, Value, ValueKind};
 pub use rs_consul::Config;
-use rs_consul::{Consul, types::ReadKeyRequest};
+use rs_consul::{ConsulBuilder, types::ReadKeyRequest};
 
 // ---------------------------------------------------------------------------
 // ConsulSource — config::AsyncSource implementation
@@ -29,27 +31,54 @@ const PREFIX: &str = "rara/config/";
 /// `rara/config/database/database_url` becomes `database.database_url`.
 #[derive(Debug)]
 pub struct ConsulSource {
-    consul: Consul,
+    config: Config,
 }
 
 impl ConsulSource {
-    pub fn new(config: Config) -> Self {
-        Self {
-            consul: Consul::new(config),
-        }
-    }
+    pub fn new(config: Config) -> Self { Self { config } }
+}
+
+/// Build a [`hyper_rustls::HttpsConnector`] that trusts the OS certificate
+/// store (macOS Keychain, Windows cert store, Linux system CAs) via
+/// [`rustls_platform_verifier`].
+fn platform_https_connector()
+-> hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector> {
+    use rustls_platform_verifier::ConfigVerifierExt;
+
+    let tls_config = rustls::ClientConfig::with_platform_verifier()
+        .expect("failed to build rustls ClientConfig with platform verifier");
+
+    hyper_rustls::HttpsConnectorBuilder::new()
+        .with_tls_config(tls_config)
+        .https_or_http()
+        .enable_http1()
+        .build()
+}
+
+/// Build a custom [`rs_consul::HttpsClient`] that uses the platform
+/// certificate verifier instead of the default `webpki-roots`.
+fn build_platform_https_client(config: &Config) -> rs_consul::HttpsClient {
+    let connector = platform_https_connector();
+    config
+        .hyper_builder
+        .build::<_, http_body_util::combinators::BoxBody<bytes::Bytes, Infallible>>(connector)
 }
 
 #[async_trait::async_trait]
 impl config::AsyncSource for ConsulSource {
     async fn collect(&self) -> Result<Map<String, Value>, config::ConfigError> {
+        let https_client = build_platform_https_client(&self.config);
+        let consul = ConsulBuilder::new(self.config.clone())
+            .with_https_client(https_client)
+            .build();
+
         let request = ReadKeyRequest {
             key: PREFIX,
             recurse: true,
             ..Default::default()
         };
 
-        let entries = match self.consul.read_key(request).await {
+        let entries = match consul.read_key(request).await {
             Ok(response) => response.response,
             Err(rs_consul::ConsulError::UnexpectedResponseCode(status, _))
                 if status.as_u16() == 404 =>

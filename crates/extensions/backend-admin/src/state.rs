@@ -15,12 +15,12 @@
 //! Backend domain-service state — holds all HTTP admin services and routes.
 //!
 //! [`BackendState`] is the domain-service half of the old `AppState` god
-//! object.  It wires resume, application, interview, scheduler, analytics,
-//! job, session (chat), settings, contacts, and notification services.
+//! object.  It wires scheduler, session (chat), settings, contacts, and
+//! notification services.
 
 use std::sync::Arc;
 
-use snafu::{ResultExt, Whatever};
+use snafu::Whatever;
 use tracing::info;
 
 /// Backend domain-service state.
@@ -28,16 +28,11 @@ use tracing::info;
 /// Owns all domain services needed for HTTP admin routes.
 #[derive(Clone)]
 pub struct BackendState {
-    pub resume_service:      crate::resume::ResumeAppService,
-    pub application_service: crate::application::service::ApplicationService,
-    pub interview_service:   crate::interview::service::InterviewService,
-    pub scheduler_service:   crate::scheduler::service::SchedulerService,
-    pub analytics_service:   crate::analytics::service::AnalyticsService,
-    pub job_service:         crate::job::service::JobService,
-    pub session_service:     crate::chat::service::SessionService,
-    pub settings_svc:        crate::settings::SettingsSvc,
-    pub contact_repo:        rara_channels::telegram::contacts::repository::ContactRepository,
-    pub notify_client:       rara_domain_shared::notify::client::NotifyClient,
+    pub scheduler_service: crate::scheduler::service::SchedulerService,
+    pub session_service:   crate::chat::service::SessionService,
+    pub settings_svc:      crate::settings::SettingsSvc,
+    pub contact_repo:      rara_channels::telegram::contacts::repository::ContactRepository,
+    pub notify_client:     rara_domain_shared::notify::client::NotifyClient,
 }
 
 impl BackendState {
@@ -54,14 +49,7 @@ impl BackendState {
     ) -> Result<Self, Whatever> {
         // -- domain services -------------------------------------------------
 
-        let resume_service = crate::resume::wire_resume_service(pool.clone());
-        let application_service = crate::application::wire(pool.clone());
-        let interview_service = crate::interview::wire_interview_service(pool.clone());
         let scheduler_service = crate::scheduler::wire_scheduler_service(pool.clone());
-        let analytics_service = crate::analytics::wire_analytics_service(pool.clone());
-        let job_service = crate::job::wire_job_service(pool.clone())
-            .whatever_context("Failed to initialize job service")?;
-        info!("Job service initialized");
 
         // -- session service (renamed from ChatService) ----------------------
 
@@ -75,12 +63,7 @@ impl BackendState {
             rara_channels::telegram::contacts::repository::ContactRepository::new(pool);
 
         Ok(Self {
-            resume_service,
-            application_service,
-            interview_service,
             scheduler_service,
-            analytics_service,
-            job_service,
             session_service,
             settings_svc,
             contact_repo,
@@ -107,32 +90,7 @@ impl BackendState {
         merge_openapi_router(
             &mut router,
             &mut api,
-            crate::resume::routes(self.resume_service.clone()),
-        );
-        merge_openapi_router(
-            &mut router,
-            &mut api,
-            crate::application::routes(self.application_service.clone()),
-        );
-        merge_openapi_router(
-            &mut router,
-            &mut api,
-            crate::interview::routes(self.interview_service.clone()),
-        );
-        merge_openapi_router(
-            &mut router,
-            &mut api,
             crate::scheduler::routes(self.scheduler_service.clone()),
-        );
-        merge_openapi_router(
-            &mut router,
-            &mut api,
-            crate::analytics::routes(self.analytics_service.clone()),
-        );
-        merge_openapi_router(
-            &mut router,
-            &mut api,
-            crate::job::discovery_routes(self.job_service.clone()),
         );
         merge_openapi_router(
             &mut router,
@@ -175,17 +133,12 @@ impl BackendState {
         #[openapi(
             info(
                 title = "Rara API",
-                description = "AI Job Automation Platform API",
+                description = "AI Agent Platform API",
                 version = "0.0.17"
             ),
             tags(
-                (name = "applications", description = "Application lifecycle management"),
                 (name = "chat", description = "Chat sessions and messaging"),
-                (name = "resumes", description = "Resume management"),
-                (name = "interviews", description = "Interview management"),
-                (name = "jobs", description = "Job discovery and management"),
                 (name = "scheduler", description = "Task scheduling"),
-                (name = "analytics", description = "Analytics and metrics"),
                 (name = "settings", description = "Runtime settings"),
                 (name = "notifications", description = "Notification queue"),
                 (name = "contacts", description = "Telegram contacts allowlist"),

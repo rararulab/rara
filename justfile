@@ -18,7 +18,7 @@ RARA__DATABASE__MIGRATION_DIR := env("RARA__DATABASE__MIGRATION_DIR", "crates/ra
 [group("📒 Help")]
 [private]
 default:
-    @just --list --list-heading '🦀 job justfile manual page:\n'
+    @just --list --list-heading '🦀 rara justfile manual page:\n'
 
 [doc("show help")]
 [group("📒 Help")]
@@ -144,19 +144,19 @@ cloc:
 # Build
 # ========================================================================================
 
-[doc("build job binary")]
+[doc("build rara binary")]
 [group("🔨 Build")]
 build:
-    @echo "🔨 Building job..."
-    cargo build -p job-cli
+    @echo "🔨 Building rara..."
+    cargo build -p rara-cli
     @echo "📦 Moving binary to bin/ directory..."
-    mkdir -p bin/ && cp target/debug/job bin/
+    mkdir -p bin/ && cp target/debug/rara bin/
 
 [doc("build in release mode")]
 [group("🔨 Build")]
 build-release:
-    @echo "🔨 Building job (release mode)..."
-    cargo build -p job-cli --release
+    @echo "🔨 Building rara (release mode)..."
+    cargo build -p rara-cli --release
 
 # ========================================================================================
 # Release & Changelog
@@ -256,10 +256,10 @@ example-hello:
 [doc("build base image with Rust toolchain and cargo tools (run once)")]
 [group("🐳 Docker")]
 build-base:
-    @echo "🐳 Building base image (job-base)..."
+    @echo "🐳 Building base image (rara-base)..."
     docker build \
         --build-arg RUST_TOOLCHAIN={{RUST_TOOLCHAIN}} \
-        --tag job-base:latest \
+        --tag rara-base:latest \
         --file docker/base.Dockerfile \
         .
 

@@ -15,60 +15,61 @@
 use std::{path::Path, time::Duration};
 
 use serde::Deserialize;
-use smart_default::SmartDefault;
 use sqlx::postgres::PgPoolOptions;
 
 use crate::{db::DBStore, err::Result};
 
-/// Database configuration
-#[derive(Debug, Clone, SmartDefault, bon::Builder, Deserialize)]
-#[serde(default)]
+/// Database configuration.
+///
+/// `database_url` and `migration_dir` are **required** — they must be supplied
+/// via Consul KV or `RARA__DATABASE__*` environment variables.
+/// Connection-pool parameters have sensible defaults.
+#[derive(Debug, Clone, bon::Builder, Deserialize)]
 #[builder(on(String, into))]
 pub struct DatabaseConfig {
-    /// PostgreSQL database URL, e.g. `postgres://user:pass@host:5432/dbname`
-    #[default(_code = "\"postgres://postgres:postgres@localhost:5432/job\".to_string()")]
-    #[builder(default = "postgres://postgres:postgres@localhost:5432/job", getter)]
+    /// PostgreSQL database URL, e.g. `postgres://user:pass@host:5432/dbname`.
+    /// **Required** — must come from Consul or env.
+    #[builder(getter)]
     pub database_url: String,
 
     /// SQLx migration directory path.
-    #[default(_code = "\"crates/rara-model/migrations\".to_string()")]
-    #[builder(default = "crates/rara-model/migrations", getter)]
+    /// **Required** — must come from Consul or env.
+    #[builder(getter)]
     pub migration_dir: String,
 
-    /// Maximum number of connections in the pool
-    #[default = 20]
+    /// Maximum number of connections in the pool.
+    #[serde(default = "default_max_connections")]
     #[builder(default = 20, getter)]
     pub max_connections: u32,
 
-    /// Minimum number of idle connections
-    #[default = 2]
+    /// Minimum number of idle connections.
+    #[serde(default = "default_min_connections")]
     #[builder(default = 2, getter)]
     pub min_connections: u32,
 
-    /// Connection timeout (default: 30 seconds)
-    #[default(_code = "Duration::from_secs(30)")]
+    /// Connection timeout (default: 30 seconds).
+    #[serde(default = "default_connect_timeout", with = "humantime_serde")]
     #[builder(default = Duration::from_secs(30), getter)]
-    #[serde(with = "humantime_serde")]
     pub connect_timeout: Duration,
 
-    /// Maximum lifetime of a connection (default: 30 minutes)
-    #[default(_code = "Some(Duration::from_secs(1800))")]
+    /// Maximum lifetime of a connection (default: 30 minutes).
+    #[serde(default = "default_max_lifetime", with = "humantime_serde::option")]
     #[builder(getter)]
-    #[serde(with = "humantime_serde::option")]
     pub max_lifetime: Option<Duration>,
 
-    /// Idle timeout for connections (default: 10 minutes)
-    #[default(_code = "Some(Duration::from_secs(600))")]
+    /// Idle timeout for connections (default: 10 minutes).
+    #[serde(default = "default_idle_timeout", with = "humantime_serde::option")]
     #[builder(getter)]
-    #[serde(with = "humantime_serde::option")]
     pub idle_timeout: Option<Duration>,
 }
 
+fn default_max_connections() -> u32 { 20 }
+fn default_min_connections() -> u32 { 2 }
+fn default_connect_timeout() -> Duration { Duration::from_secs(30) }
+fn default_max_lifetime() -> Option<Duration> { Some(Duration::from_secs(1800)) }
+fn default_idle_timeout() -> Option<Duration> { Some(Duration::from_secs(600)) }
+
 impl DatabaseConfig {
-    /// Create a new database store with the given configuration
-    ///
-    /// # Arguments
-    /// * `config` - Database configuration
     #[tracing::instrument(
         level = "trace",
         skip(self),

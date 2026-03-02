@@ -21,7 +21,7 @@ eula = false
 
 # Binary definition for cargo-dist
 [[bin]]
-name = "job"
+name = "rara"
 path = "src/main.rs"
 
 [dependencies]
@@ -33,6 +33,7 @@ rara-channels = { workspace = true }
 rara-kernel = { workspace = true }
 ratatui.workspace = true
 reqwest.workspace = true
+rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 shadow-rs = { workspace = true }

@@ -20,7 +20,6 @@ import os
 from dataclasses import dataclass
 
 from python_worker.app.state import WorkerState
-from python_worker.capabilities.jobspy import jobspy_scrape
 from python_worker.capabilities.mem0 import (
     mem0_add,
     mem0_delete,
@@ -54,7 +53,6 @@ def build_container() -> WorkerContainer:
     registry = CapabilityRegistry()
     registry.register("system.health.ping", health_ping)
     registry.register("system.echo", system_echo)
-    registry.register("jobspy.scrape_jobs", jobspy_scrape)
     registry.register("mem0.from_config", mem0_from_config)
     registry.register("mem0.add", mem0_add)
     registry.register("mem0.get_all", mem0_get_all)

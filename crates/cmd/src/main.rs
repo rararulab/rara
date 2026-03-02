@@ -387,6 +387,10 @@ async fn run_repl(
 
 #[tokio::main]
 async fn main() -> Result<(), Whatever> {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install rustls crypto provider");
+
     let cli = Cli::parse();
     match cli.commands {
         Commands::Server(_) => ServerArgs::run().await,

@@ -82,7 +82,6 @@ crates/{layer}/{name}/
     pg_repository.rs # PostgreSQL implementation (if applicable)
     service.rs       # Business logic
     router.rs        # axum routes (if applicable)
-  migrations/
   Cargo.toml
 ```
 
@@ -180,6 +179,15 @@ When user requests involve multiple independent changes, split into separate iss
 - Merge sequentially to main, resolving conflicts as they arise
 - The second merge may need conflict resolution where both branches touched the same files
 
+### Database Migrations
+
+- **Location**: `crates/rara-model/migrations/`（集中式）
+- **永远不要修改已应用的迁移** — SQLx 通过 checksum 追踪，任何改动都会破坏启动
+- Schema 变更必须创建**新迁移**，即使是修复上一个迁移的错误
+- 使用 `just migrate-add <scope>_<description>` 创建迁移（如 `chat_add_pinned`）
+- 本地数据库损坏时用 `just migrate-reset` 重建
+- **不要在 Rust 代码中硬编码数据库默认值** — 所有配置通过 Consul 或环境变量注入
+
 ### Commit Style
 - Conventional commits: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`
 - Scope matches crate or area: `feat(kernel):`, `fix(web):`, `refactor(memory):`
@@ -221,3 +229,5 @@ When user requests involve multiple independent changes, split into separate iss
 - Do NOT create issues without `created-by:claude` label
 - Do NOT forget to close issues after merge — `gh issue close` explicitly
 - Do NOT leave stale worktrees — clean up after every merge
+- Do NOT modify already-applied migration files — create a new migration instead
+- Do NOT hardcode database URLs or config defaults in Rust code — use Consul/env vars

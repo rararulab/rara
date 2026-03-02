@@ -437,15 +437,16 @@ APP_VALUES_DEV := "rara-app/values-dev.yaml"
 GHCR_REPO := "ghcr.io/crrow"
 IMAGE_TAG := env("IMAGE_TAG", "latest")
 
-[doc("build backend Docker image")]
+[doc("build backend Docker image (buildx cached)")]
 [group("🐳 Images")]
 build-backend:
-    docker build -t {{ GHCR_REPO }}/job:{{ IMAGE_TAG }} -f ../../docker/Dockerfile ../..
+    docker buildx build -t {{ GHCR_REPO }}/rara:{{ IMAGE_TAG }} --load -f ../../docker/Dockerfile ../..
 
 [doc("build frontend Docker image")]
 [group("🐳 Images")]
 build-frontend:
-    docker build -t {{ GHCR_REPO }}/job-web:{{ IMAGE_TAG }} -f ../../docker/web.Dockerfile ../..
+    cd ../.. && mdbook build docs
+    docker buildx build -t {{ GHCR_REPO }}/rara-web:{{ IMAGE_TAG }} --load -f ../../docker/web.Dockerfile ../..
 
 [doc("build both images")]
 [group("🐳 Images")]
@@ -454,12 +455,12 @@ build-images: build-backend build-frontend
 [doc("push backend image to GHCR")]
 [group("🐳 Images")]
 push-backend:
-    docker push {{ GHCR_REPO }}/job:{{ IMAGE_TAG }}
+    docker push {{ GHCR_REPO }}/rara:{{ IMAGE_TAG }}
 
 [doc("push frontend image to GHCR")]
 [group("🐳 Images")]
 push-frontend:
-    docker push {{ GHCR_REPO }}/job-web:{{ IMAGE_TAG }}
+    docker push {{ GHCR_REPO }}/rara-web:{{ IMAGE_TAG }}
 
 [doc("push both images to GHCR")]
 [group("🐳 Images")]

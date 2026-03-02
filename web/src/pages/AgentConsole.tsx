@@ -19,7 +19,6 @@ import { useSearchParams } from "react-router";
 import {
   Activity,
   Bot,
-  Briefcase,
   Ellipsis,
   Layers,
   Settings as SettingsIcon,
@@ -42,7 +41,6 @@ const OPS_TABS = [
 ];
 
 const OPS_UTILITY_ITEMS = [
-  { href: "/jobs", label: "Jobs", icon: <Briefcase className="h-4 w-4" />, newTab: true },
   { href: "/settings", label: "Settings", icon: <SettingsIcon className="h-4 w-4" />, newTab: true },
 ];
 

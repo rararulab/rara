@@ -11,7 +11,7 @@ dependencies = [
   "opentelemetry-api>=1.28",
   "opentelemetry-sdk>=1.28",
   "protobuf>=5.0",
-  "python-jobspy>=1.1.82",
+
   "uvicorn>=0.30",
 ]
 

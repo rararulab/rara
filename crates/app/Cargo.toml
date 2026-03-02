@@ -16,6 +16,7 @@ agentfs-sdk = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 base = { workspace = true }
+bon = { workspace = true }
 common-runtime = { workspace = true }
 common-worker = { workspace = true }
 config = { workspace = true }

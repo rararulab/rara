@@ -13,8 +13,14 @@ description = "Consul KV configuration source for rara"
 
 [dependencies]
 async-trait = { workspace = true }
+bytes = { workspace = true }
 config = { workspace = true }
+http-body-util = "0.1"
+hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "http1"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "tokio"] }
 rs-consul = "0.13"
+rustls = { workspace = true }
+rustls-platform-verifier = "0.6"
 tracing = { workspace = true }
 
 [lints]

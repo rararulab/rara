@@ -81,7 +81,7 @@ skip = [
     { crate = "windows-strings@0.4.2", reason = "windows-core 0.61 uses older version" },
     { crate = "windows-sys@0.60.2", reason = "socket2 uses intermediate version" },
     { crate = "windows-targets@0.52.6", reason = "windows-sys 0.52 uses older version" },
-    { crate = "zip@2.4.2", reason = "ytmusicapi-uv pulls zip 2.x while utoipa-swagger-ui uses zip 3.x" },
+
 ]
 
 skip-tree = []
@@ -92,5 +92,5 @@ unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
     "https://github.com/AlexsJones/llmfit",
-    "https://github.com/crrow/ytmusicapi",
+
 ]
