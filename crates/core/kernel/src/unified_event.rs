@@ -164,7 +164,8 @@ pub enum Syscall {
         reply_tx: oneshot::Sender<crate::error::Result<AgentManifest>>,
     },
 
-    /// Get the tool registry, enriched with per-process tools (e.g. SyscallTool).
+    /// Get the tool registry, enriched with per-process tools (e.g.
+    /// SyscallTool).
     GetToolRegistry {
         agent_id: AgentId,
         reply_tx: oneshot::Sender<Arc<ToolRegistry>>,

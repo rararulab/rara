@@ -398,7 +398,8 @@ impl ProcessHandle {
         })?
     }
 
-    /// Get the tool registry, enriched with per-process tools (e.g. SyscallTool).
+    /// Get the tool registry, enriched with per-process tools (e.g.
+    /// SyscallTool).
     pub async fn tool_registry(&self) -> Result<Arc<ToolRegistry>> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.syscall_push(KernelEvent::Syscall(Syscall::GetToolRegistry {

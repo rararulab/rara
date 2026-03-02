@@ -106,10 +106,7 @@ impl SyscallTool {
         &self,
         tasks: Vec<SpawnRequest>,
     ) -> Result<serde_json::Value, anyhow::Error> {
-        info!(
-            count = tasks.len(),
-            "kernel: spawning agents in parallel"
-        );
+        info!(count = tasks.len(), "kernel: spawning agents in parallel");
 
         let mut handles: Vec<(String, AgentHandle)> = Vec::new();
         for task_req in &tasks {
@@ -337,8 +334,8 @@ struct SpawnRequest {
 // ============================================================================
 
 fn parse_agent_id(s: &str) -> anyhow::Result<AgentId> {
-    let uuid = uuid::Uuid::parse_str(s)
-        .map_err(|e| anyhow::anyhow!("invalid agent ID '{s}': {e}"))?;
+    let uuid =
+        uuid::Uuid::parse_str(s).map_err(|e| anyhow::anyhow!("invalid agent ID '{s}': {e}"))?;
     Ok(AgentId(uuid))
 }
 
@@ -369,9 +366,8 @@ impl crate::tool::AgentTool for SyscallTool {
     fn name(&self) -> &str { "kernel" }
 
     fn description(&self) -> &str {
-        "Interact with the kernel: spawn agents, query process status, \
-         send signals, manage memory (private & shared), and publish events. \
-         Set the 'action' field to select the operation."
+        "Interact with the kernel: spawn agents, query process status, send signals, manage memory \
+         (private & shared), and publish events. Set the 'action' field to select the operation."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -447,12 +443,11 @@ impl crate::tool::AgentTool for SyscallTool {
             .map_err(|e| anyhow::anyhow!("invalid kernel tool params: {e}"))?;
 
         match action {
-            SyscallParams::Spawn { agent, task } => {
-                self.exec_spawn(&agent, &task).await
-            }
-            SyscallParams::SpawnParallel { parallel, max_concurrency: _ } => {
-                self.exec_spawn_parallel(parallel).await
-            }
+            SyscallParams::Spawn { agent, task } => self.exec_spawn(&agent, &task).await,
+            SyscallParams::SpawnParallel {
+                parallel,
+                max_concurrency: _,
+            } => self.exec_spawn_parallel(parallel).await,
             SyscallParams::Status { target } => self.exec_status(&target).await,
             SyscallParams::Children => self.exec_children().await,
             SyscallParams::Kill { target } => self.exec_signal(&target, "kill").await,
@@ -466,9 +461,10 @@ impl crate::tool::AgentTool for SyscallTool {
             SyscallParams::SharedRecall { scope, key } => {
                 self.exec_shared_recall(&scope, &key).await
             }
-            SyscallParams::Publish { event_type, payload } => {
-                self.exec_publish(&event_type, payload).await
-            }
+            SyscallParams::Publish {
+                event_type,
+                payload,
+            } => self.exec_publish(&event_type, payload).await,
         }
     }
 }

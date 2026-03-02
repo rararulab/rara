@@ -74,7 +74,12 @@ impl ServerArgs {
                     config.langfuse.public_key.as_deref(),
                     config.langfuse.secret_key.as_deref(),
                 )
-            } else if let Some(ref endpoint) = config.telemetry.otlp_endpoint.as_deref().filter(|s| !s.is_empty()) {
+            } else if let Some(ref endpoint) = config
+                .telemetry
+                .otlp_endpoint
+                .as_deref()
+                .filter(|s| !s.is_empty())
+            {
                 use common_telemetry::logging::{LoggingOptions, OtlpExportProtocol};
                 let protocol = config.telemetry.otlp_protocol.as_deref().map(|p| match p {
                     "grpc" => OtlpExportProtocol::Grpc,

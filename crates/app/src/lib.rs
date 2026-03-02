@@ -83,11 +83,11 @@ pub struct MemoryConfig {
 #[derive(Debug, Clone, bon::Builder, Deserialize)]
 #[builder(on(String, into))]
 pub struct LangfuseConfig {
-    pub host:                        String,
+    pub host:       String,
     #[serde(default)]
-    pub public_key:                  Option<String>,
+    pub public_key: Option<String>,
     #[serde(default)]
-    pub secret_key:                  Option<String>,
+    pub secret_key: Option<String>,
 }
 
 /// General OTLP telemetry configuration (non-Langfuse).
