@@ -423,6 +423,31 @@ impl Kernel {
                 });
             }
 
+            Syscall::CheckGuardBatch { agent_id, session_id, checks, reply_tx } => {
+                let (user_id, session_uuid) = inner.process_table
+                    .get(agent_id)
+                    .map(|proc| {
+                        (proc.principal.user_id.0.clone(), proc.session_id.to_string())
+                    })
+                    .unwrap_or_else(|| (String::new(), session_id.to_string()));
+
+                let ctx = crate::guard::GuardContext {
+                    agent_id: agent_id.0,
+                    user_id: uuid::Uuid::parse_str(&user_id).unwrap_or(uuid::Uuid::nil()),
+                    session_id: uuid::Uuid::parse_str(&session_uuid).unwrap_or(uuid::Uuid::nil()),
+                };
+
+                let guard = Arc::clone(&inner.guard);
+                tokio::spawn(async move {
+                    let mut verdicts = Vec::with_capacity(checks.len());
+                    for (tool_name, args) in &checks {
+                        let verdict = guard.check_tool(&ctx, tool_name, args).await;
+                        verdicts.push(verdict);
+                    }
+                    let _ = reply_tx.send(verdicts);
+                });
+            }
+
             Syscall::GetManifest { agent_id, reply_tx } => {
                 let result = inner
                     .process_table

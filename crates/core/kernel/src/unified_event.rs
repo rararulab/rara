@@ -153,6 +153,14 @@ pub enum Syscall {
         reply_tx:  oneshot::Sender<crate::error::Result<bool>>,
     },
 
+    /// Check guard verdict for a batch of tool calls before execution.
+    CheckGuardBatch {
+        agent_id:   AgentId,
+        session_id: SessionId,
+        checks:     Vec<(String, serde_json::Value)>,
+        reply_tx:   oneshot::Sender<Vec<crate::guard::Verdict>>,
+    },
+
     // -- Context queries (used by agent_turn) --
 
     /// Get the manifest for an agent process.
@@ -207,6 +215,7 @@ impl Syscall {
             Self::ConnectPipe { .. } => "connect_pipe",
             Self::RequiresApproval { .. } => "requires_approval",
             Self::RequestApproval { .. } => "request_approval",
+            Self::CheckGuardBatch { .. } => "check_guard_batch",
             Self::GetManifest { .. } => "get_manifest",
             Self::GetToolRegistry { .. } => "get_tool_registry",
             Self::ResolveProvider { .. } => "resolve_provider",
@@ -224,6 +233,7 @@ impl Syscall {
             | Self::SharedRecall { agent_id, .. }
             | Self::PublishEvent { agent_id, .. }
             | Self::RequestApproval { agent_id, .. }
+            | Self::CheckGuardBatch { agent_id, .. }
             | Self::GetManifest { agent_id, .. }
             | Self::ResolveProvider { agent_id, .. }
             | Self::GetToolRegistry { agent_id, .. } => *agent_id,
@@ -292,6 +302,13 @@ impl std::fmt::Debug for Syscall {
                     f,
                     "Syscall::RequestApproval(agent={}, tool={})",
                     agent_id, tool_name
+                )
+            }
+            Self::CheckGuardBatch { agent_id, checks, .. } => {
+                write!(
+                    f,
+                    "Syscall::CheckGuardBatch(agent={}, checks={})",
+                    agent_id, checks.len()
                 )
             }
             Self::GetManifest { agent_id, .. } => {

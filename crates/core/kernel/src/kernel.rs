@@ -1087,4 +1087,238 @@ mod tests {
 
         cancel.cancel();
     }
+
+    // -----------------------------------------------------------------------
+    // Guard integration tests
+    // -----------------------------------------------------------------------
+
+    /// A guard that denies calls to tools whose name contains "dangerous".
+    struct DenyDangerousGuard;
+
+    #[async_trait::async_trait]
+    impl crate::guard::Guard for DenyDangerousGuard {
+        async fn check_tool(
+            &self,
+            _ctx: &crate::guard::GuardContext,
+            tool_name: &str,
+            _args: &serde_json::Value,
+        ) -> crate::guard::Verdict {
+            if tool_name.contains("dangerous") {
+                crate::guard::Verdict::Deny {
+                    reason: format!("tool '{tool_name}' is forbidden"),
+                }
+            } else {
+                crate::guard::Verdict::Allow
+            }
+        }
+
+        async fn check_output(
+            &self,
+            _ctx: &crate::guard::GuardContext,
+            _content: &str,
+        ) -> crate::guard::Verdict {
+            crate::guard::Verdict::Allow
+        }
+    }
+
+    fn make_guarded_kernel() -> Kernel {
+        let config = KernelConfig {
+            max_concurrency:        10,
+            default_child_limit:    5,
+            default_max_iterations: 5,
+            memory_quota_per_agent: 1000,
+            ..Default::default()
+        };
+
+        let registry = Arc::new(AgentRegistry::new(
+            crate::testing::test_manifests(),
+            std::env::temp_dir().join("kernel_guard_test_agents"),
+        ));
+
+        let provider_registry = Arc::new(
+            ProviderRegistryBuilder::new("test", "test-model").build(),
+        );
+
+        Kernel::new(
+            config,
+            provider_registry,
+            Arc::new(ToolRegistry::new()),
+            Arc::new(NoopMemory),
+            Arc::new(NoopEventBus),
+            Arc::new(DenyDangerousGuard),
+            registry,
+            Arc::new(NoopUserStore),
+            Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
+            Arc::new(NoopSettingsProvider) as Arc<dyn rara_domain_shared::settings::SettingsProvider>,
+            Arc::new(StreamHub::new(16)),
+            Arc::new(crate::defaults::noop::NoopIdentityResolver) as Arc<dyn IdentityResolver>,
+            Arc::new(crate::defaults::noop::NoopSessionResolver) as Arc<dyn SessionResolver>,
+            Arc::new(InMemoryAuditLog::default()) as Arc<dyn AuditLog>,
+            Arc::new(crate::approval::ApprovalManager::new(
+                crate::approval::ApprovalPolicy::default(),
+            )),
+            None,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_check_guard_batch_denies_dangerous_tools() {
+        let kernel = make_guarded_kernel();
+        let cancel = CancellationToken::new();
+        let kernel = kernel.start(cancel.clone());
+
+        let principal = Principal::user("test-user");
+        let agent_id = kernel
+            .spawn_with_input(
+                test_manifest("guard-test"),
+                "hello".to_string(),
+                principal,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Allow process to be registered.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Push a CheckGuardBatch syscall via the event queue.
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let checks = vec![
+            ("safe_tool".to_string(), serde_json::json!({"arg": "val"})),
+            ("dangerous_delete".to_string(), serde_json::json!({"path": "/etc"})),
+            ("another_safe".to_string(), serde_json::json!({})),
+        ];
+
+        let process = kernel.process_table().get(agent_id).unwrap();
+        let event = crate::unified_event::KernelEvent::Syscall(
+            crate::unified_event::Syscall::CheckGuardBatch {
+                agent_id,
+                session_id: process.session_id.clone(),
+                checks,
+                reply_tx,
+            },
+        );
+        kernel.event_queue().push(event).await.unwrap();
+
+        let verdicts = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            reply_rx,
+        )
+        .await
+        .expect("timeout waiting for guard verdict")
+        .expect("reply channel closed");
+
+        assert_eq!(verdicts.len(), 3);
+        assert!(verdicts[0].is_allow(), "safe_tool should be allowed");
+        assert!(verdicts[1].is_deny(), "dangerous_delete should be denied");
+        assert!(verdicts[2].is_allow(), "another_safe should be allowed");
+
+        // Verify the deny reason contains the tool name.
+        if let crate::guard::Verdict::Deny { reason } = &verdicts[1] {
+            assert!(
+                reason.contains("dangerous_delete"),
+                "deny reason should mention the tool name, got: {reason}"
+            );
+        }
+
+        cancel.cancel();
+    }
+
+    #[tokio::test]
+    async fn test_check_guard_batch_allows_all_safe_tools() {
+        let kernel = make_guarded_kernel();
+        let cancel = CancellationToken::new();
+        let kernel = kernel.start(cancel.clone());
+
+        let principal = Principal::user("test-user");
+        let agent_id = kernel
+            .spawn_with_input(
+                test_manifest("guard-safe-test"),
+                "hi".to_string(),
+                principal,
+                None,
+            )
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let checks = vec![
+            ("read_file".to_string(), serde_json::json!({"path": "/tmp/test"})),
+            ("grep".to_string(), serde_json::json!({"pattern": "hello"})),
+        ];
+
+        let process = kernel.process_table().get(agent_id).unwrap();
+        let event = crate::unified_event::KernelEvent::Syscall(
+            crate::unified_event::Syscall::CheckGuardBatch {
+                agent_id,
+                session_id: process.session_id.clone(),
+                checks,
+                reply_tx,
+            },
+        );
+        kernel.event_queue().push(event).await.unwrap();
+
+        let verdicts = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            reply_rx,
+        )
+        .await
+        .expect("timeout")
+        .expect("channel closed");
+
+        assert_eq!(verdicts.len(), 2);
+        assert!(verdicts[0].is_allow());
+        assert!(verdicts[1].is_allow());
+
+        cancel.cancel();
+    }
+
+    #[tokio::test]
+    async fn test_check_guard_batch_empty_checks() {
+        let kernel = make_guarded_kernel();
+        let cancel = CancellationToken::new();
+        let kernel = kernel.start(cancel.clone());
+
+        let principal = Principal::user("test-user");
+        let agent_id = kernel
+            .spawn_with_input(
+                test_manifest("guard-empty-test"),
+                "hi".to_string(),
+                principal,
+                None,
+            )
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let checks = vec![];
+
+        let process = kernel.process_table().get(agent_id).unwrap();
+        let event = crate::unified_event::KernelEvent::Syscall(
+            crate::unified_event::Syscall::CheckGuardBatch {
+                agent_id,
+                session_id: process.session_id.clone(),
+                checks,
+                reply_tx,
+            },
+        );
+        kernel.event_queue().push(event).await.unwrap();
+
+        let verdicts = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            reply_rx,
+        )
+        .await
+        .expect("timeout")
+        .expect("channel closed");
+
+        assert!(verdicts.is_empty(), "empty checks should return empty verdicts");
+
+        cancel.cancel();
+    }
+
 }

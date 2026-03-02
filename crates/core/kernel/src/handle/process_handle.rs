@@ -374,6 +374,24 @@ impl ProcessHandle {
         })?
     }
 
+    /// Check guard verdicts for a batch of tool calls.
+    pub async fn check_guard_batch(
+        &self,
+        checks: Vec<(String, serde_json::Value)>,
+    ) -> Result<Vec<crate::guard::Verdict>> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.syscall_push(KernelEvent::Syscall(Syscall::CheckGuardBatch {
+            agent_id: self.agent_id,
+            session_id: self.session_id.clone(),
+            checks,
+            reply_tx,
+        }))
+        .await?;
+        reply_rx.await.map_err(|_| KernelError::Other {
+            message: "check_guard_batch: reply channel closed".into(),
+        })
+    }
+
     // ========================================================================
     // Context queries (used by agent_turn)
     // ========================================================================

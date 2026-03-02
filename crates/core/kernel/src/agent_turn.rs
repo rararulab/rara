@@ -466,13 +466,32 @@ pub(crate) async fn run_inline_agent_loop(
 
         iter_span.record("tool_count", valid_tool_calls.len());
 
+        // Guard check: batch-verify all tool calls before execution
+        let guard_checks: Vec<(String, serde_json::Value)> = valid_tool_calls
+            .iter()
+            .map(|(_, name, args)| (name.clone(), args.clone()))
+            .collect();
+
+        let verdicts = if !guard_checks.is_empty() {
+            handle.check_guard_batch(guard_checks).await
+                .unwrap_or_else(|_| vec![crate::guard::Verdict::Allow; valid_tool_calls.len()])
+        } else {
+            vec![]
+        };
+
         // Execute all tool calls concurrently (with timing for traces)
         let tool_futures: Vec<_> = valid_tool_calls
             .iter()
-            .map(|(_id, name, args)| {
+            .zip(verdicts.iter().chain(std::iter::repeat(&crate::guard::Verdict::Allow)))
+            .map(|((_id, name, args), verdict)| {
                 let tool = tools.get(name);
                 let args = args.clone();
                 let name = name.clone();
+                let is_denied = matches!(verdict, crate::guard::Verdict::Deny { .. });
+                let deny_reason = match verdict {
+                    crate::guard::Verdict::Deny { reason } => Some(reason.clone()),
+                    _ => None,
+                };
                 let tool_span = info_span!(
                     "tool_exec",
                     tool_name = name.as_str(),
@@ -481,6 +500,14 @@ pub(crate) async fn run_inline_agent_loop(
                 async move {
                     let _guard = tool_span.enter();
                     let tool_start = Instant::now();
+                    // Check guard verdict first
+                    if is_denied {
+                        tool_span.record("success", false);
+                        let reason = deny_reason.unwrap_or_default();
+                        let err = format!("sandbox denied: {reason}");
+                        let dur = tool_start.elapsed().as_millis() as u64;
+                        return (false, serde_json::json!({ "error": &err }), Some(err), dur);
+                    }
                     if let Some(tool) = tool {
                         match tool.execute(args).await {
                             Ok(result) => {
