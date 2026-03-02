@@ -533,6 +533,17 @@ impl Kernel {
     /// tracking).
     pub fn endpoint_registry(&self) -> &EndpointRegistryRef { &self.endpoint_registry }
 
+    /// Create a [`KernelHandle`] for external callers.
+    ///
+    /// The handle is cheap to clone (two `Arc`s) and routes all mutations
+    /// through the event queue.
+    pub fn handle(&self) -> crate::handle::kernel_handle::KernelHandle {
+        crate::handle::kernel_handle::KernelHandle::new(
+            self.event_queue.clone(),
+            Arc::clone(&self.agent_registry),
+        )
+    }
+
     /// Access the unified event queue.
     pub fn event_queue(&self) -> &EventQueueRef { &self.event_queue }
 

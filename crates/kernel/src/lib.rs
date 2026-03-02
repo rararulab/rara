@@ -70,7 +70,10 @@ pub use audit_subsystem::AuditSubsystem;
 pub use error::{KernelError, Result};
 pub use security::SecuritySubsystem;
 // New process model re-exports
-pub use handle::{AgentHandle, process_handle::ProcessHandle, syscall_tool::SyscallTool};
+pub use handle::{
+    AgentHandle, kernel_handle::KernelHandle, process_handle::ProcessHandle,
+    syscall_tool::SyscallTool,
+};
 pub use kernel::{Kernel, KernelConfig};
 pub use process::{
     AgentId, AgentProcess, AgentRole, MetricsSnapshot, Priority, ProcessInfo, ProcessState,

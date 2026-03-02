@@ -18,6 +18,7 @@
 //! interactions through `KernelEvent::Syscall` variants via the unified
 //! event queue. The kernel event loop handles all business logic.
 
+pub mod kernel_handle;
 pub mod process_handle;
 pub mod syscall_tool;
 
