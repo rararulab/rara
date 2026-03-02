@@ -1,0 +1,16 @@
+{{- if (index .Values "kube-prometheus-stack" "grafana" "sidecar" "dashboards" "enabled") }}
+{{- range $path, $_ := .Files.Glob "dashboards/*.json" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rara-infra.fullname" $ }}-dashboard-{{ base $path | trimSuffix ".json" }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "rara-infra.labels" $ | nindent 4 }}
+    grafana_dashboard: "1"
+data:
+  {{ base $path }}: |-
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
+{{- end }}
