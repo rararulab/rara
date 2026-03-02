@@ -309,6 +309,10 @@ consulSeed:
   # Empty string = use internal K8s service DNS (default).
   overrides:
     databaseUrl: ""
+    migrationDir: ""
+    httpBindAddress: ""
+    grpcBindAddress: ""
+    mainServiceHttpBase: ""
     objectStoreEndpoint: ""
     chromaUrl: ""
     mem0BaseUrl: ""

@@ -6,7 +6,7 @@ set dotenv-filename := ".env"
 RUST_TOOLCHAIN := `grep 'channel = ' rust-toolchain.toml | cut -d '"' -f 2`
 TARGET_PLATFORM := env("TARGET_PLATFORM", "linux/arm64")
 DISTRI_PLATFORM := env("DISTRI_PLATFORM", "ubuntu")
-DOCKER_TAG := env("DOCKER_TAG", "job:latest")
+DOCKER_TAG := env("DOCKER_TAG", "rara:latest")
 PYO3_PYTHON := `uv python find 3.10`
 RARA__DATABASE__DATABASE_URL := env("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/rara")
 RARA__DATABASE__MIGRATION_DIR := env("RARA__DATABASE__MIGRATION_DIR", "crates/rara-model/migrations")

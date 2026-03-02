@@ -1005,7 +1005,7 @@ mod tests {
     // =======================================================================
 
     #[tokio::test]
-    async fn test_get_tool_registry_includes_spawn_agent() {
+    async fn test_get_tool_registry_includes_kernel_tool() {
         let (kernel, cancel) = start_test_kernel(10, 5);
         let principal = Principal::user("test-user");
 
@@ -1033,10 +1033,10 @@ mod tests {
 
         let registry = handle.tool_registry().await.unwrap();
 
-        // The per-process SpawnTool should be injected.
+        // The per-process SyscallTool should be injected.
         assert!(
-            registry.get("spawn_agent").is_some(),
-            "tool registry should include spawn_agent, got: {:?}",
+            registry.get("kernel").is_some(),
+            "tool registry should include kernel, got: {:?}",
             registry.tool_names(),
         );
 
@@ -1046,7 +1046,7 @@ mod tests {
     #[tokio::test]
     async fn test_tool_registry_filtered_by_manifest_tools() {
         // The "scout" manifest specifies tools: ["read_file", "grep"].
-        // Even though spawn_agent is injected, `filtered()` should exclude
+        // Even though the kernel tool is injected, `filtered()` should exclude
         // it when the manifest specifies a non-empty tool list.
         let (kernel, cancel) = start_test_kernel(10, 5);
         let principal = Principal::user("test-user");
@@ -1071,21 +1071,21 @@ mod tests {
         );
 
         let full_registry = handle.tool_registry().await.unwrap();
-        assert!(full_registry.get("spawn_agent").is_some());
+        assert!(full_registry.get("kernel").is_some());
 
-        // Filter with an explicit tool whitelist that excludes spawn_agent.
+        // Filter with an explicit tool whitelist that excludes kernel.
         let whitelist = vec!["read_file".to_string(), "grep".to_string()];
         let filtered = full_registry.filtered(&whitelist);
         assert!(
-            filtered.get("spawn_agent").is_none(),
-            "filtered registry should NOT include spawn_agent"
+            filtered.get("kernel").is_none(),
+            "filtered registry should NOT include kernel"
         );
 
         // Filter with empty list means include all.
         let unfiltered = full_registry.filtered(&[]);
         assert!(
-            unfiltered.get("spawn_agent").is_some(),
-            "unfiltered registry should include spawn_agent"
+            unfiltered.get("kernel").is_some(),
+            "unfiltered registry should include kernel"
         );
 
         cancel.cancel();

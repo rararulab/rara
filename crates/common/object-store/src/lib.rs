@@ -32,6 +32,7 @@ pub enum ObjectStoreError {
 
 /// Configuration for connecting to an S3-compatible object store.
 #[derive(Debug, Clone, Serialize, Deserialize, SmartDefault, bon::Builder)]
+#[serde(default)]
 pub struct ObjectStoreConfig {
     /// S3 endpoint URL (e.g. `http://localhost:9000` for MinIO).
     #[default = "http://localhost:9000"]

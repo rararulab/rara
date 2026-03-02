@@ -64,6 +64,7 @@ pub struct AppConfig {
     /// Langfuse observability (host, API keys).
     pub langfuse:               LangfuseConfig,
     /// General OTLP telemetry (Alloy/Tempo).
+    #[serde(default)]
     pub telemetry:              TelemetryConfig,
     /// JWT signing secret.
     pub jwt_secret:             Option<String>,
@@ -82,17 +83,21 @@ pub struct MemoryConfig {
 #[derive(Debug, Clone, bon::Builder, Deserialize)]
 #[builder(on(String, into))]
 pub struct LangfuseConfig {
-    pub host:       String,
-    pub public_key: Option<String>,
-    pub secret_key: Option<String>,
+    pub host:                        String,
+    #[serde(default)]
+    pub public_key:                  Option<String>,
+    #[serde(default)]
+    pub secret_key:                  Option<String>,
 }
 
 /// General OTLP telemetry configuration (non-Langfuse).
-#[derive(Debug, Clone, bon::Builder, Deserialize)]
+#[derive(Debug, Clone, Default, bon::Builder, Deserialize)]
 pub struct TelemetryConfig {
     /// OTLP endpoint URL (e.g. `http://alloy:4318/v1/traces`).
+    #[serde(default)]
     pub otlp_endpoint: Option<String>,
     /// Export protocol: `"http"` or `"grpc"`.
+    #[serde(default)]
     pub otlp_protocol: Option<String>,
 }
 

@@ -19,7 +19,7 @@
 //! event queue. The kernel event loop handles all business logic.
 
 pub mod process_handle;
-pub mod spawn_tool;
+pub mod syscall_tool;
 
 use tokio::sync::oneshot;
 

@@ -39,6 +39,7 @@ pub const DEFAULT_MAX_GRPC_SEND_MESSAGE_SIZE: ReadableSize = ReadableSize::mb(51
 
 /// Configuration options for a gRPC server
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, SmartDefault, bon::Builder)]
+#[serde(default)]
 pub struct GrpcServerConfig {
     /// The address to bind the gRPC server
     #[default = "127.0.0.1:50051"]

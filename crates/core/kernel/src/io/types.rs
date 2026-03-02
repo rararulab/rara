@@ -138,7 +138,7 @@ pub struct InboundMessage {
 }
 
 impl InboundMessage {
-    /// Create a synthetic internal message (for workers, SpawnTool, etc.).
+    /// Create a synthetic internal message (for workers, SyscallTool, etc.).
     pub fn synthetic(text: String, user: UserId, session_id: SessionId) -> Self {
         Self {
             id: MessageId::new(),

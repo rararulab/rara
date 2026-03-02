@@ -45,6 +45,7 @@ pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 60;
 
 /// Configuration options for a REST server
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, SmartDefault, bon::Builder)]
+#[serde(default)]
 pub struct RestServerConfig {
     /// The address to bind the REST server
     #[default = "127.0.0.1:25555"]

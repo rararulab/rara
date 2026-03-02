@@ -91,14 +91,18 @@ impl config::AsyncSource for ConsulSource {
 
         let mut map = Map::new();
         for entry in &entries {
-            // rs-consul already decodes base64 values
-            let Some(ref value) = entry.value else {
-                continue; // directory marker
-            };
+            // Directory markers end with `/` — skip them.
+            if entry.key.ends_with('/') {
+                continue;
+            }
 
             let Some(config_key) = kv_path_to_config_key(&entry.key, PREFIX) else {
                 continue;
             };
+
+            // rs-consul decodes base64 values; `None` means the key was
+            // set with an empty body (`curl -X PUT -d ""`).  Treat as "".
+            let value = entry.value.as_deref().unwrap_or("");
 
             tracing::info!(key = %config_key, "Loaded config key from Consul KV");
 
@@ -106,7 +110,7 @@ impl config::AsyncSource for ConsulSource {
                 config_key,
                 Value::new(
                     Some(&"consul".to_string()),
-                    ValueKind::String(value.clone()),
+                    ValueKind::String(value.to_owned()),
                 ),
             );
         }

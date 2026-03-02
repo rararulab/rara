@@ -490,11 +490,11 @@ impl Kernel {
             Syscall::GetToolRegistry { agent_id, reply_tx } => {
                 let mut registry = inner.tool_registry.as_ref().clone();
                 if let Some(rt) = runtimes.get(&agent_id) {
-                    let spawn_tool = crate::handle::spawn_tool::SpawnTool::new(
+                    let syscall_tool = crate::handle::syscall_tool::SyscallTool::new(
                         Arc::clone(&rt.handle),
                         Arc::clone(&inner.agent_registry),
                     );
-                    registry.register_builtin(Arc::new(spawn_tool));
+                    registry.register_builtin(Arc::new(syscall_tool));
                 }
                 let _ = reply_tx.send(Arc::new(registry));
             }
@@ -1285,7 +1285,7 @@ impl Kernel {
             Err(err_msg) => {
                 span.record("success", false);
                 turn_failed = err_msg != "interrupted by user";
-                info!(agent_id = %agent_id, error = %err_msg, "turn completed (error)");
+                warn!(agent_id = %agent_id, error = %err_msg, "turn completed (error)");
 
                 if err_msg != "interrupted by user" {
                     crate::audit::record_async(

@@ -46,7 +46,7 @@ pub enum ChannelType {
     Scheduled,
     /// Internally-triggered proactive task.
     Proactive,
-    /// Internal synthetic message (workers, SpawnTool, etc.).
+    /// Internal synthetic message (workers, SyscallTool, etc.).
     Internal,
 }
 

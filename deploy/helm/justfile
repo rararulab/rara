@@ -119,7 +119,7 @@ history:
 # Consul KV
 # --------------------------------------------------------------------------
 
-[doc("seed Consul KV with infrastructure config (database, minio, chroma)")]
+[doc("seed Consul KV via kubectl exec (for K8s-deployed Consul)")]
 [group("🔧 Consul")]
 seed-consul:
     #!/usr/bin/env bash
@@ -147,6 +147,14 @@ seed-consul:
     # Database
     put_kv "rara/config/database/database_url" \
       "postgres://postgres:${PG_PASS}@{{ RELEASE }}-postgresql:5432/${PG_DB}"
+    put_kv "rara/config/database/migration_dir" "crates/rara-model/migrations"
+
+    # HTTP / gRPC
+    put_kv "rara/config/http/bind_address"        "0.0.0.0:25555"
+    put_kv "rara/config/grpc/bind_address"        "0.0.0.0:50051"
+
+    # Main service
+    put_kv "rara/config/main_service_http_base"   "http://{{ APP_RELEASE }}-rara-app-backend:25555"
 
     # Object store (MinIO)
     put_kv "rara/config/object_store/endpoint"          "http://{{ RELEASE }}-minio:9000"
@@ -154,30 +162,12 @@ seed-consul:
     put_kv "rara/config/object_store/secret_access_key" "${MINIO_PASS}"
     put_kv "rara/config/object_store/bucket"            "rara"
 
-    # Memory (ChromaDB)
-    put_kv "rara/config/memory/chroma_url" "http://{{ RELEASE }}-chromadb:8000"
-
-    # Memory (Mem0 REST API) — only if enabled
-    MEM0_ENABLED=$(echo "$VALUES" | jq -r '.mem0.enabled // false')
-    if [ "$MEM0_ENABLED" = "true" ]; then
-      put_kv "rara/config/memory/mem0_base_url" "http://{{ RELEASE }}-mem0:8000"
-    fi
-
-    # Memory (Memos note service) — only if enabled
-    MEMOS_ENABLED=$(echo "$VALUES" | jq -r '.memos.enabled // false')
-    if [ "$MEMOS_ENABLED" = "true" ]; then
-      put_kv "rara/config/memory/memos_base_url" "http://{{ RELEASE }}-memos:5230"
-      MEMOS_TOKEN=$(echo "$VALUES" | jq -r '.consulSeed.overrides.memosToken // empty')
-      if [ -n "$MEMOS_TOKEN" ]; then put_kv "rara/config/memory/memos_token" "$MEMOS_TOKEN"; fi
-    fi
-
-    # Memory (Hindsight 4-network) — only if enabled
-    HINDSIGHT_ENABLED=$(echo "$VALUES" | jq -r '.hindsight.enabled // false')
-    if [ "$HINDSIGHT_ENABLED" = "true" ]; then
-      put_kv "rara/config/memory/hindsight_base_url" "http://{{ RELEASE }}-hindsight:8888"
-      HINDSIGHT_BANK_ID=$(echo "$VALUES" | jq -r '.consulSeed.overrides.hindsightBankId // "default"')
-      put_kv "rara/config/memory/hindsight_bank_id" "$HINDSIGHT_BANK_ID"
-    fi
+    # Memory — always seed all keys (empty string for optional tokens)
+    put_kv "rara/config/memory/mem0_base_url"       "http://{{ RELEASE }}-mem0:8000"
+    put_kv "rara/config/memory/memos_base_url"      "http://{{ RELEASE }}-memos:5230"
+    put_kv "rara/config/memory/memos_token"         ""
+    put_kv "rara/config/memory/hindsight_base_url"  "http://{{ RELEASE }}-hindsight:8888"
+    put_kv "rara/config/memory/hindsight_bank_id"   "default"
 
     # Crawl4AI
     put_kv "rara/config/crawl4ai/base_url" "http://{{ RELEASE }}-crawl4ai:11235"
@@ -190,6 +180,37 @@ seed-consul:
     if [ -n "$LF_SK" ]; then put_kv "rara/config/langfuse/secret_key" "$LF_SK"; fi
 
     echo "✔ Consul KV seed complete"
+
+[doc("seed Consul KV for local dev (requires CONSUL_HTTP_ADDR)")]
+[group("🔧 Consul")]
+consul-seed-local CONSUL_ADDR=env("CONSUL_HTTP_ADDR", "https://consul.rara.local") DB_URL=env("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/rara"):
+    #!/usr/bin/env bash
+    set -euo pipefail
+    CONSUL="{{ CONSUL_ADDR }}"
+    put_kv() { curl -sf -X PUT -d "$2" "${CONSUL}/v1/kv/$1" > /dev/null && echo "  ✓ $1"; }
+    echo "Seeding Consul KV at ${CONSUL} ..."
+    # Database
+    put_kv "rara/config/database/database_url"    "{{ DB_URL }}"
+    put_kv "rara/config/database/migration_dir"   "crates/rara-model/migrations"
+    # HTTP / gRPC
+    put_kv "rara/config/http/bind_address"        "127.0.0.1:25555"
+    put_kv "rara/config/grpc/bind_address"        "127.0.0.1:50051"
+    # Main service
+    put_kv "rara/config/main_service_http_base"   "http://127.0.0.1:25555"
+    # Object store (MinIO via ingress)
+    put_kv "rara/config/object_store/endpoint"    "https://minio.rara.local"
+    put_kv "rara/config/object_store/bucket"      "rara"
+    put_kv "rara/config/object_store/access_key_id"     "minioadmin"
+    put_kv "rara/config/object_store/secret_access_key" "minioadmin"
+    # Memory
+    put_kv "rara/config/memory/mem0_base_url"       "https://mem0.rara.local"
+    put_kv "rara/config/memory/memos_base_url"      "https://memos.rara.local"
+    put_kv "rara/config/memory/memos_token"         ""
+    put_kv "rara/config/memory/hindsight_base_url"  "https://hindsight.rara.local"
+    put_kv "rara/config/memory/hindsight_bank_id"   "default"
+    # Langfuse
+    put_kv "rara/config/langfuse/host"              "https://langfuse.rara.local"
+    echo "Done. ${CONSUL}/ui/ to verify."
 
 [doc("list all Consul KV keys under rara/config/")]
 [group("🔧 Consul")]
