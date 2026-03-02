@@ -118,6 +118,13 @@ pub struct AgentTurnResult {
 ///
 /// Context (manifest, tools, provider) is queried via syscalls through the
 /// ProcessHandle.
+#[tracing::instrument(
+    skip(handle, history, stream_handle, turn_cancel),
+    fields(
+        agent_id = %handle.agent_id(),
+        session_id = %handle.session_id(),
+    )
+)]
 pub(crate) async fn run_inline_agent_loop(
     handle: &ProcessHandle,
     user_text: String,
