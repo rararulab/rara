@@ -164,7 +164,7 @@ futures = "^0.3"
 http = "^1"
 hyper = { version = "1", features = ["full"] }
 jiff = { version = "^0.2", features = ["serde"] }
-jsonwebtoken = "9"
+jsonwebtoken = "10"
 lazy_static = "^1.4"
 lettre = { version = "0.11", default-features = false, features = [
     "tokio1-rustls-tls",
