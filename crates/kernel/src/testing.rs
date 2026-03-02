@@ -38,7 +38,6 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 use crate::{
-    audit::{AuditLog, InMemoryAuditLog},
     defaults::noop::{NoopEventBus, NoopMemory, NoopSessionRepository, NoopSettingsProvider},
     device_registry::DeviceRegistry,
     event_queue::InMemoryEventQueue,
@@ -136,7 +135,7 @@ impl TestKernelBuilder {
             security: Arc::new(crate::security::SecuritySubsystem::noop()),
             agent_registry: Arc::new(self.agent_registry),
             shared_kv: Arc::new(crate::defaults::dashmap_kv::DashMapKv::new()),
-            tool_call_recorder: Arc::new(crate::audit::NoopToolCallRecorder),
+            audit: Arc::new(crate::audit_subsystem::AuditSubsystem::noop()),
             memory_quota_per_agent: self.config.memory_quota_per_agent,
             session_repo: Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
             settings: Arc::new(NoopSettingsProvider)
@@ -144,7 +143,6 @@ impl TestKernelBuilder {
             stream_hub: Arc::new(StreamHub::new(16)),
             pipe_registry: Arc::new(PipeRegistry::new()),
             device_registry: Arc::new(DeviceRegistry::new()),
-            audit_log: Arc::new(InMemoryAuditLog::default()) as Arc<dyn AuditLog>,
             event_queue: Arc::new(InMemoryEventQueue::new(4096)),
         });
 

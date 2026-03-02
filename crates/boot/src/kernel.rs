@@ -167,6 +167,13 @@ pub fn boot(config: BootConfig) -> Kernel {
     let audit_log: Arc<dyn AuditLog> = config
         .audit_log
         .unwrap_or_else(|| Arc::new(InMemoryAuditLog::default()));
+    let tool_call_recorder: Arc<dyn rara_kernel::audit::ToolCallRecorder> = config
+        .tool_call_recorder
+        .unwrap_or_else(|| Arc::new(rara_kernel::audit::NoopToolCallRecorder));
+    let audit = Arc::new(rara_kernel::audit_subsystem::AuditSubsystem::new(
+        audit_log,
+        tool_call_recorder,
+    ));
     let approval = config
         .approval
         .unwrap_or_else(|| Arc::new(ApprovalManager::new(ApprovalPolicy::default())));
@@ -199,10 +206,9 @@ pub fn boot(config: BootConfig) -> Kernel {
         stream_hub,
         identity_resolver,
         session_resolver,
-        audit_log,
+        audit,
         config.sharded_queue,
         config.kv_backend,
-        config.tool_call_recorder,
     )
 }
 

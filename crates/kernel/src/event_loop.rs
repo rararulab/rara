@@ -534,7 +534,7 @@ impl Kernel {
                 duration_ms,
             } => {
                 inner
-                    .tool_call_recorder
+                    .audit
                     .record_tool_call(agent_id, &tool_name, &args, &result, success, duration_ms)
                     .await;
             }
@@ -581,20 +581,17 @@ impl Kernel {
             })?;
 
         // Audit: MemoryAccess (Store)
-        crate::audit::record_async(
-            &inner.audit_log,
-            AuditEvent {
-                timestamp: Timestamp::now(),
-                agent_id,
-                session_id: session_id.clone(),
-                user_id: principal.user_id.clone(),
-                event_type: AuditEventType::MemoryAccess {
-                    operation: MemoryOp::Store,
-                    key:       key.to_string(),
-                },
-                details: serde_json::Value::Null,
+        inner.audit.record(AuditEvent {
+            timestamp: Timestamp::now(),
+            agent_id,
+            session_id: session_id.clone(),
+            user_id: principal.user_id.clone(),
+            event_type: AuditEventType::MemoryAccess {
+                operation: MemoryOp::Store,
+                key:       key.to_string(),
             },
-        );
+            details: serde_json::Value::Null,
+        });
 
         Ok(())
     }
@@ -1231,22 +1228,19 @@ impl Kernel {
                 }
 
                 // Audit: ProcessCompleted
-                crate::audit::record_async(
-                    &inner.audit_log,
-                    AuditEvent {
-                        timestamp: jiff::Timestamp::now(),
-                        agent_id,
-                        session_id: session_id.clone(),
-                        user_id: user.clone(),
-                        event_type: AuditEventType::ProcessCompleted {
-                            result: result.output.clone(),
-                        },
-                        details: serde_json::json!({
-                            "iterations": result.iterations,
-                            "tool_calls": result.tool_calls,
-                        }),
+                inner.audit.record(AuditEvent {
+                    timestamp: jiff::Timestamp::now(),
+                    agent_id,
+                    session_id: session_id.clone(),
+                    user_id: user.clone(),
+                    event_type: AuditEventType::ProcessCompleted {
+                        result: result.output.clone(),
                     },
-                );
+                    details: serde_json::json!({
+                        "iterations": result.iterations,
+                        "tool_calls": result.tool_calls,
+                    }),
+                });
 
                 info!(
                     agent_id = %agent_id,
@@ -1284,19 +1278,16 @@ impl Kernel {
                 warn!(agent_id = %agent_id, error = %err_msg, "turn completed (error)");
 
                 if err_msg != "interrupted by user" {
-                    crate::audit::record_async(
-                        &inner.audit_log,
-                        AuditEvent {
-                            timestamp: jiff::Timestamp::now(),
-                            agent_id,
-                            session_id: session_id.clone(),
-                            user_id: user.clone(),
-                            event_type: AuditEventType::ProcessFailed {
-                                error: err_msg.clone(),
-                            },
-                            details: serde_json::Value::Null,
+                    inner.audit.record(AuditEvent {
+                        timestamp: jiff::Timestamp::now(),
+                        agent_id,
+                        session_id: session_id.clone(),
+                        user_id: user.clone(),
+                        event_type: AuditEventType::ProcessFailed {
+                            error: err_msg.clone(),
                         },
-                    );
+                        details: serde_json::Value::Null,
+                    });
                 }
 
                 // Deliver error — use egress session for routing.
@@ -1410,23 +1401,20 @@ impl Kernel {
         let initial_messages = vec![];
 
         // Audit: ProcessSpawned
-        crate::audit::record_async(
-            &inner.audit_log,
-            AuditEvent {
-                timestamp: jiff::Timestamp::now(),
-                agent_id,
-                session_id: session_id.clone(),
-                user_id: principal.user_id.clone(),
-                event_type: AuditEventType::ProcessSpawned {
-                    manifest_name: manifest.name.clone(),
-                    parent_id,
-                },
-                details: serde_json::json!({
-                    "model": manifest.model,
-                    "max_iterations": manifest.max_iterations,
-                }),
+        inner.audit.record(AuditEvent {
+            timestamp: jiff::Timestamp::now(),
+            agent_id,
+            session_id: session_id.clone(),
+            user_id: principal.user_id.clone(),
+            event_type: AuditEventType::ProcessSpawned {
+                manifest_name: manifest.name.clone(),
+                parent_id,
             },
-        );
+            details: serde_json::json!({
+                "model": manifest.model,
+                "max_iterations": manifest.max_iterations,
+            }),
+        });
 
         // Register process in table.
         let metrics = std::sync::Arc::new(crate::process::RuntimeMetrics::new());

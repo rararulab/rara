@@ -31,6 +31,7 @@
 pub mod agent_turn;
 pub mod approval;
 pub mod audit;
+pub mod audit_subsystem;
 pub mod channel;
 pub mod defaults;
 pub mod device;
@@ -65,6 +66,7 @@ pub mod testing;
 pub use approval::{
     ApprovalDecision, ApprovalManager, ApprovalPolicy, ApprovalRequest, ApprovalResponse, RiskLevel,
 };
+pub use audit_subsystem::AuditSubsystem;
 pub use error::{KernelError, Result};
 pub use security::SecuritySubsystem;
 // New process model re-exports

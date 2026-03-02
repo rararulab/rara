@@ -46,7 +46,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::{
-    audit::{AuditEvent, AuditFilter, AuditLog, ToolCallRecorder},
+    audit::{AuditEvent, AuditFilter, AuditLog},
     channel::types::ChannelType,
     device_registry::DeviceRegistry,
     error::{KernelError, Result},
@@ -100,8 +100,8 @@ pub(crate) struct KernelInner {
     pub agent_registry:         Arc<AgentRegistry>,
     /// Cross-agent shared key-value store (trait-based, swappable backend).
     pub shared_kv:              Arc<dyn KvBackend>,
-    /// Tool call recorder for persistent audit trail.
-    pub tool_call_recorder:     Arc<dyn ToolCallRecorder>,
+    /// Unified audit subsystem (logging + tool call recording).
+    pub audit:                  Arc<crate::audit_subsystem::AuditSubsystem>,
     /// Maximum number of KV entries per agent (0 = unlimited).
     pub memory_quota_per_agent: usize,
     /// Session repository for conversation history.
@@ -114,8 +114,6 @@ pub(crate) struct KernelInner {
     pub pipe_registry:          Arc<PipeRegistry>,
     /// Device registry for hot-pluggable devices (MCP servers, APIs, etc.).
     pub device_registry:        Arc<DeviceRegistry>,
-    /// Structured audit log for agent behavior tracking.
-    pub audit_log:              Arc<dyn AuditLog>,
     /// Unified event queue (tiered priority) for all kernel interactions.
     pub event_queue:            Arc<dyn EventQueue>,
 }
@@ -255,10 +253,9 @@ impl Kernel {
         stream_hub: Arc<StreamHub>,
         identity_resolver: Arc<dyn IdentityResolver>,
         session_resolver: Arc<dyn SessionResolver>,
-        audit_log: Arc<dyn AuditLog>,
+        audit: Arc<crate::audit_subsystem::AuditSubsystem>,
         sharded_queue: Option<Arc<crate::sharded_event_queue::ShardedEventQueue>>,
         kv_backend: Option<Arc<dyn KvBackend>>,
-        tool_call_recorder: Option<Arc<dyn ToolCallRecorder>>,
     ) -> Self {
         info!(
             max_concurrency = config.max_concurrency,
@@ -296,15 +293,13 @@ impl Kernel {
             agent_registry,
             shared_kv: kv_backend
                 .unwrap_or_else(|| Arc::new(crate::defaults::dashmap_kv::DashMapKv::new())),
-            tool_call_recorder: tool_call_recorder
-                .unwrap_or_else(|| Arc::new(crate::audit::NoopToolCallRecorder)),
+            audit,
             memory_quota_per_agent: config.memory_quota_per_agent,
             session_repo,
             settings,
             stream_hub: stream_hub.clone(),
             pipe_registry: Arc::new(PipeRegistry::new()),
             device_registry: Arc::new(DeviceRegistry::new()),
-            audit_log,
             event_queue: event_queue.clone(),
         });
 
@@ -448,7 +443,10 @@ impl Kernel {
     pub fn device_registry(&self) -> &Arc<DeviceRegistry> { &self.inner.device_registry }
 
     /// Access the audit log.
-    pub fn audit_log(&self) -> &Arc<dyn AuditLog> { &self.inner.audit_log }
+    pub fn audit_log(&self) -> &Arc<dyn AuditLog> { self.inner.audit.audit_log() }
+
+    /// Access the unified audit subsystem.
+    pub fn audit(&self) -> &Arc<crate::audit_subsystem::AuditSubsystem> { &self.inner.audit }
 
     /// Access the approval manager.
     pub fn approval(&self) -> &Arc<crate::approval::ApprovalManager> {
@@ -460,7 +458,7 @@ impl Kernel {
 
     /// Query the audit log for events matching the given filter.
     pub async fn audit_query(&self, filter: AuditFilter) -> Vec<AuditEvent> {
-        self.inner.audit_log.query(filter).await
+        self.inner.audit.query(filter).await
     }
 
     /// Access the shared KernelInner (used by event loop and tests).
@@ -563,7 +561,6 @@ impl Kernel {
 mod tests {
     use super::*;
     use crate::{
-        audit::InMemoryAuditLog,
         defaults::{
             noop::{NoopEventBus, NoopMemory, NoopSessionRepository, NoopSettingsProvider},
             noop_user_store::NoopUserStore,
@@ -603,8 +600,7 @@ mod tests {
             Arc::new(StreamHub::new(16)),
             Arc::new(crate::defaults::noop::NoopIdentityResolver) as Arc<dyn IdentityResolver>,
             Arc::new(crate::defaults::noop::NoopSessionResolver) as Arc<dyn SessionResolver>,
-            Arc::new(InMemoryAuditLog::default()) as Arc<dyn AuditLog>,
-            None,
+            Arc::new(crate::audit_subsystem::AuditSubsystem::noop()),
             None,
             None,
         )
@@ -1130,8 +1126,7 @@ mod tests {
             Arc::new(StreamHub::new(16)),
             Arc::new(crate::defaults::noop::NoopIdentityResolver) as Arc<dyn IdentityResolver>,
             Arc::new(crate::defaults::noop::NoopSessionResolver) as Arc<dyn SessionResolver>,
-            Arc::new(InMemoryAuditLog::default()) as Arc<dyn AuditLog>,
-            None,
+            Arc::new(crate::audit_subsystem::AuditSubsystem::noop()),
             None,
             None,
         )
