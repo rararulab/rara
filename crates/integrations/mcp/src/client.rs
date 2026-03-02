@@ -46,6 +46,8 @@ use tokio::{
 };
 use tracing::{info, warn};
 
+use rara_keyring_store::KeyringStoreRef;
+
 use crate::{
     logging_client_handler::{LoggingClientHandler, SendElicitation},
     manager::log_buffer::McpLogBuffer,
@@ -182,7 +184,7 @@ impl RmcpClient {
     /// * `store_mode`       — Where to look for (and persist) OAuth
     ///   credentials: keyring, file, or auto.
     #[allow(clippy::too_many_arguments)]
-    #[tracing::instrument(skip(bearer_token, http_headers, env_http_headers))]
+    #[tracing::instrument(skip(bearer_token, http_headers, env_http_headers, store))]
     pub async fn new_streamable_http_client(
         server_name: &str,
         url: &str,
@@ -190,6 +192,7 @@ impl RmcpClient {
         http_headers: Option<HashMap<String, String>>,
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
+        store: KeyringStoreRef,
     ) -> Result<Self> {
         let default_headers = build_default_headers(http_headers, env_http_headers)?;
 
@@ -197,18 +200,27 @@ impl RmcpClient {
         // already provided explicit credentials.
         let stored_tokens =
             if bearer_token.is_none() && !default_headers.contains_key(AUTHORIZATION) {
-                StoredOAuthTokens::load(server_name, url, store_mode).unwrap_or_else(|err| {
-                    warn!("failed to read tokens for server `{server_name}`: {err}");
-                    None
-                })
+                StoredOAuthTokens::load(server_name, url, store_mode, &*store)
+                    .await
+                    .unwrap_or_else(|err| {
+                        warn!("failed to read tokens for server `{server_name}`: {err}");
+                        None
+                    })
             } else {
                 None
             };
 
         let transport = match stored_tokens {
             Some(tokens) => {
-                Self::build_oauth_transport(server_name, url, tokens, store_mode, &default_headers)
-                    .await?
+                Self::build_oauth_transport(
+                    server_name,
+                    url,
+                    tokens,
+                    store_mode,
+                    store.clone(),
+                    &default_headers,
+                )
+                .await?
             }
             None => Self::build_plain_transport(url, bearer_token.as_deref(), &default_headers)?,
         };
@@ -614,6 +626,7 @@ impl RmcpClient {
         url: &str,
         tokens: StoredOAuthTokens,
         store_mode: OAuthCredentialsStoreMode,
+        store: KeyringStoreRef,
         default_headers: &HeaderMap,
     ) -> Result<PendingTransport> {
         match Self::try_oauth_transport(
@@ -621,6 +634,7 @@ impl RmcpClient {
             url,
             tokens.clone(),
             store_mode,
+            store,
             default_headers,
         )
         .await
@@ -660,6 +674,7 @@ impl RmcpClient {
         url: &str,
         tokens: StoredOAuthTokens,
         store_mode: OAuthCredentialsStoreMode,
+        store: KeyringStoreRef,
         default_headers: &HeaderMap,
     ) -> Result<(
         StreamableHttpClientTransport<AuthClient<reqwest::Client>>,
@@ -689,7 +704,7 @@ impl RmcpClient {
         );
 
         let persistor =
-            OAuthPersistor::new(server_name, url, auth_manager, store_mode, Some(tokens));
+            OAuthPersistor::new(server_name, url, auth_manager, store_mode, store, Some(tokens));
 
         Ok((transport, persistor))
     }

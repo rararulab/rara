@@ -72,6 +72,8 @@ use rmcp::model::{
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
+use rara_keyring_store::KeyringStoreRef;
+
 use crate::{
     client::RmcpClient,
     manager::{
@@ -135,6 +137,7 @@ impl AsyncManagedClient {
         server_name: S,
         config: McpServerConfig,
         store_mode: OAuthCredentialsStoreMode,
+        store: KeyringStoreRef,
         elicitation_requests: ElicitationRequestManager,
         log_buffer: McpLogBuffer,
         #[cfg(feature = "k8s")] pod_registry: PodRegistry,
@@ -152,6 +155,7 @@ impl AsyncManagedClient {
                     &server_name,
                     &config,
                     store_mode,
+                    store,
                     #[cfg(feature = "k8s")]
                     &pod_registry,
                 )
@@ -379,6 +383,7 @@ async fn make_rmcp_client(
     server_name: &str,
     config: &McpServerConfig,
     store_mode: OAuthCredentialsStoreMode,
+    store: KeyringStoreRef,
     #[cfg(feature = "k8s")] pod_registry: &PodRegistry,
 ) -> Result<RmcpClient, StartupOutcomeError> {
     match config.transport {
@@ -414,6 +419,7 @@ async fn make_rmcp_client(
                 config.http_headers.clone(),
                 config.env_http_headers.clone(),
                 store_mode,
+                store.clone(),
             )
             .await
             .map_err(StartupOutcomeError::from)
@@ -468,6 +474,7 @@ async fn make_rmcp_client(
                 config.http_headers.clone(),
                 config.env_http_headers.clone(),
                 store_mode,
+                store,
             )
             .await
             .map_err(StartupOutcomeError::from)

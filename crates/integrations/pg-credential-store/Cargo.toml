@@ -1,5 +1,5 @@
 [package]
-name = "rara-keyring-store"
+name = "rara-pg-credential-store"
 version = "0.0.1"
 edition.workspace = true
 license.workspace = true
@@ -15,13 +15,12 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
-keyring = "^3.6"
+rara-keyring-store.workspace = true
 snafu.workspace = true
 sqlx.workspace = true
 tracing.workspace = true
 
-[target.'cfg(target_os = "linux")'.dependencies]
-keyring = { version = "^3.6", features = ["linux-native-async-persistent"] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-keyring = { version = "^3.6", features = ["apple-native"] }
+[dev-dependencies]
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true, features = ["postgres"] }
+tokio = { workspace = true, features = ["test-util", "macros"] }

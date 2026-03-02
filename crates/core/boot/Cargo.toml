@@ -28,6 +28,8 @@ opendal.workspace = true
 rara-agents.workspace = true
 rara-codex-oauth = { workspace = true }
 rara-coding-task = { workspace = true }
+rara-keyring-store.workspace = true
+rara-pg-credential-store.workspace = true
 rara-composio.workspace = true
 rara-domain-shared.workspace = true
 rara-k8s = { workspace = true, optional = true }

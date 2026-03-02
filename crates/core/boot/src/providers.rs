@@ -27,6 +27,7 @@ use tracing::info;
 /// available providers based on configured API keys / base URLs.
 pub async fn build_provider_registry(
     settings: &dyn rara_domain_shared::settings::SettingsProvider,
+    credential_store: &dyn rara_keyring_store::KeyringStore,
 ) -> Arc<rara_kernel::provider::ProviderRegistry> {
     use rara_domain_shared::settings::keys;
     use rara_kernel::provider::{OpenAiProvider, ProviderRegistryBuilder};
@@ -66,7 +67,7 @@ pub async fn build_provider_registry(
     }
 
     // -- codex (OpenAI via OAuth) -------------------------------------------
-    if let Ok(Some(tokens)) = rara_codex_oauth::load_tokens() {
+    if let Ok(Some(tokens)) = rara_codex_oauth::load_tokens(credential_store).await {
         let config =
             async_openai::config::OpenAIConfig::new().with_api_key(&tokens.access_token);
         builder = builder.provider(

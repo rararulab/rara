@@ -18,6 +18,10 @@ use rara_mcp::{
     },
     oauth::OAuthCredentialsStoreMode,
 };
+
+fn default_store() -> std::sync::Arc<dyn rara_keyring_store::KeyringStore> {
+    std::sync::Arc::new(rara_keyring_store::DefaultKeyringStore)
+}
 use serde_json::json;
 
 // ── Test infrastructure ─────────────────────────────────────────────────
@@ -60,7 +64,11 @@ async fn new_test_manager() -> Result<(McpManager, tempfile::TempDir)> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("mcp-registry.json");
     let registry = FSMcpRegistry::load(&path).await?;
-    let manager = McpManager::new(Arc::new(registry), OAuthCredentialsStoreMode::default());
+    let manager = McpManager::new(
+        Arc::new(registry),
+        OAuthCredentialsStoreMode::default(),
+        default_store(),
+    );
     Ok((manager, dir))
 }
 

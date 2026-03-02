@@ -14,6 +14,7 @@
 
 use std::{fmt::Debug, sync::Arc};
 
+use async_trait::async_trait;
 use snafu::{ResultExt, Snafu};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -27,6 +28,14 @@ pub enum Error {
         #[snafu(implicit)]
         location: snafu::Location,
     },
+
+    /// Database error from the PostgreSQL credential store.
+    #[snafu(display("database error: {source}"))]
+    Pg {
+        source:   sqlx::Error,
+        #[snafu(implicit)]
+        location: snafu::Location,
+    },
 }
 
 pub type KeyringStoreRef = Arc<dyn KeyringStore>;
@@ -36,16 +45,17 @@ pub type KeyringStoreRef = Arc<dyn KeyringStore>;
 ///
 /// Each credential is addressed by a `(service, account)` pair — the same
 /// key space used by the underlying `keyring` crate.
+#[async_trait]
 pub trait KeyringStore: Debug + Send + Sync {
     /// Load a stored credential. Returns `None` when no entry exists.
-    fn load(&self, service: &str, account: &str) -> Result<Option<String>>;
+    async fn load(&self, service: &str, account: &str) -> Result<Option<String>>;
 
     /// Save (or overwrite) a credential.
-    fn save(&self, service: &str, account: &str, value: &str) -> Result<()>;
+    async fn save(&self, service: &str, account: &str, value: &str) -> Result<()>;
 
     /// Delete a credential. Returns `true` if an entry was removed, `false`
     /// if it did not exist.
-    fn delete(&self, service: &str, account: &str) -> Result<bool>;
+    async fn delete(&self, service: &str, account: &str) -> Result<bool>;
 }
 
 /// Default implementation that delegates directly to the OS keyring via the
@@ -65,9 +75,10 @@ fn filter_no_entry(err: keyring::Error) -> Result<Option<String>> {
     }
 }
 
+#[async_trait]
 impl KeyringStore for DefaultKeyringStore {
     #[tracing::instrument(skip(self), level = "debug")]
-    fn load(&self, service: &str, account: &str) -> Result<Option<String>> {
+    async fn load(&self, service: &str, account: &str) -> Result<Option<String>> {
         let entry = keyring::Entry::new(service, account).context(KeyringSnafu)?;
         match entry.get_password() {
             Ok(password) => Ok(Some(password)),
@@ -78,13 +89,13 @@ impl KeyringStore for DefaultKeyringStore {
     }
 
     #[tracing::instrument(skip(self, value), fields(value_len = value.len()), level = "debug")]
-    fn save(&self, service: &str, account: &str, value: &str) -> Result<()> {
+    async fn save(&self, service: &str, account: &str, value: &str) -> Result<()> {
         let entry = keyring::Entry::new(service, account).context(KeyringSnafu)?;
         entry.set_password(value).context(KeyringSnafu)
     }
 
     #[tracing::instrument(skip(self), level = "debug")]
-    fn delete(&self, service: &str, account: &str) -> Result<bool> {
+    async fn delete(&self, service: &str, account: &str) -> Result<bool> {
         let entry = keyring::Entry::new(service, account).context(KeyringSnafu)?;
         match entry.delete_credential() {
             Ok(()) => Ok(true),

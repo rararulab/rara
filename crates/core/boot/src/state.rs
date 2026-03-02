@@ -34,6 +34,7 @@ use tracing::info;
 /// Does NOT hold a `Kernel` — the app crate builds one from these fields.
 #[derive(Clone)]
 pub struct RaraState {
+    pub credential_store:    rara_keyring_store::KeyringStoreRef,
     pub provider_registry:   Arc<rara_kernel::provider::ProviderRegistry>,
     pub tool_registry:       Arc<rara_kernel::tool::ToolRegistry>,
     pub user_store:          Arc<dyn rara_kernel::process::user::UserStore>,
@@ -62,10 +63,16 @@ impl RaraState {
         hindsight_base_url: String,
         hindsight_bank_id: String,
     ) -> Result<Self, Whatever> {
+        // -- credential store --------------------------------------------------
+
+        let credential_store: rara_keyring_store::KeyringStoreRef =
+            Arc::new(rara_pg_credential_store::PgKeyringStore::new(pool.clone()));
+
         // -- LLM provider registry -------------------------------------------
 
         let provider_registry =
-            crate::providers::build_provider_registry(&*settings_provider).await;
+            crate::providers::build_provider_registry(&*settings_provider, &*credential_store)
+                .await;
 
         // -- session repository -----------------------------------------------
 
@@ -122,7 +129,7 @@ impl RaraState {
 
         // -- MCP manager ------------------------------------------------------
 
-        let mcp_manager = crate::mcp::init_mcp_manager()
+        let mcp_manager = crate::mcp::init_mcp_manager(credential_store.clone())
             .await
             .whatever_context("Failed to initialize MCP manager")?;
 
@@ -154,6 +161,7 @@ impl RaraState {
         info!("RaraState initialized");
 
         Ok(Self {
+            credential_store,
             provider_registry,
             tool_registry: tools,
             user_store,

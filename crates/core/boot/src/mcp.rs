@@ -28,14 +28,16 @@ use crate::error::{BootError, Result};
 
 /// Initialize the MCP manager from the filesystem registry and start all
 /// enabled servers.
-pub async fn init_mcp_manager() -> Result<McpManager> {
+pub async fn init_mcp_manager(
+    credential_store: rara_keyring_store::KeyringStoreRef,
+) -> Result<McpManager> {
     let path = rara_paths::config_dir().join("mcp-servers.json");
     let registry = FSMcpRegistry::load(&path)
         .await
         .map_err(|e| BootError::McpRegistry {
             message: e.to_string(),
         })?;
-    let manager = McpManager::new(Arc::new(registry), OAuthCredentialsStoreMode::default());
+    let manager = McpManager::new(Arc::new(registry), OAuthCredentialsStoreMode::default(), credential_store);
     let started = manager.start_enabled().await;
     if started.is_empty() {
         info!("no MCP servers to start");
