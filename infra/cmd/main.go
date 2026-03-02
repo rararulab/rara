@@ -14,8 +14,29 @@
  * limitations under the License.
  */
 
-package main 
+package main
+
+import (
+	"strings"
+
+	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
+
+	"github.com/rararulab/rara/infra/pkg/app"
+	"github.com/rararulab/rara/infra/pkg/infra"
+)
 
 func main() {
+	pulumi.Run(func(ctx *pulumi.Context) error {
+		stack := ctx.Stack()
 
+		switch {
+		case strings.HasPrefix(stack, "infra"):
+			return infra.Run(ctx)
+		case strings.HasPrefix(stack, "app"):
+			return app.Run(ctx)
+		default:
+			ctx.Log.Warn("Unknown stack '"+stack+"', defaulting to infra stack", nil)
+			return infra.Run(ctx)
+		}
+	})
 }

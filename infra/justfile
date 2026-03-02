@@ -1,0 +1,24 @@
+init:
+    cd infra && pulumi login --local && pulumi stack init infra-dev && pulumi stack init app-dev
+
+infra-up:
+    cd infra && pulumi up -s infra-dev -y
+
+app-up:
+    cd infra && pulumi up -s app-dev -y
+
+setup: infra-up app-up
+
+infra-preview:
+    cd infra && pulumi preview -s infra-dev
+
+app-preview:
+    cd infra && pulumi preview -s app-dev
+
+infra-destroy:
+    cd infra && pulumi destroy -s infra-dev -y
+
+app-destroy:
+    cd infra && pulumi destroy -s app-dev -y
+
+destroy: app-destroy infra-destroy
