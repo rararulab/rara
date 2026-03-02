@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-import { useState, Fragment } from "react";
+import { useState, useEffect, Fragment } from "react";
 import { useQuery } from "@tanstack/react-query";
+import CascadeViewer, { type StreamingNode, type TurnTrace } from "@/components/CascadeViewer";
 import {
   Activity,
   ChevronDown,
@@ -79,38 +80,6 @@ interface ProcessStats {
 }
 
 // ---------------------------------------------------------------------------
-// Turn Trace types (matching Rust backend)
-// ---------------------------------------------------------------------------
-
-interface ToolCallTrace {
-  name: string;
-  id: string;
-  duration_ms: number;
-  success: boolean;
-  arguments: Record<string, unknown>;
-  result_preview: string;
-  error: string | null;
-}
-
-interface IterationTrace {
-  index: number;
-  first_token_ms: number | null;
-  stream_ms: number;
-  text_preview: string;
-  tool_calls: ToolCallTrace[];
-}
-
-interface TurnTrace {
-  duration_ms: number;
-  model: string;
-  iterations: IterationTrace[];
-  final_text_len: number;
-  total_tool_calls: number;
-  success: boolean;
-  error: string | null;
-}
-
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -165,108 +134,121 @@ function stateColor(state: string): "default" | "secondary" | "destructive" | "o
 }
 
 // ---------------------------------------------------------------------------
-// TurnTraceTree
+// useProcessStream hook
 // ---------------------------------------------------------------------------
 
-function ToolCallDetail({ tc }: { tc: ToolCallTrace }) {
-  const [expanded, setExpanded] = useState(false);
+function useProcessStream(agentId: string | null, processState: string | null) {
+  const [nodes, setNodes] = useState<StreamingNode[]>([]);
+  const [isStreaming, setIsStreaming] = useState(false);
 
-  return (
-    <div className="ml-3">
-      <div
-        className="flex cursor-pointer items-center gap-1.5"
-        onClick={() => setExpanded((v) => !v)}
-      >
-        <span className={tc.success ? "text-green-500" : "text-red-500"}>
-          {tc.success ? "\u2713" : "\u2717"}
-        </span>
-        <span>{tc.name}</span>
-        <span className="text-muted-foreground">({tc.duration_ms}ms)</span>
-        <span className="text-muted-foreground/50">
-          {expanded ? "\u25BC" : "\u25B6"}
-        </span>
-      </div>
-      {tc.error && (
-        <div className="ml-5 mt-0.5 text-red-400">Error: {tc.error}</div>
-      )}
-      {expanded && (
-        <div className="ml-5 mt-1 space-y-1">
-          <details className="group">
-            <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-              Arguments
-            </summary>
-            <pre className="mt-1 max-h-40 overflow-auto rounded bg-muted/30 p-2 text-[10px] leading-tight">
-              {JSON.stringify(tc.arguments, null, 2)}
-            </pre>
-          </details>
-          {tc.result_preview && (
-            <details className="group">
-              <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-                Result
-              </summary>
-              <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/30 p-2 text-[10px] leading-tight">
-                {tc.result_preview}
-              </pre>
-            </details>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
+  useEffect(() => {
+    if (!agentId || !processState) return;
+    if (processState !== "Running" && processState !== "Idle") return;
 
-function TurnTraceTree({ traces }: { traces: TurnTrace[] }) {
-  return (
-    <div className="space-y-2 font-mono text-xs">
-      {traces.map((turn, ti) => (
-        <div key={ti} className="rounded-lg border border-border/50 p-3">
-          {/* Turn header */}
-          <div className="flex items-center gap-2 font-medium">
-            <span className={turn.success ? "text-green-500" : "text-red-500"}>
-              {turn.success ? "\u25CF" : "\u2717"}
-            </span>
-            <span>Turn {ti + 1}</span>
-            <span className="text-muted-foreground">
-              ({turn.model}, {(turn.duration_ms / 1000).toFixed(1)}s,{" "}
-              {turn.final_text_len} chars)
-            </span>
-          </div>
-          {/* Iterations */}
-          {turn.iterations.map((iter) => (
-            <div
-              key={iter.index}
-              className="ml-4 mt-1 border-l border-border/30 pl-3"
-            >
-              <div className="text-muted-foreground">
-                Iter {iter.index}
-                {iter.first_token_ms != null &&
-                  ` \u00b7 TTFT ${iter.first_token_ms}ms`}
-                {` \u00b7 stream ${iter.stream_ms}ms`}
-              </div>
-              {/* Tool calls */}
-              {iter.tool_calls.map((tc) => (
-                <ToolCallDetail key={tc.id} tc={tc} />
-              ))}
-              {/* Text preview */}
-              {iter.text_preview && (
-                <div className="ml-3 mt-0.5 max-w-md truncate text-muted-foreground/70">
-                  &quot;{iter.text_preview}&quot;
-                </div>
-              )}
-            </div>
-          ))}
-          {turn.error && (
-            <div className="ml-4 mt-1 text-red-500">Error: {turn.error}</div>
-          )}
-        </div>
-      ))}
-      {traces.length === 0 && (
-        <div className="text-muted-foreground italic">
-          No turns recorded yet
-        </div>
-      )}
-    </div>
-  );
+    const host = window.location.host;
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const token = localStorage.getItem("access_token") ?? "";
+    const ws = new WebSocket(
+      `${protocol}//${host}/api/v1/kernel/processes/${agentId}/stream?token=${token}`
+    );
+
+    let currentThought = "";
+    let thoughtKey = `live-thought-${Date.now()}`;
+
+    ws.onopen = () => {
+      setIsStreaming(true);
+      setNodes([]);
+    };
+
+    ws.onmessage = (ev) => {
+      try {
+        const event = JSON.parse(ev.data);
+        switch (event.type) {
+          case "text_delta":
+            currentThought += event["0"] ?? "";
+            setNodes((prev) => {
+              const existing = prev.find((n) => n.key === thoughtKey);
+              if (existing) {
+                return prev.map((n) =>
+                  n.key === thoughtKey ? { ...n, text: currentThought } : n
+                );
+              }
+              return [
+                ...prev,
+                {
+                  type: "thought" as const,
+                  key: thoughtKey,
+                  text: currentThought,
+                  streaming: true,
+                },
+              ];
+            });
+            break;
+
+          case "tool_call_start":
+            if (currentThought) {
+              setNodes((prev) =>
+                prev.map((n) =>
+                  n.key === thoughtKey ? { ...n, streaming: false } : n
+                )
+              );
+            }
+            setNodes((prev) => [
+              ...prev,
+              {
+                type: "action" as const,
+                key: `live-action-${event.id}`,
+                toolName: event.name,
+                toolId: event.id,
+                arguments: event.arguments,
+                streaming: true,
+              },
+            ]);
+            break;
+
+          case "tool_call_end":
+            setNodes((prev) => [
+              ...prev.map((n) =>
+                n.key === `live-action-${event.id}`
+                  ? { ...n, streaming: false, success: event.success }
+                  : n
+              ),
+              {
+                type: "observation" as const,
+                key: `live-obs-${event.id}`,
+                resultPreview: event.result_preview,
+                success: event.success,
+                error: event.error,
+              },
+            ]);
+            break;
+
+          case "turn_metrics":
+            currentThought = "";
+            thoughtKey = `live-thought-${Date.now()}`;
+            break;
+
+          case "done":
+            setIsStreaming(false);
+            setNodes([]);
+            break;
+        }
+      } catch {
+        // ignore parse errors
+      }
+    };
+
+    ws.onclose = () => setIsStreaming(false);
+    ws.onerror = () => setIsStreaming(false);
+
+    return () => {
+      ws.close();
+      setIsStreaming(false);
+      setNodes([]);
+    };
+  }, [agentId, processState]);
+
+  return { streamingNodes: nodes, isStreaming };
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +285,15 @@ export default function KernelTop() {
 
   const stats = statsQuery.data;
   const processes = processesQuery.data ?? [];
+
+  const selectedProcessState = processes.find(
+    (p) => p.agent_id === selectedProcess
+  )?.state ?? null;
+
+  const { streamingNodes, isStreaming } = useProcessStream(
+    selectedProcess,
+    selectedProcessState
+  );
 
   const handleRefresh = () => {
     statsQuery.refetch();
@@ -546,7 +537,7 @@ export default function KernelTop() {
                           <div className="space-y-3">
                             <div className="flex items-center gap-2 text-sm font-medium">
                               <Zap className="h-3.5 w-3.5" />
-                              Turn Traces
+                              Cascade Viewer
                             </div>
                             {turnsQuery.isLoading ? (
                               <div className="space-y-2">
@@ -558,8 +549,10 @@ export default function KernelTop() {
                                 Failed to load turn traces
                               </div>
                             ) : (
-                              <TurnTraceTree
+                              <CascadeViewer
                                 traces={turnsQuery.data ?? []}
+                                streamingNodes={streamingNodes}
+                                isStreaming={isStreaming}
                               />
                             )}
                           </div>
