@@ -452,8 +452,8 @@ async fn test_stream_hub_full_lifecycle() {
 
     // Emit events.
     handle.emit(StreamEvent::Progress { stage: "starting".to_string() });
-    handle.emit(StreamEvent::TextDelta("Hello ".to_string()));
-    handle.emit(StreamEvent::TextDelta("world!".to_string()));
+    handle.emit(StreamEvent::TextDelta { text: "Hello ".to_string() });
+    handle.emit(StreamEvent::TextDelta { text: "world!".to_string() });
     handle.emit(StreamEvent::ToolCallStart {
         name:      "echo_tool".to_string(),
         id:        "tc-1".to_string(),
@@ -471,10 +471,10 @@ async fn test_stream_hub_full_lifecycle() {
     assert!(matches!(e1, StreamEvent::Progress { stage } if stage == "starting"));
 
     let e2 = rx.recv().await.unwrap();
-    assert!(matches!(e2, StreamEvent::TextDelta(ref s) if s == "Hello "));
+    assert!(matches!(e2, StreamEvent::TextDelta { ref text } if text == "Hello "));
 
     let e3 = rx.recv().await.unwrap();
-    assert!(matches!(e3, StreamEvent::TextDelta(ref s) if s == "world!"));
+    assert!(matches!(e3, StreamEvent::TextDelta { ref text } if text == "world!"));
 
     let e4 = rx.recv().await.unwrap();
     assert!(matches!(e4, StreamEvent::ToolCallStart { ref name, .. } if name == "echo_tool"));

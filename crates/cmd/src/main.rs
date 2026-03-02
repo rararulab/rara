@@ -234,8 +234,8 @@ impl ChatArgs {
 /// Convert a [`StreamEvent`] into a [`CliEvent`].
 fn stream_event_to_cli_event(event: StreamEvent) -> CliEvent {
     match event {
-        StreamEvent::TextDelta(t) => CliEvent::TextDelta { text: t },
-        StreamEvent::ReasoningDelta(t) => CliEvent::ReasoningDelta { text: t },
+        StreamEvent::TextDelta { text: t } => CliEvent::TextDelta { text: t },
+        StreamEvent::ReasoningDelta { text: t } => CliEvent::ReasoningDelta { text: t },
         StreamEvent::ToolCallStart { name, .. } => CliEvent::ToolCallStart { name },
         StreamEvent::ToolCallEnd { error, .. } => {
             if let Some(ref err) = error {

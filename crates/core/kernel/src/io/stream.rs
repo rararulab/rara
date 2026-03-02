@@ -68,9 +68,9 @@ impl std::fmt::Display for StreamId {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamEvent {
     /// Incremental text output from the LLM.
-    TextDelta(String),
+    TextDelta { text: String },
     /// Incremental reasoning/thinking text.
-    ReasoningDelta(String),
+    ReasoningDelta { text: String },
     /// A tool call has started executing.
     ToolCallStart {
         name:      String,
@@ -240,13 +240,13 @@ mod tests {
 
         let (_, mut rx) = subs.into_iter().next().unwrap();
 
-        handle.emit(StreamEvent::TextDelta("hello".to_string()));
+        handle.emit(StreamEvent::TextDelta { text: "hello".to_string() });
         handle.emit(StreamEvent::Progress {
             stage: "thinking".to_string(),
         });
 
         let event = rx.recv().await.unwrap();
-        assert!(matches!(event, StreamEvent::TextDelta(ref s) if s == "hello"));
+        assert!(matches!(event, StreamEvent::TextDelta { ref text } if text == "hello"));
 
         let event = rx.recv().await.unwrap();
         assert!(matches!(event, StreamEvent::Progress { ref stage } if stage == "thinking"));
@@ -260,7 +260,7 @@ mod tests {
         let handle = hub.open(session);
 
         // Emit without any subscriber — should not panic.
-        handle.emit(StreamEvent::TextDelta("ignored".to_string()));
+        handle.emit(StreamEvent::TextDelta { text: "ignored".to_string() });
         handle.emit(StreamEvent::ToolCallStart {
             name:      "read_file".to_string(),
             id:        "tc-1".to_string(),

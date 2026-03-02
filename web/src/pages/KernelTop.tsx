@@ -165,7 +165,7 @@ function useProcessStream(agentId: string | null, processState: string | null) {
         const event = JSON.parse(ev.data);
         switch (event.type) {
           case "text_delta":
-            currentThought += event["0"] ?? "";
+            currentThought += event.text ?? "";
             setNodes((prev) => {
               const existing = prev.find((n) => n.key === thoughtKey);
               if (existing) {

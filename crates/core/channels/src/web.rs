@@ -588,8 +588,8 @@ fn spawn_stream_forwarder(
             tokio::spawn(async move {
                 while let Ok(event) = rx.recv().await {
                     let web_event = match event {
-                        StreamEvent::TextDelta(t) => WebEvent::TextDelta { text: t },
-                        StreamEvent::ReasoningDelta(t) => WebEvent::ReasoningDelta { text: t },
+                        StreamEvent::TextDelta { text: t } => WebEvent::TextDelta { text: t },
+                        StreamEvent::ReasoningDelta { text: t } => WebEvent::ReasoningDelta { text: t },
                         StreamEvent::ToolCallStart { name, id, arguments } => {
                             WebEvent::ToolCallStart { name, id, arguments }
                         }

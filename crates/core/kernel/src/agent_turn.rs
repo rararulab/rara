@@ -310,7 +310,7 @@ pub(crate) async fn run_inline_agent_loop(
                         );
                     }
                     accumulated_text.push_str(text);
-                    stream_handle.emit(StreamEvent::TextDelta(text.clone()));
+                    stream_handle.emit(StreamEvent::TextDelta { text: text.clone() });
                 }
             }
 
