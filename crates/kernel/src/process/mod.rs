@@ -76,7 +76,17 @@ pub enum AgentRole {
 /// scheduler is draining the inbound bus. Critical messages bypass rate
 /// limiting entirely.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Default,
+    Serialize,
+    Deserialize,
     strum::Display,
 )]
 #[strum(serialize_all = "snake_case")]
@@ -185,7 +195,7 @@ pub struct AgentManifest {
     pub name:               String,
     /// Agent's functional role (chat, scout, planner, worker).
     #[serde(default)]
-    pub role: Option<AgentRole>,
+    pub role:               Option<AgentRole>,
     /// Human-readable description.
     pub description:        String,
     /// LLM model identifier (e.g., "deepseek/deepseek-chat", "gpt-4").
@@ -194,7 +204,7 @@ pub struct AgentManifest {
     /// `ProviderRegistry::resolve()` will fall through to the global
     /// default model when this is `None`.
     #[serde(default)]
-    pub model: Option<String>,
+    pub model:              Option<String>,
     /// System prompt defining agent behavior.
     pub system_prompt:      String,
     /// Optional personality/mood/voice prompt (prepended to system_prompt when

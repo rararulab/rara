@@ -15,7 +15,8 @@
 //! Core LLM types — messages, requests, responses, and related types.
 //!
 //! These types are independent of any specific LLM provider and form the
-//! canonical request/response model for the [`LlmDriver`](super::LlmDriver) trait.
+//! canonical request/response model for the [`LlmDriver`](super::LlmDriver)
+//! trait.
 
 use serde::{Deserialize, Serialize};
 
@@ -69,15 +70,11 @@ impl MessageContent {
 }
 
 impl From<String> for MessageContent {
-    fn from(s: String) -> Self {
-        Self::Text(s)
-    }
+    fn from(s: String) -> Self { Self::Text(s) }
 }
 
 impl From<&str> for MessageContent {
-    fn from(s: &str) -> Self {
-        Self::Text(s.to_owned())
-    }
+    fn from(s: &str) -> Self { Self::Text(s.to_owned()) }
 }
 
 // ---------------------------------------------------------------------------
@@ -87,8 +84,8 @@ impl From<&str> for MessageContent {
 /// A tool call requested by the model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallRequest {
-    pub id: String,
-    pub name: String,
+    pub id:        String,
+    pub name:      String,
     /// JSON-encoded arguments string.
     pub arguments: String,
 }
@@ -100,10 +97,10 @@ pub struct ToolCallRequest {
 /// A single message in a conversation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
-    pub role: Role,
-    pub content: MessageContent,
+    pub role:         Role,
+    pub content:      MessageContent,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tool_calls: Vec<ToolCallRequest>,
+    pub tool_calls:   Vec<ToolCallRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
 }
@@ -111,36 +108,36 @@ pub struct Message {
 impl Message {
     pub fn system(text: impl Into<String>) -> Self {
         Self {
-            role: Role::System,
-            content: MessageContent::Text(text.into()),
-            tool_calls: Vec::new(),
+            role:         Role::System,
+            content:      MessageContent::Text(text.into()),
+            tool_calls:   Vec::new(),
             tool_call_id: None,
         }
     }
 
     pub fn user(text: impl Into<String>) -> Self {
         Self {
-            role: Role::User,
-            content: MessageContent::Text(text.into()),
-            tool_calls: Vec::new(),
+            role:         Role::User,
+            content:      MessageContent::Text(text.into()),
+            tool_calls:   Vec::new(),
             tool_call_id: None,
         }
     }
 
     pub fn user_multimodal(blocks: Vec<ContentBlock>) -> Self {
         Self {
-            role: Role::User,
-            content: MessageContent::Multimodal(blocks),
-            tool_calls: Vec::new(),
+            role:         Role::User,
+            content:      MessageContent::Multimodal(blocks),
+            tool_calls:   Vec::new(),
             tool_call_id: None,
         }
     }
 
     pub fn assistant(text: impl Into<String>) -> Self {
         Self {
-            role: Role::Assistant,
-            content: MessageContent::Text(text.into()),
-            tool_calls: Vec::new(),
+            role:         Role::Assistant,
+            content:      MessageContent::Text(text.into()),
+            tool_calls:   Vec::new(),
             tool_call_id: None,
         }
     }
@@ -159,9 +156,9 @@ impl Message {
 
     pub fn tool_result(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
-            role: Role::Tool,
-            content: MessageContent::Text(content.into()),
-            tool_calls: Vec::new(),
+            role:         Role::Tool,
+            content:      MessageContent::Text(content.into()),
+            tool_calls:   Vec::new(),
             tool_call_id: Some(tool_call_id.into()),
         }
     }
@@ -174,9 +171,9 @@ impl Message {
 /// Definition of a tool the model can call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {
-    pub name: String,
+    pub name:        String,
     pub description: String,
-    pub parameters: serde_json::Value,
+    pub parameters:  serde_json::Value,
 }
 
 // ---------------------------------------------------------------------------
@@ -186,7 +183,7 @@ pub struct ToolDefinition {
 /// Thinking/reasoning budget configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThinkingConfig {
-    pub enabled: bool,
+    pub enabled:       bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget_tokens: Option<u32>,
 }
@@ -212,13 +209,13 @@ pub enum ToolChoice {
 /// A chat completion request.
 #[derive(Debug, Clone)]
 pub struct CompletionRequest {
-    pub model: String,
-    pub messages: Vec<Message>,
-    pub tools: Vec<ToolDefinition>,
-    pub temperature: Option<f32>,
-    pub max_tokens: Option<u32>,
-    pub thinking: Option<ThinkingConfig>,
-    pub tool_choice: ToolChoice,
+    pub model:               String,
+    pub messages:            Vec<Message>,
+    pub tools:               Vec<ToolDefinition>,
+    pub temperature:         Option<f32>,
+    pub max_tokens:          Option<u32>,
+    pub thinking:            Option<ThinkingConfig>,
+    pub tool_choice:         ToolChoice,
     pub parallel_tool_calls: bool,
 }
 
@@ -243,9 +240,9 @@ pub enum StopReason {
 /// Token usage statistics.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct Usage {
-    pub prompt_tokens: u32,
+    pub prompt_tokens:     u32,
     pub completion_tokens: u32,
-    pub total_tokens: u32,
+    pub total_tokens:      u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -255,10 +252,10 @@ pub struct Usage {
 /// A complete chat completion response.
 #[derive(Debug, Clone)]
 pub struct CompletionResponse {
-    pub content: Option<String>,
+    pub content:           Option<String>,
     pub reasoning_content: Option<String>,
-    pub tool_calls: Vec<ToolCallRequest>,
-    pub stop_reason: StopReason,
-    pub usage: Option<Usage>,
-    pub model: String,
+    pub tool_calls:        Vec<ToolCallRequest>,
+    pub stop_reason:       StopReason,
+    pub usage:             Option<Usage>,
+    pub model:             String,
 }

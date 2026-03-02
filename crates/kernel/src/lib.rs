@@ -68,7 +68,6 @@ pub use approval::{
 };
 pub use audit_subsystem::AuditSubsystem;
 pub use error::{KernelError, Result};
-pub use security::SecuritySubsystem;
 // New process model re-exports
 pub use handle::{
     AgentHandle, kernel_handle::KernelHandle, process_handle::ProcessHandle,
@@ -82,3 +81,4 @@ pub use process::{
     manifest_loader::ManifestLoader,
     principal::{Principal, Role, UserId},
 };
+pub use security::SecuritySubsystem;

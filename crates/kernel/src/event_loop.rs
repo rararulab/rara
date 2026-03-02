@@ -295,8 +295,16 @@ impl Kernel {
                 value,
                 reply_tx,
             } => {
-                let result =
-                    self.do_mem_store(self.config().memory_quota_per_agent, agent_id, &session_id, &principal, &key, value).await;
+                let result = self
+                    .do_mem_store(
+                        self.config().memory_quota_per_agent,
+                        agent_id,
+                        &session_id,
+                        &principal,
+                        &key,
+                        value,
+                    )
+                    .await;
                 let _ = reply_tx.send(result);
             }
 
@@ -318,8 +326,9 @@ impl Kernel {
                 value,
                 reply_tx,
             } => {
-                let result =
-                    self.do_shared_store(agent_id, &principal, &scope, &key, value).await;
+                let result = self
+                    .do_shared_store(agent_id, &principal, &scope, &key, value)
+                    .await;
                 let _ = reply_tx.send(result);
             }
 
@@ -330,8 +339,9 @@ impl Kernel {
                 key,
                 reply_tx,
             } => {
-                let result =
-                    self.do_shared_recall(agent_id, &principal, &scope, &key).await;
+                let result = self
+                    .do_shared_recall(agent_id, &principal, &scope, &key)
+                    .await;
                 let _ = reply_tx.send(result);
             }
 
@@ -894,7 +904,6 @@ impl Kernel {
         msg: InboundMessage,
         runtimes: &RuntimeTable,
     ) {
-
         let Some(mut rt) = runtimes.get_mut(&agent_id) else {
             warn!(agent_id = %agent_id, "runtime not found for LLM turn");
             // Send error back to the user instead of silently dropping.
@@ -982,10 +991,7 @@ impl Kernel {
             let session_id = session_id_persist.clone();
             let user_msg = user_msg.clone();
             tokio::spawn(async move {
-                if let Err(e) = session_repo
-                    .append_message(&session_id, &user_msg)
-                    .await
-                {
+                if let Err(e) = session_repo.append_message(&session_id, &user_msg).await {
                     warn!(%e, "failed to persist user message");
                 }
             });
@@ -1360,7 +1366,6 @@ impl Kernel {
         parent_id: Option<AgentId>,
         runtimes: &RuntimeTable,
     ) -> Result<AgentId> {
-
         // Validate principal.
         self.security().validate_principal(&principal).await?;
 
@@ -1439,7 +1444,9 @@ impl Kernel {
         };
 
         // Build ProcessHandle — uses the process's own session.
-        let child_limit = manifest.max_children.unwrap_or(self.config().default_child_limit);
+        let child_limit = manifest
+            .max_children
+            .unwrap_or(self.config().default_child_limit);
 
         let handle = Arc::new(ProcessHandle::new(
             agent_id,
@@ -1511,7 +1518,6 @@ impl Kernel {
     /// Handle a control signal sent to an agent process.
     #[tracing::instrument(skip_all, fields(agent_id = %target, signal = ?signal))]
     async fn handle_signal(&self, target: AgentId, signal: Signal, runtimes: &RuntimeTable) {
-
         match signal {
             Signal::Interrupt => {
                 info!(agent_id = %target, "interrupt signal");
@@ -1613,7 +1619,6 @@ impl Kernel {
         result: AgentResult,
         runtimes: &RuntimeTable,
     ) {
-
         info!(
             parent_id = %parent_id,
             child_id = %child_id,

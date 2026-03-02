@@ -31,16 +31,13 @@ use crate::{
     error::{KernelError, Result},
     event_queue::EventQueueRef,
     io::{
-        egress::EndpointRegistryRef,
-        ingress::IngressPipelineRef,
-        stream::StreamHubRef,
+        egress::EndpointRegistryRef, ingress::IngressPipelineRef, stream::StreamHubRef,
         types::InboundMessage,
     },
     kernel::{KernelConfig, SettingsRef},
     process::{
         AgentId, AgentManifest, ProcessState, ProcessTable, Signal,
-        agent_registry::AgentRegistryRef,
-        principal::Principal,
+        agent_registry::AgentRegistryRef, principal::Principal,
     },
     provider::ProviderRegistryRef,
     security::SecurityRef,
@@ -58,7 +55,8 @@ use crate::{
 ///
 /// # Usage
 ///
-/// Obtain a `KernelHandle` via [`Kernel::handle()`](crate::kernel::Kernel::handle):
+/// Obtain a `KernelHandle` via
+/// [`Kernel::handle()`](crate::kernel::Kernel::handle):
 ///
 /// ```ignore
 /// let handle = kernel.handle();
@@ -69,35 +67,35 @@ use crate::{
 #[derive(Clone)]
 pub struct KernelHandle {
     /// Core: the unified event queue sender.
-    event_queue: EventQueueRef,
+    event_queue:       EventQueueRef,
     /// Agent registry for resolving named agents to manifests.
-    agent_registry: AgentRegistryRef,
+    agent_registry:    AgentRegistryRef,
     /// The global process table tracking all running agents.
-    process_table: Arc<ProcessTable>,
+    process_table:     Arc<ProcessTable>,
     /// Ingress pipeline for adapters to push inbound messages.
-    ingress_pipeline: IngressPipelineRef,
+    ingress_pipeline:  IngressPipelineRef,
     /// Ephemeral stream hub for real-time token deltas.
-    stream_hub: StreamHubRef,
+    stream_hub:        StreamHubRef,
     /// Per-user endpoint registry (tracks connected channels).
     endpoint_registry: EndpointRegistryRef,
     /// Unified audit subsystem (logging + tool call recording).
-    audit: AuditRef,
+    audit:             AuditRef,
     /// Flat KV settings provider for runtime configuration.
-    settings: SettingsRef,
+    settings:          SettingsRef,
     /// Unified security subsystem (auth + authz + approval + guard).
-    security: SecurityRef,
+    security:          SecurityRef,
     /// Kernel configuration.
-    config: KernelConfig,
+    config:            KernelConfig,
     /// Multi-provider LLM registry.
     provider_registry: ProviderRegistryRef,
     /// Global tool registry.
-    tool_registry: ToolRegistryRef,
+    tool_registry:     ToolRegistryRef,
     /// Device registry for hot-pluggable devices.
-    device_registry: DeviceRegistryRef,
+    device_registry:   DeviceRegistryRef,
     /// Global semaphore limiting total concurrent agent processes.
-    global_semaphore: Arc<Semaphore>,
+    global_semaphore:  Arc<Semaphore>,
     /// When the kernel was created (for uptime calculation).
-    started_at: Timestamp,
+    started_at:        Timestamp,
 }
 
 impl KernelHandle {

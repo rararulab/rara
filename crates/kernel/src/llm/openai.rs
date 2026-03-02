@@ -43,18 +43,18 @@ use crate::error::{KernelError, Result};
 /// Uses `reqwest` directly for HTTP + SSE parsing, supporting fields
 /// like `reasoning_content` that `async-openai` doesn't expose.
 pub struct OpenAiDriver {
-    client: reqwest::Client,
+    client:   reqwest::Client,
     base_url: String,
-    api_key: String,
+    api_key:  String,
 }
 
 impl OpenAiDriver {
     /// Create a new driver targeting the given API base URL.
     pub fn new(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client:   reqwest::Client::new(),
             base_url: base_url.into(),
-            api_key: api_key.into(),
+            api_key:  api_key.into(),
         }
     }
 
@@ -103,11 +103,13 @@ impl LlmDriver for OpenAiDriver {
                 message: format!("failed to parse response: {e}").into(),
             })?;
 
-        let choice = raw.choices.into_iter().next().ok_or_else(|| {
-            KernelError::Provider {
+        let choice = raw
+            .choices
+            .into_iter()
+            .next()
+            .ok_or_else(|| KernelError::Provider {
                 message: "no choices in response".into(),
-            }
-        })?;
+            })?;
 
         let stop_reason = parse_stop_reason(choice.finish_reason.as_deref());
 
@@ -117,16 +119,16 @@ impl LlmDriver for OpenAiDriver {
             .unwrap_or_default()
             .into_iter()
             .map(|tc| ToolCallRequest {
-                id: tc.id,
-                name: tc.function.name,
+                id:        tc.id,
+                name:      tc.function.name,
                 arguments: tc.function.arguments,
             })
             .collect();
 
         let usage = raw.usage.map(|u| Usage {
-            prompt_tokens: u.prompt_tokens.unwrap_or(0),
+            prompt_tokens:     u.prompt_tokens.unwrap_or(0),
             completion_tokens: u.completion_tokens.unwrap_or(0),
-            total_tokens: u.total_tokens.unwrap_or(0),
+            total_tokens:      u.total_tokens.unwrap_or(0),
         });
 
         Ok(CompletionResponse {
@@ -198,17 +200,17 @@ impl LlmDriver for OpenAiDriver {
                     let _ = tx
                         .send(StreamDelta::Done {
                             stop_reason: final_stop_reason,
-                            usage: final_usage,
+                            usage:       final_usage,
                         })
                         .await;
 
                     return Ok(CompletionResponse {
-                        content: non_empty(accumulated_text),
+                        content:           non_empty(accumulated_text),
                         reasoning_content: non_empty(accumulated_reasoning),
-                        tool_calls: tool_call_results,
-                        stop_reason: final_stop_reason,
-                        usage: final_usage,
-                        model: request.model.clone(),
+                        tool_calls:        tool_call_results,
+                        stop_reason:       final_stop_reason,
+                        usage:             final_usage,
+                        model:             request.model.clone(),
                     });
                 }
 
@@ -236,17 +238,17 @@ impl LlmDriver for OpenAiDriver {
         let _ = tx
             .send(StreamDelta::Done {
                 stop_reason: final_stop_reason,
-                usage: final_usage,
+                usage:       final_usage,
             })
             .await;
 
         Ok(CompletionResponse {
-            content: non_empty(accumulated_text),
+            content:           non_empty(accumulated_text),
             reasoning_content: non_empty(accumulated_reasoning),
-            tool_calls: tool_call_results,
-            stop_reason: final_stop_reason,
-            usage: final_usage,
-            model: request.model.clone(),
+            tool_calls:        tool_call_results,
+            stop_reason:       final_stop_reason,
+            usage:             final_usage,
+            model:             request.model.clone(),
         })
     }
 }
@@ -257,11 +259,11 @@ impl LlmDriver for OpenAiDriver {
 
 /// Accumulator for a tool call being assembled from streaming chunks.
 struct PendingToolCall {
-    id: String,
-    name: String,
+    id:        String,
+    name:      String,
     arguments: String,
     /// Whether `ToolCallStart` has already been emitted for this call.
-    started: bool,
+    started:   bool,
 }
 
 fn collect_pending_tools(pending: HashMap<u32, PendingToolCall>) -> Vec<ToolCallRequest> {
@@ -270,8 +272,8 @@ fn collect_pending_tools(pending: HashMap<u32, PendingToolCall>) -> Vec<ToolCall
     entries
         .into_iter()
         .map(|(_, pt)| ToolCallRequest {
-            id: pt.id,
-            name: pt.name,
+            id:        pt.id,
+            name:      pt.name,
             arguments: pt.arguments,
         })
         .collect()
@@ -291,9 +293,7 @@ async fn process_stream_chunk(
         if let Some(ref text) = choice.delta.content {
             if !text.is_empty() {
                 accumulated_text.push_str(text);
-                let _ = tx
-                    .send(StreamDelta::TextDelta { text: text.clone() })
-                    .await;
+                let _ = tx.send(StreamDelta::TextDelta { text: text.clone() }).await;
             }
         }
 
@@ -312,12 +312,14 @@ async fn process_stream_chunk(
         // Tool call deltas
         if let Some(ref tcs) = choice.delta.tool_calls {
             for tc in tcs {
-                let entry = pending_tools.entry(tc.index).or_insert_with(|| PendingToolCall {
-                    id: String::new(),
-                    name: String::new(),
-                    arguments: String::new(),
-                    started: false,
-                });
+                let entry = pending_tools
+                    .entry(tc.index)
+                    .or_insert_with(|| PendingToolCall {
+                        id:        String::new(),
+                        name:      String::new(),
+                        arguments: String::new(),
+                        started:   false,
+                    });
 
                 if let Some(ref id) = tc.id {
                     if !id.is_empty() {
@@ -336,7 +338,7 @@ async fn process_stream_chunk(
                             entry.arguments.push_str(args);
                             let _ = tx
                                 .send(StreamDelta::ToolCallArgumentsDelta {
-                                    index: tc.index,
+                                    index:     tc.index,
                                     arguments: args.clone(),
                                 })
                                 .await;
@@ -345,16 +347,13 @@ async fn process_stream_chunk(
                 }
 
                 // Emit ToolCallStart exactly once when we first get both id and name
-                if !entry.started
-                    && !entry.id.is_empty()
-                    && !entry.name.is_empty()
-                {
+                if !entry.started && !entry.id.is_empty() && !entry.name.is_empty() {
                     entry.started = true;
                     let _ = tx
                         .send(StreamDelta::ToolCallStart {
                             index: tc.index,
-                            id: entry.id.clone(),
-                            name: entry.name.clone(),
+                            id:    entry.id.clone(),
+                            name:  entry.name.clone(),
                         })
                         .await;
                 }
@@ -370,16 +369,14 @@ async fn process_stream_chunk(
     // Usage (some providers send it in the last chunk)
     if let Some(ref usage) = chunk.usage {
         *final_usage = Some(Usage {
-            prompt_tokens: usage.prompt_tokens.unwrap_or(0),
+            prompt_tokens:     usage.prompt_tokens.unwrap_or(0),
             completion_tokens: usage.completion_tokens.unwrap_or(0),
-            total_tokens: usage.total_tokens.unwrap_or(0),
+            total_tokens:      usage.total_tokens.unwrap_or(0),
         });
     }
 }
 
-fn non_empty(s: String) -> Option<String> {
-    if s.is_empty() { None } else { Some(s) }
-}
+fn non_empty(s: String) -> Option<String> { if s.is_empty() { None } else { Some(s) } }
 
 fn parse_stop_reason(reason: Option<&str>) -> StopReason {
     match reason {
@@ -515,46 +512,46 @@ fn message_to_json(msg: &Message) -> serde_json::Value {
 #[derive(Debug, Deserialize)]
 struct RawStreamChunk {
     #[allow(dead_code)]
-    id: Option<String>,
+    id:      Option<String>,
     choices: Vec<RawStreamChoice>,
-    usage: Option<RawUsage>,
+    usage:   Option<RawUsage>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawStreamChoice {
     #[allow(dead_code)]
-    index: u32,
-    delta: RawDelta,
+    index:         u32,
+    delta:         RawDelta,
     finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawDelta {
-    content: Option<String>,
+    content:           Option<String>,
     reasoning_content: Option<String>,
-    tool_calls: Option<Vec<RawToolCallChunk>>,
+    tool_calls:        Option<Vec<RawToolCallChunk>>,
     #[allow(dead_code)]
-    role: Option<String>,
+    role:              Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawToolCallChunk {
-    index: u32,
-    id: Option<String>,
+    index:    u32,
+    id:       Option<String>,
     function: Option<RawFunctionChunk>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawFunctionChunk {
-    name: Option<String>,
+    name:      Option<String>,
     arguments: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawUsage {
-    prompt_tokens: Option<u32>,
+    prompt_tokens:     Option<u32>,
     completion_tokens: Option<u32>,
-    total_tokens: Option<u32>,
+    total_tokens:      Option<u32>,
 }
 
 // --- Non-streaming response types ---
@@ -562,32 +559,32 @@ struct RawUsage {
 #[derive(Debug, Deserialize)]
 struct RawCompletionResponse {
     choices: Vec<RawResponseChoice>,
-    usage: Option<RawUsage>,
-    model: Option<String>,
+    usage:   Option<RawUsage>,
+    model:   Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawResponseChoice {
-    message: RawResponseMessage,
+    message:       RawResponseMessage,
     finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawResponseMessage {
-    content: Option<String>,
+    content:           Option<String>,
     reasoning_content: Option<String>,
-    tool_calls: Option<Vec<RawResponseToolCall>>,
+    tool_calls:        Option<Vec<RawResponseToolCall>>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawResponseToolCall {
-    id: String,
+    id:       String,
     function: RawResponseFunction,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawResponseFunction {
-    name: String,
+    name:      String,
     arguments: String,
 }
 
@@ -603,13 +600,13 @@ mod tests {
     #[test]
     fn test_build_request_body_simple() {
         let request = CompletionRequest {
-            model: "gpt-4".to_string(),
-            messages: vec![Message::system("You are helpful."), Message::user("Hello")],
-            tools: vec![],
-            temperature: Some(0.7),
-            max_tokens: None,
-            thinking: None,
-            tool_choice: ToolChoice::Auto,
+            model:               "gpt-4".to_string(),
+            messages:            vec![Message::system("You are helpful."), Message::user("Hello")],
+            tools:               vec![],
+            temperature:         Some(0.7),
+            max_tokens:          None,
+            thinking:            None,
+            tool_choice:         ToolChoice::Auto,
             parallel_tool_calls: false,
         };
         let body = build_request_body(&request, false);
@@ -624,17 +621,17 @@ mod tests {
     #[test]
     fn test_build_request_body_with_tools() {
         let request = CompletionRequest {
-            model: "gpt-4".to_string(),
-            messages: vec![Message::user("Use the tool")],
-            tools: vec![ToolDefinition {
-                name: "read_file".to_string(),
+            model:               "gpt-4".to_string(),
+            messages:            vec![Message::user("Use the tool")],
+            tools:               vec![ToolDefinition {
+                name:        "read_file".to_string(),
                 description: "Read a file".to_string(),
-                parameters: serde_json::json!({"type": "object", "properties": {"path": {"type": "string"}}}),
+                parameters:  serde_json::json!({"type": "object", "properties": {"path": {"type": "string"}}}),
             }],
-            temperature: None,
-            max_tokens: Some(4096),
-            thinking: None,
-            tool_choice: ToolChoice::Auto,
+            temperature:         None,
+            max_tokens:          Some(4096),
+            thinking:            None,
+            tool_choice:         ToolChoice::Auto,
             parallel_tool_calls: true,
         };
         let body = build_request_body(&request, true);
@@ -650,17 +647,17 @@ mod tests {
     #[test]
     fn test_build_request_body_tool_choice_variants() {
         let base = CompletionRequest {
-            model: "gpt-4".to_string(),
-            messages: vec![Message::user("test")],
-            tools: vec![ToolDefinition {
-                name: "t".to_string(),
+            model:               "gpt-4".to_string(),
+            messages:            vec![Message::user("test")],
+            tools:               vec![ToolDefinition {
+                name:        "t".to_string(),
                 description: "d".to_string(),
-                parameters: serde_json::json!({}),
+                parameters:  serde_json::json!({}),
             }],
-            temperature: None,
-            max_tokens: None,
-            thinking: None,
-            tool_choice: ToolChoice::None,
+            temperature:         None,
+            max_tokens:          None,
+            thinking:            None,
+            tool_choice:         ToolChoice::None,
             parallel_tool_calls: false,
         };
 
@@ -700,8 +697,8 @@ mod tests {
         let msg = Message::assistant_with_tool_calls(
             "thinking...",
             vec![ToolCallRequest {
-                id: "call_1".to_string(),
-                name: "read_file".to_string(),
+                id:        "call_1".to_string(),
+                name:      "read_file".to_string(),
                 arguments: r#"{"path":"/tmp/test"}"#.to_string(),
             }],
         );
@@ -809,13 +806,13 @@ mod tests {
     #[test]
     fn test_stream_options_only_when_streaming() {
         let request = CompletionRequest {
-            model: "gpt-4".to_string(),
-            messages: vec![Message::user("Hi")],
-            tools: vec![],
-            temperature: None,
-            max_tokens: None,
-            thinking: None,
-            tool_choice: ToolChoice::Auto,
+            model:               "gpt-4".to_string(),
+            messages:            vec![Message::user("Hi")],
+            tools:               vec![],
+            temperature:         None,
+            max_tokens:          None,
+            thinking:            None,
+            tool_choice:         ToolChoice::Auto,
             parallel_tool_calls: false,
         };
 

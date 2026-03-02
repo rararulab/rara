@@ -24,19 +24,20 @@ use super::types::{StopReason, Usage};
 pub enum StreamDelta {
     /// Incremental text content.
     TextDelta { text: String },
-    /// Incremental reasoning/thinking content (e.g. DeepSeek-R1 thinking tokens).
+    /// Incremental reasoning/thinking content (e.g. DeepSeek-R1 thinking
+    /// tokens).
     ReasoningDelta { text: String },
     /// A tool call has started — id and name are known.
     ToolCallStart {
         index: u32,
-        id: String,
-        name: String,
+        id:    String,
+        name:  String,
     },
     /// Incremental JSON fragment for an in-progress tool call's arguments.
     ToolCallArgumentsDelta { index: u32, arguments: String },
     /// The stream is complete.
     Done {
         stop_reason: StopReason,
-        usage: Option<Usage>,
+        usage:       Option<Usage>,
     },
 }

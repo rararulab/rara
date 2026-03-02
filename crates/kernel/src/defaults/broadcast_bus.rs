@@ -41,7 +41,5 @@ impl EventBus for BroadcastEventBus {
         let _ = self.sender.send(event);
     }
 
-    async fn subscribe(&self, _filter: EventFilter) -> EventStream {
-        self.sender.subscribe()
-    }
+    async fn subscribe(&self, _filter: EventFilter) -> EventStream { self.sender.subscribe() }
 }

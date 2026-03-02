@@ -31,19 +31,17 @@ pub mod openai;
 pub mod stream;
 pub mod types;
 
-pub use driver::{LlmDriver, LlmDriverRef};
-pub use openai::OpenAiDriver;
-pub use stream::StreamDelta;
-pub use types::*;
-
 // --- Legacy re-exports for backward compatibility ---
 // The old llm.rs had these types. Keep them available until consumers migrate.
-
 use std::pin::Pin;
 
 use async_trait::async_trait;
+pub use driver::{LlmDriver, LlmDriverRef};
 use futures::Stream;
+pub use openai::OpenAiDriver;
 use serde::{Deserialize, Serialize};
+pub use stream::StreamDelta;
+pub use types::*;
 
 pub use crate::channel::types::ToolCall;
 use crate::model::ModelCapabilities;
@@ -64,11 +62,11 @@ pub enum FinishReason {
 /// New code should use [`CompletionRequest`] instead.
 #[derive(Debug, Clone)]
 pub struct ChatRequest {
-    pub model: String,
+    pub model:         String,
     pub system_prompt: String,
-    pub messages: Vec<crate::channel::types::ChatMessage>,
-    pub tools: Option<Vec<ToolDefinition>>,
-    pub temperature: Option<f32>,
+    pub messages:      Vec<crate::channel::types::ChatMessage>,
+    pub tools:         Option<Vec<ToolDefinition>>,
+    pub temperature:   Option<f32>,
 }
 
 /// A complete chat completion response (legacy).
@@ -76,10 +74,10 @@ pub struct ChatRequest {
 /// New code should use [`CompletionResponse`] instead.
 #[derive(Debug, Clone)]
 pub struct ChatResponse {
-    pub content: Option<String>,
-    pub tool_calls: Vec<ToolCall>,
+    pub content:       Option<String>,
+    pub tool_calls:    Vec<ToolCall>,
     pub finish_reason: FinishReason,
-    pub usage: Option<Usage>,
+    pub usage:         Option<Usage>,
 }
 
 /// A streaming delta from a chat completion (legacy).
@@ -87,8 +85,8 @@ pub struct ChatResponse {
 /// New code should use [`StreamDelta`] instead.
 #[derive(Debug, Clone)]
 pub struct ChatStreamDelta {
-    pub content: Option<String>,
-    pub tool_calls: Vec<ToolCall>,
+    pub content:       Option<String>,
+    pub tool_calls:    Vec<ToolCall>,
     pub finish_reason: Option<FinishReason>,
 }
 

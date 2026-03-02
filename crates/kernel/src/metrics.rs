@@ -250,16 +250,13 @@ mod tests {
         }));
 
         let turn_duration = metric_family("kernel_turn_duration_seconds");
-        assert!(turn_duration
-            .get_metric()
-            .iter()
-            .any(|metric| {
-                metric
-                    .get_histogram()
-                    .as_ref()
-                    .map_or(0, prometheus::proto::Histogram::sample_count)
-                    >= 1
-            }));
+        assert!(turn_duration.get_metric().iter().any(|metric| {
+            metric
+                .get_histogram()
+                .as_ref()
+                .map_or(0, prometheus::proto::Histogram::sample_count)
+                >= 1
+        }));
 
         let turn_tool_calls = metric_family("kernel_turn_tool_calls_total");
         assert!(turn_tool_calls.get_metric().iter().any(|metric| {
@@ -281,27 +278,21 @@ mod tests {
         }));
 
         let turn_tokens_input = metric_family("kernel_turn_tokens_input_total");
-        assert!(turn_tokens_input
-            .get_metric()
-            .iter()
-            .any(|metric| {
-                metric
-                    .get_counter()
-                    .as_ref()
-                    .map_or(0.0, prometheus::proto::Counter::value)
-                    >= 11.0
-            }));
+        assert!(turn_tokens_input.get_metric().iter().any(|metric| {
+            metric
+                .get_counter()
+                .as_ref()
+                .map_or(0.0, prometheus::proto::Counter::value)
+                >= 11.0
+        }));
 
         let turn_tokens_output = metric_family("kernel_turn_tokens_output_total");
-        assert!(turn_tokens_output
-            .get_metric()
-            .iter()
-            .any(|metric| {
-                metric
-                    .get_counter()
-                    .as_ref()
-                    .map_or(0.0, prometheus::proto::Counter::value)
-                    >= 23.0
-            }));
+        assert!(turn_tokens_output.get_metric().iter().any(|metric| {
+            metric
+                .get_counter()
+                .as_ref()
+                .map_or(0.0, prometheus::proto::Counter::value)
+                >= 23.0
+        }));
     }
 }

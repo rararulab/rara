@@ -357,15 +357,16 @@ impl Egress {
             .into_iter()
             .filter(|p| p.platform == "telegram")
             .filter_map(|p| {
-                p.platform_user_id.parse::<i64>().ok().map(|chat_id| {
-                    Endpoint {
+                p.platform_user_id
+                    .parse::<i64>()
+                    .ok()
+                    .map(|chat_id| Endpoint {
                         channel_type: ChannelType::Telegram,
                         address:      EndpointAddress::Telegram {
                             chat_id,
                             thread_id: None,
                         },
-                    }
-                })
+                    })
             })
             .collect();
 

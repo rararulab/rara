@@ -62,10 +62,7 @@ use crate::{
     },
     kv::KvBackendRef,
     memory::MemoryRef,
-    process::{
-        AgentId, ProcessState, ProcessTable, SessionId,
-        agent_registry::AgentRegistryRef,
-    },
+    process::{AgentId, ProcessState, ProcessTable, SessionId, agent_registry::AgentRegistryRef},
     provider::ProviderRegistryRef,
     security::SecurityRef,
     session::SessionRepoRef,
@@ -95,7 +92,8 @@ pub struct KernelConfig {
     pub memory_quota_per_agent: usize,
 }
 
-/// Shared reference to a [`SettingsProvider`](rara_domain_shared::settings::SettingsProvider).
+/// Shared reference to a
+/// [`SettingsProvider`](rara_domain_shared::settings::SettingsProvider).
 pub type SettingsRef = Arc<dyn rara_domain_shared::settings::SettingsProvider>;
 
 /// The unified agent orchestrator.
@@ -116,50 +114,50 @@ pub struct Kernel {
     config: KernelConfig,
     // -- Core subsystems (previously in KernelInner) -----------------------
     /// The global process table tracking all running agents.
-    process_table:     Arc<ProcessTable>,
+    process_table: Arc<ProcessTable>,
     /// Global semaphore limiting total concurrent agent processes.
-    global_semaphore:  Arc<Semaphore>,
+    global_semaphore: Arc<Semaphore>,
     /// Multi-provider LLM registry with per-agent overrides.
     provider_registry: ProviderRegistryRef,
     /// Global tool registry (spawned agents get filtered subsets).
-    tool_registry:     ToolRegistryRef,
+    tool_registry: ToolRegistryRef,
     /// 3-layer memory (not used for cross-agent KV — see shared_kv).
-    memory:            MemoryRef,
+    memory: MemoryRef,
     /// Event bus for publishing kernel events.
-    event_bus:         EventBusRef,
+    event_bus: EventBusRef,
     /// Unified security subsystem (auth + authz + approval).
-    security:          SecurityRef,
+    security: SecurityRef,
     /// Agent registry for looking up named agent definitions.
-    agent_registry:    AgentRegistryRef,
+    agent_registry: AgentRegistryRef,
     /// Cross-agent shared key-value store (trait-based, swappable backend).
-    shared_kv:         KvBackendRef,
+    shared_kv: KvBackendRef,
     /// Unified audit subsystem (logging + tool call recording).
-    audit:             AuditRef,
+    audit: AuditRef,
     /// Session repository for conversation history.
-    session_repo:      SessionRepoRef,
+    session_repo: SessionRepoRef,
     /// Flat KV settings provider for runtime configuration.
-    settings:          SettingsRef,
+    settings: SettingsRef,
     /// Inter-agent pipe registry for streaming data between agents.
-    pipe_registry:     PipeRegistry,
+    pipe_registry: PipeRegistry,
     /// Device registry for hot-pluggable devices (MCP servers, APIs, etc.).
-    device_registry:   DeviceRegistryRef,
+    device_registry: DeviceRegistryRef,
     // -- I/O subsystem -----------------------------------------------------
     /// Ephemeral stream hub for real-time token deltas.
-    stream_hub:        StreamHubRef,
+    stream_hub: StreamHubRef,
     /// Ingress pipeline for adapters to push inbound messages.
-    ingress_pipeline:  IngressPipelineRef,
+    ingress_pipeline: IngressPipelineRef,
     /// Per-user endpoint registry (tracks connected channels).
     endpoint_registry: EndpointRegistryRef,
     /// Registered egress adapters (mutable before start, consumed by start).
     pub(crate) egress_adapters: HashMap<ChannelType, EgressAdapterRef>,
     /// Unified event queue for all kernel interactions.
-    event_queue:       EventQueueRef,
+    event_queue: EventQueueRef,
     /// Sharded event queue for multi-processor event loop.
     /// The `event_queue` field points to the same object (via `Arc<dyn
     /// EventQueue>`).
-    sharded_queue:     ShardedQueueRef,
+    sharded_queue: ShardedQueueRef,
     /// When this kernel was created (for uptime calculation).
-    started_at:        Timestamp,
+    started_at: Timestamp,
 }
 
 impl Kernel {
@@ -316,9 +314,7 @@ impl Kernel {
     pub fn audit(&self) -> &AuditRef { &self.audit }
 
     /// Access the approval manager.
-    pub fn approval(&self) -> &Arc<crate::approval::ApprovalManager> {
-        self.security.approval()
-    }
+    pub fn approval(&self) -> &Arc<crate::approval::ApprovalManager> { self.security.approval() }
 
     /// Access the unified security subsystem.
     pub fn security(&self) -> &SecurityRef { &self.security }

@@ -23,13 +23,15 @@ use std::sync::Arc;
 pub type AuditRef = Arc<AuditSubsystem>;
 
 use crate::{
-    audit::{AuditEvent, AuditFilter, AuditLog, InMemoryAuditLog, NoopToolCallRecorder, ToolCallRecorder},
+    audit::{
+        AuditEvent, AuditFilter, AuditLog, InMemoryAuditLog, NoopToolCallRecorder, ToolCallRecorder,
+    },
     process::AgentId,
 };
 
 /// Unified audit subsystem — event logging and tool call recording.
 pub struct AuditSubsystem {
-    audit_log: Arc<dyn AuditLog>,
+    audit_log:          Arc<dyn AuditLog>,
     tool_call_recorder: Arc<dyn ToolCallRecorder>,
 }
 
@@ -38,13 +40,14 @@ impl AuditSubsystem {
         audit_log: Arc<dyn AuditLog>,
         tool_call_recorder: Arc<dyn ToolCallRecorder>,
     ) -> Self {
-        Self { audit_log, tool_call_recorder }
+        Self {
+            audit_log,
+            tool_call_recorder,
+        }
     }
 
     /// Record a structured audit event (fire-and-forget).
-    pub fn record(&self, event: AuditEvent) {
-        crate::audit::record_async(&self.audit_log, event);
-    }
+    pub fn record(&self, event: AuditEvent) { crate::audit::record_async(&self.audit_log, event); }
 
     /// Record a tool call invocation.
     pub async fn record_tool_call(
@@ -67,19 +70,15 @@ impl AuditSubsystem {
     }
 
     /// Access the raw audit log.
-    pub fn audit_log(&self) -> &Arc<dyn AuditLog> {
-        &self.audit_log
-    }
+    pub fn audit_log(&self) -> &Arc<dyn AuditLog> { &self.audit_log }
 
     /// Access the tool call recorder.
-    pub fn tool_call_recorder(&self) -> &Arc<dyn ToolCallRecorder> {
-        &self.tool_call_recorder
-    }
+    pub fn tool_call_recorder(&self) -> &Arc<dyn ToolCallRecorder> { &self.tool_call_recorder }
 
     /// Create a no-op audit subsystem for testing.
     pub fn noop() -> Self {
         Self {
-            audit_log: Arc::new(InMemoryAuditLog::default()),
+            audit_log:          Arc::new(InMemoryAuditLog::default()),
             tool_call_recorder: Arc::new(NoopToolCallRecorder),
         }
     }
