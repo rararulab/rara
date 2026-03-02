@@ -23,7 +23,7 @@ use anyhow::{Context, Result};
 use oauth2::{
     AccessToken, EmptyExtraTokenFields, RefreshToken, Scope, TokenResponse, basic::BasicTokenType,
 };
-use rara_keyring_store::{DefaultKeyringStore, KeyringStore};
+use rara_keyring_store::{KeyringStore, KeyringStoreRef};
 use rmcp::transport::auth::{AuthorizationManager, OAuthTokenResponse};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -54,6 +54,7 @@ impl OAuthPersistor {
         url: S,
         authorization_manager: Arc<Mutex<AuthorizationManager>>,
         store_mode: OAuthCredentialsStoreMode,
+        store: KeyringStoreRef,
         initial_credentials: Option<StoredOAuthTokens>,
     ) -> Self {
         Self {
@@ -62,6 +63,7 @@ impl OAuthPersistor {
                 url: url.as_ref().to_owned(),
                 authorization_manager,
                 store_mode,
+                store,
                 last_credentials: Mutex::new(initial_credentials),
             }),
         }
@@ -122,7 +124,7 @@ impl OAuthPersistor {
         };
 
         if last.as_ref() != Some(&stored) {
-            stored.save(self.inner.store_mode)?;
+            stored.save(self.inner.store_mode, &*self.inner.store).await?;
             *last = Some(stored);
         }
 
@@ -138,7 +140,10 @@ impl OAuthPersistor {
                 &self.inner.server_name,
                 &self.inner.url,
                 self.inner.store_mode,
-            ) {
+                &*self.inner.store,
+            )
+            .await
+            {
                 warn!(
                     "failed to remove OAuth tokens for server {}: {error}",
                     self.inner.server_name
@@ -191,6 +196,7 @@ struct OAuthPersistorInner {
     url:                   String,
     authorization_manager: Arc<Mutex<AuthorizationManager>>,
     store_mode:            OAuthCredentialsStoreMode,
+    store:                 KeyringStoreRef,
     last_credentials:      Mutex<Option<StoredOAuthTokens>>,
 }
 
@@ -254,41 +260,50 @@ impl StoredOAuthTokens {
     /// - `File`    — only look in `<config_dir>/.credentials.json`.
     /// - `Keyring` — only look in the OS keyring (fail if unavailable).
     #[tracing::instrument(level = "debug")]
-    pub(crate) fn load(
+    pub(crate) async fn load(
         server_name: &str,
         url: &str,
         store_mode: OAuthCredentialsStoreMode,
+        store: &dyn KeyringStore,
     ) -> Result<Option<Self>> {
         match store_mode {
             OAuthCredentialsStoreMode::Auto => {
-                // Prefer the keyring; silently fall back to the file store
-                // when the keyring is unavailable or returns nothing.
-                match Self::load_from_keyring(server_name, url) {
+                // Prefer the credential store; silently fall back to the file
+                // store when the credential store is unavailable or returns
+                // nothing.
+                match Self::load_from_store(server_name, url, store).await {
                     Ok(Some(tokens)) => Ok(Some(tokens)),
                     Ok(None) | Err(_) => Self::load_from_file(server_name, url),
                 }
             }
             OAuthCredentialsStoreMode::File => Self::load_from_file(server_name, url),
-            OAuthCredentialsStoreMode::Keyring => Self::load_from_keyring(server_name, url)
-                .context("failed to read OAuth tokens from keyring"),
+            OAuthCredentialsStoreMode::Keyring => {
+                Self::load_from_store(server_name, url, store)
+                    .await
+                    .context("failed to read OAuth tokens from credential store")
+            }
         }
     }
 
-    /// Load tokens from the OS keyring. The credential is stored as a JSON
-    /// blob keyed by `(KEYRING_SERVICE, store_key)`.
-    fn load_from_keyring(server_name: &str, url: &str) -> Result<Option<Self>> {
-        let store = DefaultKeyringStore;
+    /// Load tokens from the credential store. The credential is stored as a
+    /// JSON blob keyed by `(KEYRING_SERVICE, store_key)`.
+    async fn load_from_store(
+        server_name: &str,
+        url: &str,
+        store: &dyn KeyringStore,
+    ) -> Result<Option<Self>> {
         let account = Self::store_key(server_name, url)?;
 
         let Some(json) = store
             .load(KEYRING_SERVICE, &account)
-            .context("keyring load failed")?
+            .await
+            .context("credential store load failed")?
         else {
             return Ok(None);
         };
 
         let mut tokens: Self =
-            serde_json::from_str(&json).context("failed to parse OAuth tokens from keyring")?;
+            serde_json::from_str(&json).context("failed to parse OAuth tokens from store")?;
         tokens.refresh_expires_in();
         Ok(Some(tokens))
     }
@@ -342,27 +357,33 @@ impl StoredOAuthTokens {
     ///
     /// * `store_mode` — Where to write: keyring, file, or auto (try keyring
     ///   first, fall back to file).
-    #[tracing::instrument(skip(self), fields(server = %self.server_name), level = "debug")]
-    pub(crate) fn save(&self, store_mode: OAuthCredentialsStoreMode) -> Result<()> {
+    #[tracing::instrument(skip(self, store), fields(server = %self.server_name), level = "debug")]
+    pub(crate) async fn save(
+        &self,
+        store_mode: OAuthCredentialsStoreMode,
+        store: &dyn KeyringStore,
+    ) -> Result<()> {
         match store_mode {
-            OAuthCredentialsStoreMode::Auto => {
-                self.save_to_keyring().or_else(|_| self.save_to_file())
-            }
+            OAuthCredentialsStoreMode::Auto => match self.save_to_store(store).await {
+                Ok(()) => Ok(()),
+                Err(_) => self.save_to_file(),
+            },
             OAuthCredentialsStoreMode::File => self.save_to_file(),
             OAuthCredentialsStoreMode::Keyring => self
-                .save_to_keyring()
-                .context("failed to save OAuth tokens to keyring"),
+                .save_to_store(store)
+                .await
+                .context("failed to save OAuth tokens to credential store"),
         }
     }
 
-    /// Serialize and store these tokens in the OS keyring.
-    fn save_to_keyring(&self) -> Result<()> {
-        let store = DefaultKeyringStore;
+    /// Serialize and store these tokens in the credential store.
+    async fn save_to_store(&self, store: &dyn KeyringStore) -> Result<()> {
         let account = Self::store_key(&self.server_name, &self.url)?;
         let json = serde_json::to_string(self).context("failed to serialize OAuth tokens")?;
         store
             .save(KEYRING_SERVICE, &account, &json)
-            .context("keyring save failed")
+            .await
+            .context("credential store save failed")
     }
 
     /// Upsert these tokens into the credentials file on disk.
@@ -383,31 +404,39 @@ impl StoredOAuthTokens {
     /// * `url`         — The MCP server endpoint URL.
     /// * `store_mode`  — Where to delete from: keyring, file, or auto (both).
     #[tracing::instrument(level = "debug")]
-    pub(crate) fn delete(
+    pub(crate) async fn delete(
         server_name: &str,
         url: &str,
         store_mode: OAuthCredentialsStoreMode,
+        store: &dyn KeyringStore,
     ) -> Result<()> {
         match store_mode {
             OAuthCredentialsStoreMode::Auto => {
                 // Best-effort removal from both stores.
-                let _ = Self::delete_from_keyring(server_name, url);
+                let _ = Self::delete_from_store(server_name, url, store).await;
                 Self::delete_from_file(server_name, url)
             }
             OAuthCredentialsStoreMode::File => Self::delete_from_file(server_name, url),
-            OAuthCredentialsStoreMode::Keyring => Self::delete_from_keyring(server_name, url)
-                .context("failed to delete OAuth tokens from keyring"),
+            OAuthCredentialsStoreMode::Keyring => {
+                Self::delete_from_store(server_name, url, store)
+                    .await
+                    .context("failed to delete OAuth tokens from credential store")
+            }
         }
     }
 
-    /// Delete tokens from the OS keyring. Returns `Ok(())` regardless of
-    /// whether an entry was actually present.
-    fn delete_from_keyring(server_name: &str, url: &str) -> Result<()> {
-        let store = DefaultKeyringStore;
+    /// Delete tokens from the credential store. Returns `Ok(())` regardless
+    /// of whether an entry was actually present.
+    async fn delete_from_store(
+        server_name: &str,
+        url: &str,
+        store: &dyn KeyringStore,
+    ) -> Result<()> {
         let account = Self::store_key(server_name, url)?;
         store
             .delete(KEYRING_SERVICE, &account)
-            .context("keyring delete failed")?;
+            .await
+            .context("credential store delete failed")?;
         Ok(())
     }
 

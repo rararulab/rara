@@ -26,6 +26,8 @@ use tracing::{info, instrument, warn};
 
 #[cfg(feature = "k8s")]
 use crate::manager::managed_client::PodRegistry;
+use rara_keyring_store::KeyringStoreRef;
+
 use crate::{
     manager::{
         erm::ElicitationRequestManager,
@@ -64,17 +66,23 @@ struct McpManagerInner {
     elicitation_requests: ElicitationRequestManager,
     registry:             McpRegistryRef,
     store_mode:           OAuthCredentialsStoreMode,
+    store:                KeyringStoreRef,
 }
 
 impl McpManager {
     #[instrument(skip_all)]
-    pub fn new(registry: McpRegistryRef, store_mode: OAuthCredentialsStoreMode) -> Self {
+    pub fn new(
+        registry: McpRegistryRef,
+        store_mode: OAuthCredentialsStoreMode,
+        store: KeyringStoreRef,
+    ) -> Self {
         Self {
             inner: Arc::new(RwLock::new(McpManagerInner {
                 clients: HashMap::new(),
                 elicitation_requests: ElicitationRequestManager::default(),
                 registry,
                 store_mode,
+                store,
             })),
             log_buffer: McpLogBuffer::default(),
             #[cfg(feature = "k8s")]
@@ -132,15 +140,20 @@ impl McpManager {
     pub async fn start_server(&self, name: &str, config: &McpServerConfig) -> Result<()> {
         self.stop_server(name).await;
 
-        let (store_mode, erm) = {
+        let (store_mode, store, erm) = {
             let inner = self.inner.read().await;
-            (inner.store_mode, inner.elicitation_requests.clone())
+            (
+                inner.store_mode,
+                inner.store.clone(),
+                inner.elicitation_requests.clone(),
+            )
         };
 
         let managed = AsyncManagedClient::new(
             name,
             config.clone(),
             store_mode,
+            store,
             erm,
             self.log_buffer.clone(),
             #[cfg(feature = "k8s")]

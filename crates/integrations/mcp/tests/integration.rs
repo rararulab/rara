@@ -9,6 +9,10 @@ use anyhow::Result;
 use rara_mcp::{
     client::RmcpClient, manager::log_buffer::McpLogBuffer, oauth::OAuthCredentialsStoreMode,
 };
+
+fn default_store() -> std::sync::Arc<dyn rara_keyring_store::KeyringStore> {
+    std::sync::Arc::new(rara_keyring_store::DefaultKeyringStore)
+}
 use rmcp::model::{ClientInfo, ReadResourceRequestParams};
 
 mod test_server;
@@ -277,6 +281,7 @@ async fn new_http_test_client() -> Result<(RmcpClient, tokio_util::sync::Cancell
         None,
         None,
         OAuthCredentialsStoreMode::default(),
+        default_store(),
     )
     .await?;
 
@@ -305,6 +310,7 @@ async fn test_http_initialize() -> Result<()> {
         None,
         None,
         OAuthCredentialsStoreMode::default(),
+        default_store(),
     )
     .await?;
 
