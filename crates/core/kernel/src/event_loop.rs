@@ -1050,6 +1050,10 @@ impl Kernel {
             metrics.touch().await;
         }
 
+        // Track whether the turn errored so we can choose the right terminal
+        // state below (Completed vs Failed).
+        let mut turn_failed = false;
+
         match result {
             Ok(turn) if !turn.text.is_empty() => {
                 span.record("success", true);
@@ -1153,16 +1157,10 @@ impl Kernel {
             }
             Err(err_msg) => {
                 span.record("success", false);
+                turn_failed = err_msg != "interrupted by user";
                 info!(agent_id = %agent_id, error = %err_msg, "turn completed (error)");
 
                 if err_msg != "interrupted by user" {
-                    // NOTE: We intentionally do NOT set_state(Failed) here.
-                    // The unconditional set_state(Waiting) below makes errors
-                    // recoverable (process can accept new messages). Setting
-                    // Failed first would create a race window where a parallel
-                    // processor (handling UserMessage) observes the terminal
-                    // Failed state, removes the process from the table, and
-                    // spawns a replacement — orphaning the runtime.
                     crate::audit::record_async(
                         &inner.audit_log,
                         AuditEvent {
@@ -1197,19 +1195,41 @@ impl Kernel {
             }
         }
 
-        // Set state to Idle (turn done, no pending work).
+        // Short-lived process model: complete the process after each turn.
+        // The next user message will trigger a respawn via Path 2 (session
+        // addressing detects terminal state, clears binding, falls through
+        // to Path 3 which spawns a new process). Session history is loaded
+        // from SessionRepo on respawn.
+
+        // Drain pause buffer before completing — if the user sent messages
+        // while the turn was running, we need to re-inject them so they
+        // trigger a new process spawn via the session addressing path.
+        let buffered = if let Some(mut rt) = runtimes.get_mut(&agent_id) {
+            std::mem::take(&mut rt.pause_buffer)
+        } else {
+            vec![]
+        };
+
+        // Set terminal state (sets finished_at, increments counter).
+        let terminal_state = if turn_failed {
+            ProcessState::Failed
+        } else {
+            ProcessState::Completed
+        };
         let _ = inner
             .process_table
-            .set_state(agent_id, ProcessState::Idle);
+            .set_state(agent_id, terminal_state);
 
-        // Drain pause buffer: re-inject buffered events into the queue.
-        if let Some(mut rt) = runtimes.get_mut(&agent_id) {
-            let buffered = std::mem::take(&mut rt.pause_buffer);
-            drop(rt); // Release the lock before pushing to queue.
-            for event in buffered {
-                if let Err(e) = self.event_queue().try_push(event) {
-                    warn!(%e, "failed to re-inject buffered event");
-                }
+        // Remove runtime — drops global semaphore permit, cancellation
+        // tokens, and conversation buffer. The process entry stays in
+        // ProcessTable for observability (TTL reaper handles cleanup).
+        // Also notifies parent if this is a subagent (via ChildCompleted).
+        self.cleanup_process(agent_id, runtimes).await;
+
+        // Re-inject buffered events so they trigger respawn via Path 2.
+        for event in buffered {
+            if let Err(e) = self.event_queue().try_push(event) {
+                warn!(%e, "failed to re-inject buffered event");
             }
         }
     }

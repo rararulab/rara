@@ -135,7 +135,7 @@ fn build_kernel(tools: Vec<Arc<dyn AgentTool>>) -> (Arc<Kernel>, CancellationTok
     (arc, cancel)
 }
 
-/// Poll until the process reaches `Waiting` state and has a result, or timeout.
+/// Poll until the process reaches `Completed` state and has a result, or timeout.
 async fn wait_for_result(
     kernel: &Kernel,
     agent_id: AgentId,
@@ -155,7 +155,7 @@ async fn wait_for_result(
             );
         }
         if let Some(p) = kernel.process_table().get(agent_id) {
-            if matches!(p.state, ProcessState::Idle | ProcessState::Completed) {
+            if matches!(p.state, ProcessState::Completed) {
                 if let Some(result) = p.result {
                     return result;
                 }
@@ -269,11 +269,11 @@ async fn test_process_state_transitions() {
     // Wait for message processing to complete.
     let _result = wait_for_result(&kernel, agent_id, 60).await;
 
-    // After processing, state should be Waiting (waiting for next message).
+    // After processing, state should be Completed (short-lived process model).
     let process = kernel.process_table().get(agent_id).unwrap();
     assert!(
-        matches!(process.state, ProcessState::Idle),
-        "expected Waiting state after processing, got {:?}",
+        matches!(process.state, ProcessState::Completed),
+        "expected Completed state after processing, got {:?}",
         process.state
     );
 
@@ -408,18 +408,28 @@ async fn test_multi_turn_via_event_queue() {
         .await
         .expect("failed to push second message");
 
-    // Wait for second turn to complete — result should mention "Alice".
+    // With the short-lived process model, the second message triggers a
+    // respawn (new AgentId). We scan all processes for a Completed process
+    // named "multi-turn-agent" whose result mentions "Alice".
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
     loop {
         if tokio::time::Instant::now() > deadline {
             panic!("timed out waiting for second turn");
         }
-        if let Some(p) = kernel.process_table().get(agent_id) {
-            if matches!(p.state, ProcessState::Idle) {
-                if let Some(ref result) = p.result {
-                    if result.output.to_lowercase().contains("alice") {
-                        cancel.cancel();
-                        return;
+        let processes = kernel.list_processes().await;
+        for p in &processes {
+            if p.manifest_name == "multi-turn-agent"
+                && matches!(p.state, ProcessState::Completed)
+                && p.agent_id != agent_id
+            {
+                // A new process completed — check if the kernel stored
+                // the result in the process table.
+                if let Some(proc) = kernel.process_table().get(p.agent_id) {
+                    if let Some(ref result) = proc.result {
+                        if result.output.to_lowercase().contains("alice") {
+                            cancel.cancel();
+                            return;
+                        }
                     }
                 }
             }
@@ -489,7 +499,7 @@ async fn test_spawn_named_agent() {
         .await
         .expect("spawn_named failed");
 
-    // Wait for the process to reach Waiting (turn processed, even if empty).
+    // Wait for the process to reach Completed (short-lived process model).
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
     loop {
         if tokio::time::Instant::now() > deadline {
@@ -498,11 +508,11 @@ async fn test_spawn_named_agent() {
                 .get(agent_id)
                 .map(|p| format!("{:?}", p.state))
                 .unwrap_or_else(|| "not found".to_string());
-            panic!("timed out waiting for named agent to reach Waiting (state: {state})");
+            panic!("timed out waiting for named agent to reach Completed (state: {state})");
         }
         if let Some(p) = kernel.process_table().get(agent_id) {
             match p.state {
-                ProcessState::Idle | ProcessState::Completed => break,
+                ProcessState::Completed => break,
                 ProcessState::Failed => panic!("named agent failed"),
                 _ => {}
             }
@@ -512,8 +522,8 @@ async fn test_spawn_named_agent() {
 
     let process = kernel.process_table().get(agent_id).unwrap();
     assert!(
-        matches!(process.state, ProcessState::Idle | ProcessState::Completed),
-        "named agent should reach Waiting after processing"
+        matches!(process.state, ProcessState::Completed),
+        "named agent should reach Completed after processing"
     );
 
     cancel.cancel();

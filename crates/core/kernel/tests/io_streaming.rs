@@ -136,7 +136,7 @@ fn start_test_kernel(
     (arc, cancel)
 }
 
-/// Poll until the process reaches `Waiting` state and has a result, or timeout.
+/// Poll until the process reaches `Completed` state and has a result, or timeout.
 async fn wait_for_result(
     kernel: &rara_kernel::Kernel,
     agent_id: AgentId,
@@ -155,7 +155,7 @@ async fn wait_for_result(
             );
         }
         if let Some(p) = kernel.process_table().get(agent_id) {
-            if matches!(p.state, ProcessState::Idle | ProcessState::Completed) {
+            if matches!(p.state, ProcessState::Completed) {
                 if let Some(result) = p.result {
                     return result;
                 }
