@@ -44,6 +44,12 @@ func Run(ctx *pulumi.Context) error {
 		return err
 	}
 
+	// Keel — automatic image update controller
+	_, err = DeployKeel(ctx, cfg)
+	if err != nil {
+		return err
+	}
+
 	// Consul KV seeding (depends on everything)
 	consulDeps := []pulumi.Resource{
 		ns,

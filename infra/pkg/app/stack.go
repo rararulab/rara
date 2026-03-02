@@ -30,6 +30,11 @@ func Run(ctx *pulumi.Context) error {
 			Name:      pulumi.String(fmt.Sprintf("%s-backend", prefix)),
 			Namespace: pulumi.String(ns),
 			Labels:    pulumi.ToStringMap(backendLabels),
+			Annotations: pulumi.StringMap{
+				"keel.sh/policy":       pulumi.String("force"),
+				"keel.sh/trigger":      pulumi.String("poll"),
+				"keel.sh/pollSchedule": pulumi.String("@every 2m"),
+			},
 		},
 		Spec: &appsv1.DeploymentSpecArgs{
 			Replicas: replicas,
@@ -140,6 +145,11 @@ func Run(ctx *pulumi.Context) error {
 			Name:      pulumi.String(fmt.Sprintf("%s-frontend", prefix)),
 			Namespace: pulumi.String(ns),
 			Labels:    pulumi.ToStringMap(frontendLabels),
+			Annotations: pulumi.StringMap{
+				"keel.sh/policy":       pulumi.String("force"),
+				"keel.sh/trigger":      pulumi.String("poll"),
+				"keel.sh/pollSchedule": pulumi.String("@every 2m"),
+			},
 		},
 		Spec: &appsv1.DeploymentSpecArgs{
 			Replicas: replicas,

@@ -38,7 +38,7 @@ func LoadAppConfig(ctx *pulumi.Context) *AppConfig {
 	}
 	backendPull := cfg.Get("backend.imagePullPolicy")
 	if backendPull == "" {
-		backendPull = "IfNotPresent"
+		backendPull = "Always"
 	}
 
 	frontendRepo := cfg.Get("frontend.imageRepo")
@@ -51,7 +51,7 @@ func LoadAppConfig(ctx *pulumi.Context) *AppConfig {
 	}
 	frontendPull := cfg.Get("frontend.imagePullPolicy")
 	if frontendPull == "" {
-		frontendPull = "IfNotPresent"
+		frontendPull = "Always"
 	}
 
 	consulAddr := cfg.Get("consul.address")
