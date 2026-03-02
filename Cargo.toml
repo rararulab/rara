@@ -125,6 +125,7 @@ members = [
     "crates/integrations/mcp",
     "crates/integrations/codex-oauth",
     "crates/integrations/keyring-store",
+    "crates/integrations/pg-credential-store",
     "crates/core/agents",
     "crates/core/boot",
     "crates/core/channels",
@@ -247,6 +248,7 @@ rara-git = { path = "crates/extensions/rara-git" }
 rara-k8s = { path = "crates/integrations/k8s" }
 rara-kernel = { path = "crates/core/kernel" }
 rara-keyring-store = { path = "crates/integrations/keyring-store" }
+rara-pg-credential-store = { path = "crates/integrations/pg-credential-store" }
 rara-mcp = { path = "crates/integrations/mcp" }
 rara-memory = { path = "crates/memory" }
 rara-model = { path = "crates/rara-model" }
