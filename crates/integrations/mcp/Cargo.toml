@@ -25,7 +25,7 @@ oauth2.workspace = true
 rara-keyring-store.workspace = true
 rara-paths.workspace = true
 reqwest.workspace = true
-rmcp = { version = "^0.16", default-features = false, features = [
+rmcp = { version = "^0.17", default-features = false, features = [
     "auth",
     "base64",
     "client",
