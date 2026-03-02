@@ -86,6 +86,17 @@ impl ServerArgs {
                     otlp_export_protocol: protocol,
                     ..Default::default()
                 }
+            } else if std::env::var("KUBERNETES_SERVICE_HOST").is_ok() {
+                // Running in Kubernetes — auto-connect to Alloy OTLP collector.
+                use common_telemetry::logging::{LoggingOptions, OtlpExportProtocol};
+                tracing::info!("Kubernetes detected — auto-enabling OTLP tracing to Alloy");
+                LoggingOptions {
+                    enable_otlp_tracing: true,
+                    otlp_endpoint: Some("http://rara-infra-alloy:4318/v1/traces".to_string()),
+                    otlp_export_protocol: Some(OtlpExportProtocol::Http),
+                    log_format: common_telemetry::logging::LogFormat::Json,
+                    ..Default::default()
+                }
             } else {
                 common_telemetry::logging::LoggingOptions::default()
             };
