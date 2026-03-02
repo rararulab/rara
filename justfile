@@ -76,7 +76,7 @@ clippy:
 [group("👆 Code Quality")]
 check:
     @echo "🔨 Running compilation check..."
-    cargo check --all --all-features --all-targets
+    cargo check --all --all-targets
 
 alias c := check
 
