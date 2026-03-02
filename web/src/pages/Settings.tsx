@@ -71,6 +71,7 @@ import {
   Plus,
   Save,
   Settings2,
+  Shield,
   Sparkles,
   Trash2,
   User,
@@ -88,7 +89,7 @@ import Skills from "@/pages/Skills";
 import Agents from "@/pages/Agents";
 import McpServers from "@/pages/McpServers";
 
-type SettingsPage = "account" | "general" | "providers" | "agents" | "skills" | "mcp" | "channels" | "tools";
+type SettingsPage = "account" | "general" | "providers" | "agents" | "skills" | "mcp" | "channels" | "tools" | "security";
 type ToastState = { kind: "success" | "error"; message: string } | null;
 
 // Well-known setting keys (must match backend keys module)
@@ -125,6 +126,9 @@ const KEYS = {
   MEMORY_MEMOS_TOKEN: "memory.memos.token",
   MEMORY_HINDSIGHT_BASE_URL: "memory.hindsight.base_url",
   MEMORY_HINDSIGHT_BANK_ID: "memory.hindsight.bank_id",
+  FS_ALLOWED_DIRECTORIES: "fs.allowed_directories",
+  FS_READ_ONLY_DIRECTORIES: "fs.read_only_directories",
+  FS_DENIED_DIRECTORIES: "fs.denied_directories",
 } as const;
 
 const THEME_OPTIONS: Array<{ key: Theme; label: string; icon: ReactNode; description: string }> = [
@@ -313,7 +317,7 @@ export default function Settings() {
   const queryClient = useQueryClient();
   const [activeCategory, setActiveCategory] = useState<SettingsPage>(() => {
     const section = searchParams.get("section");
-    const allowed: SettingsPage[] = ["account", "general", "providers", "agents", "skills", "mcp", "channels", "tools"];
+    const allowed: SettingsPage[] = ["account", "general", "providers", "agents", "skills", "mcp", "channels", "tools", "security"];
     return allowed.includes(section as SettingsPage) ? (section as SettingsPage) : "general";
   });
   const [toast, setToast] = useState<ToastState>(null);
@@ -578,6 +582,7 @@ export default function Settings() {
     { id: "mcp", label: "MCP Servers", icon: <ExternalLink className="h-4 w-4" />, summary: "Tool server connections" },
     { id: "channels", label: "Channels", icon: <MessageSquare className="h-4 w-4" />, summary: "Telegram, Gmail, contacts" },
     { id: "tools", label: "Tools", icon: <Settings2 className="h-4 w-4" />, summary: "Composio, memory integrations" },
+    { id: "security", label: "Security", icon: <Shield className="h-4 w-4" />, summary: "Filesystem sandbox" },
   ];
 
   return (
@@ -1253,6 +1258,127 @@ export default function Settings() {
             />
           </>
         )}
+
+        {/* ── Security ── */}
+        {activeCategory === "security" && (
+          <>
+            <KvGroup
+              title="Filesystem Sandbox"
+              description="Control which directories agents can access. Values are JSON arrays of directory paths."
+              icon={<Shield className="h-4 w-4" />}
+              fields={[
+                { key: KEYS.FS_ALLOWED_DIRECTORIES, label: "Allowed Directories (Read/Write)", placeholder: '["/tmp/workspace", "/data/shared"]', description: "Directories where agents can read and write files" },
+                { key: KEYS.FS_READ_ONLY_DIRECTORIES, label: "Read-Only Directories", placeholder: '["/etc/config"]', description: "Directories where agents can only read files" },
+                { key: KEYS.FS_DENIED_DIRECTORIES, label: "Denied Directories", placeholder: '["/etc/secrets", "/root"]', description: "Directories that agents are explicitly blocked from accessing" },
+              ]}
+              values={draft}
+              original={original}
+              onFieldChange={handleFieldChange}
+              onSave={() => {
+                const fsKeys = [KEYS.FS_ALLOWED_DIRECTORIES, KEYS.FS_READ_ONLY_DIRECTORIES, KEYS.FS_DENIED_DIRECTORIES];
+                for (const key of fsKeys) {
+                  const val = (draft[key] ?? "").trim();
+                  if (val === "") continue;
+                  try {
+                    const parsed = JSON.parse(val);
+                    if (!Array.isArray(parsed) || !parsed.every((v: unknown) => typeof v === "string")) {
+                      setToast({ kind: "error", message: `Invalid value for ${key}: must be a JSON array of strings.` });
+                      return;
+                    }
+                  } catch {
+                    setToast({ kind: "error", message: `Invalid JSON for ${key}. Expected a JSON array like ["/path/a", "/path/b"].` });
+                    return;
+                  }
+                }
+                handleGroupSave(fsKeys, "fs-sandbox");
+              }}
+              saving={saveMutation.isPending}
+              toast={groupToasts["fs-sandbox"] ?? null}
+            />
+
+            {/* Current Status */}
+            <Card className="app-surface border-border/60">
+              <CardHeader className="pb-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
+                    <Shield className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <CardTitle className="text-base">Current Status</CardTitle>
+                    <CardDescription>Active filesystem access rules</CardDescription>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {(() => {
+                  const parseJsonArray = (key: string): string[] => {
+                    const val = (original[key] ?? "").trim();
+                    if (!val) return [];
+                    try {
+                      const parsed = JSON.parse(val);
+                      if (Array.isArray(parsed)) return parsed.filter((v): v is string => typeof v === "string");
+                    } catch { /* ignore */ }
+                    return [];
+                  };
+                  const allowed = parseJsonArray(KEYS.FS_ALLOWED_DIRECTORIES);
+                  const readOnly = parseJsonArray(KEYS.FS_READ_ONLY_DIRECTORIES);
+                  const denied = parseJsonArray(KEYS.FS_DENIED_DIRECTORIES);
+                  const hasAny = allowed.length > 0 || readOnly.length > 0 || denied.length > 0;
+
+                  if (!hasAny) {
+                    return (
+                      <p className="text-sm text-muted-foreground">
+                        No restrictions configured — agents have unrestricted file access.
+                      </p>
+                    );
+                  }
+
+                  return (
+                    <div className="space-y-3">
+                      {allowed.length > 0 && (
+                        <div className="space-y-1.5">
+                          <p className="text-xs font-medium text-muted-foreground">Allowed (Read/Write)</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {allowed.map((dir) => (
+                              <Badge key={dir} variant="outline" className="border-green-300 bg-green-50 text-green-700 dark:border-green-700 dark:bg-green-950 dark:text-green-300">
+                                {dir}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {readOnly.length > 0 && (
+                        <div className="space-y-1.5">
+                          <p className="text-xs font-medium text-muted-foreground">Read-Only</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {readOnly.map((dir) => (
+                              <Badge key={dir} variant="outline" className="border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-300">
+                                {dir}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {denied.length > 0 && (
+                        <div className="space-y-1.5">
+                          <p className="text-xs font-medium text-muted-foreground">Denied</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {denied.map((dir) => (
+                              <Badge key={dir} variant="outline" className="border-red-300 bg-red-50 text-red-700 dark:border-red-700 dark:bg-red-950 dark:text-red-300">
+                                {dir}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </CardContent>
+            </Card>
+          </>
+        )}
+
       </div>
 
       {/* Contact Dialog */}
