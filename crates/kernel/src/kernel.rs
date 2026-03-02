@@ -52,7 +52,6 @@ use crate::{
     audit_subsystem::AuditRef,
     channel::types::ChannelType,
     device_registry::{DeviceRegistry, DeviceRegistryRef},
-    error::{KernelError, Result},
     event::EventBusRef,
     event_queue::EventQueueRef,
     io::{
@@ -64,8 +63,8 @@ use crate::{
     kv::KvBackendRef,
     memory::MemoryRef,
     process::{
-        AgentId, AgentManifest, ProcessState, ProcessTable, SessionId,
-        agent_registry::AgentRegistryRef, principal::Principal,
+        AgentId, ProcessState, ProcessTable, SessionId,
+        agent_registry::AgentRegistryRef,
     },
     provider::ProviderRegistryRef,
     security::SecurityRef,
@@ -236,63 +235,6 @@ impl Kernel {
             sharded_queue,
             started_at: Timestamp::now(),
         }
-    }
-
-    /// Spawn a new agent process via the unified event queue.
-    ///
-    /// Pushes a `KernelEvent::SpawnAgent` into the event queue and waits
-    /// for the reply. The kernel generates a fresh isolated session for
-    /// the new process.
-    ///
-    /// External callers should use [`KernelHandle::spawn_with_input`] instead.
-    #[tracing::instrument(skip_all, fields(manifest_name = %manifest.name))]
-    pub(crate) async fn spawn_with_input(
-        &self,
-        manifest: AgentManifest,
-        input: String,
-        principal: Principal,
-        parent_id: Option<AgentId>,
-    ) -> Result<AgentId> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        let event = crate::unified_event::KernelEvent::SpawnAgent {
-            manifest,
-            input,
-            principal,
-            parent_id,
-            reply_tx,
-        };
-        self.event_queue
-            .push(event)
-            .await
-            .map_err(|_| KernelError::SpawnFailed {
-                message: "event queue full".to_string(),
-            })?;
-
-        reply_rx.await.map_err(|_| KernelError::SpawnFailed {
-            message: "spawn reply channel closed".to_string(),
-        })?
-    }
-
-    /// Spawn a named agent by looking up its manifest.
-    ///
-    /// External callers should use [`KernelHandle::spawn_named`] instead.
-    #[tracing::instrument(skip(self, input, principal, parent_id))]
-    pub(crate) async fn spawn_named(
-        &self,
-        agent_name: &str,
-        input: String,
-        principal: Principal,
-        parent_id: Option<AgentId>,
-    ) -> Result<AgentId> {
-        let manifest =
-            self.agent_registry
-                .get(agent_name)
-                .ok_or(KernelError::ManifestNotFound {
-                    name: agent_name.to_string(),
-                })?;
-
-        self.spawn_with_input(manifest, input, principal, parent_id)
-            .await
     }
 
     /// Access the process table for querying.
@@ -613,8 +555,9 @@ mod tests {
             noop::{NoopEventBus, NoopMemory, NoopSessionRepository, NoopSettingsProvider},
             noop_user_store::NoopUserStore,
         },
+        handle::kernel_handle::KernelHandle,
         io::stream::StreamHub,
-        process::{agent_registry::AgentRegistry, principal::Principal},
+        process::{AgentManifest, agent_registry::AgentRegistry, principal::Principal},
         provider::ProviderRegistryBuilder,
         tool::ToolRegistry,
     };
@@ -660,11 +603,11 @@ mod tests {
     fn start_test_kernel(
         max_concurrency: usize,
         child_limit: usize,
-    ) -> (Arc<Kernel>, CancellationToken) {
+    ) -> (KernelHandle, CancellationToken) {
         let kernel = make_test_kernel(max_concurrency, child_limit);
         let cancel = CancellationToken::new();
-        let (arc, _handle) = kernel.start(cancel.clone());
-        (arc, cancel)
+        let (_arc, handle) = kernel.start(cancel.clone());
+        (handle, cancel)
     }
 
     fn test_manifest(name: &str) -> AgentManifest {
@@ -1184,10 +1127,10 @@ mod tests {
     async fn test_check_guard_batch_denies_dangerous_tools() {
         let kernel = make_guarded_kernel();
         let cancel = CancellationToken::new();
-        let (kernel, _handle) = kernel.start(cancel.clone());
+        let (_kernel, handle) = kernel.start(cancel.clone());
 
         let principal = Principal::user("test-user");
-        let agent_id = kernel
+        let agent_id = handle
             .spawn_with_input(
                 test_manifest("guard-test"),
                 "hello".to_string(),
@@ -1211,7 +1154,7 @@ mod tests {
             ("another_safe".to_string(), serde_json::json!({})),
         ];
 
-        let process = kernel.process_table().get(agent_id).unwrap();
+        let process = handle.process_table().get(agent_id).unwrap();
         let event = crate::unified_event::KernelEvent::Syscall(
             crate::unified_event::Syscall::CheckGuardBatch {
                 agent_id,
@@ -1220,7 +1163,7 @@ mod tests {
                 reply_tx,
             },
         );
-        kernel.event_queue().push(event).await.unwrap();
+        handle.event_queue().push(event).await.unwrap();
 
         let verdicts = tokio::time::timeout(std::time::Duration::from_secs(2), reply_rx)
             .await
@@ -1247,10 +1190,10 @@ mod tests {
     async fn test_check_guard_batch_allows_all_safe_tools() {
         let kernel = make_guarded_kernel();
         let cancel = CancellationToken::new();
-        let (kernel, _handle) = kernel.start(cancel.clone());
+        let (_kernel, handle) = kernel.start(cancel.clone());
 
         let principal = Principal::user("test-user");
-        let agent_id = kernel
+        let agent_id = handle
             .spawn_with_input(
                 test_manifest("guard-safe-test"),
                 "hi".to_string(),
@@ -1271,7 +1214,7 @@ mod tests {
             ("grep".to_string(), serde_json::json!({"pattern": "hello"})),
         ];
 
-        let process = kernel.process_table().get(agent_id).unwrap();
+        let process = handle.process_table().get(agent_id).unwrap();
         let event = crate::unified_event::KernelEvent::Syscall(
             crate::unified_event::Syscall::CheckGuardBatch {
                 agent_id,
@@ -1280,7 +1223,7 @@ mod tests {
                 reply_tx,
             },
         );
-        kernel.event_queue().push(event).await.unwrap();
+        handle.event_queue().push(event).await.unwrap();
 
         let verdicts = tokio::time::timeout(std::time::Duration::from_secs(2), reply_rx)
             .await
@@ -1298,10 +1241,10 @@ mod tests {
     async fn test_check_guard_batch_empty_checks() {
         let kernel = make_guarded_kernel();
         let cancel = CancellationToken::new();
-        let (kernel, _handle) = kernel.start(cancel.clone());
+        let (_kernel, handle) = kernel.start(cancel.clone());
 
         let principal = Principal::user("test-user");
-        let agent_id = kernel
+        let agent_id = handle
             .spawn_with_input(
                 test_manifest("guard-empty-test"),
                 "hi".to_string(),
@@ -1316,7 +1259,7 @@ mod tests {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let checks = vec![];
 
-        let process = kernel.process_table().get(agent_id).unwrap();
+        let process = handle.process_table().get(agent_id).unwrap();
         let event = crate::unified_event::KernelEvent::Syscall(
             crate::unified_event::Syscall::CheckGuardBatch {
                 agent_id,
@@ -1325,7 +1268,7 @@ mod tests {
                 reply_tx,
             },
         );
-        kernel.event_queue().push(event).await.unwrap();
+        handle.event_queue().push(event).await.unwrap();
 
         let verdicts = tokio::time::timeout(std::time::Duration::from_secs(2), reply_rx)
             .await

@@ -684,10 +684,10 @@ mod tests {
         );
         let kernel = TestKernelBuilder::new().provider_registry(registry).build();
         let cancel = CancellationToken::new();
-        let (kernel, _handle) = kernel.start(cancel.clone());
+        let (kernel_arc, handle) = kernel.start(cancel.clone());
 
         let manifest = test_manifest();
-        let agent_id = kernel
+        let agent_id = handle
             .spawn_with_input(
                 manifest,
                 "init".to_string(),
@@ -700,7 +700,7 @@ mod tests {
         // Wait briefly for spawn to complete.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        (kernel, agent_id, cancel)
+        (kernel_arc, agent_id, cancel)
     }
 
     #[derive(Default)]
