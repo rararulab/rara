@@ -11,7 +11,7 @@ workspace = true
 anyhow = { workspace = true }
 async-openai = { workspace = true }
 async-trait = { workspace = true }
-axum = { workspace = true }
+axum = { workspace = true, features = ["ws"] }
 bon = { workspace = true }
 chrono = { workspace = true }
 derive_more = { workspace = true }

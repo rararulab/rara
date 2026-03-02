@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{
+        Path, Query, State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
+    },
     routing::get,
 };
 use rara_kernel::Kernel;
@@ -36,6 +39,10 @@ pub fn kernel_routes(kernel: Arc<Kernel>) -> Router {
         .route(
             "/api/v1/kernel/processes/{agent_id}/turns",
             get(get_process_turns),
+        )
+        .route(
+            "/api/v1/kernel/processes/{agent_id}/stream",
+            get(stream_process),
         )
         .route("/api/v1/kernel/approvals", get(list_approvals))
         .route("/api/v1/kernel/audit", get(query_audit))
@@ -91,4 +98,100 @@ async fn query_audit(
         ..Default::default()
     };
     Ok(Json(kernel.audit_query(filter).await))
+}
+
+async fn stream_process(
+    State(kernel): State<Arc<Kernel>>,
+    Path(agent_id): Path<String>,
+    ws: WebSocketUpgrade,
+) -> Result<impl axum::response::IntoResponse, ProblemDetails> {
+    let aid = rara_kernel::process::AgentId(
+        uuid::Uuid::parse_str(&agent_id)
+            .map_err(|e| ProblemDetails::bad_request(format!("invalid agent_id: {e}")))?,
+    );
+
+    let process = kernel
+        .process_table()
+        .get(aid)
+        .ok_or_else(|| {
+            ProblemDetails::not_found(
+                "Process Not Found",
+                format!("process not found: {agent_id}"),
+            )
+        })?;
+    let session_id = process.session_id.clone();
+    let stream_hub = kernel.stream_hub().clone();
+
+    Ok(ws.on_upgrade(move |socket| {
+        handle_process_stream(socket, stream_hub, session_id)
+    }))
+}
+
+async fn handle_process_stream(
+    mut socket: WebSocket,
+    stream_hub: std::sync::Arc<rara_kernel::io::stream::StreamHub>,
+    session_id: rara_kernel::process::SessionId,
+) {
+    use tokio::time::Duration;
+
+    let mut poll_interval = tokio::time::interval(Duration::from_millis(200));
+    let mut receivers: Vec<
+        tokio::sync::broadcast::Receiver<rara_kernel::io::stream::StreamEvent>,
+    > = Vec::new();
+
+    loop {
+        // If no active receivers, try to subscribe
+        if receivers.is_empty() {
+            let subs = stream_hub.subscribe_session(&session_id);
+            receivers = subs.into_iter().map(|(_, rx)| rx).collect();
+            if receivers.is_empty() {
+                // No active stream — wait and retry
+                tokio::select! {
+                    _ = poll_interval.tick() => continue,
+                    msg = socket.recv() => {
+                        match msg {
+                            Some(Ok(Message::Close(_))) | None => return,
+                            _ => continue,
+                        }
+                    }
+                }
+            }
+        }
+
+        // Drain from all receivers
+        let mut got_event = false;
+        for rx in &mut receivers {
+            match rx.try_recv() {
+                Ok(event) => {
+                    got_event = true;
+                    let json = serde_json::to_string(&event).unwrap_or_default();
+                    if socket.send(Message::Text(json.into())).await.is_err() {
+                        return;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
+                    let _ = socket
+                        .send(Message::Text(r#"{"type":"done"}"#.into()))
+                        .await;
+                    return;
+                }
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(n)) => {
+                    tracing::warn!(lagged = n, "process stream subscriber lagged");
+                }
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {}
+            }
+        }
+
+        if !got_event {
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {},
+                msg = socket.recv() => {
+                    match msg {
+                        Some(Ok(Message::Close(_))) | None => return,
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
 }
