@@ -14,8 +14,10 @@ categories.workspace = true
 workspace = true
 
 [dependencies]
+async-trait.workspace = true
 keyring = "^3.6"
 snafu.workspace = true
+sqlx.workspace = true
 tracing.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
