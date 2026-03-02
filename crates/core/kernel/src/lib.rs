@@ -43,7 +43,7 @@ pub mod guard;
 pub mod handle;
 pub mod io;
 pub mod kernel;
-pub mod unified_event;
+pub mod kv;pub mod unified_event;
 pub mod llm;
 pub mod memory;
 pub mod metrics;

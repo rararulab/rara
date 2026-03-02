@@ -86,7 +86,10 @@ pub struct BootConfig {
     pub approval: Option<Arc<ApprovalManager>>,
     /// Sharded event queue (optional — defaults to ShardedEventQueue with default config).
     pub sharded_queue: Option<Arc<rara_kernel::sharded_event_queue::ShardedEventQueue>>,
-}
+    /// KV backend (optional — defaults to in-memory DashMapKv).
+    pub kv_backend: Option<Arc<dyn rara_kernel::kv::KvBackend>>,
+    /// Tool call recorder (optional — defaults to NoopToolCallRecorder).
+    pub tool_call_recorder: Option<Arc<dyn rara_kernel::audit::ToolCallRecorder>>,}
 
 impl Default for BootConfig {
     fn default() -> Self {
@@ -117,7 +120,8 @@ impl Default for BootConfig {
             audit_log:         None,
             approval:          None,
             sharded_queue:     None,
-        }
+            kv_backend:        None,
+            tool_call_recorder: None,        }
     }
 }
 
@@ -185,7 +189,8 @@ pub fn boot(config: BootConfig) -> Kernel {
         audit_log,
         approval,
         config.sharded_queue,
-    )
+        config.kv_backend,
+        config.tool_call_recorder,    )
 }
 
 #[cfg(test)]

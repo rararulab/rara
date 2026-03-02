@@ -35,7 +35,6 @@
 
 use std::sync::Arc;
 
-use dashmap::DashMap;
 use tokio::sync::Semaphore;
 
 use crate::{
@@ -139,7 +138,8 @@ impl TestKernelBuilder {
             event_bus:              Arc::new(NoopEventBus),
             guard:                  Arc::new(NoopGuard),
             agent_registry:         Arc::new(self.agent_registry),
-            shared_kv:              DashMap::new(),
+            shared_kv:              Arc::new(crate::defaults::dashmap_kv::DashMapKv::new()),
+            tool_call_recorder:     Arc::new(crate::audit::NoopToolCallRecorder),
             memory_quota_per_agent: self.config.memory_quota_per_agent,
             user_store:             Arc::new(NoopUserStore),
             session_repo:           Arc::new(NoopSessionRepository)

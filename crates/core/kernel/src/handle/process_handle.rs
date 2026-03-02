@@ -435,7 +435,26 @@ impl ProcessHandle {
         }))
         .await
     }
-}
+
+    /// Record a tool call for audit trail (fire-and-forget).
+    pub async fn record_tool_call(
+        &self,
+        tool_name: String,
+        args: serde_json::Value,
+        result: serde_json::Value,
+        success: bool,
+        duration_ms: u64,
+    ) -> Result<()> {
+        self.syscall_push(KernelEvent::Syscall(Syscall::RecordToolCall {
+            agent_id: self.agent_id,
+            tool_name,
+            args,
+            result,
+            success,
+            duration_ms,
+        }))
+        .await
+    }}
 
 impl std::fmt::Debug for ProcessHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

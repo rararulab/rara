@@ -277,7 +277,7 @@ impl Kernel {
                 value,
                 reply_tx,
             } => {
-                let result = Self::do_mem_store(inner, agent_id, &session_id, &principal, &key, value);
+                let result = Self::do_mem_store(inner, agent_id, &session_id, &principal, &key, value).await;
                 let _ = reply_tx.send(result);
             }
 
@@ -287,11 +287,7 @@ impl Kernel {
                 reply_tx,
             } => {
                 let namespaced = format!("agent:{}:{}", agent_id.0, key);
-                let result = Ok(inner
-                    .shared_kv
-                    .get(&namespaced)
-                    .map(|v| v.value().clone()));
-                let _ = reply_tx.send(result);
+                let result = Ok(inner.shared_kv.get(&namespaced).await);                let _ = reply_tx.send(result);
             }
 
             Syscall::SharedStore {
@@ -303,7 +299,7 @@ impl Kernel {
                 reply_tx,
             } => {
                 let result =
-                    Self::do_shared_store(inner, agent_id, &principal, &scope, &key, value);
+                    Self::do_shared_store(inner, agent_id, &principal, &scope, &key, value).await;
                 let _ = reply_tx.send(result);
             }
 
@@ -315,7 +311,7 @@ impl Kernel {
                 reply_tx,
             } => {
                 let result =
-                    Self::do_shared_recall(inner, agent_id, &principal, &scope, &key);
+                    Self::do_shared_recall(inner, agent_id, &principal, &scope, &key).await;
                 let _ = reply_tx.send(result);
             }
 
@@ -475,6 +471,20 @@ impl Kernel {
                     })
                     .await;
             }
+
+            Syscall::RecordToolCall {
+                agent_id,
+                tool_name,
+                args,
+                result,
+                success,
+                duration_ms,
+            } => {
+                inner
+                    .tool_call_recorder
+                    .record_tool_call(agent_id, &tool_name, &args, &result, success, duration_ms)
+                    .await;
+            }
         }
     }
 
@@ -483,7 +493,7 @@ impl Kernel {
     // -----------------------------------------------------------------------
 
     /// Store a value in an agent's private memory namespace.
-    fn do_mem_store(
+    async fn do_mem_store(
         inner: &Arc<crate::kernel::KernelInner>,
         agent_id: AgentId,
         session_id: &SessionId,
@@ -494,15 +504,11 @@ impl Kernel {
         let namespaced = format!("agent:{}:{}", agent_id.0, key);
 
         // Check quota before inserting — only if this is a new key.
-        if !inner.shared_kv.contains_key(&namespaced) {
+        if !inner.shared_kv.contains_key(&namespaced).await {
             let max = inner.memory_quota_per_agent;
             if max > 0 {
                 let prefix = format!("agent:{}:", agent_id.0);
-                let count = inner
-                    .shared_kv
-                    .iter()
-                    .filter(|entry| entry.key().starts_with(&prefix))
-                    .count();
+                let count = inner.shared_kv.count_prefix(&prefix).await;
                 if count >= max {
                     return Err(KernelError::MemoryQuotaExceeded {
                         agent_id: agent_id.to_string(),
@@ -513,7 +519,11 @@ impl Kernel {
             }
         }
 
-        inner.shared_kv.insert(namespaced, value);
+        inner.shared_kv.set(&namespaced, value).await.map_err(|e| {
+            KernelError::Other {
+                message: format!("KV store error: {e}").into(),
+            }
+        })?;
 
         // Audit: MemoryAccess (Store)
         crate::audit::record_async(
@@ -533,7 +543,6 @@ impl Kernel {
 
         Ok(())
     }
-
     /// Validate scope permissions for shared memory operations.
     fn check_scope_permission(
         agent_id: AgentId,
@@ -575,7 +584,7 @@ impl Kernel {
     }
 
     /// Store a value in a shared (scoped) memory namespace.
-    fn do_shared_store(
+    async fn do_shared_store(
         inner: &Arc<crate::kernel::KernelInner>,
         agent_id: AgentId,
         principal: &Principal,
@@ -585,12 +594,16 @@ impl Kernel {
     ) -> Result<()> {
         Self::check_scope_permission(agent_id, principal, scope)?;
         let scoped = Self::scoped_key(scope, key);
-        inner.shared_kv.insert(scoped, value);
+        inner.shared_kv.set(&scoped, value).await.map_err(|e| {
+            KernelError::Other {
+                message: format!("KV store error: {e}").into(),
+            }
+        })?;
         Ok(())
     }
 
     /// Recall a value from a shared (scoped) memory namespace.
-    fn do_shared_recall(
+    async fn do_shared_recall(
         inner: &Arc<crate::kernel::KernelInner>,
         agent_id: AgentId,
         principal: &Principal,
@@ -599,9 +612,8 @@ impl Kernel {
     ) -> Result<Option<serde_json::Value>> {
         Self::check_scope_permission(agent_id, principal, scope)?;
         let scoped = Self::scoped_key(scope, key);
-        Ok(inner.shared_kv.get(&scoped).map(|v| v.value().clone()))
+        Ok(inner.shared_kv.get(&scoped).await)
     }
-
     // -----------------------------------------------------------------------
     // handle_user_message
     // -----------------------------------------------------------------------

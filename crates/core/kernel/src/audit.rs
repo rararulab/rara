@@ -239,6 +239,47 @@ pub fn record_async(audit_log: &Arc<dyn AuditLog>, event: AuditEvent) {
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// ToolCallRecorder — dedicated tool call audit trail
+// ---------------------------------------------------------------------------
+
+/// Records tool call invocations for audit trail.
+///
+/// Separate from [`AuditLog`] — this is a dedicated, structured recorder
+/// for tool calls that can be backed by a persistent store (e.g., AgentFS)
+/// for post-hoc analysis and debugging.
+#[async_trait]
+pub trait ToolCallRecorder: Send + Sync {
+    /// Record a completed tool call.
+    async fn record_tool_call(
+        &self,
+        agent_id: crate::process::AgentId,
+        tool_name: &str,
+        args: &serde_json::Value,
+        result: &serde_json::Value,
+        success: bool,
+        duration_ms: u64,
+    );
+}
+
+/// No-op recorder — default for tests and when no persistent backend is
+/// configured.
+pub struct NoopToolCallRecorder;
+
+#[async_trait]
+impl ToolCallRecorder for NoopToolCallRecorder {
+    async fn record_tool_call(
+        &self,
+        _agent_id: crate::process::AgentId,
+        _tool_name: &str,
+        _args: &serde_json::Value,
+        _result: &serde_json::Value,
+        _success: bool,
+        _duration_ms: u64,
+    ) {
+    }
+}
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

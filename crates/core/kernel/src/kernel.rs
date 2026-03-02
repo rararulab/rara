@@ -40,21 +40,20 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use dashmap::DashMap;
 use jiff::Timestamp;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::{
-    audit::{AuditEvent, AuditFilter, AuditLog},
+    audit::{AuditEvent, AuditFilter, AuditLog, ToolCallRecorder},
     channel::types::ChannelType,
     device_registry::DeviceRegistry,
     error::{KernelError, Result},
     event::EventBus,
     event_queue::EventQueue,
     guard::Guard,
-    io::{
+    kv::KvBackend,    io::{
         egress::{EgressAdapter, EndpointRegistry},
         ingress::{IdentityResolver, IngressPipeline, SessionResolver},
         pipe::PipeRegistry,
@@ -99,8 +98,10 @@ pub(crate) struct KernelInner {
     pub guard:                  Arc<dyn Guard>,
     /// Agent registry for looking up named agent definitions.
     pub agent_registry:         Arc<AgentRegistry>,
-    /// Cross-agent shared key-value store (simple DashMap).
-    pub shared_kv:              DashMap<String, serde_json::Value>,
+    /// Cross-agent shared key-value store (trait-based, swappable backend).
+    pub shared_kv:              Arc<dyn KvBackend>,
+    /// Tool call recorder for persistent audit trail.
+    pub tool_call_recorder:     Arc<dyn ToolCallRecorder>,
     /// Maximum number of KV entries per agent (0 = unlimited).
     pub memory_quota_per_agent: usize,
     /// User store for user management and permission validation.
@@ -282,7 +283,8 @@ impl Kernel {
         audit_log: Arc<dyn AuditLog>,
         approval: Arc<crate::approval::ApprovalManager>,
         sharded_queue: Option<Arc<crate::sharded_event_queue::ShardedEventQueue>>,
-    ) -> Self {
+        kv_backend: Option<Arc<dyn KvBackend>>,
+        tool_call_recorder: Option<Arc<dyn ToolCallRecorder>>,    ) -> Self {
         info!(
             max_concurrency = config.max_concurrency,
             default_child_limit = config.default_child_limit,
@@ -317,7 +319,12 @@ impl Kernel {
             event_bus,
             guard,
             agent_registry,
-            shared_kv: DashMap::new(),
+            shared_kv: kv_backend.unwrap_or_else(|| {
+                Arc::new(crate::defaults::dashmap_kv::DashMapKv::new())
+            }),
+            tool_call_recorder: tool_call_recorder.unwrap_or_else(|| {
+                Arc::new(crate::audit::NoopToolCallRecorder)
+            }),
             memory_quota_per_agent: config.memory_quota_per_agent,
             user_store,
             session_repo,
@@ -622,7 +629,8 @@ mod tests {
                 crate::approval::ApprovalPolicy::default(),
             )),
             None,
-        )
+            None,
+            None,        )
     }
 
     /// Create a test kernel with its event loop running, returning an Arc<Kernel>

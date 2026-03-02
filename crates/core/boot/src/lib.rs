@@ -20,7 +20,7 @@
 //! endpoint registry, ingress pipeline).
 
 pub mod audit;
-pub mod bus;
+pub mod agentfs;pub mod bus;
 pub mod coding_task;
 pub mod components;
 pub mod error;
