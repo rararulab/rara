@@ -350,6 +350,7 @@ mod tests {
                 trace:      crate::agent_turn::TurnTrace {
                     duration_ms: 0,
                     model: "test".to_string(),
+                    input_text: None,
                     iterations: vec![],
                     final_text_len: 4,
                     total_tool_calls: 0,

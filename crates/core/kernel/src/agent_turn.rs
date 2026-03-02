@@ -74,6 +74,8 @@ pub struct IterationTrace {
     pub stream_ms: u64,
     /// First 200 chars of accumulated text.
     pub text_preview: String,
+    /// Full accumulated text for this iteration (the agent's "thinking").
+    pub reasoning_text: Option<String>,
     pub tool_calls: Vec<ToolCallTrace>,
 }
 
@@ -82,6 +84,8 @@ pub struct IterationTrace {
 pub struct TurnTrace {
     pub duration_ms: u64,
     pub model: String,
+    /// The user message that triggered this turn.
+    pub input_text: Option<String>,
     pub iterations: Vec<IterationTrace>,
     pub final_text_len: usize,
     pub total_tool_calls: usize,
@@ -154,6 +158,9 @@ pub(crate) async fn run_inline_agent_loop(
 
     // Record model on the parent agent_turn span.
     tracing::Span::current().record("model", model.as_str());
+
+    // Clone user_text before it's consumed by build_user_message.
+    let input_text = user_text.clone();
 
     // Build initial messages: system + optional history + user
     let mut messages: Vec<ChatCompletionRequestMessage> = {
@@ -367,11 +374,13 @@ pub(crate) async fn run_inline_agent_loop(
                 first_token_ms,
                 stream_ms,
                 text_preview,
+                reasoning_text: Some(accumulated_text.clone()),
                 tool_calls: vec![],
             });
             let trace = TurnTrace {
                 duration_ms: turn_start.elapsed().as_millis() as u64,
                 model: model.clone(),
+                input_text: Some(input_text.clone()),
                 iterations: iteration_traces,
                 final_text_len: accumulated_text.len(),
                 total_tool_calls: tool_calls_made,
@@ -539,6 +548,7 @@ pub(crate) async fn run_inline_agent_loop(
                 first_token_ms,
                 stream_ms,
                 text_preview,
+                reasoning_text: if accumulated_text.is_empty() { None } else { Some(accumulated_text.clone()) },
                 tool_calls: tool_call_traces,
             });
         }
@@ -553,6 +563,7 @@ pub(crate) async fn run_inline_agent_loop(
     let trace = TurnTrace {
         duration_ms: turn_start.elapsed().as_millis() as u64,
         model: model.clone(),
+        input_text: Some(input_text.clone()),
         iterations: iteration_traces,
         final_text_len: last_accumulated_text.len(),
         total_tool_calls: tool_calls_made,
