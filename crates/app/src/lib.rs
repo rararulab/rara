@@ -284,7 +284,27 @@ impl AppConfig {
             Box::new(rara_kernel::defaults::noop_guard::NoopGuard),
         );
 
-        let mut kernel = rara_boot::kernel::boot(rara_boot::kernel::BootConfig {
+
+        // -- AgentFS for persistent KV + tool call audit ---------------------
+
+        let data_dir = rara_paths::data_dir();
+        let (kv_backend, tool_recorder): (
+            Option<Arc<dyn rara_kernel::kv::KvBackend>>,
+            Option<Arc<dyn rara_kernel::audit::ToolCallRecorder>>,
+        ) = match rara_boot::agentfs::init_agentfs(&data_dir).await {
+            Ok(agentfs) => {
+                let agentfs = Arc::new(agentfs);
+                let agentfs_path = data_dir.join("agentfs");
+                info!("AgentFS initialized at {}", agentfs_path.display());                (
+                    Some(Arc::new(rara_boot::agentfs::AgentFsKv::new(agentfs.clone()))),
+                    Some(Arc::new(rara_boot::agentfs::AgentFsToolCallRecorder::new(agentfs))),
+                )
+            }
+            Err(e) => {
+                warn!(error = %e, "AgentFS init failed, falling back to in-memory defaults");
+                (None, None)
+            }
+        };        let mut kernel = rara_boot::kernel::boot(rara_boot::kernel::BootConfig {
             provider_registry: rara.provider_registry.clone(),
             tool_registry:     rara.tool_registry.clone(),
             agent_registry:    Arc::new(rara_boot::manifests::load_default_registry()),
@@ -292,7 +312,8 @@ impl AppConfig {
             session_repo:      rara.session_repo.clone(),
             settings:          settings_provider.clone(),
             guard:             Some(Arc::new(path_guard)),
-            ..Default::default()
+            kv_backend,
+            tool_call_recorder: tool_recorder,            ..Default::default()
         });
 
         // -- HTTP routes (need kernel Arc for agent/kernel routes) -----------

@@ -555,6 +555,16 @@ pub(crate) async fn run_inline_agent_loop(
                 error:          err.clone(),
             });
 
+            // Fire-and-forget tool call audit recording.
+            let _ = handle
+                .record_tool_call(
+                    name.clone(),
+                    args.clone(),
+                    result.clone(),
+                    success,
+                    duration_ms,
+                )
+                .await;
             tool_call_traces.push(ToolCallTrace {
                 name: name.clone(),
                 id: id.clone(),

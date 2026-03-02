@@ -193,7 +193,16 @@ pub enum Syscall {
         event_type: String,
         payload:    serde_json::Value,
     },
-}
+
+    /// Record a tool call for audit trail (fire-and-forget, no reply channel).
+    RecordToolCall {
+        agent_id:    AgentId,
+        tool_name:   String,
+        args:        serde_json::Value,
+        result:      serde_json::Value,
+        success:     bool,
+        duration_ms: u64,
+    },}
 
 impl Syscall {
     /// Extract the primary `AgentId` from this syscall variant.
@@ -220,7 +229,7 @@ impl Syscall {
             Self::GetToolRegistry { .. } => "get_tool_registry",
             Self::ResolveProvider { .. } => "resolve_provider",
             Self::PublishEvent { .. } => "publish_event",
-        }
+            Self::RecordToolCall { .. } => "record_tool_call",        }
     }
 
     pub fn agent_id(&self) -> AgentId {
@@ -232,6 +241,7 @@ impl Syscall {
             | Self::SharedStore { agent_id, .. }
             | Self::SharedRecall { agent_id, .. }
             | Self::PublishEvent { agent_id, .. }
+            | Self::RecordToolCall { agent_id, .. }
             | Self::RequestApproval { agent_id, .. }
             | Self::CheckGuardBatch { agent_id, .. }
             | Self::GetManifest { agent_id, .. }
@@ -327,7 +337,13 @@ impl std::fmt::Debug for Syscall {
                     agent_id, event_type
                 )
             }
-        }
+            Self::RecordToolCall { agent_id, tool_name, success, .. } => {
+                write!(
+                    f,
+                    "Syscall::RecordToolCall(agent={}, tool={}, success={})",
+                    agent_id, tool_name, success
+                )
+            }        }
     }
 }
 
