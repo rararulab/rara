@@ -4,7 +4,8 @@
 # =============================================================================
 # syntax=docker/dockerfile:1
 
-FROM rara-base:latest AS chef
+ARG BASE_IMAGE=rara-base:latest
+FROM ${BASE_IMAGE} AS chef
 
 # ---------- Step 1: generate recipe (only depends on Cargo.toml/Cargo.lock) --
 FROM chef AS planner
