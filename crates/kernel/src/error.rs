@@ -74,7 +74,8 @@ pub enum KernelError {
     #[snafu(display("non-retryable error"))]
     NonRetryable,
 
-    IO {
+    #[snafu(display("{}", source))]
+    Io {
         source:   std::io::Error,
         #[snafu(implicit)]
         location: snafu::Location,
@@ -160,6 +161,15 @@ pub enum KernelError {
     /// Device health check or shutdown failed.
     #[snafu(display("device error: {message}"))]
     Device { message: String },
+
+    /// Catch-all: wraps any error with a descriptive message (via
+    /// [`snafu::ResultExt::whatever_context`]).
+    #[snafu(whatever, display("{message}"))]
+    Whatever {
+        message:                  String,
+        #[snafu(source(from(Box<dyn std::error::Error + Send + Sync>, Some)))]
+        source:                   Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
 }
 
 impl From<crate::memory::MemoryError> for KernelError {

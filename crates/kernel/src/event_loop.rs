@@ -28,6 +28,7 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use jiff::Timestamp;
+use snafu::ResultExt;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug_span, error, info, info_span, warn};
@@ -577,9 +578,7 @@ impl Kernel {
         self.shared_kv()
             .set(&namespaced, value)
             .await
-            .map_err(|e| KernelError::Other {
-                message: format!("KV store error: {e}").into(),
-            })?;
+            .whatever_context::<_, KernelError>("KV store error")?;
 
         // Audit: MemoryAccess (Store)
         self.audit().record(AuditEvent {
@@ -652,9 +651,7 @@ impl Kernel {
         self.shared_kv()
             .set(&scoped, value)
             .await
-            .map_err(|e| KernelError::Other {
-                message: format!("KV store error: {e}").into(),
-            })?;
+            .whatever_context::<_, KernelError>("KV store error")?;
         Ok(())
     }
 
@@ -1332,9 +1329,7 @@ impl Kernel {
             .session_repo()
             .create()
             .await
-            .map_err(|e| KernelError::Other {
-                message: format!("failed to create session: {e}").into(),
-            })?;
+            .whatever_context::<_, KernelError>("failed to create session")?;
         let session_id = session.key;
         // Clean start: no loaded history. Task input arrives as synthetic
         // message (below) or is injected directly into the conversation.

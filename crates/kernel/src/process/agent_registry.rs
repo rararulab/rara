@@ -21,7 +21,9 @@ use std::{
 use dashmap::DashMap;
 
 use super::AgentManifest;
-use crate::error::{KernelError, Result};
+use snafu::ResultExt;
+
+use crate::error::{IoSnafu, KernelError, Result};
 
 /// Shared reference to the [`AgentRegistry`].
 pub type AgentRegistryRef = Arc<AgentRegistry>;
@@ -83,13 +85,9 @@ impl AgentRegistry {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let yaml = serde_yaml::to_string(&manifest).map_err(|e| KernelError::Other {
-            message: format!("failed to serialize manifest: {e}").into(),
-        })?;
-        std::fs::write(&path, yaml).map_err(|e| KernelError::IO {
-            source:   e,
-            location: snafu::Location::new(file!(), line!(), 0),
-        })?;
+        let yaml = serde_yaml::to_string(&manifest)
+            .whatever_context::<_, KernelError>("failed to serialize manifest")?;
+        std::fs::write(&path, yaml).context(IoSnafu)?;
         self.custom.insert(name, manifest);
         Ok(())
     }

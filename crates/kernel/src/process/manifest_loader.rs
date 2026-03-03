@@ -24,7 +24,9 @@ use std::path::Path;
 use tracing::warn;
 
 use super::AgentManifest;
-use crate::error::{KernelError, Result};
+use snafu::ResultExt;
+
+use crate::error::{IoSnafu, Result};
 
 /// Loads [`AgentManifest`] definitions.
 ///
@@ -53,20 +55,14 @@ impl ManifestLoader {
             return Ok(0);
         }
         let mut count = 0;
-        let entries = std::fs::read_dir(dir).map_err(|e| KernelError::IO {
-            source:   e,
-            location: snafu::Location::new(file!(), line!(), 0),
-        })?;
+        let entries = std::fs::read_dir(dir).context(IoSnafu)?;
         for entry in entries.flatten() {
             let path = entry.path();
             if path
                 .extension()
                 .is_some_and(|ext| ext == "yaml" || ext == "yml")
             {
-                let content = std::fs::read_to_string(&path).map_err(|e| KernelError::IO {
-                    source:   e,
-                    location: snafu::Location::new(file!(), line!(), 0),
-                })?;
+                let content = std::fs::read_to_string(&path).context(IoSnafu)?;
                 match serde_yaml::from_str::<AgentManifest>(&content) {
                     Ok(m) => {
                         self.manifests.retain(|existing| existing.name != m.name);
