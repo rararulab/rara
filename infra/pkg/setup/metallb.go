@@ -44,16 +44,14 @@ const (
 )
 
 // InstallMetalLB installs MetalLB and configures an IP pool from the kind Docker network.
-func InstallMetalLB(ctx context.Context, rc *rest.Config) error {
-	if err := Wait("Applying MetalLB manifests", func() error {
-		return applyMetalLBManifests(ctx, rc)
-	}); err != nil {
+func InstallMetalLB(ctx context.Context, rc *rest.Config, send Sender) error {
+	send(ProgressEvent{Kind: EventInfo, Name: "Applying MetalLB manifests..."})
+	if err := applyMetalLBManifests(ctx, rc); err != nil {
 		return err
 	}
 
-	if err := Wait("Waiting for MetalLB controller", func() error {
-		return waitForMetalLBController(ctx, rc)
-	}); err != nil {
+	send(ProgressEvent{Kind: EventInfo, Name: "Waiting for MetalLB controller..."})
+	if err := waitForMetalLBController(ctx, rc); err != nil {
 		return err
 	}
 
@@ -61,17 +59,16 @@ func InstallMetalLB(ctx context.Context, rc *rest.Config) error {
 	if err != nil {
 		return fmt.Errorf("get kind docker subnet: %w", err)
 	}
-	Info(fmt.Sprintf("kind Docker network subnet: %s", subnet))
+	send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("kind Docker network subnet: %s", subnet)})
 
 	startIP, endIP, err := computeMetalLBRange(subnet)
 	if err != nil {
 		return fmt.Errorf("compute metallb range: %w", err)
 	}
-	Info(fmt.Sprintf("MetalLB IP pool: %s - %s", startIP, endIP))
+	send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("MetalLB IP pool: %s - %s", startIP, endIP)})
 
-	if err := Wait("Configuring MetalLB IP pool", func() error {
-		return applyMetalLBConfig(ctx, rc, startIP, endIP)
-	}); err != nil {
+	send(ProgressEvent{Kind: EventInfo, Name: "Configuring MetalLB IP pool..."})
+	if err := applyMetalLBConfig(ctx, rc, startIP, endIP); err != nil {
 		return err
 	}
 

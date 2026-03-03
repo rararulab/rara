@@ -42,7 +42,7 @@ func ClusterExists(name string) (bool, error) {
 
 // EnsureCluster creates a kind cluster if it doesn't already exist.
 // Returns the kubeconfig path.
-func EnsureCluster(_ context.Context, cfg Config) (string, error) {
+func EnsureCluster(_ context.Context, cfg Config, send Sender) (string, error) {
 	kubeconfigPath := KindKubeconfigPath(cfg.ClusterName)
 
 	exists, err := ClusterExists(cfg.ClusterName)
@@ -51,7 +51,7 @@ func EnsureCluster(_ context.Context, cfg Config) (string, error) {
 	}
 
 	if exists {
-		OK(fmt.Sprintf("kind cluster %q already exists", cfg.ClusterName))
+		send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("kind cluster %q already exists", cfg.ClusterName)})
 		provider := cluster.NewProvider()
 		if err := provider.ExportKubeConfig(cfg.ClusterName, kubeconfigPath, false); err != nil {
 			return "", fmt.Errorf("export kubeconfig: %w", err)
@@ -59,7 +59,7 @@ func EnsureCluster(_ context.Context, cfg Config) (string, error) {
 		return kubeconfigPath, nil
 	}
 
-	Info(fmt.Sprintf("Creating kind cluster %q...", cfg.ClusterName))
+	send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("Creating kind cluster %q...", cfg.ClusterName)})
 	provider := cluster.NewProvider()
 	if err := provider.Create(
 		cfg.ClusterName,
@@ -68,18 +68,18 @@ func EnsureCluster(_ context.Context, cfg Config) (string, error) {
 		return "", fmt.Errorf("create kind cluster: %w", err)
 	}
 
-	OK(fmt.Sprintf("kind cluster %q created", cfg.ClusterName))
+	send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("kind cluster %q created", cfg.ClusterName)})
 	return kubeconfigPath, nil
 }
 
 // DeleteCluster deletes the kind cluster.
-func DeleteCluster(name string) error {
+func DeleteCluster(name string, send Sender) error {
 	exists, err := ClusterExists(name)
 	if err != nil {
 		return err
 	}
 	if !exists {
-		Info(fmt.Sprintf("cluster %q not found, nothing to delete", name))
+		send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("cluster %q not found, nothing to delete", name)})
 		return nil
 	}
 
@@ -87,7 +87,7 @@ func DeleteCluster(name string) error {
 	if err := provider.Delete(name, KindKubeconfigPath(name)); err != nil {
 		return fmt.Errorf("delete kind cluster: %w", err)
 	}
-	OK(fmt.Sprintf("kind cluster %q deleted", name))
+	send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("kind cluster %q deleted", name)})
 	return nil
 }
 

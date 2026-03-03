@@ -35,126 +35,85 @@ import (
 )
 
 // InstallHelmCharts installs all infrastructure Helm charts in order.
-func InstallHelmCharts(ctx context.Context, cfg Config, kubeconfigPath string) error {
+func InstallHelmCharts(ctx context.Context, cfg Config, kubeconfigPath string, send Sender) error {
 	helm := NewHelmManager(kubeconfigPath, cfg.Namespace)
 	prefix := cfg.Prefix()
 	ns := cfg.Namespace
 
 	// --- cert-manager ---
-	if err := Wait(fmt.Sprintf("Installing cert-manager (%s-cert-manager)", prefix), func() error {
-		return helm.InstallOrUpgrade(ctx,
-			fmt.Sprintf("%s-cert-manager", prefix),
-			"cert-manager",
-			"v1.19.3",
-			"https://charts.jetstack.io",
-			map[string]interface{}{
-				"crds": map[string]interface{}{
-					"enabled": true,
-					"keep":    true,
-				},
-				"prometheus": map[string]interface{}{
-					"enabled": true,
-				},
+	send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("Installing cert-manager (%s-cert-manager)...", prefix)})
+	if err := helm.InstallOrUpgrade(ctx,
+		fmt.Sprintf("%s-cert-manager", prefix),
+		"cert-manager",
+		"v1.19.3",
+		"https://charts.jetstack.io",
+		map[string]interface{}{
+			"crds": map[string]interface{}{
+				"enabled": true,
+				"keep":    true,
 			},
-		)
-	}); err != nil {
+			"prometheus": map[string]interface{}{
+				"enabled": true,
+			},
+		},
+	); err != nil {
 		return err
 	}
 
 	// --- Traefik ---
-	if err := Wait(fmt.Sprintf("Installing Traefik (%s-traefik)", prefix), func() error {
-		return helm.InstallOrUpgrade(ctx,
-			fmt.Sprintf("%s-traefik", prefix),
-			"traefik",
-			"39.0.2",
-			"https://traefik.github.io/charts",
-			map[string]interface{}{
-				"gateway": map[string]interface{}{"enabled": false},
-				"ingressRoute": map[string]interface{}{
-					"dashboard": map[string]interface{}{"enabled": false},
-				},
-				"additionalArguments": []interface{}{
-					"--serversTransport.insecureSkipVerify=true",
-				},
+	send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("Installing Traefik (%s-traefik)...", prefix)})
+	if err := helm.InstallOrUpgrade(ctx,
+		fmt.Sprintf("%s-traefik", prefix),
+		"traefik",
+		"39.0.2",
+		"https://traefik.github.io/charts",
+		map[string]interface{}{
+			"gateway": map[string]interface{}{"enabled": false},
+			"ingressRoute": map[string]interface{}{
+				"dashboard": map[string]interface{}{"enabled": false},
 			},
-		)
-	}); err != nil {
+			"additionalArguments": []interface{}{
+				"--serversTransport.insecureSkipVerify=true",
+			},
+		},
+	); err != nil {
 		return err
 	}
 
 	// --- PostgreSQL ---
-	if err := Wait(fmt.Sprintf("Installing PostgreSQL (%s-postgresql)", prefix), func() error {
-		return helm.InstallOrUpgrade(ctx,
-			fmt.Sprintf("%s-postgresql", prefix),
-			"postgresql",
-			"18.4.0",
-			"https://charts.bitnami.com/bitnami",
-			map[string]interface{}{
-				"global": map[string]interface{}{
-					"security": map[string]interface{}{
-						"allowInsecureImages": true,
-					},
-				},
-				"image": map[string]interface{}{
-					"registry":   "ghcr.io",
-					"repository": "pgmq/pg18-pgmq",
-					"tag":        "v1.10.0",
-				},
-				"auth": map[string]interface{}{
-					"postgresPassword": cfg.PostgresPassword,
-					"database":         cfg.PostgresDatabase,
-					"usePasswordFiles": false,
-				},
-				"volumePermissions": map[string]interface{}{"enabled": true},
-				"primary": map[string]interface{}{
-					"podSecurityContext": map[string]interface{}{
-						"enabled": true,
-						"fsGroup": 999,
-					},
-					"containerSecurityContext": map[string]interface{}{
-						"enabled":                true,
-						"runAsUser":              999,
-						"runAsGroup":             999,
-						"readOnlyRootFilesystem": false,
-					},
-					"persistence": map[string]interface{}{
-						"enabled": true,
-						"size":    "2Gi",
-					},
-					"resources": map[string]interface{}{
-						"requests": map[string]interface{}{"cpu": "100m", "memory": "256Mi"},
-						"limits":   map[string]interface{}{"cpu": "500m", "memory": "512Mi"},
-					},
+	send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("Installing PostgreSQL (%s-postgresql)...", prefix)})
+	if err := helm.InstallOrUpgrade(ctx,
+		fmt.Sprintf("%s-postgresql", prefix),
+		"postgresql",
+		"18.4.0",
+		"https://charts.bitnami.com/bitnami",
+		map[string]interface{}{
+			"global": map[string]interface{}{
+				"security": map[string]interface{}{
+					"allowInsecureImages": true,
 				},
 			},
-		)
-	}); err != nil {
-		return err
-	}
-
-	// --- MinIO ---
-	if err := Wait(fmt.Sprintf("Installing MinIO (%s-minio)", prefix), func() error {
-		return helm.InstallOrUpgrade(ctx,
-			fmt.Sprintf("%s-minio", prefix),
-			"minio",
-			"5.4.0",
-			"https://charts.min.io",
-			map[string]interface{}{
-				"mode":         "standalone",
-				"rootUser":     cfg.MinioUser,
-				"rootPassword": cfg.MinioPassword,
-				"consoleService": map[string]interface{}{
-					"type": "ClusterIP",
-					"port": 9001,
+			"image": map[string]interface{}{
+				"registry":   "ghcr.io",
+				"repository": "pgmq/pg18-pgmq",
+				"tag":        "v1.10.0",
+			},
+			"auth": map[string]interface{}{
+				"postgresPassword": cfg.PostgresPassword,
+				"database":         cfg.PostgresDatabase,
+				"usePasswordFiles": false,
+			},
+			"volumePermissions": map[string]interface{}{"enabled": true},
+			"primary": map[string]interface{}{
+				"podSecurityContext": map[string]interface{}{
+					"enabled": true,
+					"fsGroup": 999,
 				},
-				"service": map[string]interface{}{
-					"type": "ClusterIP",
-					"port": 9000,
-				},
-				"buckets": []interface{}{
-					map[string]interface{}{"name": "rara", "policy": "none", "purge": false},
-					map[string]interface{}{"name": "langfuse", "policy": "none", "purge": false},
-					map[string]interface{}{"name": "quickwit", "policy": "none", "purge": false},
+				"containerSecurityContext": map[string]interface{}{
+					"enabled":                true,
+					"runAsUser":              999,
+					"runAsGroup":             999,
+					"readOnlyRootFilesystem": false,
 				},
 				"persistence": map[string]interface{}{
 					"enabled": true,
@@ -165,102 +124,139 @@ func InstallHelmCharts(ctx context.Context, cfg Config, kubeconfigPath string) e
 					"limits":   map[string]interface{}{"cpu": "500m", "memory": "512Mi"},
 				},
 			},
-		)
-	}); err != nil {
+		},
+	); err != nil {
+		return err
+	}
+
+	// --- MinIO ---
+	send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("Installing MinIO (%s-minio)...", prefix)})
+	if err := helm.InstallOrUpgrade(ctx,
+		fmt.Sprintf("%s-minio", prefix),
+		"minio",
+		"5.4.0",
+		"https://charts.min.io",
+		map[string]interface{}{
+			"mode":         "standalone",
+			"rootUser":     cfg.MinioUser,
+			"rootPassword": cfg.MinioPassword,
+			"consoleService": map[string]interface{}{
+				"type": "ClusterIP",
+				"port": 9001,
+			},
+			"service": map[string]interface{}{
+				"type": "ClusterIP",
+				"port": 9000,
+			},
+			"buckets": []interface{}{
+				map[string]interface{}{"name": "rara", "policy": "none", "purge": false},
+				map[string]interface{}{"name": "langfuse", "policy": "none", "purge": false},
+				map[string]interface{}{"name": "quickwit", "policy": "none", "purge": false},
+			},
+			"persistence": map[string]interface{}{
+				"enabled": true,
+				"size":    "2Gi",
+			},
+			"resources": map[string]interface{}{
+				"requests": map[string]interface{}{"cpu": "100m", "memory": "512Mi"},
+				"limits":   map[string]interface{}{"cpu": "1", "memory": "1Gi"},
+			},
+			"makeBucketJob": map[string]interface{}{
+				"backoffLimit": 30,
+			},
+		},
+	); err != nil {
 		return err
 	}
 
 	// --- Consul ---
-	if err := Wait(fmt.Sprintf("Installing Consul (%s-consul)", prefix), func() error {
-		return helm.InstallOrUpgrade(ctx,
-			fmt.Sprintf("%s-consul", prefix),
-			"consul",
-			"1.9.3",
-			"https://helm.releases.hashicorp.com",
-			map[string]interface{}{
-				"global": map[string]interface{}{
-					"name":       "consul",
-					"datacenter": "rara-dc1",
-				},
-				"server": map[string]interface{}{
-					"replicas": 1,
-					"storage":  "1Gi",
-					"resources": map[string]interface{}{
-						"requests": map[string]interface{}{"cpu": "100m", "memory": "128Mi"},
-						"limits":   map[string]interface{}{"cpu": "500m", "memory": "256Mi"},
-					},
-				},
-				"client":        map[string]interface{}{"enabled": true},
-				"ui":            map[string]interface{}{"enabled": true},
-				"connectInject": map[string]interface{}{"enabled": false},
+	send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("Installing Consul (%s-consul)...", prefix)})
+	if err := helm.InstallOrUpgrade(ctx,
+		fmt.Sprintf("%s-consul", prefix),
+		"consul",
+		"1.9.3",
+		"https://helm.releases.hashicorp.com",
+		map[string]interface{}{
+			"global": map[string]interface{}{
+				"name":       "consul",
+				"datacenter": "rara-dc1",
 			},
-		)
-	}); err != nil {
+			"server": map[string]interface{}{
+				"replicas": 1,
+				"storage":  "1Gi",
+				"resources": map[string]interface{}{
+					"requests": map[string]interface{}{"cpu": "100m", "memory": "128Mi"},
+					"limits":   map[string]interface{}{"cpu": "500m", "memory": "256Mi"},
+				},
+			},
+			"client":        map[string]interface{}{"enabled": true},
+			"ui":            map[string]interface{}{"enabled": true},
+			"connectInject": map[string]interface{}{"enabled": false},
+		},
+	); err != nil {
 		return err
 	}
 
 	// --- kube-prometheus-stack ---
-	if err := Wait(fmt.Sprintf("Installing kube-prometheus-stack (%s-kube-prometheus-stack)", prefix), func() error {
-		return helm.InstallOrUpgrade(ctx,
-			fmt.Sprintf("%s-kube-prometheus-stack", prefix),
-			"kube-prometheus-stack",
-			"82.2.1",
-			"https://prometheus-community.github.io/helm-charts",
-			map[string]interface{}{
-				"grafana": map[string]interface{}{
-					"adminPassword": "admin",
-					"persistence":   map[string]interface{}{"enabled": true, "size": "1Gi"},
-				},
-				"prometheus": map[string]interface{}{
-					"prometheusSpec": map[string]interface{}{
-						"retention":              "3d",
-						"storageSpec":            map[string]interface{}{"volumeClaimTemplate": map[string]interface{}{"spec": map[string]interface{}{"resources": map[string]interface{}{"requests": map[string]interface{}{"storage": "2Gi"}}}}},
-						"serviceMonitorSelectorNilUsesHelmValues": false,
-					},
-				},
-				"alertmanager": map[string]interface{}{"enabled": false},
+	send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("Installing kube-prometheus-stack (%s-kube-prometheus-stack)...", prefix)})
+	if err := helm.InstallOrUpgrade(ctx,
+		fmt.Sprintf("%s-kube-prometheus-stack", prefix),
+		"kube-prometheus-stack",
+		"82.2.1",
+		"https://prometheus-community.github.io/helm-charts",
+		map[string]interface{}{
+			"grafana": map[string]interface{}{
+				"adminPassword": "admin",
+				"persistence":   map[string]interface{}{"enabled": true, "size": "1Gi"},
 			},
-		)
-	}); err != nil {
+			"prometheus": map[string]interface{}{
+				"prometheusSpec": map[string]interface{}{
+					"retention":              "3d",
+					"storageSpec":            map[string]interface{}{"volumeClaimTemplate": map[string]interface{}{"spec": map[string]interface{}{"resources": map[string]interface{}{"requests": map[string]interface{}{"storage": "2Gi"}}}}},
+					"serviceMonitorSelectorNilUsesHelmValues": false,
+				},
+			},
+			"alertmanager": map[string]interface{}{"enabled": false},
+		},
+	); err != nil {
 		return err
 	}
 
 	// --- Tempo ---
-	if err := Wait(fmt.Sprintf("Installing Tempo (%s-tempo)", prefix), func() error {
-		return helm.InstallOrUpgrade(ctx,
-			fmt.Sprintf("%s-tempo", prefix),
-			"tempo",
-			"1.24.4",
-			"https://grafana.github.io/helm-charts",
-			map[string]interface{}{
-				"tempo": map[string]interface{}{
-					"storage": map[string]interface{}{
-						"trace": map[string]interface{}{
-							"backend": "local",
-						},
+	send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("Installing Tempo (%s-tempo)...", prefix)})
+	if err := helm.InstallOrUpgrade(ctx,
+		fmt.Sprintf("%s-tempo", prefix),
+		"tempo",
+		"1.24.4",
+		"https://grafana.github.io/helm-charts",
+		map[string]interface{}{
+			"tempo": map[string]interface{}{
+				"storage": map[string]interface{}{
+					"trace": map[string]interface{}{
+						"backend": "local",
 					},
 				},
-				"persistence": map[string]interface{}{
-					"enabled": true,
-					"size":    "2Gi",
-				},
 			},
-		)
-	}); err != nil {
+			"persistence": map[string]interface{}{
+				"enabled": true,
+				"size":    "2Gi",
+			},
+		},
+	); err != nil {
 		return err
 	}
 
 	// --- Alloy ---
-	if err := Wait(fmt.Sprintf("Installing Alloy (%s-alloy)", prefix), func() error {
-		return helm.InstallOrUpgrade(ctx,
-			fmt.Sprintf("%s-alloy", prefix),
-			"alloy",
-			"1.6.0",
-			"https://grafana.github.io/helm-charts",
-			map[string]interface{}{
-				"alloy": map[string]interface{}{
-					"configMap": map[string]interface{}{
-						"content": fmt.Sprintf(`otelcol.receiver.otlp "default" {
+	send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("Installing Alloy (%s-alloy)...", prefix)})
+	if err := helm.InstallOrUpgrade(ctx,
+		fmt.Sprintf("%s-alloy", prefix),
+		"alloy",
+		"1.6.0",
+		"https://grafana.github.io/helm-charts",
+		map[string]interface{}{
+			"alloy": map[string]interface{}{
+				"configMap": map[string]interface{}{
+					"content": fmt.Sprintf(`otelcol.receiver.otlp "default" {
   grpc { endpoint = "0.0.0.0:4317" }
   http { endpoint = "0.0.0.0:4318" }
   output { traces = [otelcol.exporter.otlp.tempo.input] }
@@ -269,47 +265,45 @@ otelcol.exporter.otlp "tempo" {
   client { endpoint = "%s-tempo:4317" }
 }
 `, prefix),
-					},
-				},
-				"controller": map[string]interface{}{
-					"type": "deployment",
-				},
-				"service": map[string]interface{}{
-					"enabled": true,
 				},
 			},
-		)
-	}); err != nil {
+			"controller": map[string]interface{}{
+				"type": "deployment",
+			},
+			"service": map[string]interface{}{
+				"enabled": true,
+			},
+		},
+	); err != nil {
 		return err
 	}
 
 	// --- Quickwit ---
-	if err := Wait(fmt.Sprintf("Installing Quickwit (%s-quickwit)", prefix), func() error {
-		return helm.InstallOrUpgrade(ctx,
-			fmt.Sprintf("%s-quickwit", prefix),
-			"quickwit",
-			"0.7.21",
-			"https://helm.quickwit.io",
-			map[string]interface{}{
-				"config": map[string]interface{}{
-					"default_index_root_uri": fmt.Sprintf("s3://quickwit/indexes?endpoint=http://%s-minio:9000&force_path_style_access=true", prefix),
-					"storage": map[string]interface{}{
-						"s3": map[string]interface{}{
-							"endpoint":    fmt.Sprintf("http://%s-minio:9000", prefix),
-							"access_key":  cfg.MinioUser,
-							"secret_key":  cfg.MinioPassword,
-							"force_path_style_access": true,
-						},
+	send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("Installing Quickwit (%s-quickwit)...", prefix)})
+	if err := helm.InstallOrUpgrade(ctx,
+		fmt.Sprintf("%s-quickwit", prefix),
+		"quickwit",
+		"0.7.21",
+		"https://helm.quickwit.io",
+		map[string]interface{}{
+			"config": map[string]interface{}{
+				"default_index_root_uri": fmt.Sprintf("s3://quickwit/indexes?endpoint=http://%s-minio:9000&force_path_style_access=true", prefix),
+				"storage": map[string]interface{}{
+					"s3": map[string]interface{}{
+						"endpoint":    fmt.Sprintf("http://%s-minio:9000", prefix),
+						"access_key":  cfg.MinioUser,
+						"secret_key":  cfg.MinioPassword,
+						"force_path_style_access": true,
 					},
 				},
-				"searcher": map[string]interface{}{"replicaCount": 1},
-				"indexer":  map[string]interface{}{"replicaCount": 1},
-				"control_plane": map[string]interface{}{"replicaCount": 1},
-				"janitor":  map[string]interface{}{"replicaCount": 1},
-				"metastore": map[string]interface{}{"replicaCount": 1},
 			},
-		)
-	}); err != nil {
+			"searcher": map[string]interface{}{"replicaCount": 1},
+			"indexer":  map[string]interface{}{"replicaCount": 1},
+			"control_plane": map[string]interface{}{"replicaCount": 1},
+			"janitor":  map[string]interface{}{"replicaCount": 1},
+			"metastore": map[string]interface{}{"replicaCount": 1},
+		},
+	); err != nil {
 		return err
 	}
 
@@ -343,32 +337,30 @@ otelcol.exporter.otlp "tempo" {
 		langfuseValues["langfuse"].(map[string]interface{})["secretKey"] = cfg.LangfuseSecretKey
 	}
 
-	if err := Wait(fmt.Sprintf("Installing Langfuse (%s-langfuse)", prefix), func() error {
-		return helm.InstallOrUpgrade(ctx,
-			fmt.Sprintf("%s-langfuse", prefix),
-			"langfuse",
-			"1.5.20",
-			"https://langfuse.github.io/langfuse-k8s",
-			langfuseValues,
-		)
-	}); err != nil {
+	send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("Installing Langfuse (%s-langfuse)...", prefix)})
+	if err := helm.InstallOrUpgrade(ctx,
+		fmt.Sprintf("%s-langfuse", prefix),
+		"langfuse",
+		"1.5.20",
+		"https://langfuse.github.io/langfuse-k8s",
+		langfuseValues,
+	); err != nil {
 		return err
 	}
 
 	// --- Keel ---
-	if err := Wait(fmt.Sprintf("Installing Keel (%s-keel)", prefix), func() error {
-		return helm.InstallOrUpgrade(ctx,
-			fmt.Sprintf("%s-keel", prefix),
-			"keel",
-			"",
-			"https://charts.keel.sh",
-			map[string]interface{}{
-				"service": map[string]interface{}{"enabled": true},
-			},
-		)
-	}); err != nil {
+	send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("Installing Keel (%s-keel)...", prefix)})
+	if err := helm.InstallOrUpgrade(ctx,
+		fmt.Sprintf("%s-keel", prefix),
+		"keel",
+		"",
+		"https://charts.keel.sh",
+		map[string]interface{}{
+			"service": map[string]interface{}{"enabled": true},
+		},
+	); err != nil {
 		// Keel is non-critical, log and continue
-		Warn(fmt.Sprintf("Keel install failed (non-critical): %v", err))
+		send(ProgressEvent{Kind: EventWarn, Name: fmt.Sprintf("Keel install failed (non-critical): %v", err)})
 	}
 
 	_ = ns // used implicitly via prefix
@@ -376,7 +368,7 @@ otelcol.exporter.otlp "tempo" {
 }
 
 // DeployCustomServices deploys custom K8s resources (non-Helm services).
-func DeployCustomServices(ctx context.Context, cfg Config, kubeconfigPath string) error {
+func DeployCustomServices(ctx context.Context, cfg Config, kubeconfigPath string, send Sender) error {
 	rc, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
 	if err != nil {
 		return fmt.Errorf("build rest config: %w", err)
@@ -395,51 +387,45 @@ func DeployCustomServices(ctx context.Context, cfg Config, kubeconfigPath string
 	}
 
 	// ChromaDB
-	if err := Wait(fmt.Sprintf("Deploying ChromaDB (%s-chromadb)", prefix), func() error {
-		return deployChromaDB(ctx, kc, prefix, ns)
-	}); err != nil {
+	send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("Deploying ChromaDB (%s-chromadb)...", prefix)})
+	if err := deployChromaDB(ctx, kc, prefix, ns); err != nil {
 		return err
 	}
 
 	// Crawl4AI
-	if err := Wait(fmt.Sprintf("Deploying Crawl4AI (%s-crawl4ai)", prefix), func() error {
-		return deployCrawl4AI(ctx, kc, prefix, ns)
-	}); err != nil {
+	send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("Deploying Crawl4AI (%s-crawl4ai)...", prefix)})
+	if err := deployCrawl4AI(ctx, kc, prefix, ns); err != nil {
 		return err
 	}
 
 	// Memos (with its own postgres)
 	if cfg.EnableMemos {
-		if err := Wait(fmt.Sprintf("Deploying Memos (%s-memos)", prefix), func() error {
-			return deployMemos(ctx, kc, prefix, ns)
-		}); err != nil {
+		send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("Deploying Memos (%s-memos)...", prefix)})
+		if err := deployMemos(ctx, kc, prefix, ns); err != nil {
 			return err
 		}
 	}
 
 	// Hindsight (with pgvector postgres)
 	if cfg.EnableHindsight {
-		if err := Wait(fmt.Sprintf("Deploying Hindsight (%s-hindsight)", prefix), func() error {
-			return deployHindsight(ctx, kc, prefix, ns, cfg)
-		}); err != nil {
+		send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("Deploying Hindsight (%s-hindsight)...", prefix)})
+		if err := deployHindsight(ctx, kc, prefix, ns, cfg); err != nil {
 			return err
 		}
 	}
 
 	// Mem0
 	if cfg.EnableMem0 {
-		if err := Wait(fmt.Sprintf("Deploying Mem0 (%s-mem0)", prefix), func() error {
-			return deployMem0(ctx, kc, prefix, ns, cfg)
-		}); err != nil {
+		send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("Deploying Mem0 (%s-mem0)...", prefix)})
+		if err := deployMem0(ctx, kc, prefix, ns, cfg); err != nil {
 			return err
 		}
 	}
 
 	// Ollama
 	if cfg.EnableOllama {
-		if err := Wait(fmt.Sprintf("Deploying Ollama (%s-ollama)", prefix), func() error {
-			return deployOllama(ctx, kc, prefix, ns)
-		}); err != nil {
+		send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("Deploying Ollama (%s-ollama)...", prefix)})
+		if err := deployOllama(ctx, kc, prefix, ns); err != nil {
 			return err
 		}
 	}

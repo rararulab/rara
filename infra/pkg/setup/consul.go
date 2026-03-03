@@ -33,7 +33,7 @@ import (
 )
 
 // SeedConsulKV seeds all required Consul KV pairs by exec-ing into the consul-server-0 pod.
-func SeedConsulKV(ctx context.Context, cfg Config, kubeconfigPath string) error {
+func SeedConsulKV(ctx context.Context, cfg Config, kubeconfigPath string, send Sender) error {
 	rc, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
 	if err != nil {
 		return fmt.Errorf("build rest config: %w", err)
@@ -47,24 +47,21 @@ func SeedConsulKV(ctx context.Context, cfg Config, kubeconfigPath string) error 
 	consulPod := "consul-server-0"
 
 	// Wait for consul to be ready
-	if err := Wait("Waiting for Consul to be ready", func() error {
-		return waitForConsulReady(ctx, kc, rc, ns, consulPod)
-	}); err != nil {
+	send(ProgressEvent{Kind: EventInfo, Name: "Waiting for Consul to be ready..."})
+	if err := waitForConsulReady(ctx, kc, rc, ns, consulPod); err != nil {
 		return err
 	}
 
 	kvPairs := buildKVPairs(cfg)
 
 	for key, value := range kvPairs {
-		localKey, localValue := key, value
-		if err := Wait(fmt.Sprintf("  KV: %s", localKey), func() error {
-			return consulPut(ctx, kc, rc, ns, consulPod, localKey, localValue)
-		}); err != nil {
-			return fmt.Errorf("set consul KV %s: %w", localKey, err)
+		if err := consulPut(ctx, kc, rc, ns, consulPod, key, value); err != nil {
+			return fmt.Errorf("set consul KV %s: %w", key, err)
 		}
 	}
+	send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("Seeded %d Consul KV pairs", len(kvPairs))})
 
-	OK("Consul KV seed complete")
+	send(ProgressEvent{Kind: EventInfo, Name: "Consul KV seed complete"})
 	return nil
 }
 

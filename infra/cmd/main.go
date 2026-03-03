@@ -415,7 +415,7 @@ func seedCmd() *cli.Command {
 		Action: func(c *cli.Context) error {
 			cfg := configFromCtx(c)
 			kubeconfigPath := setup.KindKubeconfigPath(cfg.ClusterName)
-			return setup.SeedConsulKV(c.Context, cfg, kubeconfigPath)
+			return setup.SeedConsulKV(c.Context, cfg, kubeconfigPath, consoleSender)
 		},
 	}
 }

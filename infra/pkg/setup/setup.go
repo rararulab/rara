@@ -34,13 +34,23 @@ import (
 
 const totalSteps = 8
 
+// consolePrint is a Sender that routes events to the legacy console functions.
+var consolePrint Sender = func(ev ProgressEvent) {
+	switch ev.Kind {
+	case EventInfo:
+		Info(ev.Name)
+	case EventWarn:
+		Warn(ev.Name)
+	}
+}
+
 // Up brings up the complete local rara environment.
 func Up(ctx context.Context, cfg Config, send Sender) error {
 	// Step 1: kind cluster
 	const step1Name = "Ensure kind cluster"
 	step1Start := time.Now()
 	send(ProgressEvent{Kind: EventStepStart, N: 1, Total: totalSteps, Name: step1Name})
-	kubeconfigPath, err := EnsureCluster(ctx, cfg)
+	kubeconfigPath, err := EnsureCluster(ctx, cfg, send)
 	if err != nil {
 		send(ProgressEvent{Kind: EventError, Err: fmt.Errorf("ensure cluster: %w", err)})
 		return fmt.Errorf("ensure cluster: %w", err)
@@ -57,7 +67,7 @@ func Up(ctx context.Context, cfg Config, send Sender) error {
 		send(ProgressEvent{Kind: EventError, Err: fmt.Errorf("build rest config: %w", err)})
 		return fmt.Errorf("build rest config: %w", err)
 	}
-	if err := InstallMetalLB(ctx, rc); err != nil {
+	if err := InstallMetalLB(ctx, rc, send); err != nil {
 		send(ProgressEvent{Kind: EventError, Err: fmt.Errorf("install metallb: %w", err)})
 		return fmt.Errorf("install metallb: %w", err)
 	}
@@ -67,7 +77,7 @@ func Up(ctx context.Context, cfg Config, send Sender) error {
 	const step3Name = "Install infrastructure Helm charts"
 	step3Start := time.Now()
 	send(ProgressEvent{Kind: EventStepStart, N: 3, Total: totalSteps, Name: step3Name})
-	if err := InstallHelmCharts(ctx, cfg, kubeconfigPath); err != nil {
+	if err := InstallHelmCharts(ctx, cfg, kubeconfigPath, send); err != nil {
 		send(ProgressEvent{Kind: EventError, Err: fmt.Errorf("install helm charts: %w", err)})
 		return fmt.Errorf("install helm charts: %w", err)
 	}
@@ -77,7 +87,7 @@ func Up(ctx context.Context, cfg Config, send Sender) error {
 	const step4Name = "Deploy custom K8s services"
 	step4Start := time.Now()
 	send(ProgressEvent{Kind: EventStepStart, N: 4, Total: totalSteps, Name: step4Name})
-	if err := DeployCustomServices(ctx, cfg, kubeconfigPath); err != nil {
+	if err := DeployCustomServices(ctx, cfg, kubeconfigPath, send); err != nil {
 		send(ProgressEvent{Kind: EventError, Err: fmt.Errorf("deploy custom services: %w", err)})
 		return fmt.Errorf("deploy custom services: %w", err)
 	}
@@ -87,7 +97,7 @@ func Up(ctx context.Context, cfg Config, send Sender) error {
 	const step5Name = "Seed Consul KV"
 	step5Start := time.Now()
 	send(ProgressEvent{Kind: EventStepStart, N: 5, Total: totalSteps, Name: step5Name})
-	if err := SeedConsulKV(ctx, cfg, kubeconfigPath); err != nil {
+	if err := SeedConsulKV(ctx, cfg, kubeconfigPath, send); err != nil {
 		send(ProgressEvent{Kind: EventError, Err: fmt.Errorf("seed consul kv: %w", err)})
 		return fmt.Errorf("seed consul kv: %w", err)
 	}
@@ -147,7 +157,7 @@ func Down(cfg Config) error {
 
 	Step(2, 2, "Delete kind cluster")
 	if err := Wait(fmt.Sprintf("Deleting kind cluster %q", cfg.ClusterName), func() error {
-		return DeleteCluster(cfg.ClusterName)
+		return DeleteCluster(cfg.ClusterName, consolePrint)
 	}); err != nil {
 		return fmt.Errorf("delete cluster: %w", err)
 	}
