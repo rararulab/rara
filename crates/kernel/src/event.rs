@@ -58,19 +58,21 @@ pub enum EventPriority {
 /// Syscall variants — all interactions that a `ProcessHandle` routes through
 /// the kernel event queue. Each variant carries identity fields plus a oneshot
 /// reply channel for the kernel event loop to respond on.
-#[derive(strum::IntoStaticStr)]
+#[derive(derive_more::Debug, strum::IntoStaticStr)]
 #[strum(serialize_all = "snake_case")]
 pub enum Syscall {
     // -- Process queries --
     /// Query the status of a target agent process.
     QueryStatus {
         target:   AgentId,
+        #[debug(skip)]
         reply_tx: oneshot::Sender<crate::error::Result<ProcessInfo>>,
     },
 
     /// Query children of a parent agent process.
     QueryChildren {
         parent:   AgentId,
+        #[debug(skip)]
         reply_tx: oneshot::Sender<Vec<ProcessInfo>>,
     },
 
@@ -82,6 +84,7 @@ pub enum Syscall {
         principal:  Principal,
         key:        String,
         value:      serde_json::Value,
+        #[debug(skip)]
         reply_tx:   oneshot::Sender<crate::error::Result<()>>,
     },
 
@@ -89,6 +92,7 @@ pub enum Syscall {
     MemRecall {
         agent_id: AgentId,
         key:      String,
+        #[debug(skip)]
         reply_tx: oneshot::Sender<crate::error::Result<Option<serde_json::Value>>>,
     },
 
@@ -99,6 +103,7 @@ pub enum Syscall {
         scope:     KvScope,
         key:       String,
         value:     serde_json::Value,
+        #[debug(skip)]
         reply_tx:  oneshot::Sender<crate::error::Result<()>>,
     },
 
@@ -108,6 +113,7 @@ pub enum Syscall {
         principal: Principal,
         scope:     KvScope,
         key:       String,
+        #[debug(skip)]
         reply_tx:  oneshot::Sender<crate::error::Result<Option<serde_json::Value>>>,
     },
 
@@ -116,6 +122,7 @@ pub enum Syscall {
     CreatePipe {
         owner:    AgentId,
         target:   AgentId,
+        #[debug(skip)]
         reply_tx: oneshot::Sender<crate::error::Result<(PipeWriter, PipeReader)>>,
     },
 
@@ -123,6 +130,7 @@ pub enum Syscall {
     CreateNamedPipe {
         owner:    AgentId,
         name:     String,
+        #[debug(skip)]
         reply_tx: oneshot::Sender<crate::error::Result<(PipeWriter, PipeReader)>>,
     },
 
@@ -130,6 +138,7 @@ pub enum Syscall {
     ConnectPipe {
         connector: AgentId,
         name:      String,
+        #[debug(skip)]
         reply_tx:  oneshot::Sender<crate::error::Result<PipeReader>>,
     },
 
@@ -137,6 +146,7 @@ pub enum Syscall {
     /// Check whether a tool requires approval before execution.
     RequiresApproval {
         tool_name: String,
+        #[debug(skip)]
         reply_tx:  oneshot::Sender<bool>,
     },
 
@@ -146,6 +156,7 @@ pub enum Syscall {
         principal: Principal,
         tool_name: String,
         summary:   String,
+        #[debug(skip)]
         reply_tx:  oneshot::Sender<crate::error::Result<bool>>,
     },
 
@@ -153,7 +164,9 @@ pub enum Syscall {
     CheckGuardBatch {
         agent_id:   AgentId,
         session_id: SessionId,
+        #[debug("{} checks", checks.len())]
         checks:     Vec<(String, serde_json::Value)>,
+        #[debug(skip)]
         reply_tx:   oneshot::Sender<Vec<crate::guard::Verdict>>,
     },
 
@@ -161,6 +174,7 @@ pub enum Syscall {
     /// Get the manifest for an agent process.
     GetManifest {
         agent_id: AgentId,
+        #[debug(skip)]
         reply_tx: oneshot::Sender<crate::error::Result<AgentManifest>>,
     },
 
@@ -168,6 +182,7 @@ pub enum Syscall {
     /// SyscallTool).
     GetToolRegistry {
         agent_id: AgentId,
+        #[debug(skip)]
         reply_tx: oneshot::Sender<Arc<ToolRegistry>>,
     },
 
@@ -175,6 +190,7 @@ pub enum Syscall {
     /// specific agent via `DriverRegistry::resolve()`.
     ResolveDriver {
         agent_id: AgentId,
+        #[debug(skip)]
         reply_tx: oneshot::Sender<crate::error::Result<(crate::llm::LlmDriverRef, String)>>,
     },
 
@@ -226,124 +242,6 @@ impl Syscall {
     }
 }
 
-impl std::fmt::Debug for Syscall {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::QueryStatus { target, .. } => {
-                write!(f, "Syscall::QueryStatus(target={})", target)
-            }
-            Self::QueryChildren { parent, .. } => {
-                write!(f, "Syscall::QueryChildren(parent={})", parent)
-            }
-            Self::MemStore { agent_id, key, .. } => {
-                write!(f, "Syscall::MemStore(agent={}, key={})", agent_id, key)
-            }
-            Self::MemRecall { agent_id, key, .. } => {
-                write!(f, "Syscall::MemRecall(agent={}, key={})", agent_id, key)
-            }
-            Self::SharedStore {
-                agent_id,
-                scope,
-                key,
-                ..
-            } => {
-                write!(
-                    f,
-                    "Syscall::SharedStore(agent={}, scope={:?}, key={})",
-                    agent_id, scope, key
-                )
-            }
-            Self::SharedRecall {
-                agent_id,
-                scope,
-                key,
-                ..
-            } => {
-                write!(
-                    f,
-                    "Syscall::SharedRecall(agent={}, scope={:?}, key={})",
-                    agent_id, scope, key
-                )
-            }
-            Self::CreatePipe { owner, target, .. } => {
-                write!(f, "Syscall::CreatePipe(owner={}, target={})", owner, target)
-            }
-            Self::CreateNamedPipe { owner, name, .. } => {
-                write!(
-                    f,
-                    "Syscall::CreateNamedPipe(owner={}, name={})",
-                    owner, name
-                )
-            }
-            Self::ConnectPipe {
-                connector, name, ..
-            } => {
-                write!(
-                    f,
-                    "Syscall::ConnectPipe(connector={}, name={})",
-                    connector, name
-                )
-            }
-            Self::RequiresApproval { tool_name, .. } => {
-                write!(f, "Syscall::RequiresApproval(tool={})", tool_name)
-            }
-            Self::RequestApproval {
-                agent_id,
-                tool_name,
-                ..
-            } => {
-                write!(
-                    f,
-                    "Syscall::RequestApproval(agent={}, tool={})",
-                    agent_id, tool_name
-                )
-            }
-            Self::CheckGuardBatch {
-                agent_id, checks, ..
-            } => {
-                write!(
-                    f,
-                    "Syscall::CheckGuardBatch(agent={}, checks={})",
-                    agent_id,
-                    checks.len()
-                )
-            }
-            Self::GetManifest { agent_id, .. } => {
-                write!(f, "Syscall::GetManifest(agent={})", agent_id)
-            }
-            Self::GetToolRegistry { agent_id, .. } => {
-                write!(f, "Syscall::GetToolRegistry(agent={})", agent_id)
-            }
-            Self::ResolveDriver { agent_id, .. } => {
-                write!(f, "Syscall::ResolveDriver(agent={})", agent_id)
-            }
-            Self::PublishEvent {
-                agent_id,
-                event_type,
-                ..
-            } => {
-                write!(
-                    f,
-                    "Syscall::PublishEvent(agent={}, type={})",
-                    agent_id, event_type
-                )
-            }
-            Self::RecordToolCall {
-                agent_id,
-                tool_name,
-                success,
-                ..
-            } => {
-                write!(
-                    f,
-                    "Syscall::RecordToolCall(agent={}, tool={}, success={})",
-                    agent_id, tool_name, success
-                )
-            }
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // KernelEvent
 // ---------------------------------------------------------------------------
@@ -353,11 +251,12 @@ impl std::fmt::Debug for Syscall {
 /// Every interaction with the kernel — user messages, process control,
 /// internal callbacks, output delivery — is represented as a `KernelEvent`
 /// and processed by the single `Kernel::run()` event loop.
-#[derive(strum::IntoStaticStr)]
+#[derive(derive_more::Debug, strum::IntoStaticStr)]
 #[strum(serialize_all = "snake_case")]
 pub enum KernelEvent {
     // === Input: from external sources ===
     /// A new user message from a channel adapter (via IngressPipeline).
+    #[debug("UserMessage(session={})", _0.session_id)]
     UserMessage(InboundMessage),
 
     // === Process control ===
@@ -367,10 +266,12 @@ pub enum KernelEvent {
     /// Callers no longer specify a session — this ensures each process gets
     /// context isolation (subagent session isolation).
     SpawnAgent {
+        #[debug("{}", manifest.name)]
         manifest:  AgentManifest,
         input:     String,
         principal: Principal,
         parent_id: Option<AgentId>,
+        #[debug(skip)]
         reply_tx:  oneshot::Sender<crate::error::Result<AgentId>>,
     },
 
@@ -382,6 +283,7 @@ pub enum KernelEvent {
     TurnCompleted {
         agent_id:    AgentId,
         session_id:  SessionId,
+        #[debug("{}", if result.is_ok() { "Ok(..)" } else { "Err(..)" })]
         result:      Result<AgentTurnResult, String>,
         in_reply_to: MessageId,
         user:        UserId,
@@ -396,6 +298,7 @@ pub enum KernelEvent {
 
     // === Output ===
     /// Deliver an outbound envelope to egress.
+    #[debug("Deliver(session={})", _0.session_id)]
     Deliver(OutboundEnvelope),
 
     // === Syscall: ProcessHandle → kernel event loop ===
@@ -445,36 +348,6 @@ impl KernelEvent {
     }
 }
 
-impl std::fmt::Debug for KernelEvent {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::UserMessage(msg) => write!(f, "UserMessage(session={})", msg.session_id),
-            Self::SpawnAgent { manifest, .. } => {
-                write!(f, "SpawnAgent(name={})", manifest.name)
-            }
-            Self::SendSignal { target, signal } => {
-                write!(f, "SendSignal(target={}, signal={:?})", target, signal)
-            }
-            Self::TurnCompleted { agent_id, .. } => {
-                write!(f, "TurnCompleted(agent={})", agent_id)
-            }
-            Self::ChildCompleted {
-                parent_id,
-                child_id,
-                ..
-            } => {
-                write!(
-                    f,
-                    "ChildCompleted(parent={}, child={})",
-                    parent_id, child_id
-                )
-            }
-            Self::Deliver(env) => write!(f, "Deliver(session={})", env.session_id),
-            Self::Syscall(syscall) => write!(f, "{:?}", syscall),
-            Self::Shutdown => write!(f, "Shutdown"),
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

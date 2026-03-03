@@ -23,6 +23,7 @@ base.workspace = true
 bon.workspace = true
 chrono.workspace = true
 dashmap = "6"
+derive_more = { workspace = true }
 eventsource-stream.workspace = true
 futures.workspace = true
 jiff.workspace = true
