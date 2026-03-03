@@ -32,7 +32,7 @@ use crate::{
         Result as MemResult, knowledge::KnowledgeMemory, learning::LearningMemory,
         state::StateMemory, types::*,
     },
-    notification::{EventBus, EventFilter, EventStream, KernelNotification},
+    notification::{KernelNotification, NotificationBus, NotificationFilter, NotificationStream},
     process::{SessionId, principal::UserId},
     session::{ChannelBinding, SessionEntry, SessionError, SessionKey, SessionRepository},
 };
@@ -51,18 +51,18 @@ impl Guard for NoopGuard {
     async fn check_output(&self, _ctx: &GuardContext, _content: &str) -> Verdict { Verdict::Allow }
 }
 
-// ---- NoopEventBus ----
+// ---- NoopNotificationBus ----
 
-/// An event bus that silently discards all published events.
-pub struct NoopEventBus;
+/// A notification bus that silently discards all published notifications.
+pub struct NoopNotificationBus;
 
 #[async_trait]
-impl EventBus for NoopEventBus {
+impl NotificationBus for NoopNotificationBus {
     async fn publish(&self, _event: KernelNotification) {
         // discard
     }
 
-    async fn subscribe(&self, _filter: EventFilter) -> EventStream {
+    async fn subscribe(&self, _filter: NotificationFilter) -> NotificationStream {
         let (_tx, rx) = broadcast::channel(1);
         rx
     }

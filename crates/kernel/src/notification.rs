@@ -64,7 +64,7 @@ pub enum KernelNotification {
 
 /// Filter for subscribing to specific events.
 #[derive(Debug, Clone, Default)]
-pub struct EventFilter {
+pub struct NotificationFilter {
     /// Only receive events for this agent (None = all agents).
     pub agent_id:    Option<Uuid>,
     /// Only receive these event types (empty = all types).
@@ -72,20 +72,20 @@ pub struct EventFilter {
 }
 
 /// A stream of kernel notifications.
-pub type EventStream = broadcast::Receiver<KernelNotification>;
+pub type NotificationStream = broadcast::Receiver<KernelNotification>;
 
 // ---------------------------------------------------------------------------
-// EventBus trait
+// NotificationBus trait
 // ---------------------------------------------------------------------------
 
-pub type EventBusRef = Arc<dyn EventBus>;
+pub type NotificationBusRef = Arc<dyn NotificationBus>;
 
-/// Inter-component event broadcasting.
+/// Inter-component notification broadcasting.
 #[async_trait]
-pub trait EventBus: Send + Sync {
+pub trait NotificationBus: Send + Sync {
     /// Publish a notification to all subscribers.
     async fn publish(&self, event: KernelNotification);
 
-    /// Subscribe to events matching the given filter.
-    async fn subscribe(&self, filter: EventFilter) -> EventStream;
+    /// Subscribe to notifications matching the given filter.
+    async fn subscribe(&self, filter: NotificationFilter) -> NotificationStream;
 }

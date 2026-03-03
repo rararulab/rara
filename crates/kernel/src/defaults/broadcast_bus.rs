@@ -15,31 +15,31 @@
 use async_trait::async_trait;
 use tokio::sync::broadcast;
 
-use crate::notification::{EventBus, EventFilter, EventStream, KernelNotification};
+use crate::notification::{KernelNotification, NotificationBus, NotificationFilter, NotificationStream};
 
-/// Event bus backed by `tokio::sync::broadcast`.
-pub struct BroadcastEventBus {
+/// Notification bus backed by `tokio::sync::broadcast`.
+pub struct BroadcastNotificationBus {
     sender: broadcast::Sender<KernelNotification>,
 }
 
-impl BroadcastEventBus {
-    /// Create a new broadcast event bus with the given channel capacity.
+impl BroadcastNotificationBus {
+    /// Create a new broadcast notification bus with the given channel capacity.
     pub fn new(capacity: usize) -> Self {
         let (sender, _) = broadcast::channel(capacity);
         Self { sender }
     }
 }
 
-impl Default for BroadcastEventBus {
+impl Default for BroadcastNotificationBus {
     fn default() -> Self { Self::new(256) }
 }
 
 #[async_trait]
-impl EventBus for BroadcastEventBus {
+impl NotificationBus for BroadcastNotificationBus {
     async fn publish(&self, event: KernelNotification) {
         // Ignore send errors (no active subscribers).
         let _ = self.sender.send(event);
     }
 
-    async fn subscribe(&self, _filter: EventFilter) -> EventStream { self.sender.subscribe() }
+    async fn subscribe(&self, _filter: NotificationFilter) -> NotificationStream { self.sender.subscribe() }
 }

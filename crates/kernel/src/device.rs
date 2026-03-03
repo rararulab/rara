@@ -167,7 +167,7 @@ pub trait Device: Send + Sync {
 /// Events emitted by the device subsystem.
 ///
 /// These are published to the kernel's
-/// [`EventBus`](crate::notification::EventBus) when devices change state.
+/// [`NotificationBus`](crate::notification::NotificationBus) when devices change state.
 #[derive(Debug, Clone)]
 pub enum DeviceEvent {
     /// A device was successfully connected.

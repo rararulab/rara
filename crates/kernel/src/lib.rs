@@ -26,7 +26,7 @@
 //! | Memory      | [`Memory`]       | 3-layer memory (State/Knowledge/Learning) |
 //! | Session     | [`SessionRepository`] | Conversation history persistence |
 //! | Guard       | [`Guard`]        | Tool approval + output moderation |
-//! | Event Bus   | [`EventBus`]     | Inter-component event broadcasting |
+//! | Notification Bus | [`NotificationBus`] | Inter-component notification broadcasting |
 
 pub mod agent_turn;
 pub mod approval;

@@ -29,7 +29,7 @@
 //!   ├── DriverRegistry  (multi-driver LLM)
 //!   ├── ToolRegistry
 //!   ├── Memory
-//!   ├── EventBus
+//!   ├── NotificationBus
 //!   ├── SecuritySubsystem (auth + authz + approval + guard)
 //!   ├── shared_kv (cross-agent KV)
 //!   ├── AuditSubsystem
@@ -61,7 +61,7 @@ use crate::{
     kv::SharedKv,
     llm::DriverRegistryRef,
     memory::MemoryRef,
-    notification::EventBusRef,
+    notification::NotificationBusRef,
     process::{AgentId, ProcessState, ProcessTable, agent_registry::AgentRegistryRef},
     queue::{EventQueueRef, ShardedEventQueueConfig, ShardedQueueRef},
     security::SecurityRef,
@@ -127,7 +127,7 @@ pub struct Kernel {
     /// 3-layer memory (not used for cross-agent KV — see shared_kv).
     memory: MemoryRef,
     /// Event bus for publishing kernel events.
-    event_bus: EventBusRef,
+    event_bus: NotificationBusRef,
     /// Unified security subsystem (auth + authz + approval).
     security: SecurityRef,
     /// Agent registry for looking up named agent definitions.
@@ -178,7 +178,7 @@ impl Kernel {
         driver_registry: DriverRegistryRef,
         tool_registry: ToolRegistryRef,
         memory: MemoryRef,
-        event_bus: EventBusRef,
+        event_bus: NotificationBusRef,
         security: SecurityRef,
         agent_registry: AgentRegistryRef,
         session_repo: SessionRepoRef,
@@ -242,7 +242,7 @@ impl Kernel {
     pub fn tool_registry(&self) -> &ToolRegistryRef { &self.tool_registry }
 
     /// Access the event bus.
-    pub fn event_bus(&self) -> &EventBusRef { &self.event_bus }
+    pub fn event_bus(&self) -> &NotificationBusRef { &self.event_bus }
 
     /// Access the memory subsystem.
     pub fn memory(&self) -> &MemoryRef { &self.memory }
@@ -351,7 +351,7 @@ impl Kernel {
         driver_registry: DriverRegistryRef,
         tool_registry: ToolRegistryRef,
         memory: MemoryRef,
-        event_bus: EventBusRef,
+        event_bus: NotificationBusRef,
         security: SecurityRef,
         agent_registry: AgentRegistryRef,
         audit: AuditRef,
@@ -487,7 +487,7 @@ mod tests {
     use super::*;
     use crate::{
         defaults::{
-            noop::{NoopEventBus, NoopMemory, NoopSessionRepository, NoopSettingsProvider},
+            noop::{NoopNotificationBus, NoopMemory, NoopSessionRepository, NoopSettingsProvider},
             noop_user_store::NoopUserStore,
         },
         handle::kernel_handle::KernelHandle,
@@ -518,7 +518,7 @@ mod tests {
             driver_registry,
             Arc::new(ToolRegistry::new()),
             Arc::new(NoopMemory),
-            Arc::new(NoopEventBus),
+            Arc::new(NoopNotificationBus),
             Arc::new(crate::security::SecuritySubsystem::noop()),
             registry,
             Arc::new(NoopSessionRepository) as SessionRepoRef,
@@ -1044,7 +1044,7 @@ mod tests {
             driver_registry,
             Arc::new(ToolRegistry::new()),
             Arc::new(NoopMemory),
-            Arc::new(NoopEventBus),
+            Arc::new(NoopNotificationBus),
             security,
             registry,
             Arc::new(NoopSessionRepository) as SessionRepoRef,

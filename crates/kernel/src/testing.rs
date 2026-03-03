@@ -38,7 +38,7 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 use crate::{
-    defaults::noop::{NoopEventBus, NoopMemory, NoopSessionRepository, NoopSettingsProvider},
+    defaults::noop::{NoopNotificationBus, NoopMemory, NoopSessionRepository, NoopSettingsProvider},
     device_registry::DeviceRegistry,
     io::{pipe::PipeRegistry, stream::StreamHub},
     kernel::{Kernel, KernelConfig, SettingsRef},
@@ -130,7 +130,7 @@ impl TestKernelBuilder {
             driver_registry,
             Arc::new(self.tool_registry),
             Arc::new(NoopMemory),
-            Arc::new(NoopEventBus),
+            Arc::new(NoopNotificationBus),
             Arc::new(crate::security::SecuritySubsystem::noop()),
             Arc::new(self.agent_registry),
             Arc::new(crate::audit_subsystem::AuditSubsystem::noop()),

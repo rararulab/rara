@@ -76,8 +76,8 @@ pub struct BootConfig {
     pub session_resolver:   Option<Arc<dyn SessionResolver>>,
     /// Memory implementation (optional — defaults to NoopMemory).
     pub memory:             Option<Arc<dyn rara_kernel::memory::Memory>>,
-    /// Event bus (optional — defaults to BroadcastEventBus).
-    pub event_bus:          Option<Arc<dyn rara_kernel::notification::EventBus>>,
+    /// Notification bus (optional — defaults to BroadcastNotificationBus).
+    pub event_bus:          Option<Arc<dyn rara_kernel::notification::NotificationBus>>,
     /// Guard (optional — defaults to NoopGuard).
     pub guard:              Option<Arc<dyn rara_kernel::guard::Guard>>,
     /// Audit log (optional — defaults to InMemoryAuditLog).
