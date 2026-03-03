@@ -279,8 +279,11 @@ otelcol.exporter.otlp "tempo" {
 	}
 
 	// --- Quickwit (non-critical: heavy multi-pod chart, may time out on low-resource clusters) ---
+	// Use a short timeout so failure doesn't block the rest of setup for 15 minutes.
+	quickwitCtx, quickwitCancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer quickwitCancel()
 	send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("Installing Quickwit (%s-quickwit)...", prefix)})
-	if err := helm.InstallOrUpgrade(ctx,
+	if err := helm.InstallOrUpgrade(quickwitCtx,
 		fmt.Sprintf("%s-quickwit", prefix),
 		"quickwit",
 		"0.7.21",
@@ -291,8 +294,8 @@ otelcol.exporter.otlp "tempo" {
 				"storage": map[string]interface{}{
 					"s3": map[string]interface{}{
 						"endpoint":              fmt.Sprintf("http://%s-minio:9000", prefix),
-						"access_key":            cfg.MinioUser,
-						"secret_key":            cfg.MinioPassword,
+						"access_key_id":         cfg.MinioUser,
+						"secret_access_key":     cfg.MinioPassword,
 						"force_path_style_access": true,
 					},
 				},
@@ -305,47 +308,6 @@ otelcol.exporter.otlp "tempo" {
 		},
 	); err != nil {
 		send(ProgressEvent{Kind: EventWarn, Name: fmt.Sprintf("Quickwit install failed (non-critical): %v", err)})
-	}
-
-	// --- Langfuse ---
-	langfuseValues := map[string]interface{}{
-		"langfuse": map[string]interface{}{
-			"nextAuthSecret": "change-this-in-production",
-			"salt":           "change-this-in-production",
-		},
-		"postgresql": map[string]interface{}{
-			"deploy": true,
-			"auth": map[string]interface{}{
-				"password": "langfuse",
-				"database": "langfuse",
-			},
-		},
-		"s3": map[string]interface{}{
-			"enabled":   true,
-			"bucket":    "langfuse",
-			"region":    "us-east-1",
-			"endpoint":  fmt.Sprintf("http://%s-minio:9000", prefix),
-			"forcePathStyle": true,
-			"accessKeyId":     cfg.MinioUser,
-			"secretAccessKey": cfg.MinioPassword,
-		},
-	}
-	if cfg.LangfusePublicKey != "" {
-		langfuseValues["langfuse"].(map[string]interface{})["publicKey"] = cfg.LangfusePublicKey
-	}
-	if cfg.LangfuseSecretKey != "" {
-		langfuseValues["langfuse"].(map[string]interface{})["secretKey"] = cfg.LangfuseSecretKey
-	}
-
-	send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("Installing Langfuse (%s-langfuse)...", prefix)})
-	if err := helm.InstallOrUpgrade(ctx,
-		fmt.Sprintf("%s-langfuse", prefix),
-		"langfuse",
-		"1.5.20",
-		"https://langfuse.github.io/langfuse-k8s",
-		langfuseValues,
-	); err != nil {
-		return err
 	}
 
 	// --- Keel ---
@@ -505,11 +467,22 @@ func applyOrUpdateConfigMap(ctx context.Context, kc *kubernetes.Clientset, ns st
 	return err
 }
 
-// resourceList builds a ResourceList from cpu and memory strings.
+// resourceList builds a ResourceList from cpu and memory strings (empty strings are omitted).
 func resourceList(cpu, mem string) corev1.ResourceList {
+	rl := corev1.ResourceList{}
+	if cpu != "" {
+		rl[corev1.ResourceCPU] = resource.MustParse(cpu)
+	}
+	if mem != "" {
+		rl[corev1.ResourceMemory] = resource.MustParse(mem)
+	}
+	return rl
+}
+
+// storageList builds a ResourceList for PVC storage requests.
+func storageList(size string) corev1.ResourceList {
 	return corev1.ResourceList{
-		corev1.ResourceCPU:    resource.MustParse(cpu),
-		corev1.ResourceMemory: resource.MustParse(mem),
+		corev1.ResourceStorage: resource.MustParse(size),
 	}
 }
 
@@ -534,7 +507,7 @@ func deployChromaDB(ctx context.Context, kc *kubernetes.Clientset, prefix, ns st
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-			Resources:   corev1.VolumeResourceRequirements{Requests: resourceList("", "1Gi")},
+			Resources:   corev1.VolumeResourceRequirements{Requests: storageList("1Gi")},
 		},
 	}); err != nil {
 		return err
@@ -640,7 +613,7 @@ func deployMemos(ctx context.Context, kc *kubernetes.Clientset, prefix, ns strin
 		ObjectMeta: metav1.ObjectMeta{Name: pgName, Namespace: ns, Labels: pgLabels},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-			Resources:   corev1.VolumeResourceRequirements{Requests: resourceList("", "2Gi")},
+			Resources:   corev1.VolumeResourceRequirements{Requests: storageList("2Gi")},
 		},
 	}); err != nil {
 		return err
@@ -751,7 +724,7 @@ func deployHindsight(ctx context.Context, kc *kubernetes.Clientset, prefix, ns s
 		ObjectMeta: metav1.ObjectMeta{Name: pgName, Namespace: ns, Labels: pgLabels},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-			Resources:   corev1.VolumeResourceRequirements{Requests: resourceList("", "5Gi")},
+			Resources:   corev1.VolumeResourceRequirements{Requests: storageList("5Gi")},
 		},
 	}); err != nil {
 		return err
@@ -942,7 +915,7 @@ func deployOllama(ctx context.Context, kc *kubernetes.Clientset, prefix, ns stri
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-			Resources:   corev1.VolumeResourceRequirements{Requests: resourceList("", "20Gi")},
+			Resources:   corev1.VolumeResourceRequirements{Requests: storageList("20Gi")},
 		},
 	}); err != nil {
 		return err

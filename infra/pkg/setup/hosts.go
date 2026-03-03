@@ -86,7 +86,6 @@ func buildHostsBlock(ip, domain string) string {
 		"grafana." + domain,
 		"consul." + domain,
 		"minio." + domain,
-		"langfuse." + domain,
 		"memos." + domain,
 		"ollama." + domain,
 	}

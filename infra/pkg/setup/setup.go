@@ -242,7 +242,6 @@ func printSummary(cfg Config, lbIP string) {
 	fmt.Printf("  Grafana:            https://grafana.%s  (admin/admin)\n", cfg.Domain)
 	fmt.Printf("  Consul UI:          https://consul.%s\n", cfg.Domain)
 	fmt.Printf("  MinIO Console:      https://minio.%s  (%s/%s)\n", cfg.Domain, cfg.MinioUser, cfg.MinioPassword)
-	fmt.Printf("  Langfuse:           https://langfuse.%s\n", cfg.Domain)
 	fmt.Printf("  Memos:              https://memos.%s\n", cfg.Domain)
 	fmt.Printf("\n  LoadBalancer IP: %s\n", lbIP)
 	fmt.Printf("  Kubeconfig:      %s\n", KindKubeconfigPath(cfg.ClusterName))

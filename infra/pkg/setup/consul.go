@@ -87,15 +87,7 @@ func buildKVPairs(cfg Config) map[string]string {
 		"rara/config/memory/hindsight_bank_id":       "default",
 		"rara/config/memory/ollama_base_url":         fmt.Sprintf("http://%s-ollama:11434", prefix),
 		"rara/config/crawl4ai/base_url":              fmt.Sprintf("http://%s-crawl4ai:11235", prefix),
-		"rara/config/telemetry/otlp_endpoint":        fmt.Sprintf("http://%s-alloy:4318/v1/traces", prefix),
-		"rara/config/langfuse/host":                  fmt.Sprintf("http://%s-langfuse-web:3000", prefix),
-	}
-
-	if cfg.LangfusePublicKey != "" {
-		pairs["rara/config/langfuse/public_key"] = cfg.LangfusePublicKey
-	}
-	if cfg.LangfuseSecretKey != "" {
-		pairs["rara/config/langfuse/secret_key"] = cfg.LangfuseSecretKey
+		"rara/config/telemetry/otlp_endpoint": fmt.Sprintf("http://%s-alloy:4318/v1/traces", prefix),
 	}
 
 	return pairs

@@ -250,12 +250,6 @@ func configFromCtx(c *cli.Context) setup.Config {
 	if v := c.String("minio-password"); v != "" {
 		cfg.MinioPassword = v
 	}
-	if v := c.String("langfuse-public-key"); v != "" {
-		cfg.LangfusePublicKey = v
-	}
-	if v := c.String("langfuse-secret-key"); v != "" {
-		cfg.LangfuseSecretKey = v
-	}
 	cfg.EnableOllama = !c.Bool("no-ollama")
 	cfg.EnableMemos = !c.Bool("no-memos")
 	cfg.EnableHindsight = !c.Bool("no-hindsight")
@@ -301,8 +295,6 @@ func upCmd() *cli.Command {
 			&cli.StringFlag{Name: "postgres-database", Value: defs.PostgresDatabase, Usage: "PostgreSQL database name"},
 			&cli.StringFlag{Name: "minio-user", Value: defs.MinioUser, Usage: "MinIO root user"},
 			&cli.StringFlag{Name: "minio-password", Value: defs.MinioPassword, Usage: "MinIO root password"},
-			&cli.StringFlag{Name: "langfuse-public-key", Value: "", Usage: "Langfuse public key (optional)"},
-			&cli.StringFlag{Name: "langfuse-secret-key", Value: "", Usage: "Langfuse secret key (optional)"},
 			&cli.BoolFlag{Name: "no-ollama", Value: false, Usage: "Skip Ollama deployment"},
 			&cli.BoolFlag{Name: "no-memos", Value: false, Usage: "Skip Memos deployment"},
 			&cli.BoolFlag{Name: "no-hindsight", Value: false, Usage: "Skip Hindsight deployment"},
@@ -409,8 +401,6 @@ func seedCmd() *cli.Command {
 			&cli.StringFlag{Name: "postgres-database", Value: defs.PostgresDatabase, Usage: "PostgreSQL database name"},
 			&cli.StringFlag{Name: "minio-user", Value: defs.MinioUser, Usage: "MinIO root user"},
 			&cli.StringFlag{Name: "minio-password", Value: defs.MinioPassword, Usage: "MinIO root password"},
-			&cli.StringFlag{Name: "langfuse-public-key", Value: "", Usage: "Langfuse public key (optional)"},
-			&cli.StringFlag{Name: "langfuse-secret-key", Value: "", Usage: "Langfuse secret key (optional)"},
 		),
 		Action: func(c *cli.Context) error {
 			cfg := configFromCtx(c)

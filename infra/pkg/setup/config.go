@@ -39,8 +39,6 @@ type Config struct {
 	Mem0OllamaBaseURL string
 	Mem0OllamaModel   string
 
-	LangfusePublicKey string
-	LangfuseSecretKey string
 }
 
 // DefaultConfig returns a Config with sensible defaults for local dev.

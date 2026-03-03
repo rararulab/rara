@@ -66,9 +66,6 @@ func runConfigForm(initial Config) (Config, bool, error) {
 			huh.NewConfirm().Title("Enable Hindsight").Value(&cfg.EnableHindsight),
 		),
 		huh.NewGroup(
-			huh.NewNote().Title("Langfuse (optional)"),
-			huh.NewInput().Title("Langfuse Public Key").Value(&cfg.LangfusePublicKey).Placeholder("(optional)"),
-			huh.NewInput().Title("Langfuse Secret Key").Value(&cfg.LangfuseSecretKey).EchoMode(huh.EchoModePassword).Placeholder("(optional)"),
 			huh.NewConfirm().Title("Deploy?").Value(&confirmed),
 		),
 	)
