@@ -49,6 +49,7 @@ pub mod process;
 pub mod queue;
 pub mod security;
 pub mod session;
+pub(crate) mod syscall;
 pub mod tool;
 
 #[cfg(any(test, feature = "testing"))]

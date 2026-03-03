@@ -69,6 +69,7 @@ use crate::{
     queue::{EventQueueRef, ShardedQueueRef},
     security::SecurityRef,
     session::SessionRepoRef,
+    syscall::SyscallDispatcher,
     tool::ToolRegistryRef,
 };
 
@@ -93,30 +94,23 @@ pub struct Kernel {
     process_table: Arc<ProcessTable>,
     /// Global semaphore limiting total concurrent agent processes.
     global_semaphore: Arc<Semaphore>,
-    /// Multi-driver LLM registry with per-agent overrides.
-    driver_registry: DriverRegistryRef,
-    /// Global tool registry (spawned agents get filtered subsets).
-    tool_registry: ToolRegistryRef,
     /// 3-layer memory (not used for cross-agent KV — see shared_kv).
     memory: MemoryRef,
-    /// Event bus for publishing kernel events.
-    event_bus: NotificationBusRef,
     /// Unified security subsystem (auth + authz + approval).
     security: SecurityRef,
     /// Agent registry for looking up named agent definitions.
     agent_registry: AgentRegistryRef,
-    /// Cross-agent shared key-value store (OpenDAL-backed).
-    shared_kv: SharedKv,
     /// Unified audit subsystem (logging + tool call recording).
     audit: AuditRef,
     /// Session repository for conversation history.
     session_repo: SessionRepoRef,
     /// Flat KV settings provider for runtime configuration.
     settings: SettingsRef,
-    /// Inter-agent pipe registry for streaming data between agents.
-    pipe_registry: PipeRegistry,
     /// Device registry for hot-pluggable devices (MCP servers, APIs, etc.).
     device_registry: DeviceRegistryRef,
+    /// Syscall dispatcher (owns shared_kv, pipe_registry, driver_registry,
+    /// tool_registry, event_bus).
+    syscall: SyscallDispatcher,
     // -- I/O subsystem -----------------------------------------------------
     /// Ephemeral stream hub for real-time token deltas.
     stream_hub: StreamHubRef,
@@ -177,22 +171,28 @@ impl Kernel {
         let ingress_pipeline = Arc::new(IngressPipeline::new(identity_resolver, session_resolver));
 
         let global_semaphore = Arc::new(Semaphore::new(config.max_concurrency));
+
+        let syscall = SyscallDispatcher::new(
+            SharedKv::new(kv_operator),
+            PipeRegistry::new(),
+            driver_registry,
+            tool_registry,
+            event_bus,
+            config.clone(),
+        );
+
         Self {
             config,
             process_table: Arc::new(ProcessTable::new()),
             global_semaphore,
-            driver_registry,
-            tool_registry,
             memory,
-            event_bus,
             security,
             agent_registry,
-            shared_kv: SharedKv::new(kv_operator),
             audit,
             session_repo,
             settings,
-            pipe_registry: PipeRegistry::new(),
             device_registry: Arc::new(DeviceRegistry::new()),
+            syscall,
             stream_hub,
             ingress_pipeline,
             delivery: DeliverySubsystem::new(endpoint_registry),
@@ -209,10 +209,10 @@ impl Kernel {
     pub fn agent_registry(&self) -> &AgentRegistryRef { &self.agent_registry }
 
     /// Access the tool registry.
-    pub fn tool_registry(&self) -> &ToolRegistryRef { &self.tool_registry }
+    pub fn tool_registry(&self) -> &ToolRegistryRef { self.syscall.tool_registry() }
 
     /// Access the event bus.
-    pub fn event_bus(&self) -> &NotificationBusRef { &self.event_bus }
+    pub fn event_bus(&self) -> &NotificationBusRef { self.syscall.event_bus() }
 
     /// Access the memory subsystem.
     pub fn memory(&self) -> &MemoryRef { &self.memory }
@@ -297,16 +297,19 @@ impl Kernel {
     pub(crate) fn global_semaphore(&self) -> &Arc<Semaphore> { &self.global_semaphore }
 
     /// Access the shared KV store (used by event loop).
-    pub(crate) fn shared_kv(&self) -> &SharedKv { &self.shared_kv }
+    pub(crate) fn shared_kv(&self) -> &SharedKv { self.syscall.shared_kv() }
 
     /// Access the session repository (used by event loop).
     pub(crate) fn session_repo(&self) -> &SessionRepoRef { &self.session_repo }
 
     /// Access the pipe registry (used by event loop).
-    pub(crate) fn pipe_registry(&self) -> &PipeRegistry { &self.pipe_registry }
+    pub(crate) fn pipe_registry(&self) -> &PipeRegistry { self.syscall.pipe_registry() }
 
     /// Access the driver registry (used by event loop for ResolveDriver).
-    pub(crate) fn driver_registry(&self) -> &DriverRegistryRef { &self.driver_registry }
+    pub(crate) fn driver_registry(&self) -> &DriverRegistryRef { self.syscall.driver_registry() }
+
+    /// Access the syscall dispatcher (used by event loop).
+    pub(crate) fn syscall_dispatcher(&self) -> &SyscallDispatcher { &self.syscall }
 
     /// Construct a `Kernel` for testing with minimal I/O subsystem.
     ///
@@ -347,22 +350,27 @@ impl Kernel {
         let ingress_pipeline = Arc::new(IngressPipeline::new(identity_resolver, session_resolver));
         let endpoint_registry = Arc::new(EndpointRegistry::new());
 
+        let syscall = SyscallDispatcher::new(
+            SharedKv::in_memory(),
+            pipe_registry,
+            driver_registry,
+            tool_registry,
+            event_bus,
+            config.clone(),
+        );
+
         Self {
             config,
             process_table,
             global_semaphore,
-            driver_registry,
-            tool_registry,
             memory,
-            event_bus,
             security,
             agent_registry,
-            shared_kv: SharedKv::in_memory(),
             audit,
             session_repo,
             settings,
-            pipe_registry,
             device_registry,
+            syscall,
             stream_hub,
             ingress_pipeline,
             delivery: DeliverySubsystem::new(endpoint_registry),
@@ -405,7 +413,7 @@ impl Kernel {
             Arc::clone(&self.settings),
             Arc::clone(&self.security),
             self.config.clone(),
-            Arc::clone(&self.tool_registry),
+            Arc::clone(self.syscall.tool_registry()),
             Arc::clone(&self.device_registry),
             Arc::clone(&self.global_semaphore),
             self.started_at,

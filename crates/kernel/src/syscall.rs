@@ -12,8 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Syscall handling — all `ProcessHandle` interactions dispatched by the
-//! kernel event loop.
+//! Syscall dispatcher — handles all `ProcessHandle` interactions dispatched
+//! by the kernel event loop.
+//!
+//! Extracted from `event_loop/syscall.rs` to encapsulate the kernel
+//! sub-components used exclusively by syscall handling (shared KV, pipe
+//! registry, driver registry, tool registry, event bus, config).
 
 use std::sync::Arc;
 
@@ -21,22 +25,99 @@ use jiff::Timestamp;
 use snafu::ResultExt;
 use tracing::debug_span;
 
-use super::runtime::RuntimeTable;
 use crate::{
-    audit::{AuditEvent, AuditEventType, MemoryOp},
+    audit::{AuditEvent, AuditEventType, MemoryOp, subsystem::AuditRef},
     error::{KernelError, Result},
     event::Syscall,
-    io::pipe::{self, PipeEntry},
-    kernel::Kernel,
-    memory::KvScope,
-    process::{AgentId, ProcessInfo, principal::Principal},
+    event_loop::runtime::RuntimeTable,
+    io::pipe::{self, PipeEntry, PipeRegistry},
+    kernel::KernelConfig,
+    kv::SharedKv,
+    llm::DriverRegistryRef,
+    memory::{KvScope, MemoryRef},
+    notification::NotificationBusRef,
+    process::{AgentId, ProcessInfo, ProcessTable, agent_registry::AgentRegistryRef, principal::Principal},
+    security::SecurityRef,
+    tool::ToolRegistryRef,
 };
 
-impl Kernel {
+/// Dispatches syscalls from `ProcessHandle` to the appropriate kernel
+/// sub-component.
+///
+/// Owns the kernel fields used exclusively by syscall handling: shared KV,
+/// pipe registry, driver registry, tool registry, event bus, and config.
+/// Other shared state (process table, security, audit, etc.) is passed as
+/// parameters to `dispatch()`.
+pub(crate) struct SyscallDispatcher {
+    /// Cross-agent shared key-value store (OpenDAL-backed).
+    shared_kv: SharedKv,
+    /// Inter-agent pipe registry for streaming data between agents.
+    pipe_registry: PipeRegistry,
+    /// Multi-driver LLM registry with per-agent overrides.
+    driver_registry: DriverRegistryRef,
+    /// Global tool registry.
+    tool_registry: ToolRegistryRef,
+    /// Event bus for publishing kernel notifications.
+    event_bus: NotificationBusRef,
+    /// Kernel configuration.
+    config: KernelConfig,
+}
+
+impl SyscallDispatcher {
+    /// Create a new syscall dispatcher.
+    pub fn new(
+        shared_kv: SharedKv,
+        pipe_registry: PipeRegistry,
+        driver_registry: DriverRegistryRef,
+        tool_registry: ToolRegistryRef,
+        event_bus: NotificationBusRef,
+        config: KernelConfig,
+    ) -> Self {
+        Self {
+            shared_kv,
+            pipe_registry,
+            driver_registry,
+            tool_registry,
+            event_bus,
+            config,
+        }
+    }
+
+    // -- Accessors for KernelHandle backward compatibility ------------------
+
+    /// Access the shared KV store.
+    pub fn shared_kv(&self) -> &SharedKv { &self.shared_kv }
+
+    /// Access the pipe registry.
+    pub fn pipe_registry(&self) -> &PipeRegistry { &self.pipe_registry }
+
+    /// Access the driver registry.
+    pub fn driver_registry(&self) -> &DriverRegistryRef { &self.driver_registry }
+
+    /// Access the tool registry.
+    pub fn tool_registry(&self) -> &ToolRegistryRef { &self.tool_registry }
+
+    /// Access the event bus.
+    pub fn event_bus(&self) -> &NotificationBusRef { &self.event_bus }
+
+    /// Access the kernel config.
+    pub fn config(&self) -> &KernelConfig { &self.config }
+
+    // -- Dispatch -----------------------------------------------------------
+
     /// Handle a syscall from a ProcessHandle.
     ///
     /// All business logic lives here, executed by the kernel event loop.
-    pub(crate) async fn handle_syscall(&self, syscall: Syscall, runtimes: &RuntimeTable) {
+    pub async fn dispatch(
+        &self,
+        syscall: Syscall,
+        process_table: &ProcessTable,
+        runtimes: &RuntimeTable,
+        security: &SecurityRef,
+        audit: &AuditRef,
+        agent_registry: &AgentRegistryRef,
+        _memory: &MemoryRef,
+    ) {
         let syscall_type: &'static str = (&syscall).into();
         crate::metrics::SYSCALL_TOTAL
             .with_label_values(&[syscall_type])
@@ -51,8 +132,7 @@ impl Kernel {
 
         match syscall {
             Syscall::QueryStatus { target, reply_tx } => {
-                let result = self
-                    .process_table()
+                let result = process_table
                     .get(target)
                     .map(|p| ProcessInfo::from(&p))
                     .ok_or(KernelError::ProcessNotFound {
@@ -62,7 +142,7 @@ impl Kernel {
             }
 
             Syscall::QueryChildren { parent, reply_tx } => {
-                let children = self.process_table().children_of(parent);
+                let children = process_table.children_of(parent);
                 let _ = reply_tx.send(children);
             }
 
@@ -76,12 +156,13 @@ impl Kernel {
             } => {
                 let result = self
                     .do_mem_store(
-                        self.config().memory_quota_per_agent,
+                        self.config.memory_quota_per_agent,
                         agent_id,
                         &session_id,
                         &principal,
                         &key,
                         value,
+                        audit,
                     )
                     .await;
                 let _ = reply_tx.send(result);
@@ -93,7 +174,7 @@ impl Kernel {
                 reply_tx,
             } => {
                 let namespaced = format!("agent:{}:{}", agent_id.0, key);
-                let result = Ok(self.shared_kv().get(&namespaced).await);
+                let result = Ok(self.shared_kv.get(&namespaced).await);
                 let _ = reply_tx.send(result);
             }
 
@@ -130,7 +211,7 @@ impl Kernel {
                 reply_tx,
             } => {
                 let (writer, reader) = pipe::pipe(64);
-                self.pipe_registry().register(
+                self.pipe_registry.register(
                     writer.pipe_id().clone(),
                     PipeEntry {
                         owner,
@@ -146,7 +227,7 @@ impl Kernel {
                 name,
                 reply_tx,
             } => {
-                if self.pipe_registry().resolve_name(&name).is_some() {
+                if self.pipe_registry.resolve_name(&name).is_some() {
                     let _ = reply_tx.send(Err(KernelError::Other {
                         message: format!("named pipe already exists: {name}").into(),
                     }));
@@ -154,7 +235,7 @@ impl Kernel {
                 }
                 let (writer, reader) = pipe::pipe(64);
                 let pipe_id = writer.pipe_id().clone();
-                self.pipe_registry().register_named(
+                self.pipe_registry.register_named(
                     name,
                     pipe_id,
                     PipeEntry {
@@ -171,10 +252,10 @@ impl Kernel {
                 name,
                 reply_tx,
             } => {
-                let result = match self.pipe_registry().resolve_name(&name) {
-                    Some(pipe_id) => match self.pipe_registry().take_parked_reader(&pipe_id) {
+                let result = match self.pipe_registry.resolve_name(&name) {
+                    Some(pipe_id) => match self.pipe_registry.take_parked_reader(&pipe_id) {
                         Some(reader) => {
-                            self.pipe_registry().set_reader(&pipe_id, connector);
+                            self.pipe_registry.set_reader(&pipe_id, connector);
                             Ok(reader)
                         }
                         None => Err(KernelError::Other {
@@ -196,7 +277,7 @@ impl Kernel {
                 tool_name,
                 reply_tx,
             } => {
-                let result = self.security().requires_approval(&tool_name);
+                let result = security.requires_approval(&tool_name);
                 let _ = reply_tx.send(result);
             }
 
@@ -207,7 +288,7 @@ impl Kernel {
                 summary,
                 reply_tx,
             } => {
-                let approval = Arc::clone(self.security().approval());
+                let approval = Arc::clone(security.approval());
                 let policy = approval.policy();
                 let req = crate::security::approval::ApprovalRequest {
                     id: uuid::Uuid::new_v4(),
@@ -240,8 +321,7 @@ impl Kernel {
                 checks,
                 reply_tx,
             } => {
-                let (user_id, session_uuid) = self
-                    .process_table()
+                let (user_id, session_uuid) = process_table
                     .get(agent_id)
                     .map(|proc| {
                         (
@@ -257,7 +337,7 @@ impl Kernel {
                     session_id: uuid::Uuid::parse_str(&session_uuid).unwrap_or(uuid::Uuid::nil()),
                 };
 
-                let security = Arc::clone(&self.security());
+                let security = Arc::clone(security);
                 tokio::spawn(async move {
                     let verdicts = security.check_guard_batch(&ctx, &checks).await;
                     let _ = reply_tx.send(verdicts);
@@ -265,8 +345,7 @@ impl Kernel {
             }
 
             Syscall::GetManifest { agent_id, reply_tx } => {
-                let result = self
-                    .process_table()
+                let result = process_table
                     .get(agent_id)
                     .map(|p| p.manifest.clone())
                     .ok_or(KernelError::ProcessNotFound {
@@ -276,11 +355,11 @@ impl Kernel {
             }
 
             Syscall::GetToolRegistry { agent_id, reply_tx } => {
-                let mut registry = self.tool_registry().as_ref().clone();
+                let mut registry = self.tool_registry.as_ref().clone();
                 if let Some(syscall_tool) = runtimes.with(&agent_id, |rt| {
                     crate::handle::syscall_tool::SyscallTool::new(
                         Arc::clone(&rt.handle),
-                        Arc::clone(self.agent_registry()),
+                        Arc::clone(agent_registry),
                     )
                 }) {
                     registry.register_builtin(Arc::new(syscall_tool));
@@ -289,8 +368,8 @@ impl Kernel {
             }
 
             Syscall::ResolveDriver { agent_id, reply_tx } => {
-                let result = match self.process_table().get(agent_id) {
-                    Some(process) => self.driver_registry().resolve(
+                let result = match process_table.get(agent_id) {
+                    Some(process) => self.driver_registry.resolve(
                         &process.manifest.name,
                         process.manifest.provider_hint.as_deref(),
                         process.manifest.model.as_deref(),
@@ -307,7 +386,7 @@ impl Kernel {
                 event_type,
                 payload: _,
             } => {
-                self.event_bus()
+                self.event_bus
                     .publish(crate::notification::KernelNotification::ToolExecuted {
                         agent_id:  agent_id.0,
                         tool_name: format!("event:{event_type}"),
@@ -325,13 +404,12 @@ impl Kernel {
                 success,
                 duration_ms,
             } => {
-                let agent_name = self
-                    .process_table()
+                let agent_name = process_table
                     .get(agent_id)
                     .map(|p| p.manifest.name)
                     .unwrap_or_else(|| "unknown".to_string());
                 crate::metrics::record_turn_tool_call(&agent_name, &tool_name);
-                self.audit()
+                audit
                     .record_tool_call(agent_id, &tool_name, &args, &result, success, duration_ms)
                     .await;
             }
@@ -343,7 +421,7 @@ impl Kernel {
     // -----------------------------------------------------------------------
 
     /// Store a value in an agent's private memory namespace.
-    pub(crate) async fn do_mem_store(
+    async fn do_mem_store(
         &self,
         memory_quota: usize,
         agent_id: AgentId,
@@ -351,15 +429,16 @@ impl Kernel {
         principal: &Principal,
         key: &str,
         value: serde_json::Value,
+        audit: &AuditRef,
     ) -> Result<()> {
         let namespaced = format!("agent:{}:{}", agent_id.0, key);
 
         // Check quota before inserting — only if this is a new key.
-        if !self.shared_kv().contains_key(&namespaced).await {
+        if !self.shared_kv.contains_key(&namespaced).await {
             let max = memory_quota;
             if max > 0 {
                 let prefix = format!("agent:{}:", agent_id.0);
-                let count = self.shared_kv().count_prefix(&prefix).await;
+                let count = self.shared_kv.count_prefix(&prefix).await;
                 if count >= max {
                     return Err(KernelError::MemoryQuotaExceeded {
                         agent_id: agent_id.to_string(),
@@ -370,13 +449,13 @@ impl Kernel {
             }
         }
 
-        self.shared_kv()
+        self.shared_kv
             .set(&namespaced, value)
             .await
             .whatever_context::<_, KernelError>("KV store error")?;
 
         // Audit: MemoryAccess (Store)
-        self.audit().record(AuditEvent {
+        audit.record(AuditEvent {
             timestamp: Timestamp::now(),
             agent_id,
             session_id: session_id.clone(),
@@ -392,7 +471,7 @@ impl Kernel {
     }
 
     /// Validate scope permissions for shared memory operations.
-    pub(crate) fn check_scope_permission(
+    fn check_scope_permission(
         agent_id: AgentId,
         principal: &Principal,
         scope: &KvScope,
@@ -424,7 +503,7 @@ impl Kernel {
     }
 
     /// Build a scoped key from a KvScope.
-    pub(crate) fn scoped_key(scope: &KvScope, key: &str) -> String {
+    fn scoped_key(scope: &KvScope, key: &str) -> String {
         match scope {
             KvScope::Global => key.to_string(),
             KvScope::Team(name) => format!("team:{name}:{key}"),
@@ -433,7 +512,7 @@ impl Kernel {
     }
 
     /// Store a value in a shared (scoped) memory namespace.
-    pub(crate) async fn do_shared_store(
+    async fn do_shared_store(
         &self,
         agent_id: AgentId,
         principal: &Principal,
@@ -443,7 +522,7 @@ impl Kernel {
     ) -> Result<()> {
         Self::check_scope_permission(agent_id, principal, scope)?;
         let scoped = Self::scoped_key(scope, key);
-        self.shared_kv()
+        self.shared_kv
             .set(&scoped, value)
             .await
             .whatever_context::<_, KernelError>("KV store error")?;
@@ -451,7 +530,7 @@ impl Kernel {
     }
 
     /// Recall a value from a shared (scoped) memory namespace.
-    pub(crate) async fn do_shared_recall(
+    async fn do_shared_recall(
         &self,
         agent_id: AgentId,
         principal: &Principal,
@@ -460,6 +539,6 @@ impl Kernel {
     ) -> Result<Option<serde_json::Value>> {
         Self::check_scope_permission(agent_id, principal, scope)?;
         let scoped = Self::scoped_key(scope, key);
-        Ok(self.shared_kv().get(&scoped).await)
+        Ok(self.shared_kv.get(&scoped).await)
     }
 }

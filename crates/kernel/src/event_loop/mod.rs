@@ -28,7 +28,6 @@ mod lifecycle;
 mod message;
 pub(crate) mod processor;
 pub(crate) mod runtime;
-mod syscall;
 mod turn;
 
 use std::sync::Arc;
@@ -164,7 +163,17 @@ impl Kernel {
                 self.delivery().deliver(envelope, self.security());
             }
             KernelEvent::Syscall(syscall) => {
-                self.handle_syscall(syscall, runtimes).await;
+                self.syscall_dispatcher()
+                    .dispatch(
+                        syscall,
+                        self.process_table(),
+                        runtimes,
+                        self.security(),
+                        self.audit(),
+                        self.agent_registry(),
+                        self.memory(),
+                    )
+                    .await;
             }
             KernelEvent::Shutdown => {
                 info!("shutdown event received");
