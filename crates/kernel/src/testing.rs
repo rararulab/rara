@@ -20,15 +20,15 @@
 //!
 //! ```rust,ignore
 //! use rara_kernel::testing::TestKernelBuilder;
-//! use rara_kernel::provider::ProviderRegistryBuilder;
+//! use rara_kernel::llm::DriverRegistryBuilder;
 //!
 //! let registry = Arc::new(
-//!     ProviderRegistryBuilder::new("openrouter", "openai/gpt-4o-mini")
-//!         .provider("openrouter", Arc::new(my_provider))
+//!     DriverRegistryBuilder::new("test", "test-model")
+//!         .driver("test", Arc::new(my_driver))
 //!         .build(),
 //! );
 //! let kernel = TestKernelBuilder::new()
-//!     .provider_registry(registry)
+//!     .driver_registry(registry)
 //!     .max_concurrency(4)
 //!     .build();
 //! ```
@@ -42,8 +42,8 @@ use crate::{
     device_registry::DeviceRegistry,
     io::{pipe::PipeRegistry, stream::StreamHub},
     kernel::{Kernel, KernelConfig, SettingsRef},
+    llm::DriverRegistryRef,
     process::{AgentManifest, ProcessTable, agent_registry::AgentRegistry},
-    provider::ProviderRegistry,
     session::SessionRepoRef,
     tool::{AgentToolRef, ToolRegistry},
 };
@@ -52,12 +52,12 @@ use crate::{
 ///
 /// All Noop implementations are used by default. The caller only needs to
 /// provide the components relevant to their test (typically just the LLM
-/// provider registry).
+/// driver registry).
 pub struct TestKernelBuilder {
-    config:            KernelConfig,
-    provider_registry: Option<Arc<ProviderRegistry>>,
-    tool_registry:     ToolRegistry,
-    agent_registry:    AgentRegistry,
+    config:          KernelConfig,
+    driver_registry: Option<DriverRegistryRef>,
+    tool_registry:   ToolRegistry,
+    agent_registry:  AgentRegistry,
 }
 
 impl TestKernelBuilder {
@@ -75,15 +75,15 @@ impl TestKernelBuilder {
                 memory_quota_per_agent: 1000,
                 ..Default::default()
             },
-            provider_registry: None,
+            driver_registry: None,
             tool_registry: ToolRegistry::new(),
             agent_registry,
         }
     }
 
-    /// Set the provider registry.
-    pub fn provider_registry(mut self, registry: Arc<ProviderRegistry>) -> Self {
-        self.provider_registry = Some(registry);
+    /// Set the driver registry.
+    pub fn driver_registry(mut self, registry: DriverRegistryRef) -> Self {
+        self.driver_registry = Some(registry);
         self
     }
 
@@ -115,19 +115,19 @@ impl TestKernelBuilder {
     ///
     /// # Panics
     ///
-    /// Panics if no provider registry has been set. Use
-    /// [`provider_registry`](Self::provider_registry) to provide one.
+    /// Panics if no driver registry has been set. Use
+    /// [`driver_registry`](Self::driver_registry) to provide one.
     pub fn build(self) -> Kernel {
-        let provider_registry = self.provider_registry.expect(
-            "TestKernelBuilder requires a ProviderRegistry — call .provider_registry() first",
-        );
+        let driver_registry = self
+            .driver_registry
+            .expect("TestKernelBuilder requires a DriverRegistry — call .driver_registry() first");
 
         let max_concurrency = self.config.max_concurrency;
         Kernel::for_testing(
             self.config,
             Arc::new(ProcessTable::new()),
             Arc::new(Semaphore::new(max_concurrency)),
-            provider_registry,
+            driver_registry,
             Arc::new(self.tool_registry),
             Arc::new(NoopMemory),
             Arc::new(NoopEventBus),

@@ -131,6 +131,13 @@ tempo:
           path: /var/tempo/traces
         wal:
           path: /var/tempo/wal
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
   persistence:
     enabled: true
     size: 5Gi

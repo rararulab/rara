@@ -21,7 +21,7 @@
 //!
 //! | Component   | Trait            | Purpose                          |
 //! |-------------|------------------|----------------------------------|
-//! | LLM         | [`LlmApi`]       | Chat completion requests         |
+//! | LLM         | [`LlmDriver`]    | Chat completion requests         |
 //! | Tool        | [`ToolRegistry`] | Tool registration + dispatch     |
 //! | Memory      | [`Memory`]       | 3-layer memory (State/Knowledge/Learning) |
 //! | Session     | [`SessionRepository`] | Conversation history persistence |
@@ -51,8 +51,6 @@ pub mod memory;
 pub mod metrics;
 pub mod model;
 pub mod process;
-pub mod provider;
-pub mod runner;
 pub mod security;
 pub mod session;
 pub(crate) mod shard_queue;

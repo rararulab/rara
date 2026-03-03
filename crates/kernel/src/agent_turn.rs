@@ -14,30 +14,25 @@
 
 //! Inline agent turn — unified LLM streaming + tool execution loop.
 //!
-//! [`run_inline_agent_loop`] replaces the old `process_loop::run_agent_turn`
-//! bridge layer. Instead of spawning a separate tokio task (via
-//! `AgentRunner::run_streaming`) and forwarding `RunnerEvent` through an mpsc
-//! channel, this function runs the LLM streaming loop **inline** in the
+//! [`run_inline_agent_loop`] runs the LLM streaming loop **inline** in the
 //! caller's task, emitting [`StreamEvent`]s directly and supporting
 //! cancellation via `tokio::select!` on a [`CancellationToken`].
+//!
+//! This module uses the new [`LlmDriver`](crate::llm::LlmDriver) abstraction
+//! which provides first-class `reasoning_content` support for models like
+//! DeepSeek-R1.
 
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
-use async_openai::types::chat::{
-    ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
-    ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
-    ChatCompletionRequestSystemMessageArgs, ChatCompletionToolChoiceOption,
-    CreateChatCompletionRequestArgs, FinishReason, FunctionCall, ToolChoiceOptions,
-};
-use futures::StreamExt;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, info_span, warn};
 
 use crate::{
     handle::process_handle::ProcessHandle,
     io::stream::{StreamEvent, StreamHandle},
+    llm,
     model::ModelCapabilities,
-    runner::{PendingToolCall, UserContent, build_tool_response_message, build_user_message},
 };
 
 /// Maximum byte length for result preview strings.
@@ -50,6 +45,13 @@ fn truncate_preview(s: &str, max_bytes: usize) -> String {
     }
     let boundary = s.floor_char_boundary(max_bytes);
     format!("{}... (truncated)", &s[..boundary])
+}
+
+/// A tool call being incrementally assembled from streaming deltas.
+struct PendingToolCall {
+    id:            String,
+    name:          String,
+    arguments_buf: String,
 }
 
 /// Trace of a single tool call within an iteration.
@@ -72,7 +74,7 @@ pub struct IterationTrace {
     pub stream_ms:      u64,
     /// First 200 chars of accumulated text.
     pub text_preview:   String,
-    /// Full accumulated text for this iteration (the agent's "thinking").
+    /// Full accumulated reasoning text for this iteration.
     pub reasoning_text: Option<String>,
     pub tool_calls:     Vec<ToolCallTrace>,
 }
@@ -109,13 +111,14 @@ pub struct AgentTurnResult {
 /// Execute a single agent turn inline: build messages, stream LLM responses,
 /// execute tool calls, and emit [`StreamEvent`]s directly.
 ///
-/// Unlike the old `process_loop::run_agent_turn`, this function:
-/// 1. Does **not** spawn a separate tokio task
-/// 2. Emits `StreamEvent` directly (no RunnerEvent -> StreamEvent translation)
-/// 3. Supports cancellation via `turn_cancel` token in every `tokio::select!`
+/// Uses the new [`LlmDriver`] abstraction with first-class `reasoning_content`
+/// (thinking tokens) support. The driver sends [`StreamDelta`] events through
+/// an `mpsc` channel, which this function consumes.
 ///
-/// Context (manifest, tools, provider) is queried via syscalls through the
-/// ProcessHandle.
+/// # Cancellation
+///
+/// Respects `turn_cancel` at every `tokio::select!` point — both before the
+/// stream starts and during delta consumption.
 #[tracing::instrument(
     skip(handle, history, stream_handle, turn_cancel),
     fields(
@@ -126,7 +129,7 @@ pub struct AgentTurnResult {
 pub(crate) async fn run_inline_agent_loop(
     handle: &ProcessHandle,
     user_text: String,
-    history: Option<Vec<ChatCompletionRequestMessage>>,
+    history: Option<Vec<llm::Message>>,
     stream_handle: &StreamHandle,
     turn_cancel: &CancellationToken,
 ) -> Result<AgentTurnResult, String> {
@@ -140,54 +143,39 @@ pub(crate) async fn run_inline_agent_loop(
         .await
         .map_err(|e| format!("failed to get tool registry: {e}"))?;
 
-    // Filter tools by manifest.tools whitelist. If the list is empty (e.g.
-    // rara), all tools are included. If specific tools are listed (e.g.
-    // scout: ["read_file", "grep"]), only those are available.
+    // Filter tools by manifest.tools whitelist.
     let tools = Arc::new(full_tools.filtered(&manifest.tools));
 
     let max_iterations = manifest.max_iterations.unwrap_or(25);
-    // Build effective system prompt (prepend soul_prompt if present)
     let effective_prompt = match &manifest.soul_prompt {
         Some(soul) => format!("{soul}\n\n---\n\n{}", manifest.system_prompt),
         None => manifest.system_prompt.clone(),
     };
     let provider_hint = manifest.provider_hint.as_deref();
 
-    // Resolve provider + model via the ProviderRegistry syscall.
-    // This uses the resolution priority chain:
-    //   agent_overrides > manifest > global default
-    let (provider, model) = handle
-        .resolve_provider()
+    // Resolve driver + model via the DriverRegistry syscall.
+    let (driver, model) = handle
+        .resolve_driver()
         .await
-        .map_err(|e| format!("failed to resolve LLM provider: {e}"))?;
+        .map_err(|e| format!("failed to resolve LLM driver: {e}"))?;
 
-    // Record model on the parent agent_turn span.
     tracing::Span::current().record("model", model.as_str());
 
-    // Clone user_text before it's consumed by build_user_message.
     let input_text = user_text.clone();
 
     // Build initial messages: system + optional history + user
-    let mut messages: Vec<ChatCompletionRequestMessage> = {
-        let sys_msg = ChatCompletionRequestSystemMessageArgs::default()
-            .content(effective_prompt.as_str())
-            .build()
-            .map_err(|e| format!("failed to build system message: {e}"))?;
-        let mut msgs = vec![sys_msg.into()];
-
+    let mut messages: Vec<llm::Message> = {
+        let mut msgs = vec![llm::Message::system(&effective_prompt)];
         if let Some(hist) = history {
             msgs.extend(hist);
         }
-
-        let user_msg = build_user_message(&UserContent::Text(user_text))
-            .map_err(|e| format!("failed to build user message: {e}"))?;
-        msgs.push(user_msg);
+        msgs.push(llm::Message::user(user_text));
         msgs
     };
 
     // Check model tool support
-    let request_tools = if tools.is_empty() {
-        None
+    let tool_defs = if tools.is_empty() {
+        vec![]
     } else {
         let capabilities = ModelCapabilities::detect(provider_hint, &model);
         if !capabilities.supports_tools {
@@ -197,13 +185,9 @@ pub(crate) async fn run_inline_agent_loop(
                 reason = capabilities.tools_disabled_reason.unwrap_or("unknown"),
                 "disabling tool calling for model without tool support"
             );
-            None
+            vec![]
         } else {
-            Some(
-                tools
-                    .to_chat_completion_tools()
-                    .map_err(|e| format!("failed to build tool definitions: {e}"))?,
-            )
+            tools.to_llm_tool_definitions()
         }
     };
 
@@ -230,143 +214,129 @@ pub(crate) async fn run_inline_agent_loop(
         info!(
             iteration,
             messages_count = messages.len(),
-            "calling LLM (inline streaming)"
+            "calling LLM (inline streaming via LlmDriver)"
         );
 
-        // Build streaming request (provider already resolved above)
-        let mut request_builder = CreateChatCompletionRequestArgs::default();
-        request_builder
-            .model(model.as_str())
-            .messages(messages.clone())
-            .temperature(0.7_f32);
-
-        if let Some(ref tool_defs) = request_tools {
-            request_builder.tools(tool_defs.clone());
-            request_builder.tool_choice(ChatCompletionToolChoiceOption::Mode(
-                ToolChoiceOptions::Auto,
-            ));
-            request_builder.parallel_tool_calls(true);
-        }
-
-        let request = request_builder
-            .build()
-            .map_err(|e| format!("failed to build streaming request: {e}"))?;
-
-        // Start streaming with cancellation support
-        let mut stream = tokio::select! {
-            result = provider.chat_completion_stream(request) => {
-                result.map_err(|e| format!("LLM streaming request failed: {e}"))?
-            }
-            _ = turn_cancel.cancelled() => {
-                info!("LLM turn cancelled before streaming started");
-                return Err("interrupted by user".to_string());
-            }
+        // Build completion request
+        let request = llm::CompletionRequest {
+            model:               model.clone(),
+            messages:            messages.clone(),
+            tools:               tool_defs.clone(),
+            temperature:         Some(0.7),
+            max_tokens:          None,
+            thinking:            None,
+            tool_choice:         if tool_defs.is_empty() {
+                llm::ToolChoice::None
+            } else {
+                llm::ToolChoice::Auto
+            },
+            parallel_tool_calls: true,
         };
 
-        // Consume streaming chunks
+        // Start streaming via LlmDriver
+        let (tx, mut rx) = mpsc::channel::<llm::StreamDelta>(128);
+        let driver_clone = Arc::clone(&driver);
+        let request_clone = request;
+
+        // Spawn driver.stream() — it sends deltas to tx and returns when done.
+        let stream_task = tokio::spawn(async move { driver_clone.stream(request_clone, tx).await });
+
+        // Consume streaming deltas
         let stream_start = Instant::now();
         let mut first_token_at: Option<Instant> = None;
         let mut accumulated_text = String::new();
+        let mut accumulated_reasoning = String::new();
         let mut pending_tool_calls: HashMap<u32, PendingToolCall> = HashMap::new();
         let mut has_tool_calls = false;
 
         loop {
-            let chunk_result = tokio::select! {
-                chunk = stream.next() => chunk,
+            let delta = tokio::select! {
+                delta = rx.recv() => delta,
                 _ = turn_cancel.cancelled() => {
+                    stream_task.abort();
                     info!("LLM turn cancelled during streaming");
                     return Err("interrupted by user".to_string());
                 }
             };
 
-            let Some(chunk_result) = chunk_result else {
-                // Stream ended
+            let Some(delta) = delta else {
+                // Channel closed — driver finished (or errored).
                 break;
             };
 
-            let response = match chunk_result {
-                Ok(r) => r,
-                Err(e) => {
-                    error!(
-                        iteration,
-                        model = model.as_str(),
-                        error = %e,
-                        "streaming chunk error"
-                    );
-                    return Err(format!(
-                        "Model \"{}\" returned an error during streaming: {e}",
-                        model
-                    ));
-                }
-            };
-
-            let Some(choice) = response.choices.first() else {
-                continue;
-            };
-
-            // Text content delta
-            if let Some(ref text) = choice.delta.content {
-                if !text.is_empty() {
-                    if first_token_at.is_none() {
-                        first_token_at = Some(Instant::now());
-                        iter_span.record(
-                            "first_token_ms",
-                            first_token_at
-                                .unwrap()
-                                .duration_since(stream_start)
-                                .as_millis() as u64,
-                        );
+            match delta {
+                llm::StreamDelta::TextDelta { text } => {
+                    if !text.is_empty() {
+                        if first_token_at.is_none() {
+                            first_token_at = Some(Instant::now());
+                            iter_span.record(
+                                "first_token_ms",
+                                first_token_at
+                                    .unwrap()
+                                    .duration_since(stream_start)
+                                    .as_millis() as u64,
+                            );
+                        }
+                        accumulated_text.push_str(&text);
+                        stream_handle.emit(StreamEvent::TextDelta { text });
                     }
-                    accumulated_text.push_str(text);
-                    stream_handle.emit(StreamEvent::TextDelta { text: text.clone() });
                 }
-            }
-
-            // Tool call delta accumulation
-            if let Some(ref tool_calls_delta) = choice.delta.tool_calls {
-                for tc in tool_calls_delta {
-                    let idx = tc.index;
-                    let entry = pending_tool_calls
-                        .entry(idx)
+                llm::StreamDelta::ReasoningDelta { text } => {
+                    if !text.is_empty() {
+                        if first_token_at.is_none() {
+                            first_token_at = Some(Instant::now());
+                        }
+                        accumulated_reasoning.push_str(&text);
+                        // KEY: emit ReasoningDelta to the stream!
+                        stream_handle.emit(StreamEvent::ReasoningDelta { text });
+                    }
+                }
+                llm::StreamDelta::ToolCallStart { index, id, name } => {
+                    pending_tool_calls
+                        .entry(index)
                         .or_insert_with(|| PendingToolCall {
-                            id:            String::new(),
-                            name:          String::new(),
+                            id,
+                            name,
                             arguments_buf: String::new(),
                         });
-                    if let Some(ref id) = tc.id {
-                        if !id.is_empty() {
-                            entry.id = id.clone();
-                        }
-                    }
-                    if let Some(ref func) = tc.function {
-                        if let Some(ref name) = func.name {
-                            if !name.is_empty() {
-                                entry.name = name.clone();
-                            }
-                        }
-                        if let Some(ref args) = func.arguments {
-                            entry.arguments_buf.push_str(args);
-                        }
+                }
+                llm::StreamDelta::ToolCallArgumentsDelta { index, arguments } => {
+                    if let Some(tc) = pending_tool_calls.get_mut(&index) {
+                        tc.arguments_buf.push_str(&arguments);
                     }
                 }
-            }
-
-            // Check finish_reason
-            if let Some(ref reason) = choice.finish_reason {
-                match reason {
-                    FinishReason::ToolCalls => {
-                        has_tool_calls = true;
-                        break;
-                    }
-                    FinishReason::Stop | FinishReason::Length => {
-                        break;
-                    }
-                    _ => {}
+                llm::StreamDelta::Done { stop_reason, .. } => {
+                    has_tool_calls = stop_reason == llm::StopReason::ToolCalls;
+                    break;
                 }
             }
         }
 
-        // Record stream duration on the iteration span.
+        // Wait for the stream task to complete (the driver accumulates the
+        // full response internally).
+        let driver_result = match stream_task.await {
+            Ok(result) => result,
+            Err(join_err) if join_err.is_cancelled() => {
+                return Err("interrupted by user".to_string());
+            }
+            Err(join_err) => {
+                return Err(format!("driver stream task panicked: {join_err}"));
+            }
+        };
+
+        if let Err(ref e) = driver_result {
+            error!(
+                iteration,
+                model = model.as_str(),
+                error = %e,
+                "LLM driver stream error"
+            );
+            return Err(format!(
+                "Model \"{}\" returned an error during streaming: {e}",
+                model
+            ));
+        }
+
         iter_span.record("stream_ms", stream_start.elapsed().as_millis() as u64);
         iter_span.record("has_tools", has_tool_calls);
 
@@ -381,7 +351,11 @@ pub(crate) async fn run_inline_agent_loop(
                 first_token_ms,
                 stream_ms,
                 text_preview,
-                reasoning_text: Some(accumulated_text.clone()),
+                reasoning_text: if accumulated_reasoning.is_empty() {
+                    None
+                } else {
+                    Some(accumulated_reasoning)
+                },
                 tool_calls: vec![],
             });
             let trace = TurnTrace {
@@ -416,25 +390,19 @@ pub(crate) async fn run_inline_agent_loop(
             .collect();
 
         // Reconstruct assistant message with tool_calls for message history
-        let openai_tool_calls: Vec<ChatCompletionMessageToolCalls> = tool_call_list
+        let assistant_tool_calls: Vec<llm::ToolCallRequest> = tool_call_list
             .iter()
-            .map(|tc| {
-                ChatCompletionMessageToolCalls::Function(ChatCompletionMessageToolCall {
-                    id:       tc.id.clone(),
-                    function: FunctionCall {
-                        name:      tc.name.clone(),
-                        arguments: tc.arguments_buf.clone(),
-                    },
-                })
+            .map(|tc| llm::ToolCallRequest {
+                id:        tc.id.clone(),
+                name:      tc.name.clone(),
+                arguments: tc.arguments_buf.clone(),
             })
             .collect();
 
-        let assistant_msg = ChatCompletionRequestAssistantMessageArgs::default()
-            .content(accumulated_text.clone())
-            .tool_calls(openai_tool_calls)
-            .build()
-            .map_err(|e| format!("failed to build assistant message: {e}"))?;
-        messages.push(assistant_msg.into());
+        messages.push(llm::Message::assistant_with_tool_calls(
+            accumulated_text.clone(),
+            assistant_tool_calls,
+        ));
 
         // Parse and validate tool calls
         let mut valid_tool_calls = Vec::new();
@@ -444,13 +412,10 @@ pub(crate) async fn run_inline_agent_loop(
                 Ok(args) => args,
                 Err(err) => {
                     let error_message = format!("invalid tool arguments: {err}");
-                    messages.push(
-                        build_tool_response_message(
-                            &tool_call.id,
-                            &serde_json::json!({ "error": error_message }).to_string(),
-                        )
-                        .map_err(|e| format!("failed to build tool response: {e}"))?,
-                    );
+                    messages.push(llm::Message::tool_result(
+                        &tool_call.id,
+                        serde_json::json!({ "error": error_message }).to_string(),
+                    ));
                     continue;
                 }
             };
@@ -505,7 +470,6 @@ pub(crate) async fn run_inline_agent_loop(
                 async move {
                     let _guard = tool_span.enter();
                     let tool_start = Instant::now();
-                    // Check guard verdict first
                     if is_denied {
                         tool_span.record("success", false);
                         let reason = deny_reason.unwrap_or_default();
@@ -580,10 +544,7 @@ pub(crate) async fn run_inline_agent_loop(
                 error: err,
             });
 
-            messages.push(
-                build_tool_response_message(id, &result_str)
-                    .map_err(|e| format!("failed to build tool response: {e}"))?,
-            );
+            messages.push(llm::Message::tool_result(id, result_str));
         }
 
         // Collect iteration trace (with tool calls)
@@ -597,10 +558,10 @@ pub(crate) async fn run_inline_agent_loop(
                 first_token_ms,
                 stream_ms,
                 text_preview,
-                reasoning_text: if accumulated_text.is_empty() {
+                reasoning_text: if accumulated_reasoning.is_empty() {
                     None
                 } else {
-                    Some(accumulated_text.clone())
+                    Some(accumulated_reasoning.clone())
                 },
                 tool_calls: tool_call_traces,
             });
@@ -631,25 +592,69 @@ pub(crate) async fn run_inline_agent_loop(
     })
 }
 
+/// Convert persisted chat history into [`llm::Message`] format.
+///
+/// This is the `LlmDriver`-native equivalent of the legacy
+/// `runner::build_history_messages` which returns async-openai types.
+pub(crate) fn build_llm_history(
+    history: &[crate::channel::types::ChatMessage],
+) -> Vec<llm::Message> {
+    history
+        .iter()
+        .filter_map(|msg| {
+            use crate::channel::types::MessageRole;
+            match msg.role {
+                MessageRole::System => Some(llm::Message::system(msg.content.as_text())),
+                MessageRole::User => Some(llm::Message::user(msg.content.as_text())),
+                MessageRole::Assistant => {
+                    if msg.tool_calls.is_empty() {
+                        Some(llm::Message::assistant(msg.content.as_text()))
+                    } else {
+                        let tool_calls: Vec<llm::ToolCallRequest> = msg
+                            .tool_calls
+                            .iter()
+                            .map(|tc| llm::ToolCallRequest {
+                                id:        tc.id.to_string(),
+                                name:      tc.name.to_string(),
+                                arguments: tc.arguments.to_string(),
+                            })
+                            .collect();
+                        Some(llm::Message::assistant_with_tool_calls(
+                            msg.content.as_text(),
+                            tool_calls,
+                        ))
+                    }
+                }
+                MessageRole::Tool | MessageRole::ToolResult => {
+                    let tool_call_id = msg.tool_call_id.as_deref().unwrap_or("");
+                    Some(llm::Message::tool_result(
+                        tool_call_id,
+                        msg.content.as_text(),
+                    ))
+                }
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
-    use async_openai::types::chat::{
-        ChatChoiceStream, ChatCompletionRequestUserMessageArgs, ChatCompletionResponseStream,
-        ChatCompletionStreamResponseDelta, CreateChatCompletionRequest,
-        CreateChatCompletionStreamResponse, FinishReason,
-    };
     use async_trait::async_trait;
-    use futures::stream;
+    use tokio::sync::mpsc;
     use tokio_util::sync::CancellationToken;
 
     use super::*;
     use crate::{
         handle::process_handle::ProcessHandle,
         kernel::Kernel,
+        llm::{
+            self, DriverRegistryBuilder, LlmDriver, LlmDriverRef,
+            stream::StreamDelta,
+            types::{CompletionRequest, CompletionResponse, StopReason, Usage},
+        },
         process::{AgentId, AgentManifest, SessionId, principal::Principal},
-        provider::{LlmProvider, ProviderRegistryBuilder},
         testing::TestKernelBuilder,
     };
 
@@ -672,17 +677,152 @@ mod tests {
         }
     }
 
-    /// Set up a test kernel with the event loop running, spawn a process,
-    /// and return the kernel + agent_id + cancel token.
-    async fn setup_test_kernel_with_process(
-        provider: Arc<dyn LlmProvider>,
+    /// A stub LlmDriver that returns a simple text response.
+    struct StubDriver;
+
+    #[async_trait]
+    impl LlmDriver for StubDriver {
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> crate::error::Result<CompletionResponse> {
+            Ok(CompletionResponse {
+                content:           Some("test reply".to_string()),
+                reasoning_content: None,
+                tool_calls:        vec![],
+                stop_reason:       StopReason::Stop,
+                usage:             Some(Usage {
+                    prompt_tokens:     10,
+                    completion_tokens: 5,
+                    total_tokens:      15,
+                }),
+                model:             "test-model".to_string(),
+            })
+        }
+
+        async fn stream(
+            &self,
+            _request: CompletionRequest,
+            tx: mpsc::Sender<StreamDelta>,
+        ) -> crate::error::Result<CompletionResponse> {
+            let _ = tx
+                .send(StreamDelta::TextDelta {
+                    text: "test reply".to_string(),
+                })
+                .await;
+            let _ = tx
+                .send(StreamDelta::Done {
+                    stop_reason: StopReason::Stop,
+                    usage:       Some(Usage {
+                        prompt_tokens:     10,
+                        completion_tokens: 5,
+                        total_tokens:      15,
+                    }),
+                })
+                .await;
+            Ok(CompletionResponse {
+                content:           Some("test reply".to_string()),
+                reasoning_content: None,
+                tool_calls:        vec![],
+                stop_reason:       StopReason::Stop,
+                usage:             Some(Usage {
+                    prompt_tokens:     10,
+                    completion_tokens: 5,
+                    total_tokens:      15,
+                }),
+                model:             "test-model".to_string(),
+            })
+        }
+    }
+
+    /// A stub driver that emits reasoning deltas (simulating DeepSeek-R1).
+    struct ReasoningDriver;
+
+    #[async_trait]
+    impl LlmDriver for ReasoningDriver {
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> crate::error::Result<CompletionResponse> {
+            Ok(CompletionResponse {
+                content:           Some("answer".to_string()),
+                reasoning_content: Some("thinking...".to_string()),
+                tool_calls:        vec![],
+                stop_reason:       StopReason::Stop,
+                usage:             None,
+                model:             "test-model".to_string(),
+            })
+        }
+
+        async fn stream(
+            &self,
+            _request: CompletionRequest,
+            tx: mpsc::Sender<StreamDelta>,
+        ) -> crate::error::Result<CompletionResponse> {
+            let _ = tx
+                .send(StreamDelta::ReasoningDelta {
+                    text: "thinking...".to_string(),
+                })
+                .await;
+            let _ = tx
+                .send(StreamDelta::TextDelta {
+                    text: "answer".to_string(),
+                })
+                .await;
+            let _ = tx
+                .send(StreamDelta::Done {
+                    stop_reason: StopReason::Stop,
+                    usage:       None,
+                })
+                .await;
+            Ok(CompletionResponse {
+                content:           Some("answer".to_string()),
+                reasoning_content: Some("thinking...".to_string()),
+                tool_calls:        vec![],
+                stop_reason:       StopReason::Stop,
+                usage:             None,
+                model:             "test-model".to_string(),
+            })
+        }
+    }
+
+    /// A stub driver that blocks indefinitely (for cancellation tests).
+    struct BlockingDriver;
+
+    #[async_trait]
+    impl LlmDriver for BlockingDriver {
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> crate::error::Result<CompletionResponse> {
+            futures::future::pending().await
+        }
+
+        async fn stream(
+            &self,
+            _request: CompletionRequest,
+            _tx: mpsc::Sender<StreamDelta>,
+        ) -> crate::error::Result<CompletionResponse> {
+            // Never sends anything — blocks forever.
+            futures::future::pending().await
+        }
+    }
+
+    /// Set up a test kernel with a DriverRegistry. Returns (kernel_arc,
+    /// agent_id, cancel).
+    async fn setup_test_kernel_with_driver(
+        driver: LlmDriverRef,
     ) -> (Arc<Kernel>, AgentId, CancellationToken) {
-        let registry = Arc::new(
-            ProviderRegistryBuilder::new("test", "test-model")
-                .provider("test", provider)
+        let driver_registry = Arc::new(
+            DriverRegistryBuilder::new("test", "test-model")
+                .driver("test", driver)
                 .build(),
         );
-        let kernel = TestKernelBuilder::new().provider_registry(registry).build();
+
+        let kernel = TestKernelBuilder::new()
+            .driver_registry(driver_registry)
+            .build();
+
         let cancel = CancellationToken::new();
         let (kernel_arc, handle) = kernel.start(cancel.clone());
 
@@ -703,68 +843,13 @@ mod tests {
         (kernel_arc, agent_id, cancel)
     }
 
-    #[derive(Default)]
-    struct StubStreamingProvider {
-        message_counts: Mutex<Vec<usize>>,
-    }
-
-    #[async_trait]
-    impl LlmProvider for StubStreamingProvider {
-        async fn chat_completion(
-            &self,
-            _request: CreateChatCompletionRequest,
-        ) -> crate::error::Result<async_openai::types::chat::CreateChatCompletionResponse> {
-            Err(crate::error::KernelError::Other {
-                message: "not supported".into(),
-            })
-        }
-
-        #[allow(deprecated)]
-        async fn chat_completion_stream(
-            &self,
-            request: CreateChatCompletionRequest,
-        ) -> crate::error::Result<ChatCompletionResponseStream> {
-            self.message_counts
-                .lock()
-                .expect("lock")
-                .push(request.messages.len());
-
-            let chunk = CreateChatCompletionStreamResponse {
-                id:                 "resp_1".to_string(),
-                choices:            vec![ChatChoiceStream {
-                    index:         0,
-                    delta:         ChatCompletionStreamResponseDelta {
-                        content:       Some("test reply".to_string()),
-                        function_call: None,
-                        tool_calls:    None,
-                        role:          None,
-                        refusal:       None,
-                    },
-                    finish_reason: Some(FinishReason::Stop),
-                    logprobs:      None,
-                }],
-                created:            0,
-                model:              "test-model".to_string(),
-                service_tier:       None,
-                system_fingerprint: None,
-                object:             "chat.completion.chunk".to_string(),
-                usage:              None,
-            };
-
-            Ok(Box::pin(stream::iter(vec![Ok(chunk)])))
-        }
-    }
-
     #[tokio::test]
     async fn test_run_inline_agent_loop_basic() {
-        let provider = Arc::new(StubStreamingProvider::default());
+        let driver: LlmDriverRef = Arc::new(StubDriver);
+        let (kernel, agent_id, cancel) = setup_test_kernel_with_driver(driver).await;
 
-        let (kernel, _agent_id, cancel) =
-            setup_test_kernel_with_process(provider.clone() as Arc<dyn LlmProvider>).await;
-
-        // Create a handle that talks to this kernel's event queue.
         let handle = ProcessHandle::new(
-            _agent_id,
+            agent_id,
             SessionId::new("test-session"),
             Principal::user("test-user"),
             kernel.event_queue().clone(),
@@ -782,7 +867,7 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "expected Ok, got: {:?}", result);
         let result = result.unwrap();
         assert_eq!(result.text, "test reply");
 
@@ -791,13 +876,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_inline_agent_loop_with_history() {
-        let provider = Arc::new(StubStreamingProvider::default());
-
-        let (kernel, _agent_id, cancel) =
-            setup_test_kernel_with_process(provider.clone() as Arc<dyn LlmProvider>).await;
+        let driver: LlmDriverRef = Arc::new(StubDriver);
+        let (kernel, agent_id, cancel) = setup_test_kernel_with_driver(driver).await;
 
         let handle = ProcessHandle::new(
-            _agent_id,
+            agent_id,
             SessionId::new("test-session"),
             Principal::user("test-user"),
             kernel.event_queue().clone(),
@@ -806,13 +889,7 @@ mod tests {
         let stream_handle = kernel.stream_hub().open(SessionId::new("test-session"));
         let turn_cancel = CancellationToken::new();
 
-        let history = vec![
-            ChatCompletionRequestUserMessageArgs::default()
-                .content("previous question")
-                .build()
-                .unwrap()
-                .into(),
-        ];
+        let history = vec![llm::Message::user("previous question")];
 
         let result = run_inline_agent_loop(
             &handle,
@@ -824,47 +901,63 @@ mod tests {
         .await;
 
         assert!(result.is_ok());
+        cancel.cancel();
+    }
 
-        // message_counts includes the initial spawn_with_input("init") call
-        // (system + "init" = 2) plus this call (system + 1 history + 1 current = 3).
-        let counts = provider.message_counts.lock().expect("lock");
-        assert_eq!(*counts.last().unwrap(), 3);
+    #[tokio::test]
+    async fn test_run_inline_agent_loop_reasoning_delta() {
+        let driver: LlmDriverRef = Arc::new(ReasoningDriver);
+        let (kernel, agent_id, cancel) = setup_test_kernel_with_driver(driver).await;
+
+        let handle = ProcessHandle::new(
+            agent_id,
+            SessionId::new("test-session"),
+            Principal::user("test-user"),
+            kernel.event_queue().clone(),
+        );
+
+        let session_id = SessionId::new("test-session");
+        let stream_handle = kernel.stream_hub().open(session_id.clone());
+
+        // Subscribe to stream events BEFORE running the loop.
+        let subs = kernel.stream_hub().subscribe_session(&session_id);
+        let (_, mut rx) = subs.into_iter().next().unwrap();
+
+        let turn_cancel = CancellationToken::new();
+
+        let result = run_inline_agent_loop(
+            &handle,
+            "think about this".to_string(),
+            None,
+            &stream_handle,
+            &turn_cancel,
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.text, "answer");
+
+        // Verify that ReasoningDelta was emitted to the stream.
+        let mut saw_reasoning = false;
+        while let Ok(event) = rx.try_recv() {
+            if matches!(event, StreamEvent::ReasoningDelta { .. }) {
+                saw_reasoning = true;
+                break;
+            }
+        }
+        assert!(saw_reasoning, "expected ReasoningDelta stream event");
 
         cancel.cancel();
     }
 
-    /// A provider that blocks indefinitely until cancelled.
-    struct BlockingStreamingProvider;
-
-    #[async_trait]
-    impl LlmProvider for BlockingStreamingProvider {
-        async fn chat_completion(
-            &self,
-            _request: CreateChatCompletionRequest,
-        ) -> crate::error::Result<async_openai::types::chat::CreateChatCompletionResponse> {
-            Err(crate::error::KernelError::Other {
-                message: "not supported".into(),
-            })
-        }
-
-        async fn chat_completion_stream(
-            &self,
-            _request: CreateChatCompletionRequest,
-        ) -> crate::error::Result<ChatCompletionResponseStream> {
-            // Return a stream that never yields — simulates a slow LLM
-            let pending_stream = futures::stream::pending();
-            Ok(Box::pin(pending_stream))
-        }
-    }
-
     #[tokio::test]
     async fn test_run_inline_agent_loop_cancellation() {
-        let provider = Arc::new(BlockingStreamingProvider) as Arc<dyn LlmProvider>;
-
-        let (kernel, _agent_id, cancel_kernel) = setup_test_kernel_with_process(provider).await;
+        let driver: LlmDriverRef = Arc::new(BlockingDriver);
+        let (kernel, agent_id, cancel_kernel) = setup_test_kernel_with_driver(driver).await;
 
         let handle = Arc::new(ProcessHandle::new(
-            _agent_id,
+            agent_id,
             SessionId::new("test-session"),
             Principal::user("test-user"),
             kernel.event_queue().clone(),
@@ -873,7 +966,6 @@ mod tests {
         let stream_handle = kernel.stream_hub().open(SessionId::new("test-session"));
         let turn_cancel = CancellationToken::new();
 
-        // Spawn the agent loop and cancel shortly after
         let turn_cancel_clone = turn_cancel.clone();
         let handle_clone = Arc::clone(&handle);
         let join = tokio::spawn(async move {
@@ -896,5 +988,25 @@ mod tests {
         assert_eq!(result.unwrap_err(), "interrupted by user");
 
         cancel_kernel.cancel();
+    }
+
+    #[test]
+    fn test_build_llm_history() {
+        use crate::channel::types::ChatMessage;
+
+        let messages = vec![
+            ChatMessage::user("hello"),
+            ChatMessage::assistant("hi there"),
+            ChatMessage::user("how are you?"),
+        ];
+
+        let llm_msgs = build_llm_history(&messages);
+        assert_eq!(llm_msgs.len(), 3);
+        assert_eq!(llm_msgs[0].role, llm::Role::User);
+        assert_eq!(llm_msgs[0].content.as_text(), "hello");
+        assert_eq!(llm_msgs[1].role, llm::Role::Assistant);
+        assert_eq!(llm_msgs[1].content.as_text(), "hi there");
+        assert_eq!(llm_msgs[2].role, llm::Role::User);
+        assert_eq!(llm_msgs[2].content.as_text(), "how are you?");
     }
 }

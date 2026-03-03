@@ -457,39 +457,33 @@ APP_VALUES_DEV := "rara-app/values-dev.yaml"
 
 GHCR_REPO := "ghcr.io/crrow"
 IMAGE_TAG := env("IMAGE_TAG", "latest")
+BUILDER := env("BUILDER", "arch")
 
-[doc("build backend Docker image (buildx cached)")]
+[doc("build backend Docker image (local load)")]
 [group("🐳 Images")]
 build-backend:
-    docker buildx build -t {{ GHCR_REPO }}/rara:{{ IMAGE_TAG }} --load -f ../../docker/Dockerfile ../..
+    docker buildx build --builder {{ BUILDER }} -t {{ GHCR_REPO }}/rara:{{ IMAGE_TAG }} --load -f ../../docker/Dockerfile ../..
 
-[doc("build frontend Docker image")]
+[doc("build frontend Docker image (local load)")]
 [group("🐳 Images")]
 build-frontend:
     cd ../.. && mdbook build docs
-    docker buildx build -t {{ GHCR_REPO }}/rara-web:{{ IMAGE_TAG }} --load -f ../../docker/web.Dockerfile ../..
+    docker buildx build --builder {{ BUILDER }} -t {{ GHCR_REPO }}/rara-web:{{ IMAGE_TAG }} --load -f ../../docker/web.Dockerfile ../..
 
-[doc("build both images")]
-[group("🐳 Images")]
-build-images: build-backend build-frontend
-
-[doc("push backend image to GHCR")]
+[doc("build + push backend image to GHCR")]
 [group("🐳 Images")]
 push-backend:
-    docker push {{ GHCR_REPO }}/rara:{{ IMAGE_TAG }}
+    docker buildx build --builder {{ BUILDER }} -t {{ GHCR_REPO }}/rara:{{ IMAGE_TAG }} --push -f ../../docker/Dockerfile ../..
 
-[doc("push frontend image to GHCR")]
+[doc("build + push frontend image to GHCR")]
 [group("🐳 Images")]
 push-frontend:
-    docker push {{ GHCR_REPO }}/rara-web:{{ IMAGE_TAG }}
+    cd ../.. && mdbook build docs
+    docker buildx build --builder {{ BUILDER }} -t {{ GHCR_REPO }}/rara-web:{{ IMAGE_TAG }} --push -f ../../docker/web.Dockerfile ../..
 
-[doc("push both images to GHCR")]
+[doc("build and push both images to GHCR")]
 [group("🐳 Images")]
-push-images: push-backend push-frontend
-
-[doc("build and push both images")]
-[group("🐳 Images")]
-ship: build-images push-images
+ship: push-backend push-frontend
 
 # --- rara-app Helm --------------------------------------------------------
 

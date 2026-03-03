@@ -271,7 +271,7 @@ impl AppConfig {
             }
         };
         let mut kernel = rara_boot::kernel::boot(rara_boot::kernel::BootConfig {
-            provider_registry: rara.provider_registry.clone(),
+            driver_registry: rara.driver_registry.clone(),
             tool_registry: rara.tool_registry.clone(),
             agent_registry: Arc::new(rara_boot::manifests::load_default_registry()),
             user_store: rara.user_store.clone(),

@@ -35,7 +35,7 @@ use tracing::info;
 #[derive(Clone)]
 pub struct RaraState {
     pub credential_store:    rara_keyring_store::KeyringStoreRef,
-    pub provider_registry:   Arc<rara_kernel::provider::ProviderRegistry>,
+    pub driver_registry:     Arc<rara_kernel::llm::DriverRegistry>,
     pub tool_registry:       Arc<rara_kernel::tool::ToolRegistry>,
     pub user_store:          Arc<dyn rara_kernel::process::user::UserStore>,
     pub session_repo:        Arc<dyn rara_sessions::repository::SessionRepository>,
@@ -68,11 +68,10 @@ impl RaraState {
         let credential_store: rara_keyring_store::KeyringStoreRef =
             Arc::new(rara_pg_credential_store::PgKeyringStore::new(pool.clone()));
 
-        // -- LLM provider registry -------------------------------------------
+        // -- LLM driver registry ----------------------------------------------
 
-        let provider_registry =
-            crate::providers::build_provider_registry(&*settings_provider, &*credential_store)
-                .await;
+        let driver_registry =
+            crate::providers::build_driver_registry(&*settings_provider, &*credential_store).await;
 
         // -- session repository -----------------------------------------------
 
@@ -162,7 +161,7 @@ impl RaraState {
 
         Ok(Self {
             credential_store,
-            provider_registry,
+            driver_registry,
             tool_registry: tools,
             user_store,
             session_repo,

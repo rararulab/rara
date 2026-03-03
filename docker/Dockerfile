@@ -1,10 +1,10 @@
 # =============================================================================
 # Backend Dockerfile — cargo-chef for dependency caching
-# Requires: just build-base (builds rara-base:latest with toolchain + deps)
+# Base image: ghcr.io/crrow/rara-base (built from docker/base.Dockerfile)
 # =============================================================================
 # syntax=docker/dockerfile:1
 
-ARG BASE_IMAGE=rara-base:latest
+ARG BASE_IMAGE=ghcr.io/crrow/rara-base:latest
 FROM ${BASE_IMAGE} AS chef
 
 # ---------- Step 1: generate recipe (only depends on Cargo.toml/Cargo.lock) --
@@ -15,11 +15,15 @@ RUN cargo chef prepare --recipe-path recipe.json
 # ---------- Step 2: build dependencies (cached if recipe unchanged) ----------
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json -p rara-cli
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo chef cook --release --recipe-path recipe.json -p rara-cli
 
 # ---------- Step 3: build source (only recompiles project crates) ------------
 COPY . .
-RUN cargo build -p rara-cli --release && \
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo build -p rara-cli --release && \
     cp target/release/rara /tmp/rara
 
 # ---------- Runtime ----------------------------------------------------------

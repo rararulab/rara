@@ -26,7 +26,7 @@
 //!   ├── ProcessTable  (all running agents)
 //!   ├── global_semaphore (max total concurrent agents)
 //!   ├── AgentRegistry   (named agent definitions)
-//!   ├── ProviderRegistry (multi-provider LLM)
+//!   ├── DriverRegistry  (multi-driver LLM)
 //!   ├── ToolRegistry
 //!   ├── Memory
 //!   ├── EventBus
@@ -61,9 +61,9 @@ use crate::{
         stream::StreamHubRef,
     },
     kv::KvBackendRef,
+    llm::DriverRegistryRef,
     memory::MemoryRef,
     process::{AgentId, ProcessState, ProcessTable, SessionId, agent_registry::AgentRegistryRef},
-    provider::ProviderRegistryRef,
     security::SecurityRef,
     session::SessionRepoRef,
     sharded_event_queue::ShardedQueueRef,
@@ -117,8 +117,8 @@ pub struct Kernel {
     process_table: Arc<ProcessTable>,
     /// Global semaphore limiting total concurrent agent processes.
     global_semaphore: Arc<Semaphore>,
-    /// Multi-provider LLM registry with per-agent overrides.
-    provider_registry: ProviderRegistryRef,
+    /// Multi-driver LLM registry with per-agent overrides.
+    driver_registry: DriverRegistryRef,
     /// Global tool registry (spawned agents get filtered subsets).
     tool_registry: ToolRegistryRef,
     /// 3-layer memory (not used for cross-agent KV — see shared_kv).
@@ -169,7 +169,7 @@ impl Kernel {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: KernelConfig,
-        provider_registry: ProviderRegistryRef,
+        driver_registry: DriverRegistryRef,
         tool_registry: ToolRegistryRef,
         memory: MemoryRef,
         event_bus: EventBusRef,
@@ -212,7 +212,7 @@ impl Kernel {
             config,
             process_table: Arc::new(ProcessTable::new()),
             global_semaphore,
-            provider_registry,
+            driver_registry,
             tool_registry,
             memory,
             event_bus,
@@ -336,8 +336,8 @@ impl Kernel {
     /// Access the pipe registry (used by event loop).
     pub(crate) fn pipe_registry(&self) -> &PipeRegistry { &self.pipe_registry }
 
-    /// Access the provider registry (used by event loop).
-    pub(crate) fn provider_registry(&self) -> &ProviderRegistryRef { &self.provider_registry }
+    /// Access the driver registry (used by event loop for ResolveDriver).
+    pub(crate) fn driver_registry(&self) -> &DriverRegistryRef { &self.driver_registry }
 
     /// Ensure a session exists for the given ID, creating one if needed.
     ///
@@ -404,7 +404,7 @@ impl Kernel {
         config: KernelConfig,
         process_table: Arc<ProcessTable>,
         global_semaphore: Arc<Semaphore>,
-        provider_registry: ProviderRegistryRef,
+        driver_registry: DriverRegistryRef,
         tool_registry: ToolRegistryRef,
         memory: MemoryRef,
         event_bus: EventBusRef,
@@ -440,7 +440,7 @@ impl Kernel {
             config,
             process_table,
             global_semaphore,
-            provider_registry,
+            driver_registry,
             tool_registry,
             memory,
             event_bus,
@@ -492,7 +492,6 @@ impl Kernel {
             Arc::clone(&self.settings),
             Arc::clone(&self.security),
             self.config.clone(),
-            Arc::clone(&self.provider_registry),
             Arc::clone(&self.tool_registry),
             Arc::clone(&self.device_registry),
             Arc::clone(&self.global_semaphore),
@@ -553,8 +552,8 @@ mod tests {
         },
         handle::kernel_handle::KernelHandle,
         io::stream::StreamHub,
+        llm::DriverRegistryBuilder,
         process::{AgentManifest, agent_registry::AgentRegistry, principal::Principal},
-        provider::ProviderRegistryBuilder,
         tool::ToolRegistry,
     };
 
@@ -572,12 +571,11 @@ mod tests {
             std::env::temp_dir().join("kernel_test_agents"),
         ));
 
-        let provider_registry =
-            Arc::new(ProviderRegistryBuilder::new("test", "test-model").build());
+        let driver_registry = Arc::new(DriverRegistryBuilder::new("test", "test-model").build());
 
         Kernel::new(
             config,
-            provider_registry,
+            driver_registry,
             Arc::new(ToolRegistry::new()),
             Arc::new(NoopMemory),
             Arc::new(NoopEventBus),
@@ -1089,8 +1087,7 @@ mod tests {
             std::env::temp_dir().join("kernel_guard_test_agents"),
         ));
 
-        let provider_registry =
-            Arc::new(ProviderRegistryBuilder::new("test", "test-model").build());
+        let driver_registry = Arc::new(DriverRegistryBuilder::new("test", "test-model").build());
 
         let security = Arc::new(crate::security::SecuritySubsystem::new(
             Arc::new(NoopUserStore),
@@ -1102,7 +1099,7 @@ mod tests {
 
         Kernel::new(
             config,
-            provider_registry,
+            driver_registry,
             Arc::new(ToolRegistry::new()),
             Arc::new(NoopMemory),
             Arc::new(NoopEventBus),

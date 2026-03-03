@@ -39,7 +39,6 @@ use crate::{
         AgentId, AgentManifest, ProcessState, ProcessTable, Signal,
         agent_registry::AgentRegistryRef, principal::Principal,
     },
-    provider::ProviderRegistryRef,
     security::SecurityRef,
     tool::ToolRegistryRef,
     unified_event::KernelEvent,
@@ -86,8 +85,6 @@ pub struct KernelHandle {
     security:          SecurityRef,
     /// Kernel configuration.
     config:            KernelConfig,
-    /// Multi-provider LLM registry.
-    provider_registry: ProviderRegistryRef,
     /// Global tool registry.
     tool_registry:     ToolRegistryRef,
     /// Device registry for hot-pluggable devices.
@@ -112,7 +109,6 @@ impl KernelHandle {
         settings: SettingsRef,
         security: SecurityRef,
         config: KernelConfig,
-        provider_registry: ProviderRegistryRef,
         tool_registry: ToolRegistryRef,
         device_registry: DeviceRegistryRef,
         global_semaphore: Arc<Semaphore>,
@@ -129,7 +125,6 @@ impl KernelHandle {
             settings,
             security,
             config,
-            provider_registry,
             tool_registry,
             device_registry,
             global_semaphore,
@@ -264,9 +259,6 @@ impl KernelHandle {
 
     /// Access the unified event queue.
     pub fn event_queue(&self) -> &EventQueueRef { &self.event_queue }
-
-    /// Access the multi-provider LLM registry.
-    pub fn provider_registry(&self) -> &ProviderRegistryRef { &self.provider_registry }
 
     /// Access the device registry (for hot-plugging devices).
     pub fn device_registry(&self) -> &DeviceRegistryRef { &self.device_registry }

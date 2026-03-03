@@ -28,7 +28,6 @@ use crate::{
     io::pipe::{PipeReader, PipeWriter},
     memory::KvScope,
     process::{AgentId, AgentManifest, ProcessInfo, SessionId, Signal, principal::Principal},
-    provider::LlmProvider,
     tool::ToolRegistry,
     unified_event::{KernelEvent, Syscall},
 };
@@ -412,11 +411,11 @@ impl ProcessHandle {
         })
     }
 
-    /// Resolve an LLM provider + model for this agent via the kernel's
-    /// `ProviderRegistry`. Returns `(provider, model_name)`.
-    pub async fn resolve_provider(&self) -> Result<(Arc<dyn LlmProvider>, String)> {
+    /// Resolve an [`LlmDriver`](crate::llm::LlmDriver) + model for this agent
+    /// via the kernel's `DriverRegistry`. Returns `(driver, model_name)`.
+    pub async fn resolve_driver(&self) -> Result<(crate::llm::LlmDriverRef, String)> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.syscall_push(KernelEvent::Syscall(Syscall::ResolveProvider {
+        self.syscall_push(KernelEvent::Syscall(Syscall::ResolveDriver {
             agent_id: self.agent_id,
             reply_tx,
         }))

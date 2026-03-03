@@ -34,10 +34,10 @@ use async_trait::async_trait;
 use rara_kernel::{
     KernelHandle,
     io::stream::{StreamEvent, StreamHub},
+    llm::{DriverRegistryBuilder, OpenAiDriver},
     process::{AgentId, AgentManifest, AgentResult, ProcessState, SessionId, principal::Principal},
-    provider::{LlmProviderLoaderRef, OllamaProviderLoader, ProviderRegistryBuilder},
     testing::TestKernelBuilder,
-    tool::{AgentTool, ToolRegistry},
+    tool::AgentTool,
 };
 
 /// Default Ollama base URL (OpenAI-compatible API endpoint).
@@ -45,12 +45,6 @@ const OLLAMA_BASE_URL: &str = "https://ollama.rara.local/v1";
 
 /// Default model to use for Ollama integration tests.
 const OLLAMA_MODEL: &str = "qwen3.5:cloud";
-
-/// Helper: build an OllamaProviderLoader from env or defaults.
-fn ollama_loader() -> OllamaProviderLoader {
-    let base_url = std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| OLLAMA_BASE_URL.to_string());
-    OllamaProviderLoader::new(base_url)
-}
 
 /// Helper: resolve the model name from env or defaults.
 fn ollama_model() -> String {
@@ -106,7 +100,7 @@ impl AgentTool for EchoTool {
     }
 }
 
-/// Helper: build and start a kernel with the real Ollama provider and optional
+/// Helper: build and start a kernel with the real Ollama driver and optional
 /// tools.
 ///
 /// Returns the `KernelHandle` and a cancellation token.
@@ -114,23 +108,15 @@ fn start_test_kernel(
     tools: Vec<Arc<dyn AgentTool>>,
 ) -> (KernelHandle, tokio_util::sync::CancellationToken) {
     let model = ollama_model();
+    let base_url = std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| OLLAMA_BASE_URL.to_string());
+    let driver = Arc::new(OpenAiDriver::new(base_url, "ollama"));
     let registry = Arc::new(
-        ProviderRegistryBuilder::new("ollama", &model)
-            .provider(
-                "ollama",
-                Arc::new(rara_kernel::provider::OpenAiProvider::with_config(
-                    async_openai::config::OpenAIConfig::new()
-                        .with_api_key("ollama")
-                        .with_api_base(
-                            std::env::var("OLLAMA_BASE_URL")
-                                .unwrap_or_else(|_| OLLAMA_BASE_URL.to_string()),
-                        ),
-                )),
-            )
+        DriverRegistryBuilder::new("ollama", &model)
+            .driver("ollama", driver)
             .build(),
     );
     let mut builder = TestKernelBuilder::new()
-        .provider_registry(registry)
+        .driver_registry(registry)
         .max_concurrency(8)
         .max_iterations(10);
     for tool in tools {
@@ -310,120 +296,9 @@ async fn test_multi_session_isolation() {
     cancel.cancel();
 }
 
-// ---------------------------------------------------------------------------
-// Test 4: AgentRunner streaming produces RunnerEvents
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-#[ignore = "requires running Ollama instance"]
-async fn test_runner_streaming_produces_events() {
-    use rara_kernel::runner::{AgentRunner, RunnerEvent, UserContent};
-
-    let loader = Arc::new(ollama_loader()) as LlmProviderLoaderRef;
-    let model = ollama_model();
-    let tools = ToolRegistry::new();
-
-    let runner = AgentRunner::builder()
-        .llm_provider(loader)
-        .model_name(model)
-        .system_prompt("You are a concise assistant.")
-        .user_content(UserContent::Text("Count from 1 to 3.".to_string()))
-        .max_iterations(3_usize)
-        .build();
-
-    let mut rx = runner.run_streaming(Arc::new(tools));
-
-    let mut events = Vec::new();
-    let mut got_text_delta = false;
-    let mut got_done = false;
-    let mut got_thinking = false;
-
-    while let Some(event) = rx.recv().await {
-        match &event {
-            RunnerEvent::TextDelta(text) if !text.is_empty() => got_text_delta = true,
-            RunnerEvent::Done { text, .. } => {
-                assert!(!text.trim().is_empty(), "Done should have text");
-                got_done = true;
-            }
-            RunnerEvent::Thinking => got_thinking = true,
-            RunnerEvent::Error(err) => panic!("streaming error: {err}"),
-            _ => {}
-        }
-        events.push(event);
-    }
-
-    assert!(got_text_delta, "expected at least one TextDelta event");
-    assert!(got_done, "expected a Done event");
-    assert!(got_thinking, "expected a Thinking event");
-    assert!(
-        events.len() >= 3,
-        "expected at least 3 events (Thinking, TextDelta, Done), got {}",
-        events.len()
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Test 5: AgentRunner streaming with tool calls produces tool events
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-#[ignore = "requires running Ollama instance"]
-async fn test_runner_streaming_tool_events() {
-    use rara_kernel::runner::{AgentRunner, RunnerEvent, UserContent};
-
-    let loader = Arc::new(ollama_loader()) as LlmProviderLoaderRef;
-    let model = ollama_model();
-    let mut tools = ToolRegistry::new();
-    tools.register_builtin(Arc::new(EchoTool));
-
-    let runner = AgentRunner::builder()
-        .llm_provider(loader)
-        .model_name(model)
-        .system_prompt(
-            "You are a tool-using assistant. ALWAYS call echo_tool exactly once before replying.",
-        )
-        .user_content(UserContent::Text(
-            "Call echo_tool with {\"text\":\"streaming-test\"} and reply.".to_string(),
-        ))
-        .max_iterations(5_usize)
-        .build();
-
-    let mut rx = runner.run_streaming(Arc::new(tools));
-
-    let mut got_tool_start = false;
-    let mut got_tool_end = false;
-    let mut got_done = false;
-    let mut tool_name = String::new();
-
-    while let Some(event) = rx.recv().await {
-        match &event {
-            RunnerEvent::ToolCallStart { name, .. } => {
-                got_tool_start = true;
-                tool_name = name.clone();
-            }
-            RunnerEvent::ToolCallEnd { success, .. } => {
-                got_tool_end = true;
-                assert!(success, "tool call should succeed");
-            }
-            RunnerEvent::Done {
-                text,
-                tool_calls_made,
-                ..
-            } => {
-                assert!(!text.trim().is_empty(), "Done should have text");
-                assert!(*tool_calls_made > 0, "should have made tool calls");
-                got_done = true;
-            }
-            RunnerEvent::Error(err) => panic!("streaming error: {err}"),
-            _ => {}
-        }
-    }
-
-    assert!(got_tool_start, "expected ToolCallStart event");
-    assert!(got_tool_end, "expected ToolCallEnd event");
-    assert!(got_done, "expected Done event");
-    assert_eq!(tool_name, "echo_tool", "tool name should be echo_tool");
-}
+// Tests 4 and 5 (AgentRunner streaming) have been removed — the legacy
+// `AgentRunner` / `LlmProvider` path has been replaced by
+// `agent_turn::run_inline_agent_loop` + `LlmDriver`.
 
 // Tests 6 and 7 (InboundBus, OutboundBus) have been removed — these bus
 // traits are replaced by the unified EventQueue.  EventQueue tests live in

@@ -34,8 +34,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use rara_kernel::{
     KernelHandle,
+    llm::{DriverRegistryBuilder, OpenAiDriver},
     process::{AgentId, AgentManifest, AgentResult, ProcessState, principal::Principal},
-    provider::{OllamaProviderLoader, ProviderRegistryBuilder},
     testing::TestKernelBuilder,
     tool::AgentTool,
 };
@@ -46,12 +46,6 @@ const OLLAMA_BASE_URL: &str = "https://ollama.rara.local/v1";
 
 /// Default model to use for Ollama integration tests.
 const OLLAMA_MODEL: &str = "qwen3.5:cloud";
-
-/// Helper: build an OllamaProviderLoader from env or defaults.
-fn ollama_loader() -> OllamaProviderLoader {
-    let base_url = std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| OLLAMA_BASE_URL.to_string());
-    OllamaProviderLoader::new(base_url)
-}
 
 /// Helper: resolve the model name from env or defaults.
 fn ollama_model() -> String {
@@ -107,27 +101,19 @@ impl AgentTool for EchoTool {
     }
 }
 
-/// Helper: build a kernel with the real Ollama provider and optional tools,
+/// Helper: build a kernel with the real Ollama driver and optional tools,
 /// start the event loop, and return the KernelHandle + CancellationToken.
 fn build_kernel(tools: Vec<Arc<dyn AgentTool>>) -> (KernelHandle, CancellationToken) {
     let model = ollama_model();
+    let base_url = std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| OLLAMA_BASE_URL.to_string());
+    let driver = Arc::new(OpenAiDriver::new(base_url, "ollama"));
     let registry = Arc::new(
-        ProviderRegistryBuilder::new("ollama", &model)
-            .provider(
-                "ollama",
-                Arc::new(rara_kernel::provider::OpenAiProvider::with_config(
-                    async_openai::config::OpenAIConfig::new()
-                        .with_api_key("ollama")
-                        .with_api_base(
-                            std::env::var("OLLAMA_BASE_URL")
-                                .unwrap_or_else(|_| OLLAMA_BASE_URL.to_string()),
-                        ),
-                )),
-            )
+        DriverRegistryBuilder::new("ollama", &model)
+            .driver("ollama", driver)
             .build(),
     );
     let mut builder = TestKernelBuilder::new()
-        .provider_registry(registry)
+        .driver_registry(registry)
         .max_concurrency(8)
         .max_iterations(10);
     for tool in tools {
@@ -518,23 +504,15 @@ async fn test_spawn_named_agent() {
 #[ignore = "requires running Ollama instance"]
 async fn test_global_concurrency_limit() {
     let model = ollama_model();
+    let base_url = std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| OLLAMA_BASE_URL.to_string());
+    let driver = Arc::new(OpenAiDriver::new(base_url, "ollama"));
     let registry = Arc::new(
-        ProviderRegistryBuilder::new("ollama", &model)
-            .provider(
-                "ollama",
-                Arc::new(rara_kernel::provider::OpenAiProvider::with_config(
-                    async_openai::config::OpenAIConfig::new()
-                        .with_api_key("ollama")
-                        .with_api_base(
-                            std::env::var("OLLAMA_BASE_URL")
-                                .unwrap_or_else(|_| OLLAMA_BASE_URL.to_string()),
-                        ),
-                )),
-            )
+        DriverRegistryBuilder::new("ollama", &model)
+            .driver("ollama", driver)
             .build(),
     );
     let kernel = TestKernelBuilder::new()
-        .provider_registry(registry)
+        .driver_registry(registry)
         .max_concurrency(2)
         .max_iterations(10)
         .build();
@@ -570,7 +548,7 @@ async fn test_global_concurrency_limit() {
         .expect("second spawn should succeed");
 
     // Third spawn should fail (capacity exhausted).
-    let h3 = handle
+    let h3: rara_kernel::Result<AgentId> = handle
         .spawn_with_input(manifest, "Essay topic 3.".to_string(), principal, None)
         .await;
 

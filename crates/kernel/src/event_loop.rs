@@ -503,9 +503,9 @@ impl Kernel {
                 let _ = reply_tx.send(Arc::new(registry));
             }
 
-            Syscall::ResolveProvider { agent_id, reply_tx } => {
+            Syscall::ResolveDriver { agent_id, reply_tx } => {
                 let result = match self.process_table().get(agent_id) {
-                    Some(process) => self.provider_registry().resolve(
+                    Some(process) => self.driver_registry().resolve(
                         &process.manifest.name,
                         process.manifest.provider_hint.as_deref(),
                         process.manifest.model.as_deref(),
@@ -970,14 +970,10 @@ impl Kernel {
         )
         .await;
 
-        // Convert history to LLM format.
-        let history = match crate::runner::build_history_messages(&rt.conversation) {
-            Ok(msgs) if !msgs.is_empty() => Some(msgs),
-            Ok(_) => None,
-            Err(e) => {
-                warn!(%e, "failed to convert history");
-                None
-            }
+        // Convert history to LLM format (using the new llm::Message types).
+        let history = {
+            let msgs = crate::agent_turn::build_llm_history(&rt.conversation);
+            if msgs.is_empty() { None } else { Some(msgs) }
         };
 
         // Append user message to conversation + persist.

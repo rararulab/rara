@@ -14,7 +14,6 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use async_openai::types::chat::{ChatCompletionTool, ChatCompletionTools, FunctionObjectArgs};
 use async_trait::async_trait;
 
 /// Reference-counted handle to an agent tool.
@@ -38,8 +37,6 @@ pub trait AgentTool: Send + Sync {
     /// Execute the tool with the given parameters.
     async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value>;
 }
-
-use crate::error::{KernelError, Result};
 
 /// Where a tool originates from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,26 +132,17 @@ impl ToolRegistry {
             .map(|(name, entry)| (name.as_str(), &entry.tool, &entry.source, entry.layer))
     }
 
-    pub fn to_chat_completion_tools(&self) -> Result<Vec<ChatCompletionTools>> {
+    /// Convert all tools to [`llm::ToolDefinition`] format for the
+    /// [`LlmDriver`](crate::llm::LlmDriver) path.
+    #[must_use]
+    pub fn to_llm_tool_definitions(&self) -> Vec<crate::llm::ToolDefinition> {
         self.tools
             .values()
-            .map(|entry| build_tool_def(&entry.tool))
-            .collect()
-    }
-
-    /// Convert only the named tools to chat completion format.
-    /// If `tool_names` is empty, include ALL tools (no filtering).
-    pub fn to_chat_completion_tools_filtered(
-        &self,
-        tool_names: &[String],
-    ) -> Result<Vec<ChatCompletionTools>> {
-        if tool_names.is_empty() {
-            return self.to_chat_completion_tools();
-        }
-        self.tools
-            .values()
-            .filter(|entry| tool_names.iter().any(|n| n == entry.tool.name()))
-            .map(|entry| build_tool_def(&entry.tool))
+            .map(|entry| crate::llm::ToolDefinition {
+                name:        entry.tool.name().to_string(),
+                description: entry.tool.description().to_string(),
+                parameters:  entry.tool.parameters_schema(),
+            })
             .collect()
     }
 
@@ -204,20 +192,4 @@ impl ToolRegistry {
 
 impl Default for ToolRegistry {
     fn default() -> Self { Self::new() }
-}
-
-/// Build a [`ChatCompletionTools`] from an [`AgentToolRef`].
-fn build_tool_def(tool: &AgentToolRef) -> Result<ChatCompletionTools> {
-    let function = FunctionObjectArgs::default()
-        .name(tool.name())
-        .description(tool.description())
-        .parameters(tool.parameters_schema())
-        .build()
-        .map_err(|e| KernelError::Tool {
-            message: format!("failed to build tool function object: {e}"),
-        })?;
-
-    Ok(ChatCompletionTools::Function(ChatCompletionTool {
-        function,
-    }))
 }

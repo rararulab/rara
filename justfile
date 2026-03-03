@@ -4,9 +4,6 @@ set dotenv-filename := ".env"
 
 # Environment variables with defaults
 RUST_TOOLCHAIN := `grep 'channel = ' rust-toolchain.toml | cut -d '"' -f 2`
-TARGET_PLATFORM := env("TARGET_PLATFORM", "linux/arm64")
-DISTRI_PLATFORM := env("DISTRI_PLATFORM", "ubuntu")
-DOCKER_TAG := env("DOCKER_TAG", "rara:latest")
 PYO3_PYTHON := `uv python find 3.10`
 RARA__DATABASE__DATABASE_URL := env("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/rara")
 RARA__DATABASE__MIGRATION_DIR := env("RARA__DATABASE__MIGRATION_DIR", "crates/rara-model/migrations")
@@ -29,9 +26,6 @@ help: default
 env:
     @echo "🔧 Environment Configuration:"
     @echo "  RUST_TOOLCHAIN: {{RUST_TOOLCHAIN}}"
-    @echo "  TARGET_PLATFORM: {{TARGET_PLATFORM}}"
-    @echo "  DISTRI_PLATFORM: {{DISTRI_PLATFORM}}"
-    @echo "  DOCKER_TAG: {{DOCKER_TAG}}"
     @echo "  PYO3_PYTHON: {{PYO3_PYTHON}}"
 
 # ========================================================================================
@@ -87,24 +81,6 @@ test:
     cargo nextest run --workspace --all-features
 
 alias t := test
-
-[doc("run memory integration tests against deployed services")]
-[group("🧪 Testing")]
-test-memory MEM0_URL="" MEMOS_URL="" MEMOS_TOKEN="" HINDSIGHT_URL="" HINDSIGHT_BANK="default":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    # Use provided args or fall back to env vars or defaults
-    export MEM0_BASE_URL="${MEM0_URL:-${MEM0_BASE_URL:-http://localhost:8888}}"
-    export MEMOS_BASE_URL="${MEMOS_URL:-${MEMOS_BASE_URL:-http://localhost:5230}}"
-    export MEMOS_TOKEN="${MEMOS_TOKEN:-}"
-    export HINDSIGHT_BASE_URL="${HINDSIGHT_URL:-${HINDSIGHT_BASE_URL:-http://localhost:8100}}"
-    export HINDSIGHT_BANK_ID="${HINDSIGHT_BANK:-${HINDSIGHT_BANK_ID:-default}}"
-    echo "Running memory integration tests..."
-    echo "  MEM0_BASE_URL=$MEM0_BASE_URL"
-    echo "  MEMOS_BASE_URL=$MEMOS_BASE_URL"
-    echo "  HINDSIGHT_BASE_URL=$HINDSIGHT_BASE_URL"
-    echo "  HINDSIGHT_BANK_ID=$HINDSIGHT_BANK_ID"
-    cargo test -p rara-memory -- --ignored --nocapture
 
 [doc("run linting checks (clippy, docs, buf, zizmor, yamllint-rs, cargo-deny)")]
 [group("👆 Code Quality")]
@@ -249,67 +225,6 @@ example-hello:
     @echo "🏃 Running hello-world example..."
     cargo run --example hello-world
 
-# ========================================================================================
-# Docker
-# ========================================================================================
-
-[doc("build base image with Rust toolchain and cargo tools (run once)")]
-[group("🐳 Docker")]
-build-base:
-    @echo "🐳 Building base image (rara-base)..."
-    docker build \
-        --build-arg RUST_TOOLCHAIN={{RUST_TOOLCHAIN}} \
-        --tag rara-base:latest \
-        --file docker/base.Dockerfile \
-        .
-
-[doc("build app Docker image (requires base image)")]
-[group("🐳 Docker")]
-build-docker:
-    @echo "🐳 Building app Docker image..."
-    docker build \
-        --tag {{DOCKER_TAG}} \
-        --file docker/Dockerfile \
-        .
-
-[doc("build frontend Docker image")]
-[group("🐳 Docker")]
-build-web:
-    @echo "🐳 Building frontend Docker image..."
-    docker build \
-        --tag ghcr.io/rararulab/rara-web:latest \
-        --file docker/web.Dockerfile \
-        .
-
-[doc("build, push, and restart rara backend on K8s")]
-[group("🐳 Docker")]
-deploy-backend: build-base build-docker
-    @echo "📤 Pushing backend image to GHCR..."
-    docker tag {{DOCKER_TAG}} ghcr.io/rararulab/rara:latest
-    docker push ghcr.io/rararulab/rara:latest
-    @echo "♻️  Restarting backend deployment..."
-    kubectl rollout restart deployment/rara-app-backend -n rara
-    kubectl rollout status deployment/rara-app-backend -n rara --timeout=120s
-    @echo "✅ Backend deployed!"
-
-[doc("build, push, and restart rara frontend on K8s")]
-[group("🐳 Docker")]
-deploy-web: build-web
-    @echo "📤 Pushing frontend image to GHCR..."
-    docker push ghcr.io/rararulab/rara-web:latest
-    @echo "♻️  Restarting frontend deployment..."
-    kubectl rollout restart deployment/rara-app-frontend -n rara
-    kubectl rollout status deployment/rara-app-frontend -n rara --timeout=60s
-    @echo "✅ Frontend deployed!"
-
-[doc("build, push, and restart both backend and frontend on K8s")]
-[group("🐳 Docker")]
-deploy: deploy-backend deploy-web
-    @echo "✅ All deployments complete!"
-
-[group("🐳 Docker")]
-up:
-    docker compose up --build -d
 
 [doc("start frontend dev server (proxies /api to localhost:25555)")]
 [group("🔧 Development")]

@@ -34,7 +34,6 @@ use crate::{
         AgentId, AgentManifest, AgentResult, ProcessInfo, SessionId, Signal,
         principal::{Principal, UserId},
     },
-    provider::LlmProvider,
     tool::ToolRegistry,
 };
 
@@ -173,14 +172,11 @@ pub enum Syscall {
         reply_tx: oneshot::Sender<Arc<ToolRegistry>>,
     },
 
-    /// Resolve an LLM provider + model for a specific agent.
-    ///
-    /// The kernel event loop uses `ProviderRegistry::resolve()` with the
-    /// agent's name, manifest provider_hint, and manifest model to produce
-    /// the appropriate `(provider, model_name)` pair.
-    ResolveProvider {
+    /// Resolve an [`LlmDriver`](crate::llm::LlmDriver) + model for a
+    /// specific agent via `DriverRegistry::resolve()`.
+    ResolveDriver {
         agent_id: AgentId,
-        reply_tx: oneshot::Sender<crate::error::Result<(Arc<dyn LlmProvider>, String)>>,
+        reply_tx: oneshot::Sender<crate::error::Result<(crate::llm::LlmDriverRef, String)>>,
     },
 
     // -- Event publishing --
@@ -221,7 +217,7 @@ impl Syscall {
             | Self::RequestApproval { agent_id, .. }
             | Self::CheckGuardBatch { agent_id, .. }
             | Self::GetManifest { agent_id, .. }
-            | Self::ResolveProvider { agent_id, .. }
+            | Self::ResolveDriver { agent_id, .. }
             | Self::GetToolRegistry { agent_id, .. } => *agent_id,
             Self::CreatePipe { owner, .. } | Self::CreateNamedPipe { owner, .. } => *owner,
             Self::ConnectPipe { connector, .. } => *connector,
@@ -319,8 +315,8 @@ impl std::fmt::Debug for Syscall {
             Self::GetToolRegistry { agent_id, .. } => {
                 write!(f, "Syscall::GetToolRegistry(agent={})", agent_id)
             }
-            Self::ResolveProvider { agent_id, .. } => {
-                write!(f, "Syscall::ResolveProvider(agent={})", agent_id)
+            Self::ResolveDriver { agent_id, .. } => {
+                write!(f, "Syscall::ResolveDriver(agent={})", agent_id)
             }
             Self::PublishEvent {
                 agent_id,

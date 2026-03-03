@@ -17,7 +17,6 @@ testing = []
 
 [dependencies]
 anyhow.workspace = true
-async-openai.workspace = true
 async-trait.workspace = true
 backon.workspace = true
 base.workspace = true

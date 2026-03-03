@@ -13,7 +13,6 @@
 // limitations under the License.
 
 pub mod error;
-pub mod message_utils;
 pub mod model_catalog;
 mod router;
 pub mod service;

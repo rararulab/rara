@@ -12,25 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! LLM provider registry construction and Composio auth provider.
+//! LLM driver registry construction and Composio auth provider.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use tracing::info;
 
-/// Build a [`ProviderRegistry`](rara_kernel::provider::ProviderRegistry) from
+/// Build a [`DriverRegistry`](rara_kernel::llm::DriverRegistry) from
 /// runtime settings.
 ///
 /// Reads `llm.provider` (default: `"openrouter"`) and `llm.models.default`
-/// to determine the default provider and model. Then registers all
-/// available providers based on configured API keys / base URLs.
-pub async fn build_provider_registry(
+/// to determine the default driver and model. Then registers all
+/// available drivers based on configured API keys / base URLs.
+pub async fn build_driver_registry(
     settings: &dyn rara_domain_shared::settings::SettingsProvider,
     credential_store: &dyn rara_keyring_store::KeyringStore,
-) -> Arc<rara_kernel::provider::ProviderRegistry> {
+) -> Arc<rara_kernel::llm::DriverRegistry> {
     use rara_domain_shared::settings::keys;
-    use rara_kernel::provider::{OpenAiProvider, ProviderRegistryBuilder};
+    use rara_kernel::llm::{DriverRegistryBuilder, OpenAiDriver};
 
     let default_provider = settings
         .get(keys::LLM_PROVIDER)
@@ -41,11 +41,14 @@ pub async fn build_provider_registry(
         .await
         .unwrap_or_else(|| "openai/gpt-4o-mini".to_owned());
 
-    let mut builder = ProviderRegistryBuilder::new(&default_provider, &default_model);
+    let mut builder = DriverRegistryBuilder::new(&default_provider, &default_model);
 
     // -- openrouter ---------------------------------------------------------
     if let Some(api_key) = settings.get(keys::LLM_OPENROUTER_API_KEY).await {
-        builder = builder.provider("openrouter", Arc::new(OpenAiProvider::new(api_key)));
+        builder = builder.driver(
+            "openrouter",
+            Arc::new(OpenAiDriver::new("https://openrouter.ai/api/v1", api_key)),
+        );
     }
 
     // -- ollama -------------------------------------------------------------
@@ -54,19 +57,24 @@ pub async fn build_provider_registry(
             .get(keys::LLM_OLLAMA_BASE_URL)
             .await
             .unwrap_or_else(|| "http://localhost:11434".to_owned());
-        let config = async_openai::config::OpenAIConfig::new()
-            .with_api_base(format!("{}/v1", base_url))
-            .with_api_key("ollama");
-        builder = builder.provider("ollama", Arc::new(OpenAiProvider::with_config(config)));
+        builder = builder.driver(
+            "ollama",
+            Arc::new(OpenAiDriver::new(format!("{}/v1", base_url), "ollama")),
+        );
     }
 
     // -- codex (OpenAI via OAuth) -------------------------------------------
     if let Ok(Some(tokens)) = rara_codex_oauth::load_tokens(credential_store).await {
-        let config = async_openai::config::OpenAIConfig::new().with_api_key(&tokens.access_token);
-        builder = builder.provider("codex", Arc::new(OpenAiProvider::with_config(config)));
+        builder = builder.driver(
+            "codex",
+            Arc::new(OpenAiDriver::new(
+                "https://api.openai.com/v1",
+                tokens.access_token,
+            )),
+        );
     }
 
-    info!("provider registry: default_provider={default_provider}, default_model={default_model}");
+    info!("driver registry: default_driver={default_provider}, default_model={default_model}");
     Arc::new(builder.build())
 }
 

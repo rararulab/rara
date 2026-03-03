@@ -31,8 +31,8 @@ use rara_kernel::{
         stream::StreamHub,
     },
     kernel::{Kernel, KernelConfig},
+    llm::DriverRegistry,
     process::{agent_registry::AgentRegistry, user::UserStore},
-    provider::ProviderRegistry,
     session::SessionRepository,
     tool::ToolRegistry,
 };
@@ -47,23 +47,23 @@ use crate::resolvers::{DefaultIdentityResolver, DefaultSessionResolver};
 /// outside world.
 ///
 /// Fields with sensible defaults are set via `Default`; callers only need to
-/// supply the truly external deps (llm_provider, tool_registry, etc.).
+/// supply the truly external deps (driver_registry, tool_registry, etc.).
 pub struct BootConfig {
     // -- core kernel config --------------------------------------------------
     /// Kernel concurrency / iteration limits.
-    pub kernel_config:     KernelConfig,
-    /// Multi-provider LLM registry.
-    pub provider_registry: Arc<ProviderRegistry>,
+    pub kernel_config:   KernelConfig,
+    /// Multi-driver LLM registry.
+    pub driver_registry: Arc<DriverRegistry>,
     /// Global tool registry.
-    pub tool_registry:     Arc<ToolRegistry>,
+    pub tool_registry:   Arc<ToolRegistry>,
     /// Agent registry.
-    pub agent_registry:    Arc<AgentRegistry>,
+    pub agent_registry:  Arc<AgentRegistry>,
     /// User store for permission checks.
-    pub user_store:        Arc<dyn UserStore>,
+    pub user_store:      Arc<dyn UserStore>,
     /// Session repository for conversation history.
-    pub session_repo:      Arc<dyn SessionRepository>,
+    pub session_repo:    Arc<dyn SessionRepository>,
     /// Flat KV settings provider.
-    pub settings:          Arc<dyn rara_domain_shared::settings::SettingsProvider>,
+    pub settings:        Arc<dyn rara_domain_shared::settings::SettingsProvider>,
 
     // -- I/O capacities (optional, have sensible defaults) -------------------
     /// Per-stream broadcast capacity.
@@ -101,13 +101,13 @@ impl Default for BootConfig {
                 noop::{NoopSessionRepository, NoopSettingsProvider},
                 noop_user_store::NoopUserStore,
             },
-            provider::ProviderRegistryBuilder,
+            llm::DriverRegistryBuilder,
         };
 
         Self {
             kernel_config:      KernelConfig::default(),
-            provider_registry:  Arc::new(
-                ProviderRegistryBuilder::new("openrouter", "openai/gpt-4o-mini").build(),
+            driver_registry:    Arc::new(
+                DriverRegistryBuilder::new("default", "openai/gpt-4o-mini").build(),
             ),
             tool_registry:      Arc::new(ToolRegistry::new()),
             agent_registry:     Arc::new(AgentRegistry::new(
@@ -195,7 +195,7 @@ pub fn boot(config: BootConfig) -> Kernel {
 
     Kernel::new(
         config.kernel_config,
-        config.provider_registry,
+        config.driver_registry,
         config.tool_registry,
         memory,
         event_bus,

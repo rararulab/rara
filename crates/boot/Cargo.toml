@@ -19,7 +19,6 @@ k8s = ["rara-k8s"]
 agentfs-sdk = { workspace = true }
 anyhow.workspace = true
 argon2.workspace = true
-async-openai = { workspace = true }
 async-trait.workspace = true
 chrono.workspace = true
 jiff.workspace = true

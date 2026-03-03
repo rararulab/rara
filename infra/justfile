@@ -1,24 +1,41 @@
+[private]
+build:
+    go build -o bin/deploy ./cmd/deploy
+
+# ========================================================================================
+# Pulumi
+# ========================================================================================
+
+[doc("initialize Pulumi stacks (run once)")]
 init:
-    cd infra && pulumi login --local && pulumi stack init infra-dev && pulumi stack init app-dev
+    pulumi login --local && pulumi stack init infra-dev && pulumi stack init app-dev
 
+[doc("deploy infrastructure stack")]
 infra-up:
-    cd infra && pulumi up -s infra-dev -y
+    pulumi up -s infra-dev -y
 
+[doc("preview infrastructure changes")]
+infra-preview:
+    pulumi preview -s infra-dev
+
+[doc("destroy infrastructure stack")]
+infra-destroy:
+    pulumi destroy -s infra-dev -y
+
+[doc("deploy application stack")]
 app-up:
-    cd infra && pulumi up -s app-dev -y
+    pulumi up -s app-dev -y
 
+[doc("preview application changes")]
+app-preview:
+    pulumi preview -s app-dev
+
+[doc("destroy application stack")]
+app-destroy:
+    pulumi destroy -s app-dev -y
+
+[doc("deploy infra + app stacks")]
 setup: infra-up app-up
 
-infra-preview:
-    cd infra && pulumi preview -s infra-dev
-
-app-preview:
-    cd infra && pulumi preview -s app-dev
-
-infra-destroy:
-    cd infra && pulumi destroy -s infra-dev -y
-
-app-destroy:
-    cd infra && pulumi destroy -s app-dev -y
-
+[doc("destroy app + infra stacks")]
 destroy: app-destroy infra-destroy
