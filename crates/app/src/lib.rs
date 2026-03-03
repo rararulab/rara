@@ -336,6 +336,11 @@ impl AppConfig {
             .set_endpoint_registry(kernel.endpoint_registry().clone())
             .await;
 
+        // Inject StreamHub into TelegramAdapter for streaming.
+        if let Some(ref tg) = telegram_adapter {
+            tg.set_stream_hub(kernel.stream_hub().clone()).await;
+        }
+
         // Start kernel I/O subsystem (TickLoop + Egress).
         // start() consumes self and returns (Arc<Kernel>, KernelHandle).
         let cancellation_token = CancellationToken::new();

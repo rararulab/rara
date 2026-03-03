@@ -43,9 +43,11 @@
 use std::{
     collections::HashMap,
     sync::{Arc, RwLock as StdRwLock},
+    time::Instant,
 };
 
 use async_trait::async_trait;
+use dashmap::DashMap;
 use rara_kernel::{
     channel::{
         adapter::ChannelAdapter,
@@ -57,6 +59,7 @@ use rara_kernel::{
     io::{
         egress::{EgressAdapter, EgressError, Endpoint, EndpointAddress, PlatformOutbound},
         ingress::RawPlatformMessage,
+        stream::StreamHubRef,
         types::{IngestError, InteractionType, ReplyContext as IoReplyContext},
     },
 };
@@ -88,6 +91,34 @@ const MAX_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Minimum interval between Telegram `edit_message_text` calls (1.5 seconds)
 /// to avoid hitting Telegram API rate limits.
+const MIN_EDIT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Maximum characters per Telegram message before splitting to a new message.
+/// Set below 4096 to leave buffer for HTML tag expansion from markdown→html.
+const STREAM_SPLIT_THRESHOLD: usize = 3800;
+
+/// Per-chat streaming state for progressive `editMessageText` updates.
+struct StreamingMessage {
+    /// All message IDs sent for this stream (multiple when splitting long content).
+    message_ids: Vec<MessageId>,
+    /// Accumulated raw text for the current (latest) message.
+    accumulated: String,
+    /// Last successful `editMessageText` timestamp for throttling.
+    last_edit: Instant,
+    /// Whether new text has been appended since the last edit.
+    dirty: bool,
+}
+
+impl StreamingMessage {
+    fn new() -> Self {
+        Self {
+            message_ids: Vec::new(),
+            accumulated: String::new(),
+            last_edit: Instant::now(),
+            dirty: false,
+        }
+    }
+}
 
 /// Runtime configuration for the Telegram adapter.
 ///
@@ -154,6 +185,10 @@ pub struct TelegramAdapter {
     contact_tracker:   Option<Arc<dyn ContactTracker>>,
     /// Optional link service for handling `/link` commands.
     link_service:      Option<Arc<TelegramLinkService>>,
+    /// StreamHub for subscribing to real-time token deltas.
+    stream_hub:        Arc<RwLock<Option<StreamHubRef>>>,
+    /// Per-chat active streaming state, keyed by `chat_id`.
+    active_streams:    Arc<DashMap<i64, StreamingMessage>>,
 }
 
 impl TelegramAdapter {
@@ -178,6 +213,8 @@ impl TelegramAdapter {
             config: Arc::new(StdRwLock::new(TelegramConfig::default())),
             contact_tracker: None,
             link_service: None,
+            stream_hub: Arc::new(RwLock::new(None)),
+            active_streams: Arc::new(DashMap::new()),
         }
     }
 
@@ -296,6 +333,11 @@ impl TelegramAdapter {
         self
     }
 
+    /// Inject the kernel's [`StreamHub`] for real-time token streaming.
+    pub async fn set_stream_hub(&self, hub: StreamHubRef) {
+        *self.stream_hub.write().await = Some(hub);
+    }
+
     /// Check whether a chat ID is allowed.
     ///
     /// Returns `true` if the allowed list is empty (all chats permitted) or
@@ -332,13 +374,44 @@ impl EgressAdapter for TelegramAdapter {
                 let html = crate::telegram::markdown::markdown_to_telegram_html(&content);
                 let chunks = crate::telegram::markdown::chunk_message(&html, 4096);
 
+                // Check if there's an active streaming state to replace.
+                if let Some((_, stream_state)) = self.active_streams.remove(&chat_id) {
+                    if let Some(&last_msg_id) = stream_state.message_ids.last() {
+                        if last_msg_id != MessageId(0) {
+                            // Edit the last streaming message with the first chunk.
+                            let first_chunk = chunks.first().map(|s| s.as_str()).unwrap_or("");
+                            let edit_ok = self
+                                .bot
+                                .edit_message_text(ChatId(chat_id), last_msg_id, first_chunk)
+                                .parse_mode(ParseMode::Html)
+                                .await
+                                .is_ok();
+
+                            if edit_ok {
+                                // Send remaining chunks as new messages.
+                                for chunk in chunks.iter().skip(1) {
+                                    let _ = self
+                                        .bot
+                                        .send_message(ChatId(chat_id), chunk)
+                                        .parse_mode(ParseMode::Html)
+                                        .await;
+                                }
+                                return Ok(());
+                            }
+                            // Edit failed — fall through to normal send path below.
+                            warn!(chat_id, "telegram: edit streaming message failed, falling back to send");
+                        }
+                    }
+                    // Fallthrough if no valid message ID.
+                }
+
+                // No active stream — normal send path.
                 for (i, chunk) in chunks.iter().enumerate() {
                     let mut req = self
                         .bot
                         .send_message(ChatId(chat_id), chunk)
                         .parse_mode(ParseMode::Html);
 
-                    // Attach reply-to on the first chunk if available.
                     if i == 0 {
                         if let Some(ref ctx) = reply_context {
                             if let Some(ref reply_id) = ctx.reply_to_platform_msg_id {
@@ -425,6 +498,8 @@ impl ChannelAdapter for TelegramAdapter {
         let config = Arc::clone(&self.config);
         let contact_tracker = self.contact_tracker.clone();
         let link_service = self.link_service.clone();
+        let stream_hub = Arc::clone(&self.stream_hub);
+        let active_streams = Arc::clone(&self.active_streams);
 
         tokio::spawn(async move {
             polling_loop(
@@ -437,6 +512,8 @@ impl ChannelAdapter for TelegramAdapter {
                 config,
                 contact_tracker,
                 link_service,
+                stream_hub,
+                active_streams,
             )
             .await;
         });
@@ -492,6 +569,8 @@ async fn polling_loop(
     config: Arc<StdRwLock<TelegramConfig>>,
     contact_tracker: Option<Arc<dyn ContactTracker>>,
     link_service: Option<Arc<TelegramLinkService>>,
+    stream_hub: Arc<RwLock<Option<StreamHubRef>>>,
+    active_streams: Arc<DashMap<i64, StreamingMessage>>,
 ) {
     let mut offset: Option<i32> = None;
     let mut retry_delay = INITIAL_RETRY_DELAY;
@@ -546,6 +625,8 @@ async fn polling_loop(
                     let config = Arc::clone(&config);
                     let tracker = contact_tracker.clone();
                     let link_svc = link_service.clone();
+                    let stream_hub = Arc::clone(&stream_hub);
+                    let active_streams = Arc::clone(&active_streams);
                     tokio::spawn(async move {
                         handle_update(
                             update,
@@ -556,6 +637,8 @@ async fn polling_loop(
                             &config,
                             tracker.as_ref(),
                             link_svc.as_ref(),
+                            &stream_hub,
+                            &active_streams,
                         )
                         .await;
                     });
@@ -591,6 +674,8 @@ async fn handle_update(
     config: &Arc<StdRwLock<TelegramConfig>>,
     contact_tracker: Option<&Arc<dyn ContactTracker>>,
     link_service: Option<&Arc<TelegramLinkService>>,
+    stream_hub: &Arc<RwLock<Option<StreamHubRef>>>,
+    active_streams: &Arc<DashMap<i64, StreamingMessage>>,
 ) {
     // Read a snapshot of the runtime config for this update.
     let cfg = match config.read() {
@@ -728,21 +813,294 @@ async fn handle_update(
     drop(username_guard);
 
     // Fire-and-forget ingest.
-    if let Err(e) = handle.ingest(raw).await {
-        match e {
-            IngestError::SystemBusy => {
-                let _ = bot
-                    .send_message(
-                        ChatId(chat_id),
-                        "\u{26a0}\u{fe0f} \
-                         \u{7cfb}\u{7edf}\u{7e41}\u{5fd9}\u{ff0c}\u{8bf7}\u{7a0d}\u{540e}\u{518d}\\
-                         \
-                         u{8bd5}\u{3002}",
-                    )
-                    .await;
+    let session_key = format_session_key(chat_id);
+    match handle.ingest(raw).await {
+        Ok(()) => {
+            // Spawn stream forwarder for progressive editMessageText.
+            spawn_stream_forwarder(
+                Arc::clone(stream_hub),
+                Arc::clone(active_streams),
+                bot.clone(),
+                chat_id,
+                &session_key,
+            );
+        }
+        Err(IngestError::SystemBusy) => {
+            let _ = bot
+                .send_message(ChatId(chat_id), "⚠️ 系统繁忙，请稍后再试。")
+                .await;
+        }
+        Err(other) => {
+            error!(error = %other, "telegram adapter: ingest failed");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Stream forwarder — progressive editMessageText
+// ---------------------------------------------------------------------------
+
+/// Spawn a background task that subscribes to [`StreamHub`] for the given
+/// session and progressively updates a Telegram message via `editMessageText`.
+fn spawn_stream_forwarder(
+    stream_hub: Arc<RwLock<Option<StreamHubRef>>>,
+    active_streams: Arc<DashMap<i64, StreamingMessage>>,
+    bot: teloxide::Bot,
+    chat_id: i64,
+    session_key: &str,
+) {
+    use rara_kernel::io::stream::StreamEvent;
+    use rara_kernel::process::SessionId;
+
+    let session_key = session_key.to_string();
+
+    tokio::spawn(async move {
+        let hub = {
+            let guard = stream_hub.read().await;
+            match guard.as_ref() {
+                Some(hub) => Arc::clone(hub),
+                None => return,
             }
-            other => {
-                error!(error = %other, "telegram adapter: ingest failed");
+        };
+
+        let session_id = match SessionId::try_from_raw(&session_key) {
+            Ok(id) => id,
+            Err(_) => {
+                warn!(session_key, "invalid session key for telegram stream forwarder");
+                return;
+            }
+        };
+
+        // Poll until stream appears (event_loop opens it asynchronously).
+        let mut attempts = 0;
+        let subs = loop {
+            let s = hub.subscribe_session(&session_id);
+            if !s.is_empty() || attempts > 50 {
+                break s;
+            }
+            attempts += 1;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        };
+
+        if subs.is_empty() {
+            tracing::debug!(session_key, "telegram stream forwarder: no streams found");
+            return;
+        }
+
+        // Initialize streaming state.
+        active_streams.insert(chat_id, StreamingMessage::new());
+
+        // Handle the first stream (one agent turn per ingest).
+        let (_stream_id, mut rx) = match subs.into_iter().next() {
+            Some(s) => s,
+            None => return,
+        };
+
+        let mut throttle = tokio::time::interval(MIN_EDIT_INTERVAL);
+        throttle.tick().await; // skip immediate first tick
+
+        loop {
+            tokio::select! {
+                result = rx.recv() => {
+                    match result {
+                        Ok(StreamEvent::TextDelta { text }) => {
+                            // Check if we need to flush due to threshold.
+                            let flush_req = {
+                                if let Some(mut state) = active_streams.get_mut(&chat_id) {
+                                    state.accumulated.push_str(&text);
+                                    state.dirty = true;
+
+                                    if state.accumulated.len() > STREAM_SPLIT_THRESHOLD {
+                                        let html = crate::telegram::markdown::markdown_to_telegram_html(&state.accumulated);
+                                        Some(FlushRequest {
+                                            message_ids: state.message_ids.clone(),
+                                            text_html: html,
+                                        })
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                                // Guard dropped here.
+                            };
+
+                            if let Some(req) = flush_req {
+                                let result = flush_edit(&bot, chat_id, &req).await;
+                                apply_flush_result(&active_streams, chat_id, result);
+                                // Start a new message for overflow.
+                                if let Some(mut state) = active_streams.get_mut(&chat_id) {
+                                    state.accumulated.clear();
+                                    state.message_ids.push(MessageId(0)); // sentinel
+                                    state.dirty = false;
+                                }
+                            }
+                        }
+                        Ok(_) => {} // Ignore non-text events
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            warn!(chat_id, skipped = n, "telegram stream forwarder lagged");
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            // Stream closed — do final flush.
+                            let flush_req = {
+                                if let Some(state) = active_streams.get(&chat_id) {
+                                    if state.dirty {
+                                        let html = crate::telegram::markdown::markdown_to_telegram_html(&state.accumulated);
+                                        Some(FlushRequest {
+                                            message_ids: state.message_ids.clone(),
+                                            text_html: html,
+                                        })
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                                // Guard dropped here.
+                            };
+                            if let Some(req) = flush_req {
+                                let result = flush_edit(&bot, chat_id, &req).await;
+                                apply_flush_result(&active_streams, chat_id, result);
+                            }
+                            break;
+                        }
+                    }
+                }
+                _ = throttle.tick() => {
+                    let flush_req = {
+                        if let Some(state) = active_streams.get(&chat_id) {
+                            if state.dirty && !state.accumulated.is_empty() {
+                                let html = crate::telegram::markdown::markdown_to_telegram_html(&state.accumulated);
+                                Some(FlushRequest {
+                                    message_ids: state.message_ids.clone(),
+                                    text_html: html,
+                                })
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                        // Guard dropped here.
+                    };
+                    if let Some(req) = flush_req {
+                        let result = flush_edit(&bot, chat_id, &req).await;
+                        apply_flush_result(&active_streams, chat_id, result);
+                    }
+                }
+            }
+        }
+
+        // Auto-cleanup after 120s if Reply never arrives.
+        let streams = active_streams.clone();
+        let cid = chat_id;
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+            if streams.remove(&cid).is_some() {
+                warn!(chat_id = cid, "telegram stream forwarder: stale state cleaned up after 120s");
+            }
+        });
+    });
+}
+
+/// Data extracted from [`StreamingMessage`] needed for a flush operation.
+/// Allows dropping the DashMap guard before making async Telegram API calls.
+struct FlushRequest {
+    message_ids: Vec<MessageId>,
+    text_html: String,
+}
+
+/// Result of a flush operation — what to update back in state.
+enum FlushResult {
+    /// First message sent successfully with this ID.
+    Sent(MessageId),
+    /// Edit succeeded.
+    Edited,
+    /// Edit failed but not retryable.
+    Failed,
+    /// Rate limited — keep dirty for retry.
+    RateLimited,
+    /// Send failed.
+    SendFailed,
+}
+
+/// Flush accumulated text to Telegram via `sendMessage` (first time) or
+/// `editMessageText` (subsequent).
+///
+/// This function does NOT hold any DashMap guard — the caller must extract
+/// the data into a [`FlushRequest`] and drop the guard before calling.
+async fn flush_edit(
+    bot: &teloxide::Bot,
+    chat_id: i64,
+    req: &FlushRequest,
+) -> FlushResult {
+    if req.message_ids.is_empty() || req.message_ids.last().copied() == Some(MessageId(0)) {
+        // First message or new split — send a new message.
+        match bot
+            .send_message(ChatId(chat_id), &req.text_html)
+            .parse_mode(ParseMode::Html)
+            .await
+        {
+            Ok(sent) => FlushResult::Sent(sent.id),
+            Err(e) => {
+                warn!(chat_id, error = %e, "telegram stream: failed to send message");
+                FlushResult::SendFailed
+            }
+        }
+    } else {
+        let msg_id = *req.message_ids.last().unwrap();
+        match bot
+            .edit_message_text(ChatId(chat_id), msg_id, &req.text_html)
+            .parse_mode(ParseMode::Html)
+            .await
+        {
+            Ok(_) => FlushResult::Edited,
+            Err(teloxide::RequestError::Api(ref api_err)) => {
+                let err_str = format!("{api_err}");
+                if err_str.contains("message is not modified") {
+                    FlushResult::Edited
+                } else if err_str.contains("Too Many Requests") || err_str.contains("retry after") {
+                    warn!(chat_id, "telegram stream: rate limited, will retry next tick");
+                    FlushResult::RateLimited
+                } else {
+                    warn!(chat_id, error = %api_err, "telegram stream: edit failed");
+                    FlushResult::Failed
+                }
+            }
+            Err(e) => {
+                warn!(chat_id, error = %e, "telegram stream: edit request failed");
+                FlushResult::Failed
+            }
+        }
+    }
+}
+
+/// Apply a [`FlushResult`] back to the streaming state in the DashMap.
+fn apply_flush_result(
+    active_streams: &DashMap<i64, StreamingMessage>,
+    chat_id: i64,
+    result: FlushResult,
+) {
+    if let Some(mut state) = active_streams.get_mut(&chat_id) {
+        match result {
+            FlushResult::Sent(msg_id) => {
+                if state.message_ids.last().copied() == Some(MessageId(0)) {
+                    *state.message_ids.last_mut().unwrap() = msg_id;
+                } else {
+                    state.message_ids.push(msg_id);
+                }
+                state.last_edit = Instant::now();
+                state.dirty = false;
+            }
+            FlushResult::Edited | FlushResult::Failed => {
+                state.last_edit = Instant::now();
+                state.dirty = false;
+            }
+            FlushResult::RateLimited => {
+                // Leave dirty=true so the next tick retries.
+            }
+            FlushResult::SendFailed => {
+                state.dirty = false;
             }
         }
     }
@@ -1487,5 +1845,85 @@ mod tests {
         // Disambiguate: call EgressAdapter's channel_type explicitly.
         let egress_ct = <TelegramAdapter as EgressAdapter>::channel_type(&adapter);
         assert_eq!(egress_ct, ChannelType::Telegram);
+    }
+
+    // -----------------------------------------------------------------------
+    // StreamingMessage tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn streaming_message_initial_state() {
+        let state = StreamingMessage::new();
+        assert!(state.message_ids.is_empty());
+        assert!(state.accumulated.is_empty());
+        assert!(!state.dirty);
+    }
+
+    #[test]
+    fn streaming_message_accumulate() {
+        let mut state = StreamingMessage::new();
+        state.accumulated.push_str("Hello ");
+        state.accumulated.push_str("world");
+        state.dirty = true;
+
+        assert_eq!(state.accumulated, "Hello world");
+        assert!(state.dirty);
+    }
+
+    #[test]
+    fn streaming_message_split_threshold() {
+        let mut state = StreamingMessage::new();
+        let chunk = "x".repeat(STREAM_SPLIT_THRESHOLD - 10);
+        state.accumulated.push_str(&chunk);
+        assert!(state.accumulated.len() <= STREAM_SPLIT_THRESHOLD);
+
+        state.accumulated.push_str(&"y".repeat(20));
+        assert!(state.accumulated.len() > STREAM_SPLIT_THRESHOLD);
+    }
+
+    #[test]
+    fn min_edit_interval_is_reasonable() {
+        assert!(MIN_EDIT_INTERVAL >= std::time::Duration::from_secs(1));
+        assert!(MIN_EDIT_INTERVAL <= std::time::Duration::from_secs(3));
+    }
+
+    #[tokio::test]
+    async fn test_stream_state_lifecycle() {
+        use rara_kernel::io::stream::{StreamHub, StreamEvent};
+        use rara_kernel::process::SessionId;
+
+        let hub = Arc::new(StreamHub::new(64));
+        let active_streams: Arc<DashMap<i64, StreamingMessage>> = Arc::new(DashMap::new());
+        let chat_id = 12345_i64;
+
+        let session_id = SessionId::new();
+
+        // Open a stream on the hub.
+        let stream_handle = hub.open(session_id);
+
+        // Simulate what the forwarder does: insert state.
+        active_streams.insert(chat_id, StreamingMessage::new());
+        assert!(active_streams.contains_key(&chat_id));
+
+        // Simulate text accumulation.
+        if let Some(mut state) = active_streams.get_mut(&chat_id) {
+            state.accumulated.push_str("Hello from LLM");
+            state.dirty = true;
+        }
+
+        // Verify state.
+        {
+            let state = active_streams.get(&chat_id).unwrap();
+            assert_eq!(state.accumulated, "Hello from LLM");
+            assert!(state.dirty);
+        }
+
+        // Simulate Reply arrival — remove state.
+        let removed = active_streams.remove(&chat_id);
+        assert!(removed.is_some());
+        assert!(!active_streams.contains_key(&chat_id));
+
+        // Verify stream_handle still works (no panic on emit after state removal).
+        stream_handle.emit(StreamEvent::TextDelta { text: "late delta".to_string() });
     }
 }
