@@ -229,10 +229,6 @@ impl Kernel {
             KernelEvent::Syscall(syscall) => {
                 self.handle_syscall(syscall, runtimes).await;
             }
-            KernelEvent::Timer { name, payload } => {
-                info!(name = %name, "timer event received (not yet implemented)");
-                let _ = payload;
-            }
             KernelEvent::Shutdown => {
                 info!("shutdown event received");
             }

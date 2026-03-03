@@ -574,7 +574,13 @@ fn spawn_stream_forwarder(
             }
         };
 
-        let session_id = rara_kernel::process::SessionId::from_raw(&session_key);
+        let session_id = match rara_kernel::process::SessionId::try_from_raw(&session_key) {
+            Ok(id) => id,
+            Err(_) => {
+                tracing::warn!(session_key = %session_key, "invalid session key for stream forwarder");
+                return;
+            }
+        };
 
         // Poll until stream appears (process_loop opens it asynchronously).
         let mut attempts = 0;

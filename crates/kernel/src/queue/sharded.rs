@@ -17,7 +17,7 @@
 //! [`EventProcessor`](crate::processor::EventProcessor)s.
 //!
 //! Event classification:
-//! - **Global**: `UserMessage`, `SpawnAgent`, `Timer`, `Shutdown`, `Deliver`
+//! - **Global**: `UserMessage`, `SpawnAgent`, `Shutdown`, `Deliver`
 //! - **Sharded by agent_id**: `Syscall`, `TurnCompleted`, `ChildCompleted`,
 //!   `SendSignal`
 //!
@@ -295,16 +295,6 @@ mod tests {
             principal: crate::process::principal::Principal::user("test"),
             parent_id: None,
             reply_tx:  tx,
-        };
-        assert_eq!(q.classify(&event), ShardTarget::Global);
-    }
-
-    #[test]
-    fn classify_timer_is_global() {
-        let q = make_queue(4);
-        let event = KernelEvent::Timer {
-            name:    "tick".to_string(),
-            payload: serde_json::Value::Null,
         };
         assert_eq!(q.classify(&event), ShardTarget::Global);
     }

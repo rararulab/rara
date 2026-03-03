@@ -47,7 +47,7 @@ pub enum EventPriority {
     Critical = 0,
     /// TurnCompleted, ChildCompleted, Deliver, Syscall — processed second.
     Normal = 1,
-    /// UserMessage, SpawnAgent, Timer — processed last.
+    /// UserMessage, SpawnAgent — processed last.
     Low = 2,
 }
 
@@ -405,12 +405,6 @@ pub enum KernelEvent {
     Syscall(Syscall),
 
     // === System ===
-    /// Timer event (reserved for future use).
-    Timer {
-        name:    String,
-        payload: serde_json::Value,
-    },
-
     /// Graceful shutdown request.
     Shutdown,
 }
@@ -430,7 +424,6 @@ impl KernelEvent {
             // Global events — no specific agent affinity.
             Self::UserMessage(_)
             | Self::SpawnAgent { .. }
-            | Self::Timer { .. }
             | Self::Deliver(_)
             | Self::Shutdown => None,
         }
@@ -447,9 +440,7 @@ impl KernelEvent {
             | Self::ChildCompleted { .. }
             | Self::Deliver(_)
             | Self::Syscall(_) => EventPriority::Normal,
-            Self::UserMessage(_) | Self::SpawnAgent { .. } | Self::Timer { .. } => {
-                EventPriority::Low
-            }
+            Self::UserMessage(_) | Self::SpawnAgent { .. } => EventPriority::Low,
         }
     }
 }
@@ -480,7 +471,6 @@ impl std::fmt::Debug for KernelEvent {
             }
             Self::Deliver(env) => write!(f, "Deliver(session={})", env.session_id),
             Self::Syscall(syscall) => write!(f, "{:?}", syscall),
-            Self::Timer { name, .. } => write!(f, "Timer(name={})", name),
             Self::Shutdown => write!(f, "Shutdown"),
         }
     }
@@ -549,15 +539,6 @@ mod tests {
             principal: Principal::user("test"),
             parent_id: None,
             reply_tx:  tx,
-        };
-        assert!(event.agent_id().is_none());
-    }
-
-    #[test]
-    fn agent_id_for_timer_is_none() {
-        let event = KernelEvent::Timer {
-            name:    "tick".to_string(),
-            payload: serde_json::Value::Null,
         };
         assert!(event.agent_id().is_none());
     }

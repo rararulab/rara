@@ -47,6 +47,14 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::chat::{error::ChatError, model_catalog::ChatModel, service::SessionService};
 
+/// Parse a session key from a URL path parameter, returning 400 on invalid
+/// UUID.
+fn parse_session_key(raw: &str) -> Result<SessionKey, ChatError> {
+    SessionKey::try_from_raw(raw).map_err(|_| ChatError::InvalidRequest {
+        message: format!("invalid session key: {raw}"),
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Request / Response types
 // ---------------------------------------------------------------------------
@@ -247,7 +255,7 @@ async fn get_session(
     State(service): State<SessionService>,
     Path(key): Path<String>,
 ) -> Result<Json<SessionEntry>, ChatError> {
-    let session = service.get_session(&SessionKey::from_raw(&key)).await?;
+    let session = service.get_session(&parse_session_key(&key)?).await?;
     Ok(Json(session))
 }
 
@@ -271,7 +279,7 @@ async fn update_session(
 ) -> Result<Json<SessionEntry>, ChatError> {
     let session = service
         .update_session_fields(
-            &SessionKey::from_raw(&key),
+            &parse_session_key(&key)?,
             req.title,
             req.model,
             req.system_prompt,
@@ -295,7 +303,7 @@ async fn delete_session(
     State(service): State<SessionService>,
     Path(key): Path<String>,
 ) -> Result<StatusCode, ChatError> {
-    service.delete_session(&SessionKey::from_raw(&key)).await?;
+    service.delete_session(&parse_session_key(&key)?).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -321,7 +329,7 @@ async fn get_messages(
     Query(q): Query<GetMessagesQuery>,
 ) -> Result<Json<Vec<ChatMessage>>, ChatError> {
     let messages = service
-        .get_messages(&SessionKey::from_raw(&key), q.after_seq, q.limit)
+        .get_messages(&parse_session_key(&key)?, q.after_seq, q.limit)
         .await?;
     Ok(Json(messages))
 }
@@ -342,7 +350,7 @@ async fn clear_messages(
     State(service): State<SessionService>,
     Path(key): Path<String>,
 ) -> Result<StatusCode, ChatError> {
-    service.clear_messages(&SessionKey::from_raw(&key)).await?;
+    service.clear_messages(&parse_session_key(&key)?).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -365,7 +373,7 @@ async fn fork_session(
     Json(req): Json<ForkSessionRequest>,
 ) -> Result<(StatusCode, Json<SessionEntry>), ChatError> {
     let forked = service
-        .fork_session(&SessionKey::from_raw(&key), req.fork_at_seq)
+        .fork_session(&parse_session_key(&key)?, req.fork_at_seq)
         .await?;
     Ok((StatusCode::CREATED, Json(forked)))
 }
@@ -391,7 +399,7 @@ async fn bind_channel(
             req.channel_type,
             req.account,
             req.chat_id,
-            SessionKey::from_raw(&req.session_key),
+            parse_session_key(&req.session_key)?,
         )
         .await?;
     Ok(Json(binding))

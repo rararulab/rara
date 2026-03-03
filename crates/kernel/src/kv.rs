@@ -32,9 +32,14 @@ impl SharedKv {
     pub fn new(op: Operator) -> Self { Self { op } }
 
     /// Create a volatile in-memory instance (tests / dev default).
+    ///
+    /// # Panics
+    ///
+    /// Never in practice — `opendal::services::Memory` construction is
+    /// infallible. The `.expect()` guards against future opendal API changes.
     pub fn in_memory() -> Self {
         let op = Operator::new(opendal::services::Memory::default())
-            .expect("memory operator")
+            .expect("opendal Memory operator is infallible")
             .finish();
         Self { op }
     }

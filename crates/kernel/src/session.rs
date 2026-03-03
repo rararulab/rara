@@ -58,6 +58,18 @@ impl SessionKey {
         Self(uuid::Uuid::parse_str(raw).expect("SessionKey::from_raw: invalid UUID"))
     }
 
+    /// Try to parse a session key from a string, returning an error on invalid
+    /// UUID.
+    ///
+    /// Prefer this over [`from_raw`](Self::from_raw) when the input comes from
+    /// an untrusted source (user input, URL parameters, etc.).
+    pub fn try_from_raw(raw: &str) -> Result<Self, SessionError> {
+        let uuid = uuid::Uuid::parse_str(raw).map_err(|_| SessionError::InvalidKey {
+            message: raw.to_string(),
+        })?;
+        Ok(Self(uuid))
+    }
+
     /// Return the inner [`uuid::Uuid`].
     #[must_use]
     pub fn uuid(&self) -> uuid::Uuid { self.0 }
