@@ -374,13 +374,39 @@ impl EgressAdapter for TelegramAdapter {
                 let html = crate::telegram::markdown::markdown_to_telegram_html(&content);
                 let chunks = crate::telegram::markdown::chunk_message(&html, 4096);
 
+                // Check if there's an active streaming state to replace.
+                if let Some((_, stream_state)) = self.active_streams.remove(&chat_id) {
+                    if let Some(&last_msg_id) = stream_state.message_ids.last() {
+                        if last_msg_id != MessageId(0) {
+                            // Edit the last streaming message with the first chunk.
+                            let first_chunk = chunks.first().map(|s| s.as_str()).unwrap_or("");
+                            let _ = self
+                                .bot
+                                .edit_message_text(ChatId(chat_id), last_msg_id, first_chunk)
+                                .parse_mode(ParseMode::Html)
+                                .await;
+
+                            // Send remaining chunks as new messages.
+                            for chunk in chunks.iter().skip(1) {
+                                let _ = self
+                                    .bot
+                                    .send_message(ChatId(chat_id), chunk)
+                                    .parse_mode(ParseMode::Html)
+                                    .await;
+                            }
+                            return Ok(());
+                        }
+                    }
+                    // Fallthrough if no valid message ID.
+                }
+
+                // No active stream — normal send path.
                 for (i, chunk) in chunks.iter().enumerate() {
                     let mut req = self
                         .bot
                         .send_message(ChatId(chat_id), chunk)
                         .parse_mode(ParseMode::Html);
 
-                    // Attach reply-to on the first chunk if available.
                     if i == 0 {
                         if let Some(ref ctx) = reply_context {
                             if let Some(ref reply_id) = ctx.reply_to_platform_msg_id {
@@ -467,6 +493,8 @@ impl ChannelAdapter for TelegramAdapter {
         let config = Arc::clone(&self.config);
         let contact_tracker = self.contact_tracker.clone();
         let link_service = self.link_service.clone();
+        let stream_hub = Arc::clone(&self.stream_hub);
+        let active_streams = Arc::clone(&self.active_streams);
 
         tokio::spawn(async move {
             polling_loop(
@@ -479,6 +507,8 @@ impl ChannelAdapter for TelegramAdapter {
                 config,
                 contact_tracker,
                 link_service,
+                stream_hub,
+                active_streams,
             )
             .await;
         });
@@ -534,6 +564,8 @@ async fn polling_loop(
     config: Arc<StdRwLock<TelegramConfig>>,
     contact_tracker: Option<Arc<dyn ContactTracker>>,
     link_service: Option<Arc<TelegramLinkService>>,
+    stream_hub: Arc<RwLock<Option<StreamHubRef>>>,
+    active_streams: Arc<DashMap<i64, StreamingMessage>>,
 ) {
     let mut offset: Option<i32> = None;
     let mut retry_delay = INITIAL_RETRY_DELAY;
@@ -588,6 +620,8 @@ async fn polling_loop(
                     let config = Arc::clone(&config);
                     let tracker = contact_tracker.clone();
                     let link_svc = link_service.clone();
+                    let stream_hub = Arc::clone(&stream_hub);
+                    let active_streams = Arc::clone(&active_streams);
                     tokio::spawn(async move {
                         handle_update(
                             update,
@@ -598,6 +632,8 @@ async fn polling_loop(
                             &config,
                             tracker.as_ref(),
                             link_svc.as_ref(),
+                            &stream_hub,
+                            &active_streams,
                         )
                         .await;
                     });
@@ -633,6 +669,8 @@ async fn handle_update(
     config: &Arc<StdRwLock<TelegramConfig>>,
     contact_tracker: Option<&Arc<dyn ContactTracker>>,
     link_service: Option<&Arc<TelegramLinkService>>,
+    stream_hub: &Arc<RwLock<Option<StreamHubRef>>>,
+    active_streams: &Arc<DashMap<i64, StreamingMessage>>,
 ) {
     // Read a snapshot of the runtime config for this update.
     let cfg = match config.read() {
@@ -770,22 +808,25 @@ async fn handle_update(
     drop(username_guard);
 
     // Fire-and-forget ingest.
-    if let Err(e) = handle.ingest(raw).await {
-        match e {
-            IngestError::SystemBusy => {
-                let _ = bot
-                    .send_message(
-                        ChatId(chat_id),
-                        "\u{26a0}\u{fe0f} \
-                         \u{7cfb}\u{7edf}\u{7e41}\u{5fd9}\u{ff0c}\u{8bf7}\u{7a0d}\u{540e}\u{518d}\\
-                         \
-                         u{8bd5}\u{3002}",
-                    )
-                    .await;
-            }
-            other => {
-                error!(error = %other, "telegram adapter: ingest failed");
-            }
+    let session_key = format_session_key(chat_id);
+    match handle.ingest(raw).await {
+        Ok(()) => {
+            // Spawn stream forwarder for progressive editMessageText.
+            spawn_stream_forwarder(
+                Arc::clone(stream_hub),
+                Arc::clone(active_streams),
+                bot.clone(),
+                chat_id,
+                &session_key,
+            );
+        }
+        Err(IngestError::SystemBusy) => {
+            let _ = bot
+                .send_message(ChatId(chat_id), "⚠️ 系统繁忙，请稍后再试。")
+                .await;
+        }
+        Err(other) => {
+            error!(error = %other, "telegram adapter: ingest failed");
         }
     }
 }
