@@ -37,7 +37,7 @@ use crate::{
     handle::process_handle::ProcessHandle,
     io::{
         pipe::{self, PipeEntry},
-        types::{InboundMessage, MessageId, OutboundEnvelope, OutboundPayload, OutboundRouting},
+        types::{InboundMessage, MessageId, OutboundEnvelope, OutboundPayload},
     },
     kernel::Kernel,
     memory::KvScope,
@@ -731,18 +731,13 @@ impl Kernel {
             span.record("routing_path", "id_addressing");
             match self.process_table().get(target_id) {
                 Some(process) if process.state.is_terminal() => {
-                    let envelope = OutboundEnvelope {
-                        id:          MessageId::new(),
-                        in_reply_to: msg.id.clone(),
-                        user:        user.clone(),
-                        session_id:  session_id.clone(),
-                        routing:     OutboundRouting::BroadcastAll,
-                        payload:     OutboundPayload::Error {
-                            code:    "process_terminal".to_string(),
-                            message: format!("process {} is {}", target_id, process.state),
-                        },
-                        timestamp:   jiff::Timestamp::now(),
-                    };
+                    let envelope = OutboundEnvelope::error(
+                        msg.id.clone(),
+                        user.clone(),
+                        session_id.clone(),
+                        "process_terminal",
+                        format!("process {} is {}", target_id, process.state),
+                    );
                     if let Err(e) = self.event_queue().try_push(KernelEvent::Deliver(envelope)) {
                         error!(%e, "failed to push process-terminal error Deliver");
                     }
@@ -767,18 +762,13 @@ impl Kernel {
                 }
                 None => {
                     // Process not found — return error.
-                    let envelope = OutboundEnvelope {
-                        id:          MessageId::new(),
-                        in_reply_to: msg.id.clone(),
-                        user:        user.clone(),
-                        session_id:  session_id.clone(),
-                        routing:     OutboundRouting::BroadcastAll,
-                        payload:     OutboundPayload::Error {
-                            code:    "process_not_found".to_string(),
-                            message: format!("process not found: {target_id}"),
-                        },
-                        timestamp:   jiff::Timestamp::now(),
-                    };
+                    let envelope = OutboundEnvelope::error(
+                        msg.id.clone(),
+                        user.clone(),
+                        session_id.clone(),
+                        "process_not_found",
+                        format!("process not found: {target_id}"),
+                    );
                     if let Err(e) = self.event_queue().try_push(KernelEvent::Deliver(envelope)) {
                         error!(%e, "failed to push process-not-found error Deliver");
                     }
@@ -855,18 +845,13 @@ impl Kernel {
                 session_id = %session_id,
                 "unknown target agent"
             );
-            let envelope = OutboundEnvelope {
-                id:          MessageId::new(),
-                in_reply_to: msg.id.clone(),
-                user:        user.clone(),
-                session_id:  session_id.clone(),
-                routing:     OutboundRouting::BroadcastAll,
-                payload:     OutboundPayload::Error {
-                    code:    "unknown_agent".to_string(),
-                    message: format!("unknown target agent: {target_name}"),
-                },
-                timestamp:   jiff::Timestamp::now(),
-            };
+            let envelope = OutboundEnvelope::error(
+                msg.id.clone(),
+                user.clone(),
+                session_id.clone(),
+                "unknown_agent",
+                format!("unknown target agent: {target_name}"),
+            );
             if let Err(e) = self.event_queue().try_push(KernelEvent::Deliver(envelope)) {
                 error!(%e, "failed to push unknown-agent error Deliver");
             }
@@ -907,18 +892,13 @@ impl Kernel {
         let Some(mut rt) = runtimes.get_mut(&agent_id) else {
             warn!(agent_id = %agent_id, "runtime not found for LLM turn");
             // Send error back to the user instead of silently dropping.
-            let envelope = OutboundEnvelope {
-                id:          MessageId::new(),
-                in_reply_to: msg.id.clone(),
-                user:        msg.user.clone(),
-                session_id:  msg.session_id.clone(),
-                routing:     OutboundRouting::BroadcastAll,
-                payload:     OutboundPayload::Error {
-                    code:    "runtime_not_found".to_string(),
-                    message: format!("agent runtime not found: {agent_id}"),
-                },
-                timestamp:   jiff::Timestamp::now(),
-            };
+            let envelope = OutboundEnvelope::error(
+                msg.id.clone(),
+                msg.user.clone(),
+                msg.session_id.clone(),
+                "runtime_not_found",
+                format!("agent runtime not found: {agent_id}"),
+            );
             if let Err(e) = self.event_queue().try_push(KernelEvent::Deliver(envelope)) {
                 error!(%e, "failed to push runtime-not-found error Deliver");
             }
@@ -943,18 +923,13 @@ impl Kernel {
             .unwrap_or_else(|| session_id.clone());
         let _ = self
             .event_queue()
-            .try_push(KernelEvent::Deliver(OutboundEnvelope {
-                id:          MessageId::new(),
-                in_reply_to: msg_id.clone(),
-                user:        user.clone(),
-                session_id:  egress_session_id.clone(),
-                routing:     OutboundRouting::BroadcastAll,
-                payload:     OutboundPayload::Progress {
-                    stage:  "thinking".to_string(), // tODO: standardize stage names
-                    detail: Some(String::new()),    // An empty Some ???
-                },
-                timestamp:   jiff::Timestamp::now(),
-            }));
+            .try_push(KernelEvent::Deliver(OutboundEnvelope::progress(
+                msg_id.clone(),
+                user.clone(),
+                egress_session_id.clone(),
+                "thinking",
+                None,
+            )));
 
         // Record metrics.
         if let Some(metrics) = self.process_table().get_metrics(&agent_id) {
@@ -1038,18 +1013,13 @@ impl Kernel {
                     interval.tick().await; // skip the immediate first tick
                     loop {
                         interval.tick().await;
-                        let _ = eq.try_push(KernelEvent::Deliver(OutboundEnvelope {
-                            id:          MessageId::new(),
-                            in_reply_to: mid.clone(),
-                            user:        usr.clone(),
-                            session_id:  sid.clone(),
-                            routing:     OutboundRouting::BroadcastAll,
-                            payload:     OutboundPayload::Progress {
-                                stage:  "thinking".to_string(),
-                                detail: Some(String::new()),
-                            },
-                            timestamp:   Timestamp::now(),
-                        }));
+                        let _ = eq.try_push(KernelEvent::Deliver(OutboundEnvelope::progress(
+                            mid.clone(),
+                            usr.clone(),
+                            sid.clone(),
+                            "thinking",
+                            None,
+                        )));
                     }
                 })
             };
@@ -1205,18 +1175,13 @@ impl Kernel {
                 let _ = self.process_table().set_result(agent_id, result.clone());
 
                 // Push Deliver event for the reply — use egress session for routing.
-                let envelope = OutboundEnvelope {
-                    id: MessageId::new(),
+                let envelope = OutboundEnvelope::reply(
                     in_reply_to,
-                    user: user.clone(),
-                    session_id: egress_session_id.clone(),
-                    routing: OutboundRouting::BroadcastAll,
-                    payload: OutboundPayload::Reply {
-                        content:     crate::channel::types::MessageContent::Text(turn.text),
-                        attachments: vec![],
-                    },
-                    timestamp: jiff::Timestamp::now(),
-                };
+                    user.clone(),
+                    egress_session_id.clone(),
+                    crate::channel::types::MessageContent::Text(turn.text),
+                    vec![],
+                );
                 if let Err(e) = self.event_queue().try_push(KernelEvent::Deliver(envelope)) {
                     error!(%e, "failed to push Deliver event");
                 }
@@ -1284,18 +1249,13 @@ impl Kernel {
                 }
 
                 // Deliver error — use egress session for routing.
-                let envelope = OutboundEnvelope {
-                    id: MessageId::new(),
+                let envelope = OutboundEnvelope::error(
                     in_reply_to,
-                    user: user.clone(),
-                    session_id: egress_session_id.clone(),
-                    routing: OutboundRouting::BroadcastAll,
-                    payload: OutboundPayload::Error {
-                        code:    "agent_error".to_string(),
-                        message: err_msg,
-                    },
-                    timestamp: jiff::Timestamp::now(),
-                };
+                    user.clone(),
+                    egress_session_id.clone(),
+                    "agent_error",
+                    err_msg,
+                );
                 if let Err(e) = self.event_queue().try_push(KernelEvent::Deliver(envelope)) {
                     error!(%e, "failed to push error Deliver event");
                 }
@@ -1529,21 +1489,16 @@ impl Kernel {
                     .get(target)
                     .and_then(|p| p.channel_session_id.clone())
                     .unwrap_or_else(|| SessionId::new("unknown"));
-                let envelope = OutboundEnvelope {
-                    id: MessageId::new(),
-                    in_reply_to: MessageId::new(),
-                    user: crate::process::principal::UserId("system".to_string()),
+                let envelope = OutboundEnvelope::state_change(
+                    MessageId::new(),
+                    crate::process::principal::UserId("system".to_string()),
                     session_id,
-                    routing: OutboundRouting::BroadcastAll,
-                    payload: OutboundPayload::StateChange {
-                        event_type: "interrupted".to_string(),
-                        data:       serde_json::json!({
-                            "agent_id": target.to_string(),
-                            "message": "Agent interrupted by user",
-                        }),
-                    },
-                    timestamp: jiff::Timestamp::now(),
-                };
+                    "interrupted",
+                    serde_json::json!({
+                        "agent_id": target.to_string(),
+                        "message": "Agent interrupted by user",
+                    }),
+                );
                 if let Err(e) = self.event_queue().try_push(KernelEvent::Deliver(envelope)) {
                     error!(%e, "failed to push interrupt notification");
                 }

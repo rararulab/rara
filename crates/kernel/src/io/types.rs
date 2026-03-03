@@ -255,6 +255,96 @@ pub struct OutboundEnvelope {
     pub timestamp:   jiff::Timestamp,
 }
 
+impl OutboundEnvelope {
+    /// Create an error envelope with `BroadcastAll` routing.
+    pub fn error(
+        in_reply_to: MessageId,
+        user: UserId,
+        session_id: SessionId,
+        code: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: MessageId::new(),
+            in_reply_to,
+            user,
+            session_id,
+            routing: OutboundRouting::BroadcastAll,
+            payload: OutboundPayload::Error {
+                code:    code.into(),
+                message: message.into(),
+            },
+            timestamp: jiff::Timestamp::now(),
+        }
+    }
+
+    /// Create a reply envelope with `BroadcastAll` routing.
+    pub fn reply(
+        in_reply_to: MessageId,
+        user: UserId,
+        session_id: SessionId,
+        content: crate::channel::types::MessageContent,
+        attachments: Vec<Attachment>,
+    ) -> Self {
+        Self {
+            id: MessageId::new(),
+            in_reply_to,
+            user,
+            session_id,
+            routing: OutboundRouting::BroadcastAll,
+            payload: OutboundPayload::Reply {
+                content,
+                attachments,
+            },
+            timestamp: jiff::Timestamp::now(),
+        }
+    }
+
+    /// Create a progress envelope with `BroadcastAll` routing.
+    pub fn progress(
+        in_reply_to: MessageId,
+        user: UserId,
+        session_id: SessionId,
+        stage: impl Into<String>,
+        detail: Option<String>,
+    ) -> Self {
+        Self {
+            id: MessageId::new(),
+            in_reply_to,
+            user,
+            session_id,
+            routing: OutboundRouting::BroadcastAll,
+            payload: OutboundPayload::Progress {
+                stage: stage.into(),
+                detail,
+            },
+            timestamp: jiff::Timestamp::now(),
+        }
+    }
+
+    /// Create a state-change envelope with `BroadcastAll` routing.
+    pub fn state_change(
+        in_reply_to: MessageId,
+        user: UserId,
+        session_id: SessionId,
+        event_type: impl Into<String>,
+        data: serde_json::Value,
+    ) -> Self {
+        Self {
+            id: MessageId::new(),
+            in_reply_to,
+            user,
+            session_id,
+            routing: OutboundRouting::BroadcastAll,
+            payload: OutboundPayload::StateChange {
+                event_type: event_type.into(),
+                data,
+            },
+            timestamp: jiff::Timestamp::now(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // OutboundRouting
 // ---------------------------------------------------------------------------
