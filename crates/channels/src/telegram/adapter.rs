@@ -791,6 +791,192 @@ async fn handle_update(
 }
 
 // ---------------------------------------------------------------------------
+// Stream forwarder — progressive editMessageText
+// ---------------------------------------------------------------------------
+
+/// Spawn a background task that subscribes to [`StreamHub`] for the given
+/// session and progressively updates a Telegram message via `editMessageText`.
+fn spawn_stream_forwarder(
+    stream_hub: Arc<RwLock<Option<StreamHubRef>>>,
+    active_streams: Arc<DashMap<i64, StreamingMessage>>,
+    bot: teloxide::Bot,
+    chat_id: i64,
+    session_key: &str,
+) {
+    use rara_kernel::io::stream::StreamEvent;
+    use rara_kernel::process::SessionId;
+
+    let session_key = session_key.to_string();
+
+    tokio::spawn(async move {
+        let hub = {
+            let guard = stream_hub.read().await;
+            match guard.as_ref() {
+                Some(hub) => Arc::clone(hub),
+                None => return,
+            }
+        };
+
+        let session_id = match SessionId::try_from_raw(&session_key) {
+            Ok(id) => id,
+            Err(_) => {
+                warn!(session_key, "invalid session key for telegram stream forwarder");
+                return;
+            }
+        };
+
+        // Poll until stream appears (event_loop opens it asynchronously).
+        let mut attempts = 0;
+        let subs = loop {
+            let s = hub.subscribe_session(&session_id);
+            if !s.is_empty() || attempts > 50 {
+                break s;
+            }
+            attempts += 1;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        };
+
+        if subs.is_empty() {
+            tracing::debug!(session_key, "telegram stream forwarder: no streams found");
+            return;
+        }
+
+        // Initialize streaming state.
+        active_streams.insert(chat_id, StreamingMessage::new());
+
+        // Handle the first stream (one agent turn per ingest).
+        let (_stream_id, mut rx) = match subs.into_iter().next() {
+            Some(s) => s,
+            None => return,
+        };
+
+        let mut throttle = tokio::time::interval(MIN_EDIT_INTERVAL);
+        throttle.tick().await; // skip immediate first tick
+
+        loop {
+            tokio::select! {
+                result = rx.recv() => {
+                    match result {
+                        Ok(StreamEvent::TextDelta { text }) => {
+                            if let Some(mut state) = active_streams.get_mut(&chat_id) {
+                                state.accumulated.push_str(&text);
+                                state.dirty = true;
+
+                                // If over threshold, flush and start new message.
+                                if state.accumulated.len() > STREAM_SPLIT_THRESHOLD {
+                                    let flush_text = state.accumulated.clone();
+                                    let _ = flush_edit(&bot, chat_id, &mut state, &flush_text).await;
+                                    // Start a new message for overflow.
+                                    state.accumulated.clear();
+                                    state.message_ids.push(MessageId(0)); // sentinel
+                                    state.dirty = false;
+                                }
+                            }
+                        }
+                        Ok(_) => {} // Ignore non-text events
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            warn!(chat_id, skipped = n, "telegram stream forwarder lagged");
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            // Stream closed — do final flush.
+                            if let Some(mut state) = active_streams.get_mut(&chat_id) {
+                                if state.dirty {
+                                    let text = state.accumulated.clone();
+                                    let _ = flush_edit(&bot, chat_id, &mut state, &text).await;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+                _ = throttle.tick() => {
+                    if let Some(mut state) = active_streams.get_mut(&chat_id) {
+                        if state.dirty && !state.accumulated.is_empty() {
+                            let text = state.accumulated.clone();
+                            let _ = flush_edit(&bot, chat_id, &mut state, &text).await;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Auto-cleanup after 30s if Reply never arrives.
+        let streams = active_streams.clone();
+        let cid = chat_id;
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            if streams.remove(&cid).is_some() {
+                warn!(chat_id = cid, "telegram stream forwarder: stale state cleaned up");
+            }
+        });
+    });
+}
+
+/// Flush accumulated text to Telegram via `sendMessage` (first time) or
+/// `editMessageText` (subsequent).
+async fn flush_edit(
+    bot: &teloxide::Bot,
+    chat_id: i64,
+    state: &mut dashmap::mapref::one::RefMut<'_, i64, StreamingMessage>,
+    text: &str,
+) -> Result<(), ()> {
+    let html = crate::telegram::markdown::markdown_to_telegram_html(text);
+
+    if state.message_ids.is_empty() || *state.message_ids.last().unwrap() == MessageId(0) {
+        // First message or new split — send a new message.
+        match bot
+            .send_message(ChatId(chat_id), &html)
+            .parse_mode(ParseMode::Html)
+            .await
+        {
+            Ok(sent) => {
+                let msg_id = sent.id;
+                if state.message_ids.last() == Some(&MessageId(0)) {
+                    *state.message_ids.last_mut().unwrap() = msg_id;
+                } else {
+                    state.message_ids.push(msg_id);
+                }
+                state.last_edit = Instant::now();
+                state.dirty = false;
+            }
+            Err(e) => {
+                warn!(chat_id, error = %e, "telegram stream: failed to send initial message");
+            }
+        }
+    } else {
+        // Edit existing message.
+        let msg_id = *state.message_ids.last().unwrap();
+        match bot
+            .edit_message_text(ChatId(chat_id), msg_id, &html)
+            .parse_mode(ParseMode::Html)
+            .await
+        {
+            Ok(_) => {
+                state.last_edit = Instant::now();
+                state.dirty = false;
+            }
+            Err(teloxide::RequestError::Api(ref api_err)) => {
+                let err_str = format!("{api_err}");
+                if err_str.contains("message is not modified") {
+                    state.dirty = false;
+                } else if err_str.contains("Too Many Requests") || err_str.contains("retry after") {
+                    warn!(chat_id, "telegram stream: rate limited, will retry next tick");
+                } else {
+                    warn!(chat_id, error = %api_err, "telegram stream: edit failed");
+                    state.dirty = false;
+                }
+            }
+            Err(e) => {
+                warn!(chat_id, error = %e, "telegram stream: edit request failed");
+                state.dirty = false;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // RawPlatformMessage conversion
 // ---------------------------------------------------------------------------
 
