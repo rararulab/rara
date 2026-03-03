@@ -1757,4 +1757,84 @@ mod tests {
         let egress_ct = <TelegramAdapter as EgressAdapter>::channel_type(&adapter);
         assert_eq!(egress_ct, ChannelType::Telegram);
     }
+
+    // -----------------------------------------------------------------------
+    // StreamingMessage tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn streaming_message_initial_state() {
+        let state = StreamingMessage::new();
+        assert!(state.message_ids.is_empty());
+        assert!(state.accumulated.is_empty());
+        assert!(!state.dirty);
+    }
+
+    #[test]
+    fn streaming_message_accumulate() {
+        let mut state = StreamingMessage::new();
+        state.accumulated.push_str("Hello ");
+        state.accumulated.push_str("world");
+        state.dirty = true;
+
+        assert_eq!(state.accumulated, "Hello world");
+        assert!(state.dirty);
+    }
+
+    #[test]
+    fn streaming_message_split_threshold() {
+        let mut state = StreamingMessage::new();
+        let chunk = "x".repeat(STREAM_SPLIT_THRESHOLD - 10);
+        state.accumulated.push_str(&chunk);
+        assert!(state.accumulated.len() <= STREAM_SPLIT_THRESHOLD);
+
+        state.accumulated.push_str(&"y".repeat(20));
+        assert!(state.accumulated.len() > STREAM_SPLIT_THRESHOLD);
+    }
+
+    #[test]
+    fn min_edit_interval_is_reasonable() {
+        assert!(MIN_EDIT_INTERVAL >= std::time::Duration::from_secs(1));
+        assert!(MIN_EDIT_INTERVAL <= std::time::Duration::from_secs(3));
+    }
+
+    #[tokio::test]
+    async fn test_stream_state_lifecycle() {
+        use rara_kernel::io::stream::{StreamHub, StreamEvent};
+        use rara_kernel::process::SessionId;
+
+        let hub = Arc::new(StreamHub::new(64));
+        let active_streams: Arc<DashMap<i64, StreamingMessage>> = Arc::new(DashMap::new());
+        let chat_id = 12345_i64;
+
+        let session_id = SessionId::new();
+
+        // Open a stream on the hub.
+        let stream_handle = hub.open(session_id);
+
+        // Simulate what the forwarder does: insert state.
+        active_streams.insert(chat_id, StreamingMessage::new());
+        assert!(active_streams.contains_key(&chat_id));
+
+        // Simulate text accumulation.
+        if let Some(mut state) = active_streams.get_mut(&chat_id) {
+            state.accumulated.push_str("Hello from LLM");
+            state.dirty = true;
+        }
+
+        // Verify state.
+        {
+            let state = active_streams.get(&chat_id).unwrap();
+            assert_eq!(state.accumulated, "Hello from LLM");
+            assert!(state.dirty);
+        }
+
+        // Simulate Reply arrival — remove state.
+        let removed = active_streams.remove(&chat_id);
+        assert!(removed.is_some());
+        assert!(!active_streams.contains_key(&chat_id));
+
+        // Verify stream_handle still works (no panic on emit after state removal).
+        stream_handle.emit(StreamEvent::TextDelta { text: "late delta".to_string() });
+    }
 }
