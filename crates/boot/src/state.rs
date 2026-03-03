@@ -70,10 +70,12 @@ impl RaraState {
 
         // -- LLM driver registry ----------------------------------------------
 
-        let driver_registry =
-            crate::llm_registry::build_driver_registry(settings_provider.clone(), &*credential_store)
-                .await
-                .whatever_context("Failed to initialize LLM driver registry")?;
+        let driver_registry = crate::llm_registry::build_driver_registry(
+            settings_provider.clone(),
+            &*credential_store,
+        )
+        .await
+        .whatever_context("Failed to initialize LLM driver registry")?;
 
         {
             let driver_registry_ref = driver_registry.clone();
@@ -113,8 +115,9 @@ impl RaraState {
 
         // -- Composio auth provider -------------------------------------------
 
-        let composio_auth_provider: Arc<dyn rara_composio::ComposioAuthProvider> =
-            Arc::new(crate::composio::SettingsComposioAuthProvider::new(settings_provider.clone()));
+        let composio_auth_provider: Arc<dyn rara_composio::ComposioAuthProvider> = Arc::new(
+            crate::composio::SettingsComposioAuthProvider::new(settings_provider.clone()),
+        );
 
         // -- primitive tools (Layer 1) ----------------------------------------
 

@@ -192,6 +192,9 @@ mod tests {
             keys::LLM_PROVIDERS_OLLAMA_BASE_URL,
             "llm.providers.ollama.base_url"
         );
-        assert_eq!(keys::LLM_PROVIDERS_OLLAMA_API_KEY, "llm.providers.ollama.api_key");
+        assert_eq!(
+            keys::LLM_PROVIDERS_OLLAMA_API_KEY,
+            "llm.providers.ollama.api_key"
+        );
     }
 }

@@ -135,9 +135,12 @@ pub(crate) async fn run_inline_agent_loop(
     turn_cancel: &CancellationToken,
 ) -> crate::error::Result<AgentTurnResult> {
     // Query context via syscalls.
-    let manifest = handle.manifest().await.map_err(|e| KernelError::AgentExecution {
-        message: format!("failed to get manifest: {e}"),
-    })?;
+    let manifest = handle
+        .manifest()
+        .await
+        .map_err(|e| KernelError::AgentExecution {
+            message: format!("failed to get manifest: {e}"),
+        })?;
     let full_tools = handle
         .tool_registry()
         .await

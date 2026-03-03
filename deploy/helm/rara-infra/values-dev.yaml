@@ -80,7 +80,7 @@ alloy:
 # ------------------------------------------------------------------------------
 quickwit:
   searcher:
-    replicaCount: true
+    replicaCount: 1
     resources:
       requests:
         cpu: 100m
@@ -89,7 +89,7 @@ quickwit:
         cpu: 500m
         memory: 512Mi
   indexer:
-    replicaCount: true
+    replicaCount: 1
     resources:
       requests:
         cpu: 100m
@@ -98,7 +98,7 @@ quickwit:
         cpu: 500m
         memory: 512Mi
   metastore:
-    replicaCount: true
+    replicaCount: 1
     resources:
       requests:
         cpu: 100m
@@ -107,7 +107,7 @@ quickwit:
         cpu: 250m
         memory: 256Mi
   control_plane:
-    replicaCount: true
+    replicaCount: 1
     resources:
       requests:
         cpu: 100m
@@ -151,7 +151,7 @@ langfuse:
 # ------------------------------------------------------------------------------
 consul:
   server:
-    replicas: true
+    replicas: 1
     storage: 1Gi
     resources:
       requests:

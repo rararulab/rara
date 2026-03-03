@@ -97,12 +97,10 @@ impl OpenAiDriver {
 
     async fn resolve_config(&self) -> Result<ResolvedConfig> {
         match &self.config_source {
-            OpenAiDriverConfigSource::Static { base_url, api_key } => {
-                Ok(ResolvedConfig {
-                    base_url: base_url.clone(),
-                    api_key:  api_key.clone(),
-                })
-            }
+            OpenAiDriverConfigSource::Static { base_url, api_key } => Ok(ResolvedConfig {
+                base_url: base_url.clone(),
+                api_key:  api_key.clone(),
+            }),
             OpenAiDriverConfigSource::SettingsBacked {
                 settings,
                 provider_name,
@@ -110,22 +108,26 @@ impl OpenAiDriver {
                 let base_url_key = format!("llm.providers.{provider_name}.base_url");
                 let api_key_key = format!("llm.providers.{provider_name}.api_key");
 
-                let base_url = settings.get(&base_url_key).await.ok_or_else(|| {
-                    KernelError::Provider {
-                        message: format!(
-                            "LLM provider base URL is not configured (checked: {base_url_key})"
-                        )
-                        .into(),
-                    }
-                })?;
-                let api_key = settings.get(&api_key_key).await.ok_or_else(|| {
-                    KernelError::Provider {
-                        message: format!(
-                            "LLM provider API key is not configured (checked: {api_key_key})"
-                        )
-                        .into(),
-                    }
-                })?;
+                let base_url =
+                    settings
+                        .get(&base_url_key)
+                        .await
+                        .ok_or_else(|| KernelError::Provider {
+                            message: format!(
+                                "LLM provider base URL is not configured (checked: {base_url_key})"
+                            )
+                            .into(),
+                        })?;
+                let api_key =
+                    settings
+                        .get(&api_key_key)
+                        .await
+                        .ok_or_else(|| KernelError::Provider {
+                            message: format!(
+                                "LLM provider API key is not configured (checked: {api_key_key})"
+                            )
+                            .into(),
+                        })?;
 
                 Ok(ResolvedConfig { base_url, api_key })
             }
@@ -380,15 +382,16 @@ impl StreamAccumulator {
     }
 
     async fn finalize(self, tx: &mpsc::Sender<StreamDelta>, model: String) -> CompletionResponse {
-        let Self { text, reasoning, tools, stop_reason, usage } = self;
+        let Self {
+            text,
+            reasoning,
+            tools,
+            stop_reason,
+            usage,
+        } = self;
         let tool_calls = Self::collect_tools(tools);
 
-        let _ = tx
-            .send(StreamDelta::Done {
-                stop_reason,
-                usage,
-            })
-            .await;
+        let _ = tx.send(StreamDelta::Done { stop_reason, usage }).await;
 
         CompletionResponse {
             content: non_empty(text),
@@ -417,30 +420,29 @@ fn parse_stop_reason(reason: Option<&str>) -> StopReason {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Wire types — typed request serialization
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
 struct ChatRequest<'a> {
-    model:    &'a str,
-    messages: Vec<WireMessage<'a>>,
-    stream:   bool,
+    model:                 &'a str,
+    messages:              Vec<WireMessage<'a>>,
+    stream:                bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    temperature: Option<f32>,
+    temperature:           Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_completion_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<WireTool<'a>>>,
+    tools:                 Option<Vec<WireTool<'a>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tool_choice: Option<serde_json::Value>,
+    tool_choice:           Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    parallel_tool_calls: Option<bool>,
+    parallel_tool_calls:   Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    thinking: Option<serde_json::Value>,
+    thinking:              Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    stream_options: Option<WireStreamOptions>,
+    stream_options:        Option<WireStreamOptions>,
 }
 
 #[derive(Serialize)]
@@ -484,10 +486,10 @@ struct WireImageUrl<'a> {
 
 #[derive(Serialize)]
 struct WireMessage<'a> {
-    role:    &'static str,
-    content: WireContent<'a>,
+    role:         &'static str,
+    content:      WireContent<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tool_calls: Option<Vec<WireToolCallRef<'a>>>,
+    tool_calls:   Option<Vec<WireToolCallRef<'a>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<&'a str>,
 }
@@ -560,7 +562,9 @@ impl<'a> ChatRequest<'a> {
         });
 
         let stream_options = if stream {
-            Some(WireStreamOptions { include_usage: true })
+            Some(WireStreamOptions {
+                include_usage: true,
+            })
         } else {
             None
         };
@@ -596,11 +600,9 @@ impl<'a> WireMessage<'a> {
                     .iter()
                     .map(|b| match b {
                         ContentBlock::Text { text } => WireContentPart::Text { text },
-                        ContentBlock::ImageUrl { url } => {
-                            WireContentPart::ImageUrl {
-                                image_url: WireImageUrl { url },
-                            }
-                        }
+                        ContentBlock::ImageUrl { url } => WireContentPart::ImageUrl {
+                            image_url: WireImageUrl { url },
+                        },
                     })
                     .collect();
                 WireContent::Multimodal(parts)
@@ -725,7 +727,7 @@ struct RawResponseFunction {
 mod tests {
     use std::sync::Arc;
 
-    use rara_domain_shared::settings::{testing::MapSettingsProvider, SettingsProvider};
+    use rara_domain_shared::settings::{SettingsProvider, testing::MapSettingsProvider};
 
     use super::*;
     use crate::llm::types::ToolDefinition;
@@ -1009,7 +1011,8 @@ mod tests {
 
     #[tokio::test]
     async fn settings_backed_driver_requires_base_url_without_fallback() {
-        let driver = OpenAiDriver::from_settings(Arc::new(MapSettingsProvider::default()), "ollama");
+        let driver =
+            OpenAiDriver::from_settings(Arc::new(MapSettingsProvider::default()), "ollama");
 
         let err = driver
             .resolve_config()

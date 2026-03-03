@@ -42,12 +42,12 @@ pub async fn build_driver_registry(
         .get_first(&[keys::LLM_DEFAULT_PROVIDER, keys::LLM_PROVIDER])
         .await
         .ok_or_else(|| {
-        anyhow::anyhow!(
-            "LLM default provider is not configured (checked: {}, {})",
-            keys::LLM_DEFAULT_PROVIDER,
-            keys::LLM_PROVIDER
-        )
-    })?;
+            anyhow::anyhow!(
+                "LLM default provider is not configured (checked: {}, {})",
+                keys::LLM_DEFAULT_PROVIDER,
+                keys::LLM_PROVIDER
+            )
+        })?;
     let default_model = settings
         .as_ref()
         .get(keys::LLM_MODELS_DEFAULT)

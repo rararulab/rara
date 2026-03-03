@@ -214,13 +214,13 @@ quickwit:
         force_path_style_access: true
         region: us-east-1
   searcher:
-    replicaCount: true
+    replicaCount: 1
   indexer:
-    replicaCount: true
+    replicaCount: 1
   metastore:
-    replicaCount: true
+    replicaCount: 1
   control_plane:
-    replicaCount: true
+    replicaCount: 1
   janitor:
     enabled: true
 
@@ -294,7 +294,7 @@ consul:
     name: consul
     datacenter: rara-dc1
   server:
-    replicas: true
+    replicas: 1
     storage: 5Gi
     storageClass: null
   client:
