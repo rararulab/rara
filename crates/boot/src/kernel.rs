@@ -24,7 +24,7 @@
 use std::sync::Arc;
 
 use rara_kernel::{
-    approval::{ApprovalManager, ApprovalPolicy},
+    security::approval::{ApprovalManager, ApprovalPolicy},
     audit::{AuditLog, InMemoryAuditLog},
     io::{
         ingress::{IdentityResolver, SessionResolver},
@@ -170,7 +170,7 @@ pub fn boot(config: BootConfig) -> Kernel {
     let tool_call_recorder: Arc<dyn rara_kernel::audit::ToolCallRecorder> = config
         .tool_call_recorder
         .unwrap_or_else(|| Arc::new(rara_kernel::audit::NoopToolCallRecorder));
-    let audit = Arc::new(rara_kernel::audit_subsystem::AuditSubsystem::new(
+    let audit = Arc::new(rara_kernel::audit::subsystem::AuditSubsystem::new(
         audit_log,
         tool_call_recorder,
     ));

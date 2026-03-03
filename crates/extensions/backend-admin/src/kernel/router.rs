@@ -94,7 +94,7 @@ async fn get_process_turns(
 
 async fn list_approvals(
     State(handle): State<KernelHandle>,
-) -> Result<Json<Vec<rara_kernel::approval::ApprovalRequest>>, ProblemDetails> {
+) -> Result<Json<Vec<rara_kernel::security::approval::ApprovalRequest>>, ProblemDetails> {
     Ok(Json(handle.security().approval().list_pending()))
 }
 
