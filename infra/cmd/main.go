@@ -17,26 +17,428 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
+	"github.com/urfave/cli/v2"
+	"go.uber.org/zap"
+	"golang.org/x/term"
+	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/rararulab/rara/infra/pkg/app"
+	"github.com/rararulab/rara/infra/pkg/deploy"
+	"github.com/rararulab/rara/infra/pkg/doctor"
 	"github.com/rararulab/rara/infra/pkg/infra"
+	"github.com/rararulab/rara/infra/pkg/setup"
 )
 
 func main() {
-	pulumi.Run(func(ctx *pulumi.Context) error {
-		stack := ctx.Stack()
+	// Pulumi sets PULUMI_MONITOR when it invokes the program
+	if os.Getenv("PULUMI_MONITOR") != "" {
+		pulumi.Run(func(ctx *pulumi.Context) error {
+			stack := ctx.Stack()
+			switch {
+			case strings.HasPrefix(stack, "infra"):
+				return infra.Run(ctx)
+			case strings.HasPrefix(stack, "app"):
+				return app.Run(ctx)
+			default:
+				ctx.Log.Warn("Unknown stack '"+stack+"', defaulting to infra stack", nil)
+				return infra.Run(ctx)
+			}
+		})
+		return
+	}
 
-		switch {
-		case strings.HasPrefix(stack, "infra"):
-			return infra.Run(ctx)
-		case strings.HasPrefix(stack, "app"):
-			return app.Run(ctx)
-		default:
-			ctx.Log.Warn("Unknown stack '"+stack+"', defaulting to infra stack", nil)
-			return infra.Run(ctx)
-		}
-	})
+	cliApp := &cli.App{
+		Name:  "rara",
+		Usage: "rara infrastructure tools",
+		Commands: []*cli.Command{
+			setupCommand(),
+			deployCommand(),
+		},
+	}
+
+	if err := cliApp.Run(os.Args); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// setupCommand returns the 'setup' command group.
+func setupCommand() *cli.Command {
+	return &cli.Command{
+		Name:  "setup",
+		Usage: "Manage the local kind-based rara environment",
+		Subcommands: []*cli.Command{
+			upCmd(),
+			downCmd(),
+			statusCmd(),
+			hostsCmd(),
+			seedCmd(),
+		},
+	}
+}
+
+// deployCommand returns the 'deploy' command group.
+func deployCommand() *cli.Command {
+	return &cli.Command{
+		Name:  "deploy",
+		Usage: "Build, push, and deploy rara images",
+		Subcommands: []*cli.Command{
+			{
+				Name:  "build",
+				Usage: "Build Docker images locally",
+				Subcommands: []*cli.Command{
+					{
+						Name:  "base",
+						Usage: "Build the Rust base image (run once or after toolchain change)",
+						Action: func(c *cli.Context) error {
+							if err := deploy.ChdirToGitRoot(); err != nil {
+								return err
+							}
+							return deploy.Build("docker/base.Dockerfile", []string{"rara-base:latest"}, nil)
+						},
+					},
+					{
+						Name:  "backend",
+						Usage: "Build the backend image (requires base image)",
+						Action: func(c *cli.Context) error {
+							if err := deploy.ChdirToGitRoot(); err != nil {
+								return err
+							}
+							return deploy.Build("docker/Dockerfile", []string{"rara:latest"}, nil)
+						},
+					},
+					{
+						Name:  "frontend",
+						Usage: "Build the frontend image",
+						Action: func(c *cli.Context) error {
+							if err := deploy.ChdirToGitRoot(); err != nil {
+								return err
+							}
+							return deploy.Build("docker/web.Dockerfile", []string{"ghcr.io/rararulab/rara-web:latest"}, nil)
+						},
+					},
+				},
+			},
+			{
+				Name:  "backend",
+				Usage: "Deploy the backend to K8s",
+				Action: func(c *cli.Context) error {
+					return runDeploy(c.Context, deploy.Backend)
+				},
+			},
+			{
+				Name:  "frontend",
+				Usage: "Deploy the frontend to K8s",
+				Action: func(c *cli.Context) error {
+					return runDeploy(c.Context, deploy.Frontend)
+				},
+			},
+			{
+				Name:  "all",
+				Usage: "Deploy backend and frontend to K8s",
+				Action: func(c *cli.Context) error {
+					if err := runDeploy(c.Context, deploy.Backend); err != nil {
+						return err
+					}
+					return runDeploy(c.Context, deploy.Frontend)
+				},
+			},
+			{
+				Name:  "doctor",
+				Usage: "Check infrastructure health across all components",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:    "namespace",
+						Aliases: []string{"n"},
+						Value:   "rara",
+						Usage:   "Kubernetes namespace",
+					},
+					&cli.StringFlag{
+						Name:    "release",
+						Aliases: []string{"r"},
+						Value:   "rara-infra",
+						Usage:   "Helm release name",
+					},
+					&cli.StringFlag{
+						Name:    "domain",
+						Aliases: []string{"d"},
+						Value:   "",
+						Usage:   "Domain suffix (default: from Helm values or rara.local)",
+					},
+				},
+				Action: func(c *cli.Context) error {
+					kube, err := deploy.NewKubeClient()
+					if err != nil {
+						return fmt.Errorf("init kube client: %w", err)
+					}
+
+					cfg := doctor.Config{
+						Namespace: c.String("namespace"),
+						Release:   c.String("release"),
+						Domain:    c.String("domain"),
+					}
+
+					report, err := doctor.Run(c.Context, kube.Clientset(), kube.RESTConfig(), cfg)
+					if err != nil {
+						return err
+					}
+
+					doctor.NewPrinter(os.Stdout).PrintReport(report)
+
+					if report.HasFailures() {
+						os.Exit(1)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+func runDeploy(ctx context.Context, target deploy.Target) error {
+	cfg := zap.NewDevelopmentConfig()
+	cfg.DisableStacktrace = true
+	log, err := cfg.Build()
+	if err != nil {
+		return fmt.Errorf("init logger: %w", err)
+	}
+	defer log.Sync()
+
+	if err := deploy.ChdirToGitRoot(); err != nil {
+		return err
+	}
+
+	kube, err := deploy.NewKubeClient()
+	if err != nil {
+		return fmt.Errorf("init kube client: %w", err)
+	}
+
+	return deploy.Deploy(ctx, log, kube, target)
+}
+
+// configFromCtx builds a setup.Config from CLI context.
+func configFromCtx(c *cli.Context) setup.Config {
+	cfg := setup.DefaultConfig()
+	if v := c.String("cluster"); v != "" {
+		cfg.ClusterName = v
+	}
+	if v := c.String("namespace"); v != "" {
+		cfg.Namespace = v
+	}
+	if v := c.String("domain"); v != "" {
+		cfg.Domain = v
+	}
+	if v := c.String("infra-release"); v != "" {
+		cfg.InfraRelease = v
+	}
+	if v := c.String("postgres-password"); v != "" {
+		cfg.PostgresPassword = v
+	}
+	if v := c.String("postgres-database"); v != "" {
+		cfg.PostgresDatabase = v
+	}
+	if v := c.String("minio-user"); v != "" {
+		cfg.MinioUser = v
+	}
+	if v := c.String("minio-password"); v != "" {
+		cfg.MinioPassword = v
+	}
+	if v := c.String("langfuse-public-key"); v != "" {
+		cfg.LangfusePublicKey = v
+	}
+	if v := c.String("langfuse-secret-key"); v != "" {
+		cfg.LangfuseSecretKey = v
+	}
+	cfg.EnableOllama = !c.Bool("no-ollama")
+	cfg.EnableMemos = !c.Bool("no-memos")
+	cfg.EnableHindsight = !c.Bool("no-hindsight")
+	cfg.EnableMem0 = !c.Bool("no-mem0")
+	return cfg
+}
+
+// commonFlags returns the shared config flags.
+func commonFlags() []cli.Flag {
+	defs := setup.DefaultConfig()
+	return []cli.Flag{
+		&cli.StringFlag{
+			Name:  "cluster",
+			Value: defs.ClusterName,
+			Usage: "kind cluster name",
+		},
+		&cli.StringFlag{
+			Name:    "namespace",
+			Aliases: []string{"n"},
+			Value:   defs.Namespace,
+			Usage:   "Kubernetes namespace",
+		},
+		&cli.StringFlag{
+			Name:  "domain",
+			Value: defs.Domain,
+			Usage: "local domain suffix (e.g. rara.local)",
+		},
+		&cli.StringFlag{
+			Name:  "infra-release",
+			Value: defs.InfraRelease,
+			Usage: "Helm release prefix for infra stack",
+		},
+	}
+}
+
+func upCmd() *cli.Command {
+	defs := setup.DefaultConfig()
+	return &cli.Command{
+		Name:  "up",
+		Usage: "Create kind cluster and deploy all rara infrastructure",
+		Flags: append(commonFlags(),
+			&cli.StringFlag{Name: "postgres-password", Value: defs.PostgresPassword, Usage: "PostgreSQL admin password"},
+			&cli.StringFlag{Name: "postgres-database", Value: defs.PostgresDatabase, Usage: "PostgreSQL database name"},
+			&cli.StringFlag{Name: "minio-user", Value: defs.MinioUser, Usage: "MinIO root user"},
+			&cli.StringFlag{Name: "minio-password", Value: defs.MinioPassword, Usage: "MinIO root password"},
+			&cli.StringFlag{Name: "langfuse-public-key", Value: "", Usage: "Langfuse public key (optional)"},
+			&cli.StringFlag{Name: "langfuse-secret-key", Value: "", Usage: "Langfuse secret key (optional)"},
+			&cli.BoolFlag{Name: "no-ollama", Value: false, Usage: "Skip Ollama deployment"},
+			&cli.BoolFlag{Name: "no-memos", Value: false, Usage: "Skip Memos deployment"},
+			&cli.BoolFlag{Name: "no-hindsight", Value: false, Usage: "Skip Hindsight deployment"},
+			&cli.BoolFlag{Name: "no-mem0", Value: false, Usage: "Skip Mem0 deployment"},
+		),
+		Action: func(c *cli.Context) error {
+			cfg := configFromCtx(c)
+			// TTY detection: use TUI when stdin is a terminal, otherwise use console output.
+			if isTerminal() {
+				return setup.RunTUI(c.Context, cfg)
+			}
+			return setup.Up(c.Context, cfg, consoleSender)
+		},
+	}
+}
+
+func downCmd() *cli.Command {
+	return &cli.Command{
+		Name:  "down",
+		Usage: "Delete the kind cluster and clean up /etc/hosts",
+		Flags: commonFlags(),
+		Action: func(c *cli.Context) error {
+			cfg := configFromCtx(c)
+			return setup.Down(cfg)
+		},
+	}
+}
+
+func statusCmd() *cli.Command {
+	return &cli.Command{
+		Name:  "status",
+		Usage: "Show the status of the local rara environment",
+		Flags: commonFlags(),
+		Action: func(c *cli.Context) error {
+			cfg := configFromCtx(c)
+			return setup.Status(c.Context, cfg)
+		},
+	}
+}
+
+func hostsCmd() *cli.Command {
+	return &cli.Command{
+		Name:  "hosts",
+		Usage: "Manage /etc/hosts entries for rara services",
+		Subcommands: []*cli.Command{
+			{
+				Name:  "add",
+				Usage: "Add /etc/hosts entries for the rara domain (requires root)",
+				Flags: append(commonFlags(),
+					&cli.StringFlag{
+						Name:  "ip",
+						Value: "",
+						Usage: "Override the LoadBalancer IP (auto-detected by default)",
+					},
+				),
+				Action: func(c *cli.Context) error {
+					cfg := configFromCtx(c)
+					ip := c.String("ip")
+					if ip == "" {
+						kubeconfigPath := setup.KindKubeconfigPath(cfg.ClusterName)
+						rc, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+						if err != nil {
+							return fmt.Errorf("build rest config: %w", err)
+						}
+						ip, err = setup.GetTraefikIP(c.Context, rc, cfg)
+						if err != nil {
+							return fmt.Errorf("auto-detect LoadBalancer IP: %w", err)
+						}
+						setup.Info(fmt.Sprintf("Detected LoadBalancer IP: %s", ip))
+					}
+					return setup.AddHostsEntries(ip, cfg.Domain)
+				},
+			},
+			{
+				Name:  "remove",
+				Usage: "Remove rara /etc/hosts entries (requires root)",
+				Action: func(c *cli.Context) error {
+					return setup.RemoveHostsEntries()
+				},
+			},
+			{
+				Name:  "show",
+				Usage: "Print what would be added to /etc/hosts",
+				Flags: append(commonFlags(),
+					&cli.StringFlag{Name: "ip", Value: "127.0.0.1", Usage: "IP address to use"},
+				),
+				Action: func(c *cli.Context) error {
+					cfg := configFromCtx(c)
+					setup.PrintHostsBlock(c.String("ip"), cfg.Domain)
+					return nil
+				},
+			},
+		},
+	}
+}
+
+func seedCmd() *cli.Command {
+	defs := setup.DefaultConfig()
+	return &cli.Command{
+		Name:  "seed",
+		Usage: "Seed Consul KV with rara configuration values",
+		Flags: append(commonFlags(),
+			&cli.StringFlag{Name: "postgres-password", Value: defs.PostgresPassword, Usage: "PostgreSQL admin password"},
+			&cli.StringFlag{Name: "postgres-database", Value: defs.PostgresDatabase, Usage: "PostgreSQL database name"},
+			&cli.StringFlag{Name: "minio-user", Value: defs.MinioUser, Usage: "MinIO root user"},
+			&cli.StringFlag{Name: "minio-password", Value: defs.MinioPassword, Usage: "MinIO root password"},
+			&cli.StringFlag{Name: "langfuse-public-key", Value: "", Usage: "Langfuse public key (optional)"},
+			&cli.StringFlag{Name: "langfuse-secret-key", Value: "", Usage: "Langfuse secret key (optional)"},
+		),
+		Action: func(c *cli.Context) error {
+			cfg := configFromCtx(c)
+			kubeconfigPath := setup.KindKubeconfigPath(cfg.ClusterName)
+			return setup.SeedConsulKV(c.Context, cfg, kubeconfigPath)
+		},
+	}
+}
+
+// isTerminal reports whether stdin is a terminal.
+func isTerminal() bool {
+	return term.IsTerminal(int(os.Stdin.Fd()))
+}
+
+// consoleSender adapts ProgressEvents to the legacy console output functions.
+func consoleSender(ev setup.ProgressEvent) {
+	switch ev.Kind {
+	case setup.EventStepStart:
+		setup.Step(ev.N, ev.Total, ev.Name)
+	case setup.EventStepDone:
+		setup.OK(fmt.Sprintf("%s (%s)", ev.Name, ev.Elapsed.Round(time.Millisecond)))
+	case setup.EventInfo:
+		setup.Info(ev.Name)
+	case setup.EventWarn:
+		setup.Warn(ev.Name)
+	case setup.EventDone:
+		// nothing
+	case setup.EventError:
+		setup.Warn(fmt.Sprintf("error: %v", ev.Err))
+	}
 }

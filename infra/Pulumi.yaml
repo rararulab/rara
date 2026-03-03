@@ -1,3 +1,6 @@
 name: rara
-runtime: go
+runtime:
+  name: go
+  options:
+    main: cmd
 description: Rara platform infrastructure and application stacks
