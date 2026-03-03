@@ -32,6 +32,7 @@ use std::{
 
 use async_trait::async_trait;
 use serde_json::Value;
+use snafu::ResultExt;
 
 use crate::{
     error::KernelError,
@@ -315,9 +316,8 @@ fn normalize_path(path: &Path) -> PathBuf {
 /// cleaning up the directory when the agent terminates.
 pub fn create_workspace(agent_id: &crate::process::AgentId) -> Result<PathBuf, KernelError> {
     let dir = std::env::temp_dir().join(format!("rara-agent-{}", agent_id.0));
-    std::fs::create_dir_all(&dir).map_err(|e| KernelError::SandboxPathError {
-        message: format!("failed to create workspace: {e}"),
-    })?;
+    std::fs::create_dir_all(&dir)
+        .whatever_context::<_, KernelError>("failed to create workspace")?;
     Ok(dir)
 }
 

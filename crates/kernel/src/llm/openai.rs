@@ -33,6 +33,8 @@ use super::{
         StopReason, ToolCallRequest, ToolChoice, Usage,
     },
 };
+use snafu::ResultExt;
+
 use crate::error::{KernelError, Result};
 
 // ---------------------------------------------------------------------------
@@ -150,9 +152,7 @@ impl OpenAiDriver {
             .json(&body)
             .send()
             .await
-            .map_err(|e| KernelError::Provider {
-                message: e.to_string().into(),
-            })?;
+            .whatever_context::<_, KernelError>("LLM provider request failed")?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -176,9 +176,10 @@ impl LlmDriver for OpenAiDriver {
         let response = self.send_request(&request, false).await?;
 
         let raw: RawCompletionResponse =
-            response.json().await.map_err(|e| KernelError::Provider {
-                message: format!("failed to parse response: {e}").into(),
-            })?;
+            response
+                .json()
+                .await
+                .whatever_context::<_, KernelError>("failed to parse LLM response")?;
 
         let choice = raw
             .choices
@@ -229,9 +230,8 @@ impl LlmDriver for OpenAiDriver {
         let mut acc = StreamAccumulator::new();
 
         while let Some(event_result) = event_stream.next().await {
-            let event = event_result.map_err(|e| KernelError::Provider {
-                message: e.to_string().into(),
-            })?;
+            let event = event_result
+                .whatever_context::<_, KernelError>("SSE stream error")?;
 
             if event.data == "[DONE]" {
                 break;
