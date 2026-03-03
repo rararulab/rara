@@ -380,21 +380,26 @@ impl EgressAdapter for TelegramAdapter {
                         if last_msg_id != MessageId(0) {
                             // Edit the last streaming message with the first chunk.
                             let first_chunk = chunks.first().map(|s| s.as_str()).unwrap_or("");
-                            let _ = self
+                            let edit_ok = self
                                 .bot
                                 .edit_message_text(ChatId(chat_id), last_msg_id, first_chunk)
                                 .parse_mode(ParseMode::Html)
-                                .await;
+                                .await
+                                .is_ok();
 
-                            // Send remaining chunks as new messages.
-                            for chunk in chunks.iter().skip(1) {
-                                let _ = self
-                                    .bot
-                                    .send_message(ChatId(chat_id), chunk)
-                                    .parse_mode(ParseMode::Html)
-                                    .await;
+                            if edit_ok {
+                                // Send remaining chunks as new messages.
+                                for chunk in chunks.iter().skip(1) {
+                                    let _ = self
+                                        .bot
+                                        .send_message(ChatId(chat_id), chunk)
+                                        .parse_mode(ParseMode::Html)
+                                        .await;
+                                }
+                                return Ok(());
                             }
-                            return Ok(());
+                            // Edit failed — fall through to normal send path below.
+                            warn!(chat_id, "telegram: edit streaming message failed, falling back to send");
                         }
                     }
                     // Fallthrough if no valid message ID.
@@ -899,15 +904,32 @@ fn spawn_stream_forwarder(
                 result = rx.recv() => {
                     match result {
                         Ok(StreamEvent::TextDelta { text }) => {
-                            if let Some(mut state) = active_streams.get_mut(&chat_id) {
-                                state.accumulated.push_str(&text);
-                                state.dirty = true;
+                            // Check if we need to flush due to threshold.
+                            let flush_req = {
+                                if let Some(mut state) = active_streams.get_mut(&chat_id) {
+                                    state.accumulated.push_str(&text);
+                                    state.dirty = true;
 
-                                // If over threshold, flush and start new message.
-                                if state.accumulated.len() > STREAM_SPLIT_THRESHOLD {
-                                    let flush_text = state.accumulated.clone();
-                                    let _ = flush_edit(&bot, chat_id, &mut state, &flush_text).await;
-                                    // Start a new message for overflow.
+                                    if state.accumulated.len() > STREAM_SPLIT_THRESHOLD {
+                                        let html = crate::telegram::markdown::markdown_to_telegram_html(&state.accumulated);
+                                        Some(FlushRequest {
+                                            message_ids: state.message_ids.clone(),
+                                            text_html: html,
+                                        })
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                                // Guard dropped here.
+                            };
+
+                            if let Some(req) = flush_req {
+                                let result = flush_edit(&bot, chat_id, &req).await;
+                                apply_flush_result(&active_streams, chat_id, result);
+                                // Start a new message for overflow.
+                                if let Some(mut state) = active_streams.get_mut(&chat_id) {
                                     state.accumulated.clear();
                                     state.message_ids.push(MessageId(0)); // sentinel
                                     state.dirty = false;
@@ -920,59 +942,149 @@ fn spawn_stream_forwarder(
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                             // Stream closed — do final flush.
-                            if let Some(mut state) = active_streams.get_mut(&chat_id) {
-                                if state.dirty {
-                                    let text = state.accumulated.clone();
-                                    let _ = flush_edit(&bot, chat_id, &mut state, &text).await;
+                            let flush_req = {
+                                if let Some(state) = active_streams.get(&chat_id) {
+                                    if state.dirty {
+                                        let html = crate::telegram::markdown::markdown_to_telegram_html(&state.accumulated);
+                                        Some(FlushRequest {
+                                            message_ids: state.message_ids.clone(),
+                                            text_html: html,
+                                        })
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
                                 }
+                                // Guard dropped here.
+                            };
+                            if let Some(req) = flush_req {
+                                let result = flush_edit(&bot, chat_id, &req).await;
+                                apply_flush_result(&active_streams, chat_id, result);
                             }
                             break;
                         }
                     }
                 }
                 _ = throttle.tick() => {
-                    if let Some(mut state) = active_streams.get_mut(&chat_id) {
-                        if state.dirty && !state.accumulated.is_empty() {
-                            let text = state.accumulated.clone();
-                            let _ = flush_edit(&bot, chat_id, &mut state, &text).await;
+                    let flush_req = {
+                        if let Some(state) = active_streams.get(&chat_id) {
+                            if state.dirty && !state.accumulated.is_empty() {
+                                let html = crate::telegram::markdown::markdown_to_telegram_html(&state.accumulated);
+                                Some(FlushRequest {
+                                    message_ids: state.message_ids.clone(),
+                                    text_html: html,
+                                })
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
                         }
+                        // Guard dropped here.
+                    };
+                    if let Some(req) = flush_req {
+                        let result = flush_edit(&bot, chat_id, &req).await;
+                        apply_flush_result(&active_streams, chat_id, result);
                     }
                 }
             }
         }
 
-        // Auto-cleanup after 30s if Reply never arrives.
+        // Auto-cleanup after 120s if Reply never arrives.
         let streams = active_streams.clone();
         let cid = chat_id;
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(120)).await;
             if streams.remove(&cid).is_some() {
-                warn!(chat_id = cid, "telegram stream forwarder: stale state cleaned up");
+                warn!(chat_id = cid, "telegram stream forwarder: stale state cleaned up after 120s");
             }
         });
     });
 }
 
+/// Data extracted from [`StreamingMessage`] needed for a flush operation.
+/// Allows dropping the DashMap guard before making async Telegram API calls.
+struct FlushRequest {
+    message_ids: Vec<MessageId>,
+    text_html: String,
+}
+
+/// Result of a flush operation — what to update back in state.
+enum FlushResult {
+    /// First message sent successfully with this ID.
+    Sent(MessageId),
+    /// Edit succeeded.
+    Edited,
+    /// Edit failed but not retryable.
+    Failed,
+    /// Rate limited — keep dirty for retry.
+    RateLimited,
+    /// Send failed.
+    SendFailed,
+}
+
 /// Flush accumulated text to Telegram via `sendMessage` (first time) or
 /// `editMessageText` (subsequent).
+///
+/// This function does NOT hold any DashMap guard — the caller must extract
+/// the data into a [`FlushRequest`] and drop the guard before calling.
 async fn flush_edit(
     bot: &teloxide::Bot,
     chat_id: i64,
-    state: &mut dashmap::mapref::one::RefMut<'_, i64, StreamingMessage>,
-    text: &str,
-) -> Result<(), ()> {
-    let html = crate::telegram::markdown::markdown_to_telegram_html(text);
-
-    if state.message_ids.is_empty() || *state.message_ids.last().unwrap() == MessageId(0) {
+    req: &FlushRequest,
+) -> FlushResult {
+    if req.message_ids.is_empty() || req.message_ids.last().copied() == Some(MessageId(0)) {
         // First message or new split — send a new message.
         match bot
-            .send_message(ChatId(chat_id), &html)
+            .send_message(ChatId(chat_id), &req.text_html)
             .parse_mode(ParseMode::Html)
             .await
         {
-            Ok(sent) => {
-                let msg_id = sent.id;
-                if state.message_ids.last() == Some(&MessageId(0)) {
+            Ok(sent) => FlushResult::Sent(sent.id),
+            Err(e) => {
+                warn!(chat_id, error = %e, "telegram stream: failed to send message");
+                FlushResult::SendFailed
+            }
+        }
+    } else {
+        let msg_id = *req.message_ids.last().unwrap();
+        match bot
+            .edit_message_text(ChatId(chat_id), msg_id, &req.text_html)
+            .parse_mode(ParseMode::Html)
+            .await
+        {
+            Ok(_) => FlushResult::Edited,
+            Err(teloxide::RequestError::Api(ref api_err)) => {
+                let err_str = format!("{api_err}");
+                if err_str.contains("message is not modified") {
+                    FlushResult::Edited
+                } else if err_str.contains("Too Many Requests") || err_str.contains("retry after") {
+                    warn!(chat_id, "telegram stream: rate limited, will retry next tick");
+                    FlushResult::RateLimited
+                } else {
+                    warn!(chat_id, error = %api_err, "telegram stream: edit failed");
+                    FlushResult::Failed
+                }
+            }
+            Err(e) => {
+                warn!(chat_id, error = %e, "telegram stream: edit request failed");
+                FlushResult::Failed
+            }
+        }
+    }
+}
+
+/// Apply a [`FlushResult`] back to the streaming state in the DashMap.
+fn apply_flush_result(
+    active_streams: &DashMap<i64, StreamingMessage>,
+    chat_id: i64,
+    result: FlushResult,
+) {
+    if let Some(mut state) = active_streams.get_mut(&chat_id) {
+        match result {
+            FlushResult::Sent(msg_id) => {
+                if state.message_ids.last().copied() == Some(MessageId(0)) {
                     *state.message_ids.last_mut().unwrap() = msg_id;
                 } else {
                     state.message_ids.push(msg_id);
@@ -980,41 +1092,18 @@ async fn flush_edit(
                 state.last_edit = Instant::now();
                 state.dirty = false;
             }
-            Err(e) => {
-                warn!(chat_id, error = %e, "telegram stream: failed to send initial message");
-            }
-        }
-    } else {
-        // Edit existing message.
-        let msg_id = *state.message_ids.last().unwrap();
-        match bot
-            .edit_message_text(ChatId(chat_id), msg_id, &html)
-            .parse_mode(ParseMode::Html)
-            .await
-        {
-            Ok(_) => {
+            FlushResult::Edited | FlushResult::Failed => {
                 state.last_edit = Instant::now();
                 state.dirty = false;
             }
-            Err(teloxide::RequestError::Api(ref api_err)) => {
-                let err_str = format!("{api_err}");
-                if err_str.contains("message is not modified") {
-                    state.dirty = false;
-                } else if err_str.contains("Too Many Requests") || err_str.contains("retry after") {
-                    warn!(chat_id, "telegram stream: rate limited, will retry next tick");
-                } else {
-                    warn!(chat_id, error = %api_err, "telegram stream: edit failed");
-                    state.dirty = false;
-                }
+            FlushResult::RateLimited => {
+                // Leave dirty=true so the next tick retries.
             }
-            Err(e) => {
-                warn!(chat_id, error = %e, "telegram stream: edit request failed");
+            FlushResult::SendFailed => {
                 state.dirty = false;
             }
         }
     }
-
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
