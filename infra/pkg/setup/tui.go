@@ -94,20 +94,23 @@ type stepState struct {
 	name    string
 	status  stepStatus
 	elapsed time.Duration
-	startAt time.Time // when this step started (for live elapsed)
+	startAt time.Time
+	logs    []string // all EventInfo lines for this step
 }
 
 type installModel struct {
-	steps    []stepState
-	current  int
-	spinner  spinner.Model
-	start    time.Time
-	elapsed  time.Duration
-	done     bool
-	finalErr error
-	activity string   // latest EventInfo message, shown under current step
-	warns    []string // warnings (max 3)
-	width    int
+	steps     []stepState
+	current   int  // index of currently running step
+	cursor    int  // highlighted step (keyboard navigation)
+	following bool // cursor auto-tracks current step when true
+	expanded  int  // index of expanded step (-1 = none)
+	spinner   spinner.Model
+	start     time.Time
+	elapsed   time.Duration
+	done      bool
+	finalErr  error
+	warns     []string // global warnings (max 3)
+	width     int
 }
 
 // tea.Msg types
@@ -123,15 +126,21 @@ var (
 	elapsedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	activityStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	warnStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	cursorStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true)
+	logLineStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
+	hintStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
 )
 
 func newInstallModel() installModel {
 	s := spinner.New(spinner.WithSpinner(spinner.Dot))
 	s.Style = stepRunStyle
 	return installModel{
-		spinner: s,
-		start:   time.Now(),
-		steps:   []stepState{},
+		spinner:   s,
+		start:     time.Now(),
+		steps:     []stepState{},
+		cursor:    0,
+		following: true,
+		expanded:  -1,
 	}
 }
 
@@ -148,8 +157,32 @@ func tickCmd() tea.Cmd {
 func (m installModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		if msg.Type == tea.KeyCtrlC {
+		switch msg.Type {
+		case tea.KeyCtrlC:
 			return m, tea.Quit
+		case tea.KeyUp:
+			m.following = false
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case tea.KeyDown:
+			m.following = false
+			if m.cursor < len(m.steps)-1 {
+				m.cursor++
+			}
+		case tea.KeyEnter:
+			if len(m.steps) > 0 {
+				if m.expanded == m.cursor {
+					m.expanded = -1
+				} else {
+					m.expanded = m.cursor
+				}
+			}
+		}
+		switch msg.String() {
+		case "f": // re-follow current step
+			m.following = true
+			m.cursor = m.current
 		}
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -169,15 +202,18 @@ func (m installModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.steps[ev.N-1] = stepState{name: ev.Name, status: stepRunning, startAt: time.Now()}
 			m.current = ev.N - 1
-			m.activity = "" // clear activity on new step
+			if m.following {
+				m.cursor = m.current
+			}
 		case EventStepDone:
 			if ev.N-1 < len(m.steps) {
 				m.steps[ev.N-1].status = stepDone
 				m.steps[ev.N-1].elapsed = ev.Elapsed
 			}
-			m.activity = ""
 		case EventInfo:
-			m.activity = ev.Name
+			if m.current < len(m.steps) {
+				m.steps[m.current].logs = append(m.steps[m.current].logs, ev.Name)
+			}
 		case EventWarn:
 			m.warns = append(m.warns, ev.Name)
 			if len(m.warns) > 3 {
@@ -201,6 +237,7 @@ func (m installModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m installModel) View() string {
 	var b strings.Builder
 
+	// Title line
 	title := titleStyle.Render("rara local setup")
 	if m.done {
 		if m.finalErr != nil {
@@ -214,6 +251,16 @@ func (m installModel) View() string {
 	b.WriteString(title + "\n\n")
 
 	for i, s := range m.steps {
+		isCursor := i == m.cursor
+		isExpanded := i == m.expanded
+
+		// Cursor indicator
+		cursorMark := "  "
+		if isCursor {
+			cursorMark = cursorStyle.Render("▶ ")
+		}
+
+		// Step icon
 		var icon string
 		var nameStyle lipgloss.Style
 		switch s.status {
@@ -231,22 +278,46 @@ func (m installModel) View() string {
 			nameStyle = stepPendStyle
 		}
 
-		line := fmt.Sprintf("  %s  %s", icon, nameStyle.Render(s.name))
+		// Step name + elapsed
+		line := fmt.Sprintf("%s%s  %s", cursorMark, icon, nameStyle.Render(s.name))
 		switch s.status {
 		case stepDone:
 			line += "  " + elapsedStyle.Render(s.elapsed.Round(time.Second).String())
 		case stepRunning:
 			line += "  " + elapsedStyle.Render(time.Since(s.startAt).Round(time.Second).String())
 		}
+
+		// Expand hint for steps with logs
+		if len(s.logs) > 0 && !isExpanded {
+			line += "  " + hintStyle.Render(fmt.Sprintf("[Enter ↵ %d lines]", len(s.logs)))
+		}
 		b.WriteString(line + "\n")
 
-		// Show current activity inline under the running step
-		if s.status == stepRunning && i == m.current && m.activity != "" {
-			b.WriteString("       " + activityStyle.Render("→ "+m.activity) + "\n")
+		// Activity line for currently running step (when not expanded)
+		if s.status == stepRunning && i == m.current && !isExpanded && len(s.logs) > 0 {
+			latest := s.logs[len(s.logs)-1]
+			b.WriteString("       " + activityStyle.Render("→ "+latest) + "\n")
+		}
+
+		// Expanded log view
+		if isExpanded && len(s.logs) > 0 {
+			logs := s.logs
+			const maxLines = 20
+			skipped := 0
+			if len(logs) > maxLines {
+				skipped = len(logs) - maxLines
+				logs = logs[skipped:]
+			}
+			if skipped > 0 {
+				b.WriteString("    " + hintStyle.Render(fmt.Sprintf("  ... (%d earlier lines)", skipped)) + "\n")
+			}
+			for _, l := range logs {
+				b.WriteString("    " + logLineStyle.Render("│  "+l) + "\n")
+			}
 		}
 	}
 
-	// Warnings at the bottom
+	// Global warnings
 	if len(m.warns) > 0 {
 		b.WriteString("\n")
 		for _, w := range m.warns {
@@ -254,7 +325,11 @@ func (m installModel) View() string {
 		}
 	}
 
-	b.WriteString("\n" + elapsedStyle.Render(fmt.Sprintf("Total: %s", m.elapsed.Round(time.Second))))
+	// Footer
+	b.WriteString("\n")
+	b.WriteString(elapsedStyle.Render(fmt.Sprintf("Total: %s", m.elapsed.Round(time.Second))))
+	hints := "  " + hintStyle.Render("↑↓ navigate  Enter expand/collapse  f follow current")
+	b.WriteString(hints + "\n")
 
 	return b.String()
 }
