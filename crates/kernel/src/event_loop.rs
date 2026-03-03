@@ -929,7 +929,7 @@ impl Kernel {
                 msg_id.clone(),
                 user.clone(),
                 egress_session_id.clone(),
-                "thinking",
+                crate::io::types::stages::THINKING,
                 None,
             )));
 
@@ -1019,7 +1019,7 @@ impl Kernel {
                             mid.clone(),
                             usr.clone(),
                             sid.clone(),
-                            "thinking",
+                            crate::io::types::stages::THINKING,
                             None,
                         )));
                     }

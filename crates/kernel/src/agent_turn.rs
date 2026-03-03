@@ -214,7 +214,7 @@ pub(crate) async fn run_inline_agent_loop(
         let _iter_guard = iter_span.enter();
 
         stream_handle.emit(StreamEvent::Progress {
-            stage: "thinking".to_string(),
+            stage: crate::io::types::stages::THINKING.to_string(),
         });
         info!(
             iteration,

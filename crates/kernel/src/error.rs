@@ -170,19 +170,21 @@ impl From<crate::memory::MemoryError> for KernelError {
     }
 }
 
-impl From<(&str, Option<u16>)> for KernelError {
-    fn from((msg, status_code): (&str, Option<u16>)) -> Self {
-        if matches!(status_code, Some(500 | 502 | 503 | 529)) {
-            return KernelError::RetryableServer;
-        }
+/// Classify a provider error by HTTP status code and/or error message body.
+///
+/// Used by retry and fallback logic to decide whether to retry, fall back to
+/// another model, or give up.
+pub fn classify_provider_error(msg: &str, status_code: Option<u16>) -> KernelError {
+    if matches!(status_code, Some(500 | 502 | 503 | 529)) {
+        return KernelError::RetryableServer;
+    }
 
-        if is_context_window_error(msg) {
-            KernelError::ContextWindow
-        } else if is_retryable_server_error(msg) {
-            KernelError::RetryableServer
-        } else {
-            KernelError::NonRetryable
-        }
+    if is_context_window_error(msg) {
+        KernelError::ContextWindow
+    } else if is_retryable_server_error(msg) {
+        KernelError::RetryableServer
+    } else {
+        KernelError::NonRetryable
     }
 }
 
@@ -201,7 +203,7 @@ pub fn is_retryable_provider_error(err: &KernelError) -> bool {
     match err {
         KernelError::Provider { message } => {
             matches!(
-                KernelError::from((message.as_ref(), None::<u16>)),
+                classify_provider_error(message.as_ref(), None),
                 KernelError::RetryableServer
             )
         }

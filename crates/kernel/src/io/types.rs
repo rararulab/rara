@@ -25,6 +25,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use snafu::Snafu;
 
+/// Well-known progress stage names used by `OutboundPayload::Progress` and
+/// `StreamEvent::Progress`.
+pub mod stages {
+    pub const THINKING: &str = "thinking";
+}
+
 use crate::{
     channel::types::{ChannelType, MessageContent},
     process::{AgentId, SessionId, principal::UserId},
