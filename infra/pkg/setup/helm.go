@@ -26,6 +26,7 @@ import (
 	helmchart "helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/cli"
+	helmrelease "helm.sh/helm/v3/pkg/release"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/discovery/cached/memory"
@@ -69,13 +70,23 @@ func (m *HelmManager) InstallOrUpgrade(ctx context.Context, releaseName, chartNa
 
 	histClient := action.NewHistory(cfg)
 	histClient.Max = 1
-	_, histErr := histClient.Run(releaseName)
+	history, histErr := histClient.Run(releaseName)
 
 	tctx, cancel := context.WithTimeout(ctx, defaultHelmTimeout)
 	defer cancel()
 
-	if histErr != nil {
-		// Not installed — install it
+	// Determine if the last release is in a failed/pending state and needs reinstall.
+	needsReinstall := histErr == nil && len(history) > 0 && isFailedRelease(history[0])
+
+	if histErr != nil || needsReinstall {
+		if needsReinstall {
+			// Clean up the stuck release before reinstalling.
+			uninstall := action.NewUninstall(cfg)
+			uninstall.Timeout = defaultHelmTimeout
+			uninstall.Wait = true
+			_, _ = uninstall.Run(releaseName) // best effort; ignore error
+		}
+		// Fresh install
 		client := action.NewInstall(cfg)
 		client.ReleaseName = releaseName
 		client.Namespace = m.namespace
@@ -87,11 +98,12 @@ func (m *HelmManager) InstallOrUpgrade(ctx context.Context, releaseName, chartNa
 			return fmt.Errorf("helm install %s: %w", releaseName, err)
 		}
 	} else {
-		// Upgrade existing release
+		// Upgrade existing healthy release
 		client := action.NewUpgrade(cfg)
 		client.Namespace = m.namespace
 		client.Timeout = defaultHelmTimeout
 		client.Wait = true
+		client.WaitForJobs = true
 		client.ReuseValues = false
 		client.MaxHistory = 3
 		if _, err := client.RunWithContext(tctx, releaseName, chrt, values); err != nil {
@@ -100,6 +112,19 @@ func (m *HelmManager) InstallOrUpgrade(ctx context.Context, releaseName, chartNa
 	}
 
 	return nil
+}
+
+// isFailedRelease reports whether a release is in a state that requires
+// uninstalling before reinstalling (failed, pending-install, pending-upgrade).
+func isFailedRelease(r *helmrelease.Release) bool {
+	switch r.Info.Status {
+	case helmrelease.StatusFailed,
+		helmrelease.StatusPendingInstall,
+		helmrelease.StatusPendingUpgrade,
+		helmrelease.StatusPendingRollback:
+		return true
+	}
+	return false
 }
 
 // pullChart uses helm pull to download and load a chart from the given repo.

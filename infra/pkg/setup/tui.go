@@ -227,6 +227,9 @@ func (m installModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.done = true
 			if m.current < len(m.steps) {
 				m.steps[m.current].status = stepError
+				// Auto-expand the failed step so the user sees what was happening.
+				m.expanded = m.current
+				m.cursor = m.current
 			}
 			return m, tea.Quit
 		}
@@ -322,6 +325,16 @@ func (m installModel) View() string {
 		b.WriteString("\n")
 		for _, w := range m.warns {
 			b.WriteString("  " + warnStyle.Render("! "+w) + "\n")
+		}
+	}
+
+	// Error message
+	if m.done && m.finalErr != nil {
+		b.WriteString("\n")
+		for _, line := range strings.Split(m.finalErr.Error(), "\n") {
+			if strings.TrimSpace(line) != "" {
+				b.WriteString("  " + stepErrStyle.Render(line) + "\n")
+			}
 		}
 	}
 
