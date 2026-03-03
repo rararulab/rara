@@ -278,7 +278,7 @@ otelcol.exporter.otlp "tempo" {
 		return err
 	}
 
-	// --- Quickwit ---
+	// --- Quickwit (non-critical: heavy multi-pod chart, may time out on low-resource clusters) ---
 	send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("Installing Quickwit (%s-quickwit)...", prefix)})
 	if err := helm.InstallOrUpgrade(ctx,
 		fmt.Sprintf("%s-quickwit", prefix),
@@ -290,21 +290,21 @@ otelcol.exporter.otlp "tempo" {
 				"default_index_root_uri": fmt.Sprintf("s3://quickwit/indexes?endpoint=http://%s-minio:9000&force_path_style_access=true", prefix),
 				"storage": map[string]interface{}{
 					"s3": map[string]interface{}{
-						"endpoint":    fmt.Sprintf("http://%s-minio:9000", prefix),
-						"access_key":  cfg.MinioUser,
-						"secret_key":  cfg.MinioPassword,
+						"endpoint":              fmt.Sprintf("http://%s-minio:9000", prefix),
+						"access_key":            cfg.MinioUser,
+						"secret_key":            cfg.MinioPassword,
 						"force_path_style_access": true,
 					},
 				},
 			},
-			"searcher": map[string]interface{}{"replicaCount": 1},
-			"indexer":  map[string]interface{}{"replicaCount": 1},
+			"searcher":      map[string]interface{}{"replicaCount": 1},
+			"indexer":       map[string]interface{}{"replicaCount": 1},
 			"control_plane": map[string]interface{}{"replicaCount": 1},
-			"janitor":  map[string]interface{}{"replicaCount": 1},
-			"metastore": map[string]interface{}{"replicaCount": 1},
+			"janitor":       map[string]interface{}{"replicaCount": 1},
+			"metastore":     map[string]interface{}{"replicaCount": 1},
 		},
 	); err != nil {
-		return err
+		send(ProgressEvent{Kind: EventWarn, Name: fmt.Sprintf("Quickwit install failed (non-critical): %v", err)})
 	}
 
 	// --- Langfuse ---
