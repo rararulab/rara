@@ -162,7 +162,7 @@ consul:
         memory: 256Mi
 
 # ------------------------------------------------------------------------------
-# Consul seed URL overrides (use local Traefik domains for local app)
+# Consul seed overrides for the local profile (rara/config/local/*)
 # ------------------------------------------------------------------------------
 consulSeed:
   overrides:

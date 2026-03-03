@@ -29,21 +29,24 @@ use crate::{
     audit_subsystem::AuditRef,
     device_registry::DeviceRegistryRef,
     error::{KernelError, Result},
-    event_queue::EventQueueRef,
+    event::KernelEvent,
     io::{
-        egress::EndpointRegistryRef, ingress::IngressPipelineRef, stream::StreamHubRef,
-        types::InboundMessage,
+        egress::EndpointRegistryRef,
+        ingress::{IngressPipelineRef, RawPlatformMessage},
+        stream::StreamHubRef,
+        types::{InboundMessage, IngestError},
     },
     kernel::{KernelConfig, SettingsRef},
     process::{
         AgentId, AgentManifest, ProcessState, ProcessTable, Signal,
         agent_registry::AgentRegistryRef, principal::Principal,
     },
+    queue::EventQueueRef,
     security::SecurityRef,
     tool::ToolRegistryRef,
-    unified_event::KernelEvent,
 };
 
+// FIXME: why kernel this complicated ?
 /// Public entry point for interacting with the kernel.
 ///
 /// Provides both mutation methods (spawn, signal, shutdown) that flow through
@@ -157,7 +160,6 @@ impl KernelHandle {
         };
         self.event_queue
             .push(event)
-            .await
             .map_err(|_| KernelError::SpawnFailed {
                 message: "event queue full".to_string(),
             })?;
@@ -199,6 +201,24 @@ impl KernelHandle {
             })
     }
 
+    /// Ingest a raw platform message: resolve identity + session, then push
+    /// the resulting [`InboundMessage`] into the event queue.
+    ///
+    /// This is the primary entry point for channel adapters.
+    pub async fn ingest(&self, raw: RawPlatformMessage) -> std::result::Result<(), IngestError> {
+        let msg = self.ingress_pipeline.resolve(raw).await?;
+        let channel_label = format!("{:?}", msg.source.channel_type);
+
+        self.submit_message(msg)
+            .map_err(|_| IngestError::SystemBusy)?;
+
+        crate::metrics::MESSAGE_INBOUND
+            .with_label_values(&[&channel_label])
+            .inc();
+
+        Ok(())
+    }
+
     /// Submit an inbound user message (fire-and-forget).
     ///
     /// Uses `try_push` (non-async) so this can be called from synchronous
@@ -228,7 +248,7 @@ impl KernelHandle {
     /// Access the process table for querying.
     pub fn process_table(&self) -> &Arc<ProcessTable> { &self.process_table }
 
-    /// Access the ingress pipeline (adapters need this to push messages).
+    /// Access the ingress pipeline (resolution layer).
     pub fn ingress_pipeline(&self) -> &IngressPipelineRef { &self.ingress_pipeline }
 
     /// Access the ephemeral stream hub (WebAdapter needs this for token

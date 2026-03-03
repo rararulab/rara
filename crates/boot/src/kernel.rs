@@ -77,7 +77,7 @@ pub struct BootConfig {
     /// Memory implementation (optional — defaults to NoopMemory).
     pub memory:             Option<Arc<dyn rara_kernel::memory::Memory>>,
     /// Event bus (optional — defaults to BroadcastEventBus).
-    pub event_bus:          Option<Arc<dyn rara_kernel::event::EventBus>>,
+    pub event_bus:          Option<Arc<dyn rara_kernel::notification::EventBus>>,
     /// Guard (optional — defaults to NoopGuard).
     pub guard:              Option<Arc<dyn rara_kernel::guard::Guard>>,
     /// Audit log (optional — defaults to InMemoryAuditLog).
@@ -85,11 +85,12 @@ pub struct BootConfig {
     /// Approval manager (optional — defaults to ApprovalManager with default
     /// policy).
     pub approval:           Option<Arc<ApprovalManager>>,
-    /// Sharded event queue (optional — defaults to ShardedEventQueue with
-    /// default config).
-    pub sharded_queue:      Option<Arc<rara_kernel::sharded_event_queue::ShardedEventQueue>>,
-    /// KV backend (optional — defaults to in-memory DashMapKv).
-    pub kv_backend:         Option<Arc<dyn rara_kernel::kv::KvBackend>>,
+    /// Event queue sharding configuration (optional — defaults to
+    /// single-queue mode via `KernelConfig`).
+    pub event_queue_config: Option<rara_kernel::queue::ShardedEventQueueConfig>,
+    /// OpenDAL operator for the kernel shared KV store (optional — defaults
+    /// to in-memory).
+    pub kv_operator:        Option<opendal::Operator>,
     /// Tool call recorder (optional — defaults to NoopToolCallRecorder).
     pub tool_call_recorder: Option<Arc<dyn rara_kernel::audit::ToolCallRecorder>>,
 }
@@ -126,8 +127,8 @@ impl Default for BootConfig {
             guard:              None,
             audit_log:          None,
             approval:           None,
-            sharded_queue:      None,
-            kv_backend:         None,
+            event_queue_config: None,
+            kv_operator:        None,
             tool_call_recorder: None,
         }
     }
@@ -193,8 +194,13 @@ pub fn boot(config: BootConfig) -> Kernel {
         "booting kernel via boot::kernel::boot()"
     );
 
+    let mut kernel_config = config.kernel_config;
+    if let Some(eq_config) = config.event_queue_config {
+        kernel_config.event_queue = eq_config;
+    }
+
     Kernel::new(
-        config.kernel_config,
+        kernel_config,
         config.driver_registry,
         config.tool_registry,
         memory,
@@ -207,8 +213,11 @@ pub fn boot(config: BootConfig) -> Kernel {
         identity_resolver,
         session_resolver,
         audit,
-        config.sharded_queue,
-        config.kv_backend,
+        config.kv_operator.unwrap_or_else(|| {
+            opendal::Operator::new(opendal::services::Memory::default())
+                .expect("memory operator")
+                .finish()
+        }),
     )
 }
 
@@ -221,6 +230,7 @@ mod tests {
         let kernel = boot(BootConfig::default());
         assert_eq!(kernel.config().max_concurrency, 16);
         assert_eq!(kernel.config().default_child_limit, 8);
+        assert!(!kernel.event_queue().is_sharded());
     }
 
     #[test]

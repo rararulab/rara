@@ -18,7 +18,7 @@
 //!
 //! - **Ingress**: channel adapters publish messages through
 //!   [`IngressPipeline`](ingress::IngressPipeline) into the unified
-//!   [`EventQueue`](crate::event_queue::EventQueue).
+//!   [`EventQueue`](crate::queue::EventQueue).
 //! - **Egress**: the kernel event loop delivers outbound envelopes via
 //!   [`Egress::deliver`](egress::Egress::deliver) to registered adapters.
 //! - **Streaming**: ephemeral real-time events (token deltas, tool progress)

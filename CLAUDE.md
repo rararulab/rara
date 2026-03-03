@@ -13,7 +13,7 @@ Rara is a self-evolving, developer-first personal proactive agent built in Rust.
 ```
 Layer 5 (Entry):        rara-cmd, rara-app
 Layer 4 (Interface):    rara-server (HTTP + gRPC)
-Layer 3 (Core):         rara-kernel, rara-boot, rara-channels, rara-queue
+Layer 3 (Core):         rara-kernel, rara-boot, rara-channels
 Layer 2 (Capabilities): rara-memory, rara-skills, rara-sessions
 Layer 1 (Extensions):   rara-git, rara-coding-task, rara-workspace, rara-backend-admin
 Layer 0 (Foundation):   base, rara-error, rara-paths, rara-model, yunara-store

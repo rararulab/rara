@@ -129,7 +129,6 @@ members = [
     "crates/boot",
     "crates/channels",
     "crates/kernel",
-    "crates/queue",
     "crates/integrations/k8s",
     "crates/integrations/composio",
     "crates/extensions/workspace",
@@ -158,6 +157,7 @@ croner = "3"
 crossterm = "0.28"
 derive_more = { version = "2.0", features = ["full"] }
 dirs = "^6"
+eventsource-stream = "0.2"
 futures = "^0.3"
 http = "^1"
 hyper = { version = "1", features = ["full"] }
@@ -174,7 +174,7 @@ llmfit-core = { git = "https://github.com/AlexsJones/llmfit" }
 moka = { version = "0.12", features = ["future"] }
 oauth2 = "5"
 once_cell = "^1.20"
-opendal = { version = "0.52", features = ["services-s3"] }
+opendal = { version = "0.52", features = ["services-s3", "services-memory"] }
 prometheus = "^0.14"
 prost = "^0.14"
 protobuf = "^3.7"
@@ -253,7 +253,6 @@ rara-memory = { path = "crates/memory" }
 rara-model = { path = "crates/rara-model" }
 rara-paths = { path = "crates/paths" }
 rara-pg-credential-store = { path = "crates/integrations/pg-credential-store" }
-rara-queue = { path = "crates/queue" }
 rara-server = { path = "crates/server" }
 rara-sessions = { path = "crates/sessions" }
 rara-skills = { path = "crates/skills" }

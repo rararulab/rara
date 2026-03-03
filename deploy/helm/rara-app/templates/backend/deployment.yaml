@@ -34,6 +34,8 @@ spec:
           env:
             - name: CONSUL_HTTP_ADDR
               value: {{ .Values.consul.address | quote }}
+            - name: CONSUL_KV_PREFIX
+              value: "rara/config/k8s/"
             - name: RUST_LOG
               value: {{ .Values.backend.rustLog | quote }}
             {{- range .Values.backend.extraEnv }}

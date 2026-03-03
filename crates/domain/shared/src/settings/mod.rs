@@ -22,9 +22,12 @@ use std::collections::HashMap;
 
 /// Well-known setting key constants.
 pub mod keys {
+    pub const LLM_DEFAULT_PROVIDER: &str = "llm.default_provider";
     pub const LLM_PROVIDER: &str = "llm.provider";
-    pub const LLM_OPENROUTER_API_KEY: &str = "llm.openrouter.api_key";
-    pub const LLM_OLLAMA_BASE_URL: &str = "llm.ollama.base_url";
+    pub const LLM_PROVIDERS_OPENROUTER_BASE_URL: &str = "llm.providers.openrouter.base_url";
+    pub const LLM_PROVIDERS_OPENROUTER_API_KEY: &str = "llm.providers.openrouter.api_key";
+    pub const LLM_PROVIDERS_OLLAMA_API_KEY: &str = "llm.providers.ollama.api_key";
+    pub const LLM_PROVIDERS_OLLAMA_BASE_URL: &str = "llm.providers.ollama.base_url";
     pub const LLM_MODELS_DEFAULT: &str = "llm.models.default";
     pub const LLM_MODELS_CHAT: &str = "llm.models.chat";
     pub const LLM_MODELS_JOB: &str = "llm.models.job";
@@ -58,6 +61,19 @@ pub trait SettingsProvider: Send + Sync {
     /// Get a single setting by key. Returns `None` if not set.
     async fn get(&self, key: &str) -> Option<String>;
 
+    /// Get the first non-empty value from the provided key list.
+    async fn get_first(&self, keys: &[&str]) -> Option<String> {
+        for key in keys {
+            if let Some(value) = self.get(key).await {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_owned());
+                }
+            }
+        }
+        None
+    }
+
     /// Set a single setting. Creates or overwrites.
     async fn set(&self, key: &str, value: &str) -> anyhow::Result<()>;
 
@@ -85,11 +101,97 @@ pub async fn get_model(settings: &dyn SettingsProvider, key: &str) -> Option<Str
     settings.get(keys::LLM_MODELS_DEFAULT).await
 }
 
-/// Read `llm.fallback_models` (stored as a JSON array of strings).
-pub async fn get_fallback_models(settings: &dyn SettingsProvider) -> Vec<String> {
-    settings
-        .get(keys::LLM_FALLBACK_MODELS)
-        .await
-        .and_then(|v| serde_json::from_str(&v).ok())
-        .unwrap_or_default()
+/// Test utilities for settings.
+#[cfg(any(test, feature = "testing"))]
+pub mod testing {
+    use std::collections::HashMap;
+
+    use async_trait::async_trait;
+    use tokio::sync::RwLock;
+
+    use super::SettingsProvider;
+
+    /// In-memory [`SettingsProvider`] backed by a `HashMap`.
+    ///
+    /// Useful for unit tests that need a settings provider without a database.
+    #[derive(Default)]
+    pub struct MapSettingsProvider {
+        values: RwLock<HashMap<String, String>>,
+    }
+
+    impl MapSettingsProvider {
+        pub fn new(values: HashMap<String, String>) -> Self {
+            Self {
+                values: RwLock::new(values),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl SettingsProvider for MapSettingsProvider {
+        async fn get(&self, key: &str) -> Option<String> {
+            self.values.read().await.get(key).cloned()
+        }
+
+        async fn set(&self, key: &str, value: &str) -> anyhow::Result<()> {
+            self.values
+                .write()
+                .await
+                .insert(key.to_owned(), value.to_owned());
+            Ok(())
+        }
+
+        async fn delete(&self, key: &str) -> anyhow::Result<()> {
+            self.values.write().await.remove(key);
+            Ok(())
+        }
+
+        async fn list(&self) -> HashMap<String, String> { self.values.read().await.clone() }
+
+        async fn batch_update(
+            &self,
+            patches: HashMap<String, Option<String>>,
+        ) -> anyhow::Result<()> {
+            let mut values = self.values.write().await;
+            for (key, value) in patches {
+                match value {
+                    Some(value) => {
+                        values.insert(key, value);
+                    }
+                    None => {
+                        values.remove(&key);
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        fn subscribe(&self) -> tokio::sync::watch::Receiver<()> {
+            let (_tx, rx) = tokio::sync::watch::channel(());
+            rx
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::keys;
+
+    #[test]
+    fn llm_provider_keys_include_shared_provider_constants() {
+        assert_eq!(keys::LLM_DEFAULT_PROVIDER, "llm.default_provider");
+        assert_eq!(
+            keys::LLM_PROVIDERS_OPENROUTER_BASE_URL,
+            "llm.providers.openrouter.base_url"
+        );
+        assert_eq!(
+            keys::LLM_PROVIDERS_OPENROUTER_API_KEY,
+            "llm.providers.openrouter.api_key"
+        );
+        assert_eq!(
+            keys::LLM_PROVIDERS_OLLAMA_BASE_URL,
+            "llm.providers.ollama.base_url"
+        );
+        assert_eq!(keys::LLM_PROVIDERS_OLLAMA_API_KEY, "llm.providers.ollama.api_key");
+    }
 }

@@ -298,7 +298,7 @@ mod tests {
         AuditEvent {
             timestamp: Timestamp::now(),
             agent_id,
-            session_id: SessionId::new("test-session"),
+            session_id: SessionId::new(),
             user_id: UserId(user.to_string()),
             event_type,
             details: serde_json::Value::Null,
@@ -677,7 +677,7 @@ mod tests {
         let event = AuditEvent {
             timestamp:  Timestamp::now(),
             agent_id:   AgentId::new(),
-            session_id: SessionId::new("test"),
+            session_id: SessionId::new(),
             user_id:    UserId("alice".to_string()),
             event_type: AuditEventType::ToolCall {
                 tool_name: "bash".to_string(),

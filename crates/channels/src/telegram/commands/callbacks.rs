@@ -207,8 +207,8 @@ mod tests {
             })
         }
 
-        async fn create_session(&self, _: &str, _: Option<&str>) -> Result<(), BotServiceError> {
-            Ok(())
+        async fn create_session(&self, _: Option<&str>) -> Result<String, BotServiceError> {
+            Ok("mock-session-key".to_owned())
         }
 
         async fn clear_session_messages(&self, _: &str) -> Result<(), BotServiceError> { Ok(()) }

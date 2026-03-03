@@ -15,11 +15,11 @@
 use async_trait::async_trait;
 use tokio::sync::broadcast;
 
-use crate::event::{EventBus, EventFilter, EventStream, KernelEvent};
+use crate::notification::{EventBus, EventFilter, EventStream, KernelNotification};
 
 /// Event bus backed by `tokio::sync::broadcast`.
 pub struct BroadcastEventBus {
-    sender: broadcast::Sender<KernelEvent>,
+    sender: broadcast::Sender<KernelNotification>,
 }
 
 impl BroadcastEventBus {
@@ -36,7 +36,7 @@ impl Default for BroadcastEventBus {
 
 #[async_trait]
 impl EventBus for BroadcastEventBus {
-    async fn publish(&self, event: KernelEvent) {
+    async fn publish(&self, event: KernelNotification) {
         // Ignore send errors (no active subscribers).
         let _ = self.sender.send(event);
     }

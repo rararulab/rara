@@ -67,6 +67,7 @@ impl ServerArgs {
             .whatever_context("Failed to load config")?;
 
         // Priority: Langfuse (OTLP + auth) > general OTLP endpoint > no OTLP.
+        // TODO: can't we just use the general OTLP?
         let logging_opts =
             if config.langfuse.public_key.is_some() && config.langfuse.secret_key.is_some() {
                 common_telemetry::logging::build_langfuse_logging_options(
@@ -159,25 +160,19 @@ impl ChatArgs {
             .await
             .whatever_context("Failed to start application")?;
 
-        let ingress_pipeline = match app_handle.ingress_pipeline.take() {
-            Some(p) => p,
-            None => whatever!("ingress pipeline not available"),
-        };
-        let endpoint_registry = match app_handle.endpoint_registry.take() {
-            Some(r) => r,
-            None => whatever!("endpoint registry not available"),
-        };
-        let stream_hub = match app_handle.stream_hub.take() {
+        let kernel_handle = match app_handle.kernel_handle.take() {
             Some(h) => h,
-            None => whatever!("stream hub not available"),
+            None => whatever!("kernel handle not available"),
         };
+        let endpoint_registry = kernel_handle.endpoint_registry().clone();
+        let stream_hub = kernel_handle.stream_hub().clone();
 
         // Compute the session ID and user ID the same way AppSessionResolver
         // and AppIdentityResolver would.
         let session_key = self.session.clone();
         let user_id_str = self.user_id.clone();
         let resolved_user_id = UserId(format!("cli:{}", user_id_str));
-        let resolved_session_id = SessionId::new(format!("cli:{}", session_key));
+        let resolved_session_id = SessionId::new();
 
         // Register CLI endpoint in the EndpointRegistry.
         let cli_endpoint = Endpoint {
@@ -229,7 +224,7 @@ impl ChatArgs {
         eprintln!("Type your message and press Enter. Ctrl+C to exit.\n");
 
         // Run the REPL loop.
-        run_repl(event_rx, ingress_pipeline, session_key, user_id_str).await;
+        run_repl(event_rx, kernel_handle, session_key, user_id_str).await;
 
         // Cleanup.
         app_handle.shutdown();
@@ -286,7 +281,7 @@ fn build_cli_raw_message(session_key: &str, user_id: &str, content: &str) -> Raw
 /// Run the interactive REPL loop.
 async fn run_repl(
     mut event_rx: tokio::sync::mpsc::UnboundedReceiver<CliEvent>,
-    ingress_pipeline: Arc<rara_kernel::io::ingress::IngressPipeline>,
+    kernel_handle: rara_kernel::handle::kernel_handle::KernelHandle,
     session_key: String,
     user_id: String,
 ) {
@@ -328,7 +323,7 @@ async fn run_repl(
                 match line {
                     Some(text) => {
                         let raw = build_cli_raw_message(&session_key, &user_id, &text);
-                        if let Err(e) = ingress_pipeline.ingest(raw).await {
+                        if let Err(e) = kernel_handle.ingest(raw).await {
                             eprintln!("[error] Failed to send message: {}", e);
                         } else {
                             in_stream = true;

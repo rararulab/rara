@@ -15,7 +15,7 @@
 //! Bus traits for durable message storage.
 //!
 //! The legacy `InboundBus` / `OutboundBus` / `OutboundSubscriber` traits have
-//! been replaced by the unified [`EventQueue`](crate::event_queue::EventQueue).
+//! been replaced by the unified [`EventQueue`](crate::queue::EventQueue).
 //!
 //! [`OutboxStore`] provides durable storage for messages that could not be
 //! delivered immediately (user offline).

@@ -22,7 +22,7 @@ use rs_consul::{ConsulBuilder, types::ReadKeyRequest};
 // ConsulSource — config::AsyncSource implementation
 // ---------------------------------------------------------------------------
 
-const PREFIX: &str = "rara/config/";
+pub const DEFAULT_PREFIX: &str = "rara/config/";
 
 /// Consul KV as a [`config`] crate async source.
 ///
@@ -32,10 +32,21 @@ const PREFIX: &str = "rara/config/";
 #[derive(Debug)]
 pub struct ConsulSource {
     config: Config,
+    prefix: String,
 }
 
 impl ConsulSource {
-    pub fn new(config: Config) -> Self { Self { config } }
+    pub fn new(config: Config) -> Self { Self::with_prefix(config, DEFAULT_PREFIX) }
+
+    pub fn with_prefix(config: Config, prefix: impl Into<String>) -> Self {
+        Self {
+            config,
+            prefix: normalize_prefix(&prefix.into()),
+        }
+    }
+
+    #[must_use]
+    pub fn prefix(&self) -> &str { &self.prefix }
 }
 
 /// Build a [`hyper_rustls::HttpsConnector`] that trusts the OS certificate
@@ -71,9 +82,10 @@ impl config::AsyncSource for ConsulSource {
         let consul = ConsulBuilder::new(self.config.clone())
             .with_https_client(https_client)
             .build();
+        let prefix = self.prefix();
 
         let request = ReadKeyRequest {
-            key: PREFIX,
+            key: prefix,
             recurse: true,
             ..Default::default()
         };
@@ -83,7 +95,7 @@ impl config::AsyncSource for ConsulSource {
             Err(rs_consul::ConsulError::UnexpectedResponseCode(status, _))
                 if status.as_u16() == 404 =>
             {
-                tracing::warn!(prefix = PREFIX, "Consul KV prefix not found (empty)");
+                tracing::warn!(prefix, "Consul KV prefix not found (empty)");
                 return Ok(Map::new());
             }
             Err(e) => return Err(config::ConfigError::Foreign(Box::new(e))),
@@ -96,7 +108,7 @@ impl config::AsyncSource for ConsulSource {
                 continue;
             }
 
-            let Some(config_key) = kv_path_to_config_key(&entry.key, PREFIX) else {
+            let Some(config_key) = kv_path_to_config_key(&entry.key, prefix) else {
                 continue;
             };
 
@@ -136,4 +148,33 @@ pub fn kv_path_to_config_key(key: &str, prefix: &str) -> Option<String> {
         return None;
     }
     Some(relative.replace('/', "."))
+}
+
+#[must_use]
+pub fn normalize_prefix(prefix: &str) -> String {
+    let trimmed = prefix.trim_matches('/');
+    if trimmed.is_empty() {
+        return DEFAULT_PREFIX.to_string();
+    }
+
+    format!("{trimmed}/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_prefix_trims_slashes_and_enforces_trailing_slash() {
+        assert_eq!(normalize_prefix("/rara/config/local"), "rara/config/local/");
+        assert_eq!(normalize_prefix("rara/config/k8s/"), "rara/config/k8s/");
+        assert_eq!(normalize_prefix(""), DEFAULT_PREFIX);
+    }
+
+    #[test]
+    fn custom_prefix_is_stored_on_consul_source() {
+        let source = ConsulSource::with_prefix(Config::default(), "/rara/config/local");
+
+        assert_eq!(source.prefix(), "rara/config/local/");
+    }
 }

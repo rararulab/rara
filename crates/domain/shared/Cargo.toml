@@ -11,6 +11,10 @@ keywords.workspace = true
 categories.workspace = true
 description = "Shared domain interfaces, traits, and types for cross-crate contracts"
 
+[features]
+default = []
+testing = []
+
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true

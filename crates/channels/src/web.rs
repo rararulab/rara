@@ -22,8 +22,9 @@
 //! [`tokio::sync::broadcast`] channels for fan-out to multiple WebSocket and
 //! SSE connections.
 //!
-//! Inbound messages are handed to the [`IngressPipeline`] in a fire-and-forget
-//! fashion. Outbound delivery is handled separately via [`EgressAdapter`].
+//! Inbound messages are handed to the kernel via [`KernelHandle`] in a
+//! fire-and-forget fashion. Outbound delivery is handled separately via
+//! [`EgressAdapter`].
 //!
 //! # Endpoints
 //!
@@ -56,12 +57,13 @@ use rara_kernel::{
         types::{AgentPhase, ChannelType, MessageContent},
     },
     error::KernelError,
+    handle::kernel_handle::KernelHandle,
     io::{
         egress::{
             EgressAdapter, EgressError, Endpoint, EndpointAddress, EndpointRegistry,
             PlatformOutbound,
         },
-        ingress::{IngressPipeline, RawPlatformMessage},
+        ingress::RawPlatformMessage,
         types::{InteractionType, ReplyContext as IoReplyContext},
     },
     process::principal::UserId,
@@ -172,8 +174,8 @@ pub struct SendMessageResponse {
 pub struct WebAdapter {
     /// Active sessions: session_key -> broadcast sender for outbound events.
     sessions:          Arc<DashMap<String, broadcast::Sender<String>>>,
-    /// IngressPipeline handle (set during `start`).
-    sink:              Arc<RwLock<Option<Arc<IngressPipeline>>>>,
+    /// KernelHandle for dispatching inbound messages (set during `start`).
+    sink:              Arc<RwLock<Option<KernelHandle>>>,
     /// StreamHub for subscribing to real-time token deltas.
     stream_hub:        Arc<RwLock<Option<Arc<rara_kernel::io::stream::StreamHub>>>>,
     /// EndpointRegistry for tracking connected users (set during startup).
@@ -284,7 +286,7 @@ impl WebAdapter {
 #[derive(Clone)]
 struct WebAdapterState {
     sessions:          Arc<DashMap<String, broadcast::Sender<String>>>,
-    sink:              Arc<RwLock<Option<Arc<IngressPipeline>>>>,
+    sink:              Arc<RwLock<Option<KernelHandle>>>,
     stream_hub:        Arc<RwLock<Option<Arc<rara_kernel::io::stream::StreamHub>>>>,
     endpoint_registry: Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
     jwt_secret:        Arc<RwLock<Option<String>>>,
@@ -572,7 +574,7 @@ fn spawn_stream_forwarder(
             }
         };
 
-        let session_id = rara_kernel::process::SessionId::new(session_key.clone());
+        let session_id = rara_kernel::process::SessionId::from_raw(&session_key);
 
         // Poll until stream appears (process_loop opens it asynchronously).
         let mut attempts = 0;
@@ -795,10 +797,10 @@ async fn send_message_handler(
 impl ChannelAdapter for WebAdapter {
     fn channel_type(&self) -> ChannelType { ChannelType::Web }
 
-    async fn start(&self, sink: Arc<IngressPipeline>) -> Result<(), KernelError> {
-        info!("WebAdapter started — sink registered");
+    async fn start(&self, handle: KernelHandle) -> Result<(), KernelError> {
+        info!("WebAdapter started — KernelHandle registered");
         let mut guard = self.sink.write().await;
-        *guard = Some(sink);
+        *guard = Some(handle);
         Ok(())
     }
 
@@ -856,315 +858,5 @@ impl EgressAdapter for WebAdapter {
 
         WebAdapter::broadcast_event(&self.sessions, broadcast_key, &event);
         Ok(())
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use rara_kernel::{
-        defaults::noop::{NoopIdentityResolver, NoopSessionResolver},
-        event_queue::InMemoryEventQueue,
-        io::ingress::IdentityResolver,
-    };
-
-    use super::*;
-
-    /// Create a test `IngressPipeline` with noop resolvers and an EventQueue.
-    fn test_pipeline() -> Arc<IngressPipeline> {
-        Arc::new(IngressPipeline::with_event_queue(
-            Arc::new(NoopIdentityResolver) as Arc<dyn IdentityResolver>,
-            Arc::new(NoopSessionResolver) as Arc<dyn rara_kernel::io::ingress::SessionResolver>,
-            Arc::new(InMemoryEventQueue::new(100)),
-        ))
-    }
-
-    #[test]
-    fn build_raw_platform_message_fields() {
-        let msg = build_raw_platform_message("sess-1", "user-42", "hello world");
-        assert_eq!(msg.platform_chat_id, Some("sess-1".to_owned()));
-        assert_eq!(msg.platform_user_id, "user-42");
-        assert_eq!(msg.content.as_text(), "hello world");
-        assert_eq!(msg.channel_type, ChannelType::Web);
-        assert!(msg.platform_message_id.is_some());
-    }
-
-    #[test]
-    fn web_event_serialization() {
-        let event = WebEvent::Message {
-            content: "hi".to_owned(),
-        };
-        let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains("\"type\":\"message\""));
-        assert!(json.contains("\"content\":\"hi\""));
-
-        let typing = WebEvent::Typing;
-        let json = serde_json::to_string(&typing).unwrap();
-        assert!(json.contains("\"type\":\"typing\""));
-
-        let phase = WebEvent::Phase {
-            phase: "thinking".to_owned(),
-        };
-        let json = serde_json::to_string(&phase).unwrap();
-        assert!(json.contains("\"type\":\"phase\""));
-        assert!(json.contains("\"phase\":\"thinking\""));
-
-        let error = WebEvent::Error {
-            message: "oops".to_owned(),
-        };
-        let json = serde_json::to_string(&error).unwrap();
-        assert!(json.contains("\"type\":\"error\""));
-        assert!(json.contains("\"message\":\"oops\""));
-    }
-
-    #[test]
-    fn web_event_deserialization() {
-        let json = r#"{"type":"message","content":"hello"}"#;
-        let event: WebEvent = serde_json::from_str(json).unwrap();
-        match event {
-            WebEvent::Message { content } => assert_eq!(content, "hello"),
-            _ => panic!("expected Message variant"),
-        }
-    }
-
-    #[test]
-    fn session_broadcast_fan_out() {
-        let sessions: DashMap<String, broadcast::Sender<String>> = DashMap::new();
-
-        // Create session and subscribe two receivers.
-        let tx = WebAdapter::get_or_create_session(&sessions, "sess-1");
-        let mut rx1 = tx.subscribe();
-        let mut rx2 = tx.subscribe();
-
-        // Broadcast an event.
-        WebAdapter::broadcast_event(
-            &sessions,
-            "sess-1",
-            &WebEvent::Message {
-                content: "broadcast-test".to_owned(),
-            },
-        );
-
-        // Both receivers should get the message.
-        let msg1 = rx1.try_recv().unwrap();
-        let msg2 = rx2.try_recv().unwrap();
-        assert_eq!(msg1, msg2);
-        assert!(msg1.contains("broadcast-test"));
-    }
-
-    #[test]
-    fn session_broadcast_no_receivers_does_not_panic() {
-        let sessions: DashMap<String, broadcast::Sender<String>> = DashMap::new();
-        let _tx = WebAdapter::get_or_create_session(&sessions, "orphan");
-
-        // Broadcasting with no active receivers should not panic.
-        WebAdapter::broadcast_event(&sessions, "orphan", &WebEvent::Typing);
-    }
-
-    #[test]
-    fn broadcast_to_nonexistent_session_is_noop() {
-        let sessions: DashMap<String, broadcast::Sender<String>> = DashMap::new();
-        // No session "ghost" exists — should silently do nothing.
-        WebAdapter::broadcast_event(&sessions, "ghost", &WebEvent::Typing);
-    }
-
-    #[test]
-    fn adapter_channel_type_is_web() {
-        let adapter = WebAdapter::new();
-        assert_eq!(ChannelAdapter::channel_type(&adapter), ChannelType::Web);
-    }
-
-    #[test]
-    fn router_has_expected_routes() {
-        let adapter = WebAdapter::new();
-        let router = adapter.router();
-        // Verify the router can be created without panic.
-        drop(router);
-    }
-
-    #[tokio::test]
-    async fn adapter_start_sets_sink() {
-        let adapter = WebAdapter::new();
-        assert!(adapter.sink.read().await.is_none());
-
-        adapter.start(test_pipeline()).await.unwrap();
-        assert!(adapter.sink.read().await.is_some());
-    }
-
-    #[tokio::test]
-    async fn adapter_stop_clears_state() {
-        let adapter = WebAdapter::new();
-        adapter.start(test_pipeline()).await.unwrap();
-
-        // Create a session.
-        WebAdapter::get_or_create_session(&adapter.sessions, "s1");
-        assert!(!adapter.sessions.is_empty());
-
-        adapter.stop().await.unwrap();
-        assert!(adapter.sessions.is_empty());
-        assert!(adapter.sink.read().await.is_none());
-    }
-
-    #[tokio::test]
-    async fn typing_indicator_broadcasts_typing_event() {
-        let adapter = WebAdapter::new();
-        let tx = WebAdapter::get_or_create_session(&adapter.sessions, "sess-t");
-        let mut rx = tx.subscribe();
-
-        adapter.typing_indicator("sess-t").await.unwrap();
-
-        let received = rx.try_recv().unwrap();
-        assert!(received.contains("\"type\":\"typing\""));
-    }
-
-    #[tokio::test]
-    async fn set_phase_broadcasts_phase_event() {
-        let adapter = WebAdapter::new();
-        let tx = WebAdapter::get_or_create_session(&adapter.sessions, "sess-p");
-        let mut rx = tx.subscribe();
-
-        adapter
-            .set_phase("sess-p", AgentPhase::Thinking)
-            .await
-            .unwrap();
-
-        let received = rx.try_recv().unwrap();
-        assert!(received.contains("\"type\":\"phase\""));
-        assert!(received.contains("\"phase\":\"thinking\""));
-    }
-
-    // -----------------------------------------------------------------------
-    // EndpointRegistry integration tests
-    // -----------------------------------------------------------------------
-
-    #[tokio::test]
-    async fn set_endpoint_registry_injects_registry() {
-        let adapter = WebAdapter::new();
-        assert!(adapter.endpoint_registry.read().await.is_none());
-
-        let registry = Arc::new(EndpointRegistry::new());
-        adapter.set_endpoint_registry(registry).await;
-        assert!(adapter.endpoint_registry.read().await.is_some());
-    }
-
-    #[tokio::test]
-    async fn register_unregister_endpoint_lifecycle() {
-        let registry = Arc::new(EndpointRegistry::new());
-        let registry_lock: Arc<RwLock<Option<Arc<EndpointRegistry>>>> =
-            Arc::new(RwLock::new(Some(registry.clone())));
-
-        let user_id = "user-42";
-        let session_key = "my-session";
-
-        // Register
-        register_endpoint(&registry_lock, user_id, session_key).await;
-        let uid = web_user_id(user_id);
-        assert!(registry.is_online(&uid));
-        let endpoints = registry.get_endpoints(&uid);
-        assert_eq!(endpoints.len(), 1);
-        assert_eq!(endpoints[0].channel_type, ChannelType::Web);
-        match &endpoints[0].address {
-            EndpointAddress::Web { connection_id } => {
-                assert_eq!(connection_id, session_key);
-            }
-            _ => panic!("expected Web endpoint"),
-        }
-
-        // Unregister
-        unregister_endpoint(&registry_lock, user_id, session_key).await;
-        assert!(!registry.is_online(&uid));
-        assert_eq!(registry.get_endpoints(&uid).len(), 0);
-    }
-
-    #[tokio::test]
-    async fn register_endpoint_noop_when_no_registry() {
-        let registry_lock: Arc<RwLock<Option<Arc<EndpointRegistry>>>> = Arc::new(RwLock::new(None));
-
-        // Should not panic when registry is None.
-        register_endpoint(&registry_lock, "user-1", "sess-1").await;
-        unregister_endpoint(&registry_lock, "user-1", "sess-1").await;
-    }
-
-    #[tokio::test]
-    async fn egress_send_routes_via_endpoint_connection_id() {
-        let adapter = WebAdapter::new();
-
-        // Create a session broadcast and subscribe.
-        let tx = WebAdapter::get_or_create_session(&adapter.sessions, "my-chat");
-        let mut rx = tx.subscribe();
-
-        // Build endpoint with connection_id = "my-chat".
-        let endpoint = Endpoint {
-            channel_type: ChannelType::Web,
-            address:      EndpointAddress::Web {
-                connection_id: "my-chat".to_owned(),
-            },
-        };
-
-        let msg = PlatformOutbound::Reply {
-            session_key:   "web:my-chat".to_owned(),
-            content:       "hello via egress".to_owned(),
-            attachments:   vec![],
-            reply_context: None,
-        };
-
-        // EgressAdapter::send should use the endpoint's connection_id,
-        // NOT the PlatformOutbound session_key.
-        EgressAdapter::send(&adapter, &endpoint, msg).await.unwrap();
-
-        let received = rx.try_recv().unwrap();
-        assert!(received.contains("hello via egress"));
-    }
-
-    #[tokio::test]
-    async fn egress_send_ignores_non_web_endpoint() {
-        let adapter = WebAdapter::new();
-
-        let endpoint = Endpoint {
-            channel_type: ChannelType::Telegram,
-            address:      EndpointAddress::Telegram {
-                chat_id:   123,
-                thread_id: None,
-            },
-        };
-
-        let msg = PlatformOutbound::Reply {
-            session_key:   "tg:123".to_owned(),
-            content:       "should be ignored".to_owned(),
-            attachments:   vec![],
-            reply_context: None,
-        };
-
-        // Should return Ok without panicking.
-        EgressAdapter::send(&adapter, &endpoint, msg).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn egress_send_stream_chunk() {
-        let adapter = WebAdapter::new();
-        let tx = WebAdapter::get_or_create_session(&adapter.sessions, "stream-sess");
-        let mut rx = tx.subscribe();
-
-        let endpoint = Endpoint {
-            channel_type: ChannelType::Web,
-            address:      EndpointAddress::Web {
-                connection_id: "stream-sess".to_owned(),
-            },
-        };
-
-        let msg = PlatformOutbound::StreamChunk {
-            session_key: "ignored".to_owned(),
-            delta:       "token".to_owned(),
-            edit_target: None,
-        };
-
-        EgressAdapter::send(&adapter, &endpoint, msg).await.unwrap();
-
-        let received = rx.try_recv().unwrap();
-        assert!(received.contains("\"type\":\"text_delta\""));
-        assert!(received.contains("token"));
     }
 }

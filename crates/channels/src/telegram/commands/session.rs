@@ -94,18 +94,8 @@ impl SessionCommandHandler {
         let chat_id = extract_chat_id(context);
         let account = extract_bot_username(context);
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let key = format!("tg-{chat_id}-{now}");
-
-        match self
-            .client
-            .create_session(&key, Some("Telegram Chat"))
-            .await
-        {
-            Ok(()) => {
+        match self.client.create_session(Some("Telegram Chat")).await {
+            Ok(key) => {
                 let _ = self
                     .client
                     .bind_channel("telegram", &account, &chat_id, &key)
@@ -427,12 +417,8 @@ mod tests {
             })
         }
 
-        async fn create_session(
-            &self,
-            _key: &str,
-            _title: Option<&str>,
-        ) -> Result<(), BotServiceError> {
-            Ok(())
+        async fn create_session(&self, _title: Option<&str>) -> Result<String, BotServiceError> {
+            Ok("mock-session-key".to_owned())
         }
 
         async fn clear_session_messages(&self, _session_key: &str) -> Result<(), BotServiceError> {

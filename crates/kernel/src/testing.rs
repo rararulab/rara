@@ -133,7 +133,6 @@ impl TestKernelBuilder {
             Arc::new(NoopEventBus),
             Arc::new(crate::security::SecuritySubsystem::noop()),
             Arc::new(self.agent_registry),
-            Arc::new(crate::defaults::dashmap_kv::DashMapKv::new()),
             Arc::new(crate::audit_subsystem::AuditSubsystem::noop()),
             Arc::new(NoopSessionRepository) as SessionRepoRef,
             Arc::new(NoopSettingsProvider) as SettingsRef,

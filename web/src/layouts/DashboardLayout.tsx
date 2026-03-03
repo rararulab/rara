@@ -20,7 +20,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Activity, LogOut, ShieldCheck, User } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
-import { authApi } from '@/api/client';
+import { authApi, settingsApi } from '@/api/client';
 import { Button } from '@/components/ui/button';
 import OnboardingModal, { isOnboardingDismissed } from '@/components/OnboardingModal';
 
@@ -29,6 +29,45 @@ const FULL_BLEED_ROUTES = new Set(['/agent', '/docs']);
 
 /** Routes that need full bleed when they match as a prefix. */
 const FULL_BLEED_PREFIXES: string[] = [];
+
+const SETTINGS_KEYS = {
+  defaultProvider: 'llm.default_provider',
+  openrouterEnabled: 'llm.providers.openrouter.enabled',
+  openrouterApiKey: 'llm.providers.openrouter.api_key',
+  ollamaEnabled: 'llm.providers.ollama.enabled',
+  ollamaApiKey: 'llm.providers.ollama.api_key',
+  ollamaBaseUrl: 'llm.providers.ollama.base_url',
+  codexEnabled: 'llm.providers.codex.enabled',
+} as const;
+
+function hasConfiguredLlmProvider(settings: Record<string, string> | undefined): boolean {
+  if (!settings) {
+    return false;
+  }
+
+  const defaultProvider = settings[SETTINGS_KEYS.defaultProvider]?.trim();
+  if (!defaultProvider) {
+    return false;
+  }
+
+  switch (defaultProvider) {
+    case 'openrouter':
+      return (
+        settings[SETTINGS_KEYS.openrouterEnabled] === 'true' &&
+        Boolean(settings[SETTINGS_KEYS.openrouterApiKey]?.trim())
+      );
+    case 'ollama':
+      return (
+        settings[SETTINGS_KEYS.ollamaEnabled] === 'true' &&
+        Boolean(settings[SETTINGS_KEYS.ollamaApiKey]?.trim()) &&
+        Boolean(settings[SETTINGS_KEYS.ollamaBaseUrl]?.trim())
+      );
+    case 'codex':
+      return settings[SETTINGS_KEYS.codexEnabled] === 'true';
+    default:
+      return false;
+  }
+}
 
 export default function DashboardLayout() {
   const location = useLocation();
@@ -40,6 +79,12 @@ export default function DashboardLayout() {
   const profileQuery = useQuery({
     queryKey: ['profile'],
     queryFn: () => authApi.me(),
+    enabled: isRoot,
+  });
+
+  const settingsQuery = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => settingsApi.list(),
     enabled: isRoot,
   });
 
@@ -68,6 +113,7 @@ export default function DashboardLayout() {
         <OnboardingModal
           open={onboardingOpen}
           onDismiss={handleOnboardingDismiss}
+          showLlmProviderPrompt={!hasConfiguredLlmProvider(settingsQuery.data)}
         />
       )}
 

@@ -23,9 +23,11 @@ base.workspace = true
 bon.workspace = true
 chrono.workspace = true
 dashmap = "6"
+eventsource-stream.workspace = true
 futures.workspace = true
 jiff.workspace = true
 lazy_static.workspace = true
+opendal = { workspace = true }
 opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"] }
 prometheus.workspace = true
 rara-domain-shared.workspace = true
@@ -46,6 +48,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 common-telemetry.workspace = true
+rara-domain-shared = { workspace = true, features = ["testing"] }
 rara-kernel = { path = ".", features = ["testing"] }
 test-case = "^3"
 

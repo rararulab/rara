@@ -39,8 +39,6 @@ pub mod device_registry;
 pub mod error;
 pub mod event;
 pub mod event_loop;
-pub(crate) mod event_processor;
-pub mod event_queue;
 pub mod guard;
 pub mod handle;
 pub mod io;
@@ -50,13 +48,13 @@ pub mod llm;
 pub mod memory;
 pub mod metrics;
 pub mod model;
+pub mod notification;
 pub mod process;
+pub(crate) mod processor;
+pub mod queue;
 pub mod security;
 pub mod session;
-pub(crate) mod shard_queue;
-pub mod sharded_event_queue;
 pub mod tool;
-pub mod unified_event;
 
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
@@ -80,3 +78,25 @@ pub use process::{
     principal::{Principal, Role, UserId},
 };
 pub use security::SecuritySubsystem;
+
+#[cfg(test)]
+mod api_naming_tests {
+    #[test]
+    fn kernel_events_and_notifications_use_distinct_modules() {
+        let _ = crate::event::KernelEvent::Shutdown;
+        let _ = std::mem::size_of::<crate::notification::KernelNotification>();
+    }
+
+    #[test]
+    fn queue_types_are_grouped_under_queue_module() {
+        let _ = std::mem::size_of::<crate::queue::InMemoryEventQueue>();
+        let _ = std::mem::size_of::<crate::queue::ShardedEventQueue>();
+        let _ = std::mem::size_of::<crate::queue::ShardedEventQueueConfig>();
+        let _ = std::mem::size_of::<crate::queue::EventQueueRef>();
+    }
+
+    #[test]
+    fn event_processors_are_grouped_under_processor_module() {
+        let _ = std::mem::size_of::<crate::processor::EventProcessor>();
+    }
+}

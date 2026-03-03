@@ -15,5 +15,5 @@
 //! In-memory bus implementations.
 //!
 //! The legacy `InMemoryInboundBus` and `InMemoryOutboundBus` have been
-//! replaced by [`EventQueue`](crate::event_queue::EventQueue).
+//! replaced by [`EventQueue`](crate::queue::EventQueue).
 //! This module is kept empty for now; it will be removed in a follow-up.

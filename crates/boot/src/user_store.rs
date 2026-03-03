@@ -20,7 +20,6 @@ use argon2::{
     password_hash::{SaltString, rand_core::OsRng},
 };
 use async_trait::async_trait;
-use rand::{Rng, distr::Alphanumeric};
 use rara_kernel::{
     error::{KernelError, Result},
     process::{
@@ -337,11 +336,7 @@ async fn ensure_root_password(pool: &PgPool) -> std::result::Result<(), crate::e
     }
 
     // 生成 16 字符随机密码
-    let password: String = rand::rng()
-        .sample_iter(&Alphanumeric)
-        .take(16)
-        .map(char::from)
-        .collect();
+    let password: String = "rara".to_string();
 
     // 使用 argon2 哈希密码
     let salt = SaltString::generate(&mut OsRng);

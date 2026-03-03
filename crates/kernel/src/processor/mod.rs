@@ -12,26 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Event processor — processes events from a single [`ShardQueue`].
+//! Multi-processor subsystem for kernel event dispatch.
 //!
-//! Each `EventProcessor` runs as an independent tokio task, draining events
-//! from its assigned shard queue and dispatching them to the kernel's event
-//! handlers.
-//!
-//! The sharded event loop spawns N+1 processors:
-//! - 1 **global processor** for UserMessage, SpawnAgent, Timer, Shutdown,
-//!   Deliver
-//! - N **shard processors** for agent-scoped events (Syscall, TurnCompleted,
-//!   etc.)
+//! Owns the event processor workers that drain shard queues in parallel
+//! when the kernel runs in sharded event-loop mode.
 
 use std::sync::Arc;
 
-use futures::future::join_all;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info, info_span, warn};
 
 use crate::{
-    event_loop::RuntimeTable, kernel::Kernel, shard_queue::ShardQueue, unified_event::KernelEvent,
+    event::KernelEvent, event_loop::RuntimeTable, kernel::Kernel, queue::shard::ShardQueue,
 };
 
 /// A single event processor that drains and processes events from one
@@ -57,36 +49,28 @@ impl EventProcessor {
         loop {
             tokio::select! {
                 _ = self.queue.wait() => {
-                    let events = self.queue.drain(32);
-                    let futures: Vec<_> = events
-                        .into_iter()
-                        .map(|(event, wal_id)| {
+                    // Inner loop: keep draining while events are available
+                    // to avoid re-entering select! unnecessarily.
+                    loop {
+                        let events = self.queue.drain(32);
+                        if events.is_empty() { break; }
+                        for event in events {
                             let event_type: &'static str = (&event).into();
                             let span = info_span!(
                                 "handle_event",
                                 processor_id = self.id,
                                 event_type,
                             );
-                            async move {
-                                kernel.handle_event(event, runtimes)
-                                    .instrument(span)
-                                    .await;
-                                wal_id
-                            }
-                        })
-                        .collect();
-                    let wal_ids = join_all(futures).await;
-                    for wal_id in wal_ids {
-                        if let Some(id) = wal_id {
-                            kernel.event_queue().mark_completed(id);
+                            kernel.handle_event(event, runtimes)
+                                .instrument(span)
+                                .await;
                         }
                     }
                 }
                 _ = shutdown.cancelled() => {
                     info!(processor_id = self.id, "event processor shutting down");
-                    // Drain remaining critical events.
                     let remaining = self.queue.drain(1024);
-                    for (event, wal_id) in remaining {
+                    for event in remaining {
                         if matches!(event, KernelEvent::SendSignal { .. } | KernelEvent::Shutdown) {
                             kernel.handle_event(event, runtimes).await;
                         } else {
@@ -95,9 +79,6 @@ impl EventProcessor {
                                 event = ?event,
                                 "dropping non-critical event during shutdown"
                             );
-                        }
-                        if let Some(id) = wal_id {
-                            kernel.event_queue().mark_completed(id);
                         }
                     }
                     break;
@@ -130,7 +111,7 @@ mod tests {
                 platform_chat_id:    None,
             },
             user:            UserId("u1".to_string()),
-            session_id:      SessionId::new("s1"),
+            session_id:      SessionId::new(),
             target_agent_id: None,
             target_agent:    None,
             content:         MessageContent::Text(text.to_string()),
@@ -148,21 +129,14 @@ mod tests {
             queue: queue.clone(),
         };
 
-        // Push some events before starting.
         queue
             .push(KernelEvent::UserMessage(test_inbound("will be dropped")))
             .unwrap();
         queue.push(KernelEvent::Shutdown).unwrap();
 
         let shutdown = CancellationToken::new();
-
-        // Cancel immediately — processor should drain only critical events.
         shutdown.cancel();
 
-        // We can't easily test with a real kernel here, but we can test
-        // that the processor exits cleanly when shutdown is already cancelled.
-        // The queue should be drained after the processor runs.
-        // Since we don't have a real kernel, just verify the queue structure.
         assert_eq!(queue.pending_count(), 2);
     }
 

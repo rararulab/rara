@@ -13,14 +13,16 @@
 // limitations under the License.
 
 //! Unified event loop — parallel multi-processor loop that processes all
-//! [`KernelEvent`](crate::unified_event::KernelEvent) variants.
+//! [`KernelEvent`](crate::event::KernelEvent) variants.
 //!
-//! Uses [`ShardedEventQueue`](crate::sharded_event_queue::ShardedEventQueue) to
-//! route events to N+1
-//! [`EventProcessor`](crate::event_processor::EventProcessor)
-//! tasks for parallel processing. The kernel directly manages process state
-//! (conversation, turn cancellation, pause buffer) instead of delegating to
-//! per-process tokio tasks.
+//! Always backed by a
+//! [`ShardedEventQueue`](crate::queue::ShardedEventQueue). When
+//! `num_shards == 0` (single-queue mode), only a global
+//! [`EventProcessor`](crate::processor::EventProcessor) is spawned. When
+//! `num_shards > 0`, N additional shard processors run in parallel for
+//! agent-scoped events. The kernel directly manages process state
+//! (conversation, turn cancellation, pause buffer) instead of delegating
+//! to per-process tokio tasks.
 
 use std::sync::Arc;
 
@@ -28,12 +30,13 @@ use dashmap::DashMap;
 use jiff::Timestamp;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug_span, error, info, info_span, warn};
+use tracing::{Instrument, debug_span, error, info, info_span, warn};
 
 use crate::{
     audit::{AuditEvent, AuditEventType, MemoryOp},
     channel::types::ChatMessage,
     error::{KernelError, Result},
+    event::{KernelEvent, Syscall},
     handle::process_handle::ProcessHandle,
     io::{
         pipe::{self, PipeEntry},
@@ -45,7 +48,6 @@ use crate::{
         AgentEnv, AgentId, AgentManifest, AgentProcess, AgentResult, ProcessInfo, ProcessState,
         SessionId, Signal, principal::Principal,
     },
-    unified_event::{KernelEvent, Syscall},
 };
 
 // ---------------------------------------------------------------------------
@@ -106,48 +108,35 @@ impl Kernel {
     /// Agent name for regular users.
     const USER_AGENT_NAME: &'static str = "nana";
 
-    /// Run the event loop with an `Arc<Kernel>`, spawning N+1 parallel
-    /// [`EventProcessor`] tasks (1 global + N shard).
+    /// Run the unified event loop, spawning 1 global + N shard
+    /// [`EventProcessor`] tasks.
+    ///
+    /// When `num_shards == 0` (single-queue mode), only the global processor
+    /// is spawned — functionally identical to the former single-queue path
+    /// but using the same code path for both modes.
     ///
     /// Called from [`start()`](Kernel::start) which already wraps Kernel in
     /// Arc.
     pub(crate) async fn run_event_loop_arc(kernel: Arc<Kernel>, shutdown: CancellationToken) {
+        use crate::processor::EventProcessor;
+
         let runtimes: Arc<RuntimeTable> = Arc::new(DashMap::new());
-        let sq = Arc::clone(kernel.sharded_queue());
-        Self::run_parallel_event_loop(kernel, sq, runtimes, shutdown).await;
-    }
+        let sq = kernel.sharded_queue().clone();
+        let num_shards = sq.num_shards();
 
-    /// Multi-processor event loop — spawns N+1 independent tokio tasks.
-    ///
-    /// Each task runs an [`EventProcessor`] draining its own shard queue,
-    /// achieving true parallel event processing across different agents.
-    ///
-    /// - **Processor 0** (global): UserMessage, SpawnAgent, Timer, Shutdown,
-    ///   Deliver
-    /// - **Processors 1..=N** (shards): Syscall, TurnCompleted, ChildCompleted,
-    ///   SendSignal
-    async fn run_parallel_event_loop(
-        kernel: Arc<Kernel>,
-        sharded_queue: Arc<crate::sharded_event_queue::ShardedEventQueue>,
-        runtimes: Arc<RuntimeTable>,
-        shutdown: CancellationToken,
-    ) {
-        use crate::event_processor::EventProcessor;
-
-        let num_shards = sharded_queue.num_shards();
         info!(
             num_shards = num_shards,
             total_processors = num_shards + 1,
-            "kernel event loop started (parallel mode)"
+            "kernel event loop started"
         );
 
         let mut handles = Vec::with_capacity(num_shards + 1);
 
-        // Global processor (id=0)
+        // Global processor (id=0) — always present.
         {
             let proc = EventProcessor {
                 id:    0,
-                queue: Arc::clone(sharded_queue.global()),
+                queue: Arc::clone(sq.global()),
             };
             let k = Arc::clone(&kernel);
             let rt = Arc::clone(&runtimes);
@@ -157,11 +146,11 @@ impl Kernel {
             }));
         }
 
-        // Shard processors (id=1..=N)
+        // Shard processors (id=1..=N) — only when sharding is enabled.
         for i in 0..num_shards {
             let proc = EventProcessor {
                 id:    i + 1,
-                queue: Arc::clone(sharded_queue.shard(i)),
+                queue: Arc::clone(sq.shard(i)),
             };
             let k = Arc::clone(&kernel);
             let rt = Arc::clone(&runtimes);
@@ -178,7 +167,7 @@ impl Kernel {
             }
         }
 
-        info!("kernel parallel event loop stopped");
+        info!("kernel event loop stopped");
     }
 
     /// Dispatch a single event to its handler.
@@ -235,7 +224,7 @@ impl Kernel {
                     .await;
             }
             KernelEvent::Deliver(envelope) => {
-                self.handle_deliver(envelope).await;
+                self.spawn_deliver(envelope);
             }
             KernelEvent::Syscall(syscall) => {
                 self.handle_syscall(syscall, runtimes).await;
@@ -523,7 +512,7 @@ impl Kernel {
                 payload: _,
             } => {
                 self.event_bus()
-                    .publish(crate::event::KernelEvent::ToolExecuted {
+                    .publish(crate::notification::KernelNotification::ToolExecuted {
                         agent_id:  agent_id.0,
                         tool_name: format!("event:{event_type}"),
                         success:   true,
@@ -1339,8 +1328,14 @@ impl Kernel {
         tracing::Span::current().record("agent_id", tracing::field::display(&agent_id));
 
         // Each process gets its own session — context isolation.
-        let session_id = SessionId::new(format!("agent:{}", agent_id));
-        self.ensure_session(&session_id).await;
+        let session = self
+            .session_repo()
+            .create()
+            .await
+            .map_err(|e| KernelError::Other {
+                message: format!("failed to create session: {e}").into(),
+            })?;
+        let session_id = session.key;
         // Clean start: no loaded history. Task input arrives as synthetic
         // message (below) or is injected directly into the conversation.
         let initial_messages = vec![];
@@ -1488,8 +1483,11 @@ impl Kernel {
                 let session_id = self
                     .process_table()
                     .get(target)
-                    .and_then(|p| p.channel_session_id.clone())
-                    .unwrap_or_else(|| SessionId::new("unknown"));
+                    .and_then(|p| p.channel_session_id.clone());
+                let Some(session_id) = session_id else {
+                    error!(agent_id = %target, "cannot send interrupt notification: process not found or has no channel session");
+                    return;
+                };
                 let envelope = OutboundEnvelope::state_change(
                     MessageId::new(),
                     crate::process::principal::UserId("system".to_string()),
@@ -1589,11 +1587,14 @@ impl Kernel {
             rt.conversation.push(child_msg.clone());
         }
 
-        let session_id = self
+        let Some(session_id) = self
             .process_table()
             .get(parent_id)
             .map(|p| p.session_id.clone())
-            .unwrap_or_else(|| SessionId::new("unknown"));
+        else {
+            error!(parent_id = %parent_id, child_id = %child_id, "cannot persist child result: parent process not found");
+            return;
+        };
 
         if let Err(e) = self
             .session_repo()
@@ -1608,24 +1609,37 @@ impl Kernel {
     // handle_deliver
     // -----------------------------------------------------------------------
 
-    /// Handle a Deliver event — call Egress::deliver directly.
-    #[tracing::instrument(skip_all, fields(session_id = %envelope.session_id, payload_type))]
-    async fn handle_deliver(&self, envelope: OutboundEnvelope) {
+    /// Spawn a Deliver event as an independent task so that egress I/O
+    /// (Telegram API, WebSocket send, etc.) does not block the event loop.
+    fn spawn_deliver(&self, envelope: OutboundEnvelope) {
+        let adapters = self.egress_adapters.clone();
+        let endpoints = Arc::clone(self.endpoint_registry());
+        let user_store = Arc::clone(self.security().user_store());
+
         let payload_type = match &envelope.payload {
             OutboundPayload::Reply { .. } => "reply",
             OutboundPayload::Progress { .. } => "progress",
             OutboundPayload::StateChange { .. } => "state_change",
             OutboundPayload::Error { .. } => "error",
         };
-        tracing::Span::current().record("payload_type", payload_type);
+        let span = tracing::info_span!(
+            "deliver",
+            session_id = %envelope.session_id,
+            payload_type,
+        );
 
-        crate::io::egress::Egress::deliver(
-            &self.egress_adapters,
-            self.endpoint_registry(),
-            Some(self.security().user_store().as_ref()),
-            envelope,
-        )
-        .await;
+        tokio::spawn(
+            async move {
+                crate::io::egress::Egress::deliver(
+                    &adapters,
+                    &endpoints,
+                    Some(user_store.as_ref()),
+                    envelope,
+                )
+                .await;
+            }
+            .instrument(span),
+        );
     }
 
     // -----------------------------------------------------------------------

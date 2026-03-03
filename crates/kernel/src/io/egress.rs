@@ -221,7 +221,7 @@ pub enum EgressError {
 /// the appropriate [`EgressAdapter`]s based on the user's connected
 /// endpoints and routing rules.
 ///
-/// Called directly by `Kernel::handle_deliver()` in the unified event loop.
+/// Called by `Kernel::spawn_deliver()` in the unified event loop.
 pub struct Egress;
 
 use std::sync::Arc;
@@ -238,7 +238,7 @@ impl Egress {
     /// This is a free function over the needed fields so that the
     /// `outbound_sub` is never borrowed immutably across an `.await`.
     ///
-    /// Also used directly by `Kernel::handle_deliver()` in the unified
+    /// Also used directly by `Kernel::spawn_deliver()` in the unified
     /// event loop, bypassing the outbound bus subscribe loop.
     #[tracing::instrument(
         skip(adapters, endpoints, user_store, envelope),
@@ -509,7 +509,7 @@ mod tests {
             id: MessageId::new(),
             in_reply_to: MessageId::new(),
             user: UserId("user-1".to_string()),
-            session_id: SessionId::new("session-1"),
+            session_id: SessionId::new(),
             routing,
             payload: OutboundPayload::Reply {
                 content:     MessageContent::Text("hello".to_string()),
@@ -669,7 +669,7 @@ mod tests {
             id:          MessageId::new(),
             in_reply_to: MessageId::new(),
             user:        UserId("user-1".to_string()),
-            session_id:  SessionId::new("session-1"),
+            session_id:  SessionId::new(),
             routing:     OutboundRouting::BroadcastAll,
             payload:     OutboundPayload::Error {
                 code:    "E001".to_string(),

@@ -33,6 +33,12 @@ traefik:
             to: websecure
             scheme: https
             permanent: true
+    postgres:
+      port: 5432
+      exposedPort: 5432
+      protocol: TCP
+      expose:
+        default: true
   additionalArguments:
     - "--serversTransport.insecureSkipVerify=true"
 
@@ -301,19 +307,32 @@ consul:
 # ------------------------------------------------------------------------------
 # Consul KV seed — injected by the consul-kv-seed Job (post-install/upgrade).
 #
-# By default URLs use cluster-internal service DNS. If the rara app runs
-# OUTSIDE the cluster, override these to use the Traefik-exposed URLs:
-#   consulSeed.overrides.langfuseHost: "https://langfuse.rara.local"
-#   consulSeed.overrides.crawl4aiBaseUrl: "https://crawl4ai.rara.local"
-#   consulSeed.overrides.mem0BaseUrl: "https://mem0.rara.local"
-#   consulSeed.overrides.memosBaseUrl: "https://memos.rara.local"
-#   consulSeed.overrides.hindsightBaseUrl: "https://hindsight.rara.local"
-#   consulSeed.overrides.ollamaBaseUrl: "https://ollama.rara.local"
-#   ... etc.
+# The job writes two profiles:
+# - rara/config/k8s/*   for in-cluster deployments
+# - rara/config/local/* for local app runs that must access infra via ingress
+# 
+# `consulSeed.k8s` overrides the in-cluster profile.
+# `consulSeed.overrides` overrides the local profile.
 # ------------------------------------------------------------------------------
 consulSeed:
-  # Override any auto-derived service URL.
-  # Empty string = use internal K8s service DNS (default).
+  k8s:
+    databaseUrl: ""
+    migrationDir: ""
+    httpBindAddress: ""
+    grpcBindAddress: ""
+    mainServiceHttpBase: ""
+    objectStoreEndpoint: ""
+    chromaUrl: ""
+    mem0BaseUrl: ""
+    memosBaseUrl: ""
+    memosToken: ""
+    hindsightBaseUrl: ""
+    hindsightBankId: ""
+    ollamaBaseUrl: ""
+    crawl4aiBaseUrl: ""
+    telemetryOtlpEndpoint: ""
+    langfuseHost: ""
+
   overrides:
     databaseUrl: ""
     migrationDir: ""

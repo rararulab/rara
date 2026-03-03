@@ -22,7 +22,6 @@ use std::{
 
 use opendal::Operator;
 use rara_domain_shared::notify::client::NotifyClient;
-use rara_kernel::io::{egress::EndpointRegistry, ingress::IngressPipeline, stream::StreamHub};
 use rara_server::{
     grpc::{GrpcServerConfig, hello::HelloService, start_grpc_server},
     http::{RestServerConfig, health_routes, start_rest_server},
@@ -129,14 +128,21 @@ impl AppConfig {
                 config::ConfigError::Message("CONSUL_HTTP_ADDR is required but not set".to_string())
             })?;
 
-        tracing::info!(%consul_addr, "Loading configuration from Consul KV");
-        let consul_config = rara_consul::Config {
-            address: consul_addr,
-            ..Default::default()
+        let consul_prefix = if cfg!(debug_assertions) {
+            format!("{}local", rara_consul::DEFAULT_PREFIX)
+        } else {
+            format!("{}k8s", rara_consul::DEFAULT_PREFIX)
         };
+        println!("Loading configuration from Consul KV: {consul_addr}, {consul_prefix}");
 
         let cfg = config::ConfigBuilder::<config::builder::AsyncState>::default()
-            .add_async_source(rara_consul::ConsulSource::new(consul_config))
+            .add_async_source(rara_consul::ConsulSource::with_prefix(
+                rara_consul::Config {
+                    address: consul_addr,
+                    ..Default::default()
+                },
+                consul_prefix,
+            ))
             .build()
             .await?;
 
@@ -245,31 +251,24 @@ impl AppConfig {
             });
         }
 
-        // -- AgentFS for persistent KV + tool call audit ---------------------
+        // -- AgentFS for tool call audit --------------------------------------
 
         let data_dir = rara_paths::data_dir();
-        let (kv_backend, tool_recorder): (
-            Option<Arc<dyn rara_kernel::kv::KvBackend>>,
-            Option<Arc<dyn rara_kernel::audit::ToolCallRecorder>>,
-        ) = match rara_boot::agentfs::init_agentfs(&data_dir).await {
-            Ok(agentfs) => {
-                let agentfs = Arc::new(agentfs);
-                let agentfs_path = data_dir.join("agentfs");
-                info!("AgentFS initialized at {}", agentfs_path.display());
-                (
-                    Some(Arc::new(rara_boot::agentfs::AgentFsKv::new(
-                        agentfs.clone(),
-                    ))),
+        let tool_recorder: Option<Arc<dyn rara_kernel::audit::ToolCallRecorder>> =
+            match rara_boot::agentfs::init_agentfs(&data_dir).await {
+                Ok(agentfs) => {
+                    let agentfs = Arc::new(agentfs);
+                    let agentfs_path = data_dir.join("agentfs");
+                    info!("AgentFS initialized at {}", agentfs_path.display());
                     Some(Arc::new(rara_boot::agentfs::AgentFsToolCallRecorder::new(
                         agentfs,
-                    ))),
-                )
-            }
-            Err(e) => {
-                warn!(error = %e, "AgentFS init failed, falling back to in-memory defaults");
-                (None, None)
-            }
-        };
+                    )))
+                }
+                Err(e) => {
+                    warn!(error = %e, "AgentFS init failed, falling back to in-memory defaults");
+                    None
+                }
+            };
         let mut kernel = rara_boot::kernel::boot(rara_boot::kernel::BootConfig {
             driver_registry: rara.driver_registry.clone(),
             tool_registry: rara.tool_registry.clone(),
@@ -278,7 +277,6 @@ impl AppConfig {
             session_repo: rara.session_repo.clone(),
             settings: settings_provider.clone(),
             guard: Some(path_guard as Arc<dyn rara_kernel::guard::Guard>),
-            kv_backend,
             tool_call_recorder: tool_recorder,
             ..Default::default()
         });
@@ -418,13 +416,10 @@ impl AppConfig {
         };
         let mut worker_manager = common_worker::Manager::with_state_and_config((), manager_config);
 
-        // Start channel adapters with the kernel's ingress pipeline.
+        // Start channel adapters with the kernel handle.
         if let Some(ref tg_adapter) = telegram_adapter {
             use rara_kernel::channel::adapter::ChannelAdapter as _;
-            match tg_adapter
-                .start(kernel_handle.ingress_pipeline().clone())
-                .await
-            {
+            match tg_adapter.start(kernel_handle.clone()).await {
                 Ok(()) => info!("Telegram adapter started"),
                 Err(e) => warn!(
                     error = %e,
@@ -434,10 +429,7 @@ impl AppConfig {
         }
         {
             use rara_kernel::channel::adapter::ChannelAdapter as _;
-            match web_adapter
-                .start(kernel_handle.ingress_pipeline().clone())
-                .await
-            {
+            match web_adapter.start(kernel_handle.clone()).await {
                 Ok(()) => info!("WebAdapter started"),
                 Err(e) => warn!(
                     error = %e,
@@ -455,9 +447,7 @@ impl AppConfig {
             shutdown_tx:        Some(shutdown_tx),
             running:            Arc::clone(&running),
             cancellation_token: cancellation_token.clone(),
-            ingress_pipeline:   Some(kernel_handle.ingress_pipeline().clone()),
-            endpoint_registry:  Some(kernel_handle.endpoint_registry().clone()),
-            stream_hub:         Some(kernel_handle.stream_hub().clone()),
+            kernel_handle:      Some(kernel_handle),
         };
 
         // -- shutdown loop ---------------------------------------------------
@@ -630,15 +620,12 @@ impl AppConfig {
 /// Handle for controlling a running application.
 #[allow(dead_code)]
 pub struct AppHandle {
-    shutdown_tx:           Option<oneshot::Sender<()>>,
-    running:               Arc<AtomicBool>,
-    cancellation_token:    CancellationToken,
-    /// The ingress pipeline (for injecting inbound messages).
-    pub ingress_pipeline:  Option<Arc<IngressPipeline>>,
-    /// Per-user endpoint registry (for registering CLI endpoints).
-    pub endpoint_registry: Option<Arc<EndpointRegistry>>,
-    /// Ephemeral stream hub (for subscribing to real-time deltas).
-    pub stream_hub:        Option<Arc<StreamHub>>,
+    shutdown_tx:        Option<oneshot::Sender<()>>,
+    running:            Arc<AtomicBool>,
+    cancellation_token: CancellationToken,
+    /// Kernel handle (for injecting inbound messages, accessing stream hub,
+    /// endpoint registry, etc.).
+    pub kernel_handle:  Option<rara_kernel::handle::kernel_handle::KernelHandle>,
 }
 
 #[allow(dead_code)]

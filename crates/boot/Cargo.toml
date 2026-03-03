@@ -37,7 +37,6 @@ rara-mcp.workspace = true
 rara-memory = { workspace = true }
 rara-paths.workspace = true
 rara-pg-credential-store.workspace = true
-rara-queue.workspace = true
 rara-sessions.workspace = true
 rara-skills.workspace = true
 rara-workspace = { workspace = true }
@@ -51,6 +50,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+rara-domain-shared = { workspace = true, features = ["testing"] }
 tempfile = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["postgres"] }

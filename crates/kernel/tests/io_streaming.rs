@@ -302,7 +302,7 @@ async fn test_multi_session_isolation() {
 
 // Tests 6 and 7 (InboundBus, OutboundBus) have been removed — these bus
 // traits are replaced by the unified EventQueue.  EventQueue tests live in
-// `crate::event_queue` and in the `event_loop` module.
+// `crate::queue` and in the `event_loop` module.
 
 // ---------------------------------------------------------------------------
 // Test 8: StreamHub lifecycle — open, subscribe, emit, close
@@ -311,7 +311,7 @@ async fn test_multi_session_isolation() {
 #[tokio::test]
 async fn test_stream_hub_full_lifecycle() {
     let hub = StreamHub::new(64);
-    let session_id = SessionId::new("lifecycle-session");
+    let session_id = SessionId::from_raw("lifecycle-session");
 
     // Open a stream.
     let handle = hub.open(session_id.clone());

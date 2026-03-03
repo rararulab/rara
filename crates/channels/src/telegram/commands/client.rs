@@ -141,8 +141,8 @@ pub trait BotServiceClient: Send + Sync {
         session_key: &str,
     ) -> Result<ChannelBinding, BotServiceError>;
 
-    /// Create a new chat session.
-    async fn create_session(&self, key: &str, title: Option<&str>) -> Result<(), BotServiceError>;
+    /// Create a new chat session and return the generated session key.
+    async fn create_session(&self, title: Option<&str>) -> Result<String, BotServiceError>;
 
     /// Delete all messages from a session.
     async fn clear_session_messages(&self, session_key: &str) -> Result<(), BotServiceError>;

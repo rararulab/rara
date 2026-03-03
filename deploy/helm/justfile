@@ -145,45 +145,113 @@ seed-consul:
     echo "Seeding Consul KV via ${CONSUL_POD} ..."
 
     # Database
-    put_kv "rara/config/database/database_url" \
+    put_kv "rara/config/k8s/database/database_url" \
       "postgres://postgres:${PG_PASS}@{{ RELEASE }}-postgresql:5432/${PG_DB}"
-    put_kv "rara/config/database/migration_dir" "crates/rara-model/migrations"
+    put_kv "rara/config/k8s/database/migration_dir" "crates/rara-model/migrations"
 
     # HTTP / gRPC
-    put_kv "rara/config/http/bind_address"        "0.0.0.0:25555"
-    put_kv "rara/config/grpc/bind_address"        "0.0.0.0:50051"
+    put_kv "rara/config/k8s/http/bind_address"        "0.0.0.0:25555"
+    put_kv "rara/config/k8s/grpc/bind_address"        "0.0.0.0:50051"
 
     # Main service
-    put_kv "rara/config/main_service_http_base"   "http://{{ APP_RELEASE }}-rara-app-backend:25555"
+    put_kv "rara/config/k8s/main_service_http_base"   "http://{{ APP_RELEASE }}-rara-app-backend:25555"
 
     # Object store (MinIO)
-    put_kv "rara/config/object_store/endpoint"          "http://{{ RELEASE }}-minio:9000"
-    put_kv "rara/config/object_store/access_key_id"     "${MINIO_USER}"
-    put_kv "rara/config/object_store/secret_access_key" "${MINIO_PASS}"
-    put_kv "rara/config/object_store/bucket"            "rara"
+    put_kv "rara/config/k8s/object_store/endpoint"          "http://{{ RELEASE }}-minio:9000"
+    put_kv "rara/config/k8s/object_store/access_key_id"     "${MINIO_USER}"
+    put_kv "rara/config/k8s/object_store/secret_access_key" "${MINIO_PASS}"
+    put_kv "rara/config/k8s/object_store/bucket"            "rara"
+
+    # Memory (ChromaDB)
+    put_kv "rara/config/k8s/memory/chroma_url"          "http://{{ RELEASE }}-chromadb:8000"
 
     # Memory — always seed all keys (empty string for optional tokens)
-    put_kv "rara/config/memory/mem0_base_url"       "http://{{ RELEASE }}-mem0:8000"
-    put_kv "rara/config/memory/memos_base_url"      "http://{{ RELEASE }}-memos:5230"
-    put_kv "rara/config/memory/memos_token"         ""
-    put_kv "rara/config/memory/hindsight_base_url"  "http://{{ RELEASE }}-hindsight:8888"
-    put_kv "rara/config/memory/hindsight_bank_id"   "default"
+    put_kv "rara/config/k8s/memory/mem0_base_url"       "http://{{ RELEASE }}-mem0:8000"
+    put_kv "rara/config/k8s/memory/memos_base_url"      "http://{{ RELEASE }}-memos:5230"
+    put_kv "rara/config/k8s/memory/memos_token"         ""
+    put_kv "rara/config/k8s/memory/hindsight_base_url"  "http://{{ RELEASE }}-hindsight:8888"
+    put_kv "rara/config/k8s/memory/hindsight_bank_id"   "default"
+    OLLAMA_ENABLED=$(echo "$VALUES" | jq -r '.ollama.enabled // false')
+    if [ "$OLLAMA_ENABLED" = "true" ]; then
+      put_kv "rara/config/k8s/memory/ollama_base_url"   "http://{{ RELEASE }}-ollama:11434"
+    fi
 
     # Crawl4AI
-    put_kv "rara/config/crawl4ai/base_url" "http://{{ RELEASE }}-crawl4ai:11235"
+    put_kv "rara/config/k8s/crawl4ai/base_url" "http://{{ RELEASE }}-crawl4ai:11235"
+
+    # Telemetry / OTLP
+    put_kv "rara/config/k8s/telemetry/otlp_endpoint" "http://{{ RELEASE }}-alloy:4318/v1/traces"
 
     # Langfuse (LLM observability)
-    put_kv "rara/config/langfuse/host" "http://{{ RELEASE }}-langfuse-web:3000"
+    put_kv "rara/config/k8s/langfuse/host" "http://{{ RELEASE }}-langfuse-web:3000"
     LF_PK=$(echo "$VALUES" | jq -r '.consulSeed.langfuse.publicKey // empty')
     LF_SK=$(echo "$VALUES" | jq -r '.consulSeed.langfuse.secretKey // empty')
-    if [ -n "$LF_PK" ]; then put_kv "rara/config/langfuse/public_key" "$LF_PK"; fi
-    if [ -n "$LF_SK" ]; then put_kv "rara/config/langfuse/secret_key" "$LF_SK"; fi
+    if [ -n "$LF_PK" ]; then put_kv "rara/config/k8s/langfuse/public_key" "$LF_PK"; fi
+    if [ -n "$LF_SK" ]; then put_kv "rara/config/k8s/langfuse/secret_key" "$LF_SK"; fi
+
+    # Local profile (for local rara using ingress-exposed infra)
+    LOCAL_DB_URL=$(echo "$VALUES" | jq -r --arg pg "$PG_PASS" --arg db "$PG_DB" \
+      'if (.consulSeed.overrides.databaseUrl // "") == "" then ("postgres://postgres:" + $pg + "@postgres.rara.local:5432/" + $db) else .consulSeed.overrides.databaseUrl end')
+    LOCAL_MIGRATION_DIR=$(echo "$VALUES" | jq -r \
+      'if (.consulSeed.overrides.migrationDir // "") == "" then "crates/rara-model/migrations" else .consulSeed.overrides.migrationDir end')
+    LOCAL_HTTP_BIND=$(echo "$VALUES" | jq -r \
+      'if (.consulSeed.overrides.httpBindAddress // "") == "" then "127.0.0.1:25555" else .consulSeed.overrides.httpBindAddress end')
+    LOCAL_GRPC_BIND=$(echo "$VALUES" | jq -r \
+      'if (.consulSeed.overrides.grpcBindAddress // "") == "" then "127.0.0.1:50051" else .consulSeed.overrides.grpcBindAddress end')
+    LOCAL_MAIN_BASE=$(echo "$VALUES" | jq -r \
+      'if (.consulSeed.overrides.mainServiceHttpBase // "") == "" then "http://127.0.0.1:25555" else .consulSeed.overrides.mainServiceHttpBase end')
+    LOCAL_OBJECT_ENDPOINT=$(echo "$VALUES" | jq -r \
+      'if (.consulSeed.overrides.objectStoreEndpoint // "") == "" then "https://minio.rara.local" else .consulSeed.overrides.objectStoreEndpoint end')
+    LOCAL_CHROMA_URL=$(echo "$VALUES" | jq -r \
+      'if (.consulSeed.overrides.chromaUrl // "") == "" then "http://127.0.0.1:8000" else .consulSeed.overrides.chromaUrl end')
+    LOCAL_MEM0_URL=$(echo "$VALUES" | jq -r \
+      'if (.consulSeed.overrides.mem0BaseUrl // "") == "" then "https://mem0.rara.local" else .consulSeed.overrides.mem0BaseUrl end')
+    LOCAL_MEMOS_URL=$(echo "$VALUES" | jq -r \
+      'if (.consulSeed.overrides.memosBaseUrl // "") == "" then "https://memos.rara.local" else .consulSeed.overrides.memosBaseUrl end')
+    LOCAL_MEMOS_TOKEN=$(echo "$VALUES" | jq -r '.consulSeed.overrides.memosToken // ""')
+    LOCAL_HINDSIGHT_URL=$(echo "$VALUES" | jq -r \
+      'if (.consulSeed.overrides.hindsightBaseUrl // "") == "" then "https://hindsight.rara.local" else .consulSeed.overrides.hindsightBaseUrl end')
+    LOCAL_HINDSIGHT_BANK=$(echo "$VALUES" | jq -r \
+      'if (.consulSeed.overrides.hindsightBankId // "") == "" then "default" else .consulSeed.overrides.hindsightBankId end')
+    LOCAL_OLLAMA_URL=$(echo "$VALUES" | jq -r \
+      'if (.consulSeed.overrides.ollamaBaseUrl // "") == "" then "https://ollama.rara.local" else .consulSeed.overrides.ollamaBaseUrl end')
+    LOCAL_CRAWL4AI_URL=$(echo "$VALUES" | jq -r \
+      'if (.consulSeed.overrides.crawl4aiBaseUrl // "") == "" then "https://crawl4ai.rara.local" else .consulSeed.overrides.crawl4aiBaseUrl end')
+    LOCAL_OTLP_ENDPOINT=$(echo "$VALUES" | jq -r '.consulSeed.overrides.telemetryOtlpEndpoint // empty')
+    LOCAL_LANGFUSE_HOST=$(echo "$VALUES" | jq -r \
+      'if (.consulSeed.overrides.langfuseHost // "") == "" then "https://langfuse.rara.local" else .consulSeed.overrides.langfuseHost end')
+
+    put_kv "rara/config/local/database/database_url" "$LOCAL_DB_URL"
+    put_kv "rara/config/local/database/migration_dir" "$LOCAL_MIGRATION_DIR"
+    put_kv "rara/config/local/http/bind_address" "$LOCAL_HTTP_BIND"
+    put_kv "rara/config/local/grpc/bind_address" "$LOCAL_GRPC_BIND"
+    put_kv "rara/config/local/main_service_http_base" "$LOCAL_MAIN_BASE"
+    put_kv "rara/config/local/object_store/endpoint" "$LOCAL_OBJECT_ENDPOINT"
+    put_kv "rara/config/local/object_store/access_key_id" "${MINIO_USER}"
+    put_kv "rara/config/local/object_store/secret_access_key" "${MINIO_PASS}"
+    put_kv "rara/config/local/object_store/bucket" "rara"
+    put_kv "rara/config/local/memory/chroma_url" "$LOCAL_CHROMA_URL"
+    put_kv "rara/config/local/memory/mem0_base_url" "$LOCAL_MEM0_URL"
+    put_kv "rara/config/local/memory/memos_base_url" "$LOCAL_MEMOS_URL"
+    put_kv "rara/config/local/memory/memos_token" "$LOCAL_MEMOS_TOKEN"
+    put_kv "rara/config/local/memory/hindsight_base_url" "$LOCAL_HINDSIGHT_URL"
+    put_kv "rara/config/local/memory/hindsight_bank_id" "$LOCAL_HINDSIGHT_BANK"
+    if [ "$OLLAMA_ENABLED" = "true" ] || [ -n "$LOCAL_OLLAMA_URL" ]; then
+      put_kv "rara/config/local/memory/ollama_base_url" "$LOCAL_OLLAMA_URL"
+    fi
+    put_kv "rara/config/local/crawl4ai/base_url" "$LOCAL_CRAWL4AI_URL"
+    if [ -n "$LOCAL_OTLP_ENDPOINT" ]; then
+      put_kv "rara/config/local/telemetry/otlp_endpoint" "$LOCAL_OTLP_ENDPOINT"
+    fi
+    put_kv "rara/config/local/langfuse/host" "$LOCAL_LANGFUSE_HOST"
+    if [ -n "$LF_PK" ]; then put_kv "rara/config/local/langfuse/public_key" "$LF_PK"; fi
+    if [ -n "$LF_SK" ]; then put_kv "rara/config/local/langfuse/secret_key" "$LF_SK"; fi
 
     echo "✔ Consul KV seed complete"
 
 [doc("seed Consul KV for local dev (requires CONSUL_HTTP_ADDR)")]
 [group("🔧 Consul")]
-consul-seed-local CONSUL_ADDR=env("CONSUL_HTTP_ADDR", "https://consul.rara.local") DB_URL=env("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/rara"):
+consul-seed-local CONSUL_ADDR=env("CONSUL_HTTP_ADDR", "https://consul.rara.local") DB_URL=env("DATABASE_URL", "postgres://postgres:postgres@postgres.rara.local:5432/rara"):
     #!/usr/bin/env bash
     set -euo pipefail
     CONSUL="{{ CONSUL_ADDR }}"
@@ -218,6 +286,18 @@ consul-keys:
     kubectl exec consul-server-0 -n {{ NAMESPACE }} -- \
       curl -sf http://127.0.0.1:8500/v1/kv/rara/config/?keys 2>/dev/null | jq .
 
+[doc("drop and recreate a PostgreSQL database via the Traefik-exposed endpoint")]
+[group("🗄️ Database")]
+reset-db DB_HOST=env("DB_HOST", "postgres.rara.local") DB_PORT=env("DB_PORT", "5432") DB_NAME=env("DB_NAME", "rara") DB_USER=env("DB_USER", "postgres") DB_PASS=env("DB_PASS", "postgres"):
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export PGPASSWORD="{{ DB_PASS }}"
+    ADMIN_URL="postgresql://{{ DB_USER }}@{{ DB_HOST }}:{{ DB_PORT }}/postgres?sslmode=disable"
+    psql "$ADMIN_URL" -v ON_ERROR_STOP=1 \
+      -c "DROP DATABASE IF EXISTS \"{{ DB_NAME }}\" WITH (FORCE);" \
+      -c "CREATE DATABASE \"{{ DB_NAME }}\";"
+    echo "Reset database {{ DB_NAME }} on {{ DB_HOST }}:{{ DB_PORT }}"
+
 # --------------------------------------------------------------------------
 # Doctor — Infrastructure health check
 # --------------------------------------------------------------------------
@@ -241,7 +321,7 @@ hosts:
     LB_IP=$(kubectl get svc {{ RELEASE }}-traefik -n {{ NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
     if [ -z "$LB_IP" ]; then echo "ERROR: Traefik LoadBalancer IP not found"; exit 1; fi
     DOMAIN=$(helm get values {{ RELEASE }} -n {{ NAMESPACE }} -o json 2>/dev/null | jq -r '.global.domain // "rara.local"')
-    SERVICES="grafana prometheus alertmanager langfuse quickwit consul minio traefik tempo memos hindsight ollama app api"
+    SERVICES="grafana prometheus alertmanager langfuse quickwit consul minio traefik tempo memos hindsight ollama app api postgres"
     HOSTS_LINE="${LB_IP}  $(for s in $SERVICES; do printf "%s.${DOMAIN} " "$s"; done)"
     MARKER="# rara-infra managed"
     # Remove old entries

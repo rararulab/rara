@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! AgentFS-backed implementations for kernel KV and tool call recording.
+//! AgentFS-backed tool call recording.
 //!
-//! Provides persistent storage via `agentfs-sdk` as an alternative to the
-//! volatile in-memory defaults.
+//! Provides persistent tool call audit via `agentfs-sdk`.
 
 use std::sync::Arc;
 
@@ -40,54 +39,6 @@ pub async fn init_agentfs(data_dir: &std::path::Path) -> anyhow::Result<AgentFS>
     AgentFS::open(opts)
         .await
         .map_err(|e| anyhow::anyhow!("AgentFS init failed: {e}"))
-}
-
-// ---------------------------------------------------------------------------
-// KV backend
-// ---------------------------------------------------------------------------
-
-/// KV backend backed by AgentFS persistent storage.
-pub struct AgentFsKv {
-    agentfs: Arc<AgentFS>,
-}
-
-impl AgentFsKv {
-    pub fn new(agentfs: Arc<AgentFS>) -> Self { Self { agentfs } }
-}
-
-#[async_trait]
-impl rara_kernel::kv::KvBackend for AgentFsKv {
-    async fn get(&self, key: &str) -> Option<serde_json::Value> {
-        self.agentfs
-            .kv
-            .get::<serde_json::Value>(key)
-            .await
-            .ok()
-            .flatten()
-    }
-
-    async fn set(&self, key: &str, value: serde_json::Value) -> anyhow::Result<()> {
-        self.agentfs
-            .kv
-            .set(key, &value)
-            .await
-            .map_err(|e| anyhow::anyhow!("AgentFS KV set failed: {e}"))
-    }
-
-    async fn delete(&self, key: &str) -> anyhow::Result<()> {
-        self.agentfs
-            .kv
-            .delete(key)
-            .await
-            .map_err(|e| anyhow::anyhow!("AgentFS KV delete failed: {e}"))
-    }
-
-    async fn list_prefix(&self, _prefix: &str) -> Vec<(String, serde_json::Value)> {
-        // AgentFS KV does not natively support prefix listing.
-        // Return empty vec — callers should use DashMapKv if prefix
-        // listing is critical.
-        vec![]
-    }
 }
 
 // ---------------------------------------------------------------------------

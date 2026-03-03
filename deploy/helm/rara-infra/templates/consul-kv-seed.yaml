@@ -52,78 +52,147 @@ spec:
               echo "Seeding Consul KV at ${CONSUL_ADDR} ..."
 
               {{- $domain := .Values.global.domain | default "rara.local" }}
-              {{- $ov := .Values.consulSeed.overrides }}
+              {{- $k8s := .Values.consulSeed.k8s | default dict }}
+              {{- $local := .Values.consulSeed.overrides | default dict }}
 
-              # ── Database ───────────────────────────────────────────
+              # ── K8s: Database ──────────────────────────────────────
               # yamllint disable rule:line-length
-              put_kv "rara/config/database/database_url" \
-                "{{ $ov.databaseUrl | default (printf "postgres://postgres:%s@%s-postgresql:5432/%s" .Values.postgresql.auth.postgresPassword .Release.Name .Values.postgresql.auth.database) }}"
-              put_kv "rara/config/database/migration_dir" \
-                "{{ $ov.migrationDir | default "migrations" }}"
+              put_kv "rara/config/k8s/database/database_url" \
+                "{{ $k8s.databaseUrl | default (printf "postgres://postgres:%s@%s-postgresql:5432/%s" .Values.postgresql.auth.postgresPassword .Release.Name .Values.postgresql.auth.database) }}"
+              put_kv "rara/config/k8s/database/migration_dir" \
+                "{{ $k8s.migrationDir | default "migrations" }}"
               # yamllint enable rule:line-length
 
-              # ── HTTP / gRPC bind (0.0.0.0 for K8s containers) ──────
-              put_kv "rara/config/http/bind_address" \
-                "{{ $ov.httpBindAddress | default "0.0.0.0:25555" }}"
-              put_kv "rara/config/grpc/bind_address" \
-                "{{ $ov.grpcBindAddress | default "0.0.0.0:50051" }}"
+              # ── K8s: HTTP / gRPC bind ──────────────────────────────
+              put_kv "rara/config/k8s/http/bind_address" \
+                "{{ $k8s.httpBindAddress | default "0.0.0.0:25555" }}"
+              put_kv "rara/config/k8s/grpc/bind_address" \
+                "{{ $k8s.grpcBindAddress | default "0.0.0.0:50051" }}"
 
-              # ── Main service base URL ──────────────────────────────
-              put_kv "rara/config/main_service_http_base" \
-                "{{ $ov.mainServiceHttpBase | default (printf "http://%s-rara-app:25555" .Release.Name) }}"
+              # ── K8s: Main service base URL ────────────────────────
+              put_kv "rara/config/k8s/main_service_http_base" \
+                "{{ $k8s.mainServiceHttpBase | default (printf "http://%s-rara-app:25555" .Release.Name) }}"
 
-              # ── Object store (MinIO) ───────────────────────────────
-              put_kv "rara/config/object_store/endpoint" \
-                "{{ $ov.objectStoreEndpoint | default (printf "http://%s-minio:9000" .Release.Name) }}"
-              put_kv "rara/config/object_store/access_key_id" \
+              # ── K8s: Object store (MinIO) ─────────────────────────
+              put_kv "rara/config/k8s/object_store/endpoint" \
+                "{{ $k8s.objectStoreEndpoint | default (printf "http://%s-minio:9000" .Release.Name) }}"
+              put_kv "rara/config/k8s/object_store/access_key_id" \
                 "{{ .Values.minio.rootUser }}"
-              put_kv "rara/config/object_store/secret_access_key" \
+              put_kv "rara/config/k8s/object_store/secret_access_key" \
                 "{{ .Values.minio.rootPassword }}"
-              put_kv "rara/config/object_store/bucket" \
+              put_kv "rara/config/k8s/object_store/bucket" \
                 "rara"
 
-              # ── Memory (ChromaDB) ──────────────────────────────────
-              put_kv "rara/config/memory/chroma_url" \
-                "{{ $ov.chromaUrl | default (printf "http://%s-chromadb:8000" .Release.Name) }}"
+              # ── K8s: Memory (ChromaDB) ────────────────────────────
+              put_kv "rara/config/k8s/memory/chroma_url" \
+                "{{ $k8s.chromaUrl | default (printf "http://%s-chromadb:8000" .Release.Name) }}"
 
-              # ── Memory (Mem0 REST API) ─────────────────────────────
-              put_kv "rara/config/memory/mem0_base_url" \
-                "{{ $ov.mem0BaseUrl | default (printf "http://%s-mem0:8000" .Release.Name) }}"
+              # ── K8s: Memory (Mem0 REST API) ───────────────────────
+              put_kv "rara/config/k8s/memory/mem0_base_url" \
+                "{{ $k8s.mem0BaseUrl | default (printf "http://%s-mem0:8000" .Release.Name) }}"
 
-              # ── Memory (Memos note service) ────────────────────────
-              put_kv "rara/config/memory/memos_base_url" \
-                "{{ $ov.memosBaseUrl | default (printf "http://%s-memos:5230" .Release.Name) }}"
-              put_kv "rara/config/memory/memos_token" \
-                "{{ $ov.memosToken }}"
+              # ── K8s: Memory (Memos note service) ──────────────────
+              put_kv "rara/config/k8s/memory/memos_base_url" \
+                "{{ $k8s.memosBaseUrl | default (printf "http://%s-memos:5230" .Release.Name) }}"
+              put_kv "rara/config/k8s/memory/memos_token" \
+                "{{ $k8s.memosToken }}"
 
-              # ── Memory (Hindsight 4-network service) ───────────────
-              put_kv "rara/config/memory/hindsight_base_url" \
-                "{{ $ov.hindsightBaseUrl | default (printf "http://%s-hindsight:8888" .Release.Name) }}"
-              put_kv "rara/config/memory/hindsight_bank_id" \
-                "{{ $ov.hindsightBankId | default "default" }}"
+              # ── K8s: Memory (Hindsight 4-network service) ─────────
+              put_kv "rara/config/k8s/memory/hindsight_base_url" \
+                "{{ $k8s.hindsightBaseUrl | default (printf "http://%s-hindsight:8888" .Release.Name) }}"
+              put_kv "rara/config/k8s/memory/hindsight_bank_id" \
+                "{{ $k8s.hindsightBankId | default "default" }}"
 
-              {{- if or .Values.ollama.enabled $ov.ollamaBaseUrl }}
-              # ── Memory / AI (Ollama service) ───────────────────────
-              put_kv "rara/config/memory/ollama_base_url" \
-                "{{ $ov.ollamaBaseUrl | default (printf "http://%s-ollama:11434" .Release.Name) }}"
+              {{- if or .Values.ollama.enabled $k8s.ollamaBaseUrl }}
+              # ── K8s: Memory / AI (Ollama service) ─────────────────
+              put_kv "rara/config/k8s/memory/ollama_base_url" \
+                "{{ $k8s.ollamaBaseUrl | default (printf "http://%s-ollama:11434" .Release.Name) }}"
               {{- end }}
 
-              # ── Crawl4AI ───────────────────────────────────────────
-              put_kv "rara/config/crawl4ai/base_url" \
-                "{{ $ov.crawl4aiBaseUrl | default (printf "http://%s-crawl4ai:11235" .Release.Name) }}"
+              # ── K8s: Crawl4AI ─────────────────────────────────────
+              put_kv "rara/config/k8s/crawl4ai/base_url" \
+                "{{ $k8s.crawl4aiBaseUrl | default (printf "http://%s-crawl4ai:11235" .Release.Name) }}"
 
-              # ── Telemetry / OTLP (Alloy collector → Tempo) ─────────
-              put_kv "rara/config/telemetry/otlp_endpoint" \
-                "{{ $ov.telemetryOtlpEndpoint | default (printf "http://%s-alloy:4318/v1/traces" .Release.Name) }}"
+              # ── K8s: Telemetry / OTLP (Alloy collector → Tempo) ───
+              put_kv "rara/config/k8s/telemetry/otlp_endpoint" \
+                "{{ $k8s.telemetryOtlpEndpoint | default (printf "http://%s-alloy:4318/v1/traces" .Release.Name) }}"
 
-              # ── Langfuse (LLM observability) ───────────────────────
-              put_kv "rara/config/langfuse/host" \
-                "{{ $ov.langfuseHost | default (printf "http://%s-langfuse-web:3000" .Release.Name) }}"
+              # ── K8s: Langfuse (LLM observability) ─────────────────
+              put_kv "rara/config/k8s/langfuse/host" \
+                "{{ $k8s.langfuseHost | default (printf "http://%s-langfuse-web:3000" .Release.Name) }}"
               {{- with .Values.consulSeed.langfuse.publicKey }}
-              put_kv "rara/config/langfuse/public_key" "{{ . }}"
+              put_kv "rara/config/k8s/langfuse/public_key" "{{ . }}"
               {{- end }}
               {{- with .Values.consulSeed.langfuse.secretKey }}
-              put_kv "rara/config/langfuse/secret_key" "{{ . }}"
+              put_kv "rara/config/k8s/langfuse/secret_key" "{{ . }}"
+              {{- end }}
+
+              # ── Local: Database ────────────────────────────────────
+              # yamllint disable rule:line-length
+              put_kv "rara/config/local/database/database_url" \
+                "{{ $local.databaseUrl | default (printf "postgres://postgres:%s@postgres.%s:5432/%s" .Values.postgresql.auth.postgresPassword $domain .Values.postgresql.auth.database) }}"
+              put_kv "rara/config/local/database/migration_dir" \
+                "{{ $local.migrationDir | default "crates/rara-model/migrations" }}"
+              # yamllint enable rule:line-length
+
+              # ── Local: HTTP / gRPC bind ────────────────────────────
+              put_kv "rara/config/local/http/bind_address" \
+                "{{ $local.httpBindAddress | default "127.0.0.1:25555" }}"
+              put_kv "rara/config/local/grpc/bind_address" \
+                "{{ $local.grpcBindAddress | default "127.0.0.1:50051" }}"
+
+              # ── Local: Main service base URL ──────────────────────
+              put_kv "rara/config/local/main_service_http_base" \
+                "{{ $local.mainServiceHttpBase | default "http://127.0.0.1:25555" }}"
+
+              # ── Local: Object store (MinIO via ingress) ───────────
+              put_kv "rara/config/local/object_store/endpoint" \
+                "{{ $local.objectStoreEndpoint | default (printf "https://minio.%s" $domain) }}"
+              put_kv "rara/config/local/object_store/access_key_id" \
+                "{{ .Values.minio.rootUser }}"
+              put_kv "rara/config/local/object_store/secret_access_key" \
+                "{{ .Values.minio.rootPassword }}"
+              put_kv "rara/config/local/object_store/bucket" \
+                "rara"
+
+              # ── Local: Memory ──────────────────────────────────────
+              put_kv "rara/config/local/memory/chroma_url" \
+                "{{ $local.chromaUrl | default "http://127.0.0.1:8000" }}"
+              put_kv "rara/config/local/memory/mem0_base_url" \
+                "{{ $local.mem0BaseUrl | default (printf "https://mem0.%s" $domain) }}"
+              put_kv "rara/config/local/memory/memos_base_url" \
+                "{{ $local.memosBaseUrl | default (printf "https://memos.%s" $domain) }}"
+              put_kv "rara/config/local/memory/memos_token" \
+                "{{ $local.memosToken }}"
+              put_kv "rara/config/local/memory/hindsight_base_url" \
+                "{{ $local.hindsightBaseUrl | default (printf "https://hindsight.%s" $domain) }}"
+              put_kv "rara/config/local/memory/hindsight_bank_id" \
+                "{{ $local.hindsightBankId | default "default" }}"
+
+              {{- if or .Values.ollama.enabled $local.ollamaBaseUrl }}
+              # ── Local: Memory / AI (Ollama service) ───────────────
+              put_kv "rara/config/local/memory/ollama_base_url" \
+                "{{ $local.ollamaBaseUrl | default (printf "https://ollama.%s" $domain) }}"
+              {{- end }}
+
+              # ── Local: Crawl4AI ───────────────────────────────────
+              put_kv "rara/config/local/crawl4ai/base_url" \
+                "{{ $local.crawl4aiBaseUrl | default (printf "https://crawl4ai.%s" $domain) }}"
+
+              {{- if $local.telemetryOtlpEndpoint }}
+              # ── Local: Telemetry / OTLP ───────────────────────────
+              put_kv "rara/config/local/telemetry/otlp_endpoint" \
+                "{{ $local.telemetryOtlpEndpoint }}"
+              {{- end }}
+
+              # ── Local: Langfuse (LLM observability) ───────────────
+              put_kv "rara/config/local/langfuse/host" \
+                "{{ $local.langfuseHost | default (printf "https://langfuse.%s" $domain) }}"
+              {{- with .Values.consulSeed.langfuse.publicKey }}
+              put_kv "rara/config/local/langfuse/public_key" "{{ . }}"
+              {{- end }}
+              {{- with .Values.consulSeed.langfuse.secretKey }}
+              put_kv "rara/config/local/langfuse/secret_key" "{{ . }}"
               {{- end }}
 
               echo "Consul KV seed complete."

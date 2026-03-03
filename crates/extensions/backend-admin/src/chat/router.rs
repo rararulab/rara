@@ -54,8 +54,6 @@ use crate::chat::{error::ChatError, model_catalog::ChatModel, service::SessionSe
 /// Request body for `POST /sessions`.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CreateSessionRequest {
-    /// Session key (e.g. `"user:alice"` or `"dm:alice:bob"`).
-    pub key:           String,
     /// Optional human-readable title.
     pub title:         Option<String>,
     /// Optional LLM model override (e.g. `"gpt-4o"`).
@@ -85,8 +83,6 @@ pub struct GetMessagesQuery {
 /// Request body for `POST /sessions/{key}/fork`.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct ForkSessionRequest {
-    /// Key for the newly created forked session.
-    pub target_key:  String,
     /// Fork point — messages with `seq <= fork_at_seq` are copied.
     pub fork_at_seq: i64,
 }
@@ -208,9 +204,8 @@ async fn create_session(
     State(service): State<SessionService>,
     Json(req): Json<CreateSessionRequest>,
 ) -> Result<(StatusCode, Json<SessionEntry>), ChatError> {
-    let key = SessionKey::from_raw(req.key);
     let session = service
-        .create_session(key, req.title, req.model, req.system_prompt)
+        .create_session(req.title, req.model, req.system_prompt)
         .await?;
     Ok((StatusCode::CREATED, Json(session)))
 }
@@ -252,7 +247,7 @@ async fn get_session(
     State(service): State<SessionService>,
     Path(key): Path<String>,
 ) -> Result<Json<SessionEntry>, ChatError> {
-    let session = service.get_session(&SessionKey::from_raw(key)).await?;
+    let session = service.get_session(&SessionKey::from_raw(&key)).await?;
     Ok(Json(session))
 }
 
@@ -276,7 +271,7 @@ async fn update_session(
 ) -> Result<Json<SessionEntry>, ChatError> {
     let session = service
         .update_session_fields(
-            &SessionKey::from_raw(key),
+            &SessionKey::from_raw(&key),
             req.title,
             req.model,
             req.system_prompt,
@@ -300,7 +295,7 @@ async fn delete_session(
     State(service): State<SessionService>,
     Path(key): Path<String>,
 ) -> Result<StatusCode, ChatError> {
-    service.delete_session(&SessionKey::from_raw(key)).await?;
+    service.delete_session(&SessionKey::from_raw(&key)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -326,7 +321,7 @@ async fn get_messages(
     Query(q): Query<GetMessagesQuery>,
 ) -> Result<Json<Vec<ChatMessage>>, ChatError> {
     let messages = service
-        .get_messages(&SessionKey::from_raw(key), q.after_seq, q.limit)
+        .get_messages(&SessionKey::from_raw(&key), q.after_seq, q.limit)
         .await?;
     Ok(Json(messages))
 }
@@ -347,7 +342,7 @@ async fn clear_messages(
     State(service): State<SessionService>,
     Path(key): Path<String>,
 ) -> Result<StatusCode, ChatError> {
-    service.clear_messages(&SessionKey::from_raw(key)).await?;
+    service.clear_messages(&SessionKey::from_raw(&key)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -370,11 +365,7 @@ async fn fork_session(
     Json(req): Json<ForkSessionRequest>,
 ) -> Result<(StatusCode, Json<SessionEntry>), ChatError> {
     let forked = service
-        .fork_session(
-            &SessionKey::from_raw(key),
-            SessionKey::from_raw(req.target_key),
-            req.fork_at_seq,
-        )
+        .fork_session(&SessionKey::from_raw(&key), req.fork_at_seq)
         .await?;
     Ok((StatusCode::CREATED, Json(forked)))
 }
@@ -400,7 +391,7 @@ async fn bind_channel(
             req.channel_type,
             req.account,
             req.chat_id,
-            SessionKey::from_raw(req.session_key),
+            SessionKey::from_raw(&req.session_key),
         )
         .await?;
     Ok(Json(binding))

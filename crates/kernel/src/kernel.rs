@@ -34,7 +34,7 @@
 //!   ├── shared_kv (cross-agent KV)
 //!   ├── AuditSubsystem
 //!   ├── StreamHub + IngressPipeline + EndpointRegistry
-//!   └── EventQueue (sharded)
+//!   └── ShardedEventQueue (single-queue or multi-shard mode)
 //! ```
 //!
 //! Each spawned agent receives a [`ProcessHandle`] — a thin event pusher that
@@ -52,21 +52,20 @@ use crate::{
     audit_subsystem::AuditRef,
     channel::types::ChannelType,
     device_registry::{DeviceRegistry, DeviceRegistryRef},
-    event::EventBusRef,
-    event_queue::EventQueueRef,
     io::{
         egress::{EgressAdapterRef, EndpointRegistry, EndpointRegistryRef},
         ingress::{IdentityResolverRef, IngressPipeline, IngressPipelineRef, SessionResolverRef},
         pipe::PipeRegistry,
         stream::StreamHubRef,
     },
-    kv::KvBackendRef,
+    kv::SharedKv,
     llm::DriverRegistryRef,
     memory::MemoryRef,
-    process::{AgentId, ProcessState, ProcessTable, SessionId, agent_registry::AgentRegistryRef},
+    notification::EventBusRef,
+    process::{AgentId, ProcessState, ProcessTable, agent_registry::AgentRegistryRef},
+    queue::{EventQueueRef, ShardedEventQueueConfig, ShardedQueueRef},
     security::SecurityRef,
     session::SessionRepoRef,
-    sharded_event_queue::ShardedQueueRef,
     tool::ToolRegistryRef,
 };
 
@@ -90,6 +89,10 @@ pub struct KernelConfig {
     /// Applies to the agent-scoped namespace only.
     #[default = 1000]
     pub memory_quota_per_agent: usize,
+    /// Event queue configuration. Controls whether the kernel uses a single
+    /// global queue (`num_shards = 0`) or sharded parallel processing.
+    #[default(ShardedEventQueueConfig::single())]
+    pub event_queue:            ShardedEventQueueConfig,
 }
 
 /// Shared reference to a
@@ -129,8 +132,8 @@ pub struct Kernel {
     security: SecurityRef,
     /// Agent registry for looking up named agent definitions.
     agent_registry: AgentRegistryRef,
-    /// Cross-agent shared key-value store (trait-based, swappable backend).
-    shared_kv: KvBackendRef,
+    /// Cross-agent shared key-value store (OpenDAL-backed).
+    shared_kv: SharedKv,
     /// Unified audit subsystem (logging + tool call recording).
     audit: AuditRef,
     /// Session repository for conversation history.
@@ -152,9 +155,12 @@ pub struct Kernel {
     pub(crate) egress_adapters: HashMap<ChannelType, EgressAdapterRef>,
     /// Unified event queue for all kernel interactions.
     event_queue: EventQueueRef,
-    /// Sharded event queue for multi-processor event loop.
-    /// The `event_queue` field points to the same object (via `Arc<dyn
-    /// EventQueue>`).
+    /// Sharded event queue backing the kernel event loop.
+    ///
+    /// Always present. When `num_shards == 0` (single-queue mode), all
+    /// events are routed to the global queue and processed by a single
+    /// `EventProcessor`. When `num_shards > 0`, events are distributed
+    /// across N shard queues for parallel processing.
     sharded_queue: ShardedQueueRef,
     /// When this kernel was created (for uptime calculation).
     started_at: Timestamp,
@@ -181,8 +187,7 @@ impl Kernel {
         identity_resolver: IdentityResolverRef,
         session_resolver: SessionResolverRef,
         audit: AuditRef,
-        sharded_queue: Option<ShardedQueueRef>,
-        kv_backend: Option<KvBackendRef>,
+        kv_operator: opendal::Operator,
     ) -> Self {
         info!(
             max_concurrency = config.max_concurrency,
@@ -193,19 +198,12 @@ impl Kernel {
 
         let endpoint_registry = Arc::new(EndpointRegistry::new());
 
-        // Always use a ShardedEventQueue — create a default one if not provided.
-        let sharded_queue = sharded_queue.unwrap_or_else(|| {
-            Arc::new(crate::sharded_event_queue::ShardedEventQueue::new(
-                crate::sharded_event_queue::ShardedEventQueueConfig::default(),
-            ))
-        });
+        let sharded_queue: ShardedQueueRef = Arc::new(crate::queue::ShardedEventQueue::new(
+            config.event_queue.clone(),
+        ));
         let event_queue: EventQueueRef = sharded_queue.clone();
 
-        let ingress_pipeline = Arc::new(IngressPipeline::with_event_queue(
-            identity_resolver,
-            session_resolver,
-            event_queue.clone(),
-        ));
+        let ingress_pipeline = Arc::new(IngressPipeline::new(identity_resolver, session_resolver));
 
         let global_semaphore = Arc::new(Semaphore::new(config.max_concurrency));
         Self {
@@ -218,8 +216,7 @@ impl Kernel {
             event_bus,
             security,
             agent_registry,
-            shared_kv: kv_backend
-                .unwrap_or_else(|| Arc::new(crate::defaults::dashmap_kv::DashMapKv::new())),
+            shared_kv: SharedKv::new(kv_operator),
             audit,
             session_repo,
             settings,
@@ -327,8 +324,8 @@ impl Kernel {
     /// Access the global semaphore (used by event loop for spawn limits).
     pub(crate) fn global_semaphore(&self) -> &Arc<Semaphore> { &self.global_semaphore }
 
-    /// Access the shared KV backend (used by event loop).
-    pub(crate) fn shared_kv(&self) -> &KvBackendRef { &self.shared_kv }
+    /// Access the shared KV store (used by event loop).
+    pub(crate) fn shared_kv(&self) -> &SharedKv { &self.shared_kv }
 
     /// Access the session repository (used by event loop).
     pub(crate) fn session_repo(&self) -> &SessionRepoRef { &self.session_repo }
@@ -338,59 +335,6 @@ impl Kernel {
 
     /// Access the driver registry (used by event loop for ResolveDriver).
     pub(crate) fn driver_registry(&self) -> &DriverRegistryRef { &self.driver_registry }
-
-    /// Ensure a session exists for the given ID, creating one if needed.
-    ///
-    /// Called at spawn time to set up the process's conversation environment.
-    pub(crate) async fn ensure_session(&self, session_id: &SessionId) {
-        use chrono::Utc;
-
-        match self.session_repo.get_session(session_id).await {
-            Ok(Some(_)) => {}
-            Ok(None) => {
-                let now = Utc::now();
-                let entry = crate::session::SessionEntry {
-                    key:           session_id.clone(),
-                    title:         None,
-                    model:         None,
-                    system_prompt: None,
-                    message_count: 0,
-                    preview:       None,
-                    metadata:      None,
-                    created_at:    now,
-                    updated_at:    now,
-                };
-                if let Err(e) = self.session_repo.create_session(&entry).await {
-                    tracing::warn!(%e, "failed to create session");
-                }
-            }
-            Err(e) => {
-                tracing::warn!(%e, "failed to check session");
-            }
-        }
-    }
-
-    /// Load raw conversation messages for a session.
-    ///
-    /// Called at spawn time to provide the process with its initial
-    /// conversation state. Returns an empty vec on error.
-    #[allow(dead_code)]
-    pub(crate) async fn load_session_messages(
-        &self,
-        session_id: &SessionId,
-    ) -> Vec<crate::channel::types::ChatMessage> {
-        match self
-            .session_repo
-            .read_messages(session_id, None, None)
-            .await
-        {
-            Ok(msgs) => msgs,
-            Err(e) => {
-                tracing::warn!(%e, "failed to load session messages");
-                vec![]
-            }
-        }
-    }
 
     /// Construct a `Kernel` for testing with minimal I/O subsystem.
     ///
@@ -410,7 +354,6 @@ impl Kernel {
         event_bus: EventBusRef,
         security: SecurityRef,
         agent_registry: AgentRegistryRef,
-        shared_kv: KvBackendRef,
         audit: AuditRef,
         session_repo: SessionRepoRef,
         settings: SettingsRef,
@@ -423,17 +366,12 @@ impl Kernel {
         let session_resolver: SessionResolverRef =
             Arc::new(crate::defaults::noop::NoopSessionResolver);
 
-        // Always create a ShardedEventQueue so the parallel event loop works.
-        let sharded_queue = Arc::new(crate::sharded_event_queue::ShardedEventQueue::new(
-            crate::sharded_event_queue::ShardedEventQueueConfig::default(),
+        let sharded_queue: ShardedQueueRef = Arc::new(crate::queue::ShardedEventQueue::new(
+            ShardedEventQueueConfig::single(),
         ));
         let event_queue: EventQueueRef = sharded_queue.clone();
 
-        let ingress_pipeline = Arc::new(IngressPipeline::with_event_queue(
-            identity_resolver,
-            session_resolver,
-            event_queue.clone(),
-        ));
+        let ingress_pipeline = Arc::new(IngressPipeline::new(identity_resolver, session_resolver));
         let endpoint_registry = Arc::new(EndpointRegistry::new());
 
         Self {
@@ -446,7 +384,7 @@ impl Kernel {
             event_bus,
             security,
             agent_registry,
-            shared_kv,
+            shared_kv: SharedKv::in_memory(),
             audit,
             session_repo,
             settings,
@@ -528,7 +466,9 @@ impl Kernel {
         let kernel = Arc::new(self);
         let handle = kernel.handle();
 
-        // Unified event loop — parallel multi-processor mode via ShardedEventQueue.
+        // Unified event loop — spawns 1 global + N shard EventProcessors.
+        // When num_shards == 0 (single-queue mode), only the global
+        // processor is created.
         tokio::spawn({
             let k = kernel.clone();
             let token = cancel_token;
@@ -587,8 +527,9 @@ mod tests {
             Arc::new(crate::defaults::noop::NoopIdentityResolver) as IdentityResolverRef,
             Arc::new(crate::defaults::noop::NoopSessionResolver) as SessionResolverRef,
             Arc::new(crate::audit_subsystem::AuditSubsystem::noop()),
-            None,
-            None,
+            opendal::Operator::new(opendal::services::Memory::default())
+                .expect("memory operator")
+                .finish(),
         )
     }
 
@@ -629,6 +570,7 @@ mod tests {
         assert_eq!(kernel.config().max_concurrency, 10);
         assert_eq!(kernel.config().default_child_limit, 5);
         assert_eq!(kernel.process_table().list().len(), 0);
+        assert!(!kernel.event_queue().is_sharded());
     }
 
     #[test]
@@ -665,8 +607,8 @@ mod tests {
         assert!(process.is_some());
         let process = process.unwrap();
         assert_eq!(process.manifest.name, "test-agent");
-        // Each process gets its own agent-scoped session.
-        assert!(process.session_id.as_str().starts_with("agent:"));
+        // Each process gets its own UUID session.
+        assert!(!process.session_id.to_string().is_empty());
 
         cancel.cancel();
     }
@@ -903,11 +845,11 @@ mod tests {
         assert!(process.is_some(), "process should exist after spawn");
 
         // Push a Pause signal via event queue.
-        let event = crate::unified_event::KernelEvent::SendSignal {
+        let event = crate::event::KernelEvent::SendSignal {
             target: agent_id,
             signal: crate::process::Signal::Pause,
         };
-        kernel.event_queue().push(event).await.unwrap();
+        kernel.event_queue().push(event).unwrap();
 
         // Allow time for the event loop to process.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -922,11 +864,11 @@ mod tests {
         );
 
         // Push Resume signal.
-        let event = crate::unified_event::KernelEvent::SendSignal {
+        let event = crate::event::KernelEvent::SendSignal {
             target: agent_id,
             signal: crate::process::Signal::Resume,
         };
-        kernel.event_queue().push(event).await.unwrap();
+        kernel.event_queue().push(event).unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
@@ -975,7 +917,7 @@ mod tests {
         // tool registry via the GetToolRegistry syscall.
         let handle = crate::handle::process_handle::ProcessHandle::new(
             agent_id,
-            crate::process::SessionId::new("test"),
+            crate::process::SessionId::new(),
             Principal::user("test-user"),
             kernel.event_queue().clone(),
         );
@@ -1014,7 +956,7 @@ mod tests {
 
         let handle = crate::handle::process_handle::ProcessHandle::new(
             agent_id,
-            crate::process::SessionId::new("test"),
+            crate::process::SessionId::new(),
             Principal::user("test-user"),
             kernel.event_queue().clone(),
         );
@@ -1111,8 +1053,9 @@ mod tests {
             Arc::new(crate::defaults::noop::NoopIdentityResolver) as IdentityResolverRef,
             Arc::new(crate::defaults::noop::NoopSessionResolver) as SessionResolverRef,
             Arc::new(crate::audit_subsystem::AuditSubsystem::noop()),
-            None,
-            None,
+            opendal::Operator::new(opendal::services::Memory::default())
+                .expect("memory operator")
+                .finish(),
         )
     }
 
@@ -1148,15 +1091,13 @@ mod tests {
         ];
 
         let process = handle.process_table().get(agent_id).unwrap();
-        let event = crate::unified_event::KernelEvent::Syscall(
-            crate::unified_event::Syscall::CheckGuardBatch {
-                agent_id,
-                session_id: process.session_id.clone(),
-                checks,
-                reply_tx,
-            },
-        );
-        handle.event_queue().push(event).await.unwrap();
+        let event = crate::event::KernelEvent::Syscall(crate::event::Syscall::CheckGuardBatch {
+            agent_id,
+            session_id: process.session_id.clone(),
+            checks,
+            reply_tx,
+        });
+        handle.event_queue().push(event).unwrap();
 
         let verdicts = tokio::time::timeout(std::time::Duration::from_secs(2), reply_rx)
             .await
@@ -1208,15 +1149,13 @@ mod tests {
         ];
 
         let process = handle.process_table().get(agent_id).unwrap();
-        let event = crate::unified_event::KernelEvent::Syscall(
-            crate::unified_event::Syscall::CheckGuardBatch {
-                agent_id,
-                session_id: process.session_id.clone(),
-                checks,
-                reply_tx,
-            },
-        );
-        handle.event_queue().push(event).await.unwrap();
+        let event = crate::event::KernelEvent::Syscall(crate::event::Syscall::CheckGuardBatch {
+            agent_id,
+            session_id: process.session_id.clone(),
+            checks,
+            reply_tx,
+        });
+        handle.event_queue().push(event).unwrap();
 
         let verdicts = tokio::time::timeout(std::time::Duration::from_secs(2), reply_rx)
             .await
@@ -1253,15 +1192,13 @@ mod tests {
         let checks = vec![];
 
         let process = handle.process_table().get(agent_id).unwrap();
-        let event = crate::unified_event::KernelEvent::Syscall(
-            crate::unified_event::Syscall::CheckGuardBatch {
-                agent_id,
-                session_id: process.session_id.clone(),
-                checks,
-                reply_tx,
-            },
-        );
-        handle.event_queue().push(event).await.unwrap();
+        let event = crate::event::KernelEvent::Syscall(crate::event::Syscall::CheckGuardBatch {
+            agent_id,
+            session_id: process.session_id.clone(),
+            checks,
+            reply_tx,
+        });
+        handle.event_queue().push(event).unwrap();
 
         let verdicts = tokio::time::timeout(std::time::Duration::from_secs(2), reply_rx)
             .await

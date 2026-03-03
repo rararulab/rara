@@ -199,7 +199,7 @@ mod tests {
     #[tokio::test]
     async fn test_stream_open_close() {
         let hub = StreamHub::new(16);
-        let session = SessionId::new("s1");
+        let session = SessionId::new();
 
         let handle = hub.open(session.clone());
         let sid = handle.stream_id().clone();
@@ -216,7 +216,7 @@ mod tests {
     #[tokio::test]
     async fn test_stream_concurrent_sessions() {
         let hub = StreamHub::new(16);
-        let session = SessionId::new("s1");
+        let session = SessionId::new();
 
         let h1 = hub.open(session.clone());
         let h2 = hub.open(session.clone());
@@ -239,7 +239,7 @@ mod tests {
     #[tokio::test]
     async fn test_stream_subscribe_receives() {
         let hub = StreamHub::new(16);
-        let session = SessionId::new("s1");
+        let session = SessionId::new();
 
         let handle = hub.open(session.clone());
 
@@ -265,7 +265,7 @@ mod tests {
     #[tokio::test]
     async fn test_stream_no_subscriber_no_error() {
         let hub = StreamHub::new(16);
-        let session = SessionId::new("s1");
+        let session = SessionId::new();
 
         let handle = hub.open(session);
 

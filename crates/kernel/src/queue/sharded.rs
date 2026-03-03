@@ -14,7 +14,7 @@
 
 //! Sharded event queue — routes events to N agent-sharded queues + 1 global
 //! queue for parallel processing by
-//! [`EventProcessor`](crate::event_processor)s.
+//! [`EventProcessor`](crate::processor::EventProcessor)s.
 //!
 //! Event classification:
 //! - **Global**: `UserMessage`, `SpawnAgent`, `Timer`, `Shutdown`, `Deliver`
@@ -30,10 +30,8 @@ use std::sync::{
 
 use async_trait::async_trait;
 
-use crate::{
-    event_queue::EventQueue, io::types::BusError, shard_queue::ShardQueue,
-    unified_event::KernelEvent,
-};
+use super::{in_memory::EventQueue, shard::ShardQueue};
+use crate::{event::KernelEvent, io::types::BusError};
 
 /// Shared reference to the [`ShardedEventQueue`].
 pub type ShardedQueueRef = Arc<ShardedEventQueue>;
@@ -66,6 +64,20 @@ pub struct ShardedEventQueueConfig {
     pub global_capacity: usize,
 }
 
+impl ShardedEventQueueConfig {
+    /// Single-queue (non-sharded) configuration.
+    ///
+    /// All events are routed to the global queue and processed by a single
+    /// `EventProcessor`. Equivalent to the old `InMemoryEventQueue` path.
+    pub fn single() -> Self {
+        Self {
+            num_shards:      0,
+            shard_capacity:  0,
+            global_capacity: 4096,
+        }
+    }
+}
+
 impl Default for ShardedEventQueueConfig {
     fn default() -> Self {
         let num_shards = num_cpus().max(2) / 2;
@@ -90,7 +102,7 @@ fn num_cpus() -> usize {
 /// shards for the multi-processor event loop.
 ///
 /// All shard queues are stored as `Arc<ShardQueue>` so that
-/// [`EventProcessor`](crate::event_processor::EventProcessor) tasks can
+/// [`EventProcessor`](crate::processor::EventProcessor) tasks can
 /// hold references to them independently.
 pub struct ShardedEventQueue {
     /// Per-agent shards. Events are routed by `agent_id % num_shards`.
@@ -115,7 +127,13 @@ impl ShardedEventQueue {
     }
 
     /// Classify a kernel event into its routing target.
+    ///
+    /// When `num_shards == 0` (single-queue mode), all events are routed to
+    /// the global queue regardless of `agent_id`.
     pub(crate) fn classify(&self, event: &KernelEvent) -> ShardTarget {
+        if self.shards.is_empty() {
+            return ShardTarget::Global;
+        }
         match event.agent_id() {
             Some(agent_id) => {
                 let shard_idx = agent_id.0.as_u128() as usize % self.shards.len();
@@ -137,7 +155,7 @@ impl ShardedEventQueue {
 
 #[async_trait]
 impl EventQueue for ShardedEventQueue {
-    async fn push(&self, event: KernelEvent) -> Result<(), BusError> { self.try_push(event) }
+    fn push(&self, event: KernelEvent) -> Result<(), BusError> { self.try_push(event) }
 
     fn try_push(&self, event: KernelEvent) -> Result<(), BusError> {
         let target = self.classify(&event);
@@ -151,7 +169,7 @@ impl EventQueue for ShardedEventQueue {
         result
     }
 
-    async fn drain(&self, max: usize) -> Vec<(KernelEvent, Option<u64>)> {
+    fn drain(&self, max: usize) -> Vec<KernelEvent> {
         // Drain from global first, then round-robin across shards.
         let mut result = Vec::with_capacity(max);
         let mut remaining = max;
@@ -192,7 +210,7 @@ impl EventQueue for ShardedEventQueue {
 
     fn pending_count(&self) -> usize { self.total_pending.load(Ordering::Acquire) }
 
-    fn is_sharded(&self) -> bool { true }
+    fn is_sharded(&self) -> bool { !self.shards.is_empty() }
 }
 
 impl std::fmt::Debug for ShardedEventQueue {
@@ -225,7 +243,7 @@ mod tests {
                 platform_chat_id:    None,
             },
             user:            UserId("u1".to_string()),
-            session_id:      SessionId::new("s1"),
+            session_id:      SessionId::new(),
             target_agent_id: None,
             target_agent:    None,
             content:         MessageContent::Text(text.to_string()),
@@ -304,7 +322,7 @@ mod tests {
             id:          MessageId::new(),
             in_reply_to: MessageId::new(),
             user:        UserId("u1".to_string()),
-            session_id:  SessionId::new("s1"),
+            session_id:  SessionId::new(),
             routing:     crate::io::types::OutboundRouting::BroadcastAll,
             payload:     crate::io::types::OutboundPayload::Reply {
                 content:     MessageContent::Text("reply".to_string()),
@@ -333,7 +351,7 @@ mod tests {
         let agent_id = AgentId::new();
         let event = KernelEvent::TurnCompleted {
             agent_id,
-            session_id: SessionId::new("s1"),
+            session_id: SessionId::new(),
             result: Ok(crate::agent_turn::AgentTurnResult {
                 text:       "done".to_string(),
                 iterations: 1,
@@ -376,11 +394,10 @@ mod tests {
 
     // -- push routing tests -----------------------------------------------
 
-    #[tokio::test]
-    async fn push_routes_global_to_global_queue() {
+    #[test]
+    fn push_routes_global_to_global_queue() {
         let q = make_queue(4);
         q.push(KernelEvent::UserMessage(test_inbound("hello")))
-            .await
             .unwrap();
 
         assert_eq!(q.global().pending_count(), 1);
@@ -390,8 +407,8 @@ mod tests {
         assert_eq!(q.pending_count(), 1);
     }
 
-    #[tokio::test]
-    async fn push_routes_signal_to_correct_shard() {
+    #[test]
+    fn push_routes_signal_to_correct_shard() {
         let q = make_queue(4);
         let target = AgentId::new();
         let expected_shard = target.0.as_u128() as usize % 4;
@@ -400,7 +417,6 @@ mod tests {
             target,
             signal: Signal::Interrupt,
         })
-        .await
         .unwrap();
 
         assert_eq!(q.shard(expected_shard).pending_count(), 1);
@@ -408,36 +424,30 @@ mod tests {
         assert_eq!(q.pending_count(), 1);
     }
 
-    #[tokio::test]
-    async fn pending_count_aggregates_across_shards() {
+    #[test]
+    fn pending_count_aggregates_across_shards() {
         let q = make_queue(4);
 
         // Push 2 global events
-        q.push(KernelEvent::UserMessage(test_inbound("a")))
-            .await
-            .unwrap();
-        q.push(KernelEvent::UserMessage(test_inbound("b")))
-            .await
-            .unwrap();
+        q.push(KernelEvent::UserMessage(test_inbound("a"))).unwrap();
+        q.push(KernelEvent::UserMessage(test_inbound("b"))).unwrap();
 
         // Push 1 sharded event
         q.push(KernelEvent::SendSignal {
             target: AgentId::new(),
             signal: Signal::Kill,
         })
-        .await
         .unwrap();
 
         assert_eq!(q.pending_count(), 3);
     }
 
-    #[tokio::test]
-    async fn drain_collects_from_all_queues() {
+    #[test]
+    fn drain_collects_from_all_queues() {
         let q = make_queue(4);
 
         // Push 1 global event
         q.push(KernelEvent::UserMessage(test_inbound("global")))
-            .await
             .unwrap();
 
         // Push 1 sharded event
@@ -445,18 +455,17 @@ mod tests {
             target: AgentId::new(),
             signal: Signal::Kill,
         })
-        .await
         .unwrap();
 
         assert_eq!(q.pending_count(), 2);
 
-        let events = q.drain(10).await;
+        let events = q.drain(10);
         assert_eq!(events.len(), 2);
         assert_eq!(q.pending_count(), 0);
     }
 
-    #[tokio::test]
-    async fn test_capacity_per_shard() {
+    #[test]
+    fn test_capacity_per_shard() {
         let q = ShardedEventQueue::new(ShardedEventQueueConfig {
             num_shards:      1,
             shard_capacity:  2,
@@ -470,23 +479,65 @@ mod tests {
             target,
             signal: Signal::Interrupt,
         })
-        .await
         .unwrap();
         q.push(KernelEvent::SendSignal {
             target,
             signal: Signal::Interrupt,
         })
-        .await
         .unwrap();
 
         // Third should fail
-        let result = q
-            .push(KernelEvent::SendSignal {
-                target,
-                signal: Signal::Interrupt,
-            })
-            .await;
+        let result = q.push(KernelEvent::SendSignal {
+            target,
+            signal: Signal::Interrupt,
+        });
         assert!(result.is_err());
+    }
+
+    // -- single-queue mode (num_shards=0) -----------------------------------
+
+    #[test]
+    fn single_mode_classify_routes_all_to_global() {
+        let q = make_queue(0);
+        // Agent-scoped event should still go to Global in single mode.
+        let target = AgentId::new();
+        let event = KernelEvent::SendSignal {
+            target,
+            signal: Signal::Interrupt,
+        };
+        assert_eq!(q.classify(&event), ShardTarget::Global);
+    }
+
+    #[test]
+    fn single_mode_is_not_sharded() {
+        let q = make_queue(0);
+        assert!(!q.is_sharded());
+    }
+
+    #[test]
+    fn single_mode_push_and_drain() {
+        let q = make_queue(0);
+        let target = AgentId::new();
+
+        q.push(KernelEvent::UserMessage(test_inbound("hello")))
+            .unwrap();
+        q.push(KernelEvent::SendSignal {
+            target,
+            signal: Signal::Interrupt,
+        })
+        .unwrap();
+
+        assert_eq!(q.pending_count(), 2);
+        let events = q.drain(10);
+        assert_eq!(events.len(), 2);
+        assert_eq!(q.pending_count(), 0);
+    }
+
+    #[test]
+    fn single_mode_config() {
+        let config = ShardedEventQueueConfig::single();
+        assert_eq!(config.num_shards, 0);
+        assert_eq!(config.global_capacity, 4096);
     }
 
     #[test]

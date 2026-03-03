@@ -166,9 +166,9 @@ impl std::fmt::Display for AgentId {
 /// A session groups related conversations and memory. Multiple agent processes
 /// can share the same session (e.g., a chat session that spawns sub-agents).
 ///
-/// This is a type alias for [`SessionKey`](crate::session::SessionKey) to
-/// minimize churn — existing code using `SessionId::new("...")` still
-/// compiles because `SessionKey` provides the same constructor.
+/// This is a type alias for [`SessionKey`](crate::session::SessionKey).
+/// Use `SessionId::new()` to generate a new random UUID, or
+/// `SessionId::from_raw(s)` to wrap a trusted string.
 pub type SessionId = crate::session::SessionKey;
 
 /// Agent "binary" — static definition, loadable from YAML or constructed
@@ -937,7 +937,7 @@ mod tests {
         AgentProcess {
             agent_id,
             parent_id: Some(parent_id),
-            session_id: SessionId::new(format!("agent:{}", agent_id)),
+            session_id: SessionId::new(),
             channel_session_id: None,
             manifest: test_manifest(name),
             principal: Principal::user("test-user"),
@@ -956,14 +956,14 @@ mod tests {
     fn test_process_with_session(
         name: &str,
         parent_id: Option<AgentId>,
-        channel_session: &str,
+        _channel_session: &str,
     ) -> AgentProcess {
         let agent_id = AgentId::new();
         AgentProcess {
             agent_id,
             parent_id,
-            session_id: SessionId::new(format!("agent:{}", agent_id)),
-            channel_session_id: Some(SessionId::new(channel_session)),
+            session_id: SessionId::new(),
+            channel_session_id: Some(SessionId::new()),
             manifest: test_manifest(name),
             principal: Principal::user("test-user"),
             env: AgentEnv::default(),
@@ -987,10 +987,11 @@ mod tests {
     }
 
     #[test]
-    fn test_session_id() {
-        let sid = SessionId::new("my-session");
-        assert_eq!(sid.to_string(), "my-session");
-        assert_eq!(sid.as_str(), "my-session");
+    fn test_session_id_is_uuid() {
+        let sid = SessionId::new();
+        // Inner value is a valid UUID.
+        let _ = sid.uuid();
+        assert!(!sid.to_string().is_empty());
     }
 
     #[test]
@@ -1306,7 +1307,7 @@ system_prompt: "Hello"
         let new_process = AgentProcess {
             agent_id:           new_id,
             parent_id:          None,
-            session_id:         SessionId::new(format!("agent:{}", new_id)),
+            session_id:         SessionId::new(),
             channel_session_id: Some(channel_sid.clone()),
             manifest:           test_manifest("agent-b"),
             principal:          Principal::user("test-user"),
@@ -1676,7 +1677,7 @@ system_prompt: "Hello"
         );
 
         // A different session returns None (no agent bound to it).
-        let other_session = SessionId::new("session-2");
+        let other_session = SessionId::new();
         assert!(table.find_by_session(&other_session).is_none());
     }
 
@@ -1796,8 +1797,6 @@ system_prompt: "Hello"
         table.insert(p2);
 
         assert_ne!(p1_sid, p2_sid);
-        assert!(p1_sid.as_str().starts_with("agent:"));
-        assert!(p2_sid.as_str().starts_with("agent:"));
     }
 
     // -----------------------------------------------------------------------

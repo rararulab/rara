@@ -858,14 +858,15 @@ mod tests {
         let driver: LlmDriverRef = Arc::new(StubDriver);
         let (kernel, agent_id, cancel) = setup_test_kernel_with_driver(driver).await;
 
+        let session_id = SessionId::new();
         let handle = ProcessHandle::new(
             agent_id,
-            SessionId::new("test-session"),
+            session_id.clone(),
             Principal::user("test-user"),
             kernel.event_queue().clone(),
         );
 
-        let stream_handle = kernel.stream_hub().open(SessionId::new("test-session"));
+        let stream_handle = kernel.stream_hub().open(session_id);
         let turn_cancel = CancellationToken::new();
 
         let result = run_inline_agent_loop(
@@ -889,14 +890,15 @@ mod tests {
         let driver: LlmDriverRef = Arc::new(StubDriver);
         let (kernel, agent_id, cancel) = setup_test_kernel_with_driver(driver).await;
 
+        let session_id = SessionId::new();
         let handle = ProcessHandle::new(
             agent_id,
-            SessionId::new("test-session"),
+            session_id.clone(),
             Principal::user("test-user"),
             kernel.event_queue().clone(),
         );
 
-        let stream_handle = kernel.stream_hub().open(SessionId::new("test-session"));
+        let stream_handle = kernel.stream_hub().open(session_id);
         let turn_cancel = CancellationToken::new();
 
         let history = vec![llm::Message::user("previous question")];
@@ -919,14 +921,14 @@ mod tests {
         let driver: LlmDriverRef = Arc::new(ReasoningDriver);
         let (kernel, agent_id, cancel) = setup_test_kernel_with_driver(driver).await;
 
+        let session_id = SessionId::new();
         let handle = ProcessHandle::new(
             agent_id,
-            SessionId::new("test-session"),
+            session_id.clone(),
             Principal::user("test-user"),
             kernel.event_queue().clone(),
         );
 
-        let session_id = SessionId::new("test-session");
         let stream_handle = kernel.stream_hub().open(session_id.clone());
 
         // Subscribe to stream events BEFORE running the loop.
@@ -966,14 +968,15 @@ mod tests {
         let driver: LlmDriverRef = Arc::new(BlockingDriver);
         let (kernel, agent_id, cancel_kernel) = setup_test_kernel_with_driver(driver).await;
 
+        let session_id = SessionId::new();
         let handle = Arc::new(ProcessHandle::new(
             agent_id,
-            SessionId::new("test-session"),
+            session_id.clone(),
             Principal::user("test-user"),
             kernel.event_queue().clone(),
         ));
 
-        let stream_handle = kernel.stream_hub().open(SessionId::new("test-session"));
+        let stream_handle = kernel.stream_hub().open(session_id);
         let turn_cancel = CancellationToken::new();
 
         let turn_cancel_clone = turn_cancel.clone();

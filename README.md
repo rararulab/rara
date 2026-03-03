@@ -50,7 +50,7 @@ Unlike generic AI assistants that wait for your commands, Rara proactively monit
 |-------|--------|---------|
 | **Entry** | `rara-cmd`, `rara-app` | CLI binary and application composition root |
 | **Server** | `rara-server` | HTTP + gRPC endpoints |
-| **Core** | `rara-kernel`, `rara-boot`, `rara-channels`, `rara-queue` | Agent kernel, bootstrap, channel adapters, event queue |
+| **Core** | `rara-kernel`, `rara-boot`, `rara-channels` | Agent kernel, bootstrap, channel adapters |
 | **Capabilities** | `rara-memory`, `rara-skills`, `rara-sessions` | 3-layer memory, skill discovery/management, conversation persistence |
 | **Extensions** | `rara-git`, `rara-coding-task`, `rara-workspace`, `rara-backend-admin` | Developer-focused agent capabilities |
 | **Integrations** | `rara-mcp`, `rara-composio`, `rara-codex-oauth`, `rara-k8s` | External service adapters |

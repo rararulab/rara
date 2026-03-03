@@ -12,18 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! `rara-queue` — pluggable event queue implementations for the kernel.
+//! Queue subsystem for kernel event dispatch.
 //!
-//! Provides three [`EventQueue`](rara_kernel::event_queue::EventQueue)
-//! implementations:
-//!
-//! - [`MemoryQueue`](memory::MemoryQueue) — re-exports `InMemoryEventQueue`
-//!   from the kernel for convenience.
-//! - [`WalQueue`](wal::WalQueue) — file-system WAL (Write-Ahead Log) with
-//!   JSON-lines format for crash recovery.
-//! - [`HybridQueue`](hybrid::HybridQueue) — combines an in-memory fast path
-//!   with WAL persistence for durability.
+//! Groups the single-queue and sharded queue implementations under one module.
 
-pub mod hybrid;
-pub mod memory;
-pub mod wal;
+mod in_memory;
+pub(crate) mod shard;
+mod sharded;
+
+pub use in_memory::{EventPriority, EventQueue, EventQueueRef, InMemoryEventQueue, KernelEvent};
+pub use sharded::{ShardedEventQueue, ShardedEventQueueConfig, ShardedQueueRef};

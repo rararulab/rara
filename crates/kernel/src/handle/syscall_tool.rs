@@ -473,15 +473,15 @@ impl crate::tool::AgentTool for SyscallTool {
 mod tests {
     use super::*;
     use crate::{
-        event_queue::InMemoryEventQueue,
         process::{AgentId, SessionId, principal::Principal},
+        queue::InMemoryEventQueue,
         tool::AgentTool,
     };
 
     fn make_test_handle() -> Arc<ProcessHandle> {
         Arc::new(ProcessHandle::new(
             AgentId::new(),
-            SessionId::new("test-session"),
+            SessionId::new(),
             Principal::user("test-user"),
             Arc::new(InMemoryEventQueue::new(4096)),
         ))

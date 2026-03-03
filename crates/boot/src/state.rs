@@ -71,7 +71,34 @@ impl RaraState {
         // -- LLM driver registry ----------------------------------------------
 
         let driver_registry =
-            crate::providers::build_driver_registry(&*settings_provider, &*credential_store).await;
+            crate::llm_registry::build_driver_registry(settings_provider.clone(), &*credential_store)
+                .await
+                .whatever_context("Failed to initialize LLM driver registry")?;
+
+        {
+            let driver_registry_ref = driver_registry.clone();
+            let settings_ref = settings_provider.clone();
+            let credential_store_ref = credential_store.clone();
+            tokio::spawn(async move {
+                let mut rx = settings_ref.subscribe();
+                while rx.changed().await.is_ok() {
+                    match crate::llm_registry::build_driver_registry(
+                        settings_ref.clone(),
+                        &*credential_store_ref,
+                    )
+                    .await
+                    {
+                        Ok(updated) => {
+                            driver_registry_ref.update(updated.as_ref());
+                            info!("LLM driver registry reloaded from settings");
+                        }
+                        Err(err) => {
+                            tracing::warn!(error = %err, "Failed to reload LLM driver registry from settings");
+                        }
+                    }
+                }
+            });
+        }
 
         // -- session repository -----------------------------------------------
 
@@ -86,8 +113,8 @@ impl RaraState {
 
         // -- Composio auth provider -------------------------------------------
 
-        let composio_auth_provider =
-            crate::providers::composio_auth_provider(settings_provider.clone());
+        let composio_auth_provider: Arc<dyn rara_composio::ComposioAuthProvider> =
+            Arc::new(crate::composio::SettingsComposioAuthProvider::new(settings_provider.clone()));
 
         // -- primitive tools (Layer 1) ----------------------------------------
 

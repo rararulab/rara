@@ -16,7 +16,7 @@
 //!
 //! Implements [`ChannelAdapter`] using the Telegram Bot API via `getUpdates`
 //! long polling. Inbound messages are converted to [`RawPlatformMessage`] and
-//! handed to an [`IngressPipeline`] in a fire-and-forget fashion. Outbound
+//! handed to the [`KernelHandle`] in a fire-and-forget fashion. Outbound
 //! delivery is handled by the [`EgressAdapter`] implementation.
 //!
 //! ## Architecture
@@ -32,7 +32,7 @@
 //! │              │     ├── Update → RawPlatformMessage
 //! │              │     │     │              │
 //! │              │     │     ▼              │
-//! │              │     │  sink.ingest()     │
+//! │              │     │  handle.ingest()    │
 //! │              │     │                    │
 //! │              │     └── loop             │
 //! │              │                          │
@@ -53,9 +53,10 @@ use rara_kernel::{
         types::{AgentPhase, ChannelType, InlineButton, MessageContent, ReplyMarkup},
     },
     error::KernelError,
+    handle::kernel_handle::KernelHandle,
     io::{
         egress::{EgressAdapter, EgressError, Endpoint, EndpointAddress, PlatformOutbound},
-        ingress::{IngressPipeline, RawPlatformMessage},
+        ingress::RawPlatformMessage,
         types::{IngestError, InteractionType, ReplyContext as IoReplyContext},
     },
 };
@@ -127,7 +128,7 @@ impl Default for TelegramConfig {
 ///
 /// # Lifecycle
 ///
-/// 1. Call [`start`](ChannelAdapter::start) with an [`IngressPipeline`]. This
+/// 1. Call [`start`](ChannelAdapter::start) with a [`KernelHandle`]. This
 ///    spawns a background tokio task that polls for updates.
 /// 2. For each inbound message, the adapter converts the Telegram [`Update`] to
 ///    a [`RawPlatformMessage`] and hands it to the sink. Outbound delivery is
@@ -392,7 +393,7 @@ impl EgressAdapter for TelegramAdapter {
 impl ChannelAdapter for TelegramAdapter {
     fn channel_type(&self) -> ChannelType { ChannelType::Telegram }
 
-    async fn start(&self, sink: Arc<IngressPipeline>) -> Result<(), KernelError> {
+    async fn start(&self, handle: KernelHandle) -> Result<(), KernelError> {
         // Delete any existing webhook so getUpdates works.
         self.bot
             .delete_webhook()
@@ -428,7 +429,7 @@ impl ChannelAdapter for TelegramAdapter {
         tokio::spawn(async move {
             polling_loop(
                 bot,
-                sink,
+                handle,
                 allowed_chat_ids,
                 polling_timeout,
                 &mut shutdown_rx,
@@ -468,13 +469,13 @@ impl ChannelAdapter for TelegramAdapter {
 }
 
 // ---------------------------------------------------------------------------
-// Polling loop (I/O Bus model via IngressPipeline)
+// Polling loop (I/O Bus model via KernelHandle)
 // ---------------------------------------------------------------------------
 
 /// The getUpdates long-polling loop.
 ///
 /// Converts each update to a [`RawPlatformMessage`] and hands it to the
-/// [`IngressPipeline`] in a fire-and-forget fashion. The adapter does **not**
+/// [`KernelHandle`] in a fire-and-forget fashion. The adapter does **not**
 /// wait for a response -- egress delivers replies through
 /// [`EgressAdapter::send`].
 ///
@@ -483,7 +484,7 @@ impl ChannelAdapter for TelegramAdapter {
 /// authorization checks, contact tracking, and group-chat filtering.
 async fn polling_loop(
     bot: teloxide::Bot,
-    sink: Arc<IngressPipeline>,
+    handle: KernelHandle,
     allowed_chat_ids: Vec<i64>,
     polling_timeout: u32,
     shutdown_rx: &mut watch::Receiver<bool>,
@@ -538,7 +539,7 @@ async fn polling_loop(
                     offset = Some(next_offset);
 
                     // Spawn handler as a separate task.
-                    let sink = Arc::clone(&sink);
+                    let handle = handle.clone();
                     let bot = bot.clone();
                     let allowed = allowed_chat_ids.clone();
                     let bot_username = Arc::clone(&bot_username);
@@ -548,7 +549,7 @@ async fn polling_loop(
                     tokio::spawn(async move {
                         handle_update(
                             update,
-                            &sink,
+                            &handle,
                             &bot,
                             &allowed,
                             &bot_username,
@@ -583,7 +584,7 @@ async fn polling_loop(
 
 async fn handle_update(
     update: Update,
-    sink: &Arc<IngressPipeline>,
+    handle: &KernelHandle,
     bot: &teloxide::Bot,
     allowed_chat_ids: &[i64],
     bot_username: &Arc<RwLock<Option<String>>>,
@@ -727,7 +728,7 @@ async fn handle_update(
     drop(username_guard);
 
     // Fire-and-forget ingest.
-    if let Err(e) = sink.ingest(raw).await {
+    if let Err(e) = handle.ingest(raw).await {
         match e {
             IngestError::SystemBusy => {
                 let _ = bot

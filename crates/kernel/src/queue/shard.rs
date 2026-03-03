@@ -28,7 +28,7 @@ use std::{
 
 use tokio::sync;
 
-use crate::{io::types::BusError, unified_event::KernelEvent};
+use crate::{event::KernelEvent, io::types::BusError};
 
 /// A single priority shard — 3-tier queue with async notification.
 ///
@@ -82,10 +82,7 @@ impl ShardQueue {
     pub fn try_push(&self, event: KernelEvent) -> Result<(), BusError> { self.push(event) }
 
     /// Drain up to `max` events from the queue, in priority order.
-    ///
-    /// Returns `(event, wal_id)` pairs. The `wal_id` is always `None` for
-    /// in-memory shard queues.
-    pub fn drain(&self, max: usize) -> Vec<(KernelEvent, Option<u64>)> {
+    pub fn drain(&self, max: usize) -> Vec<KernelEvent> {
         let mut result = Vec::with_capacity(max);
         let mut remaining = max;
 
@@ -96,7 +93,7 @@ impl ShardQueue {
             }
             let mut q = self.queues[tier].lock().expect("shard queue lock poisoned");
             let n = remaining.min(q.len());
-            result.extend(q.drain(..n).map(|e| (e, None)));
+            result.extend(q.drain(..n));
             remaining -= n;
         }
 
@@ -136,9 +133,9 @@ mod tests {
     use super::*;
     use crate::{
         channel::types::{ChannelType, MessageContent},
+        event::KernelEvent,
         io::types::{ChannelSource, InboundMessage, MessageId},
         process::{AgentId, SessionId, Signal, principal::UserId},
-        unified_event::KernelEvent,
     };
 
     fn test_inbound(text: &str) -> InboundMessage {
@@ -151,7 +148,7 @@ mod tests {
                 platform_chat_id:    None,
             },
             user:            UserId("u1".to_string()),
-            session_id:      SessionId::new("s1"),
+            session_id:      SessionId::new(),
             target_agent_id: None,
             target_agent:    None,
             content:         MessageContent::Text(text.to_string()),
@@ -188,7 +185,7 @@ mod tests {
             id:          MessageId::new(),
             in_reply_to: MessageId::new(),
             user:        UserId("u1".to_string()),
-            session_id:  SessionId::new("s1"),
+            session_id:  SessionId::new(),
             routing:     crate::io::types::OutboundRouting::BroadcastAll,
             payload:     crate::io::types::OutboundPayload::Reply {
                 content:     MessageContent::Text("normal".to_string()),
@@ -207,11 +204,11 @@ mod tests {
         assert_eq!(events.len(), 3);
 
         // First should be Critical (SendSignal)
-        assert!(matches!(events[0].0, KernelEvent::SendSignal { .. }));
+        assert!(matches!(events[0], KernelEvent::SendSignal { .. }));
         // Second should be Normal (Deliver)
-        assert!(matches!(events[1].0, KernelEvent::Deliver(_)));
+        assert!(matches!(events[1], KernelEvent::Deliver(_)));
         // Third should be Low (UserMessage)
-        assert!(matches!(events[2].0, KernelEvent::UserMessage(_)));
+        assert!(matches!(events[2], KernelEvent::UserMessage(_)));
     }
 
     #[test]
@@ -336,8 +333,8 @@ mod tests {
         let events = q.drain(10);
         assert_eq!(events.len(), 2);
         // Shutdown should come first (Critical priority)
-        assert!(matches!(events[0].0, KernelEvent::Shutdown));
-        assert!(matches!(events[1].0, KernelEvent::UserMessage(_)));
+        assert!(matches!(events[0], KernelEvent::Shutdown));
+        assert!(matches!(events[1], KernelEvent::UserMessage(_)));
     }
 
     #[test]

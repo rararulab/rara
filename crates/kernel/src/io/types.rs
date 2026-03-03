@@ -116,7 +116,7 @@ pub enum InteractionType {
 ///
 /// After ingress resolves identity and session, the raw platform event is
 /// converted into this type and published to the
-/// [`EventQueue`](crate::event_queue::EventQueue).
+/// [`EventQueue`](crate::queue::EventQueue).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InboundMessage {
     /// Unique message identifier (ULID).

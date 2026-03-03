@@ -15,5 +15,5 @@
 //! Factory functions for I/O bus components.
 //!
 //! The legacy `InboundBus` / `OutboundBus` have been replaced by the unified
-//! [`EventQueue`](rara_kernel::event_queue::EventQueue). This module is kept
+//! [`EventQueue`](rara_kernel::queue::EventQueue). This module is kept
 //! for backward compatibility but no longer creates bus instances.

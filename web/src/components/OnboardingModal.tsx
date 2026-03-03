@@ -15,6 +15,7 @@
  */
 
 import { useState } from "react";
+import { useNavigate } from "react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { authApi } from "@/api/client";
 import { Button } from "@/components/ui/button";
@@ -26,7 +27,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Check, Clipboard, Loader2, MessageSquare } from "lucide-react";
+import { Check, Clipboard, Loader2, MessageSquare, Sparkles } from "lucide-react";
 
 /** localStorage key — 标记用户已跳过或完成引导 */
 const ONBOARDING_DISMISSED_KEY = "onboarding_dismissed";
@@ -42,6 +43,7 @@ export function dismissOnboarding(): void {
 interface OnboardingModalProps {
   open: boolean;
   onDismiss: () => void;
+  showLlmProviderPrompt?: boolean;
 }
 
 /**
@@ -53,7 +55,8 @@ interface OnboardingModalProps {
  * 3. 复制指令发送给 Telegram Bot
  * 4. 验证关联 / 跳过
  */
-export default function OnboardingModal({ open, onDismiss }: OnboardingModalProps) {
+export default function OnboardingModal({ open, onDismiss, showLlmProviderPrompt = false }: OnboardingModalProps) {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [linkCode, setLinkCode] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -100,6 +103,11 @@ export default function OnboardingModal({ open, onDismiss }: OnboardingModalProp
     onDismiss();
   };
 
+  const handleOpenProviderSettings = () => {
+    onDismiss();
+    navigate("/settings?section=providers");
+  };
+
   return (
     <Dialog open={open} onOpenChange={(isOpen) => { if (!isOpen) handleSkip(); }}>
       <DialogContent className="sm:max-w-md">
@@ -114,6 +122,25 @@ export default function OnboardingModal({ open, onDismiss }: OnboardingModalProp
         </DialogHeader>
 
         <div className="space-y-4 py-2">
+          {showLlmProviderPrompt && !verified && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
+              <div className="flex items-start gap-2">
+                <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-foreground">
+                    你还没有配置 LLM Provider
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    在使用 AI 功能前，请先到 Settings 的 Providers 页面完成配置。
+                  </p>
+                  <Button size="sm" variant="outline" onClick={handleOpenProviderSettings}>
+                    去配置 Provider
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* 步骤说明 */}
           {!linkCode && !verified && (
             <div className="space-y-3">

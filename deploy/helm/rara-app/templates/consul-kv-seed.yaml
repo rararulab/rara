@@ -41,6 +41,6 @@ spec:
               done
               echo "Consul is ready."
 
-              echo "Setting rara/config/jwt_secret..."
-              curl -sf -X PUT -d "${JWT_SECRET}" "${CONSUL_ADDR}/v1/kv/rara/config/jwt_secret" > /dev/null
+              echo "Setting rara/config/k8s/jwt_secret..."
+              curl -sf -X PUT -d "${JWT_SECRET}" "${CONSUL_ADDR}/v1/kv/rara/config/k8s/jwt_secret" > /dev/null
               echo "Consul KV seed complete."

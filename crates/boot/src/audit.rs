@@ -62,7 +62,7 @@ fn row_to_event(row: AuditRow) -> Option<AuditEvent> {
     Some(AuditEvent {
         timestamp: chrono_to_jiff(row.timestamp),
         agent_id: AgentId(row.agent_id),
-        session_id: SessionId::new(row.session_id),
+        session_id: SessionId::from_raw(&row.session_id),
         user_id: UserId(row.user_id),
         event_type,
         details: row.details,
@@ -115,7 +115,7 @@ impl AuditLog for PgAuditLog {
             )
             .bind(timestamp)
             .bind(event.agent_id.0)
-            .bind(event.session_id.as_str())
+            .bind(event.session_id.to_string())
             .bind(&event.user_id.0)
             .bind(&type_name)
             .bind(&event_data)

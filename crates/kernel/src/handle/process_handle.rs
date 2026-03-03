@@ -24,12 +24,12 @@ use std::sync::Arc;
 use super::AgentHandle;
 use crate::{
     error::{KernelError, Result},
-    event_queue::EventQueue,
+    event::{KernelEvent, Syscall},
     io::pipe::{PipeReader, PipeWriter},
     memory::KvScope,
     process::{AgentId, AgentManifest, ProcessInfo, SessionId, Signal, principal::Principal},
+    queue::EventQueue,
     tool::ToolRegistry,
-    unified_event::{KernelEvent, Syscall},
 };
 
 /// Thin per-process handle to kernel capabilities.
@@ -83,7 +83,6 @@ impl ProcessHandle {
     async fn syscall_push(&self, event: KernelEvent) -> Result<()> {
         self.event_queue
             .push(event)
-            .await
             .map_err(|_| KernelError::Other {
                 message: "event queue full for syscall".into(),
             })

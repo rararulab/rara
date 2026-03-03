@@ -13,7 +13,6 @@
 // limitations under the License.
 
 pub mod broadcast_bus;
-pub mod dashmap_kv;
 pub mod noop;
 pub mod noop_guard;
 pub mod noop_user_store;

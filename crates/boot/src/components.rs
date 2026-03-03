@@ -18,9 +18,9 @@ use std::sync::Arc;
 
 use rara_kernel::{
     defaults::{broadcast_bus::BroadcastEventBus, noop::NoopMemory, noop_guard::NoopGuard},
-    event::EventBus,
     guard::Guard,
     memory::Memory,
+    notification::EventBus,
 };
 
 /// Default Memory implementation — `NoopMemory` (kernel layer does not persist;

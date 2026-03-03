@@ -103,6 +103,7 @@ const KEYS = {
   LLM_PROVIDERS_OPENROUTER_BASE_URL: "llm.providers.openrouter.base_url",
   // Provider: Ollama
   LLM_PROVIDERS_OLLAMA_ENABLED: "llm.providers.ollama.enabled",
+  LLM_PROVIDERS_OLLAMA_API_KEY: "llm.providers.ollama.api_key",
   LLM_PROVIDERS_OLLAMA_BASE_URL: "llm.providers.ollama.base_url",
   // Provider: Codex
   LLM_PROVIDERS_CODEX_ENABLED: "llm.providers.codex.enabled",
@@ -140,6 +141,7 @@ const THEME_OPTIONS: Array<{ key: Theme; label: string; icon: ReactNode; descrip
 // Sensitive keys that should be masked by default
 const SENSITIVE_KEYS: Set<string> = new Set([
   KEYS.LLM_PROVIDERS_OPENROUTER_API_KEY,
+  KEYS.LLM_PROVIDERS_OLLAMA_API_KEY,
   KEYS.TELEGRAM_BOT_TOKEN,
   KEYS.GMAIL_APP_PASSWORD,
   KEYS.COMPOSIO_API_KEY,
@@ -164,7 +166,8 @@ const PROVIDER_DEFS = [
     description: "Local model inference server",
     enabledKey: KEYS.LLM_PROVIDERS_OLLAMA_ENABLED,
     fields: [
-      { key: KEYS.LLM_PROVIDERS_OLLAMA_BASE_URL, label: "Base URL", placeholder: "http://localhost:11434" },
+      { key: KEYS.LLM_PROVIDERS_OLLAMA_API_KEY, label: "API Key", placeholder: "ollama", sensitive: true },
+      { key: KEYS.LLM_PROVIDERS_OLLAMA_BASE_URL, label: "Base URL", placeholder: "http://localhost:11434/v1" },
     ],
   },
   {

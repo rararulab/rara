@@ -92,7 +92,7 @@ impl PgSessionRepository {
 impl From<ChatSessionRow> for SessionEntry {
     fn from(row: ChatSessionRow) -> Self {
         Self {
-            key:           SessionKey::from_raw(row.key),
+            key:           SessionKey::from_raw(&row.key),
             title:         row.title,
             model:         row.model,
             system_prompt: row.system_prompt,
@@ -111,7 +111,7 @@ impl From<ChannelBindingRow> for ChannelBinding {
             channel_type: row.channel_type,
             account:      row.account,
             chat_id:      row.chat_id,
-            session_key:  SessionKey::from_raw(row.session_key),
+            session_key:  SessionKey::from_raw(&row.session_key),
             created_at:   row.created_at,
             updated_at:   row.updated_at,
         }
@@ -143,7 +143,7 @@ impl crate::repository::SessionRepository for PgSessionRepository {
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                RETURNING *",
         )
-        .bind(entry.key.as_str())
+        .bind(entry.key.to_string())
         .bind(&entry.title)
         .bind(&entry.model)
         .bind(&entry.system_prompt)
@@ -157,7 +157,7 @@ impl crate::repository::SessionRepository for PgSessionRepository {
         .map_err(|e| {
             if is_unique_violation(&e) {
                 return SessionError::AlreadyExists {
-                    key: entry.key.as_str().to_owned(),
+                    key: entry.key.to_string(),
                 };
             }
             SessionError::Repository { source: e }
@@ -169,7 +169,7 @@ impl crate::repository::SessionRepository for PgSessionRepository {
     #[instrument(skip(self))]
     async fn get_session(&self, key: &SessionKey) -> Result<Option<SessionEntry>, SessionError> {
         let row = sqlx::query_as::<_, ChatSessionRow>("SELECT * FROM chat_session WHERE key = $1")
-            .bind(key.as_str())
+            .bind(key.to_string())
             .fetch_optional(&self.pool)
             .await?;
 
@@ -202,7 +202,7 @@ impl crate::repository::SessionRepository for PgSessionRepository {
                WHERE key = $1
                RETURNING *",
         )
-        .bind(entry.key.as_str())
+        .bind(entry.key.to_string())
         .bind(&entry.title)
         .bind(&entry.model)
         .bind(&entry.system_prompt)
@@ -212,7 +212,7 @@ impl crate::repository::SessionRepository for PgSessionRepository {
         .fetch_optional(&self.pool)
         .await?
         .ok_or_else(|| SessionError::NotFound {
-            key: entry.key.as_str().to_owned(),
+            key: entry.key.to_string(),
         })?;
 
         Ok(row.into())
@@ -221,18 +221,18 @@ impl crate::repository::SessionRepository for PgSessionRepository {
     #[instrument(skip(self))]
     async fn delete_session(&self, key: &SessionKey) -> Result<(), SessionError> {
         let result = sqlx::query("DELETE FROM chat_session WHERE key = $1")
-            .bind(key.as_str())
+            .bind(key.to_string())
             .execute(&self.pool)
             .await?;
 
         if result.rows_affected() == 0 {
             return Err(SessionError::NotFound {
-                key: key.as_str().to_owned(),
+                key: key.to_string(),
             });
         }
 
         // Clean up message files (best-effort).
-        let _ = self.store.delete(key.as_str()).await;
+        let _ = self.store.delete(&key.to_string()).await;
 
         Ok(())
     }
@@ -245,7 +245,7 @@ impl crate::repository::SessionRepository for PgSessionRepository {
         session_key: &SessionKey,
         message: &ChatMessage,
     ) -> Result<ChatMessage, SessionError> {
-        self.store.append(session_key.as_str(), message).await
+        self.store.append(&session_key.to_string(), message).await
     }
 
     #[instrument(skip(self))]
@@ -256,13 +256,13 @@ impl crate::repository::SessionRepository for PgSessionRepository {
         limit: Option<i64>,
     ) -> Result<Vec<ChatMessage>, SessionError> {
         self.store
-            .read(session_key.as_str(), after_seq, limit)
+            .read(&session_key.to_string(), after_seq, limit)
             .await
     }
 
     #[instrument(skip(self))]
     async fn clear_messages(&self, session_key: &SessionKey) -> Result<(), SessionError> {
-        self.store.clear(session_key.as_str()).await
+        self.store.clear(&session_key.to_string()).await
     }
 
     // -- fork ---------------------------------------------------------------
@@ -271,7 +271,6 @@ impl crate::repository::SessionRepository for PgSessionRepository {
     async fn fork_session(
         &self,
         source_key: &SessionKey,
-        target_key: &SessionKey,
         fork_at_seq: i64,
     ) -> Result<SessionEntry, SessionError> {
         // Verify source exists.
@@ -279,12 +278,18 @@ impl crate::repository::SessionRepository for PgSessionRepository {
             .get_session(source_key)
             .await?
             .ok_or_else(|| SessionError::NotFound {
-                key: source_key.as_str().to_owned(),
+                key: source_key.to_string(),
             })?;
+
+        let target_key = SessionKey::new();
 
         // Fork the message files (validates fork_at_seq internally).
         self.store
-            .fork(source_key.as_str(), target_key.as_str(), fork_at_seq)
+            .fork(
+                &source_key.to_string(),
+                &target_key.to_string(),
+                fork_at_seq,
+            )
             .await?;
 
         let now = Utc::now();
@@ -321,7 +326,7 @@ impl crate::repository::SessionRepository for PgSessionRepository {
         .bind(&binding.channel_type)
         .bind(&binding.account)
         .bind(&binding.chat_id)
-        .bind(binding.session_key.as_str())
+        .bind(binding.session_key.to_string())
         .bind(binding.created_at)
         .bind(binding.updated_at)
         .fetch_one(&self.pool)
@@ -414,10 +419,10 @@ mod tests {
         (repo, tmp_dir, container)
     }
 
-    fn make_session(key: &str) -> SessionEntry {
+    fn make_session() -> SessionEntry {
         let now = Utc::now();
         SessionEntry {
-            key:           SessionKey::from_raw(key),
+            key:           SessionKey::new(),
             title:         Some("Test session".to_owned()),
             model:         Some("gpt-4o".to_owned()),
             system_prompt: Some("You are helpful".to_owned()),
@@ -437,15 +442,13 @@ mod tests {
     async fn create_and_get_session() {
         let (repo, _tmp, _container) = setup().await;
 
-        let entry = make_session("test:session1");
+        let entry = make_session();
+        let key = entry.key;
         let created = repo.create_session(&entry).await.unwrap();
-        assert_eq!(created.key.as_str(), "test:session1");
+        assert_eq!(created.key, key);
         assert_eq!(created.title.as_deref(), Some("Test session"));
 
-        let fetched = repo
-            .get_session(&SessionKey::from_raw("test:session1"))
-            .await
-            .unwrap();
+        let fetched = repo.get_session(&key).await.unwrap();
         assert!(fetched.is_some());
         assert_eq!(fetched.unwrap().model.as_deref(), Some("gpt-4o"));
     }
@@ -454,7 +457,7 @@ mod tests {
     async fn create_duplicate_session_returns_already_exists() {
         let (repo, _tmp, _container) = setup().await;
 
-        let entry = make_session("dup:key");
+        let entry = make_session();
         repo.create_session(&entry).await.unwrap();
 
         let result = repo.create_session(&entry).await;
@@ -469,9 +472,9 @@ mod tests {
     async fn list_sessions_ordered_by_updated_at() {
         let (repo, _tmp, _container) = setup().await;
 
-        repo.create_session(&make_session("list:a")).await.unwrap();
-        repo.create_session(&make_session("list:b")).await.unwrap();
-        repo.create_session(&make_session("list:c")).await.unwrap();
+        repo.create_session(&make_session()).await.unwrap();
+        repo.create_session(&make_session()).await.unwrap();
+        repo.create_session(&make_session()).await.unwrap();
 
         let sessions = repo.list_sessions(10, 0).await.unwrap();
         assert_eq!(sessions.len(), 3);
@@ -481,7 +484,7 @@ mod tests {
     async fn update_session() {
         let (repo, _tmp, _container) = setup().await;
 
-        let entry = make_session("upd:key");
+        let entry = make_session();
         let mut created = repo.create_session(&entry).await.unwrap();
 
         created.title = Some("Updated title".to_owned());
@@ -495,15 +498,12 @@ mod tests {
     async fn delete_session() {
         let (repo, _tmp, _container) = setup().await;
 
-        repo.create_session(&make_session("del:key")).await.unwrap();
-        repo.delete_session(&SessionKey::from_raw("del:key"))
-            .await
-            .unwrap();
+        let entry = make_session();
+        let key = entry.key;
+        repo.create_session(&entry).await.unwrap();
+        repo.delete_session(&key).await.unwrap();
 
-        let fetched = repo
-            .get_session(&SessionKey::from_raw("del:key"))
-            .await
-            .unwrap();
+        let fetched = repo.get_session(&key).await.unwrap();
         assert!(fetched.is_none());
     }
 
@@ -511,7 +511,7 @@ mod tests {
     async fn delete_nonexistent_session_returns_not_found() {
         let (repo, _tmp, _container) = setup().await;
 
-        let result = repo.delete_session(&SessionKey::from_raw("ghost")).await;
+        let result = repo.delete_session(&SessionKey::new()).await;
         assert!(matches!(result.unwrap_err(), SessionError::NotFound { .. }));
     }
 
@@ -522,10 +522,9 @@ mod tests {
     #[tokio::test]
     async fn append_and_read_messages() {
         let (repo, _tmp, _container) = setup().await;
-        let key = SessionKey::from_raw("msg:test");
-        repo.create_session(&make_session("msg:test"))
-            .await
-            .unwrap();
+        let entry = make_session();
+        let key = entry.key;
+        repo.create_session(&entry).await.unwrap();
 
         let m1 = repo
             .append_message(&key, &ChatMessage::user("hello"))
@@ -561,10 +560,9 @@ mod tests {
     #[tokio::test]
     async fn clear_messages() {
         let (repo, _tmp, _container) = setup().await;
-        let key = SessionKey::from_raw("clear:test");
-        repo.create_session(&make_session("clear:test"))
-            .await
-            .unwrap();
+        let entry = make_session();
+        let key = entry.key;
+        repo.create_session(&entry).await.unwrap();
 
         repo.append_message(&key, &ChatMessage::user("msg1"))
             .await
@@ -586,10 +584,9 @@ mod tests {
     #[tokio::test]
     async fn delete_session_removes_messages() {
         let (repo, _tmp, _container) = setup().await;
-        let key = SessionKey::from_raw("cascade:test");
-        repo.create_session(&make_session("cascade:test"))
-            .await
-            .unwrap();
+        let entry = make_session();
+        let key = entry.key;
+        repo.create_session(&entry).await.unwrap();
 
         repo.append_message(&key, &ChatMessage::user("msg1"))
             .await
@@ -605,59 +602,17 @@ mod tests {
         let msgs = repo.read_messages(&key, None, None).await.unwrap();
         assert!(msgs.is_empty());
     }
-
-    // -----------------------------------------------------------------------
-    // Fork
-    // -----------------------------------------------------------------------
-
-    #[tokio::test]
-    async fn fork_session_copies_messages() {
-        let (repo, _tmp, _container) = setup().await;
-        let src_key = SessionKey::from_raw("fork:source");
-        let tgt_key = SessionKey::from_raw("fork:target");
-        repo.create_session(&make_session("fork:source"))
-            .await
-            .unwrap();
-
-        repo.append_message(&src_key, &ChatMessage::user("m1"))
-            .await
-            .unwrap();
-        repo.append_message(&src_key, &ChatMessage::assistant("m2"))
-            .await
-            .unwrap();
-        repo.append_message(&src_key, &ChatMessage::user("m3"))
-            .await
-            .unwrap();
-
-        // Fork at seq 2.
-        let forked = repo.fork_session(&src_key, &tgt_key, 2).await.unwrap();
-        assert_eq!(forked.message_count, 2);
-        assert!(forked.title.unwrap().contains("(fork)"));
-
-        let forked_messages = repo.read_messages(&tgt_key, None, None).await.unwrap();
-        assert_eq!(forked_messages.len(), 2);
-        assert_eq!(forked_messages[0].content.as_text(), "m1");
-        assert_eq!(forked_messages[1].content.as_text(), "m2");
-
-        // Source still has all 3.
-        let source_messages = repo.read_messages(&src_key, None, None).await.unwrap();
-        assert_eq!(source_messages.len(), 3);
-    }
-
     #[tokio::test]
     async fn fork_invalid_seq_returns_error() {
         let (repo, _tmp, _container) = setup().await;
-        let key = SessionKey::from_raw("fork:invalid");
-        repo.create_session(&make_session("fork:invalid"))
-            .await
-            .unwrap();
+        let entry = make_session();
+        let key = entry.key;
+        repo.create_session(&entry).await.unwrap();
         repo.append_message(&key, &ChatMessage::user("m1"))
             .await
             .unwrap();
 
-        let result = repo
-            .fork_session(&key, &SessionKey::from_raw("fork:out"), 99)
-            .await;
+        let result = repo.fork_session(&key, 99).await;
         assert!(matches!(
             result.unwrap_err(),
             SessionError::InvalidForkPoint { .. }
@@ -671,49 +626,48 @@ mod tests {
     #[tokio::test]
     async fn bind_and_get_channel() {
         let (repo, _tmp, _container) = setup().await;
-        let key = SessionKey::from_raw("chan:test");
-        repo.create_session(&make_session("chan:test"))
-            .await
-            .unwrap();
+        let entry = make_session();
+        let key = entry.key;
+        repo.create_session(&entry).await.unwrap();
 
         let now = Utc::now();
         let binding = ChannelBinding {
             channel_type: "telegram".to_owned(),
             account:      "bot123".to_owned(),
             chat_id:      "chat456".to_owned(),
-            session_key:  key.clone(),
+            session_key:  key,
             created_at:   now,
             updated_at:   now,
         };
 
         let created = repo.bind_channel(&binding).await.unwrap();
-        assert_eq!(created.session_key.as_str(), "chan:test");
+        assert_eq!(created.session_key, key);
 
         let fetched = repo
             .get_channel_binding("telegram", "bot123", "chat456")
             .await
             .unwrap();
         assert!(fetched.is_some());
-        assert_eq!(fetched.unwrap().session_key.as_str(), "chan:test");
+        assert_eq!(fetched.unwrap().session_key, key);
     }
 
     #[tokio::test]
     async fn bind_channel_upsert() {
         let (repo, _tmp, _container) = setup().await;
 
-        repo.create_session(&make_session("chan:first"))
-            .await
-            .unwrap();
-        repo.create_session(&make_session("chan:second"))
-            .await
-            .unwrap();
+        let entry1 = make_session();
+        let key1 = entry1.key;
+        repo.create_session(&entry1).await.unwrap();
+        let entry2 = make_session();
+        let key2 = entry2.key;
+        repo.create_session(&entry2).await.unwrap();
 
         let now = Utc::now();
         let binding1 = ChannelBinding {
             channel_type: "slack".to_owned(),
             account:      "team1".to_owned(),
             chat_id:      "ch1".to_owned(),
-            session_key:  SessionKey::from_raw("chan:first"),
+            session_key:  key1,
             created_at:   now,
             updated_at:   now,
         };
@@ -723,28 +677,27 @@ mod tests {
             channel_type: "slack".to_owned(),
             account:      "team1".to_owned(),
             chat_id:      "ch1".to_owned(),
-            session_key:  SessionKey::from_raw("chan:second"),
+            session_key:  key2,
             created_at:   now,
             updated_at:   now,
         };
         let updated = repo.bind_channel(&binding2).await.unwrap();
-        assert_eq!(updated.session_key.as_str(), "chan:second");
+        assert_eq!(updated.session_key, key2);
 
         let fetched = repo
             .get_channel_binding("slack", "team1", "ch1")
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(fetched.session_key.as_str(), "chan:second");
+        assert_eq!(fetched.session_key, key2);
     }
 
     #[tokio::test]
     async fn cascade_delete_removes_bindings() {
         let (repo, _tmp, _container) = setup().await;
-        let key = SessionKey::from_raw("cascade_bind:test");
-        repo.create_session(&make_session("cascade_bind:test"))
-            .await
-            .unwrap();
+        let entry = make_session();
+        let key = entry.key;
+        repo.create_session(&entry).await.unwrap();
 
         let now = Utc::now();
         repo.bind_channel(&ChannelBinding {

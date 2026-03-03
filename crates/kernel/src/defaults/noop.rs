@@ -22,7 +22,6 @@ use uuid::Uuid;
 
 use crate::{
     channel::types::{ChannelType, ChatMessage},
-    event::{EventBus, EventFilter, EventStream, KernelEvent},
     guard::{Guard, GuardContext, Verdict},
     io::{
         bus::OutboxStore,
@@ -33,6 +32,7 @@ use crate::{
         Result as MemResult, knowledge::KnowledgeMemory, learning::LearningMemory,
         state::StateMemory, types::*,
     },
+    notification::{EventBus, EventFilter, EventStream, KernelNotification},
     process::{SessionId, principal::UserId},
     session::{ChannelBinding, SessionEntry, SessionError, SessionKey, SessionRepository},
 };
@@ -58,7 +58,7 @@ pub struct NoopEventBus;
 
 #[async_trait]
 impl EventBus for NoopEventBus {
-    async fn publish(&self, _event: KernelEvent) {
+    async fn publish(&self, _event: KernelNotification) {
         // discard
     }
 
@@ -274,12 +274,11 @@ impl SessionRepository for NoopSessionRepository {
     async fn fork_session(
         &self,
         _source_key: &SessionKey,
-        target_key: &SessionKey,
         _fork_at_seq: i64,
     ) -> Result<SessionEntry, SessionError> {
         let now = Utc::now();
         Ok(SessionEntry {
-            key:           target_key.clone(),
+            key:           SessionKey::new(),
             title:         None,
             model:         None,
             system_prompt: None,
@@ -337,8 +336,8 @@ impl SessionResolver for NoopSessionResolver {
         channel_type: ChannelType,
         platform_chat_id: Option<&str>,
     ) -> Result<SessionId, IngestError> {
-        let chat_id = platform_chat_id.unwrap_or("default");
-        Ok(SessionId::new(format!("{}:{}", channel_type, chat_id)))
+        let _ = (channel_type, platform_chat_id);
+        Ok(SessionId::new())
     }
 }
 
