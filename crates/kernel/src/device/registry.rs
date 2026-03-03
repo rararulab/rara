@@ -29,10 +29,8 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use tracing::{info, warn};
 
-use crate::{
-    device::{Device, DeviceEvent, DeviceId, DeviceInfo, DeviceStatus},
-    error::{KernelError, Result},
-};
+use super::{Device, DeviceEvent, DeviceId, DeviceInfo, DeviceStatus};
+use crate::error::{KernelError, Result};
 
 // ---------------------------------------------------------------------------
 // DeviceRegistry

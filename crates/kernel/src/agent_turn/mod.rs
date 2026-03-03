@@ -22,6 +22,12 @@
 //! which provides first-class `reasoning_content` support for models like
 //! DeepSeek-R1.
 
+mod trace;
+mod history;
+
+pub use trace::*;
+pub(crate) use history::build_llm_history;
+
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use tokio::sync::mpsc;
@@ -33,81 +39,10 @@ use crate::{
     handle::process_handle::ProcessHandle,
     io::stream::{StreamEvent, StreamHandle},
     llm,
-    model::ModelCapabilities,
+    llm::ModelCapabilities,
 };
 
-/// Maximum byte length for result preview strings.
-const RESULT_PREVIEW_MAX_BYTES: usize = 2048;
-
-/// Truncate a string to at most `max_bytes` bytes on a valid char boundary.
-fn truncate_preview(s: &str, max_bytes: usize) -> String {
-    if s.len() <= max_bytes {
-        return s.to_string();
-    }
-    let boundary = s.floor_char_boundary(max_bytes);
-    format!("{}... (truncated)", &s[..boundary])
-}
-
-/// A tool call being incrementally assembled from streaming deltas.
-struct PendingToolCall {
-    id:            String,
-    name:          String,
-    arguments_buf: String,
-}
-
-/// Trace of a single tool call within an iteration.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct ToolCallTrace {
-    pub name:           String,
-    pub id:             String,
-    pub duration_ms:    u64,
-    pub success:        bool,
-    pub arguments:      serde_json::Value,
-    pub result_preview: String,
-    pub error:          Option<String>,
-}
-
-/// Trace of a single LLM iteration within a turn.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct IterationTrace {
-    pub index:          usize,
-    pub first_token_ms: Option<u64>,
-    pub stream_ms:      u64,
-    /// First 200 chars of accumulated text.
-    pub text_preview:   String,
-    /// Full accumulated reasoning text for this iteration.
-    pub reasoning_text: Option<String>,
-    pub tool_calls:     Vec<ToolCallTrace>,
-}
-
-/// Complete trace of a single agent turn.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct TurnTrace {
-    pub duration_ms:      u64,
-    pub model:            String,
-    /// The user message that triggered this turn.
-    pub input_text:       Option<String>,
-    pub iterations:       Vec<IterationTrace>,
-    pub final_text_len:   usize,
-    pub total_tool_calls: usize,
-    pub success:          bool,
-    pub error:            Option<String>,
-}
-
-/// Result of a single agent turn.
-#[derive(Debug)]
-pub struct AgentTurnResult {
-    /// The final text produced by the agent.
-    pub text:       String,
-    /// Number of LLM iterations consumed.
-    pub iterations: usize,
-    /// Number of tool calls executed.
-    pub tool_calls: usize,
-    /// Model used for this turn.
-    pub model:      String,
-    /// Detailed trace of the turn for observability.
-    pub trace:      TurnTrace,
-}
+use trace::{RESULT_PREVIEW_MAX_BYTES, PendingToolCall, truncate_preview};
 
 /// Execute a single agent turn inline: build messages, stream LLM responses,
 /// execute tool calls, and emit [`StreamEvent`]s directly.
@@ -603,51 +538,6 @@ pub(crate) async fn run_inline_agent_loop(
         model: model.clone(),
         trace,
     })
-}
-
-/// Convert persisted chat history into [`llm::Message`] format.
-///
-/// This is the `LlmDriver`-native equivalent of the legacy
-/// `runner::build_history_messages` which returns async-openai types.
-pub(crate) fn build_llm_history(
-    history: &[crate::channel::types::ChatMessage],
-) -> Vec<llm::Message> {
-    history
-        .iter()
-        .filter_map(|msg| {
-            use crate::channel::types::MessageRole;
-            match msg.role {
-                MessageRole::System => Some(llm::Message::system(msg.content.as_text())),
-                MessageRole::User => Some(llm::Message::user(msg.content.as_text())),
-                MessageRole::Assistant => {
-                    if msg.tool_calls.is_empty() {
-                        Some(llm::Message::assistant(msg.content.as_text()))
-                    } else {
-                        let tool_calls: Vec<llm::ToolCallRequest> = msg
-                            .tool_calls
-                            .iter()
-                            .map(|tc| llm::ToolCallRequest {
-                                id:        tc.id.to_string(),
-                                name:      tc.name.to_string(),
-                                arguments: tc.arguments.to_string(),
-                            })
-                            .collect();
-                        Some(llm::Message::assistant_with_tool_calls(
-                            msg.content.as_text(),
-                            tool_calls,
-                        ))
-                    }
-                }
-                MessageRole::Tool | MessageRole::ToolResult => {
-                    let tool_call_id = msg.tool_call_id.as_deref().unwrap_or("");
-                    Some(llm::Message::tool_result(
-                        tool_call_id,
-                        msg.content.as_text(),
-                    ))
-                }
-            }
-        })
-        .collect()
 }
 
 #[cfg(test)]

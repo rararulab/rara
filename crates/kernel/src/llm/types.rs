@@ -18,6 +18,7 @@
 //! canonical request/response model for the [`LlmDriver`](super::LlmDriver)
 //! trait.
 
+use base::shared_string::SharedString;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -258,4 +259,134 @@ pub struct CompletionResponse {
     pub stop_reason:       StopReason,
     pub usage:             Option<Usage>,
     pub model:             String,
+}
+
+// ---------------------------------------------------------------------------
+// LlmProviderFamily / ModelCapabilities (migrated from model.rs)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LlmProviderFamily {
+    OpenRouter,
+    Ollama,
+    Codex,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModelCapabilities {
+    pub provider:              LlmProviderFamily,
+    pub supports_tools:        bool,
+    pub tools_disabled_reason: Option<&'static str>,
+}
+
+impl ModelCapabilities {
+    #[must_use]
+    pub fn detect(provider_hint: Option<&str>, model_name: &str) -> Self {
+        let provider = detect_provider_family(provider_hint, model_name);
+        let canonical = canonical_model_name(model_name);
+
+        // Ollama serves many raw models whose chat templates/tool-calling support
+        // varies. Keep the deny-list small and explicit so unsupported models
+        // degrade gracefully without breaking tool-capable ones.
+        if matches!(provider, LlmProviderFamily::Ollama) && canonical.starts_with("deepseek-r1") {
+            return Self {
+                provider,
+                supports_tools: false,
+                tools_disabled_reason: Some(
+                    "ollama deepseek-r1 variants do not support function/tool calling",
+                ),
+            };
+        }
+
+        Self {
+            provider,
+            supports_tools: true,
+            tools_disabled_reason: None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ToolCall (SharedString-based, migrated from model.rs)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct ToolCall {
+    pub id:        SharedString,
+    pub name:      SharedString,
+    pub arguments: serde_json::Value,
+}
+
+// ---------------------------------------------------------------------------
+// Helper functions (migrated from model.rs)
+// ---------------------------------------------------------------------------
+
+fn detect_provider_family(provider_hint: Option<&str>, model_name: &str) -> LlmProviderFamily {
+    let provider_hint = provider_hint.map(str::trim).map(str::to_ascii_lowercase);
+    match provider_hint.as_deref() {
+        Some("ollama") => return LlmProviderFamily::Ollama,
+        Some("openrouter") => return LlmProviderFamily::OpenRouter,
+        Some("codex") => return LlmProviderFamily::Codex,
+        _ => {}
+    }
+
+    let trimmed = model_name.trim();
+    // Common Ollama local model syntax: `name:tag` with no provider prefix.
+    if trimmed.contains(':') && !trimmed.contains('/') {
+        return LlmProviderFamily::Ollama;
+    }
+
+    LlmProviderFamily::Unknown
+}
+
+fn canonical_model_name(model_name: &str) -> String {
+    let trimmed = model_name.trim().to_ascii_lowercase();
+    trimmed
+        .rsplit('/')
+        .next()
+        .unwrap_or(trimmed.as_str())
+        .to_owned()
+}
+
+#[cfg(test)]
+mod model_tests {
+    use super::*;
+
+    #[test]
+    fn detects_ollama_deepseek_r1_as_no_tools() {
+        let caps = ModelCapabilities::detect(Some("ollama"), "deepseek-r1:14b");
+        assert_eq!(caps.provider, LlmProviderFamily::Ollama);
+        assert!(!caps.supports_tools);
+        assert!(caps.tools_disabled_reason.is_some());
+    }
+
+    #[test]
+    fn detects_ollama_registry_prefix_as_no_tools() {
+        let caps =
+            ModelCapabilities::detect(Some("ollama"), "registry.ollama.ai/library/deepseek-r1:14b");
+        assert!(!caps.supports_tools);
+    }
+
+    #[test]
+    fn infers_ollama_from_local_tagged_name() {
+        let caps = ModelCapabilities::detect(None, "deepseek-r1:14b");
+        assert_eq!(caps.provider, LlmProviderFamily::Ollama);
+        assert!(!caps.supports_tools);
+    }
+
+    #[test]
+    fn leaves_other_models_tool_capable_by_default() {
+        let caps = ModelCapabilities::detect(Some("openrouter"), "google/gemini-2.0-flash");
+        assert_eq!(caps.provider, LlmProviderFamily::OpenRouter);
+        assert!(caps.supports_tools);
+        assert!(caps.tools_disabled_reason.is_none());
+    }
+
+    #[test]
+    fn detects_codex_provider_hint() {
+        let caps = ModelCapabilities::detect(Some("codex"), "gpt-5");
+        assert_eq!(caps.provider, LlmProviderFamily::Codex);
+        assert!(caps.supports_tools);
+    }
 }

@@ -98,11 +98,10 @@ pub struct BootConfig {
 impl Default for BootConfig {
     fn default() -> Self {
         use rara_kernel::{
-            defaults::{
-                noop::{NoopSessionRepository, NoopSettingsProvider},
-                noop_user_store::NoopUserStore,
-            },
+            kernel::config::NoopSettingsProvider,
             llm::DriverRegistryBuilder,
+            process::noop_user_store::NoopUserStore,
+            session::NoopSessionRepository,
         };
 
         Self {

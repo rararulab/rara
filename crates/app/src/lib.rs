@@ -233,7 +233,7 @@ impl AppConfig {
         let path_guard = Arc::new(rara_kernel::guard::path_guard::PathGuard::new(
             sandbox_config,
             workspace_path,
-            Box::new(rara_kernel::defaults::noop_guard::NoopGuard),
+            Box::new(rara_kernel::guard::noop::NoopGuard),
         ));
 
         // Hot-reload: subscribe to settings changes and update PathGuard

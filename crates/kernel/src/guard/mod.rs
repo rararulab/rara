@@ -14,6 +14,7 @@
 
 //! Guard abstraction — tool approval and output moderation.
 
+pub mod noop;
 pub mod path_guard;
 
 use std::sync::Arc;

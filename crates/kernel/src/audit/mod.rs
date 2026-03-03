@@ -21,6 +21,8 @@
 //! [`InMemoryAuditLog`] provides a bounded, lock-free default implementation
 //! suitable for development and testing.
 
+pub mod subsystem;
+
 use std::{collections::VecDeque, sync::Arc};
 
 use async_trait::async_trait;

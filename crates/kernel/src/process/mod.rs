@@ -26,6 +26,7 @@
 
 pub mod agent_registry;
 pub mod manifest_loader;
+pub mod noop_user_store;
 pub mod principal;
 pub mod user;
 

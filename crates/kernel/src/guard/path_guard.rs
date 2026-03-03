@@ -335,7 +335,7 @@ mod tests {
     use std::fs;
 
     use super::*;
-    use crate::defaults::noop::NoopGuard;
+    use crate::guard::noop::NoopGuard;
 
     /// Helper to build a PathGuard with a real temp workspace.
     fn make_guard(

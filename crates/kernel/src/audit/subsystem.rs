@@ -22,12 +22,10 @@ use std::sync::Arc;
 /// Shared reference to the [`AuditSubsystem`].
 pub type AuditRef = Arc<AuditSubsystem>;
 
-use crate::{
-    audit::{
-        AuditEvent, AuditFilter, AuditLog, InMemoryAuditLog, NoopToolCallRecorder, ToolCallRecorder,
-    },
-    process::AgentId,
+use super::{
+    AuditEvent, AuditFilter, AuditLog, InMemoryAuditLog, NoopToolCallRecorder, ToolCallRecorder,
 };
+use crate::process::AgentId;
 
 /// Unified audit subsystem — event logging and tool call recording.
 pub struct AuditSubsystem {
@@ -47,7 +45,7 @@ impl AuditSubsystem {
     }
 
     /// Record a structured audit event (fire-and-forget).
-    pub fn record(&self, event: AuditEvent) { crate::audit::record_async(&self.audit_log, event); }
+    pub fn record(&self, event: AuditEvent) { super::record_async(&self.audit_log, event); }
 
     /// Record a tool call invocation.
     pub async fn record_tool_call(

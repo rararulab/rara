@@ -26,8 +26,8 @@ use tokio::sync::Semaphore;
 
 use crate::{
     audit::{AuditEvent, AuditFilter},
-    audit_subsystem::AuditRef,
-    device_registry::DeviceRegistryRef,
+    audit::subsystem::AuditRef,
+    device::registry::DeviceRegistryRef,
     error::{KernelError, Result},
     event::KernelEvent,
     io::{

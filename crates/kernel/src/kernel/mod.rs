@@ -40,6 +40,10 @@
 //! Each spawned agent receives a [`ProcessHandle`] — a thin event pusher that
 //! sends [`Syscall`] variants through the unified event queue.
 
+pub mod config;
+
+pub use config::{KernelConfig, SettingsRef};
+
 use std::{collections::HashMap, sync::Arc};
 
 use jiff::Timestamp;
@@ -49,9 +53,9 @@ use tracing::info;
 
 use crate::{
     audit::{AuditEvent, AuditFilter, AuditLog},
-    audit_subsystem::AuditRef,
+    audit::subsystem::AuditRef,
     channel::types::ChannelType,
-    device_registry::{DeviceRegistry, DeviceRegistryRef},
+    device::registry::{DeviceRegistry, DeviceRegistryRef},
     io::{
         egress::{EgressAdapterRef, EndpointRegistry, EndpointRegistryRef},
         ingress::{IdentityResolverRef, IngressPipeline, IngressPipelineRef, SessionResolverRef},
@@ -63,41 +67,11 @@ use crate::{
     memory::MemoryRef,
     notification::NotificationBusRef,
     process::{AgentId, ProcessState, ProcessTable, agent_registry::AgentRegistryRef},
-    queue::{EventQueueRef, ShardedEventQueueConfig, ShardedQueueRef},
+    queue::{EventQueueRef, ShardedQueueRef},
     security::SecurityRef,
     session::SessionRepoRef,
     tool::ToolRegistryRef,
 };
-
-// ---------------------------------------------------------------------------
-// KernelConfig
-// ---------------------------------------------------------------------------
-
-/// Kernel configuration.
-#[derive(Debug, Clone, smart_default::SmartDefault)]
-pub struct KernelConfig {
-    /// Maximum number of concurrent agent processes globally.
-    #[default = 16]
-    pub max_concurrency:        usize,
-    /// Default maximum number of children per agent.
-    #[default = 8]
-    pub default_child_limit:    usize,
-    /// Default max LLM iterations for spawned agents.
-    #[default = 25]
-    pub default_max_iterations: usize,
-    /// Maximum number of KV entries per agent (0 = unlimited).
-    /// Applies to the agent-scoped namespace only.
-    #[default = 1000]
-    pub memory_quota_per_agent: usize,
-    /// Event queue configuration. Controls whether the kernel uses a single
-    /// global queue (`num_shards = 0`) or sharded parallel processing.
-    #[default(ShardedEventQueueConfig::single())]
-    pub event_queue:            ShardedEventQueueConfig,
-}
-
-/// Shared reference to a
-/// [`SettingsProvider`](rara_domain_shared::settings::SettingsProvider).
-pub type SettingsRef = Arc<dyn rara_domain_shared::settings::SettingsProvider>;
 
 /// The unified agent orchestrator.
 ///
@@ -311,7 +285,7 @@ impl Kernel {
     pub fn audit(&self) -> &AuditRef { &self.audit }
 
     /// Access the approval manager.
-    pub fn approval(&self) -> &Arc<crate::approval::ApprovalManager> { self.security.approval() }
+    pub fn approval(&self) -> &Arc<crate::security::approval::ApprovalManager> { self.security.approval() }
 
     /// Access the unified security subsystem.
     pub fn security(&self) -> &SecurityRef { &self.security }
@@ -343,6 +317,7 @@ impl Kernel {
     ///
     /// Creates minimal I/O subsystem components (IngressPipeline,
     /// EndpointRegistry) with Noop resolvers.
+    #[cfg(any(test, feature = "testing"))]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn for_testing(
         config: KernelConfig,
@@ -362,12 +337,12 @@ impl Kernel {
         device_registry: DeviceRegistryRef,
     ) -> Self {
         let identity_resolver: IdentityResolverRef =
-            Arc::new(crate::defaults::noop::NoopIdentityResolver);
+            Arc::new(crate::io::ingress::NoopIdentityResolver);
         let session_resolver: SessionResolverRef =
-            Arc::new(crate::defaults::noop::NoopSessionResolver);
+            Arc::new(crate::io::ingress::NoopSessionResolver);
 
         let sharded_queue: ShardedQueueRef = Arc::new(crate::queue::ShardedEventQueue::new(
-            ShardedEventQueueConfig::single(),
+            crate::queue::ShardedEventQueueConfig::single(),
         ));
         let event_queue: EventQueueRef = sharded_queue.clone();
 
@@ -486,14 +461,14 @@ impl Kernel {
 mod tests {
     use super::*;
     use crate::{
-        defaults::{
-            noop::{NoopNotificationBus, NoopMemory, NoopSessionRepository, NoopSettingsProvider},
-            noop_user_store::NoopUserStore,
-        },
         handle::kernel_handle::KernelHandle,
         io::stream::StreamHub,
+        kernel::config::NoopSettingsProvider,
         llm::DriverRegistryBuilder,
-        process::{AgentManifest, agent_registry::AgentRegistry, principal::Principal},
+        memory::NoopMemory,
+        notification::NoopNotificationBus,
+        process::{AgentManifest, agent_registry::AgentRegistry, noop_user_store::NoopUserStore, principal::Principal},
+        session::NoopSessionRepository,
         tool::ToolRegistry,
     };
 
@@ -524,9 +499,9 @@ mod tests {
             Arc::new(NoopSessionRepository) as SessionRepoRef,
             Arc::new(NoopSettingsProvider) as SettingsRef,
             Arc::new(StreamHub::new(16)),
-            Arc::new(crate::defaults::noop::NoopIdentityResolver) as IdentityResolverRef,
-            Arc::new(crate::defaults::noop::NoopSessionResolver) as SessionResolverRef,
-            Arc::new(crate::audit_subsystem::AuditSubsystem::noop()),
+            Arc::new(crate::io::ingress::NoopIdentityResolver) as IdentityResolverRef,
+            Arc::new(crate::io::ingress::NoopSessionResolver) as SessionResolverRef,
+            Arc::new(crate::audit::subsystem::AuditSubsystem::noop()),
             opendal::Operator::new(opendal::services::Memory::default())
                 .expect("memory operator")
                 .finish(),
@@ -1034,8 +1009,8 @@ mod tests {
         let security = Arc::new(crate::security::SecuritySubsystem::new(
             Arc::new(NoopUserStore),
             Arc::new(DenyDangerousGuard),
-            Arc::new(crate::approval::ApprovalManager::new(
-                crate::approval::ApprovalPolicy::default(),
+            Arc::new(crate::security::approval::ApprovalManager::new(
+                crate::security::approval::ApprovalPolicy::default(),
             )),
         ));
 
@@ -1050,9 +1025,9 @@ mod tests {
             Arc::new(NoopSessionRepository) as SessionRepoRef,
             Arc::new(NoopSettingsProvider) as SettingsRef,
             Arc::new(StreamHub::new(16)),
-            Arc::new(crate::defaults::noop::NoopIdentityResolver) as IdentityResolverRef,
-            Arc::new(crate::defaults::noop::NoopSessionResolver) as SessionResolverRef,
-            Arc::new(crate::audit_subsystem::AuditSubsystem::noop()),
+            Arc::new(crate::io::ingress::NoopIdentityResolver) as IdentityResolverRef,
+            Arc::new(crate::io::ingress::NoopSessionResolver) as SessionResolverRef,
+            Arc::new(crate::audit::subsystem::AuditSubsystem::noop()),
             opendal::Operator::new(opendal::services::Memory::default())
                 .expect("memory operator")
                 .finish(),

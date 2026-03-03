@@ -323,3 +323,100 @@ pub trait SessionRepository: Send + Sync + 'static {
         Ok(None)
     }
 }
+
+// ---------------------------------------------------------------------------
+// NoopSessionRepository
+// ---------------------------------------------------------------------------
+
+mod noop {
+    use async_trait::async_trait;
+    use chrono::Utc;
+
+    use crate::channel::types::ChatMessage;
+
+    use super::{
+        ChannelBinding, SessionEntry, SessionError, SessionKey, SessionRepository,
+    };
+
+    /// A no-op session repository for testing — all operations succeed without
+    /// persisting.
+    pub struct NoopSessionRepository;
+
+    #[async_trait]
+    impl SessionRepository for NoopSessionRepository {
+        async fn create_session(&self, entry: &SessionEntry) -> Result<SessionEntry, SessionError> {
+            Ok(entry.clone())
+        }
+
+        async fn get_session(&self, _key: &SessionKey) -> Result<Option<SessionEntry>, SessionError> {
+            Ok(None)
+        }
+
+        async fn list_sessions(
+            &self,
+            _limit: i64,
+            _offset: i64,
+        ) -> Result<Vec<SessionEntry>, SessionError> {
+            Ok(vec![])
+        }
+
+        async fn update_session(&self, entry: &SessionEntry) -> Result<SessionEntry, SessionError> {
+            Ok(entry.clone())
+        }
+
+        async fn delete_session(&self, _key: &SessionKey) -> Result<(), SessionError> { Ok(()) }
+
+        async fn append_message(
+            &self,
+            _session_key: &SessionKey,
+            message: &ChatMessage,
+        ) -> Result<ChatMessage, SessionError> {
+            Ok(message.clone())
+        }
+
+        async fn read_messages(
+            &self,
+            _session_key: &SessionKey,
+            _after_seq: Option<i64>,
+            _limit: Option<i64>,
+        ) -> Result<Vec<ChatMessage>, SessionError> {
+            Ok(vec![])
+        }
+
+        async fn clear_messages(&self, _session_key: &SessionKey) -> Result<(), SessionError> { Ok(()) }
+
+        async fn fork_session(
+            &self,
+            _source_key: &SessionKey,
+            _fork_at_seq: i64,
+        ) -> Result<SessionEntry, SessionError> {
+            let now = Utc::now();
+            Ok(SessionEntry {
+                key:           SessionKey::new(),
+                title:         None,
+                model:         None,
+                system_prompt: None,
+                message_count: 0,
+                preview:       None,
+                metadata:      None,
+                created_at:    now,
+                updated_at:    now,
+            })
+        }
+
+        async fn bind_channel(&self, binding: &ChannelBinding) -> Result<ChannelBinding, SessionError> {
+            Ok(binding.clone())
+        }
+
+        async fn get_channel_binding(
+            &self,
+            _channel_type: &str,
+            _account: &str,
+            _chat_id: &str,
+        ) -> Result<Option<ChannelBinding>, SessionError> {
+            Ok(None)
+        }
+    }
+}
+
+pub use noop::NoopSessionRepository;

@@ -14,11 +14,12 @@
 
 //! Kernel notifications — inter-component event broadcasting.
 
+pub mod broadcast;
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use jiff::Timestamp;
-use tokio::sync::broadcast;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -72,7 +73,7 @@ pub struct NotificationFilter {
 }
 
 /// A stream of kernel notifications.
-pub type NotificationStream = broadcast::Receiver<KernelNotification>;
+pub type NotificationStream = tokio::sync::broadcast::Receiver<KernelNotification>;
 
 // ---------------------------------------------------------------------------
 // NotificationBus trait
@@ -89,3 +90,33 @@ pub trait NotificationBus: Send + Sync {
     /// Subscribe to notifications matching the given filter.
     async fn subscribe(&self, filter: NotificationFilter) -> NotificationStream;
 }
+
+// ---------------------------------------------------------------------------
+// Test-only NoopNotificationBus
+// ---------------------------------------------------------------------------
+
+#[cfg(any(test, feature = "testing"))]
+mod noop {
+    use async_trait::async_trait;
+    use tokio::sync::broadcast;
+
+    use super::{KernelNotification, NotificationBus, NotificationFilter, NotificationStream};
+
+    /// A notification bus that silently discards all published notifications.
+    pub struct NoopNotificationBus;
+
+    #[async_trait]
+    impl NotificationBus for NoopNotificationBus {
+        async fn publish(&self, _event: KernelNotification) {
+            // discard
+        }
+
+        async fn subscribe(&self, _filter: NotificationFilter) -> NotificationStream {
+            let (_tx, rx) = broadcast::channel(1);
+            rx
+        }
+    }
+}
+
+#[cfg(any(test, feature = "testing"))]
+pub use noop::NoopNotificationBus;

@@ -200,6 +200,59 @@ impl IngressPipeline {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Test-only Noop resolvers
+// ---------------------------------------------------------------------------
+
+#[cfg(any(test, feature = "testing"))]
+mod noop {
+    use async_trait::async_trait;
+
+    use crate::{
+        channel::types::ChannelType,
+        io::types::IngestError,
+        process::{SessionId, principal::UserId},
+    };
+
+    use super::{IdentityResolver, SessionResolver};
+
+    /// A no-op identity resolver for testing — maps to
+    /// `"{channel_type}:{platform_user_id}"`.
+    pub struct NoopIdentityResolver;
+
+    #[async_trait]
+    impl IdentityResolver for NoopIdentityResolver {
+        async fn resolve(
+            &self,
+            channel_type: ChannelType,
+            platform_user_id: &str,
+            _platform_chat_id: Option<&str>,
+        ) -> Result<UserId, IngestError> {
+            Ok(UserId(format!("{}:{}", channel_type, platform_user_id)))
+        }
+    }
+
+    /// A no-op session resolver for testing — maps to
+    /// `"{channel_type}:{platform_chat_id}"`.
+    pub struct NoopSessionResolver;
+
+    #[async_trait]
+    impl SessionResolver for NoopSessionResolver {
+        async fn resolve(
+            &self,
+            _user: &UserId,
+            channel_type: ChannelType,
+            platform_chat_id: Option<&str>,
+        ) -> Result<SessionId, IngestError> {
+            let _ = (channel_type, platform_chat_id);
+            Ok(SessionId::new())
+        }
+    }
+}
+
+#[cfg(any(test, feature = "testing"))]
+pub use noop::{NoopIdentityResolver, NoopSessionResolver};
+
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;

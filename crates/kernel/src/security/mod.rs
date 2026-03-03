@@ -17,13 +17,15 @@
 //! Consolidates `UserStore`, `Guard`, and `ApprovalManager` into a single
 //! cohesive component that owns all security-related decisions.
 
+pub mod approval;
+
 use std::sync::Arc;
 
 /// Shared reference to the [`SecuritySubsystem`].
 pub type SecurityRef = Arc<SecuritySubsystem>;
 
+use self::approval::ApprovalManager;
 use crate::{
-    approval::ApprovalManager,
     error::{KernelError, Result},
     guard::{Guard, GuardContext, GuardRef, Verdict},
     process::{
@@ -119,10 +121,10 @@ impl SecuritySubsystem {
     /// Create a no-op security subsystem for testing.
     pub fn noop() -> Self {
         Self {
-            user_store: Arc::new(crate::defaults::noop_user_store::NoopUserStore),
-            guard:      Arc::new(crate::defaults::noop::NoopGuard),
+            user_store: Arc::new(crate::process::noop_user_store::NoopUserStore),
+            guard:      Arc::new(crate::guard::noop::NoopGuard),
             approval:   Arc::new(ApprovalManager::new(
-                crate::approval::ApprovalPolicy::default(),
+                self::approval::ApprovalPolicy::default(),
             )),
         }
     }

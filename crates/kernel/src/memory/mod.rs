@@ -61,3 +61,156 @@ pub type MemoryRef = Arc<dyn Memory>;
 /// Consumers hold `Arc<dyn Memory>` for polymorphic access to all layers.
 pub trait Memory: StateMemory + KnowledgeMemory + LearningMemory {}
 impl<T: StateMemory + KnowledgeMemory + LearningMemory> Memory for T {}
+
+// ---------------------------------------------------------------------------
+// NoopMemory
+// ---------------------------------------------------------------------------
+
+mod noop {
+    use async_trait::async_trait;
+    use uuid::Uuid;
+
+    use super::{
+        KnowledgeMemory, LearningMemory, Result as MemResult, StateMemory,
+        types::*,
+    };
+
+    /// A memory implementation that does nothing — all ops succeed with empty
+    /// results.
+    pub struct NoopMemory;
+
+    #[async_trait]
+    impl StateMemory for NoopMemory {
+        async fn add(
+            &self,
+            _ctx: &MemoryContext,
+            _scope: Scope,
+            _messages: Vec<Message>,
+        ) -> MemResult<Vec<StateEvent>> {
+            Ok(vec![])
+        }
+
+        async fn search(
+            &self,
+            _ctx: &MemoryContext,
+            _scope: Scope,
+            _query: &str,
+            _limit: usize,
+        ) -> MemResult<Vec<StateFact>> {
+            Ok(vec![])
+        }
+
+        async fn get(
+            &self,
+            _ctx: &MemoryContext,
+            _scope: Scope,
+            _id: Uuid,
+        ) -> MemResult<Option<StateFact>> {
+            Ok(None)
+        }
+
+        async fn get_all(
+            &self,
+            _ctx: &MemoryContext,
+            _scope: Scope,
+            _limit: usize,
+        ) -> MemResult<Vec<StateFact>> {
+            Ok(vec![])
+        }
+
+        async fn update(
+            &self,
+            _ctx: &MemoryContext,
+            _scope: Scope,
+            _id: Uuid,
+            _data: &str,
+        ) -> MemResult<()> {
+            Ok(())
+        }
+
+        async fn delete(&self, _ctx: &MemoryContext, _scope: Scope, _id: Uuid) -> MemResult<()> {
+            Ok(())
+        }
+
+        async fn delete_all(&self, _ctx: &MemoryContext, _scope: Scope) -> MemResult<()> { Ok(()) }
+
+        async fn history(
+            &self,
+            _ctx: &MemoryContext,
+            _scope: Scope,
+            _id: Uuid,
+        ) -> MemResult<Vec<StateHistory>> {
+            Ok(vec![])
+        }
+    }
+
+    #[async_trait]
+    impl KnowledgeMemory for NoopMemory {
+        async fn write(
+            &self,
+            _ctx: &MemoryContext,
+            _scope: Scope,
+            _content: &str,
+            _tags: &[&str],
+        ) -> MemResult<KnowledgeNote> {
+            Ok(KnowledgeNote {
+                id:         Uuid::new_v4(),
+                content:    String::new(),
+                tags:       vec![],
+                created_at: jiff::Timestamp::now(),
+                updated_at: jiff::Timestamp::now(),
+            })
+        }
+
+        async fn read(
+            &self,
+            _ctx: &MemoryContext,
+            _scope: Scope,
+            _id: Uuid,
+        ) -> MemResult<Option<KnowledgeNote>> {
+            Ok(None)
+        }
+
+        async fn list(
+            &self,
+            _ctx: &MemoryContext,
+            _scope: Scope,
+            _tags: &[&str],
+            _limit: usize,
+        ) -> MemResult<Vec<KnowledgeNote>> {
+            Ok(vec![])
+        }
+
+        async fn delete(&self, _ctx: &MemoryContext, _scope: Scope, _id: Uuid) -> MemResult<()> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl LearningMemory for NoopMemory {
+        async fn retain(&self, _ctx: &MemoryContext, _scope: Scope, _content: &str) -> MemResult<()> {
+            Ok(())
+        }
+
+        async fn recall(
+            &self,
+            _ctx: &MemoryContext,
+            _scope: Scope,
+            _query: &str,
+            _limit: usize,
+        ) -> MemResult<Vec<RecallEntry>> {
+            Ok(vec![])
+        }
+
+        async fn reflect(
+            &self,
+            _ctx: &MemoryContext,
+            _scope: Scope,
+            _query: &str,
+        ) -> MemResult<String> {
+            Ok(String::new())
+        }
+    }
+}
+
+pub use noop::NoopMemory;

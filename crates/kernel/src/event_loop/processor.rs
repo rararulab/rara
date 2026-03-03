@@ -22,9 +22,8 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info, info_span, warn};
 
-use crate::{
-    event::KernelEvent, event_loop::RuntimeTable, kernel::Kernel, queue::shard::ShardQueue,
-};
+use super::RuntimeTable;
+use crate::{event::KernelEvent, kernel::Kernel, queue::shard::ShardQueue};
 
 /// A single event processor that drains and processes events from one
 /// `ShardQueue`.

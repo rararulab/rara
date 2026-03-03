@@ -43,3 +43,32 @@ pub trait OutboxStore: Send + Sync + 'static {
     /// Mark an envelope as successfully delivered (remove from outbox).
     async fn mark_delivered(&self, id: &MessageId) -> Result<(), BusError>;
 }
+
+// ---------------------------------------------------------------------------
+// Test-only NoopOutboxStore
+// ---------------------------------------------------------------------------
+
+#[cfg(any(test, feature = "testing"))]
+mod noop {
+    use async_trait::async_trait;
+
+    use crate::io::types::{BusError, MessageId, OutboundEnvelope};
+
+    use super::OutboxStore;
+
+    /// A no-op outbox store for testing — all operations succeed without
+    /// persisting.
+    pub struct NoopOutboxStore;
+
+    #[async_trait]
+    impl OutboxStore for NoopOutboxStore {
+        async fn append(&self, _envelope: OutboundEnvelope) -> Result<(), BusError> { Ok(()) }
+
+        async fn drain_pending(&self, _max: usize) -> Vec<OutboundEnvelope> { vec![] }
+
+        async fn mark_delivered(&self, _id: &MessageId) -> Result<(), BusError> { Ok(()) }
+    }
+}
+
+#[cfg(any(test, feature = "testing"))]
+pub use noop::NoopOutboxStore;

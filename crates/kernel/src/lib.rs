@@ -29,13 +29,9 @@
 //! | Notification Bus | [`NotificationBus`] | Inter-component notification broadcasting |
 
 pub mod agent_turn;
-pub mod approval;
 pub mod audit;
-pub mod audit_subsystem;
 pub mod channel;
-pub mod defaults;
 pub mod device;
-pub mod device_registry;
 pub mod error;
 pub mod event;
 pub mod event_loop;
@@ -47,10 +43,8 @@ pub mod kv;
 pub mod llm;
 pub mod memory;
 pub mod metrics;
-pub mod model;
 pub mod notification;
 pub mod process;
-pub(crate) mod processor;
 pub mod queue;
 pub mod security;
 pub mod session;
@@ -59,10 +53,10 @@ pub mod tool;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
-pub use approval::{
+pub use security::approval::{
     ApprovalDecision, ApprovalManager, ApprovalPolicy, ApprovalRequest, ApprovalResponse, RiskLevel,
 };
-pub use audit_subsystem::AuditSubsystem;
+pub use audit::subsystem::AuditSubsystem;
 pub use error::{KernelError, Result};
 // New process model re-exports
 pub use handle::{
@@ -96,7 +90,7 @@ mod api_naming_tests {
     }
 
     #[test]
-    fn event_processors_are_grouped_under_processor_module() {
-        let _ = std::mem::size_of::<crate::processor::EventProcessor>();
+    fn event_processors_are_grouped_under_event_loop_module() {
+        let _ = std::mem::size_of::<crate::event_loop::processor::EventProcessor>();
     }
 }

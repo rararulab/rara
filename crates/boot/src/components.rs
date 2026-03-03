@@ -17,10 +17,9 @@
 use std::sync::Arc;
 
 use rara_kernel::{
-    defaults::{broadcast_bus::BroadcastNotificationBus, noop::NoopMemory, noop_guard::NoopGuard},
-    guard::Guard,
-    memory::Memory,
-    notification::NotificationBus,
+    guard::{Guard, noop::NoopGuard},
+    memory::{Memory, NoopMemory},
+    notification::{NotificationBus, broadcast::BroadcastNotificationBus},
 };
 
 /// Default Memory implementation — `NoopMemory` (kernel layer does not persist;
@@ -43,5 +42,5 @@ pub fn default_guard() -> Arc<dyn Guard> { Arc::new(NoopGuard) }
 /// [`PgUserStore`](crate::user_store::PgUserStore) backed by a real
 /// PostgreSQL connection pool. See `rara-app` for the production wiring.
 pub fn default_user_store() -> Arc<dyn rara_kernel::process::user::UserStore> {
-    Arc::new(rara_kernel::defaults::noop_user_store::NoopUserStore)
+    Arc::new(rara_kernel::process::noop_user_store::NoopUserStore)
 }

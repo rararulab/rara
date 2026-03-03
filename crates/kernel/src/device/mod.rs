@@ -30,6 +30,8 @@
 //!         └── "slack_send_msg"   → DeviceId("mcp-slack")
 //! ```
 
+pub mod registry;
+
 use std::fmt;
 
 use async_trait::async_trait;
@@ -134,7 +136,7 @@ pub struct DeviceInfo {
 /// Implementors include MCP server wrappers, external API adapters, and
 /// internal platform services. Devices can be registered and unregistered
 /// at runtime via the
-/// [`DeviceRegistry`](crate::device_registry::DeviceRegistry).
+/// [`DeviceRegistry`](crate::device::registry::DeviceRegistry).
 #[async_trait]
 pub trait Device: Send + Sync {
     /// The unique identifier for this device.
