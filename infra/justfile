@@ -1,6 +1,40 @@
 [private]
+default:
+    @just --list --list-heading 'infra justfile:\n'
+
+[doc("build deploy CLI binary")]
+[private]
 build:
     go build -o bin/deploy ./cmd/deploy
+
+[doc("build setup CLI binary")]
+[private]
+build-setup:
+    go build -o bin/setup ./cmd/setup
+
+# ========================================================================================
+# Kind — local dev environment (requires Docker only)
+# ========================================================================================
+
+[doc("spin up a complete rara stack in a local kind cluster")]
+kind-up *ARGS:
+    go run ./cmd/setup up {{ ARGS }}
+
+[doc("tear down the kind cluster and clean up /etc/hosts")]
+kind-down *ARGS:
+    go run ./cmd/setup down {{ ARGS }}
+
+[doc("show status of the local kind environment")]
+kind-status *ARGS:
+    go run ./cmd/setup status {{ ARGS }}
+
+[doc("re-seed Consul KV with rara config")]
+kind-seed *ARGS:
+    go run ./cmd/setup seed {{ ARGS }}
+
+[doc("update /etc/hosts for *.rara.local resolution")]
+kind-hosts *ARGS:
+    go run ./cmd/setup hosts add {{ ARGS }}
 
 # ========================================================================================
 # Pulumi
