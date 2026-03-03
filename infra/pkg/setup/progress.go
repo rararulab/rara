@@ -53,3 +53,28 @@ func Wait(msg string, f func() error) error {
 	fmt.Printf(" \033[32mdone\033[0m (%s)\n", time.Since(start).Round(time.Millisecond))
 	return nil
 }
+
+// EventKind describes the type of a ProgressEvent.
+type EventKind int
+
+const (
+	EventStepStart EventKind = iota // a step has started
+	EventStepDone                   // a step completed (Elapsed is set)
+	EventInfo                       // informational sub-progress line
+	EventWarn                       // warning
+	EventDone                       // all steps complete
+	EventError                      // fatal error (Err is set)
+)
+
+// ProgressEvent is sent by Up() to report installation progress.
+type ProgressEvent struct {
+	Kind    EventKind
+	N       int           // step number (1-based)
+	Total   int           // total steps
+	Name    string        // step name or info text
+	Elapsed time.Duration // set for EventStepDone
+	Err     error         // set for EventError
+}
+
+// Sender is a function that receives ProgressEvents from Up().
+type Sender func(ProgressEvent)

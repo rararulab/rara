@@ -19,8 +19,10 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/urfave/cli/v2"
+	"golang.org/x/term"
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/rararulab/rara/infra/pkg/setup"
@@ -132,7 +134,11 @@ func upCmd() *cli.Command {
 		),
 		Action: func(c *cli.Context) error {
 			cfg := configFromCtx(c)
-			return setup.Up(c.Context, cfg)
+			// TTY detection: use TUI when stdin is a terminal, otherwise use console output.
+			if isTerminal() {
+				return setup.RunTUI(c.Context, cfg)
+			}
+			return setup.Up(c.Context, cfg, consoleSender)
 		},
 	}
 }
@@ -235,5 +241,28 @@ func seedCmd() *cli.Command {
 			kubeconfigPath := setup.KindKubeconfigPath(cfg.ClusterName)
 			return setup.SeedConsulKV(c.Context, cfg, kubeconfigPath)
 		},
+	}
+}
+
+// isTerminal reports whether stdin is a terminal.
+func isTerminal() bool {
+	return term.IsTerminal(int(os.Stdin.Fd()))
+}
+
+// consoleSender adapts ProgressEvents to the legacy console output functions.
+func consoleSender(ev setup.ProgressEvent) {
+	switch ev.Kind {
+	case setup.EventStepStart:
+		setup.Step(ev.N, ev.Total, ev.Name)
+	case setup.EventStepDone:
+		setup.OK(fmt.Sprintf("%s (%s)", ev.Name, ev.Elapsed.Round(time.Millisecond)))
+	case setup.EventInfo:
+		setup.Info(ev.Name)
+	case setup.EventWarn:
+		setup.Warn(ev.Name)
+	case setup.EventDone:
+		// nothing
+	case setup.EventError:
+		setup.Warn(fmt.Sprintf("error: %v", ev.Err))
 	}
 }

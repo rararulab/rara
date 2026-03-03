@@ -35,74 +35,101 @@ import (
 const totalSteps = 8
 
 // Up brings up the complete local rara environment.
-func Up(ctx context.Context, cfg Config) error {
-	fmt.Printf("\033[1;32m==> rara local setup\033[0m\n")
-	fmt.Printf("    cluster: %s  namespace: %s  domain: %s\n\n", cfg.ClusterName, cfg.Namespace, cfg.Domain)
-
+func Up(ctx context.Context, cfg Config, send Sender) error {
 	// Step 1: kind cluster
-	Step(1, totalSteps, "Ensure kind cluster")
+	const step1Name = "Ensure kind cluster"
+	step1Start := time.Now()
+	send(ProgressEvent{Kind: EventStepStart, N: 1, Total: totalSteps, Name: step1Name})
 	kubeconfigPath, err := EnsureCluster(ctx, cfg)
 	if err != nil {
+		send(ProgressEvent{Kind: EventError, Err: fmt.Errorf("ensure cluster: %w", err)})
 		return fmt.Errorf("ensure cluster: %w", err)
 	}
-	OK(fmt.Sprintf("kubeconfig: %s", kubeconfigPath))
+	send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("kubeconfig: %s", kubeconfigPath)})
+	send(ProgressEvent{Kind: EventStepDone, N: 1, Total: totalSteps, Name: step1Name, Elapsed: time.Since(step1Start)})
 
 	// Step 2: MetalLB
-	Step(2, totalSteps, "Install MetalLB (LoadBalancer support)")
+	const step2Name = "Install MetalLB (LoadBalancer support)"
+	step2Start := time.Now()
+	send(ProgressEvent{Kind: EventStepStart, N: 2, Total: totalSteps, Name: step2Name})
 	rc, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
 	if err != nil {
+		send(ProgressEvent{Kind: EventError, Err: fmt.Errorf("build rest config: %w", err)})
 		return fmt.Errorf("build rest config: %w", err)
 	}
 	if err := InstallMetalLB(ctx, rc); err != nil {
+		send(ProgressEvent{Kind: EventError, Err: fmt.Errorf("install metallb: %w", err)})
 		return fmt.Errorf("install metallb: %w", err)
 	}
+	send(ProgressEvent{Kind: EventStepDone, N: 2, Total: totalSteps, Name: step2Name, Elapsed: time.Since(step2Start)})
 
 	// Step 3: Helm charts (infra stack)
-	Step(3, totalSteps, "Install infrastructure Helm charts")
+	const step3Name = "Install infrastructure Helm charts"
+	step3Start := time.Now()
+	send(ProgressEvent{Kind: EventStepStart, N: 3, Total: totalSteps, Name: step3Name})
 	if err := InstallHelmCharts(ctx, cfg, kubeconfigPath); err != nil {
+		send(ProgressEvent{Kind: EventError, Err: fmt.Errorf("install helm charts: %w", err)})
 		return fmt.Errorf("install helm charts: %w", err)
 	}
+	send(ProgressEvent{Kind: EventStepDone, N: 3, Total: totalSteps, Name: step3Name, Elapsed: time.Since(step3Start)})
 
 	// Step 4: Custom K8s services
-	Step(4, totalSteps, "Deploy custom K8s services")
+	const step4Name = "Deploy custom K8s services"
+	step4Start := time.Now()
+	send(ProgressEvent{Kind: EventStepStart, N: 4, Total: totalSteps, Name: step4Name})
 	if err := DeployCustomServices(ctx, cfg, kubeconfigPath); err != nil {
+		send(ProgressEvent{Kind: EventError, Err: fmt.Errorf("deploy custom services: %w", err)})
 		return fmt.Errorf("deploy custom services: %w", err)
 	}
+	send(ProgressEvent{Kind: EventStepDone, N: 4, Total: totalSteps, Name: step4Name, Elapsed: time.Since(step4Start)})
 
 	// Step 5: Seed Consul KV
-	Step(5, totalSteps, "Seed Consul KV")
+	const step5Name = "Seed Consul KV"
+	step5Start := time.Now()
+	send(ProgressEvent{Kind: EventStepStart, N: 5, Total: totalSteps, Name: step5Name})
 	if err := SeedConsulKV(ctx, cfg, kubeconfigPath); err != nil {
+		send(ProgressEvent{Kind: EventError, Err: fmt.Errorf("seed consul kv: %w", err)})
 		return fmt.Errorf("seed consul kv: %w", err)
 	}
+	send(ProgressEvent{Kind: EventStepDone, N: 5, Total: totalSteps, Name: step5Name, Elapsed: time.Since(step5Start)})
 
 	// Step 6: Get LoadBalancer IP (Traefik)
-	Step(6, totalSteps, "Discover Traefik LoadBalancer IP")
+	const step6Name = "Discover Traefik LoadBalancer IP"
+	step6Start := time.Now()
+	send(ProgressEvent{Kind: EventStepStart, N: 6, Total: totalSteps, Name: step6Name})
 	lbIP, err := GetTraefikIP(ctx, rc, cfg)
 	if err != nil {
-		Warn(fmt.Sprintf("Could not determine Traefik IP: %v", err))
-		Warn("You may need to update /etc/hosts manually")
+		send(ProgressEvent{Kind: EventWarn, Name: fmt.Sprintf("Could not determine Traefik IP: %v", err)})
+		send(ProgressEvent{Kind: EventWarn, Name: "You may need to update /etc/hosts manually"})
 		lbIP = ""
 	} else {
-		OK(fmt.Sprintf("Traefik LoadBalancer IP: %s", lbIP))
+		send(ProgressEvent{Kind: EventInfo, Name: fmt.Sprintf("Traefik LoadBalancer IP: %s", lbIP)})
 	}
+	send(ProgressEvent{Kind: EventStepDone, N: 6, Total: totalSteps, Name: step6Name, Elapsed: time.Since(step6Start)})
 
 	// Step 7: /etc/hosts
-	Step(7, totalSteps, "Update /etc/hosts")
+	const step7Name = "Update /etc/hosts"
+	step7Start := time.Now()
+	send(ProgressEvent{Kind: EventStepStart, N: 7, Total: totalSteps, Name: step7Name})
 	if lbIP != "" {
-		if err := Wait("Writing /etc/hosts entries", func() error {
-			return AddHostsEntries(lbIP, cfg.Domain)
-		}); err != nil {
-			Warn(fmt.Sprintf("Could not update /etc/hosts (try running with sudo): %v", err))
-			fmt.Println("\nAdd the following entries to /etc/hosts manually:")
-			PrintHostsBlock(lbIP, cfg.Domain)
+		send(ProgressEvent{Kind: EventInfo, Name: "Writing /etc/hosts entries..."})
+		if err := AddHostsEntries(lbIP, cfg.Domain); err != nil {
+			send(ProgressEvent{Kind: EventWarn, Name: fmt.Sprintf("Could not update /etc/hosts (try running with sudo): %v", err)})
+		} else {
+			send(ProgressEvent{Kind: EventInfo, Name: "Updated /etc/hosts"})
 		}
 	} else {
-		Info("Skipping /etc/hosts (no LoadBalancer IP)")
+		send(ProgressEvent{Kind: EventInfo, Name: "Skipping /etc/hosts (no LoadBalancer IP)"})
 	}
+	send(ProgressEvent{Kind: EventStepDone, N: 7, Total: totalSteps, Name: step7Name, Elapsed: time.Since(step7Start)})
 
 	// Step 8: Summary
-	Step(8, totalSteps, "Setup complete")
+	const step8Name = "Setup complete"
+	step8Start := time.Now()
+	send(ProgressEvent{Kind: EventStepStart, N: 8, Total: totalSteps, Name: step8Name})
 	printSummary(cfg, lbIP)
+	send(ProgressEvent{Kind: EventStepDone, N: 8, Total: totalSteps, Name: step8Name, Elapsed: time.Since(step8Start)})
+	send(ProgressEvent{Kind: EventDone})
 
 	return nil
 }
