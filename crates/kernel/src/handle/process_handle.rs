@@ -77,15 +77,31 @@ impl ProcessHandle {
     /// The session ID this agent belongs to.
     pub fn session_id(&self) -> &SessionId { &self.session_id }
 
-    // ---- Helper: push syscall and await reply ----
+    // ---- Helpers ----
 
-    /// Push a syscall event and await the reply.
+    /// Push a syscall event into the event queue.
     async fn syscall_push(&self, event: KernelEvent) -> Result<()> {
         self.event_queue
             .push(event)
             .await
             .map_err(|_| KernelError::Other {
                 message: "event queue full for syscall".into(),
+            })
+    }
+
+    /// Await a oneshot reply, converting channel-closed to KernelError.
+    async fn await_reply<T>(rx: tokio::sync::oneshot::Receiver<T>) -> Result<T> {
+        rx.await.map_err(|_| KernelError::Other {
+            message: "syscall reply channel closed".into(),
+        })
+    }
+
+    /// Send a signal to a target process (fire-and-forget).
+    fn push_signal(&self, target: AgentId, signal: Signal) -> Result<()> {
+        self.event_queue
+            .try_push(KernelEvent::SendSignal { target, signal })
+            .map_err(|_| KernelError::Other {
+                message: "event queue full for signal".into(),
             })
     }
 
@@ -134,57 +150,27 @@ impl ProcessHandle {
             reply_tx,
         }))
         .await?;
-        reply_rx.await.map_err(|_| KernelError::Other {
-            message: "syscall reply channel closed".into(),
-        })?
+        Self::await_reply(reply_rx).await?
     }
 
     /// Kill an agent and its entire subtree.
     pub async fn kill(&self, target: AgentId) -> Result<()> {
-        self.event_queue
-            .try_push(KernelEvent::SendSignal {
-                target,
-                signal: Signal::Kill,
-            })
-            .map_err(|_| KernelError::Other {
-                message: "event queue full for kill signal".into(),
-            })
+        self.push_signal(target, Signal::Kill)
     }
 
     /// Pause an agent process.
     pub async fn pause(&self, target: AgentId) -> Result<()> {
-        self.event_queue
-            .try_push(KernelEvent::SendSignal {
-                target,
-                signal: Signal::Pause,
-            })
-            .map_err(|_| KernelError::Other {
-                message: "event queue full for pause signal".into(),
-            })
+        self.push_signal(target, Signal::Pause)
     }
 
     /// Resume a paused agent process.
     pub async fn resume(&self, target: AgentId) -> Result<()> {
-        self.event_queue
-            .try_push(KernelEvent::SendSignal {
-                target,
-                signal: Signal::Resume,
-            })
-            .map_err(|_| KernelError::Other {
-                message: "event queue full for resume signal".into(),
-            })
+        self.push_signal(target, Signal::Resume)
     }
 
     /// Interrupt the current LLM turn.
     pub async fn interrupt(&self, target: AgentId) -> Result<()> {
-        self.event_queue
-            .try_push(KernelEvent::SendSignal {
-                target,
-                signal: Signal::Interrupt,
-            })
-            .map_err(|_| KernelError::Other {
-                message: "event queue full for interrupt signal".into(),
-            })
+        self.push_signal(target, Signal::Interrupt)
     }
 
     /// List child processes of the current agent.
@@ -219,9 +205,7 @@ impl ProcessHandle {
             reply_tx,
         }))
         .await?;
-        reply_rx.await.map_err(|_| KernelError::Other {
-            message: "syscall reply channel closed".into(),
-        })?
+        Self::await_reply(reply_rx).await?
     }
 
     /// Recall a value from this agent's private namespace.
@@ -233,9 +217,7 @@ impl ProcessHandle {
             reply_tx,
         }))
         .await?;
-        reply_rx.await.map_err(|_| KernelError::Other {
-            message: "syscall reply channel closed".into(),
-        })?
+        Self::await_reply(reply_rx).await?
     }
 
     /// Store a value in an explicit shared scope.
@@ -255,9 +237,7 @@ impl ProcessHandle {
             reply_tx,
         }))
         .await?;
-        reply_rx.await.map_err(|_| KernelError::Other {
-            message: "syscall reply channel closed".into(),
-        })?
+        Self::await_reply(reply_rx).await?
     }
 
     /// Recall a value from an explicit shared scope.
@@ -275,9 +255,7 @@ impl ProcessHandle {
             reply_tx,
         }))
         .await?;
-        reply_rx.await.map_err(|_| KernelError::Other {
-            message: "syscall reply channel closed".into(),
-        })?
+        Self::await_reply(reply_rx).await?
     }
 
     // ========================================================================
@@ -293,9 +271,7 @@ impl ProcessHandle {
             reply_tx,
         }))
         .await?;
-        reply_rx.await.map_err(|_| KernelError::Other {
-            message: "syscall reply channel closed".into(),
-        })?
+        Self::await_reply(reply_rx).await?
     }
 
     /// Create a named pipe that any agent can connect to.
@@ -307,9 +283,7 @@ impl ProcessHandle {
             reply_tx,
         }))
         .await?;
-        reply_rx.await.map_err(|_| KernelError::Other {
-            message: "syscall reply channel closed".into(),
-        })?
+        Self::await_reply(reply_rx).await?
     }
 
     /// Connect to a named pipe as a reader.
@@ -321,9 +295,7 @@ impl ProcessHandle {
             reply_tx,
         }))
         .await?;
-        reply_rx.await.map_err(|_| KernelError::Other {
-            message: "syscall reply channel closed".into(),
-        })?
+        Self::await_reply(reply_rx).await?
     }
 
     // ========================================================================
@@ -357,9 +329,7 @@ impl ProcessHandle {
             reply_tx,
         }))
         .await?;
-        reply_rx.await.map_err(|_| KernelError::Other {
-            message: "syscall reply channel closed".into(),
-        })?
+        Self::await_reply(reply_rx).await?
     }
 
     /// Check guard verdicts for a batch of tool calls.
@@ -375,9 +345,7 @@ impl ProcessHandle {
             reply_tx,
         }))
         .await?;
-        reply_rx.await.map_err(|_| KernelError::Other {
-            message: "check_guard_batch: reply channel closed".into(),
-        })
+        Self::await_reply(reply_rx).await
     }
 
     // ========================================================================
@@ -392,9 +360,7 @@ impl ProcessHandle {
             reply_tx,
         }))
         .await?;
-        reply_rx.await.map_err(|_| KernelError::Other {
-            message: "syscall reply channel closed".into(),
-        })?
+        Self::await_reply(reply_rx).await?
     }
 
     /// Get the tool registry, enriched with per-process tools (e.g.
@@ -406,9 +372,7 @@ impl ProcessHandle {
             reply_tx,
         }))
         .await?;
-        reply_rx.await.map_err(|_| KernelError::Other {
-            message: "syscall reply channel closed".into(),
-        })
+        Self::await_reply(reply_rx).await
     }
 
     /// Resolve an [`LlmDriver`](crate::llm::LlmDriver) + model for this agent
@@ -420,9 +384,7 @@ impl ProcessHandle {
             reply_tx,
         }))
         .await?;
-        reply_rx.await.map_err(|_| KernelError::Other {
-            message: "syscall reply channel closed".into(),
-        })?
+        Self::await_reply(reply_rx).await?
     }
 
     // ========================================================================
