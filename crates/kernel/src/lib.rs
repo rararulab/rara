@@ -31,6 +31,7 @@
 pub mod agent_turn;
 pub mod audit;
 pub mod channel;
+pub(crate) mod delivery;
 pub mod device;
 pub mod error;
 pub mod event;

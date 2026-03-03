@@ -23,7 +23,7 @@ use crate::{
     audit::{AuditEvent, AuditEventType},
     channel::types::ChatMessage,
     event::KernelEvent,
-    io::types::{InboundMessage, MessageId, OutboundEnvelope, OutboundPayload},
+    io::types::{InboundMessage, MessageId, OutboundEnvelope},
     kernel::Kernel,
     process::{AgentId, AgentResult, ProcessState, SessionId},
 };
@@ -457,38 +457,4 @@ impl Kernel {
         }
     }
 
-    /// Spawn a Deliver event as an independent task so that egress I/O
-    /// (Telegram API, WebSocket send, etc.) does not block the event loop.
-    pub(crate) fn spawn_deliver(&self, envelope: OutboundEnvelope) {
-        let adapters = self.egress_adapters.clone();
-        let endpoints = Arc::clone(self.endpoint_registry());
-        let user_store = Arc::clone(self.security().user_store());
-
-        let payload_type = match &envelope.payload {
-            OutboundPayload::Reply { .. } => "reply",
-            OutboundPayload::Progress { .. } => "progress",
-            OutboundPayload::StateChange { .. } => "state_change",
-            OutboundPayload::Error { .. } => "error",
-        };
-        let span = tracing::info_span!(
-            "deliver",
-            session_id = %envelope.session_id,
-            payload_type,
-        );
-
-        tokio::spawn(
-            async move {
-                crate::io::egress::Egress::deliver(
-                    &adapters,
-                    &endpoints,
-                    Some(user_store.as_ref()),
-                    envelope,
-                )
-                .await;
-            }
-            .instrument(span),
-        );
-    }
 }
-
-use tracing::Instrument;

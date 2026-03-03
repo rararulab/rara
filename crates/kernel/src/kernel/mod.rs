@@ -42,7 +42,7 @@
 
 pub mod config;
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 pub use config::{KernelConfig, SettingsRef};
 use jiff::Timestamp;
@@ -53,6 +53,7 @@ use tracing::info;
 use crate::{
     audit::{AuditEvent, AuditFilter, AuditLog, subsystem::AuditRef},
     channel::types::ChannelType,
+    delivery::DeliverySubsystem,
     device::registry::{DeviceRegistry, DeviceRegistryRef},
     io::{
         egress::{EgressAdapterRef, EndpointRegistry, EndpointRegistryRef},
@@ -121,10 +122,8 @@ pub struct Kernel {
     stream_hub: StreamHubRef,
     /// Ingress pipeline for adapters to push inbound messages.
     ingress_pipeline: IngressPipelineRef,
-    /// Per-user endpoint registry (tracks connected channels).
-    endpoint_registry: EndpointRegistryRef,
-    /// Registered egress adapters (mutable before start, consumed by start).
-    pub(crate) egress_adapters: HashMap<ChannelType, EgressAdapterRef>,
+    /// Egress delivery subsystem (adapters + endpoint registry).
+    delivery: DeliverySubsystem,
     /// Unified event queue for all kernel interactions.
     event_queue: EventQueueRef,
     /// Sharded event queue backing the kernel event loop.
@@ -196,8 +195,7 @@ impl Kernel {
             device_registry: Arc::new(DeviceRegistry::new()),
             stream_hub,
             ingress_pipeline,
-            endpoint_registry,
-            egress_adapters: HashMap::new(),
+            delivery: DeliverySubsystem::new(endpoint_registry),
             event_queue,
             sharded_queue,
             started_at: Timestamp::now(),
@@ -367,8 +365,7 @@ impl Kernel {
             device_registry,
             stream_hub,
             ingress_pipeline,
-            endpoint_registry,
-            egress_adapters: HashMap::new(),
+            delivery: DeliverySubsystem::new(endpoint_registry),
             event_queue,
             sharded_queue,
             started_at: Timestamp::now(),
@@ -386,7 +383,10 @@ impl Kernel {
 
     /// Access the endpoint registry (WebAdapter needs this for connection
     /// tracking).
-    pub fn endpoint_registry(&self) -> &EndpointRegistryRef { &self.endpoint_registry }
+    pub fn endpoint_registry(&self) -> &EndpointRegistryRef { self.delivery.endpoint_registry() }
+
+    /// Access the delivery subsystem (used by event loop).
+    pub(crate) fn delivery(&self) -> &DeliverySubsystem { &self.delivery }
 
     /// Create a [`KernelHandle`] for external callers.
     ///
@@ -400,7 +400,7 @@ impl Kernel {
             Arc::clone(&self.process_table),
             Arc::clone(&self.ingress_pipeline),
             Arc::clone(&self.stream_hub),
-            Arc::clone(&self.endpoint_registry),
+            Arc::clone(self.delivery.endpoint_registry()),
             Arc::clone(&self.audit),
             Arc::clone(&self.settings),
             Arc::clone(&self.security),
@@ -422,7 +422,7 @@ impl Kernel {
     ///
     /// Must be called **before** [`start()`](Self::start).
     pub fn register_adapter(&mut self, channel_type: ChannelType, adapter: EgressAdapterRef) {
-        self.egress_adapters.insert(channel_type, adapter);
+        self.delivery.register_adapter(channel_type, adapter);
     }
 
     /// Start the unified event loop as a background task.

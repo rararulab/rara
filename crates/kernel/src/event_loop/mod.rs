@@ -161,7 +161,7 @@ impl Kernel {
                     .await;
             }
             KernelEvent::Deliver(envelope) => {
-                self.spawn_deliver(envelope);
+                self.delivery().deliver(envelope, self.security());
             }
             KernelEvent::Syscall(syscall) => {
                 self.handle_syscall(syscall, runtimes).await;

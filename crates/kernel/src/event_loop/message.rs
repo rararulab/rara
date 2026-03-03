@@ -48,7 +48,7 @@ impl Kernel {
         let session_id = msg.session_id.clone();
         let user = msg.user.clone();
 
-        self.register_stateless_endpoint(&msg);
+        self.delivery().register_stateless_endpoint(&msg);
 
         // ----- Path 1: ID addressing (agent-to-agent) -----
         if let Some(target_id) = msg.target_agent_id {
@@ -174,33 +174,6 @@ impl Kernel {
                 error!(session_id = %session_id, error = %e, "failed to spawn agent");
             }
         }
-    }
-
-    /// Register egress endpoint for stateless channels (e.g. Telegram).
-    ///
-    /// Connection-oriented channels (Web) register on WS/SSE connect.
-    /// Stateless channels have no persistent connection, so we register on
-    /// every inbound message (idempotent — EndpointRegistry uses a HashSet).
-    fn register_stateless_endpoint(&self, msg: &InboundMessage) {
-        if msg.source.channel_type != crate::channel::types::ChannelType::Telegram {
-            return;
-        }
-        let Some(ref chat_id_str) = msg.source.platform_chat_id else {
-            return;
-        };
-        let Ok(chat_id) = chat_id_str.parse::<i64>() else {
-            return;
-        };
-        self.endpoint_registry().register(
-            &msg.user,
-            crate::io::egress::Endpoint {
-                channel_type: crate::channel::types::ChannelType::Telegram,
-                address:      crate::io::egress::EndpointAddress::Telegram {
-                    chat_id,
-                    thread_id: None,
-                },
-            },
-        );
     }
 
     /// Deliver a message to a live process: buffer if the process is paused
