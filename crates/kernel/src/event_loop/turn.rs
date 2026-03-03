@@ -38,7 +38,7 @@ impl Kernel {
         msg: InboundMessage,
         runtimes: &RuntimeTable,
     ) {
-        let Some(mut rt) = runtimes.get_mut(&agent_id) else {
+        if !runtimes.contains(&agent_id) {
             warn!(agent_id = %agent_id, "runtime not found for LLM turn");
             // Send error back to the user instead of silently dropping.
             let envelope = OutboundEnvelope::error(
@@ -52,7 +52,7 @@ impl Kernel {
                 error!(%e, "failed to push runtime-not-found error Deliver");
             }
             return;
-        };
+        }
 
         let session_id = msg.session_id.clone();
         let user = msg.user.clone();
@@ -85,25 +85,44 @@ impl Kernel {
             metrics.record_message();
         }
 
-        // Apply context compaction.
+        // Apply context compaction + build history + append user message
+        // inside a single `with_mut` closure to minimize lock duration.
+        let user_text = msg.content.as_text();
+        let user_msg = ChatMessage::user(&user_text);
+
+        let turn_data = runtimes.with_mut(&agent_id, |rt| {
+            // Swap out the conversation for async compaction, then put it
+            // back after compaction completes.
+            let conversation = std::mem::take(&mut rt.conversation);
+            (conversation, rt.max_context_tokens, rt.handle.clone(), rt.turn_cancel.clone())
+        });
+
+        let Some((conversation, max_context_tokens, handle, turn_cancel)) = turn_data else {
+            warn!(agent_id = %agent_id, "runtime disappeared during LLM turn setup");
+            return;
+        };
+
+        // Apply context compaction (async).
         let compaction_strategy = crate::memory::compaction::SlidingWindowCompaction;
-        rt.conversation = crate::memory::compaction::maybe_compact(
-            std::mem::take(&mut rt.conversation),
-            rt.max_context_tokens,
+        let compacted = crate::memory::compaction::maybe_compact(
+            conversation,
+            max_context_tokens,
             &compaction_strategy,
         )
         .await;
 
-        // Convert history to LLM format (using the new llm::Message types).
+        // Convert history to LLM format.
         let history = {
-            let msgs = crate::agent_turn::build_llm_history(&rt.conversation);
+            let msgs = crate::agent_turn::build_llm_history(&compacted);
             if msgs.is_empty() { None } else { Some(msgs) }
         };
 
-        // Append user message to conversation + persist.
-        let user_text = msg.content.as_text();
-        let user_msg = ChatMessage::user(&user_text);
-        rt.conversation.push(user_msg.clone());
+        // Put compacted conversation back and append user message.
+        runtimes.with_mut(&agent_id, |rt| {
+            rt.conversation = compacted;
+            rt.conversation.push(user_msg.clone());
+        });
+
         let session_id_persist = session_id.clone();
         // Persist in background to avoid blocking event loop.
         {
@@ -121,15 +140,10 @@ impl Kernel {
         let stream_handle = self.stream_hub().open(session_id.clone());
 
         // Clone what we need for the spawned task.
-        let handle = Arc::clone(&rt.handle);
-        let turn_cancel = rt.turn_cancel.clone();
         let event_queue = self.event_queue().clone();
         let stream_id = stream_handle.stream_id().clone();
         let typing_session_id = egress_session_id;
         let stream_hub_ref = Arc::clone(self.stream_hub());
-
-        // Drop the DashMap guard before spawning.
-        drop(rt);
 
         // Capture parent span for the spawned task.
         let parent_span = tracing::Span::current();
@@ -304,9 +318,9 @@ impl Kernel {
 
                 // Persist assistant reply to the process's own session.
                 let assistant_msg = ChatMessage::assistant(&turn.text);
-                if let Some(mut rt) = runtimes.get_mut(&agent_id) {
+                runtimes.with_mut(&agent_id, |rt| {
                     rt.conversation.push(assistant_msg.clone());
-                }
+                });
                 if let Err(e) = self
                     .session_repo()
                     .append_message(&session_id, &assistant_msg)
@@ -357,9 +371,9 @@ impl Kernel {
                     "turn completed"
                 );
 
-                if let Some(mut rt) = runtimes.get_mut(&agent_id) {
+                runtimes.with_mut(&agent_id, |rt| {
                     rt.last_result = Some(result);
-                }
+                });
             }
             Ok(turn) => {
                 span.record("success", true);
@@ -419,11 +433,7 @@ impl Kernel {
         // Drain pause buffer before completing — if the user sent messages
         // while the turn was running, we need to re-inject them so they
         // trigger a new process spawn via the session addressing path.
-        let buffered = if let Some(mut rt) = runtimes.get_mut(&agent_id) {
-            std::mem::take(&mut rt.pause_buffer)
-        } else {
-            vec![]
-        };
+        let buffered = runtimes.drain_pause_buffer(&agent_id);
 
         // Set terminal state (sets finished_at, increments counter).
         let terminal_state = if turn_failed {

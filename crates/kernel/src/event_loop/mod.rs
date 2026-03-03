@@ -57,7 +57,7 @@ impl Kernel {
     pub(crate) async fn run_event_loop_arc(kernel: Arc<Kernel>, shutdown: CancellationToken) {
         use crate::event_loop::processor::EventProcessor;
 
-        let runtimes: Arc<RuntimeTable> = Arc::new(dashmap::DashMap::new());
+        let runtimes: Arc<RuntimeTable> = Arc::new(RuntimeTable::new());
         let sq = kernel.sharded_queue().clone();
         let num_shards = sq.num_shards();
 

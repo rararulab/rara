@@ -277,11 +277,12 @@ impl Kernel {
 
             Syscall::GetToolRegistry { agent_id, reply_tx } => {
                 let mut registry = self.tool_registry().as_ref().clone();
-                if let Some(rt) = runtimes.get(&agent_id) {
-                    let syscall_tool = crate::handle::syscall_tool::SyscallTool::new(
+                if let Some(syscall_tool) = runtimes.with(&agent_id, |rt| {
+                    crate::handle::syscall_tool::SyscallTool::new(
                         Arc::clone(&rt.handle),
                         Arc::clone(self.agent_registry()),
-                    );
+                    )
+                }) {
                     registry.register_builtin(Arc::new(syscall_tool));
                 }
                 let _ = reply_tx.send(Arc::new(registry));

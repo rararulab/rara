@@ -211,17 +211,21 @@ impl Kernel {
         msg: InboundMessage,
         runtimes: &RuntimeTable,
     ) {
-        if let Some(mut rt) = runtimes.get_mut(&agent_id) {
+        let should_buffer = runtimes.with_mut(&agent_id, |rt| {
             if rt.paused {
-                rt.pause_buffer.push(KernelEvent::UserMessage(msg));
-                return;
+                rt.pause_buffer.push(KernelEvent::UserMessage(msg.clone()));
+                return true;
             }
             if let Some(p) = self.process_table().get(agent_id) {
                 if p.state == ProcessState::Running {
-                    rt.pause_buffer.push(KernelEvent::UserMessage(msg));
-                    return;
+                    rt.pause_buffer.push(KernelEvent::UserMessage(msg.clone()));
+                    return true;
                 }
             }
+            false
+        });
+        if should_buffer == Some(true) {
+            return;
         }
         self.start_llm_turn(agent_id, msg, runtimes).await;
     }

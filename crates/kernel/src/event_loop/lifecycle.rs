@@ -134,8 +134,7 @@ impl Kernel {
         // a parent cascades to all children automatically.
         let process_cancel = if let Some(pid) = parent_id {
             runtimes
-                .get(&pid)
-                .map(|parent_rt| parent_rt.process_cancel.child_token())
+                .with(&pid, |parent_rt| parent_rt.process_cancel.child_token())
                 .unwrap_or_default()
         } else {
             CancellationToken::new()
@@ -224,12 +223,7 @@ impl Kernel {
         match signal {
             Signal::Interrupt => {
                 info!(agent_id = %target, "interrupt signal");
-                if let Some(mut rt) = runtimes.get_mut(&target) {
-                    // Cancel the current LLM turn token.
-                    rt.turn_cancel.cancel();
-                    // Replace with a fresh token for the next turn.
-                    rt.turn_cancel = CancellationToken::new();
-                }
+                runtimes.cancel_and_refresh_turn(&target);
                 // Notify via Deliver event — use channel session for egress.
                 let session_id = self
                     .process_table()
@@ -255,36 +249,25 @@ impl Kernel {
             }
             Signal::Pause => {
                 info!(agent_id = %target, "pause signal");
-                if let Some(mut rt) = runtimes.get_mut(&target) {
-                    rt.paused = true;
-                }
+                runtimes.set_paused(&target, true);
                 let _ = self.process_table().set_state(target, ProcessState::Paused);
             }
             Signal::Resume => {
                 info!(agent_id = %target, "resume signal");
-                let buffered = if let Some(mut rt) = runtimes.get_mut(&target) {
-                    rt.paused = false;
-                    std::mem::take(&mut rt.pause_buffer)
-                } else {
-                    vec![]
-                };
+                runtimes.set_paused(&target, false);
+                let buffered = runtimes.drain_pause_buffer(&target);
                 let _ = self.process_table().set_state(target, ProcessState::Idle);
-                if !buffered.is_empty() {
-                    for event in buffered {
-                        if let Err(e) = self.event_queue().try_push(event) {
-                            warn!(%e, "failed to re-inject buffered event on resume");
-                        }
+                for event in buffered {
+                    if let Err(e) = self.event_queue().try_push(event) {
+                        warn!(%e, "failed to re-inject buffered event on resume");
                     }
                 }
             }
             Signal::Terminate => {
                 info!(agent_id = %target, "terminate signal — graceful shutdown");
-                if let Some(rt) = runtimes.get(&target) {
-                    rt.turn_cancel.cancel();
-                }
+                runtimes.cancel_turn(&target);
                 // Grace period then force-kill via process_cancel token.
-                let process_cancel = runtimes.get(&target).map(|rt| rt.process_cancel.clone());
-                if let Some(token) = process_cancel {
+                if let Some(token) = runtimes.clone_process_cancel(&target) {
                     tokio::spawn(async move {
                         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                         token.cancel();
@@ -295,9 +278,7 @@ impl Kernel {
             }
             Signal::Kill => {
                 info!(agent_id = %target, "kill signal");
-                if let Some(rt) = runtimes.get(&target) {
-                    rt.process_cancel.cancel();
-                }
+                runtimes.cancel_process(&target);
                 let _ = self
                     .process_table()
                     .set_state(target, ProcessState::Cancelled);
@@ -334,9 +315,9 @@ impl Kernel {
         );
         let child_msg = crate::channel::types::ChatMessage::system(&child_result_text);
 
-        if let Some(mut rt) = runtimes.get_mut(&parent_id) {
+        runtimes.with_mut(&parent_id, |rt| {
             rt.conversation.push(child_msg.clone());
-        }
+        });
 
         let Some(session_id) = self
             .process_table()
