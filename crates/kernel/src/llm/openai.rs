@@ -23,6 +23,7 @@ use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use snafu::ResultExt;
 use tokio::sync::mpsc;
 
 use super::{
@@ -33,8 +34,6 @@ use super::{
         StopReason, ToolCallRequest, ToolChoice, Usage,
     },
 };
-use snafu::ResultExt;
-
 use crate::error::{KernelError, Result};
 
 // ---------------------------------------------------------------------------
@@ -175,11 +174,10 @@ impl LlmDriver for OpenAiDriver {
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse> {
         let response = self.send_request(&request, false).await?;
 
-        let raw: RawCompletionResponse =
-            response
-                .json()
-                .await
-                .whatever_context::<_, KernelError>("failed to parse LLM response")?;
+        let raw: RawCompletionResponse = response
+            .json()
+            .await
+            .whatever_context::<_, KernelError>("failed to parse LLM response")?;
 
         let choice = raw
             .choices
@@ -230,8 +228,7 @@ impl LlmDriver for OpenAiDriver {
         let mut acc = StreamAccumulator::new();
 
         while let Some(event_result) = event_stream.next().await {
-            let event = event_result
-                .whatever_context::<_, KernelError>("SSE stream error")?;
+            let event = event_result.whatever_context::<_, KernelError>("SSE stream error")?;
 
             if event.data == "[DONE]" {
                 break;

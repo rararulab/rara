@@ -52,9 +52,8 @@ pub trait OutboxStore: Send + Sync + 'static {
 mod noop {
     use async_trait::async_trait;
 
-    use crate::io::types::{BusError, MessageId, OutboundEnvelope};
-
     use super::OutboxStore;
+    use crate::io::types::{BusError, MessageId, OutboundEnvelope};
 
     /// A no-op outbox store for testing — all operations succeed without
     /// persisting.

@@ -70,10 +70,7 @@ mod noop {
     use async_trait::async_trait;
     use uuid::Uuid;
 
-    use super::{
-        KnowledgeMemory, LearningMemory, Result as MemResult, StateMemory,
-        types::*,
-    };
+    use super::{KnowledgeMemory, LearningMemory, Result as MemResult, StateMemory, types::*};
 
     /// A memory implementation that does nothing — all ops succeed with empty
     /// results.
@@ -188,7 +185,12 @@ mod noop {
 
     #[async_trait]
     impl LearningMemory for NoopMemory {
-        async fn retain(&self, _ctx: &MemoryContext, _scope: Scope, _content: &str) -> MemResult<()> {
+        async fn retain(
+            &self,
+            _ctx: &MemoryContext,
+            _scope: Scope,
+            _content: &str,
+        ) -> MemResult<()> {
             Ok(())
         }
 

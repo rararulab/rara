@@ -15,7 +15,9 @@
 use async_trait::async_trait;
 use tokio::sync::broadcast;
 
-use crate::notification::{KernelNotification, NotificationBus, NotificationFilter, NotificationStream};
+use crate::notification::{
+    KernelNotification, NotificationBus, NotificationFilter, NotificationStream,
+};
 
 /// Notification bus backed by `tokio::sync::broadcast`.
 pub struct BroadcastNotificationBus {
@@ -41,5 +43,7 @@ impl NotificationBus for BroadcastNotificationBus {
         let _ = self.sender.send(event);
     }
 
-    async fn subscribe(&self, _filter: NotificationFilter) -> NotificationStream { self.sender.subscribe() }
+    async fn subscribe(&self, _filter: NotificationFilter) -> NotificationStream {
+        self.sender.subscribe()
+    }
 }

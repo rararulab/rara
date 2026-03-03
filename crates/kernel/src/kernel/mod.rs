@@ -42,18 +42,16 @@
 
 pub mod config;
 
-pub use config::{KernelConfig, SettingsRef};
-
 use std::{collections::HashMap, sync::Arc};
 
+pub use config::{KernelConfig, SettingsRef};
 use jiff::Timestamp;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::{
-    audit::{AuditEvent, AuditFilter, AuditLog},
-    audit::subsystem::AuditRef,
+    audit::{AuditEvent, AuditFilter, AuditLog, subsystem::AuditRef},
     channel::types::ChannelType,
     device::registry::{DeviceRegistry, DeviceRegistryRef},
     io::{
@@ -285,7 +283,9 @@ impl Kernel {
     pub fn audit(&self) -> &AuditRef { &self.audit }
 
     /// Access the approval manager.
-    pub fn approval(&self) -> &Arc<crate::security::approval::ApprovalManager> { self.security.approval() }
+    pub fn approval(&self) -> &Arc<crate::security::approval::ApprovalManager> {
+        self.security.approval()
+    }
 
     /// Access the unified security subsystem.
     pub fn security(&self) -> &SecurityRef { &self.security }
@@ -467,7 +467,10 @@ mod tests {
         llm::DriverRegistryBuilder,
         memory::NoopMemory,
         notification::NoopNotificationBus,
-        process::{AgentManifest, agent_registry::AgentRegistry, noop_user_store::NoopUserStore, principal::Principal},
+        process::{
+            AgentManifest, agent_registry::AgentRegistry, noop_user_store::NoopUserStore,
+            principal::Principal,
+        },
         session::NoopSessionRepository,
         tool::ToolRegistry,
     };

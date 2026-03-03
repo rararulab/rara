@@ -15,6 +15,8 @@
 //! User message routing — 3-path routing logic, endpoint registration,
 //! and message delivery.
 
+use tracing::{error, info, info_span, warn};
+
 use super::runtime::RuntimeTable;
 use crate::{
     event::KernelEvent,
@@ -22,7 +24,6 @@ use crate::{
     kernel::Kernel,
     process::{AgentId, ProcessState, principal::Principal},
 };
-use tracing::{error, info, info_span, warn};
 
 impl Kernel {
     /// Handle a user message with 3-path routing:
@@ -247,8 +248,7 @@ impl Kernel {
     pub(crate) async fn resolve_manifest_for_auto_spawn(
         &self,
     ) -> Option<crate::process::AgentManifest> {
-        let model =
-            rara_domain_shared::settings::get_model(self.settings().as_ref(), "chat").await;
+        let model = rara_domain_shared::settings::get_model(self.settings().as_ref(), "chat").await;
         Some(crate::process::AgentManifest {
             name: "io-agent".to_string(),
             role: None,

@@ -99,14 +99,15 @@ const STREAM_SPLIT_THRESHOLD: usize = 3800;
 
 /// Per-chat streaming state for progressive `editMessageText` updates.
 struct StreamingMessage {
-    /// All message IDs sent for this stream (multiple when splitting long content).
+    /// All message IDs sent for this stream (multiple when splitting long
+    /// content).
     message_ids: Vec<MessageId>,
     /// Accumulated raw text for the current (latest) message.
     accumulated: String,
     /// Last successful `editMessageText` timestamp for throttling.
-    last_edit: Instant,
+    last_edit:   Instant,
     /// Whether new text has been appended since the last edit.
-    dirty: bool,
+    dirty:       bool,
 }
 
 impl StreamingMessage {
@@ -114,8 +115,8 @@ impl StreamingMessage {
         Self {
             message_ids: Vec::new(),
             accumulated: String::new(),
-            last_edit: Instant::now(),
-            dirty: false,
+            last_edit:   Instant::now(),
+            dirty:       false,
         }
     }
 }
@@ -399,7 +400,10 @@ impl EgressAdapter for TelegramAdapter {
                                 return Ok(());
                             }
                             // Edit failed — fall through to normal send path below.
-                            warn!(chat_id, "telegram: edit streaming message failed, falling back to send");
+                            warn!(
+                                chat_id,
+                                "telegram: edit streaming message failed, falling back to send"
+                            );
                         }
                     }
                     // Fallthrough if no valid message ID.
@@ -849,8 +853,7 @@ fn spawn_stream_forwarder(
     chat_id: i64,
     session_key: &str,
 ) {
-    use rara_kernel::io::stream::StreamEvent;
-    use rara_kernel::process::SessionId;
+    use rara_kernel::{io::stream::StreamEvent, process::SessionId};
 
     let session_key = session_key.to_string();
 
@@ -866,7 +869,10 @@ fn spawn_stream_forwarder(
         let session_id = match SessionId::try_from_raw(&session_key) {
             Ok(id) => id,
             Err(_) => {
-                warn!(session_key, "invalid session key for telegram stream forwarder");
+                warn!(
+                    session_key,
+                    "invalid session key for telegram stream forwarder"
+                );
                 return;
             }
         };
@@ -997,7 +1003,10 @@ fn spawn_stream_forwarder(
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(120)).await;
             if streams.remove(&cid).is_some() {
-                warn!(chat_id = cid, "telegram stream forwarder: stale state cleaned up after 120s");
+                warn!(
+                    chat_id = cid,
+                    "telegram stream forwarder: stale state cleaned up after 120s"
+                );
             }
         });
     });
@@ -1007,7 +1016,7 @@ fn spawn_stream_forwarder(
 /// Allows dropping the DashMap guard before making async Telegram API calls.
 struct FlushRequest {
     message_ids: Vec<MessageId>,
-    text_html: String,
+    text_html:   String,
 }
 
 /// Result of a flush operation — what to update back in state.
@@ -1029,11 +1038,7 @@ enum FlushResult {
 ///
 /// This function does NOT hold any DashMap guard — the caller must extract
 /// the data into a [`FlushRequest`] and drop the guard before calling.
-async fn flush_edit(
-    bot: &teloxide::Bot,
-    chat_id: i64,
-    req: &FlushRequest,
-) -> FlushResult {
+async fn flush_edit(bot: &teloxide::Bot, chat_id: i64, req: &FlushRequest) -> FlushResult {
     if req.message_ids.is_empty() || req.message_ids.last().copied() == Some(MessageId(0)) {
         // First message or new split — send a new message.
         match bot
@@ -1060,7 +1065,10 @@ async fn flush_edit(
                 if err_str.contains("message is not modified") {
                     FlushResult::Edited
                 } else if err_str.contains("Too Many Requests") || err_str.contains("retry after") {
-                    warn!(chat_id, "telegram stream: rate limited, will retry next tick");
+                    warn!(
+                        chat_id,
+                        "telegram stream: rate limited, will retry next tick"
+                    );
                     FlushResult::RateLimited
                 } else {
                     warn!(chat_id, error = %api_err, "telegram stream: edit failed");
@@ -1889,8 +1897,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_stream_state_lifecycle() {
-        use rara_kernel::io::stream::{StreamHub, StreamEvent};
-        use rara_kernel::process::SessionId;
+        use rara_kernel::{
+            io::stream::{StreamEvent, StreamHub},
+            process::SessionId,
+        };
 
         let hub = Arc::new(StreamHub::new(64));
         let active_streams: Arc<DashMap<i64, StreamingMessage>> = Arc::new(DashMap::new());
@@ -1924,6 +1934,8 @@ mod tests {
         assert!(!active_streams.contains_key(&chat_id));
 
         // Verify stream_handle still works (no panic on emit after state removal).
-        stream_handle.emit(StreamEvent::TextDelta { text: "late delta".to_string() });
+        stream_handle.emit(StreamEvent::TextDelta {
+            text: "late delta".to_string(),
+        });
     }
 }

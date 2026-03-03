@@ -45,7 +45,7 @@ use crate::{
     memory::NoopMemory,
     notification::NoopNotificationBus,
     process::{AgentManifest, ProcessTable, agent_registry::AgentRegistry},
-    session::{SessionRepoRef, NoopSessionRepository},
+    session::{NoopSessionRepository, SessionRepoRef},
     tool::{AgentToolRef, ToolRegistry},
 };
 

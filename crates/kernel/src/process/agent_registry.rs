@@ -19,10 +19,9 @@ use std::{
 };
 
 use dashmap::DashMap;
-
-use super::AgentManifest;
 use snafu::ResultExt;
 
+use super::AgentManifest;
 use crate::error::{IoSnafu, KernelError, Result};
 
 /// Shared reference to the [`AgentRegistry`].

@@ -21,11 +21,10 @@
 
 use std::path::Path;
 
+use snafu::ResultExt;
 use tracing::warn;
 
 use super::AgentManifest;
-use snafu::ResultExt;
-
 use crate::error::{IoSnafu, Result};
 
 /// Loads [`AgentManifest`] definitions.

@@ -215,7 +215,9 @@ impl Kernel {
                     tool_name: tool_name.clone(),
                     tool_args: serde_json::json!({"summary": &summary}),
                     summary,
-                    risk_level: crate::security::approval::ApprovalManager::classify_risk(&tool_name),
+                    risk_level: crate::security::approval::ApprovalManager::classify_risk(
+                        &tool_name,
+                    ),
                     requested_at: Timestamp::now(),
                     timeout_secs: policy.timeout_secs,
                 };
@@ -224,7 +226,10 @@ impl Kernel {
                 // for human approval.
                 tokio::spawn(async move {
                     let decision = approval.request_approval(req).await;
-                    let approved = matches!(decision, crate::security::approval::ApprovalDecision::Approved);
+                    let approved = matches!(
+                        decision,
+                        crate::security::approval::ApprovalDecision::Approved
+                    );
                     let _ = reply_tx.send(Ok(approved));
                 });
             }

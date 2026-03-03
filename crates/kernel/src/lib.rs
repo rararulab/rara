@@ -53,9 +53,6 @@ pub mod tool;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
-pub use security::approval::{
-    ApprovalDecision, ApprovalManager, ApprovalPolicy, ApprovalRequest, ApprovalResponse, RiskLevel,
-};
 pub use audit::subsystem::AuditSubsystem;
 pub use error::{KernelError, Result};
 // New process model re-exports
@@ -71,7 +68,13 @@ pub use process::{
     manifest_loader::ManifestLoader,
     principal::{Principal, Role, UserId},
 };
-pub use security::SecuritySubsystem;
+pub use security::{
+    SecuritySubsystem,
+    approval::{
+        ApprovalDecision, ApprovalManager, ApprovalPolicy, ApprovalRequest, ApprovalResponse,
+        RiskLevel,
+    },
+};
 
 #[cfg(test)]
 mod api_naming_tests {

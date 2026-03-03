@@ -24,7 +24,6 @@
 use std::sync::Arc;
 
 use rara_kernel::{
-    security::approval::{ApprovalManager, ApprovalPolicy},
     audit::{AuditLog, InMemoryAuditLog},
     io::{
         ingress::{IdentityResolver, SessionResolver},
@@ -33,6 +32,7 @@ use rara_kernel::{
     kernel::{Kernel, KernelConfig},
     llm::DriverRegistry,
     process::{agent_registry::AgentRegistry, user::UserStore},
+    security::approval::{ApprovalManager, ApprovalPolicy},
     session::SessionRepository,
     tool::ToolRegistry,
 };
@@ -98,10 +98,8 @@ pub struct BootConfig {
 impl Default for BootConfig {
     fn default() -> Self {
         use rara_kernel::{
-            kernel::config::NoopSettingsProvider,
-            llm::DriverRegistryBuilder,
-            process::noop_user_store::NoopUserStore,
-            session::NoopSessionRepository,
+            kernel::config::NoopSettingsProvider, llm::DriverRegistryBuilder,
+            process::noop_user_store::NoopUserStore, session::NoopSessionRepository,
         };
 
         Self {

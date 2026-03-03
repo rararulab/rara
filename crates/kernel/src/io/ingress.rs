@@ -208,13 +208,12 @@ impl IngressPipeline {
 mod noop {
     use async_trait::async_trait;
 
+    use super::{IdentityResolver, SessionResolver};
     use crate::{
         channel::types::ChannelType,
         io::types::IngestError,
         process::{SessionId, principal::UserId},
     };
-
-    use super::{IdentityResolver, SessionResolver};
 
     /// A no-op identity resolver for testing — maps to
     /// `"{channel_type}:{platform_user_id}"`.

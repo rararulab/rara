@@ -166,9 +166,9 @@ pub enum KernelError {
     /// [`snafu::ResultExt::whatever_context`]).
     #[snafu(whatever, display("{message}"))]
     Whatever {
-        message:                  String,
+        message: String,
         #[snafu(source(from(Box<dyn std::error::Error + Send + Sync>, Some)))]
-        source:                   Option<Box<dyn std::error::Error + Send + Sync>>,
+        source:  Option<Box<dyn std::error::Error + Send + Sync>>,
     },
 }
 

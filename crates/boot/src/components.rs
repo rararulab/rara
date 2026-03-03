@@ -26,8 +26,11 @@ use rara_kernel::{
 /// agents access memory through tools).
 pub fn default_memory() -> Arc<dyn Memory> { Arc::new(NoopMemory) }
 
-/// Default NotificationBus — `BroadcastNotificationBus` (tokio broadcast channel).
-pub fn default_event_bus() -> Arc<dyn NotificationBus> { Arc::new(BroadcastNotificationBus::default()) }
+/// Default NotificationBus — `BroadcastNotificationBus` (tokio broadcast
+/// channel).
+pub fn default_event_bus() -> Arc<dyn NotificationBus> {
+    Arc::new(BroadcastNotificationBus::default())
+}
 
 /// Default Guard — `NoopGuard` (allows all operations, no approval).
 ///

@@ -22,16 +22,16 @@
 //! which provides first-class `reasoning_content` support for models like
 //! DeepSeek-R1.
 
-mod trace;
 mod history;
-
-pub use trace::*;
-pub(crate) use history::build_llm_history;
+mod trace;
 
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
+pub(crate) use history::build_llm_history;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+pub use trace::*;
+use trace::{PendingToolCall, RESULT_PREVIEW_MAX_BYTES, truncate_preview};
 use tracing::{error, info, info_span, warn};
 
 use crate::{
@@ -41,8 +41,6 @@ use crate::{
     llm,
     llm::ModelCapabilities,
 };
-
-use trace::{RESULT_PREVIEW_MAX_BYTES, PendingToolCall, truncate_preview};
 
 /// Execute a single agent turn inline: build messages, stream LLM responses,
 /// execute tool calls, and emit [`StreamEvent`]s directly.

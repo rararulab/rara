@@ -325,10 +325,9 @@ impl KernelEvent {
             Self::ChildCompleted { parent_id, .. } => Some(*parent_id),
             Self::Syscall(syscall) => Some(syscall.agent_id()),
             // Global events — no specific agent affinity.
-            Self::UserMessage(_)
-            | Self::SpawnAgent { .. }
-            | Self::Deliver(_)
-            | Self::Shutdown => None,
+            Self::UserMessage(_) | Self::SpawnAgent { .. } | Self::Deliver(_) | Self::Shutdown => {
+                None
+            }
         }
     }
 
@@ -347,7 +346,6 @@ impl KernelEvent {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

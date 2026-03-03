@@ -21,13 +21,12 @@
 pub mod error;
 pub mod types;
 
-pub use error::SessionError;
-pub use types::{ChannelBinding, SessionEntry, SessionKey};
-
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
+pub use error::SessionError;
+pub use types::{ChannelBinding, SessionEntry, SessionKey};
 
 use crate::channel::types::ChatMessage;
 
@@ -173,11 +172,8 @@ mod noop {
     use async_trait::async_trait;
     use chrono::Utc;
 
+    use super::{ChannelBinding, SessionEntry, SessionError, SessionKey, SessionRepository};
     use crate::channel::types::ChatMessage;
-
-    use super::{
-        ChannelBinding, SessionEntry, SessionError, SessionKey, SessionRepository,
-    };
 
     /// A no-op session repository for testing — all operations succeed without
     /// persisting.
@@ -189,7 +185,10 @@ mod noop {
             Ok(entry.clone())
         }
 
-        async fn get_session(&self, _key: &SessionKey) -> Result<Option<SessionEntry>, SessionError> {
+        async fn get_session(
+            &self,
+            _key: &SessionKey,
+        ) -> Result<Option<SessionEntry>, SessionError> {
             Ok(None)
         }
 
@@ -224,7 +223,9 @@ mod noop {
             Ok(vec![])
         }
 
-        async fn clear_messages(&self, _session_key: &SessionKey) -> Result<(), SessionError> { Ok(()) }
+        async fn clear_messages(&self, _session_key: &SessionKey) -> Result<(), SessionError> {
+            Ok(())
+        }
 
         async fn fork_session(
             &self,
@@ -245,7 +246,10 @@ mod noop {
             })
         }
 
-        async fn bind_channel(&self, binding: &ChannelBinding) -> Result<ChannelBinding, SessionError> {
+        async fn bind_channel(
+            &self,
+            binding: &ChannelBinding,
+        ) -> Result<ChannelBinding, SessionError> {
             Ok(binding.clone())
         }
 

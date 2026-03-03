@@ -31,7 +31,18 @@ use serde::{Deserialize, Serialize};
 ///
 /// Adapters convert platform-specific events into [`ChannelMessage`]s tagged
 /// with the appropriate variant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, strum::Display, strum::IntoStaticStr)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    strum::Display,
+    strum::IntoStaticStr,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelType {
     /// Web-based chat UI.
