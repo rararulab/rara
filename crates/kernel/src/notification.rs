@@ -26,7 +26,7 @@ use uuid::Uuid;
 // ---------------------------------------------------------------------------
 
 /// Notifications emitted by the kernel during agent execution.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, strum::IntoStaticStr)]
 pub enum KernelNotification {
     /// A tool was executed.
     ToolExecuted {

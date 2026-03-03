@@ -63,24 +63,17 @@ impl<S: Into<String>> From<S> for DeviceId {
 // ---------------------------------------------------------------------------
 
 /// The kind of device.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, strum::Display)]
 pub enum DeviceType {
     /// An MCP (Model Context Protocol) server.
+    #[strum(serialize = "MCP Server")]
     McpServer,
     /// An external HTTP/gRPC API.
+    #[strum(serialize = "External API")]
     ExternalApi,
     /// An internal service provided by the platform.
+    #[strum(serialize = "Internal")]
     Internal,
-}
-
-impl fmt::Display for DeviceType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::McpServer => f.write_str("MCP Server"),
-            Self::ExternalApi => f.write_str("External API"),
-            Self::Internal => f.write_str("Internal"),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

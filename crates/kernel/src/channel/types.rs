@@ -31,42 +31,35 @@ use serde::{Deserialize, Serialize};
 ///
 /// Adapters convert platform-specific events into [`ChannelMessage`]s tagged
 /// with the appropriate variant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, strum::Display, strum::IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelType {
     /// Web-based chat UI.
+    #[strum(serialize = "web")]
     Web,
     /// Telegram bot.
+    #[strum(serialize = "telegram")]
     Telegram,
     /// Command-line interface.
+    #[strum(serialize = "cli")]
     Cli,
     /// REST/gRPC API call.
+    #[strum(serialize = "api")]
     Api,
     /// Internally-triggered scheduled task.
+    #[strum(serialize = "scheduled")]
     Scheduled,
     /// Internally-triggered proactive task.
+    #[strum(serialize = "proactive")]
     Proactive,
     /// Internal synthetic message (workers, SyscallTool, etc.).
+    #[strum(serialize = "internal")]
     Internal,
 }
 
 impl ChannelType {
     /// Return a stable label for metrics/logging.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Web => "web",
-            Self::Telegram => "telegram",
-            Self::Cli => "cli",
-            Self::Api => "api",
-            Self::Scheduled => "scheduled",
-            Self::Proactive => "proactive",
-            Self::Internal => "internal",
-        }
-    }
-}
-
-impl std::fmt::Display for ChannelType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(self.label()) }
+    pub fn label(self) -> &'static str { self.into() }
 }
 
 // ---------------------------------------------------------------------------
@@ -74,26 +67,19 @@ impl std::fmt::Display for ChannelType {
 // ---------------------------------------------------------------------------
 
 /// Role of the entity that produced a message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::Display)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageRole {
+    #[strum(serialize = "system")]
     System,
+    #[strum(serialize = "user")]
     User,
+    #[strum(serialize = "assistant")]
     Assistant,
+    #[strum(serialize = "tool")]
     Tool,
+    #[strum(serialize = "tool_result")]
     ToolResult,
-}
-
-impl std::fmt::Display for MessageRole {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::System => f.write_str("system"),
-            Self::User => f.write_str("user"),
-            Self::Assistant => f.write_str("assistant"),
-            Self::Tool => f.write_str("tool"),
-            Self::ToolResult => f.write_str("tool_result"),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -338,20 +324,26 @@ pub struct ChannelMessage {
 ///
 /// Adapters can use this for UX feedback (typing indicators, emoji
 /// reactions, progress spinners).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::Display)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentPhase {
     /// Task is queued, waiting for execution.
+    #[strum(serialize = "queued")]
     Queued,
     /// Agent is processing / thinking.
+    #[strum(serialize = "thinking")]
     Thinking,
     /// Agent is executing a tool call.
+    #[strum(serialize = "tool_use")]
     ToolUse,
     /// Agent is streaming a response.
+    #[strum(serialize = "streaming")]
     Streaming,
     /// Agent finished successfully.
+    #[strum(serialize = "done")]
     Done,
     /// Agent encountered an error.
+    #[strum(serialize = "error")]
     Error,
 }
 
@@ -365,19 +357,6 @@ impl AgentPhase {
             Self::Streaming => "\u{270d}", // ✍
             Self::Done => "\u{2705}",      // ✅
             Self::Error => "\u{274c}",     // ❌
-        }
-    }
-}
-
-impl std::fmt::Display for AgentPhase {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Queued => f.write_str("queued"),
-            Self::Thinking => f.write_str("thinking"),
-            Self::ToolUse => f.write_str("tool_use"),
-            Self::Streaming => f.write_str("streaming"),
-            Self::Done => f.write_str("done"),
-            Self::Error => f.write_str("error"),
         }
     }
 }

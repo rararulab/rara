@@ -52,7 +52,7 @@ pub struct AuditEvent {
 }
 
 /// Discriminated event types for agent actions.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, strum::IntoStaticStr)]
 pub enum AuditEventType {
     /// An agent process was spawned.
     ProcessSpawned {
@@ -87,7 +87,7 @@ pub enum AuditEventType {
 }
 
 /// Memory operation type.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, strum::Display)]
 pub enum MemoryOp {
     /// Store a value in agent-local memory.
     Store,
@@ -215,18 +215,7 @@ impl AuditLog for InMemoryAuditLog {
 }
 
 /// Extract the variant name from an `AuditEventType` for filtering.
-pub fn event_type_name(et: &AuditEventType) -> &'static str {
-    match et {
-        AuditEventType::ProcessSpawned { .. } => "ProcessSpawned",
-        AuditEventType::ProcessCompleted { .. } => "ProcessCompleted",
-        AuditEventType::ProcessFailed { .. } => "ProcessFailed",
-        AuditEventType::ProcessKilled { .. } => "ProcessKilled",
-        AuditEventType::ToolCall { .. } => "ToolCall",
-        AuditEventType::LlmCall { .. } => "LlmCall",
-        AuditEventType::MemoryAccess { .. } => "MemoryAccess",
-        AuditEventType::SignalSent { .. } => "SignalSent",
-    }
-}
+pub fn event_type_name(et: &AuditEventType) -> &'static str { et.into() }
 
 // ---------------------------------------------------------------------------
 // Helper: fire-and-forget recording
