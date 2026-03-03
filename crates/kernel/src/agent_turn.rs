@@ -29,6 +29,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, info_span, warn};
 
 use crate::{
+    error::KernelError,
     handle::process_handle::ProcessHandle,
     io::stream::{StreamEvent, StreamHandle},
     llm,
@@ -132,16 +133,17 @@ pub(crate) async fn run_inline_agent_loop(
     history: Option<Vec<llm::Message>>,
     stream_handle: &StreamHandle,
     turn_cancel: &CancellationToken,
-) -> Result<AgentTurnResult, String> {
+) -> crate::error::Result<AgentTurnResult> {
     // Query context via syscalls.
-    let manifest = handle
-        .manifest()
-        .await
-        .map_err(|e| format!("failed to get manifest: {e}"))?;
+    let manifest = handle.manifest().await.map_err(|e| KernelError::AgentExecution {
+        message: format!("failed to get manifest: {e}"),
+    })?;
     let full_tools = handle
         .tool_registry()
         .await
-        .map_err(|e| format!("failed to get tool registry: {e}"))?;
+        .map_err(|e| KernelError::AgentExecution {
+            message: format!("failed to get tool registry: {e}"),
+        })?;
 
     // Filter tools by manifest.tools whitelist.
     let tools = Arc::new(full_tools.filtered(&manifest.tools));
@@ -154,10 +156,13 @@ pub(crate) async fn run_inline_agent_loop(
     let provider_hint = manifest.provider_hint.as_deref();
 
     // Resolve driver + model via the DriverRegistry syscall.
-    let (driver, model) = handle
-        .resolve_driver()
-        .await
-        .map_err(|e| format!("failed to resolve LLM driver: {e}"))?;
+    let (driver, model) =
+        handle
+            .resolve_driver()
+            .await
+            .map_err(|e| KernelError::AgentExecution {
+                message: format!("failed to resolve LLM driver: {e}"),
+            })?;
 
     tracing::Span::current().record("model", model.as_str());
 
@@ -255,7 +260,9 @@ pub(crate) async fn run_inline_agent_loop(
                 _ = turn_cancel.cancelled() => {
                     stream_task.abort();
                     info!("LLM turn cancelled during streaming");
-                    return Err("interrupted by user".to_string());
+                    return Err(KernelError::AgentExecution {
+                        message: "interrupted by user".into(),
+                    });
                 }
             };
 
@@ -317,10 +324,14 @@ pub(crate) async fn run_inline_agent_loop(
         let driver_result = match stream_task.await {
             Ok(result) => result,
             Err(join_err) if join_err.is_cancelled() => {
-                return Err("interrupted by user".to_string());
+                return Err(KernelError::AgentExecution {
+                    message: "interrupted by user".into(),
+                });
             }
             Err(join_err) => {
-                return Err(format!("driver stream task panicked: {join_err}"));
+                return Err(KernelError::AgentExecution {
+                    message: format!("driver stream task panicked: {join_err}"),
+                });
             }
         };
 
@@ -331,10 +342,9 @@ pub(crate) async fn run_inline_agent_loop(
                 error = %e,
                 "LLM driver stream error"
             );
-            return Err(format!(
-                "Model \"{}\" returned an error during streaming: {e}",
-                model
-            ));
+            return Err(KernelError::AgentExecution {
+                message: format!("Model \"{model}\" returned an error during streaming: {e}"),
+            });
         }
 
         iter_span.record("stream_ms", stream_start.elapsed().as_millis() as u64);
@@ -985,7 +995,11 @@ mod tests {
 
         let result = join.await.unwrap();
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "interrupted by user");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("interrupted by user"),
+            "expected 'interrupted by user', got: {err}"
+        );
 
         cancel_kernel.cancel();
     }

@@ -1059,10 +1059,9 @@ impl Kernel {
             stream_hub_ref.close(&stream_id);
 
             // Push TurnCompleted back into the event queue.
-            let result = match turn_result {
-                Ok(turn) => Ok(turn),
-                Err(msg) => Err(msg),
-            };
+            // Convert KernelError → String at the event boundary because
+            // KernelEvent requires Clone but KernelError does not implement it.
+            let result = turn_result.map_err(|e| e.to_string());
             let event = KernelEvent::TurnCompleted {
                 agent_id,
                 session_id,
