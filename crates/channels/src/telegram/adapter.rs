@@ -43,9 +43,11 @@
 use std::{
     collections::HashMap,
     sync::{Arc, RwLock as StdRwLock},
+    time::Instant,
 };
 
 use async_trait::async_trait;
+use dashmap::DashMap;
 use rara_kernel::{
     channel::{
         adapter::ChannelAdapter,
@@ -57,6 +59,7 @@ use rara_kernel::{
     io::{
         egress::{EgressAdapter, EgressError, Endpoint, EndpointAddress, PlatformOutbound},
         ingress::RawPlatformMessage,
+        stream::StreamHubRef,
         types::{IngestError, InteractionType, ReplyContext as IoReplyContext},
     },
 };
@@ -88,6 +91,34 @@ const MAX_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Minimum interval between Telegram `edit_message_text` calls (1.5 seconds)
 /// to avoid hitting Telegram API rate limits.
+const MIN_EDIT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Maximum characters per Telegram message before splitting to a new message.
+/// Set below 4096 to leave buffer for HTML tag expansion from markdown→html.
+const STREAM_SPLIT_THRESHOLD: usize = 3800;
+
+/// Per-chat streaming state for progressive `editMessageText` updates.
+struct StreamingMessage {
+    /// All message IDs sent for this stream (multiple when splitting long content).
+    message_ids: Vec<MessageId>,
+    /// Accumulated raw text for the current (latest) message.
+    accumulated: String,
+    /// Last successful `editMessageText` timestamp for throttling.
+    last_edit: Instant,
+    /// Whether new text has been appended since the last edit.
+    dirty: bool,
+}
+
+impl StreamingMessage {
+    fn new() -> Self {
+        Self {
+            message_ids: Vec::new(),
+            accumulated: String::new(),
+            last_edit: Instant::now(),
+            dirty: false,
+        }
+    }
+}
 
 /// Runtime configuration for the Telegram adapter.
 ///
@@ -154,6 +185,10 @@ pub struct TelegramAdapter {
     contact_tracker:   Option<Arc<dyn ContactTracker>>,
     /// Optional link service for handling `/link` commands.
     link_service:      Option<Arc<TelegramLinkService>>,
+    /// StreamHub for subscribing to real-time token deltas.
+    stream_hub:        Arc<RwLock<Option<StreamHubRef>>>,
+    /// Per-chat active streaming state, keyed by `chat_id`.
+    active_streams:    Arc<DashMap<i64, StreamingMessage>>,
 }
 
 impl TelegramAdapter {
@@ -178,6 +213,8 @@ impl TelegramAdapter {
             config: Arc::new(StdRwLock::new(TelegramConfig::default())),
             contact_tracker: None,
             link_service: None,
+            stream_hub: Arc::new(RwLock::new(None)),
+            active_streams: Arc::new(DashMap::new()),
         }
     }
 
@@ -294,6 +331,11 @@ impl TelegramAdapter {
     pub fn with_link_service(mut self, service: TelegramLinkService) -> Self {
         self.link_service = Some(Arc::new(service));
         self
+    }
+
+    /// Inject the kernel's [`StreamHub`] for real-time token streaming.
+    pub async fn set_stream_hub(&self, hub: StreamHubRef) {
+        *self.stream_hub.write().await = Some(hub);
     }
 
     /// Check whether a chat ID is allowed.
