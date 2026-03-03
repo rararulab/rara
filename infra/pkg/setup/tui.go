@@ -94,6 +94,7 @@ type stepState struct {
 	name    string
 	status  stepStatus
 	elapsed time.Duration
+	startAt time.Time // when this step started (for live elapsed)
 }
 
 type installModel struct {
@@ -104,7 +105,8 @@ type installModel struct {
 	elapsed  time.Duration
 	done     bool
 	finalErr error
-	logs     []string // recent info/warn lines, max 5
+	activity string   // latest EventInfo message, shown under current step
+	warns    []string // warnings (max 3)
 	width    int
 }
 
@@ -113,14 +115,14 @@ type progressMsg ProgressEvent
 type tickMsg time.Time
 
 var (
-	stepDoneStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	stepRunStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
-	stepPendStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	stepErrStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("160"))
-	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
-	elapsedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	logWarnStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	logInfoStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	stepDoneStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	stepRunStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
+	stepPendStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	stepErrStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("160"))
+	titleStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
+	elapsedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	activityStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	warnStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 )
 
 func newInstallModel() installModel {
@@ -162,21 +164,25 @@ func (m installModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		ev := ProgressEvent(msg)
 		switch ev.Kind {
 		case EventStepStart:
-			// Ensure steps slice is large enough
 			for len(m.steps) < ev.N {
 				m.steps = append(m.steps, stepState{})
 			}
-			m.steps[ev.N-1] = stepState{name: ev.Name, status: stepRunning}
+			m.steps[ev.N-1] = stepState{name: ev.Name, status: stepRunning, startAt: time.Now()}
 			m.current = ev.N - 1
+			m.activity = "" // clear activity on new step
 		case EventStepDone:
 			if ev.N-1 < len(m.steps) {
 				m.steps[ev.N-1].status = stepDone
 				m.steps[ev.N-1].elapsed = ev.Elapsed
 			}
+			m.activity = ""
 		case EventInfo:
-			m.logs = appendLog(m.logs, logInfoStyle.Render("-> "+ev.Name))
+			m.activity = ev.Name
 		case EventWarn:
-			m.logs = appendLog(m.logs, logWarnStyle.Render("! "+ev.Name))
+			m.warns = append(m.warns, ev.Name)
+			if len(m.warns) > 3 {
+				m.warns = m.warns[len(m.warns)-3:]
+			}
 		case EventDone:
 			m.done = true
 			return m, tea.Quit
@@ -192,61 +198,63 @@ func (m installModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func appendLog(logs []string, line string) []string {
-	logs = append(logs, line)
-	if len(logs) > 5 {
-		logs = logs[len(logs)-5:]
-	}
-	return logs
-}
-
 func (m installModel) View() string {
 	var b strings.Builder
 
 	title := titleStyle.Render("rara local setup")
 	if m.done {
 		if m.finalErr != nil {
-			title += "  " + stepErrStyle.Render("-- error")
+			title += "  " + stepErrStyle.Render("— error")
 		} else {
-			title += "  " + stepDoneStyle.Render("-- done")
+			title += "  " + stepDoneStyle.Render("— done")
 		}
 	} else {
-		title += "  " + stepRunStyle.Render("-- installing")
+		title += "  " + stepRunStyle.Render("— installing")
 	}
 	b.WriteString(title + "\n\n")
 
-	for _, s := range m.steps {
+	for i, s := range m.steps {
 		var icon string
 		var nameStyle lipgloss.Style
 		switch s.status {
 		case stepDone:
-			icon = stepDoneStyle.Render("v")
+			icon = stepDoneStyle.Render("✓")
 			nameStyle = stepDoneStyle
 		case stepRunning:
 			icon = m.spinner.View()
 			nameStyle = stepRunStyle
 		case stepError:
-			icon = stepErrStyle.Render("x")
+			icon = stepErrStyle.Render("✗")
 			nameStyle = stepErrStyle
 		default:
-			icon = stepPendStyle.Render(".")
+			icon = stepPendStyle.Render("·")
 			nameStyle = stepPendStyle
 		}
+
 		line := fmt.Sprintf("  %s  %s", icon, nameStyle.Render(s.name))
-		if s.status == stepDone {
-			line += "  " + elapsedStyle.Render(s.elapsed.Round(time.Millisecond).String())
+		switch s.status {
+		case stepDone:
+			line += "  " + elapsedStyle.Render(s.elapsed.Round(time.Second).String())
+		case stepRunning:
+			line += "  " + elapsedStyle.Render(time.Since(s.startAt).Round(time.Second).String())
 		}
 		b.WriteString(line + "\n")
-	}
 
-	if len(m.logs) > 0 {
-		b.WriteString("\n")
-		for _, l := range m.logs {
-			b.WriteString("     " + l + "\n")
+		// Show current activity inline under the running step
+		if s.status == stepRunning && i == m.current && m.activity != "" {
+			b.WriteString("       " + activityStyle.Render("→ "+m.activity) + "\n")
 		}
 	}
 
-	b.WriteString("\n" + elapsedStyle.Render(fmt.Sprintf("Elapsed: %s", m.elapsed.Round(time.Second))))
+	// Warnings at the bottom
+	if len(m.warns) > 0 {
+		b.WriteString("\n")
+		for _, w := range m.warns {
+			b.WriteString("  " + warnStyle.Render("! "+w) + "\n")
+		}
+	}
+
+	b.WriteString("\n" + elapsedStyle.Render(fmt.Sprintf("Total: %s", m.elapsed.Round(time.Second))))
 
 	return b.String()
 }
