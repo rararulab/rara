@@ -31,6 +31,7 @@ use rara_kernel::{
     },
     kernel::{Kernel, KernelConfig},
     llm::DriverRegistry,
+    memory::{Memory, NoopMemory},
     process::{agent_registry::AgentRegistry, user::UserStore},
     security::{ApprovalManager, ApprovalPolicy},
     session::{SessionIndex, SessionRepository},
@@ -64,6 +65,8 @@ pub struct BootConfig {
     pub session_repo:    Arc<dyn SessionRepository>,
     /// Lightweight session metadata index (tape-centric replacement).
     pub session_index:   Option<Arc<dyn SessionIndex>>,
+    /// File-backed tape store (tape-centric session storage).
+    pub tape_store:      Option<Arc<rara_memory::tape::FileTapeStore>>,
     /// Flat KV settings provider.
     pub settings:        Arc<dyn rara_domain_shared::settings::SettingsProvider>,
 
@@ -76,8 +79,6 @@ pub struct BootConfig {
     pub identity_resolver:  Option<Arc<dyn IdentityResolver>>,
     /// Session resolver (optional — defaults to `DefaultSessionResolver`).
     pub session_resolver:   Option<Arc<dyn SessionResolver>>,
-    /// Memory implementation (optional — defaults to NoopMemory).
-    pub memory:             Option<Arc<dyn rara_kernel::memory::Memory>>,
     /// Notification bus (optional — defaults to BroadcastNotificationBus).
     pub event_bus:          Option<Arc<dyn rara_kernel::notification::NotificationBus>>,
     /// Guard (optional — defaults to NoopGuard).
@@ -117,12 +118,12 @@ impl Default for BootConfig {
             user_store:         Arc::new(NoopUserStore) as Arc<dyn UserStore>,
             session_repo:       Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
             session_index:      None,
+            tape_store:         None,
             settings:           Arc::new(NoopSettingsProvider)
                 as Arc<dyn rara_domain_shared::settings::SettingsProvider>,
             stream_capacity:    64,
             identity_resolver:  None,
             session_resolver:   None,
-            memory:             None,
             event_bus:          None,
             guard:              None,
             audit_log:          None,
@@ -159,9 +160,7 @@ pub fn boot(config: BootConfig) -> Kernel {
         .unwrap_or_else(|| Arc::new(DefaultSessionResolver::new(config.session_repo.clone())));
 
     // Components (use overrides or boot defaults)
-    let memory = config
-        .memory
-        .unwrap_or_else(crate::components::default_memory);
+    let memory: Arc<dyn Memory> = Arc::new(NoopMemory);
     let event_bus = config
         .event_bus
         .unwrap_or_else(crate::components::default_event_bus);

@@ -79,8 +79,6 @@ pub fn default_primitives(deps: PrimitiveDeps) -> Vec<AgentToolRef> {
 
 /// Dependencies required to construct Layer 2 service tools.
 pub struct ServiceToolDeps {
-    pub memory_manager: Arc<rara_memory::MemoryManager>,
-    pub recall_engine:  Arc<rara_memory::RecallStrategyEngine>,
     pub skill_registry: rara_skills::registry::InMemoryRegistry,
     pub mcp_manager:    rara_mcp::manager::mgr::McpManager,
 }
@@ -88,20 +86,6 @@ pub struct ServiceToolDeps {
 /// Register all Layer 2 service tools into the given [`ToolRegistry`].
 pub fn register_service_tools(registry: &mut ToolRegistry, deps: ServiceToolDeps) {
     let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-
-    // Memory tools
-    registry.register_service(Arc::new(services::MemorySearchTool::new(Arc::clone(
-        &deps.memory_manager,
-    ))));
-    registry.register_service(Arc::new(services::MemoryDeepRecallTool::new(Arc::clone(
-        &deps.memory_manager,
-    ))));
-    registry.register_service(Arc::new(services::MemoryWriteTool::new(Arc::clone(
-        &deps.memory_manager,
-    ))));
-    registry.register_service(Arc::new(services::MemoryAddFactTool::new(Arc::clone(
-        &deps.memory_manager,
-    ))));
 
     // Screenshot
     registry.register_service(Arc::new(services::ScreenshotTool::new(project_root)));
@@ -126,19 +110,5 @@ pub fn register_service_tools(registry: &mut ToolRegistry, deps: ServiceToolDeps
     )));
     registry.register_service(Arc::new(services::RemoveMcpServerTool::new(
         deps.mcp_manager,
-    )));
-
-    // Recall strategy tools
-    registry.register_service(Arc::new(services::RecallStrategyAddTool::new(Arc::clone(
-        &deps.recall_engine,
-    ))));
-    registry.register_service(Arc::new(services::RecallStrategyListTool::new(Arc::clone(
-        &deps.recall_engine,
-    ))));
-    registry.register_service(Arc::new(services::RecallStrategyUpdateTool::new(
-        Arc::clone(&deps.recall_engine),
-    )));
-    registry.register_service(Arc::new(services::RecallStrategyRemoveTool::new(
-        deps.recall_engine,
     )));
 }

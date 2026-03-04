@@ -25,6 +25,8 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use rara_domain_shared::settings::{SettingsProvider, keys};
+use rara_kernel::session::{SessionIndex, SessionIndexRef};
+use rara_memory::tape::FileTapeStore;
 use rara_sessions::{
     repository::SessionRepository,
     types::{ChannelBinding, ChatMessage, SessionEntry, SessionKey},
@@ -53,6 +55,10 @@ use crate::chat::{
 pub struct SessionService {
     /// Persistence layer for sessions, messages, and channel bindings.
     session_repo:      Arc<dyn SessionRepository>,
+    /// Tape-based session index for metadata.
+    session_index:     SessionIndexRef,
+    /// Tape store for append-only session recording.
+    tape_store:        Arc<FileTapeStore>,
     /// Cached catalog of models fetched from OpenRouter.
     model_catalog:     ModelCatalog,
     /// Settings provider for reading and writing flat KV settings.
@@ -64,10 +70,14 @@ impl SessionService {
     #[must_use]
     pub fn new(
         session_repo: Arc<dyn SessionRepository>,
+        session_index: SessionIndexRef,
+        tape_store: Arc<FileTapeStore>,
         settings_provider: Arc<dyn SettingsProvider>,
     ) -> Self {
         Self {
             session_repo,
+            session_index,
+            tape_store,
             model_catalog: ModelCatalog::new(),
             settings_provider,
         }

@@ -193,11 +193,6 @@ impl AppConfig {
         let rara = rara_boot::state::RaraState::init(
             pool.clone(),
             settings_provider.clone(),
-            self.memory.mem0_base_url.clone(),
-            self.memory.memos_base_url.clone(),
-            self.memory.memos_token.clone(),
-            self.memory.hindsight_base_url.clone(),
-            self.memory.hindsight_bank_id.clone(),
         )
         .await
         .whatever_context("Failed to initialize RaraState")?;
@@ -207,6 +202,8 @@ impl AppConfig {
         let backend = rara_backend_admin::state::BackendState::init(
             pool.clone(),
             rara.session_repo.clone(),
+            rara.session_index.clone(),
+            rara.tape_store.clone(),
             settings_provider.clone(),
             settings_svc.clone(),
         )
@@ -270,6 +267,7 @@ impl AppConfig {
             agent_registry: Arc::new(rara_boot::manifests::load_default_registry()),
             user_store: rara.user_store.clone(),
             session_repo: rara.session_repo.clone(),
+            session_index: Some(rara.session_index.clone()),
             settings: settings_provider.clone(),
             guard: Some(path_guard as Arc<dyn rara_kernel::guard::Guard>),
             tool_call_recorder: tool_recorder,
