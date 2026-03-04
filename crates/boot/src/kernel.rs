@@ -31,7 +31,6 @@ use rara_kernel::{
     },
     kernel::{Kernel, KernelConfig},
     llm::DriverRegistry,
-    memory::{Memory, NoopMemory},
     process::{agent_registry::AgentRegistry, user::UserStore},
     security::{ApprovalManager, ApprovalPolicy},
     session::SessionIndex,
@@ -162,8 +161,14 @@ pub fn boot(config: BootConfig) -> Kernel {
         .session_resolver
         .unwrap_or_else(|| Arc::new(DefaultSessionResolver::new(session_index_for_resolver)));
 
+    // Tape store — falls back to a temporary in-memory-like store if not
+    // provided by the caller (production code always provides one).
+    let tape_store: Arc<rara_memory::tape::FileTapeStore> = config
+        .tape_store
+        .clone()
+        .expect("tape_store must be provided in BootConfig");
+
     // Components (use overrides or boot defaults)
-    let memory: Arc<dyn Memory> = Arc::new(NoopMemory);
     let event_bus = config
         .event_bus
         .unwrap_or_else(crate::components::default_event_bus);
@@ -208,21 +213,14 @@ pub fn boot(config: BootConfig) -> Kernel {
         .session_index
         .unwrap_or_else(|| Arc::new(rara_kernel::session::NoopSessionIndex));
 
-    // The kernel event loop still uses SessionRepository internally for
-    // message persistence during agent turns. Pass a NoopSessionRepository
-    // since message persistence has moved to the tape subsystem.
-    let session_repo: Arc<dyn rara_kernel::session::SessionRepository> =
-        Arc::new(rara_kernel::session::NoopSessionRepository);
-
     Kernel::new(
         kernel_config,
         config.driver_registry,
         config.tool_registry,
-        memory,
+        tape_store,
         event_bus,
         security,
         config.agent_registry,
-        session_repo,
         session_index,
         config.settings,
         stream_hub,

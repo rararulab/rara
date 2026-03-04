@@ -103,7 +103,7 @@ impl AgentTool for EchoTool {
 
 /// Helper: build a kernel with the real Ollama driver and optional tools,
 /// start the event loop, and return the KernelHandle + CancellationToken.
-fn build_kernel(tools: Vec<Arc<dyn AgentTool>>) -> (KernelHandle, CancellationToken) {
+async fn build_kernel(tools: Vec<Arc<dyn AgentTool>>) -> (KernelHandle, CancellationToken) {
     let model = ollama_model();
     let base_url = std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| OLLAMA_BASE_URL.to_string());
     let driver = Arc::new(OpenAiDriver::new(base_url, "ollama"));
@@ -120,7 +120,7 @@ fn build_kernel(tools: Vec<Arc<dyn AgentTool>>) -> (KernelHandle, CancellationTo
     for tool in tools {
         builder = builder.tool(tool);
     }
-    let kernel = builder.build();
+    let kernel = builder.build().await;
     let cancel = CancellationToken::new();
     let (_arc, handle) = kernel.start(cancel.clone());
     (handle, cancel)
@@ -148,12 +148,12 @@ async fn wait_for_result(
             );
         }
         if let Some(p) = handle.process_table().get(agent_id) {
-            if matches!(p.state, ProcessState::Completed) {
+            if matches!(p.state, ProcessState::Ready) {
                 if let Some(result) = p.result {
                     return result;
                 }
             }
-            if matches!(p.state, ProcessState::Failed) {
+            if matches!(p.state, ProcessState::Suspended) {
                 panic!("agent {agent_id} failed");
             }
         }
@@ -168,7 +168,7 @@ async fn wait_for_result(
 #[tokio::test]
 #[ignore = "requires running Ollama instance"]
 async fn test_spawn_plain_text_receives_result() {
-    let (handle, cancel) = build_kernel(vec![]);
+    let (handle, cancel) = build_kernel(vec![]).await;
     let manifest = test_manifest(
         "plain-agent",
         "You are a concise assistant. Reply in one sentence.",
@@ -204,7 +204,7 @@ async fn test_spawn_plain_text_receives_result() {
 #[tokio::test]
 #[ignore = "requires running Ollama instance"]
 async fn test_spawn_with_tool_makes_tool_call() {
-    let (handle, cancel) = build_kernel(vec![Arc::new(EchoTool)]);
+    let (handle, cancel) = build_kernel(vec![Arc::new(EchoTool)]).await;
     let manifest = test_manifest(
         "tool-agent",
         "You are a tool-using assistant. When the user asks you to echo something, ALWAYS call \
@@ -245,7 +245,7 @@ async fn test_spawn_with_tool_makes_tool_call() {
 #[tokio::test]
 #[ignore = "requires running Ollama instance"]
 async fn test_process_state_transitions() {
-    let (handle, cancel) = build_kernel(vec![]);
+    let (handle, cancel) = build_kernel(vec![]).await;
     let manifest = test_manifest("state-agent", "Reply in one sentence.");
     let principal = Principal::user("test-user");
 
@@ -264,7 +264,7 @@ async fn test_process_state_transitions() {
     // After processing, state should be Completed (short-lived process model).
     let process = handle.process_table().get(agent_id).unwrap();
     assert!(
-        matches!(process.state, ProcessState::Completed),
+        matches!(process.state, ProcessState::Ready),
         "expected Completed state after processing, got {:?}",
         process.state
     );
@@ -279,7 +279,7 @@ async fn test_process_state_transitions() {
 #[tokio::test]
 #[ignore = "requires running Ollama instance"]
 async fn test_egress_delivers_reply() {
-    let (handle, cancel) = build_kernel(vec![]);
+    let (handle, cancel) = build_kernel(vec![]).await;
     let manifest = test_manifest("outbound-agent", "Reply in one sentence.");
     let principal = Principal::user("test-user");
 
@@ -314,7 +314,7 @@ async fn test_egress_delivers_reply() {
 #[tokio::test]
 #[ignore = "requires running Ollama instance"]
 async fn test_cancellation_stops_process() {
-    let (handle, cancel) = build_kernel(vec![]);
+    let (handle, cancel) = build_kernel(vec![]).await;
     let manifest = test_manifest("cancel-agent", "Reply in one sentence.");
     let principal = Principal::user("test-user");
 
@@ -336,7 +336,7 @@ async fn test_cancellation_stops_process() {
     assert!(
         matches!(
             process.state,
-            ProcessState::Cancelled | ProcessState::Completed
+            ProcessState::Suspended | ProcessState::Ready
         ),
         "expected Cancelled state after token cancel, got {:?}",
         process.state
@@ -352,7 +352,7 @@ async fn test_cancellation_stops_process() {
 #[tokio::test]
 #[ignore = "requires running Ollama instance"]
 async fn test_multi_turn_via_event_queue() {
-    let (handle, cancel) = build_kernel(vec![]);
+    let (handle, cancel) = build_kernel(vec![]).await;
     let manifest = test_manifest(
         "multi-turn-agent",
         "You are a concise assistant that remembers context. Reply in one sentence.",
@@ -402,7 +402,7 @@ async fn test_multi_turn_via_event_queue() {
         let processes = handle.list_processes().await;
         for p in &processes {
             if p.manifest_name == "multi-turn-agent"
-                && matches!(p.state, ProcessState::Completed)
+                && matches!(p.state, ProcessState::Ready)
                 && p.agent_id != agent_id
             {
                 // A new process completed — check if the kernel stored
@@ -428,7 +428,7 @@ async fn test_multi_turn_via_event_queue() {
 #[tokio::test]
 #[ignore = "requires running Ollama instance"]
 async fn test_multiple_agents_different_sessions() {
-    let (handle, cancel) = build_kernel(vec![]);
+    let (handle, cancel) = build_kernel(vec![]).await;
     let principal = Principal::user("test-user");
 
     let manifest1 = test_manifest("agent-1", "Reply with exactly: done");
@@ -459,7 +459,7 @@ async fn test_multiple_agents_different_sessions() {
 #[tokio::test]
 #[ignore = "requires running Ollama instance"]
 async fn test_spawn_named_agent() {
-    let (handle, cancel) = build_kernel(vec![]);
+    let (handle, cancel) = build_kernel(vec![]).await;
     let principal = Principal::user("test-user");
 
     let agent_id = handle
@@ -480,8 +480,8 @@ async fn test_spawn_named_agent() {
         }
         if let Some(p) = handle.process_table().get(agent_id) {
             match p.state {
-                ProcessState::Completed => break,
-                ProcessState::Failed => panic!("named agent failed"),
+                ProcessState::Ready => break,
+                ProcessState::Suspended => panic!("named agent failed"),
                 _ => {}
             }
         }
@@ -490,7 +490,7 @@ async fn test_spawn_named_agent() {
 
     let process = handle.process_table().get(agent_id).unwrap();
     assert!(
-        matches!(process.state, ProcessState::Completed),
+        matches!(process.state, ProcessState::Ready),
         "named agent should reach Completed after processing"
     );
 
@@ -517,7 +517,8 @@ async fn test_global_concurrency_limit() {
         .driver_registry(registry)
         .max_concurrency(2)
         .max_iterations(10)
-        .build();
+        .build()
+        .await;
 
     let cancel = CancellationToken::new();
     let (_arc, handle) = kernel.start(cancel.clone());

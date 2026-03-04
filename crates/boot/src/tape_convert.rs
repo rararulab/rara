@@ -17,8 +17,11 @@
 //!
 //! The tape subsystem stores messages as raw JSON [`Value`]s. This module
 //! provides [`tape_values_to_chat_messages`] for converting the output of
-//! [`default_tape_context`](super::default_tape_context) into the kernel's
-//! typed [`ChatMessage`] format.
+//! [`default_tape_context`](rara_memory::tape::default_tape_context) into the
+//! kernel's typed [`ChatMessage`] format.
+//!
+//! Moved from `rara-memory` to `rara-boot` to break the circular dependency
+//! between `rara-memory` and `rara-kernel`.
 
 use rara_kernel::channel::types::ChatMessage;
 use serde_json::Value;

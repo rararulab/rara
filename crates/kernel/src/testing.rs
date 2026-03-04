@@ -31,7 +31,8 @@
 //! let kernel = TestKernelBuilder::new()
 //!     .driver_registry(registry)
 //!     .max_concurrency(4)
-//!     .build();
+//!     .build()
+//!     .await;
 //! ```
 
 use std::sync::Arc;
@@ -43,10 +44,9 @@ use crate::{
     io::{pipe::PipeRegistry, stream::StreamHub},
     kernel::{Kernel, KernelConfig, NoopSettingsProvider, SettingsRef},
     llm::DriverRegistryRef,
-    memory::NoopMemory,
     notification::NoopNotificationBus,
     process::{AgentManifest, SessionTable, agent_registry::AgentRegistry},
-    session::{NoopSessionIndex, NoopSessionRepository, SessionIndexRef, SessionRepoRef},
+    session::{NoopSessionIndex, SessionIndexRef},
     tool::{AgentToolRef, ToolRegistry},
 };
 
@@ -119,24 +119,25 @@ impl TestKernelBuilder {
     ///
     /// Panics if no driver registry has been set. Use
     /// [`driver_registry`](Self::driver_registry) to provide one.
-    pub fn build(self) -> Kernel {
+    pub async fn build(self) -> Kernel {
         let driver_registry = self
             .driver_registry
             .expect("TestKernelBuilder requires a DriverRegistry — call .driver_registry() first");
 
         let max_concurrency = self.config.max_concurrency;
+        let tape_store = test_tape_store().await;
+
         Kernel::for_testing(
             self.config,
             Arc::new(SessionTable::new()),
             Arc::new(Semaphore::new(max_concurrency)),
             driver_registry,
             Arc::new(self.tool_registry),
-            Arc::new(NoopMemory),
+            tape_store,
             Arc::new(NoopNotificationBus),
             Arc::new(crate::security::SecuritySubsystem::noop()),
             Arc::new(self.agent_registry),
             Arc::new(crate::audit::AuditSubsystem::noop()),
-            Arc::new(NoopSessionRepository) as SessionRepoRef,
             Arc::new(NoopSessionIndex) as SessionIndexRef,
             Arc::new(NoopSettingsProvider) as SettingsRef,
             Arc::new(StreamHub::new(16)),
@@ -148,6 +149,16 @@ impl TestKernelBuilder {
 
 impl Default for TestKernelBuilder {
     fn default() -> Self { Self::new() }
+}
+
+/// Create a temporary [`FileTapeStore`] for testing.
+pub async fn test_tape_store() -> Arc<rara_memory::tape::FileTapeStore> {
+    let dir = std::env::temp_dir().join(format!("rara_test_tape_{}", uuid::Uuid::new_v4()));
+    Arc::new(
+        rara_memory::tape::FileTapeStore::new(&dir, &dir)
+            .await
+            .expect("FileTapeStore::new for testing"),
+    )
 }
 
 /// Create minimal test manifests (no external YAML dependencies).

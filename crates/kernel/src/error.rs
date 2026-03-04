@@ -172,14 +172,6 @@ pub enum KernelError {
     },
 }
 
-impl From<crate::memory::MemoryError> for KernelError {
-    fn from(err: crate::memory::MemoryError) -> Self {
-        Self::Memory {
-            message: err.to_string(),
-        }
-    }
-}
-
 /// Classify a provider error by HTTP status code and/or error message body.
 ///
 /// Used by retry and fallback logic to decide whether to retry, fall back to

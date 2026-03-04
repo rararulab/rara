@@ -68,7 +68,8 @@ async fn test_kernel_builder_creates_kernel() {
         .tool(Arc::new(EchoTool))
         .max_concurrency(4)
         .max_iterations(10)
-        .build();
+        .build()
+        .await;
 
     assert_eq!(kernel.config().max_concurrency, 4);
     assert_eq!(kernel.config().default_max_iterations, 10);

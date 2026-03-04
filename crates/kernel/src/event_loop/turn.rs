@@ -164,8 +164,8 @@ impl Kernel {
         };
 
         // Apply context compaction (async).
-        let compaction_strategy = crate::memory::compaction::SlidingWindowCompaction;
-        let compacted = crate::memory::compaction::maybe_compact(
+        let compaction_strategy = crate::compaction::SlidingWindowCompaction;
+        let compacted = crate::compaction::maybe_compact(
             conversation,
             max_context_tokens,
             &compaction_strategy,
@@ -184,15 +184,16 @@ impl Kernel {
             rt.conversation.push(user_msg.clone());
         });
 
-        let session_id_persist = session_id.clone();
         // Persist in background to avoid blocking event loop.
         {
-            let session_repo = Arc::clone(self.session_repo());
-            let session_id = session_id_persist.clone();
+            let tape = self.tape_for(&session_id);
             let user_msg = user_msg.clone();
             tokio::spawn(async move {
-                if let Err(e) = session_repo.append_message(&session_id, &user_msg).await {
-                    warn!(%e, "failed to persist user message");
+                if let Err(e) = tape
+                    .append_message(serde_json::to_value(&user_msg).unwrap_or_default())
+                    .await
+                {
+                    warn!(%e, "failed to persist user message to tape");
                 }
             });
         }
@@ -408,12 +409,16 @@ impl Kernel {
                 runtimes.with_mut(&agent_id, |rt| {
                     rt.conversation.push(assistant_msg.clone());
                 });
-                if let Err(e) = self
-                    .session_repo()
-                    .append_message(&session_id, &assistant_msg)
-                    .await
                 {
-                    warn!(%e, "failed to persist assistant message");
+                    let tape = self.tape_for(&session_id);
+                    if let Err(e) = tape
+                        .append_message(
+                            serde_json::to_value(&assistant_msg).unwrap_or_default(),
+                        )
+                        .await
+                    {
+                        warn!(%e, "failed to persist assistant message to tape");
+                    }
                 }
 
                 let result = AgentResult {

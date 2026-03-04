@@ -35,5 +35,6 @@ pub mod resolvers;
 pub mod skills;
 pub mod state;
 pub mod stream;
+pub mod tape_convert;
 pub mod tools;
 pub mod user_store;

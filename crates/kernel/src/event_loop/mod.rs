@@ -174,7 +174,6 @@ impl Kernel {
                         self.security(),
                         self.audit(),
                         self.agent_registry(),
-                        self.memory(),
                     )
                     .await;
             }

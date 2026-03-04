@@ -29,7 +29,7 @@ use crate::{
         pipe::{PipeReader, PipeWriter},
         types::{InboundMessage, MessageId, OutboundEnvelope},
     },
-    memory::KvScope,
+    kv::KvScope,
     process::{
         AgentId, AgentManifest, AgentResult, ProcessInfo, SessionId, Signal,
         principal::{Principal, UserId},

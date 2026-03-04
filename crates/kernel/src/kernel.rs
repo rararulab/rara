@@ -28,7 +28,7 @@
 //!   ├── AgentRegistry   (named agent definitions)
 //!   ├── DriverRegistry  (multi-driver LLM)
 //!   ├── ToolRegistry
-//!   ├── Memory
+//!   ├── FileTapeStore (tape-based memory)
 //!   ├── NotificationBus
 //!   ├── SecuritySubsystem (auth + authz + approval + guard)
 //!   ├── shared_kv (cross-agent KV)
@@ -60,12 +60,11 @@ use crate::{
     },
     kv::SharedKv,
     llm::DriverRegistryRef,
-    memory::MemoryRef,
     notification::NotificationBusRef,
     process::{AgentId, SessionState, SessionTable, agent_registry::AgentRegistryRef},
     queue::{EventQueueRef, ObservableEventQueue, ShardedEventQueueConfig, ShardedQueueRef},
     security::SecurityRef,
-    session::{SessionIndexRef, SessionRepoRef},
+    session::SessionIndexRef,
     syscall::SyscallDispatcher,
     tool::ToolRegistryRef,
 };
@@ -163,17 +162,14 @@ pub struct Kernel {
     process_table:    Arc<SessionTable>,
     /// Global semaphore limiting total concurrent agent processes.
     global_semaphore: Arc<Semaphore>,
-    /// 3-layer memory (not used for cross-agent KV — see shared_kv).
-    memory:           MemoryRef,
     /// Unified security subsystem (auth + authz + approval).
     security:         SecurityRef,
     /// Agent registry for looking up named agent definitions.
     agent_registry:   AgentRegistryRef,
     /// Unified audit subsystem (logging + tool call recording).
     audit:            AuditRef,
-    /// Session repository for conversation history (legacy — being replaced by
-    /// tape + session_index).
-    session_repo:     SessionRepoRef,
+    /// File-backed tape store for session message persistence.
+    tape_store:       Arc<rara_memory::tape::FileTapeStore>,
     /// Lightweight session metadata index (tape-centric replacement for the
     /// session CRUD subset of `SessionRepository`).
     session_index:    SessionIndexRef,
@@ -215,11 +211,10 @@ impl Kernel {
         config: KernelConfig,
         driver_registry: DriverRegistryRef,
         tool_registry: ToolRegistryRef,
-        memory: MemoryRef,
+        tape_store: Arc<rara_memory::tape::FileTapeStore>,
         event_bus: NotificationBusRef,
         security: SecurityRef,
         agent_registry: AgentRegistryRef,
-        session_repo: SessionRepoRef,
         session_index: SessionIndexRef,
         settings: SettingsRef,
         stream_hub: StreamHubRef,
@@ -260,11 +255,10 @@ impl Kernel {
             config,
             process_table: Arc::new(SessionTable::new()),
             global_semaphore,
-            memory,
             security,
             agent_registry,
             audit,
-            session_repo,
+            tape_store,
             session_index,
             settings,
             device_registry: Arc::new(DeviceRegistry::new()),
@@ -290,8 +284,17 @@ impl Kernel {
     /// Access the event bus.
     pub fn event_bus(&self) -> &NotificationBusRef { self.syscall.event_bus() }
 
-    /// Access the memory subsystem.
-    pub fn memory(&self) -> &MemoryRef { &self.memory }
+    /// Access the file-backed tape store.
+    pub fn tape_store(&self) -> &Arc<rara_memory::tape::FileTapeStore> { &self.tape_store }
+
+    /// Create a [`TapeService`](rara_memory::tape::TapeService) bound to the
+    /// given session.
+    pub(crate) fn tape_for(&self, session_id: &crate::process::SessionId) -> rara_memory::tape::TapeService {
+        rara_memory::tape::TapeService::new(
+            session_id.to_string(),
+            self.tape_store.as_ref().clone(),
+        )
+    }
 
     /// Access the kernel config.
     pub fn config(&self) -> &KernelConfig { &self.config }
@@ -373,9 +376,6 @@ impl Kernel {
     /// Access the shared KV store (used by event loop).
     pub(crate) fn shared_kv(&self) -> &SharedKv { self.syscall.shared_kv() }
 
-    /// Access the session repository (used by event loop).
-    pub(crate) fn session_repo(&self) -> &SessionRepoRef { &self.session_repo }
-
     /// Access the session index (lightweight metadata-only interface).
     pub fn session_index(&self) -> &SessionIndexRef { &self.session_index }
 
@@ -403,12 +403,11 @@ impl Kernel {
         global_semaphore: Arc<Semaphore>,
         driver_registry: DriverRegistryRef,
         tool_registry: ToolRegistryRef,
-        memory: MemoryRef,
+        tape_store: Arc<rara_memory::tape::FileTapeStore>,
         event_bus: NotificationBusRef,
         security: SecurityRef,
         agent_registry: AgentRegistryRef,
         audit: AuditRef,
-        session_repo: SessionRepoRef,
         session_index: SessionIndexRef,
         settings: SettingsRef,
         stream_hub: StreamHubRef,
@@ -442,11 +441,10 @@ impl Kernel {
             config,
             process_table,
             global_semaphore,
-            memory,
             security,
             agent_registry,
             audit,
-            session_repo,
+            tape_store,
             session_index,
             settings,
             device_registry,
@@ -552,17 +550,16 @@ mod tests {
         handle::kernel_handle::KernelHandle,
         io::stream::StreamHub,
         llm::DriverRegistryBuilder,
-        memory::NoopMemory,
         notification::NoopNotificationBus,
         process::{
             AgentManifest, agent_registry::AgentRegistry, noop_user_store::NoopUserStore,
             principal::Principal,
         },
-        session::{NoopSessionIndex, NoopSessionRepository, SessionIndexRef},
+        session::{NoopSessionIndex, SessionIndexRef},
         tool::ToolRegistry,
     };
 
-    fn make_test_kernel(max_concurrency: usize, child_limit: usize) -> Kernel {
+    async fn make_test_kernel(max_concurrency: usize, child_limit: usize) -> Kernel {
         let config = KernelConfig {
             max_concurrency,
             default_child_limit: child_limit,
@@ -582,15 +579,16 @@ mod tests {
                 .build(),
         );
 
+        let tape_store = crate::testing::test_tape_store().await;
+
         Kernel::new(
             config,
             driver_registry,
             Arc::new(ToolRegistry::new()),
-            Arc::new(NoopMemory),
+            tape_store,
             Arc::new(NoopNotificationBus),
             Arc::new(crate::security::SecuritySubsystem::noop()),
             registry,
-            Arc::new(NoopSessionRepository) as SessionRepoRef,
             Arc::new(NoopSessionIndex) as SessionIndexRef,
             Arc::new(NoopSettingsProvider) as SettingsRef,
             Arc::new(StreamHub::new(16)),
@@ -605,11 +603,11 @@ mod tests {
 
     /// Create a test kernel with its event loop running, returning an
     /// Arc<Kernel> and a CancellationToken to shut it down.
-    fn start_test_kernel(
+    async fn start_test_kernel(
         max_concurrency: usize,
         child_limit: usize,
     ) -> (KernelHandle, CancellationToken) {
-        let kernel = make_test_kernel(max_concurrency, child_limit);
+        let kernel = make_test_kernel(max_concurrency, child_limit).await;
         let cancel = CancellationToken::new();
         let (_arc, handle) = kernel.start(cancel.clone());
         (handle, cancel)
@@ -634,18 +632,18 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_kernel_creation() {
-        let kernel = make_test_kernel(10, 5);
+    #[tokio::test]
+    async fn test_kernel_creation() {
+        let kernel = make_test_kernel(10, 5).await;
         assert_eq!(kernel.config().max_concurrency, 10);
         assert_eq!(kernel.config().default_child_limit, 5);
         assert_eq!(kernel.process_table().list().len(), 0);
         assert!(!kernel.event_queue().is_sharded());
     }
 
-    #[test]
-    fn test_kernel_agent_registry() {
-        let kernel = make_test_kernel(10, 5);
+    #[tokio::test]
+    async fn test_kernel_agent_registry() {
+        let kernel = make_test_kernel(10, 5).await;
         assert!(kernel.agent_registry().get("rara").is_some());
         assert!(kernel.agent_registry().get("scout").is_some());
         assert!(kernel.agent_registry().get("nonexistent").is_none());
@@ -662,7 +660,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_kernel_spawn_creates_process() {
-        let (kernel, cancel) = start_test_kernel(10, 5);
+        let (kernel, cancel) = start_test_kernel(10, 5).await;
         let manifest = test_manifest("test-agent");
         let principal = Principal::user("test-user");
 
@@ -685,7 +683,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_kernel_spawn_global_limit() {
-        let (kernel, cancel) = start_test_kernel(2, 5);
+        let (kernel, cancel) = start_test_kernel(2, 5).await;
         let principal = Principal::user("test-user");
 
         let h1 = kernel
@@ -725,7 +723,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_kernel_spawn_named_success() {
-        let (kernel, cancel) = start_test_kernel(10, 5);
+        let (kernel, cancel) = start_test_kernel(10, 5).await;
         let principal = Principal::user("test-user");
 
         let result = kernel
@@ -738,7 +736,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_kernel_spawn_named_not_found() {
-        let (kernel, cancel) = start_test_kernel(10, 5);
+        let (kernel, cancel) = start_test_kernel(10, 5).await;
         let principal = Principal::user("test-user");
 
         let result = kernel
@@ -757,7 +755,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_kernel_spawn_with_parent() {
-        let (kernel, cancel) = start_test_kernel(10, 5);
+        let (kernel, cancel) = start_test_kernel(10, 5).await;
         let principal = Principal::user("test-user");
 
         let parent_id = kernel
@@ -796,7 +794,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_kernel_process_stats_after_spawn() {
-        let (kernel, cancel) = start_test_kernel(10, 5);
+        let (kernel, cancel) = start_test_kernel(10, 5).await;
         let principal = Principal::user("test-user");
 
         let agent_id = kernel
@@ -822,7 +820,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_kernel_list_processes_returns_all_spawned() {
-        let (kernel, cancel) = start_test_kernel(10, 5);
+        let (kernel, cancel) = start_test_kernel(10, 5).await;
         let principal = Principal::user("test-user");
 
         kernel
@@ -855,9 +853,9 @@ mod tests {
         cancel.cancel();
     }
 
-    #[test]
-    fn test_kernel_system_stats_initial() {
-        let kernel = make_test_kernel(10, 5);
+    #[tokio::test]
+    async fn test_kernel_system_stats_initial() {
+        let kernel = make_test_kernel(10, 5).await;
         let stats = kernel.system_stats();
         assert_eq!(stats.active_sessions, 0);
         assert_eq!(stats.total_spawned, 0);
@@ -869,7 +867,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_kernel_system_stats_after_spawn() {
-        let (kernel, cancel) = start_test_kernel(10, 5);
+        let (kernel, cancel) = start_test_kernel(10, 5).await;
         let principal = Principal::user("test-user");
 
         kernel
@@ -897,7 +895,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_signal_via_event_queue() {
-        let (kernel, cancel) = start_test_kernel(10, 5);
+        let (kernel, cancel) = start_test_kernel(10, 5).await;
         let principal = Principal::user("test-user");
 
         let agent_id = kernel
@@ -952,9 +950,9 @@ mod tests {
         cancel.cancel();
     }
 
-    #[test]
-    fn test_kernel_system_stats_serializes_to_json() {
-        let kernel = make_test_kernel(10, 5);
+    #[tokio::test]
+    async fn test_kernel_system_stats_serializes_to_json() {
+        let kernel = make_test_kernel(10, 5).await;
         let stats = kernel.system_stats();
         let json = serde_json::to_string(&stats).unwrap();
         assert!(json.contains("\"active_sessions\":0"));
@@ -967,7 +965,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_tool_registry_includes_kernel_tool() {
-        let (kernel, cancel) = start_test_kernel(10, 5);
+        let (kernel, cancel) = start_test_kernel(10, 5).await;
         let principal = Principal::user("test-user");
 
         let agent_id = kernel
@@ -1009,7 +1007,7 @@ mod tests {
         // The "scout" manifest specifies tools: ["read_file", "grep"].
         // Even though the kernel tool is injected, `filtered()` should exclude
         // it when the manifest specifies a non-empty tool list.
-        let (kernel, cancel) = start_test_kernel(10, 5);
+        let (kernel, cancel) = start_test_kernel(10, 5).await;
         let principal = Principal::user("test-user");
 
         let agent_id = kernel
@@ -1085,7 +1083,7 @@ mod tests {
         }
     }
 
-    fn make_guarded_kernel() -> Kernel {
+    async fn make_guarded_kernel() -> Kernel {
         let config = KernelConfig {
             max_concurrency: 10,
             default_child_limit: 5,
@@ -1113,15 +1111,16 @@ mod tests {
             )),
         ));
 
+        let tape_store = crate::testing::test_tape_store().await;
+
         Kernel::new(
             config,
             driver_registry,
             Arc::new(ToolRegistry::new()),
-            Arc::new(NoopMemory),
+            tape_store,
             Arc::new(NoopNotificationBus),
             security,
             registry,
-            Arc::new(NoopSessionRepository) as SessionRepoRef,
             Arc::new(NoopSessionIndex) as SessionIndexRef,
             Arc::new(NoopSettingsProvider) as SettingsRef,
             Arc::new(StreamHub::new(16)),
@@ -1136,7 +1135,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_guard_batch_denies_dangerous_tools() {
-        let kernel = make_guarded_kernel();
+        let kernel = make_guarded_kernel().await;
         let cancel = CancellationToken::new();
         let (_kernel, handle) = kernel.start(cancel.clone());
 
@@ -1197,7 +1196,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_guard_batch_allows_all_safe_tools() {
-        let kernel = make_guarded_kernel();
+        let kernel = make_guarded_kernel().await;
         let cancel = CancellationToken::new();
         let (_kernel, handle) = kernel.start(cancel.clone());
 
@@ -1246,7 +1245,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_guard_batch_empty_checks() {
-        let kernel = make_guarded_kernel();
+        let kernel = make_guarded_kernel().await;
         let cancel = CancellationToken::new();
         let (_kernel, handle) = kernel.start(cancel.clone());
 

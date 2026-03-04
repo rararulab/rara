@@ -17,7 +17,6 @@
 
 use std::sync::Arc;
 
-use snafu::ResultExt;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -77,19 +76,18 @@ impl Kernel {
         tracing::Span::current().record("agent_id", tracing::field::display(&agent_id));
 
         let (session_id, initial_messages) = if let Some(session_id) = resume_session_id {
-            let messages = self
-                .session_repo()
-                .read_messages(&session_id, None, None)
-                .await
-                .whatever_context::<_, KernelError>("failed to load resumed session history")?;
+            // Load previous conversation from the tape store.
+            let tape = self.tape_for(&session_id);
+            let entries = tape.entries().await.unwrap_or_default();
+            let messages: Vec<crate::channel::types::ChatMessage> = entries
+                .into_iter()
+                .filter(|e| e.kind == rara_memory::tape::TapEntryKind::Message)
+                .filter_map(|e| serde_json::from_value(e.payload).ok())
+                .collect();
             (session_id, messages)
         } else {
-            let session = self
-                .session_repo()
-                .create()
-                .await
-                .whatever_context::<_, KernelError>("failed to create session")?;
-            (session.key, vec![])
+            let session_id = crate::process::SessionId::new();
+            (session_id, vec![])
         };
 
         // Audit: ProcessSpawned
@@ -160,7 +158,7 @@ impl Kernel {
 
         let max_context_tokens = manifest
             .max_context_tokens
-            .unwrap_or(crate::memory::compaction::DEFAULT_MAX_CONTEXT_TOKENS);
+            .unwrap_or(crate::compaction::DEFAULT_MAX_CONTEXT_TOKENS);
 
         // Create runtime entry. The global permit is stored here so it lives
         // as long as the process — dropping the runtime entry automatically
@@ -343,12 +341,14 @@ impl Kernel {
             return;
         };
 
-        if let Err(e) = self
-            .session_repo()
-            .append_message(&session_id, &child_msg)
-            .await
         {
-            warn!(%e, "failed to persist child result message");
+            let tape = self.tape_for(&session_id);
+            if let Err(e) = tape
+                .append_message(serde_json::to_value(&child_msg).unwrap_or_default())
+                .await
+            {
+                warn!(%e, "failed to persist child result message to tape");
+            }
         }
     }
 
@@ -391,11 +391,9 @@ impl Kernel {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::sync::Arc;
 
-    use async_trait::async_trait;
-    use chrono::Utc;
-    use tokio::sync::{Mutex, Semaphore};
+    use tokio::sync::Semaphore;
 
     use super::*;
     use crate::{
@@ -406,184 +404,16 @@ mod tests {
         io::{pipe::PipeRegistry, stream::StreamHub},
         kernel::{KernelConfig, NoopSettingsProvider},
         llm::DriverRegistryBuilder,
-        memory::NoopMemory,
         notification::NoopNotificationBus,
         process::{
             AgentEnv, RuntimeMetrics, SessionRuntime, SessionState,
             agent_registry::AgentRegistry, principal::Principal,
         },
-        session::{
-            ChannelBinding, NoopSessionIndex, SessionEntry, SessionError, SessionIndexRef,
-            SessionKey, SessionRepoRef, SessionRepository,
-        },
+        session::{NoopSessionIndex, SessionIndexRef},
         tool::ToolRegistry,
     };
 
-    #[derive(Default)]
-    struct MemorySessionRepository {
-        sessions: Mutex<HashMap<SessionKey, SessionEntry>>,
-        messages: Mutex<HashMap<SessionKey, Vec<ChatMessage>>>,
-        bindings: Mutex<HashMap<(String, String, String), ChannelBinding>>,
-    }
-
-    #[async_trait]
-    impl SessionRepository for MemorySessionRepository {
-        async fn create_session(
-            &self,
-            entry: &SessionEntry,
-        ) -> std::result::Result<SessionEntry, SessionError> {
-            self.sessions
-                .lock()
-                .await
-                .insert(entry.key.clone(), entry.clone());
-            self.messages
-                .lock()
-                .await
-                .entry(entry.key.clone())
-                .or_default();
-            Ok(entry.clone())
-        }
-
-        async fn get_session(
-            &self,
-            key: &SessionKey,
-        ) -> std::result::Result<Option<SessionEntry>, SessionError> {
-            Ok(self.sessions.lock().await.get(key).cloned())
-        }
-
-        async fn list_sessions(
-            &self,
-            _limit: i64,
-            _offset: i64,
-        ) -> std::result::Result<Vec<SessionEntry>, SessionError> {
-            Ok(self.sessions.lock().await.values().cloned().collect())
-        }
-
-        async fn update_session(
-            &self,
-            entry: &SessionEntry,
-        ) -> std::result::Result<SessionEntry, SessionError> {
-            self.sessions
-                .lock()
-                .await
-                .insert(entry.key.clone(), entry.clone());
-            Ok(entry.clone())
-        }
-
-        async fn delete_session(&self, key: &SessionKey) -> std::result::Result<(), SessionError> {
-            self.sessions.lock().await.remove(key);
-            self.messages.lock().await.remove(key);
-            Ok(())
-        }
-
-        async fn append_message(
-            &self,
-            session_key: &SessionKey,
-            message: &ChatMessage,
-        ) -> std::result::Result<ChatMessage, SessionError> {
-            let mut stored = message.clone();
-            let mut messages = self.messages.lock().await;
-            let entry = messages.entry(session_key.clone()).or_default();
-            stored.seq = entry.len() as i64 + 1;
-            entry.push(stored.clone());
-            Ok(stored)
-        }
-
-        async fn read_messages(
-            &self,
-            session_key: &SessionKey,
-            after_seq: Option<i64>,
-            limit: Option<i64>,
-        ) -> std::result::Result<Vec<ChatMessage>, SessionError> {
-            let messages = self
-                .messages
-                .lock()
-                .await
-                .get(session_key)
-                .cloned()
-                .unwrap_or_default();
-            let filtered = messages
-                .into_iter()
-                .filter(|msg| match after_seq {
-                    Some(seq) => msg.seq > seq,
-                    None => true,
-                })
-                .take(limit.unwrap_or(i64::MAX) as usize)
-                .collect();
-            Ok(filtered)
-        }
-
-        async fn clear_messages(
-            &self,
-            session_key: &SessionKey,
-        ) -> std::result::Result<(), SessionError> {
-            self.messages
-                .lock()
-                .await
-                .insert(session_key.clone(), Vec::new());
-            Ok(())
-        }
-
-        async fn fork_session(
-            &self,
-            source_key: &SessionKey,
-            _fork_at_seq: i64,
-        ) -> std::result::Result<SessionEntry, SessionError> {
-            let now = Utc::now();
-            let entry = SessionEntry {
-                key:           SessionKey::new(),
-                title:         None,
-                model:         None,
-                system_prompt: None,
-                message_count: 0,
-                preview:       None,
-                metadata:      None,
-                created_at:    now,
-                updated_at:    now,
-            };
-            self.create_session(&entry).await?;
-            let messages = self.read_messages(source_key, None, None).await?;
-            for msg in messages {
-                let _ = self.append_message(&entry.key, &msg).await?;
-            }
-            Ok(entry)
-        }
-
-        async fn bind_channel(
-            &self,
-            binding: &ChannelBinding,
-        ) -> std::result::Result<ChannelBinding, SessionError> {
-            self.bindings.lock().await.insert(
-                (
-                    binding.channel_type.clone(),
-                    binding.account.clone(),
-                    binding.chat_id.clone(),
-                ),
-                binding.clone(),
-            );
-            Ok(binding.clone())
-        }
-
-        async fn get_channel_binding(
-            &self,
-            channel_type: &str,
-            account: &str,
-            chat_id: &str,
-        ) -> std::result::Result<Option<ChannelBinding>, SessionError> {
-            Ok(self
-                .bindings
-                .lock()
-                .await
-                .get(&(
-                    channel_type.to_string(),
-                    account.to_string(),
-                    chat_id.to_string(),
-                ))
-                .cloned())
-        }
-    }
-
-    fn test_kernel(session_repo: SessionRepoRef) -> Kernel {
+    async fn test_kernel() -> Kernel {
         let config = KernelConfig {
             max_concurrency: 4,
             default_child_limit: 2,
@@ -596,13 +426,14 @@ mod tests {
                 .provider_model("test", "test-model", vec![])
                 .build(),
         );
+        let tape_store = crate::testing::test_tape_store().await;
         Kernel::for_testing(
             config,
             Arc::new(crate::process::SessionTable::new()),
             Arc::new(Semaphore::new(4)),
             driver_registry,
             Arc::new(ToolRegistry::new()),
-            Arc::new(NoopMemory),
+            tape_store,
             Arc::new(NoopNotificationBus),
             Arc::new(crate::security::SecuritySubsystem::noop()),
             Arc::new(AgentRegistry::new(
@@ -610,7 +441,6 @@ mod tests {
                 std::env::temp_dir().join("kernel_lifecycle_tests"),
             )),
             Arc::new(crate::audit::AuditSubsystem::noop()),
-            session_repo,
             Arc::new(NoopSessionIndex) as SessionIndexRef,
             Arc::new(NoopSettingsProvider),
             Arc::new(StreamHub::new(16)),
@@ -678,16 +508,16 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_agent_reuses_existing_session_history() {
-        let session_repo = Arc::new(MemorySessionRepository::default());
-        let kernel = test_kernel(session_repo.clone());
+        let kernel = test_kernel().await;
         let runtimes = RuntimeTable::new();
-        let resumed_session = session_repo.create().await.expect("create session").key;
-        session_repo
-            .append_message(&resumed_session, &ChatMessage::user("hello"))
+
+        // Write messages to a tape to simulate a previous session.
+        let resumed_session = crate::process::SessionId::new();
+        let tape = kernel.tape_for(&resumed_session);
+        tape.append_message(serde_json::to_value(&ChatMessage::user("hello")).unwrap())
             .await
             .expect("append user");
-        session_repo
-            .append_message(&resumed_session, &ChatMessage::assistant("world"))
+        tape.append_message(serde_json::to_value(&ChatMessage::assistant("world")).unwrap())
             .await
             .expect("append assistant");
 
@@ -719,7 +549,7 @@ mod tests {
 
     #[tokio::test]
     async fn terminate_marks_active_session_suspended_and_defers_cleanup() {
-        let kernel = test_kernel(Arc::new(crate::session::NoopSessionRepository));
+        let kernel = test_kernel().await;
         let runtimes = RuntimeTable::new();
         let agent_id = insert_runtime(&kernel, &runtimes, SessionState::Active).await;
 

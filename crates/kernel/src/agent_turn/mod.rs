@@ -930,7 +930,8 @@ mod tests {
 
         let kernel = TestKernelBuilder::new()
             .driver_registry(driver_registry)
-            .build();
+            .build()
+            .await;
 
         let cancel = CancellationToken::new();
         let (kernel_arc, handle) = kernel.start(cancel.clone());
@@ -967,7 +968,8 @@ mod tests {
         let kernel = TestKernelBuilder::new()
             .driver_registry(driver_registry)
             .tool(tool)
-            .build();
+            .build()
+            .await;
 
         let cancel = CancellationToken::new();
         let (kernel_arc, handle) = kernel.start(cancel.clone());

@@ -20,6 +20,7 @@
 //! thin wrapper.
 
 use opendal::Operator;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Cross-agent shared KV store backed by an [`opendal::Operator`].
@@ -95,6 +96,26 @@ impl SharedKv {
             Err(_) => 0,
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// KvScope
+// ---------------------------------------------------------------------------
+
+/// Visibility partition for KV shared memory operations.
+///
+/// Used by `ProcessHandle::shared_store` and `ProcessHandle::shared_recall`
+/// to provide cross-agent data sharing with explicit scope control.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum KvScope {
+    /// Global scope — key stored as-is. Requires Root or Admin role.
+    Global,
+    /// Team scope — key prefixed with `"team:{name}:"`. Requires Root or
+    /// Admin role.
+    Team(String),
+    /// Agent scope — key prefixed with `"agent:{agent_id}:"`. Regular agents
+    /// can only access their own agent scope; Root/Admin can access any.
+    Agent(uuid::Uuid),
 }
 
 #[cfg(test)]

@@ -34,7 +34,7 @@ use crate::{
     kernel::KernelConfig,
     kv::SharedKv,
     llm::DriverRegistryRef,
-    memory::{KvScope, MemoryRef},
+    kv::KvScope,
     notification::NotificationBusRef,
     process::{
         AgentId, ProcessInfo, ProcessTable, agent_registry::AgentRegistryRef, principal::Principal,
@@ -118,7 +118,6 @@ impl SyscallDispatcher {
         security: &SecurityRef,
         audit: &AuditRef,
         agent_registry: &AgentRegistryRef,
-        _memory: &MemoryRef,
     ) {
         let syscall_type: &'static str = (&syscall).into();
         crate::metrics::SYSCALL_TOTAL

@@ -15,7 +15,6 @@ description = "Tape-based memory layer for append-only conversation recording"
 derive_more = { workspace = true }
 jiff.workspace = true
 md5.workspace = true
-rara-kernel.workspace = true
 regex.workspace = true
 rustix = { workspace = true, features = ["fs"] }
 serde.workspace = true

@@ -28,7 +28,7 @@ use tracing::{info, warn};
 
 use super::{AgentHandle, process_handle::ProcessHandle};
 use crate::{
-    memory::KvScope,
+    kv::KvScope,
     process::{AgentId, AgentManifest, agent_registry::AgentRegistry},
 };
 

@@ -229,9 +229,9 @@ pub struct AgentManifest {
     ///
     /// When the in-memory conversation history exceeds this budget, the
     /// kernel applies a
-    /// [`CompactionStrategy`](crate::memory::compaction::CompactionStrategy)
+    /// [`CompactionStrategy`](crate::compaction::CompactionStrategy)
     /// to trim it before sending to the LLM. Defaults to
-    /// [`DEFAULT_MAX_CONTEXT_TOKENS`](crate::memory::compaction::DEFAULT_MAX_CONTEXT_TOKENS)
+    /// [`DEFAULT_MAX_CONTEXT_TOKENS`](crate::compaction::DEFAULT_MAX_CONTEXT_TOKENS)
     /// (8192) when `None`.
     #[serde(default)]
     pub max_context_tokens: Option<usize>,

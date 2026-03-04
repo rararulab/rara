@@ -26,7 +26,7 @@ use crate::{
     error::{KernelError, Result},
     event::{KernelEvent, Syscall},
     io::pipe::{PipeReader, PipeWriter},
-    memory::KvScope,
+    kv::KvScope,
     process::{AgentId, AgentManifest, ProcessInfo, SessionId, Signal, principal::Principal},
     queue::EventQueue,
     tool::ToolRegistry,

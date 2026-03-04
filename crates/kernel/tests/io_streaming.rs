@@ -104,7 +104,7 @@ impl AgentTool for EchoTool {
 /// tools.
 ///
 /// Returns the `KernelHandle` and a cancellation token.
-fn start_test_kernel(
+async fn start_test_kernel(
     tools: Vec<Arc<dyn AgentTool>>,
 ) -> (KernelHandle, tokio_util::sync::CancellationToken) {
     let model = ollama_model();
@@ -123,7 +123,7 @@ fn start_test_kernel(
     for tool in tools {
         builder = builder.tool(tool);
     }
-    let kernel = builder.build();
+    let kernel = builder.build().await;
     let cancel = tokio_util::sync::CancellationToken::new();
     let (_arc, handle) = kernel.start(cancel.clone());
     (handle, cancel)
@@ -150,12 +150,12 @@ async fn wait_for_result(
             );
         }
         if let Some(p) = handle.process_table().get(agent_id) {
-            if matches!(p.state, ProcessState::Completed) {
+            if matches!(p.state, ProcessState::Ready) {
                 if let Some(result) = p.result {
                     return result;
                 }
             }
-            if matches!(p.state, ProcessState::Failed) {
+            if matches!(p.state, ProcessState::Suspended) {
                 panic!("agent {agent_id} failed");
             }
         }
@@ -170,7 +170,7 @@ async fn wait_for_result(
 #[tokio::test]
 #[ignore = "requires running Ollama instance"]
 async fn test_stream_hub_receives_text_deltas() {
-    let (handle, cancel) = start_test_kernel(vec![]);
+    let (handle, cancel) = start_test_kernel(vec![]).await;
     let manifest = test_manifest("stream-text-agent", "Reply in one sentence.");
     let principal = Principal::user("test-user");
 
@@ -206,7 +206,7 @@ async fn test_stream_hub_receives_text_deltas() {
 #[tokio::test]
 #[ignore = "requires running Ollama instance"]
 async fn test_stream_hub_tool_call_events() {
-    let (handle, cancel) = start_test_kernel(vec![Arc::new(EchoTool)]);
+    let (handle, cancel) = start_test_kernel(vec![Arc::new(EchoTool)]).await;
     let manifest = test_manifest(
         "stream-tool-agent",
         "You are a tool-using assistant. ALWAYS call echo_tool when asked, then reply briefly.",
@@ -249,7 +249,7 @@ async fn test_stream_hub_tool_call_events() {
 #[tokio::test]
 #[ignore = "requires running Ollama instance"]
 async fn test_multi_session_isolation() {
-    let (handle, cancel) = start_test_kernel(vec![]);
+    let (handle, cancel) = start_test_kernel(vec![]).await;
     let principal = Principal::user("test-user");
 
     let manifest1 = test_manifest("session-1-agent", "Reply with exactly: session one");
