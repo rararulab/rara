@@ -285,7 +285,7 @@ impl AppConfig {
         // -- telegram adapter (optional) --------------------------------------
 
         let telegram_adapter =
-            match Self::try_build_telegram(&backend.settings_svc, &backend.contact_repo).await {
+            match Self::try_build_telegram(&backend.settings_svc).await {
                 Ok(Some(adapter)) => {
                     info!("Telegram adapter built");
                     Some(adapter)
@@ -493,7 +493,6 @@ impl AppConfig {
     /// calling `adapter.start(sink)` after the I/O pipeline is ready.
     async fn try_build_telegram(
         settings_svc: &rara_backend_admin::settings::SettingsSvc,
-        contact_repo: &rara_channels::telegram::contacts::repository::ContactRepository,
     ) -> Result<Option<Arc<rara_channels::telegram::TelegramAdapter>>, Whatever> {
         use rara_domain_shared::settings::{SettingsProvider, keys};
 
@@ -526,17 +525,10 @@ impl AppConfig {
         tg_config.primary_chat_id = chat_id;
         tg_config.allowed_group_chat_id = group_id;
 
-        // Build contact tracker from the contact repository.
-        let contact_tracker: Arc<dyn rara_channels::telegram::contacts::ContactTracker> =
-            Arc::new(ContactRepoTracker {
-                repo: contact_repo.clone(),
-            });
-
         let adapter = Arc::new(
             rara_channels::telegram::TelegramAdapter::with_proxy(&token, vec![], proxy.as_deref())
                 .whatever_context("failed to build telegram adapter")?
-                .with_config(tg_config)
-                .with_contact_tracker(contact_tracker),
+                .with_config(tg_config),
         );
 
         // Spawn a background task to hot-reload config from settings.
@@ -638,25 +630,6 @@ async fn shutdown_signal(shutdown_rx: oneshot::Receiver<()>) {
         () = ctrl_c => { info!("Received Ctrl+C signal"); },
         () = terminate => { info!("Received terminate signal"); },
         _ = shutdown_rx => { info!("Received shutdown signal"); },
-    }
-}
-
-// ---------------------------------------------------------------------------
-// ContactRepoTracker — implements ContactTracker via ContactRepository
-// ---------------------------------------------------------------------------
-
-/// Bridges [`ContactTracker`](rara_channels::telegram::contacts::ContactTracker)
-/// to the SQLite-backed [`ContactRepository`].
-struct ContactRepoTracker {
-    repo: rara_channels::telegram::contacts::repository::ContactRepository,
-}
-
-#[async_trait::async_trait]
-impl rara_channels::telegram::contacts::ContactTracker for ContactRepoTracker {
-    async fn track(&self, username: &str, chat_id: i64) {
-        if let Err(e) = self.repo.set_chat_id(username, chat_id).await {
-            tracing::debug!(username, chat_id, error = %e, "failed to track contact");
-        }
     }
 }
 

@@ -20,7 +20,6 @@
 
 pub mod agents;
 pub mod chat;
-pub mod contacts;
 pub mod kernel;
 pub mod mcp;
 pub mod scheduler;

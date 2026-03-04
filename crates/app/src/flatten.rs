@@ -56,10 +56,15 @@ pub struct LlmModelsConfig {
 }
 
 /// Configuration for a single LLM provider (OpenAI-compatible).
+///
+/// Both fields are required at runtime by `OpenAiDriver::resolve_config()`.
+/// For local providers like Ollama that don't validate API keys,
+/// set `api_key` to any non-empty placeholder (e.g. `"ollama"`).
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ProviderConfig {
     pub base_url: Option<String>,
+    /// Required for all providers. For Ollama, use any placeholder value (e.g. `"ollama"`).
     pub api_key:  Option<String>,
 }
 

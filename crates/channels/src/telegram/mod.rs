@@ -16,7 +16,6 @@
 
 pub mod adapter;
 pub mod commands;
-pub mod contacts;
 pub mod markdown;
 
 pub use adapter::{TelegramAdapter, TelegramConfig, telegram_to_raw_platform_message};

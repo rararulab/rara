@@ -8,7 +8,6 @@ DROP TABLE IF EXISTS memory_files;
 DROP TABLE IF EXISTS task_run_history;
 DROP TABLE IF EXISTS scheduler_task;
 DROP TABLE IF EXISTS credential_store;
-DROP TABLE IF EXISTS telegram_contact;
 DROP TABLE IF EXISTS coding_task;
 DROP TABLE IF EXISTS skill_cache;
 DROP TABLE IF EXISTS kernel_outbox;

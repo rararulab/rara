@@ -15,7 +15,7 @@
 //! Backend domain-service state — holds all HTTP admin services and routes.
 //!
 //! [`BackendState`] is the domain-service half of the old `AppState` god
-//! object.  It wires scheduler, session (chat), settings, and contacts.
+//! object.  It wires scheduler, session (chat), and settings.
 
 use std::sync::Arc;
 
@@ -30,7 +30,6 @@ pub struct BackendState {
     pub scheduler_service: crate::scheduler::service::SchedulerService,
     pub session_service:   crate::chat::service::SessionService,
     pub settings_svc:      crate::settings::SettingsSvc,
-    pub contact_repo:      rara_channels::telegram::contacts::repository::ContactRepository,
 }
 
 impl BackendState {
@@ -54,16 +53,10 @@ impl BackendState {
             crate::chat::service::SessionService::new(session_repo, settings_provider);
         info!("Session service initialized");
 
-        // -- contacts ---------------------------------------------------------
-
-        let contact_repo =
-            rara_channels::telegram::contacts::repository::ContactRepository::new(pool);
-
         Ok(Self {
             scheduler_service,
             session_service,
             settings_svc,
-            contact_repo,
         })
     }
 
@@ -91,11 +84,6 @@ impl BackendState {
             &mut router,
             &mut api,
             crate::settings::routes(self.settings_svc.clone()),
-        );
-        merge_openapi_router(
-            &mut router,
-            &mut api,
-            crate::contacts::routes(self.contact_repo.clone()),
         );
         merge_openapi_router(
             &mut router,
@@ -132,7 +120,6 @@ impl BackendState {
                 (name = "chat", description = "Chat sessions and messaging"),
                 (name = "scheduler", description = "Task scheduling"),
                 (name = "settings", description = "Runtime settings"),
-                (name = "contacts", description = "Telegram contacts allowlist"),
                 (name = "system", description = "System utilities")
             )
         )]

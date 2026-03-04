@@ -112,31 +112,6 @@ export interface CreateSkillRequest {
   prompt: string;
 }
 
-// Telegram Contacts
-export interface TelegramContact {
-  id: string;
-  name: string;
-  telegram_username: string;
-  chat_id: number | null;
-  notes: string | null;
-  enabled: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface CreateContactRequest {
-  name: string;
-  telegram_username: string;
-  notes?: string;
-  enabled?: boolean;
-}
-
-export interface UpdateContactRequest {
-  name?: string;
-  telegram_username?: string;
-  notes?: string | null;
-  enabled?: boolean;
-}
 
 // ── MCP Management ──────────────────────────────────────────
 

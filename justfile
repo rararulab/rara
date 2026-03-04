@@ -279,6 +279,21 @@ migrate-revert:
 migrate-info:
     DATABASE_URL={{RARA__DATABASE__DATABASE_URL}} sqlx migrate info --source {{RARA__DATABASE__MIGRATION_DIR}}
 
+[doc("reset rara data directory (drops database, agentfs, etc.)")]
+[group("🗄️ Database")]
+[confirm("⚠️ This will delete ALL rara data (database, sessions, agentfs). Continue?")]
+nuke:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "$(uname)" = "Darwin" ]; then
+        DATA_DIR="$HOME/Library/Application Support/rara"
+    else
+        DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/rara"
+    fi
+    echo "🧹 Removing $DATA_DIR..."
+    rm -rf "$DATA_DIR"
+    echo "✅ Clean slate — next startup will re-create everything."
+
 alias ma := migrate-add
 
 [doc("update dependencies interactively")]

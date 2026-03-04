@@ -160,26 +160,6 @@ CREATE INDEX idx_coding_task_status ON coding_task(status);
 CREATE INDEX idx_coding_task_created ON coding_task(created_at DESC);
 
 --------------------------------------------------------------------------------
--- telegram_contact: Telegram contact management
---------------------------------------------------------------------------------
-
-CREATE TABLE telegram_contact (
-    id                TEXT NOT NULL PRIMARY KEY DEFAULT (lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' || substr(hex(randomblob(2)),2) || '-a' || substr(hex(randomblob(2)),2) || '-' || hex(randomblob(6)))),
-    name              TEXT NOT NULL,
-    telegram_username TEXT NOT NULL UNIQUE,
-    chat_id           INTEGER,
-    notes             TEXT,
-    enabled           INTEGER NOT NULL DEFAULT 1,
-    created_at        TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TRIGGER set_telegram_contact_updated_at AFTER UPDATE ON telegram_contact
-BEGIN
-    UPDATE telegram_contact SET updated_at = datetime('now') WHERE id = NEW.id;
-END;
-
---------------------------------------------------------------------------------
 -- credential_store: encrypted credential storage
 --------------------------------------------------------------------------------
 

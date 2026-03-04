@@ -74,8 +74,6 @@ use teloxide::{
 use tokio::sync::{RwLock, watch};
 use tracing::{error, info, warn};
 
-use crate::telegram::contacts::ContactTracker;
-
 /// Long-polling timeout in seconds (Telegram server-side wait).
 const POLL_TIMEOUT_SECS: u32 = 30;
 
@@ -182,8 +180,6 @@ pub struct TelegramAdapter {
     /// Runtime-updatable configuration (primary chat ID, allowed group chat
     /// ID).
     config:            Arc<StdRwLock<TelegramConfig>>,
-    /// Optional contact tracker for recording username-to-chat_id mappings.
-    contact_tracker:   Option<Arc<dyn ContactTracker>>,
     /// StreamHub for subscribing to real-time token deltas.
     stream_hub:        Arc<RwLock<Option<StreamHubRef>>>,
     /// Per-chat active streaming state, keyed by `chat_id`.
@@ -210,7 +206,6 @@ impl TelegramAdapter {
             command_handlers: Vec::new(),
             callback_handlers: Vec::new(),
             config: Arc::new(StdRwLock::new(TelegramConfig::default())),
-            contact_tracker: None,
             stream_hub: Arc::new(RwLock::new(None)),
             active_streams: Arc::new(DashMap::new()),
         }
@@ -310,16 +305,6 @@ impl TelegramAdapter {
             Ok(g) => g.clone(),
             Err(e) => e.into_inner().clone(),
         }
-    }
-
-    /// Set a contact tracker for recording username-to-chat_id mappings.
-    ///
-    /// When set, every incoming message from a user with a Telegram username
-    /// will trigger a [`ContactTracker::track`] call, recording the mapping
-    /// for outbound notification routing.
-    pub fn with_contact_tracker(mut self, tracker: Arc<dyn ContactTracker>) -> Self {
-        self.contact_tracker = Some(tracker);
-        self
     }
 
     /// Inject the kernel's [`StreamHub`] for real-time token streaming.
@@ -437,16 +422,13 @@ impl EgressAdapter for TelegramAdapter {
                     let _ = self.bot.send_message(ChatId(chat_id), &delta).await;
                 }
             }
-            PlatformOutbound::Progress { text, .. } => {
-                // Send a typing indicator for progress updates.
+            PlatformOutbound::Progress { .. } => {
+                // Send a typing indicator only. The `text` field is a stage
+                // label (e.g. "thinking"), not user-visible content.
                 let _ = self
                     .bot
                     .send_chat_action(ChatId(chat_id), ChatAction::Typing)
                     .await;
-                // If there's progress text, send it as a message.
-                if !text.is_empty() {
-                    let _ = self.bot.send_message(ChatId(chat_id), &text).await;
-                }
             }
         }
 
@@ -488,7 +470,6 @@ impl ChannelAdapter for TelegramAdapter {
         let mut shutdown_rx = self.shutdown_rx.clone();
         let bot_username = Arc::clone(&self.bot_username);
         let config = Arc::clone(&self.config);
-        let contact_tracker = self.contact_tracker.clone();
         let stream_hub = Arc::clone(&self.stream_hub);
         let active_streams = Arc::clone(&self.active_streams);
 
@@ -501,7 +482,6 @@ impl ChannelAdapter for TelegramAdapter {
                 &mut shutdown_rx,
                 bot_username,
                 config,
-                contact_tracker,
                 stream_hub,
                 active_streams,
             )
@@ -548,7 +528,7 @@ impl ChannelAdapter for TelegramAdapter {
 ///
 /// Commands and callbacks are routed through the kernel like regular
 /// messages via [`InteractionType`]. The adapter only performs
-/// authorization checks, contact tracking, and group-chat filtering.
+/// authorization checks and group-chat filtering.
 async fn polling_loop(
     bot: teloxide::Bot,
     handle: KernelHandle,
@@ -557,7 +537,6 @@ async fn polling_loop(
     shutdown_rx: &mut watch::Receiver<bool>,
     bot_username: Arc<RwLock<Option<String>>>,
     config: Arc<StdRwLock<TelegramConfig>>,
-    contact_tracker: Option<Arc<dyn ContactTracker>>,
     stream_hub: Arc<RwLock<Option<StreamHubRef>>>,
     active_streams: Arc<DashMap<i64, StreamingMessage>>,
 ) {
@@ -612,7 +591,6 @@ async fn polling_loop(
                     let allowed = allowed_chat_ids.clone();
                     let bot_username = Arc::clone(&bot_username);
                     let config = Arc::clone(&config);
-                    let tracker = contact_tracker.clone();
                     let stream_hub = Arc::clone(&stream_hub);
                     let active_streams = Arc::clone(&active_streams);
                     tokio::spawn(async move {
@@ -623,7 +601,6 @@ async fn polling_loop(
                             &allowed,
                             &bot_username,
                             &config,
-                            tracker.as_ref(),
                             &stream_hub,
                             &active_streams,
                         )
@@ -659,7 +636,6 @@ async fn handle_update(
     allowed_chat_ids: &[i64],
     bot_username: &Arc<RwLock<Option<String>>>,
     config: &Arc<StdRwLock<TelegramConfig>>,
-    contact_tracker: Option<&Arc<dyn ContactTracker>>,
     stream_hub: &Arc<RwLock<Option<StreamHubRef>>>,
     active_streams: &Arc<DashMap<i64, StreamingMessage>>,
 ) {
@@ -681,15 +657,6 @@ async fn handle_update(
     };
 
     let chat_id = msg.chat.id.0;
-
-    // Track contact if username is available.
-    if let Some(tracker) = contact_tracker {
-        if let Some(ref user) = msg.from {
-            if let Some(ref username) = user.username {
-                tracker.track(username, chat_id).await;
-            }
-        }
-    }
 
     // Check if this chat is allowed.
     if !allowed_chat_ids.is_empty() && !allowed_chat_ids.contains(&chat_id) {
@@ -1623,25 +1590,6 @@ mod tests {
         assert_eq!(mime_to_filename("image/webp"), "photo.webp");
         assert_eq!(mime_to_filename("application/octet-stream"), "photo.bin");
         assert_eq!(mime_to_filename("unknown"), "photo.bin");
-    }
-
-    // --- Contact tracker tests ---
-
-    #[test]
-    fn test_with_contact_tracker() {
-        use crate::telegram::contacts::NoopContactTracker;
-
-        let bot = teloxide::Bot::new("fake_token");
-        let tracker = Arc::new(NoopContactTracker);
-        let adapter = TelegramAdapter::new(bot, vec![]).with_contact_tracker(tracker);
-        assert!(adapter.contact_tracker.is_some());
-    }
-
-    #[test]
-    fn test_without_contact_tracker() {
-        let bot = teloxide::Bot::new("fake_token");
-        let adapter = TelegramAdapter::new(bot, vec![]);
-        assert!(adapter.contact_tracker.is_none());
     }
 
     // -----------------------------------------------------------------------

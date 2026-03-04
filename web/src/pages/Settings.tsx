@@ -18,12 +18,9 @@ import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { settingsApi, api } from "@/api/client";
+import { settingsApi } from "@/api/client";
 import type {
-  CreateContactRequest,
   SettingsMap,
-  TelegramContact,
-  UpdateContactRequest,
 } from "@/api/types";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -39,14 +36,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
   Select,
   SelectContent,
   SelectItem,
@@ -61,13 +50,10 @@ import {
   EyeOff,
   Mail,
   MessageSquare,
-  Pencil,
-  Plus,
   Save,
   Settings2,
   Shield,
   Sparkles,
-  Trash2,
   Users,
   Sun,
   Moon,
@@ -75,7 +61,6 @@ import {
   Palette,
 } from "lucide-react";
 
-import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { useTheme, type Theme } from "@/hooks/use-theme";
 import Skills from "@/pages/Skills";
@@ -324,23 +309,10 @@ export default function Settings() {
   // Group-level toasts
   const [groupToasts, setGroupToasts] = useState<Record<string, ToastState>>({});
 
-  // Contacts state
-  const [contactDialogOpen, setContactDialogOpen] = useState(false);
-  const [editingContact, setEditingContact] = useState<TelegramContact | null>(null);
-  const [contactName, setContactName] = useState("");
-  const [contactUsername, setContactUsername] = useState("");
-  const [contactNotes, setContactNotes] = useState("");
-  const [contactEnabled, setContactEnabled] = useState(true);
-
   // Fetch all settings as flat KV map
   const settingsQuery = useQuery({
     queryKey: ["settings"],
     queryFn: () => settingsApi.list(),
-  });
-
-  const contactsQuery = useQuery({
-    queryKey: ["contacts"],
-    queryFn: () => api.get<TelegramContact[]>("/api/v1/contacts"),
   });
 
   // Sync fetched data into draft
@@ -409,83 +381,6 @@ export default function Settings() {
     saveMutation.mutate({ keys, group });
   };
 
-  // Contact mutations
-  const createContactMutation = useMutation({
-    mutationFn: (req: CreateContactRequest) =>
-      api.post<TelegramContact>("/api/v1/contacts", req),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["contacts"] });
-      setContactDialogOpen(false);
-      setToast({ kind: "success", message: "Contact created." });
-    },
-    onError: (e: unknown) => {
-      setToast({ kind: "error", message: e instanceof Error ? e.message : "Failed to create contact" });
-    },
-  });
-
-  const updateContactMutation = useMutation({
-    mutationFn: ({ id, req }: { id: string; req: UpdateContactRequest }) =>
-      api.put<TelegramContact>(`/api/v1/contacts/${id}`, req),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["contacts"] });
-      setContactDialogOpen(false);
-      setToast({ kind: "success", message: "Contact updated." });
-    },
-    onError: (e: unknown) => {
-      setToast({ kind: "error", message: e instanceof Error ? e.message : "Failed to update contact" });
-    },
-  });
-
-  const deleteContactMutation = useMutation({
-    mutationFn: (id: string) => api.del(`/api/v1/contacts/${id}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["contacts"] });
-      setToast({ kind: "success", message: "Contact deleted." });
-    },
-    onError: (e: unknown) => {
-      setToast({ kind: "error", message: e instanceof Error ? e.message : "Failed to delete contact" });
-    },
-  });
-
-  const openNewContact = () => {
-    setEditingContact(null);
-    setContactName("");
-    setContactUsername("");
-    setContactNotes("");
-    setContactEnabled(true);
-    setContactDialogOpen(true);
-  };
-
-  const openEditContact = (contact: TelegramContact) => {
-    setEditingContact(contact);
-    setContactName(contact.name);
-    setContactUsername(contact.telegram_username);
-    setContactNotes(contact.notes ?? "");
-    setContactEnabled(contact.enabled);
-    setContactDialogOpen(true);
-  };
-
-  const handleSaveContact = () => {
-    if (editingContact) {
-      updateContactMutation.mutate({
-        id: editingContact.id,
-        req: {
-          name: contactName.trim() || undefined,
-          telegram_username: contactUsername.trim() || undefined,
-          notes: contactNotes.trim() || null,
-          enabled: contactEnabled,
-        },
-      });
-    } else {
-      createContactMutation.mutate({
-        name: contactName.trim(),
-        telegram_username: contactUsername.trim(),
-        notes: contactNotes.trim() || undefined,
-        enabled: contactEnabled,
-      });
-    }
-  };
-
   if (settingsQuery.isLoading) {
     return (
       <div className="space-y-6">
@@ -519,7 +414,7 @@ export default function Settings() {
     { id: "agents", label: "Agents", icon: <Users className="h-4 w-4" />, summary: "Agent definitions and overrides" },
     { id: "skills", label: "Skills", icon: <Bot className="h-4 w-4" />, summary: "Installed skills and management" },
     { id: "mcp", label: "MCP Servers", icon: <ExternalLink className="h-4 w-4" />, summary: "Tool server connections" },
-    { id: "channels", label: "Channels", icon: <MessageSquare className="h-4 w-4" />, summary: "Telegram, Gmail, contacts" },
+    { id: "channels", label: "Channels", icon: <MessageSquare className="h-4 w-4" />, summary: "Telegram, Gmail" },
     { id: "tools", label: "Tools", icon: <Settings2 className="h-4 w-4" />, summary: "Composio, memory integrations" },
     { id: "security", label: "Security", icon: <Shield className="h-4 w-4" />, summary: "Filesystem sandbox" },
   ];
@@ -904,77 +799,6 @@ export default function Settings() {
               toast={groupToasts["telegram"] ?? null}
             />
 
-            {/* Contacts */}
-            <Card className="app-surface border-border/60">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40 text-muted-foreground">
-                      <Users className="h-4 w-4" />
-                    </div>
-                    <div>
-                      <CardTitle className="text-base">Telegram Contacts</CardTitle>
-                      <CardDescription>
-                        {contactsQuery.data?.length ?? 0} contacts, {contactsQuery.data?.filter((c) => c.enabled).length ?? 0} enabled
-                      </CardDescription>
-                    </div>
-                  </div>
-                  <Button size="sm" variant="outline" onClick={openNewContact}>
-                    <Plus className="mr-1.5 h-3.5 w-3.5" />
-                    Add
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {contactsQuery.isLoading ? (
-                  <Skeleton className="h-24 w-full" />
-                ) : !contactsQuery.data || contactsQuery.data.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No contacts yet.</p>
-                ) : (
-                  <div className="divide-y divide-border/60 rounded-lg border">
-                    {contactsQuery.data.map((contact) => (
-                      <div key={contact.id} className="flex items-center justify-between px-4 py-3">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <p className="truncate text-sm font-medium">{contact.name}</p>
-                            <Badge variant={contact.enabled ? "default" : "secondary"} className="text-[10px]">
-                              {contact.enabled ? "Enabled" : "Disabled"}
-                            </Badge>
-                          </div>
-                          <p className="truncate text-xs text-muted-foreground">
-                            @{contact.telegram_username}
-                            {contact.chat_id != null && ` · Chat ID: ${contact.chat_id}`}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            onClick={() => openEditContact(contact)}
-                          >
-                            <Pencil className="h-3 w-3" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                            onClick={() => {
-                              if (window.confirm(`Delete contact "${contact.name}"?`)) {
-                                deleteContactMutation.mutate(contact.id);
-                              }
-                            }}
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
             <KvGroup
               title="Gmail"
               description="SMTP credentials for sending emails"
@@ -1155,66 +979,6 @@ export default function Settings() {
 
       </div>
 
-      {/* Contact Dialog */}
-      <Dialog open={contactDialogOpen} onOpenChange={(open) => !open && setContactDialogOpen(false)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>{editingContact ? "Edit Contact" : "New Contact"}</DialogTitle>
-            <DialogDescription>
-              {editingContact ? "Update contact details." : "Add a new Telegram contact."}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="contact-name">Name</Label>
-              <Input
-                id="contact-name"
-                value={contactName}
-                onChange={(e) => setContactName(e.target.value)}
-                placeholder="Contact name"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="contact-username">Telegram Username</Label>
-              <Input
-                id="contact-username"
-                value={contactUsername}
-                onChange={(e) => setContactUsername(e.target.value)}
-                placeholder="username (without @)"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="contact-notes">Notes</Label>
-              <Textarea
-                id="contact-notes"
-                value={contactNotes}
-                onChange={(e) => setContactNotes(e.target.value)}
-                placeholder="Optional notes"
-                rows={2}
-              />
-            </div>
-            <div className="flex items-center gap-2">
-              <Switch
-                id="contact-enabled"
-                checked={contactEnabled}
-                onCheckedChange={setContactEnabled}
-              />
-              <Label htmlFor="contact-enabled">Enabled</Label>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setContactDialogOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              onClick={handleSaveContact}
-              disabled={!contactName.trim() || !contactUsername.trim() || createContactMutation.isPending || updateContactMutation.isPending}
-            >
-              {editingContact ? "Update" : "Create"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
