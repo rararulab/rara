@@ -43,11 +43,6 @@ pub enum MemoryError {
     #[snafu(display("HTTP request failed: {source}"))]
     Http { source: reqwest::Error },
 
-    /// K8s pod management error (feature = "k8s").
-    #[cfg(feature = "k8s")]
-    #[snafu(display("k8s pod error: {source}"))]
-    K8s { source: rara_k8s::K8sError },
-
     /// mem0 is not configured (API key not set).
     #[snafu(display("mem0 not configured: {message}"))]
     NotConfigured { message: String },

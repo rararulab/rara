@@ -31,8 +31,6 @@ mod find_files;
 mod grep;
 mod http_fetch;
 mod list_directory;
-#[cfg(feature = "k8s")]
-pub mod pod;
 mod read_file;
 mod send_email;
 mod write_file;
@@ -44,8 +42,6 @@ pub use find_files::FindFilesTool;
 pub use grep::GrepTool;
 pub use http_fetch::HttpFetchTool;
 pub use list_directory::ListDirectoryTool;
-#[cfg(feature = "k8s")]
-pub use pod::PodTool;
 pub use read_file::ReadFileTool;
 pub use send_email::SendEmailTool;
 pub use write_file::WriteFileTool;

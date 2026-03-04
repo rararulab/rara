@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod flatten;
+
 use std::{
     sync::{
         Arc,
@@ -48,20 +50,24 @@ use yunara_store::{config::DatabaseConfig, db::DBStore};
 pub struct AppConfig {
     /// Database connection pool (optional — defaults to max_connections=5).
     #[serde(default = "default_database_config")]
-    pub database:               DatabaseConfig,
+    pub database:    DatabaseConfig,
     /// HTTP server bind / limits.
-    pub http:                   RestServerConfig,
+    pub http:        RestServerConfig,
     /// gRPC server bind / limits.
-    pub grpc:                   GrpcServerConfig,
-    /// Main service HTTP base URL (for telegram bot → main service calls).
-    pub main_service_http_base: String,
+    pub grpc:        GrpcServerConfig,
     /// Memory backend configuration.
-    pub memory:                 MemoryConfig,
+    pub memory:      MemoryConfig,
     /// General OTLP telemetry (Alloy/Tempo).
     #[serde(default)]
-    pub telemetry:              TelemetryConfig,
+    pub telemetry:   TelemetryConfig,
     /// Static bearer token for owner authentication (Web UI).
-    pub owner_token:            Option<String>,
+    pub owner_token: Option<String>,
+    /// LLM provider configuration (seeded to settings store at startup).
+    #[serde(default)]
+    pub llm:         Option<flatten::LlmConfig>,
+    /// Telegram bot configuration (seeded to settings store at startup).
+    #[serde(default)]
+    pub telegram:    Option<flatten::TelegramConfig>,
 }
 
 #[derive(Debug, Clone, bon::Builder, Deserialize)]
@@ -103,20 +109,32 @@ pub struct StartOptions {
 }
 
 impl AppConfig {
-    /// Load config from YAML file.
+    /// Load config from YAML files.
     ///
-    /// Reads from the path returned by [`rara_paths::config_file()`]
-    /// (typically `~/.config/job/config.yaml`).
-    /// All required fields must be present; missing keys cause
-    /// a deserialization error at startup.
+    /// Sources (later sources override earlier ones):
+    /// - **release**: `~/.config/job/config.yaml` (global) → `./config.yaml` (local override)
+    /// - **debug**: `./config.yaml` only
+    ///
+    /// All required fields must be present after merging; missing
+    /// keys cause a deserialization error at startup.
     pub fn new() -> Result<Self, config::ConfigError> {
-        let cfg = config::Config::builder()
-            .add_source(
-                config::File::from(rara_paths::config_file().as_path())
-                    .format(config::FileFormat::Yaml),
-            )
-            .build()?;
+        let mut builder = config::Config::builder();
 
+        // Global config path only in release mode.
+        #[cfg(not(debug_assertions))]
+        {
+            builder = builder.add_source(
+                config::File::from(rara_paths::config_file().as_path())
+                    .format(config::FileFormat::Yaml)
+                    .required(false),
+            );
+        }
+
+        builder = builder.add_source(
+            config::File::new("config", config::FileFormat::Yaml).required(true),
+        );
+
+        let cfg = builder.build()?;
         tracing::info!(?cfg, "Raw configuration");
         cfg.try_deserialize()
     }
@@ -157,6 +175,15 @@ impl AppConfig {
             rara_backend_admin::settings::SettingsSvc::load(db_store.kv_store(), pool.clone())
                 .await
                 .whatever_context("Failed to initialize runtime settings")?;
+        // Seed config-file defaults into settings store (won't overwrite existing).
+        let config_defaults = flatten::flatten_config_sections(&self);
+        if !config_defaults.is_empty() {
+            settings_svc
+                .seed_defaults(config_defaults)
+                .await
+                .whatever_context("Failed to seed config defaults")?;
+        }
+
         let settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider> =
             Arc::new(settings_svc.clone());
         info!("Runtime settings service loaded");
@@ -257,25 +284,21 @@ impl AppConfig {
 
         // -- telegram adapter (optional) --------------------------------------
 
-        let telegram_adapter = match Self::try_build_telegram(
-            &backend.settings_svc,
-            &backend.contact_repo,
-        )
-        .await
-        {
-            Ok(Some(adapter)) => {
-                info!("Telegram adapter built");
-                Some(adapter)
-            }
-            Ok(None) => {
-                info!("Telegram not configured (bot_token unset in settings), skipping");
-                None
-            }
-            Err(e) => {
-                warn!(error = %e, "Failed to build Telegram adapter, skipping");
-                None
-            }
-        };
+        let telegram_adapter =
+            match Self::try_build_telegram(&backend.settings_svc, &backend.contact_repo).await {
+                Ok(Some(adapter)) => {
+                    info!("Telegram adapter built");
+                    Some(adapter)
+                }
+                Ok(None) => {
+                    info!("Telegram not configured (bot_token unset in settings), skipping");
+                    None
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to build Telegram adapter, skipping");
+                    None
+                }
+            };
 
         // Register egress adapters.
         if let Some(ref tg) = telegram_adapter {
@@ -313,11 +336,8 @@ impl AppConfig {
         let (_kernel_arc, kernel_handle) = kernel.start(cancellation_token.clone());
 
         // Now build routes with the KernelHandle.
-        let (domain_routes, openapi) = backend.routes(
-            &kernel_handle,
-            &rara.skill_registry,
-            &rara.mcp_manager,
-        );
+        let (domain_routes, openapi) =
+            backend.routes(&kernel_handle, &rara.skill_registry, &rara.mcp_manager);
         let swagger_ui =
             utoipa_swagger_ui::SwaggerUi::new("/swagger-ui").url("/api/openapi.json", openapi);
 
@@ -649,7 +669,6 @@ mod tests {
             .database(DatabaseConfig::builder().build())
             .http(RestServerConfig::default())
             .grpc(GrpcServerConfig::default())
-            .main_service_http_base("http://127.0.0.1:25555")
             .memory(
                 MemoryConfig::builder()
                     .mem0_base_url("http://localhost:8080")

@@ -82,3 +82,5 @@ deploy/helm/*/Chart.lock
 .worktrees/
 
 .playwright-mcp/
+
+config.yaml

@@ -10,10 +10,6 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-[features]
-default = []
-k8s = ["rara-k8s"]
-
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
@@ -46,9 +42,6 @@ snafu.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
-
-# K8s Pod transport (optional, behind "k8s" feature)
-rara-k8s = { workspace = true, optional = true }
 
 [dev-dependencies]
 axum.workspace = true

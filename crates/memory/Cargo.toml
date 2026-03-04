@@ -11,10 +11,6 @@ keywords.workspace = true
 categories.workspace = true
 description = "Unified memory layer: mem0 (facts) + Memos (notes) + Hindsight (4-network recall)"
 
-[features]
-default = []
-k8s = ["rara-k8s"]
-
 [dependencies]
 async-trait.workspace = true
 common-worker.workspace = true
@@ -27,9 +23,6 @@ snafu.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
-
-# K8s Pod management (optional, behind "k8s" feature)
-rara-k8s = { workspace = true, optional = true }
 
 [dev-dependencies]
 testcontainers = { workspace = true, features = ["http_wait_plain"] }

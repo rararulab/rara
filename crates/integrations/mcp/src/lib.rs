@@ -13,8 +13,6 @@
 // limitations under the License.
 
 pub mod client;
-#[cfg(feature = "k8s")]
-pub mod k8s;
 pub mod logging_client_handler;
 pub mod manager;
 pub mod oauth;

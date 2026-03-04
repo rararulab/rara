@@ -11,10 +11,6 @@ keywords.workspace = true
 categories.workspace = true
 description = "Kernel bootstrap: manifests, skills, MCP, kernel construction"
 
-[features]
-default = []
-k8s = ["rara-k8s"]
-
 [dependencies]
 agentfs-sdk = { workspace = true }
 anyhow.workspace = true
@@ -28,7 +24,6 @@ rara-agents.workspace = true
 rara-codex-oauth = { workspace = true }
 rara-composio.workspace = true
 rara-domain-shared.workspace = true
-rara-k8s = { workspace = true, optional = true }
 rara-kernel.workspace = true
 rara-keyring-store.workspace = true
 rara-mcp.workspace = true

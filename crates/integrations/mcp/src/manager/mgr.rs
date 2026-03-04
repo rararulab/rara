@@ -25,8 +25,6 @@ use serde_json::Value;
 use tokio::sync::RwLock;
 use tracing::{info, instrument, warn};
 
-#[cfg(feature = "k8s")]
-use crate::manager::managed_client::PodRegistry;
 use crate::{
     manager::{
         erm::ElicitationRequestManager,
@@ -55,9 +53,6 @@ pub struct McpManager {
     /// Per-server log ring buffer.  Lives outside the `RwLock` because
     /// `McpLogBuffer` carries its own `Arc<RwLock<…>>` internally.
     log_buffer:   McpLogBuffer,
-    /// Tracks active K8s pods so they can be cleaned up on server stop.
-    #[cfg(feature = "k8s")]
-    pod_registry: PodRegistry,
 }
 
 struct McpManagerInner {
@@ -84,8 +79,6 @@ impl McpManager {
                 store,
             })),
             log_buffer: McpLogBuffer::default(),
-            #[cfg(feature = "k8s")]
-            pod_registry: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -155,8 +148,6 @@ impl McpManager {
             store,
             erm,
             self.log_buffer.clone(),
-            #[cfg(feature = "k8s")]
-            Arc::clone(&self.pod_registry),
         );
 
         self.log_buffer
@@ -200,26 +191,6 @@ impl McpManager {
                 .await;
         }
 
-        // Clean up the K8s pod if one was created for this server.
-        #[cfg(feature = "k8s")]
-        {
-            let pod_info = {
-                let mut registry = self.pod_registry.lock().await;
-                registry.remove(name)
-            };
-            if let Some((pod_name, namespace)) = pod_info {
-                if let Ok(mgr) = crate::k8s::McpPodManager::new().await {
-                    if let Err(e) = mgr.delete_mcp_pod(&pod_name, &namespace).await {
-                        warn!(
-                            server = %name,
-                            pod = %pod_name,
-                            error = %e,
-                            "failed to delete MCP pod during stop"
-                        );
-                    }
-                }
-            }
-        }
     }
 
     /// Restart a server.
@@ -242,7 +213,6 @@ impl McpManager {
     /// them all. Much cheaper than calling [`stop_server`](Self::stop_server)
     /// in a loop (which would acquire/release the lock N times).
     ///
-    /// When the `k8s` feature is enabled, also deletes all tracked pods.
     #[instrument(skip(self))]
     pub async fn shutdown_all(&self) {
         let clients: Vec<AsyncManagedClient> = {
@@ -251,28 +221,6 @@ impl McpManager {
         };
         for client in clients {
             client.cancel();
-        }
-
-        // Clean up all K8s pods.
-        #[cfg(feature = "k8s")]
-        {
-            let pods: Vec<(String, String)> = {
-                let mut registry = self.pod_registry.lock().await;
-                registry.drain().map(|(_, v)| v).collect()
-            };
-            if !pods.is_empty() {
-                if let Ok(mgr) = crate::k8s::McpPodManager::new().await {
-                    for (pod_name, namespace) in pods {
-                        if let Err(e) = mgr.delete_mcp_pod(&pod_name, &namespace).await {
-                            warn!(
-                                pod = %pod_name,
-                                error = %e,
-                                "failed to delete MCP pod during shutdown"
-                            );
-                        }
-                    }
-                }
-            }
         }
     }
 

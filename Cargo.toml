@@ -127,7 +127,6 @@ members = [
     "crates/boot",
     "crates/channels",
     "crates/kernel",
-    "crates/integrations/k8s",
     "crates/integrations/composio",
     "crates/extensions/backend-admin",
     "crates/extensions/rara-git",
@@ -236,7 +235,6 @@ rara-composio = { path = "crates/integrations/composio" }
 rara-domain-shared = { path = "crates/domain/shared" }
 rara-error = { path = "crates/common/error" }
 rara-git = { path = "crates/extensions/rara-git" }
-rara-k8s = { path = "crates/integrations/k8s" }
 rara-kernel = { path = "crates/kernel" }
 rara-keyring-store = { path = "crates/integrations/keyring-store" }
 rara-mcp = { path = "crates/integrations/mcp" }

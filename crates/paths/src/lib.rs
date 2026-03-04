@@ -252,8 +252,8 @@ pub fn memory_sessions_dir() -> &'static PathBuf {
 
 /// Returns the path to the agent scheduled raras JSON file.
 pub fn agent_raras_file() -> &'static PathBuf {
-    static AGENT_raraS: OnceLock<PathBuf> = OnceLock::new();
-    AGENT_raraS.get_or_init(|| data_dir().join("agent_raras.json"))
+    static AGENT_RARA: OnceLock<PathBuf> = OnceLock::new();
+    AGENT_RARA.get_or_init(|| data_dir().join("agent_rara.json"))
 }
 
 /// Returns the path to the user skills directory.
@@ -269,4 +269,3 @@ pub fn config_file() -> &'static PathBuf {
     static CONFIG_FILE: OnceLock<PathBuf> = OnceLock::new();
     CONFIG_FILE.get_or_init(|| config_dir().join("config.yaml"))
 }
-
