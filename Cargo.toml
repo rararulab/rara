@@ -154,6 +154,7 @@ dirs = "^6"
 eventsource-stream = "0.2"
 futures = "^0.3"
 http = "^1"
+indexmap = "2"
 hyper = { version = "1", features = ["full"] }
 jiff = { version = "^0.2", features = ["serde"] }
 jsonwebtoken = "9"

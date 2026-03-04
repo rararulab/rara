@@ -29,6 +29,7 @@ clap = { workspace = true }
 common-telemetry.workspace = true
 crossterm.workspace = true
 eventsource-stream.workspace = true
+indexmap.workspace = true
 futures.workspace = true
 rara-app = { workspace = true }
 rara-channels = { workspace = true }

@@ -12,14 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 
 use crate::top::{
     client::KernelClient,
     types::{
-        AgentInfo, ApprovalRequest, AuditEvent, KernelEventEnvelope, ProcessStats, SystemStats,
+        AgentInfo, AgentTimeline, ApprovalRequest, AuditEvent, KernelEventEnvelope,
+        MetricsSnapshot, PanelFocus, ProcessStats, SessionState, SessionView, SystemStats,
     },
 };
 
@@ -29,7 +30,7 @@ pub enum Tab {
     Agents,
     Approvals,
     Audit,
-    Events,
+    Sessions,
 }
 
 impl Tab {
@@ -38,7 +39,7 @@ impl Tab {
         Tab::Agents,
         Tab::Approvals,
         Tab::Audit,
-        Tab::Events,
+        Tab::Sessions,
     ];
 
     pub fn title(self) -> &'static str {
@@ -47,45 +48,39 @@ impl Tab {
             Tab::Agents => "Agents",
             Tab::Approvals => "Approvals",
             Tab::Audit => "Audit",
-            Tab::Events => "Events",
+            Tab::Sessions => "Sessions",
         }
     }
 }
 
 pub struct App {
-    pub tab:               Tab,
-    pub scroll_offset:     usize,
-    pub stats:             Option<SystemStats>,
-    pub processes:         Vec<ProcessStats>,
-    pub agents:            Vec<AgentInfo>,
-    pub approvals:         Vec<ApprovalRequest>,
-    pub audit:             Vec<AuditEvent>,
-    pub kernel_events:     Vec<KernelEventEnvelope>,
-    pub connected:         bool,
-    pub error:             Option<String>,
-    pub should_quit:       bool,
-    /// Selected row index in the Events tab (index into the reversed view).
-    pub selected_row:      usize,
-    /// Whether the event detail popup is visible.
-    pub show_event_detail: bool,
+    pub tab:            Tab,
+    pub scroll_offset:  usize,
+    pub stats:          Option<SystemStats>,
+    pub processes:      Vec<ProcessStats>,
+    pub agents:         Vec<AgentInfo>,
+    pub approvals:      Vec<ApprovalRequest>,
+    pub audit:          Vec<AuditEvent>,
+    pub session_state:  SessionState,
+    pub connected:      bool,
+    pub error:          Option<String>,
+    pub should_quit:    bool,
 }
 
 impl App {
     pub fn new() -> Self {
         Self {
-            tab:               Tab::Processes,
-            scroll_offset:     0,
-            stats:             None,
-            processes:         Vec::new(),
-            agents:            Vec::new(),
-            approvals:         Vec::new(),
-            audit:             Vec::new(),
-            kernel_events:     Vec::new(),
-            connected:         false,
-            error:             None,
-            should_quit:       false,
-            selected_row:      0,
-            show_event_detail: false,
+            tab:            Tab::Processes,
+            scroll_offset:  0,
+            stats:          None,
+            processes:      Vec::new(),
+            agents:         Vec::new(),
+            approvals:      Vec::new(),
+            audit:          Vec::new(),
+            session_state:  SessionState::new(),
+            connected:      false,
+            error:          None,
+            should_quit:    false,
         }
     }
 
@@ -96,21 +91,11 @@ impl App {
             Tab::Agents => self.agents.len(),
             Tab::Approvals => self.approvals.len(),
             Tab::Audit => self.audit.len(),
-            Tab::Events => self.kernel_events.len(),
+            Tab::Sessions => self.session_state.sessions.len(),
         }
     }
 
     fn handle_key(&mut self, code: KeyCode) {
-        // When the detail popup is open, only Esc/Enter/q are handled.
-        if self.show_event_detail {
-            match code {
-                KeyCode::Esc | KeyCode::Enter => self.show_event_detail = false,
-                KeyCode::Char('q') | KeyCode::Char('Q') => self.should_quit = true,
-                _ => {}
-            }
-            return;
-        }
-
         match code {
             KeyCode::Char('q') | KeyCode::Char('Q') => {
                 self.should_quit = true;
@@ -132,22 +117,37 @@ impl App {
                 self.scroll_offset = 0;
             }
             KeyCode::Char('5') => {
-                self.tab = Tab::Events;
+                self.tab = Tab::Sessions;
                 self.scroll_offset = 0;
             }
+            KeyCode::Tab => {
+                if self.tab == Tab::Sessions {
+                    self.session_state.focus = match self.session_state.focus {
+                        PanelFocus::SessionList => PanelFocus::Gantt,
+                        PanelFocus::Gantt => PanelFocus::ProcessTree,
+                        PanelFocus::ProcessTree => PanelFocus::SessionList,
+                    };
+                }
+            }
+            KeyCode::BackTab => {
+                if self.tab == Tab::Sessions {
+                    self.session_state.focus = match self.session_state.focus {
+                        PanelFocus::SessionList => PanelFocus::ProcessTree,
+                        PanelFocus::Gantt => PanelFocus::SessionList,
+                        PanelFocus::ProcessTree => PanelFocus::Gantt,
+                    };
+                }
+            }
             KeyCode::Up | KeyCode::Char('k') => {
-                if self.tab == Tab::Events {
-                    self.selected_row = self.selected_row.saturating_sub(1);
+                if self.tab == Tab::Sessions {
+                    self.handle_sessions_up();
                 } else {
                     self.scroll_offset = self.scroll_offset.saturating_sub(1);
                 }
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if self.tab == Tab::Events {
-                    let max = self.kernel_events.len().saturating_sub(1);
-                    if self.selected_row < max {
-                        self.selected_row += 1;
-                    }
+                if self.tab == Tab::Sessions {
+                    self.handle_sessions_down();
                 } else {
                     let max = self.current_row_count().saturating_sub(1);
                     if self.scroll_offset < max {
@@ -156,8 +156,13 @@ impl App {
                 }
             }
             KeyCode::Enter => {
-                if self.tab == Tab::Events && !self.kernel_events.is_empty() {
-                    self.show_event_detail = true;
+                if self.tab == Tab::Sessions
+                    && self.session_state.focus == PanelFocus::SessionList
+                    && !self.session_state.sessions.is_empty()
+                {
+                    // Jump focus to Gantt panel on Enter from session list
+                    self.session_state.focus = PanelFocus::Gantt;
+                    self.session_state.gantt_selected = 0;
                 }
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
@@ -167,16 +172,132 @@ impl App {
         }
     }
 
-    pub fn push_kernel_event(&mut self, event: KernelEventEnvelope) {
-        const MAX_KERNEL_EVENTS: usize = 200;
-
-        self.kernel_events.push(event);
-        let overflow = self.kernel_events.len().saturating_sub(MAX_KERNEL_EVENTS);
-        if overflow > 0 {
-            self.kernel_events.drain(..overflow);
-            // Adjust selected_row so it keeps pointing at the same event.
-            self.selected_row = self.selected_row.saturating_sub(overflow);
+    fn handle_sessions_up(&mut self) {
+        let ss = &mut self.session_state;
+        match ss.focus {
+            PanelFocus::SessionList => {
+                ss.selected_session = ss.selected_session.saturating_sub(1);
+                // Reset sub-panel selections when switching session
+                ss.gantt_selected = 0;
+                ss.tree_selected = 0;
+            }
+            PanelFocus::Gantt => {
+                ss.gantt_selected = ss.gantt_selected.saturating_sub(1);
+            }
+            PanelFocus::ProcessTree => {
+                ss.tree_selected = ss.tree_selected.saturating_sub(1);
+            }
         }
+    }
+
+    fn handle_sessions_down(&mut self) {
+        let ss = &mut self.session_state;
+        match ss.focus {
+            PanelFocus::SessionList => {
+                let max = ss.sessions.len().saturating_sub(1);
+                if ss.selected_session < max {
+                    ss.selected_session += 1;
+                    // Reset sub-panel selections when switching session
+                    ss.gantt_selected = 0;
+                    ss.tree_selected = 0;
+                }
+            }
+            PanelFocus::Gantt => {
+                if let Some(sv) = ss.sessions.get_index(ss.selected_session).map(|(_, v)| v) {
+                    let max = sv.agents.len().saturating_sub(1);
+                    if ss.gantt_selected < max {
+                        ss.gantt_selected += 1;
+                    }
+                }
+            }
+            PanelFocus::ProcessTree => {
+                if let Some(sv) = ss.sessions.get_index(ss.selected_session).map(|(_, v)| v) {
+                    let max = sv.agents.len().saturating_sub(1);
+                    if ss.tree_selected < max {
+                        ss.tree_selected += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn push_kernel_event(&mut self, event: KernelEventEnvelope) {
+        let now = Instant::now();
+
+        // Determine which session this event belongs to.
+        let session_id = self.resolve_session_id(&event);
+
+        let ss = &mut self.session_state;
+
+        // Get or create the session.
+        let session_view = ss.sessions.entry(session_id.clone()).or_insert_with(|| {
+            SessionView {
+                session_id: session_id.clone(),
+                agents:     indexmap::IndexMap::new(),
+                first_seen: now,
+                last_event: now,
+            }
+        });
+
+        session_view.last_event = now;
+
+        // If the event has an agent_id, update the agent timeline.
+        if let Some(ref agent_id) = event.common.agent_id {
+            let timeline =
+                session_view
+                    .agents
+                    .entry(agent_id.clone())
+                    .or_insert_with(|| AgentTimeline {
+                        agent_id:  agent_id.clone(),
+                        name:      agent_id.clone(),
+                        parent_id: None,
+                        start:     now,
+                        end:       None,
+                        state:     "Unknown".to_string(),
+                        metrics:   MetricsSnapshot::default(),
+                        events:    Vec::new(),
+                    });
+
+            // Cap events per agent to avoid unbounded growth.
+            const MAX_EVENTS_PER_AGENT: usize = 100;
+            if timeline.events.len() >= MAX_EVENTS_PER_AGENT {
+                timeline.events.drain(..timeline.events.len() - MAX_EVENTS_PER_AGENT + 1);
+            }
+            timeline.events.push(event);
+        }
+
+        // Sort sessions by last_event descending.
+        ss.sessions
+            .sort_by(|_k1, v1, _k2, v2| v2.last_event.cmp(&v1.last_event));
+    }
+
+    /// Resolve a session_id for the given event.
+    fn resolve_session_id(&self, event: &KernelEventEnvelope) -> String {
+        // 1. Explicit session_id in common fields.
+        if let Some(ref sid) = event.common.session_id {
+            if !sid.is_empty() {
+                return sid.clone();
+            }
+        }
+
+        // 2. Look up agent_id in existing sessions.
+        if let Some(ref agent_id) = event.common.agent_id {
+            for (session_id, sv) in &self.session_state.sessions {
+                if sv.agents.contains_key(agent_id) {
+                    return session_id.clone();
+                }
+            }
+
+            // 3. Look up in processes data.
+            for p in &self.processes {
+                if p.agent_id == *agent_id {
+                    return p.session_id.clone();
+                }
+            }
+        }
+
+        // Fallback.
+        "unknown".to_string()
     }
 
     /// Fetch all data from the kernel API.
@@ -215,6 +336,65 @@ impl App {
         if let Ok(a) = audit {
             self.audit = a;
         }
+
+        // Update session state from processes data.
+        self.sync_sessions_from_processes();
+    }
+
+    /// Sync SessionState with process data obtained from the kernel API.
+    fn sync_sessions_from_processes(&mut self) {
+        let now = Instant::now();
+        for p in &self.processes {
+            let ss = &mut self.session_state;
+
+            let session_view =
+                ss.sessions
+                    .entry(p.session_id.clone())
+                    .or_insert_with(|| SessionView {
+                        session_id: p.session_id.clone(),
+                        agents:     indexmap::IndexMap::new(),
+                        first_seen: now,
+                        last_event: now,
+                    });
+
+            let timeline =
+                session_view
+                    .agents
+                    .entry(p.agent_id.clone())
+                    .or_insert_with(|| AgentTimeline {
+                        agent_id:  p.agent_id.clone(),
+                        name:      p.name.clone(),
+                        parent_id: p.parent_id.clone(),
+                        start:     now,
+                        end:       None,
+                        state:     p.state.clone(),
+                        metrics:   p.metrics.clone(),
+                        events:    Vec::new(),
+                    });
+
+            // Always update mutable fields from the latest process data.
+            timeline.name = p.name.clone();
+            timeline.parent_id = p.parent_id.clone();
+            timeline.state = p.state.clone();
+            timeline.metrics = p.metrics.clone();
+
+            // Mark completed/failed agents.
+            match p.state.as_str() {
+                "Completed" | "completed" | "Failed" | "failed" => {
+                    if timeline.end.is_none() {
+                        timeline.end = Some(now);
+                    }
+                }
+                _ => {
+                    timeline.end = None;
+                }
+            }
+        }
+
+        // Sort sessions by last_event descending.
+        self.session_state
+            .sessions
+            .sort_by(|_k1, v1, _k2, v2| v2.last_event.cmp(&v1.last_event));
     }
 
     /// Run the main TUI event loop.
@@ -294,13 +474,14 @@ mod tests {
     use super::App;
     use crate::top::types::{KernelEventCommonFields, KernelEventEnvelope};
 
-    fn make_envelope(idx: usize) -> KernelEventEnvelope {
+    fn make_envelope(idx: usize, session_id: Option<&str>, agent_id: Option<&str>) -> KernelEventEnvelope {
         KernelEventEnvelope {
             common: KernelEventCommonFields {
                 timestamp:  format!("2026-03-04T00:00:{idx:02}Z"),
                 event_type: format!("event_{idx}"),
                 priority:   "normal".to_string(),
-                agent_id:   Some(format!("agent-{idx}")),
+                agent_id:   agent_id.map(|s| s.to_string()),
+                session_id: session_id.map(|s| s.to_string()),
                 summary:    format!("summary {idx}"),
             },
             event: serde_json::json!({"idx": idx}),
@@ -308,15 +489,50 @@ mod tests {
     }
 
     #[test]
-    fn push_kernel_event_keeps_latest_entries() {
+    fn events_grouped_by_session_id() {
         let mut app = App::new();
 
-        for idx in 0..205 {
-            app.push_kernel_event(make_envelope(idx));
-        }
+        app.push_kernel_event(make_envelope(0, Some("sess-A"), Some("agent-1")));
+        app.push_kernel_event(make_envelope(1, Some("sess-A"), Some("agent-2")));
+        app.push_kernel_event(make_envelope(2, Some("sess-B"), Some("agent-3")));
 
-        assert_eq!(app.kernel_events.len(), 200);
-        assert_eq!(app.kernel_events.first().unwrap().common.event_type, "event_5");
-        assert_eq!(app.kernel_events.last().unwrap().common.event_type, "event_204");
+        assert_eq!(app.session_state.sessions.len(), 2);
+        assert!(app.session_state.sessions.contains_key("sess-A"));
+        assert!(app.session_state.sessions.contains_key("sess-B"));
+
+        let sess_a = &app.session_state.sessions["sess-A"];
+        assert_eq!(sess_a.agents.len(), 2);
+        assert!(sess_a.agents.contains_key("agent-1"));
+        assert!(sess_a.agents.contains_key("agent-2"));
+
+        let sess_b = &app.session_state.sessions["sess-B"];
+        assert_eq!(sess_b.agents.len(), 1);
+        assert!(sess_b.agents.contains_key("agent-3"));
+    }
+
+    #[test]
+    fn event_without_session_id_falls_back_to_unknown() {
+        let mut app = App::new();
+
+        app.push_kernel_event(make_envelope(0, None, Some("agent-1")));
+
+        assert_eq!(app.session_state.sessions.len(), 1);
+        assert!(app.session_state.sessions.contains_key("unknown"));
+    }
+
+    #[test]
+    fn event_without_session_id_resolved_from_existing_session() {
+        let mut app = App::new();
+
+        // First event establishes agent-1 in sess-A.
+        app.push_kernel_event(make_envelope(0, Some("sess-A"), Some("agent-1")));
+        // Second event has no session_id but same agent_id.
+        app.push_kernel_event(make_envelope(1, None, Some("agent-1")));
+
+        assert_eq!(app.session_state.sessions.len(), 1);
+
+        let sess_a = &app.session_state.sessions["sess-A"];
+        let timeline = &sess_a.agents["agent-1"];
+        assert_eq!(timeline.events.len(), 2);
     }
 }

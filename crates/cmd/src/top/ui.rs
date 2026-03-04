@@ -12,16 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::time::Instant;
+
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
 };
 
 use crate::top::app::{App, Tab};
-use crate::top::types::KernelEventEnvelope;
+use crate::top::types::{PanelFocus, SessionView};
 
 /// Render the full TUI.
 pub fn render(frame: &mut Frame, app: &App) {
@@ -36,14 +38,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     render_header(frame, header_area, app);
     render_tab_bar(frame, tab_area, app);
     render_content(frame, content_area, app);
-    render_help(frame, help_area);
-
-    // Event detail popup (rendered on top of everything).
-    if app.show_event_detail && app.tab == Tab::Events {
-        if let Some(envelope) = app.kernel_events.iter().rev().nth(app.selected_row) {
-            render_event_detail_popup(frame, frame.area(), envelope);
-        }
-    }
+    render_help(frame, help_area, app);
 }
 
 // ---------------------------------------------------------------------------
@@ -129,7 +124,7 @@ fn render_content(frame: &mut Frame, area: Rect, app: &App) {
         Tab::Agents => render_agents_table(frame, area, app),
         Tab::Approvals => render_approvals_table(frame, area, app),
         Tab::Audit => render_audit_table(frame, area, app),
-        Tab::Events => render_events_table(frame, area, app),
+        Tab::Sessions => render_sessions_tab(frame, area, app),
     }
 }
 
@@ -340,13 +335,57 @@ fn render_audit_table(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(table, area);
 }
 
-fn render_events_table(frame: &mut Frame, area: Rect, app: &App) {
+// ---------------------------------------------------------------------------
+// Sessions tab — 3-panel layout
+// ---------------------------------------------------------------------------
+
+fn render_sessions_tab(frame: &mut Frame, area: Rect, app: &App) {
+    let [list_area, detail_area] = Layout::horizontal([
+        Constraint::Percentage(20),
+        Constraint::Percentage(80),
+    ])
+    .areas(area);
+
+    render_session_list(frame, list_area, app);
+
+    if let Some(session_view) = app.session_state.selected_session_view() {
+        let [gantt_area, tree_area] = Layout::vertical([
+            Constraint::Percentage(50),
+            Constraint::Percentage(50),
+        ])
+        .areas(detail_area);
+
+        render_gantt(
+            frame,
+            gantt_area,
+            session_view,
+            app.session_state.gantt_selected,
+            app.session_state.focus == PanelFocus::Gantt,
+        );
+        render_process_tree(
+            frame,
+            tree_area,
+            session_view,
+            &app.processes,
+            app.session_state.tree_selected,
+            app.session_state.focus == PanelFocus::ProcessTree,
+        );
+    } else {
+        let msg = Paragraph::new("No sessions available")
+            .style(Style::default().fg(Color::DarkGray))
+            .block(Block::default().borders(Borders::ALL).title(" Details "));
+        frame.render_widget(msg, detail_area);
+    }
+}
+
+fn render_session_list(frame: &mut Frame, area: Rect, app: &App) {
+    let ss = &app.session_state;
+    let is_focused = ss.focus == PanelFocus::SessionList;
+
     let header = Row::new(vec![
-        Cell::from("Timestamp"),
-        Cell::from("Event"),
-        Cell::from("Priority"),
-        Cell::from("Agent"),
-        Cell::from("Summary"),
+        Cell::from("Session"),
+        Cell::from("Agents"),
+        Cell::from("Last"),
     ])
     .style(
         Style::default()
@@ -354,42 +393,24 @@ fn render_events_table(frame: &mut Frame, area: Rect, app: &App) {
             .add_modifier(Modifier::BOLD),
     );
 
-    // Visible height excluding border (top+bottom) and header row.
-    let visible_rows = area.height.saturating_sub(3) as usize;
-
-    // Compute scroll_offset so that selected_row is always visible.
-    let scroll = if app.selected_row < visible_rows {
-        0
-    } else {
-        app.selected_row - visible_rows + 1
-    };
-
+    let now = Instant::now();
     let selected_style = Style::default()
         .bg(Color::DarkGray)
         .add_modifier(Modifier::BOLD);
 
-    let rows: Vec<Row> = app
-        .kernel_events
-        .iter()
-        .rev()
+    let rows: Vec<Row> = ss
+        .sessions
+        .values()
         .enumerate()
-        .skip(scroll)
-        .take(visible_rows)
-        .map(|(i, envelope)| {
-            let c = &envelope.common;
+        .map(|(i, sv)| {
+            let elapsed = now.duration_since(sv.last_event);
+            let last_str = format_duration_ago(elapsed);
             let row = Row::new(vec![
-                Cell::from(c.timestamp.as_str()),
-                Cell::from(c.event_type.as_str()),
-                Cell::from(priority_styled(&c.priority)),
-                Cell::from(
-                    c.agent_id
-                        .as_deref()
-                        .map(short_id)
-                        .unwrap_or_else(|| "-".to_string()),
-                ),
-                Cell::from(c.summary.chars().take(80).collect::<String>()),
+                Cell::from(short_id(&sv.session_id)),
+                Cell::from(sv.agents.len().to_string()),
+                Cell::from(last_str),
             ]);
-            if i == app.selected_row {
+            if i == ss.selected_session {
                 row.style(selected_style)
             } else {
                 row
@@ -398,38 +419,356 @@ fn render_events_table(frame: &mut Frame, area: Rect, app: &App) {
         .collect();
 
     let widths = [
-        Constraint::Length(22),
-        Constraint::Length(20),
         Constraint::Length(10),
-        Constraint::Length(10),
+        Constraint::Length(6),
         Constraint::Fill(1),
     ];
+
+    let border_style = if is_focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
 
     let table = Table::new(rows, widths).header(header).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(format!(" Events ({}) ", app.kernel_events.len())),
+            .title(format!(" Sessions ({}) ", ss.sessions.len()))
+            .border_style(border_style),
     );
 
     frame.render_widget(table, area);
+}
+
+fn render_gantt(
+    frame: &mut Frame,
+    area: Rect,
+    session_view: &SessionView,
+    selected: usize,
+    is_focused: bool,
+) {
+    let border_style = if is_focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Gantt Timeline ")
+        .border_style(border_style);
+
+    // Inner area for content (excluding borders).
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if session_view.agents.is_empty() || inner.width < 16 || inner.height < 1 {
+        return;
+    }
+
+    let now = Instant::now();
+    let session_start = session_view.first_seen;
+    let session_duration = now.duration_since(session_start).as_secs_f64().max(1.0);
+
+    let label_width: u16 = 12;
+    let bar_width = inner.width.saturating_sub(label_width + 1) as usize; // +1 for separator
+
+    if bar_width < 2 {
+        return;
+    }
+
+    // Build depth-first ordered agents.
+    let ordered = depth_first_agents(session_view);
+
+    let selected_style = Style::default()
+        .bg(Color::DarkGray)
+        .add_modifier(Modifier::BOLD);
+
+    for (i, agent_id) in ordered.iter().enumerate() {
+        if i as u16 >= inner.height {
+            break;
+        }
+        let y = inner.y + i as u16;
+
+        let Some(timeline) = session_view.agents.get(agent_id.as_str()) else {
+            continue;
+        };
+
+        // Label column.
+        let name: String = timeline.name.chars().take(label_width as usize).collect();
+        let label_span = Span::styled(
+            format!("{:<width$}", name, width = label_width as usize),
+            Style::default().fg(Color::White),
+        );
+        let label_area = Rect::new(inner.x, y, label_width, 1);
+        frame.render_widget(Paragraph::new(Line::from(label_span)), label_area);
+
+        // Separator.
+        let sep_area = Rect::new(inner.x + label_width, y, 1, 1);
+        frame.render_widget(
+            Paragraph::new(Span::styled("|", Style::default().fg(Color::DarkGray))),
+            sep_area,
+        );
+
+        // Bar.
+        let agent_start_frac =
+            timeline.start.duration_since(session_start).as_secs_f64() / session_duration;
+        let agent_end_frac = match timeline.end {
+            Some(end) => end.duration_since(session_start).as_secs_f64() / session_duration,
+            None => now.duration_since(session_start).as_secs_f64() / session_duration,
+        };
+
+        let bar_start = (agent_start_frac * bar_width as f64).round() as usize;
+        let bar_end = (agent_end_frac * bar_width as f64).round() as usize;
+        let bar_start = bar_start.min(bar_width);
+        let bar_end = bar_end.min(bar_width).max(bar_start + 1); // at least 1 char
+
+        let bar_color = match timeline.state.as_str() {
+            "Running" | "running" => Color::Green,
+            "Failed" | "failed" => Color::Red,
+            _ => Color::Gray,
+        };
+
+        let mut bar_chars = String::with_capacity(bar_width);
+        for col in 0..bar_width {
+            if col >= bar_start && col < bar_end {
+                bar_chars.push('\u{2588}'); // Full block
+            } else {
+                bar_chars.push(' ');
+            }
+        }
+
+        let bar_style = if i == selected {
+            selected_style.fg(bar_color)
+        } else {
+            Style::default().fg(bar_color)
+        };
+
+        let bar_area = Rect::new(inner.x + label_width + 1, y, bar_width as u16, 1);
+        frame.render_widget(
+            Paragraph::new(Span::styled(bar_chars, bar_style)),
+            bar_area,
+        );
+    }
+}
+
+fn render_process_tree(
+    frame: &mut Frame,
+    area: Rect,
+    session_view: &SessionView,
+    _processes: &[crate::top::types::ProcessStats],
+    selected: usize,
+    is_focused: bool,
+) {
+    let border_style = if is_focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Process Tree ")
+        .border_style(border_style);
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if session_view.agents.is_empty() || inner.height < 1 {
+        return;
+    }
+
+    // Build tree using parent_id relationships.
+    let ordered = depth_first_agents(session_view);
+
+    // For tree connectors, compute depth per agent.
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, agent_id) in ordered.iter().enumerate() {
+        let Some(timeline) = session_view.agents.get(agent_id.as_str()) else {
+            continue;
+        };
+
+        let depth = compute_depth(session_view, agent_id);
+        let is_last_child = is_last_sibling(session_view, agent_id, &ordered);
+
+        // Build prefix with tree connectors.
+        let mut prefix = String::new();
+        if depth > 0 {
+            for _ in 0..depth.saturating_sub(1) {
+                prefix.push_str("  ");
+            }
+            if is_last_child {
+                prefix.push_str("\u{2514}\u{2500} "); // └─
+            } else {
+                prefix.push_str("\u{251C}\u{2500} "); // ├─
+            }
+        }
+
+        let state_color = match timeline.state.as_str() {
+            "Running" | "running" => Color::Green,
+            "Failed" | "failed" => Color::Red,
+            "Completed" | "completed" => Color::Gray,
+            "Idle" | "idle" => Color::Cyan,
+            _ => Color::White,
+        };
+
+        let tokens_str = format_tokens(timeline.metrics.tokens_consumed);
+
+        let spans = vec![
+            Span::raw(prefix),
+            Span::styled(
+                &timeline.name,
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  "),
+            Span::styled(&timeline.state, Style::default().fg(state_color)),
+            Span::raw("  "),
+            Span::raw(format!("{tokens_str} tokens")),
+        ];
+
+        let mut line = Line::from(spans);
+
+        if i == selected {
+            // Apply selected style by wrapping spans with background.
+            line = Line::from(
+                line.spans
+                    .into_iter()
+                    .map(|s| {
+                        Span::styled(
+                            s.content,
+                            s.style
+                                .bg(Color::DarkGray)
+                                .add_modifier(Modifier::BOLD),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            );
+        }
+
+        lines.push(line);
+    }
+
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, inner);
 }
 
 // ---------------------------------------------------------------------------
 // Help bar
 // ---------------------------------------------------------------------------
 
-fn render_help(frame: &mut Frame, area: Rect) {
-    let help = Line::from(vec![
+fn render_help(frame: &mut Frame, area: Rect, app: &App) {
+    let mut spans = vec![
         Span::styled("q", Style::default().fg(Color::Yellow)),
         Span::raw(":Quit  "),
         Span::styled("1-5", Style::default().fg(Color::Yellow)),
         Span::raw(":Tab  "),
         Span::styled("\u{2191}\u{2193}", Style::default().fg(Color::Yellow)),
-        Span::raw(":Scroll  "),
+        Span::raw(":Select  "),
         Span::styled("r", Style::default().fg(Color::Yellow)),
         Span::raw(":Refresh"),
-    ]);
+    ];
+
+    if app.tab == Tab::Sessions {
+        spans.push(Span::raw("  "));
+        Span::styled("Tab", Style::default().fg(Color::Yellow));
+        spans.push(Span::styled("Tab", Style::default().fg(Color::Yellow)));
+        spans.push(Span::raw(":Panel  "));
+        spans.push(Span::styled("Enter", Style::default().fg(Color::Yellow)));
+        spans.push(Span::raw(":Detail"));
+    }
+
+    let help = Line::from(spans);
     frame.render_widget(Paragraph::new(help), area);
+}
+
+// ---------------------------------------------------------------------------
+// Tree helpers
+// ---------------------------------------------------------------------------
+
+/// Return agent IDs in depth-first order based on parent_id relationships.
+fn depth_first_agents(session_view: &SessionView) -> Vec<String> {
+    let agents = &session_view.agents;
+
+    // Find roots: agents whose parent_id is None or not in this session.
+    let roots: Vec<String> = agents
+        .values()
+        .filter(|a| {
+            a.parent_id.is_none()
+                || !agents.contains_key(a.parent_id.as_deref().unwrap_or(""))
+        })
+        .map(|a| a.agent_id.clone())
+        .collect();
+
+    let mut result = Vec::new();
+    for root in roots {
+        dfs_collect(&root, agents, &mut result);
+    }
+
+    // Add any agents not yet visited (orphans with broken parent refs).
+    for a in agents.values() {
+        if !result.contains(&a.agent_id) {
+            result.push(a.agent_id.clone());
+        }
+    }
+
+    result
+}
+
+fn dfs_collect(
+    agent_id: &str,
+    agents: &indexmap::IndexMap<String, crate::top::types::AgentTimeline>,
+    result: &mut Vec<String>,
+) {
+    result.push(agent_id.to_string());
+    // Find children of this agent.
+    let children: Vec<String> = agents
+        .values()
+        .filter(|a| a.parent_id.as_deref() == Some(agent_id))
+        .map(|a| a.agent_id.clone())
+        .collect();
+    for child in children {
+        dfs_collect(&child, agents, result);
+    }
+}
+
+fn compute_depth(session_view: &SessionView, agent_id: &str) -> usize {
+    let mut depth = 0;
+    let mut current = agent_id.to_string();
+    while let Some(timeline) = session_view.agents.get(&current) {
+        match &timeline.parent_id {
+            Some(pid) if session_view.agents.contains_key(pid) => {
+                depth += 1;
+                current = pid.clone();
+            }
+            _ => break,
+        }
+    }
+    depth
+}
+
+fn is_last_sibling(session_view: &SessionView, agent_id: &str, ordered: &[String]) -> bool {
+    let agents = &session_view.agents;
+    let Some(timeline) = agents.get(agent_id) else {
+        return true;
+    };
+
+    // Find all siblings (same parent_id).
+    let parent = &timeline.parent_id;
+    let siblings: Vec<&String> = agents
+        .values()
+        .filter(|a| &a.parent_id == parent && agents.contains_key(&a.agent_id))
+        .map(|a| &a.agent_id)
+        .collect();
+
+    // The last sibling in the ordered list is the "last" one.
+    let mut last_in_order: Option<&String> = None;
+    for id in ordered {
+        if siblings.contains(&id) {
+            last_in_order = Some(id);
+        }
+    }
+
+    last_in_order.map_or(true, |last| last == agent_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -471,6 +810,18 @@ fn format_tokens(tokens: u64) -> String {
     }
 }
 
+/// Format a Duration into a "Xs ago" / "Xm ago" style string.
+fn format_duration_ago(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs < 60 {
+        format!("{secs}s ago")
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else {
+        format!("{}h ago", secs / 3600)
+    }
+}
+
 /// Apply color to the state string.
 fn state_styled(state: &str) -> Span<'_> {
     let color = match state {
@@ -482,92 +833,4 @@ fn state_styled(state: &str) -> Span<'_> {
         _ => Color::White,
     };
     Span::styled(state, Style::default().fg(color))
-}
-
-fn priority_styled(priority: &str) -> Span<'_> {
-    let color = match priority {
-        "critical" => Color::Red,
-        "normal" => Color::Cyan,
-        "low" => Color::Gray,
-        _ => Color::White,
-    };
-    Span::styled(priority, Style::default().fg(color))
-}
-
-// ---------------------------------------------------------------------------
-// Event detail popup
-// ---------------------------------------------------------------------------
-
-fn render_event_detail_popup(frame: &mut Frame, area: Rect, envelope: &KernelEventEnvelope) {
-    let popup_area = centered_rect(70, 60, area);
-
-    // Clear the background behind the popup.
-    frame.render_widget(Clear, popup_area);
-
-    let c = &envelope.common;
-    let event_json = serde_json::to_string_pretty(&envelope.event).unwrap_or_default();
-
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled("Timestamp: ", Style::default().fg(Color::Yellow)),
-            Span::raw(&c.timestamp),
-        ]),
-        Line::from(vec![
-            Span::styled("Event:     ", Style::default().fg(Color::Yellow)),
-            Span::raw(&c.event_type),
-        ]),
-        Line::from(vec![
-            Span::styled("Priority:  ", Style::default().fg(Color::Yellow)),
-            priority_styled(&c.priority),
-        ]),
-        Line::from(vec![
-            Span::styled("Agent:     ", Style::default().fg(Color::Yellow)),
-            Span::raw(c.agent_id.as_deref().unwrap_or("-")),
-        ]),
-        Line::from(vec![
-            Span::styled("Summary:   ", Style::default().fg(Color::Yellow)),
-            Span::raw(&c.summary),
-        ]),
-        Line::raw(""),
-        Line::from(Span::styled(
-            "Details:",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )),
-    ];
-
-    for json_line in event_json.lines() {
-        lines.push(Line::raw(json_line.to_string()));
-    }
-
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Event Detail (Enter/Esc to close) ")
-                .border_style(Style::default().fg(Color::Cyan)),
-        )
-        .wrap(Wrap { trim: false });
-
-    frame.render_widget(paragraph, popup_area);
-}
-
-/// Return a centered `Rect` of `percent_x`% width and `percent_y`% height.
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let [_, v_center, _] = Layout::vertical([
-        Constraint::Percentage((100 - percent_y) / 2),
-        Constraint::Percentage(percent_y),
-        Constraint::Percentage((100 - percent_y) / 2),
-    ])
-    .areas(area);
-
-    let [_, h_center, _] = Layout::horizontal([
-        Constraint::Percentage((100 - percent_x) / 2),
-        Constraint::Percentage(percent_x),
-        Constraint::Percentage((100 - percent_x) / 2),
-    ])
-    .areas(v_center);
-
-    h_center
 }

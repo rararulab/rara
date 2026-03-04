@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::time::Instant;
+
+use indexmap::IndexMap;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -37,12 +40,23 @@ pub struct ProcessStats {
     pub children:   Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct MetricsSnapshot {
     pub messages_received: u64,
     pub llm_calls:         u64,
     pub tool_calls:        u64,
     pub tokens_consumed:   u64,
+}
+
+impl Default for MetricsSnapshot {
+    fn default() -> Self {
+        Self {
+            messages_received: 0,
+            llm_calls:         0,
+            tool_calls:        0,
+            tokens_consumed:   0,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,6 +89,7 @@ pub struct KernelEventCommonFields {
     pub event_type: String,
     pub priority:   String,
     pub agent_id:   Option<String>,
+    pub session_id: Option<String>,
     pub summary:    String,
 }
 
@@ -82,4 +97,58 @@ pub struct KernelEventCommonFields {
 pub struct KernelEventEnvelope {
     pub common: KernelEventCommonFields,
     pub event:  serde_json::Value,
+}
+
+// ---------------------------------------------------------------------------
+// Session-centric types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelFocus {
+    SessionList,
+    Gantt,
+    ProcessTree,
+}
+
+pub struct SessionState {
+    pub sessions:         IndexMap<String, SessionView>,
+    pub selected_session: usize,
+    pub focus:            PanelFocus,
+    pub gantt_selected:   usize,
+    pub tree_selected:    usize,
+}
+
+impl SessionState {
+    pub fn new() -> Self {
+        Self {
+            sessions:         IndexMap::new(),
+            selected_session: 0,
+            focus:            PanelFocus::SessionList,
+            gantt_selected:   0,
+            tree_selected:    0,
+        }
+    }
+
+    /// Return the currently selected session (if any).
+    pub fn selected_session_view(&self) -> Option<&SessionView> {
+        self.sessions.get_index(self.selected_session).map(|(_, v)| v)
+    }
+}
+
+pub struct SessionView {
+    pub session_id: String,
+    pub agents:     IndexMap<String, AgentTimeline>,
+    pub first_seen: Instant,
+    pub last_event: Instant,
+}
+
+pub struct AgentTimeline {
+    pub agent_id:  String,
+    pub name:      String,
+    pub parent_id: Option<String>,
+    pub start:     Instant,
+    pub end:       Option<Instant>,
+    pub state:     String,
+    pub metrics:   MetricsSnapshot,
+    pub events:    Vec<KernelEventEnvelope>,
 }
