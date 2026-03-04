@@ -19,6 +19,8 @@ schemars.workspace = true
 serde.workspace = true
 snafu.workspace = true
 tracing.workspace = true
+utoipa.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

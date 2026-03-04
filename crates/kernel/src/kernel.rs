@@ -32,7 +32,6 @@
 //!   ├── NotificationBus
 //!   ├── SecuritySubsystem (auth + authz + approval + guard)
 //!   ├── shared_kv (cross-agent KV)
-//!   ├── AuditSubsystem
 //!   ├── StreamHub + IngressPipeline + EndpointRegistry
 //!   └── ShardedEventQueue (single-queue or multi-shard mode)
 //! ```
@@ -45,26 +44,29 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{error, info};
 
 use crate::{
-    audit::{AuditEvent, AuditFilter, AuditLog, AuditRef},
-    channel::types::ChannelType,
+    Signal,
+    channel::types::{ChannelType, ChatMessage},
     delivery::DeliverySubsystem,
     device::{DeviceRegistry, DeviceRegistryRef},
+    event::{KernelEvent, KernelEventEnvelope},
+    event_loop::RuntimeTable,
     io::{
         egress::{EgressAdapterRef, EndpointRegistry, EndpointRegistryRef},
         ingress::{IdentityResolverRef, IngressPipeline, IngressPipelineRef, SessionResolverRef},
         pipe::PipeRegistry,
         stream::StreamHubRef,
+        types::{InboundMessage, OutboundEnvelope},
     },
     kv::SharedKv,
     llm::DriverRegistryRef,
     notification::NotificationBusRef,
-    process::{AgentId, SessionState, SessionTable, agent_registry::AgentRegistryRef},
+    process::{AgentRunLoopResult, SessionState, SessionTable, agent_registry::AgentRegistryRef},
     queue::{EventQueueRef, ObservableEventQueue, ShardedEventQueueConfig, ShardedQueueRef},
     security::SecurityRef,
-    session::SessionIndexRef,
+    session::{SessionIndexRef, SessionKey},
     syscall::SyscallDispatcher,
     tool::ToolRegistryRef,
 };
@@ -89,57 +91,14 @@ pub struct KernelConfig {
     /// Applies to the agent-scoped namespace only.
     #[default = 1000]
     pub memory_quota_per_agent: usize,
-    /// Event queue configuration. Controls whether the kernel uses a single
-    /// global queue (`num_shards = 0`) or sharded parallel processing.
-    #[default(ShardedEventQueueConfig::single())]
+    // Event queue configuration. Controls whether the kernel uses a single
+    // global queue (`num_shards = 0`) or sharded parallel processing.
     pub event_queue:            ShardedEventQueueConfig,
 }
 
 /// Shared reference to a
 /// [`SettingsProvider`](rara_domain_shared::settings::SettingsProvider).
 pub type SettingsRef = Arc<dyn rara_domain_shared::settings::SettingsProvider>;
-
-// ---------------------------------------------------------------------------
-// NoopSettingsProvider
-// ---------------------------------------------------------------------------
-
-mod noop {
-    use async_trait::async_trait;
-
-    /// A no-op settings provider for testing — always returns `None`.
-    pub struct NoopSettingsProvider;
-
-    #[async_trait]
-    impl rara_domain_shared::settings::SettingsProvider for NoopSettingsProvider {
-        async fn get(&self, _key: &str) -> Option<String> { None }
-
-        async fn set(&self, _key: &str, _value: &str) -> anyhow::Result<()> { Ok(()) }
-
-        async fn delete(&self, _key: &str) -> anyhow::Result<()> { Ok(()) }
-
-        async fn list(&self) -> std::collections::HashMap<String, String> {
-            std::collections::HashMap::new()
-        }
-
-        async fn batch_update(
-            &self,
-            _patches: std::collections::HashMap<String, Option<String>>,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        fn subscribe(&self) -> tokio::sync::watch::Receiver<()> {
-            let (_tx, rx) = tokio::sync::watch::channel(());
-            rx
-        }
-    }
-}
-
-pub use noop::NoopSettingsProvider;
-
-// ---------------------------------------------------------------------------
-// Kernel
-// ---------------------------------------------------------------------------
 
 /// The unified agent orchestrator.
 ///
@@ -166,8 +125,6 @@ pub struct Kernel {
     security:         SecurityRef,
     /// Agent registry for looking up named agent definitions.
     agent_registry:   AgentRegistryRef,
-    /// Unified audit subsystem (logging + tool call recording).
-    audit:            AuditRef,
     /// File-backed tape store for session message persistence.
     tape_store:       Arc<rara_memory::tape::FileTapeStore>,
     /// Lightweight session metadata index (tape-centric replacement for the
@@ -220,7 +177,6 @@ impl Kernel {
         stream_hub: StreamHubRef,
         identity_resolver: IdentityResolverRef,
         session_resolver: SessionResolverRef,
-        audit: AuditRef,
         kv_operator: opendal::Operator,
     ) -> Self {
         info!(
@@ -257,7 +213,6 @@ impl Kernel {
             global_semaphore,
             security,
             agent_registry,
-            audit,
             tape_store,
             session_index,
             settings,
@@ -272,45 +227,19 @@ impl Kernel {
         }
     }
 
-    /// Access the process table for querying.
-    pub fn process_table(&self) -> &SessionTable { &self.process_table }
-
-    /// Access the agent registry for looking up named manifests.
-    pub fn agent_registry(&self) -> &AgentRegistryRef { &self.agent_registry }
-
-    /// Access the tool registry.
-    pub fn tool_registry(&self) -> &ToolRegistryRef { self.syscall.tool_registry() }
-
-    /// Access the event bus.
-    pub fn event_bus(&self) -> &NotificationBusRef { self.syscall.event_bus() }
-
-    /// Access the file-backed tape store.
-    pub fn tape_store(&self) -> &Arc<rara_memory::tape::FileTapeStore> { &self.tape_store }
-
     /// Create a [`TapeService`](rara_memory::tape::TapeService) bound to the
     /// given session.
-    pub(crate) fn tape_for(&self, session_id: &crate::process::SessionId) -> rara_memory::tape::TapeService {
+    // FIXME: why it is create a tapeService? we should replace the original memory
+    // service as tapeMemory !
+    fn tape_for(&self, session_id: &SessionKey) -> rara_memory::tape::TapeService {
         rara_memory::tape::TapeService::new(
             session_id.to_string(),
             self.tape_store.as_ref().clone(),
         )
     }
 
-    /// Access the kernel config.
-    pub fn config(&self) -> &KernelConfig { &self.config }
-
-    /// Access the flat KV settings provider.
-    pub fn settings(&self) -> &SettingsRef { &self.settings }
-
-    /// Get detailed runtime statistics for a single process.
-    ///
-    /// Returns `None` if the process does not exist.
-    pub async fn process_stats(&self, agent_id: &AgentId) -> Option<crate::process::ProcessStats> {
-        self.process_table.process_stats(*agent_id).await
-    }
-
     /// List detailed runtime statistics for all processes.
-    pub async fn list_processes(&self) -> Vec<crate::process::ProcessStats> {
+    pub async fn list_processes(&self) -> Vec<crate::process::SessionStats> {
         self.process_table.all_process_stats().await
     }
 
@@ -320,12 +249,7 @@ impl Kernel {
         let active = pt
             .list()
             .iter()
-            .filter(|p| {
-                matches!(
-                    p.state,
-                    SessionState::Active | SessionState::Ready
-                )
-            })
+            .filter(|p| matches!(p.state, SessionState::Active | SessionState::Ready))
             .count();
 
         let uptime_ms = Timestamp::now()
@@ -346,133 +270,9 @@ impl Kernel {
     }
 
     /// Get the detailed turn traces for a specific agent process.
-    pub fn get_process_turns(&self, agent_id: AgentId) -> Vec<crate::agent_turn::TurnTrace> {
-        self.process_table.get_turn_traces(agent_id)
+    pub fn get_process_turns(&self, session_key: SessionKey) -> Vec<crate::agent_turn::TurnTrace> {
+        self.process_table.get_turn_traces(session_key)
     }
-
-    /// Access the device registry (for hot-plugging devices).
-    pub fn device_registry(&self) -> &DeviceRegistryRef { &self.device_registry }
-
-    /// Access the audit log.
-    pub fn audit_log(&self) -> &Arc<dyn AuditLog> { self.audit.audit_log() }
-
-    /// Access the unified audit subsystem.
-    pub fn audit(&self) -> &AuditRef { &self.audit }
-
-    /// Access the approval manager.
-    pub fn approval(&self) -> &Arc<crate::security::ApprovalManager> { self.security.approval() }
-
-    /// Access the unified security subsystem.
-    pub fn security(&self) -> &SecurityRef { &self.security }
-
-    /// Query the audit log for events matching the given filter.
-    pub async fn audit_query(&self, filter: AuditFilter) -> Vec<AuditEvent> {
-        self.audit.query(filter).await
-    }
-
-    /// Access the global semaphore (used by event loop for spawn limits).
-    pub(crate) fn global_semaphore(&self) -> &Arc<Semaphore> { &self.global_semaphore }
-
-    /// Access the shared KV store (used by event loop).
-    pub(crate) fn shared_kv(&self) -> &SharedKv { self.syscall.shared_kv() }
-
-    /// Access the session index (lightweight metadata-only interface).
-    pub fn session_index(&self) -> &SessionIndexRef { &self.session_index }
-
-    /// Access the pipe registry (used by event loop).
-    pub(crate) fn pipe_registry(&self) -> &PipeRegistry { self.syscall.pipe_registry() }
-
-    /// Access the driver registry (used by event loop for ResolveDriver).
-    pub(crate) fn driver_registry(&self) -> &DriverRegistryRef { self.syscall.driver_registry() }
-
-    /// Access the syscall dispatcher (used by event loop).
-    pub(crate) fn syscall_dispatcher(&self) -> &SyscallDispatcher { &self.syscall }
-
-    /// Construct a `Kernel` for testing with minimal I/O subsystem.
-    ///
-    /// Used by [`crate::testing::TestKernelBuilder`] to assemble kernels in
-    /// tests without going through the public `new()` constructor.
-    ///
-    /// Creates minimal I/O subsystem components (IngressPipeline,
-    /// EndpointRegistry) with Noop resolvers.
-    #[cfg(any(test, feature = "testing"))]
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn for_testing(
-        config: KernelConfig,
-        process_table: Arc<SessionTable>,
-        global_semaphore: Arc<Semaphore>,
-        driver_registry: DriverRegistryRef,
-        tool_registry: ToolRegistryRef,
-        tape_store: Arc<rara_memory::tape::FileTapeStore>,
-        event_bus: NotificationBusRef,
-        security: SecurityRef,
-        agent_registry: AgentRegistryRef,
-        audit: AuditRef,
-        session_index: SessionIndexRef,
-        settings: SettingsRef,
-        stream_hub: StreamHubRef,
-        pipe_registry: PipeRegistry,
-        device_registry: DeviceRegistryRef,
-    ) -> Self {
-        let identity_resolver: IdentityResolverRef =
-            Arc::new(crate::io::ingress::NoopIdentityResolver);
-        let session_resolver: SessionResolverRef =
-            Arc::new(crate::io::ingress::NoopSessionResolver);
-
-        let sharded_queue: ShardedQueueRef = Arc::new(crate::queue::ShardedEventQueue::new(
-            crate::queue::ShardedEventQueueConfig::single(),
-        ));
-        let event_queue: EventQueueRef =
-            Arc::new(ObservableEventQueue::new(sharded_queue.clone(), 512));
-
-        let ingress_pipeline = Arc::new(IngressPipeline::new(identity_resolver, session_resolver));
-        let endpoint_registry = Arc::new(EndpointRegistry::new());
-
-        let syscall = SyscallDispatcher::new(
-            SharedKv::in_memory(),
-            pipe_registry,
-            driver_registry,
-            tool_registry,
-            event_bus,
-            config.clone(),
-        );
-
-        Self {
-            config,
-            process_table,
-            global_semaphore,
-            security,
-            agent_registry,
-            audit,
-            tape_store,
-            session_index,
-            settings,
-            device_registry,
-            syscall,
-            stream_hub,
-            ingress_pipeline,
-            delivery: DeliverySubsystem::new(endpoint_registry),
-            event_queue,
-            sharded_queue,
-            started_at: Timestamp::now(),
-        }
-    }
-
-    // -- I/O subsystem accessors -----------------------------------------
-
-    /// Access the ingress pipeline (adapters need this to push messages).
-    pub fn ingress_pipeline(&self) -> &IngressPipelineRef { &self.ingress_pipeline }
-
-    /// Access the ephemeral stream hub (WebAdapter needs this for token
-    /// deltas).
-    pub fn stream_hub(&self) -> &StreamHubRef { &self.stream_hub }
-
-    /// Access the endpoint registry (WebAdapter needs this for connection
-    /// tracking).
-    pub fn endpoint_registry(&self) -> &EndpointRegistryRef { self.delivery.endpoint_registry() }
-
-    /// Access the delivery subsystem (used by event loop).
-    pub(crate) fn delivery(&self) -> &DeliverySubsystem { &self.delivery }
 
     /// Create a [`KernelHandle`] for external callers.
     ///
@@ -487,7 +287,6 @@ impl Kernel {
             Arc::clone(&self.ingress_pipeline),
             Arc::clone(&self.stream_hub),
             Arc::clone(self.delivery.endpoint_registry()),
-            Arc::clone(&self.audit),
             Arc::clone(&self.settings),
             Arc::clone(&self.security),
             self.config.clone(),
@@ -502,7 +301,7 @@ impl Kernel {
     pub fn event_queue(&self) -> &EventQueueRef { &self.event_queue }
 
     /// Access the sharded event queue.
-    pub(crate) fn sharded_queue(&self) -> &ShardedQueueRef { &self.sharded_queue }
+    fn sharded_queue(&self) -> &ShardedQueueRef { &self.sharded_queue }
 
     /// Register an egress adapter for a channel type.
     ///
@@ -541,749 +340,1191 @@ impl Kernel {
         info!("kernel event loop started");
         (kernel, handle)
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        handle::kernel_handle::KernelHandle,
-        io::stream::StreamHub,
-        llm::DriverRegistryBuilder,
-        notification::NoopNotificationBus,
-        process::{
-            AgentManifest, agent_registry::AgentRegistry, noop_user_store::NoopUserStore,
-            principal::Principal,
-        },
-        session::{NoopSessionIndex, SessionIndexRef},
-        tool::ToolRegistry,
-    };
+    /// Run the unified event loop, spawning 1 global + N shard
+    /// [`EventProcessor`] tasks.
+    ///
+    /// When `num_shards == 0` (single-queue mode), only the global processor
+    /// is spawned — functionally identical to the former single-queue path
+    /// but using the same code path for both modes.
+    ///
+    /// Called from [`start()`](Kernel::start) which already wraps Kernel in
+    /// Arc.
+    async fn run_event_loop_arc(kernel: Arc<Kernel>, shutdown: CancellationToken) {
+        /// Agent name for admin/root users.
+        const ADMIN_AGENT_NAME: &'static str = "rara";
+        /// Agent name for regular users.
+        const USER_AGENT_NAME: &'static str = "nana";
+        use crate::event_loop::processor::EventProcessor;
 
-    async fn make_test_kernel(max_concurrency: usize, child_limit: usize) -> Kernel {
-        let config = KernelConfig {
-            max_concurrency,
-            default_child_limit: child_limit,
-            default_max_iterations: 5,
-            memory_quota_per_agent: 1000,
-            ..Default::default()
-        };
+        let runtimes: Arc<RuntimeTable> = Arc::new(RuntimeTable::new());
+        let sq = kernel.sharded_queue().clone();
+        let num_shards = sq.num_shards();
 
-        let registry = Arc::new(AgentRegistry::new(
-            crate::testing::test_manifests(),
-            std::env::temp_dir().join("kernel_test_agents"),
-        ));
-
-        let driver_registry = Arc::new(
-            DriverRegistryBuilder::new("test")
-                .provider_model("test", "test-model", vec![])
-                .build(),
+        info!(
+            num_shards = num_shards,
+            total_processors = num_shards + 1,
+            "kernel event loop started"
         );
 
-        let tape_store = crate::testing::test_tape_store().await;
+        let mut handles = Vec::with_capacity(num_shards + 1);
 
-        Kernel::new(
-            config,
-            driver_registry,
-            Arc::new(ToolRegistry::new()),
-            tape_store,
-            Arc::new(NoopNotificationBus),
-            Arc::new(crate::security::SecuritySubsystem::noop()),
-            registry,
-            Arc::new(NoopSessionIndex) as SessionIndexRef,
-            Arc::new(NoopSettingsProvider) as SettingsRef,
-            Arc::new(StreamHub::new(16)),
-            Arc::new(crate::io::ingress::NoopIdentityResolver) as IdentityResolverRef,
-            Arc::new(crate::io::ingress::NoopSessionResolver) as SessionResolverRef,
-            Arc::new(crate::audit::AuditSubsystem::noop()),
-            opendal::Operator::new(opendal::services::Memory::default())
-                .expect("memory operator")
-                .finish(),
-        )
-    }
-
-    /// Create a test kernel with its event loop running, returning an
-    /// Arc<Kernel> and a CancellationToken to shut it down.
-    async fn start_test_kernel(
-        max_concurrency: usize,
-        child_limit: usize,
-    ) -> (KernelHandle, CancellationToken) {
-        let kernel = make_test_kernel(max_concurrency, child_limit).await;
-        let cancel = CancellationToken::new();
-        let (_arc, handle) = kernel.start(cancel.clone());
-        (handle, cancel)
-    }
-
-    fn test_manifest(name: &str) -> AgentManifest {
-        AgentManifest {
-            name:               name.to_string(),
-            role:               None,
-            description:        format!("Test agent: {name}"),
-            model:              Some("test-model".to_string()),
-            system_prompt:      "You are a test agent.".to_string(),
-            soul_prompt:        None,
-            provider_hint:      None,
-            max_iterations:     Some(5),
-            tools:              vec![],
-            max_children:       None,
-            max_context_tokens: None,
-            priority:           crate::process::Priority::default(),
-            metadata:           serde_json::Value::Null,
-            sandbox:            None,
+        // Global processor (id=0) — always present.
+        {
+            let proc = EventProcessor {
+                id:    0,
+                queue: Arc::clone(sq.global()),
+            };
+            let k = Arc::clone(&kernel);
+            let rt = Arc::clone(&runtimes);
+            let sd = shutdown.clone();
+            handles.push(tokio::spawn(async move {
+                proc.run(&k, &rt, sd).await;
+            }));
         }
-    }
 
-    #[tokio::test]
-    async fn test_kernel_creation() {
-        let kernel = make_test_kernel(10, 5).await;
-        assert_eq!(kernel.config().max_concurrency, 10);
-        assert_eq!(kernel.config().default_child_limit, 5);
-        assert_eq!(kernel.process_table().list().len(), 0);
-        assert!(!kernel.event_queue().is_sharded());
-    }
-
-    #[tokio::test]
-    async fn test_kernel_agent_registry() {
-        let kernel = make_test_kernel(10, 5).await;
-        assert!(kernel.agent_registry().get("rara").is_some());
-        assert!(kernel.agent_registry().get("scout").is_some());
-        assert!(kernel.agent_registry().get("nonexistent").is_none());
-    }
-
-    #[test]
-    fn test_kernel_default_config() {
-        let config = KernelConfig::default();
-        assert_eq!(config.max_concurrency, 16);
-        assert_eq!(config.default_child_limit, 8);
-        assert_eq!(config.default_max_iterations, 25);
-        assert_eq!(config.memory_quota_per_agent, 1000);
-    }
-
-    #[tokio::test]
-    async fn test_kernel_spawn_creates_process() {
-        let (kernel, cancel) = start_test_kernel(10, 5).await;
-        let manifest = test_manifest("test-agent");
-        let principal = Principal::user("test-user");
-
-        let result = kernel
-            .spawn_with_input(manifest, "hello".to_string(), principal, None)
-            .await;
-
-        assert!(result.is_ok());
-        let agent_id = result.unwrap();
-
-        let process = kernel.process_table().get(agent_id);
-        assert!(process.is_some());
-        let process = process.unwrap();
-        assert_eq!(process.manifest.name, "test-agent");
-        // Each process gets its own UUID session.
-        assert!(!process.session_id.to_string().is_empty());
-
-        cancel.cancel();
-    }
-
-    #[tokio::test]
-    async fn test_kernel_spawn_global_limit() {
-        let (kernel, cancel) = start_test_kernel(2, 5).await;
-        let principal = Principal::user("test-user");
-
-        let h1 = kernel
-            .spawn_with_input(
-                test_manifest("a1"),
-                "task 1".to_string(),
-                principal.clone(),
-                None,
-            )
-            .await;
-        assert!(h1.is_ok());
-
-        let h2 = kernel
-            .spawn_with_input(
-                test_manifest("a2"),
-                "task 2".to_string(),
-                principal.clone(),
-                None,
-            )
-            .await;
-        assert!(h2.is_ok());
-
-        // Third spawn should fail (global limit reached)
-        let h3 = kernel
-            .spawn_with_input(test_manifest("a3"), "task 3".to_string(), principal, None)
-            .await;
-        assert!(h3.is_err());
-        let err = h3.unwrap_err();
-        assert!(
-            err.to_string().contains("global concurrency limit"),
-            "expected global limit error, got: {}",
-            err
-        );
-
-        cancel.cancel();
-    }
-
-    #[tokio::test]
-    async fn test_kernel_spawn_named_success() {
-        let (kernel, cancel) = start_test_kernel(10, 5).await;
-        let principal = Principal::user("test-user");
-
-        let result = kernel
-            .spawn_named("scout", "find something".to_string(), principal, None)
-            .await;
-        assert!(result.is_ok());
-
-        cancel.cancel();
-    }
-
-    #[tokio::test]
-    async fn test_kernel_spawn_named_not_found() {
-        let (kernel, cancel) = start_test_kernel(10, 5).await;
-        let principal = Principal::user("test-user");
-
-        let result = kernel
-            .spawn_named("nonexistent", "task".to_string(), principal, None)
-            .await;
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("manifest not found")
-        );
-
-        cancel.cancel();
-    }
-
-    #[tokio::test]
-    async fn test_kernel_spawn_with_parent() {
-        let (kernel, cancel) = start_test_kernel(10, 5).await;
-        let principal = Principal::user("test-user");
-
-        let parent_id = kernel
-            .spawn_with_input(
-                test_manifest("parent"),
-                "parent task".to_string(),
-                principal.clone(),
-                None,
-            )
-            .await
-            .unwrap();
-
-        let child_id = kernel
-            .spawn_with_input(
-                test_manifest("child"),
-                "child task".to_string(),
-                principal,
-                Some(parent_id),
-            )
-            .await
-            .unwrap();
-
-        let child_process = kernel.process_table().get(child_id).unwrap();
-        assert_eq!(child_process.parent_id, Some(parent_id));
-
-        let children = kernel.process_table().children_of(parent_id);
-        assert_eq!(children.len(), 1);
-        assert_eq!(children[0].agent_id, child_id);
-
-        cancel.cancel();
-    }
-
-    // -----------------------------------------------------------------------
-    // /proc API — Kernel-level introspection tests
-    // -----------------------------------------------------------------------
-
-    #[tokio::test]
-    async fn test_kernel_process_stats_after_spawn() {
-        let (kernel, cancel) = start_test_kernel(10, 5).await;
-        let principal = Principal::user("test-user");
-
-        let agent_id = kernel
-            .spawn_with_input(
-                test_manifest("stats-agent"),
-                "hello".to_string(),
-                principal,
-                None,
-            )
-            .await
-            .unwrap();
-
-        let stats = kernel.process_stats(&agent_id).await;
-        assert!(stats.is_some());
-
-        let stats = stats.unwrap();
-        assert_eq!(stats.agent_id, agent_id);
-        assert_eq!(stats.manifest_name, "stats-agent");
-        assert!(stats.parent_id.is_none());
-
-        cancel.cancel();
-    }
-
-    #[tokio::test]
-    async fn test_kernel_list_processes_returns_all_spawned() {
-        let (kernel, cancel) = start_test_kernel(10, 5).await;
-        let principal = Principal::user("test-user");
-
-        kernel
-            .spawn_with_input(
-                test_manifest("agent-1"),
-                "task 1".to_string(),
-                principal.clone(),
-                None,
-            )
-            .await
-            .unwrap();
-
-        kernel
-            .spawn_with_input(
-                test_manifest("agent-2"),
-                "task 2".to_string(),
-                principal,
-                None,
-            )
-            .await
-            .unwrap();
-
-        let list = kernel.list_processes().await;
-        assert_eq!(list.len(), 2);
-
-        let names: Vec<&str> = list.iter().map(|s| s.manifest_name.as_str()).collect();
-        assert!(names.contains(&"agent-1"));
-        assert!(names.contains(&"agent-2"));
-
-        cancel.cancel();
-    }
-
-    #[tokio::test]
-    async fn test_kernel_system_stats_initial() {
-        let kernel = make_test_kernel(10, 5).await;
-        let stats = kernel.system_stats();
-        assert_eq!(stats.active_sessions, 0);
-        assert_eq!(stats.total_spawned, 0);
-        assert_eq!(stats.total_completed, 0);
-        assert_eq!(stats.total_failed, 0);
-        assert_eq!(stats.global_semaphore_available, 10);
-        assert_eq!(stats.total_tokens_consumed, 0);
-    }
-
-    #[tokio::test]
-    async fn test_kernel_system_stats_after_spawn() {
-        let (kernel, cancel) = start_test_kernel(10, 5).await;
-        let principal = Principal::user("test-user");
-
-        kernel
-            .spawn_with_input(
-                test_manifest("sys-agent"),
-                "work".to_string(),
-                principal,
-                None,
-            )
-            .await
-            .unwrap();
-
-        let stats = kernel.system_stats();
-        assert_eq!(stats.total_spawned, 1);
-        // The global semaphore permit is stored in ProcessRuntime, so the
-        // available count decreases while the process is alive.
-        assert_eq!(stats.global_semaphore_available, 9);
-
-        cancel.cancel();
-    }
-
-    // =======================================================================
-    // Signal system tests (via KernelEvent::SendSignal through EventQueue)
-    // =======================================================================
-
-    #[tokio::test]
-    async fn test_signal_via_event_queue() {
-        let (kernel, cancel) = start_test_kernel(10, 5).await;
-        let principal = Principal::user("test-user");
-
-        let agent_id = kernel
-            .spawn_with_input(
-                test_manifest("signalable"),
-                "initial message".to_string(),
-                principal,
-                None,
-            )
-            .await
-            .unwrap();
-
-        // Verify process exists in the table.
-        let process = kernel.process_table().get(agent_id);
-        assert!(process.is_some(), "process should exist after spawn");
-
-        // Push a Pause signal via event queue.
-        let event = crate::event::KernelEvent::send_signal(
-            agent_id,
-            crate::process::Signal::Pause,
-        );
-        kernel.event_queue().push(event).unwrap();
-
-        // Allow time for the event loop to process.
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        // Process should be Paused.
-        let process = kernel.process_table().get(agent_id).unwrap();
-        assert_eq!(
-            process.state,
-            SessionState::Paused,
-            "expected Paused after signal, got {:?}",
-            process.state
-        );
-
-        // Push Resume signal.
-        let event = crate::event::KernelEvent::send_signal(
-            agent_id,
-            crate::process::Signal::Resume,
-        );
-        kernel.event_queue().push(event).unwrap();
-
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        let process = kernel.process_table().get(agent_id).unwrap();
-        assert_ne!(
-            process.state,
-            SessionState::Paused,
-            "process should not be Paused after Resume"
-        );
-
-        cancel.cancel();
-    }
-
-    #[tokio::test]
-    async fn test_kernel_system_stats_serializes_to_json() {
-        let kernel = make_test_kernel(10, 5).await;
-        let stats = kernel.system_stats();
-        let json = serde_json::to_string(&stats).unwrap();
-        assert!(json.contains("\"active_sessions\":0"));
-        assert!(json.contains("\"global_semaphore_available\":10"));
-    }
-
-    // =======================================================================
-    // Per-process syscall tool injection tests (#443)
-    // =======================================================================
-
-    #[tokio::test]
-    async fn test_get_tool_registry_includes_kernel_tool() {
-        let (kernel, cancel) = start_test_kernel(10, 5).await;
-        let principal = Principal::user("test-user");
-
-        let agent_id = kernel
-            .spawn_with_input(
-                test_manifest("tool-test-agent"),
-                "hello".to_string(),
-                principal,
-                None,
-            )
-            .await
-            .unwrap();
-
-        // Allow time for the spawn to fully register the runtime.
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        // Create a ProcessHandle pointing at this agent and query the
-        // tool registry via the GetToolRegistry syscall.
-        let handle = crate::handle::process_handle::ProcessHandle::new(
-            agent_id,
-            crate::process::SessionId::new(),
-            Principal::user("test-user"),
-            kernel.event_queue().clone(),
-        );
-
-        let registry = handle.tool_registry().await.unwrap();
-
-        // The per-process SyscallTool should be injected.
-        assert!(
-            registry.get("kernel").is_some(),
-            "tool registry should include kernel, got: {:?}",
-            registry.tool_names(),
-        );
-
-        cancel.cancel();
-    }
-
-    #[tokio::test]
-    async fn test_tool_registry_filtered_by_manifest_tools() {
-        // The "scout" manifest specifies tools: ["read_file", "grep"].
-        // Even though the kernel tool is injected, `filtered()` should exclude
-        // it when the manifest specifies a non-empty tool list.
-        let (kernel, cancel) = start_test_kernel(10, 5).await;
-        let principal = Principal::user("test-user");
-
-        let agent_id = kernel
-            .spawn_with_input(
-                test_manifest("filter-agent"),
-                "hello".to_string(),
-                principal,
-                None,
-            )
-            .await
-            .unwrap();
-
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        let handle = crate::handle::process_handle::ProcessHandle::new(
-            agent_id,
-            crate::process::SessionId::new(),
-            Principal::user("test-user"),
-            kernel.event_queue().clone(),
-        );
-
-        let full_registry = handle.tool_registry().await.unwrap();
-        assert!(full_registry.get("kernel").is_some());
-
-        // Filter with an explicit tool whitelist that excludes kernel.
-        let whitelist = vec!["read_file".to_string(), "grep".to_string()];
-        let filtered = full_registry.filtered(&whitelist);
-        assert!(
-            filtered.get("kernel").is_none(),
-            "filtered registry should NOT include kernel"
-        );
-
-        // Filter with empty list means include all.
-        let unfiltered = full_registry.filtered(&[]);
-        assert!(
-            unfiltered.get("kernel").is_some(),
-            "unfiltered registry should include kernel"
-        );
-
-        cancel.cancel();
-    }
-
-    // -----------------------------------------------------------------------
-    // Guard integration tests
-    // -----------------------------------------------------------------------
-
-    /// A guard that denies calls to tools whose name contains "dangerous".
-    struct DenyDangerousGuard;
-
-    #[async_trait::async_trait]
-    impl crate::guard::Guard for DenyDangerousGuard {
-        async fn check_tool(
-            &self,
-            _ctx: &crate::guard::GuardContext,
-            tool_name: &str,
-            _args: &serde_json::Value,
-        ) -> crate::guard::Verdict {
-            if tool_name.contains("dangerous") {
-                crate::guard::Verdict::Deny {
-                    reason: format!("tool '{tool_name}' is forbidden"),
-                }
-            } else {
-                crate::guard::Verdict::Allow
+        // Shard processors (id=1..=N) — only when sharding is enabled.
+        for i in 0..num_shards {
+            let proc = EventProcessor {
+                id:    i + 1,
+                queue: Arc::clone(sq.shard(i)),
+            };
+            let k = Arc::clone(&kernel);
+            let rt = Arc::clone(&runtimes);
+            let sd = shutdown.clone();
+            handles.push(tokio::spawn(async move {
+                proc.run(&k, &rt, sd).await;
+            }));
+        }
+
+        // Wait for all processors to finish.
+        // TODO: use futures::join_all and handle panics more robustly (currently if any
+        for handle in handles {
+            if let Err(e) = handle.await {
+                error!("event processor panicked: {e}");
             }
         }
 
-        async fn check_output(
-            &self,
-            _ctx: &crate::guard::GuardContext,
-            _content: &str,
-        ) -> crate::guard::Verdict {
-            crate::guard::Verdict::Allow
+        info!("kernel event loop stopped");
+    }
+
+    /// Dispatch a single event to its handler.
+    async fn handle_event(&self, event: KernelEventEnvelope, runtimes: &RuntimeTable) {
+        let event_type: &'static str = (&event).into();
+        crate::metrics::EVENT_PROCESSED
+            .with_label_values(&[event_type])
+            .inc();
+
+        let KernelEventEnvelope { base, kind } = event;
+
+        match kind {
+            KernelEvent::UserMessage(msg) => {
+                self.handle_user_message(msg, runtimes).await;
+            }
+            KernelEvent::CreateSession {
+                manifest,
+                input,
+                principal,
+                parent_id,
+                reply_tx,
+            } => {
+                // CreateSession from SessionHandle::create_child() — subagent,
+                // no channel binding.
+                let result = self
+                    .handle_spawn_agent(manifest, input, principal, None, parent_id, None, runtimes)
+                    .await;
+                let _ = reply_tx.send(result);
+            }
+            KernelEvent::SendSignal { signal } => {
+                let target = base.agent_id.expect("SendSignal requires agent_id");
+                self.handle_signal(target, signal, runtimes).await;
+            }
+            KernelEvent::TurnCompleted {
+                result,
+                in_reply_to,
+                user,
+            } => {
+                let agent_id = base.agent_id.expect("TurnCompleted requires agent_id");
+                let session_id = base.session_key.expect("TurnCompleted requires session_id");
+                self.handle_turn_completed(
+                    agent_id,
+                    session_id,
+                    result,
+                    in_reply_to,
+                    user,
+                    runtimes,
+                )
+                .await;
+            }
+            KernelEvent::ChildSessionDone { child_id, result } => {
+                let parent_id = base.agent_id.expect("ChildSessionDone requires agent_id");
+                self.handle_child_completed(parent_id, child_id, result, runtimes)
+                    .await;
+            }
+            KernelEvent::Deliver(envelope) => {
+                self.delivery().deliver(envelope);
+            }
+            KernelEvent::SessionCommand(syscall) => {
+                self.syscall_dispatcher()
+                    .dispatch(
+                        syscall,
+                        self.process_table(),
+                        runtimes,
+                        self.security(),
+                        self.audit(),
+                        self.agent_registry(),
+                    )
+                    .await;
+            }
+            KernelEvent::IdleCheck => {
+                // Periodic idle check — handled by session table reaping.
+                self.process_table()
+                    .reap_terminal(std::time::Duration::from_secs(300));
+            }
+            KernelEvent::Shutdown => {
+                info!("shutdown event received");
+            }
         }
     }
 
-    async fn make_guarded_kernel() -> Kernel {
-        let config = KernelConfig {
-            max_concurrency: 10,
-            default_child_limit: 5,
-            default_max_iterations: 5,
-            memory_quota_per_agent: 1000,
-            ..Default::default()
+    /// Handle a SpawnAgent event — create a new process and its runtime.
+    ///
+    /// `channel_session_id` is the external channel binding (e.g.,
+    /// `web:chat123`). Set for root processes that entered via a channel
+    /// adapter; `None` for subagents spawned by other agents.
+    ///
+    /// Every process gets its own `agent:{id}` session for conversation
+    /// isolation. Only processes with a `channel_session_id` are inserted
+    /// into the `session_index` for inbound message routing.
+    // FIXME: we should not called it as spawn agent.
+    #[tracing::instrument(skip_all, fields(manifest_name = %manifest.name, parent_id = ?parent_id, session_key))]
+    async fn handle_spawn_agent(
+        &self,
+        manifest: AgentManifest,
+        input: String,
+        principal: Principal,
+        channel_session_id: Option<SessionKey>,
+        parent_id: Option<SessionKey>,
+        // FIXME: what is this ?
+        resume_session_id: Option<SessionKey>,
+        runtimes: &RuntimeTable,
+    ) -> Result<SessionKey> {
+        // Validate principal.
+        self.security().validate_principal(&principal).await?;
+
+        // Acquire global semaphore.
+        let global_permit = self
+            .global_semaphore()
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| KernelError::SpawnLimitReached {
+                message: "global concurrency limit reached".to_string(),
+            })?;
+
+        let session_key = SessionKey::new();
+        tracing::Span::current().record("session_key", tracing::field::display(&session_key));
+
+        // TODO: fix me
+        let (session_id, initial_messages) = if let Some(session_key) = resume_session_id {
+            // Load previous conversation from the tape store.
+            let tape = self.tape_for(&session_key);
+            let entries = tape.entries().await.unwrap_or_default();
+            let messages: Vec<crate::channel::types::ChatMessage> = entries
+                .into_iter()
+                .filter(|e| e.kind == rara_memory::tape::TapEntryKind::Message)
+                .filter_map(|e| serde_json::from_value(e.payload).ok())
+                .collect();
+            (session_key, messages)
+        } else {
+            let session_id = SessionKey::new();
+            (session_id, vec![])
         };
 
-        let registry = Arc::new(AgentRegistry::new(
-            crate::testing::test_manifests(),
-            std::env::temp_dir().join("kernel_guard_test_agents"),
+        // Register process in table.
+        let metrics = std::sync::Arc::new(crate::process::RuntimeMetrics::new());
+        let process = SessionRuntime {
+            session_key,
+            parent_id,
+            channel_session_id: channel_session_id.clone(),
+            manifest: manifest.clone(),
+            principal: principal.clone(),
+            env: AgentEnv::default(),
+            state: SessionState::Ready,
+            created_at: jiff::Timestamp::now(),
+            finished_at: None,
+            result: None,
+            created_files: vec![],
+            metrics,
+            turn_traces: vec![],
+        };
+        self.process_table().insert(process);
+
+        crate::metrics::SESSION_CREATED
+            .with_label_values(&[&manifest.name])
+            .inc();
+        crate::metrics::SESSION_ACTIVE
+            .with_label_values(&[&manifest.name])
+            .inc();
+
+        // Create process-level cancellation token.
+        // Child processes derive their token from the parent's, so cancelling
+        // a parent cascades to all children automatically.
+        let process_cancel = if let Some(pid) = parent_id {
+            runtimes
+                .with(&pid, |parent_rt| parent_rt.process_cancel.child_token())
+                .unwrap_or_default()
+        } else {
+            CancellationToken::new()
+        };
+
+        // Build ProcessHandle — uses the process's own session.
+        let child_limit = manifest
+            .max_children
+            .unwrap_or(self.config().default_child_limit);
+
+        let handle = Arc::new(ProcessHandle::new(
+            session_key,
+            principal.clone(),
+            self.event_queue().clone(),
         ));
 
-        let driver_registry = Arc::new(
-            DriverRegistryBuilder::new("test")
-                .provider_model("test", "test-model", vec![])
-                .build(),
+        let max_context_tokens = manifest
+            .max_context_tokens
+            .unwrap_or(crate::compaction::DEFAULT_MAX_CONTEXT_TOKENS);
+
+        // Create runtime entry. The global permit is stored here so it lives
+        // as long as the process — dropping the runtime entry automatically
+        // releases the semaphore slot.
+        let runtime = ProcessRuntime {
+            conversation: initial_messages,
+            turn_cancel: CancellationToken::new(),
+            process_cancel,
+            paused: false,
+            pause_buffer: Vec::new(),
+            handle,
+            child_semaphore: Arc::new(Semaphore::new(child_limit)),
+            max_context_tokens,
+            last_result: None,
+            _global_permit: global_permit,
+        };
+        runtimes.insert(session_key, runtime);
+
+        info!(
+            session_key = %session_key,
+            manifest = %manifest.name,
+            session_id = %session_id,
+            channel_session_id = ?channel_session_id,
+            "process spawned via event loop"
         );
 
-        let security = Arc::new(crate::security::SecuritySubsystem::new(
-            Arc::new(NoopUserStore),
-            Arc::new(DenyDangerousGuard),
-            Arc::new(crate::security::ApprovalManager::new(
-                crate::security::ApprovalPolicy::default(),
-            )),
-        ));
-
-        let tape_store = crate::testing::test_tape_store().await;
-
-        Kernel::new(
-            config,
-            driver_registry,
-            Arc::new(ToolRegistry::new()),
-            tape_store,
-            Arc::new(NoopNotificationBus),
-            security,
-            registry,
-            Arc::new(NoopSessionIndex) as SessionIndexRef,
-            Arc::new(NoopSettingsProvider) as SettingsRef,
-            Arc::new(StreamHub::new(16)),
-            Arc::new(crate::io::ingress::NoopIdentityResolver) as IdentityResolverRef,
-            Arc::new(crate::io::ingress::NoopSessionResolver) as SessionResolverRef,
-            Arc::new(crate::audit::AuditSubsystem::noop()),
-            opendal::Operator::new(opendal::services::Memory::default())
-                .expect("memory operator")
-                .finish(),
-        )
-    }
-
-    #[tokio::test]
-    async fn test_check_guard_batch_denies_dangerous_tools() {
-        let kernel = make_guarded_kernel().await;
-        let cancel = CancellationToken::new();
-        let (_kernel, handle) = kernel.start(cancel.clone());
-
-        let principal = Principal::user("test-user");
-        let agent_id = handle
-            .spawn_with_input(
-                test_manifest("guard-test"),
-                "hello".to_string(),
-                principal,
-                None,
-            )
-            .await
-            .unwrap();
-
-        // Allow process to be registered.
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        // Push a CheckGuardBatch syscall via the event queue.
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        let checks = vec![
-            ("safe_tool".to_string(), serde_json::json!({"arg": "val"})),
-            (
-                "dangerous_delete".to_string(),
-                serde_json::json!({"path": "/etc"}),
-            ),
-            ("another_safe".to_string(), serde_json::json!({})),
-        ];
-
-        let process = handle.process_table().get(agent_id).unwrap();
-        let event = crate::event::KernelEvent::syscall(crate::event::Syscall::CheckGuardBatch {
-            agent_id,
-            session_id: process.session_id.clone(),
-            checks,
-            reply_tx,
-        });
-        handle.event_queue().push(event).unwrap();
-
-        let verdicts = tokio::time::timeout(std::time::Duration::from_secs(2), reply_rx)
-            .await
-            .expect("timeout waiting for guard verdict")
-            .expect("reply channel closed");
-
-        assert_eq!(verdicts.len(), 3);
-        assert!(verdicts[0].is_allow(), "safe_tool should be allowed");
-        assert!(verdicts[1].is_deny(), "dangerous_delete should be denied");
-        assert!(verdicts[2].is_allow(), "another_safe should be allowed");
-
-        // Verify the deny reason contains the tool name.
-        if let crate::guard::Verdict::Deny { reason } = &verdicts[1] {
-            assert!(
-                reason.contains("dangerous_delete"),
-                "deny reason should mention the tool name, got: {reason}"
-            );
+        // Deliver the initial input to the spawned process.
+        //
+        // For root processes (channel_session_id.is_some()), push a synthetic
+        // UserMessage — the session-first router finds the process via
+        // session_index (bound to the channel session above).
+        //
+        // For subagents (channel_session_id.is_none()), also push a synthetic
+        // UserMessage using the process's own agent-scoped session and target
+        // the agent by name. handle_user_message will fall through to the
+        // name-based lookup path and find this process.
+        let msg_session = channel_session_id.unwrap_or(session_id);
+        let inbound = InboundMessage::synthetic_to(
+            input,
+            principal.user_id.clone(),
+            msg_session,
+            manifest.name.clone(),
+        );
+        if let Err(e) = self
+            .event_queue()
+            .try_push(KernelEventEnvelope::user_message(inbound))
+        {
+            error!(%e, "failed to push initial UserMessage for spawned agent");
         }
 
-        cancel.cancel();
+        Ok(session_key)
     }
 
-    #[tokio::test]
-    async fn test_check_guard_batch_allows_all_safe_tools() {
-        let kernel = make_guarded_kernel().await;
-        let cancel = CancellationToken::new();
-        let (_kernel, handle) = kernel.start(cancel.clone());
+    // -----------------------------------------------------------------------
+    // handle_signal
+    // -----------------------------------------------------------------------
 
-        let principal = Principal::user("test-user");
-        let agent_id = handle
-            .spawn_with_input(
-                test_manifest("guard-safe-test"),
-                "hi".to_string(),
-                principal,
-                None,
-            )
-            .await
-            .unwrap();
-
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        let checks = vec![
-            (
-                "read_file".to_string(),
-                serde_json::json!({"path": "/tmp/test"}),
-            ),
-            ("grep".to_string(), serde_json::json!({"pattern": "hello"})),
-        ];
-
-        let process = handle.process_table().get(agent_id).unwrap();
-        let event = crate::event::KernelEvent::syscall(crate::event::Syscall::CheckGuardBatch {
-            agent_id,
-            session_id: process.session_id.clone(),
-            checks,
-            reply_tx,
-        });
-        handle.event_queue().push(event).unwrap();
-
-        let verdicts = tokio::time::timeout(std::time::Duration::from_secs(2), reply_rx)
-            .await
-            .expect("timeout")
-            .expect("channel closed");
-
-        assert_eq!(verdicts.len(), 2);
-        assert!(verdicts[0].is_allow());
-        assert!(verdicts[1].is_allow());
-
-        cancel.cancel();
+    /// Handle a control signal sent to a session runtime.
+    #[tracing::instrument(skip_all, fields(session_key = %target, signal = ?signal))]
+    async fn handle_signal(&self, target: SessionKey, signal: Signal, runtimes: &RuntimeTable) {
+        match signal {
+            Signal::Interrupt => {
+                info!(session_key = %target, "interrupt signal");
+                runtimes.cancel_and_refresh_turn(&target);
+                // Notify via Deliver event — use channel session for egress.
+                let session_id = self
+                    .process_table()
+                    .get(target)
+                    .and_then(|p| p.channel_session_id.clone());
+                let Some(session_id) = session_id else {
+                    error!(session_key = %target, "cannot send interrupt notification: process not found or has no channel session");
+                    return;
+                };
+                let envelope = OutboundEnvelope::state_change(
+                    MessageId::new(),
+                    crate::process::principal::UserId("system".to_string()),
+                    session_id,
+                    "interrupted",
+                    serde_json::json!({
+                        "session_key": target.to_string(),
+                        "message": "Agent interrupted by user",
+                    }),
+                );
+                if let Err(e) = self
+                    .event_queue()
+                    .try_push(KernelEventEnvelope::deliver(envelope))
+                {
+                    error!(%e, "failed to push interrupt notification");
+                }
+            }
+            Signal::Pause => {
+                info!(session_key = %target, "pause signal");
+                runtimes.set_paused(&target, true);
+                let _ = self.process_table().set_state(target, SessionState::Paused);
+            }
+            Signal::Resume => {
+                info!(session_key = %target, "resume signal");
+                runtimes.set_paused(&target, false);
+                let buffered = runtimes.drain_pause_buffer(&target);
+                let _ = self.process_table().set_state(target, SessionState::Ready);
+                for event in buffered {
+                    if let Err(e) = self.event_queue().try_push(event) {
+                        warn!(%e, "failed to re-inject buffered event on resume");
+                    }
+                }
+            }
+            Signal::Terminate => {
+                info!(session_key = %target, "terminate signal — graceful shutdown");
+                let was_active = self
+                    .process_table()
+                    .get(target)
+                    .map(|p| p.state == SessionState::Active)
+                    .unwrap_or(false);
+                let _ = self
+                    .process_table()
+                    .set_state(target, SessionState::Suspended);
+                runtimes.cancel_turn(&target);
+                // Grace period then force-kill via process_cancel token.
+                if let Some(token) = runtimes.clone_process_cancel(&target) {
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        token.cancel();
+                    });
+                }
+                if !was_active {
+                    self.cleanup_process(target, runtimes).await;
+                }
+            }
+            Signal::Kill => {
+                info!(session_key = %target, "kill signal");
+                runtimes.cancel_process(&target);
+                let _ = self
+                    .process_table()
+                    .set_state(target, SessionState::Suspended);
+                self.cleanup_process(target, runtimes).await;
+            }
+        }
     }
 
-    #[tokio::test]
-    async fn test_check_guard_batch_empty_checks() {
-        let kernel = make_guarded_kernel().await;
-        let cancel = CancellationToken::new();
-        let (_kernel, handle) = kernel.start(cancel.clone());
+    // -----------------------------------------------------------------------
+    // handle_child_completed
+    // -----------------------------------------------------------------------
 
-        let principal = Principal::user("test-user");
-        let agent_id = handle
-            .spawn_with_input(
-                test_manifest("guard-empty-test"),
-                "hi".to_string(),
-                principal,
-                None,
-            )
-            .await
-            .unwrap();
-
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        let checks = vec![];
-
-        let process = handle.process_table().get(agent_id).unwrap();
-        let event = crate::event::KernelEvent::syscall(crate::event::Syscall::CheckGuardBatch {
-            agent_id,
-            session_id: process.session_id.clone(),
-            checks,
-            reply_tx,
-        });
-        handle.event_queue().push(event).unwrap();
-
-        let verdicts = tokio::time::timeout(std::time::Duration::from_secs(2), reply_rx)
-            .await
-            .expect("timeout")
-            .expect("channel closed");
-
-        assert!(
-            verdicts.is_empty(),
-            "empty checks should return empty verdicts"
+    /// Handle a child agent completion — persist result to parent's
+    /// conversation.
+    #[tracing::instrument(skip_all, fields(parent_id = %parent_id, child_id = %child_id, output_len = result.output.len()))]
+    async fn handle_child_completed(
+        &self,
+        parent_id: SessionKey,
+        child_id: SessionKey,
+        result: AgentRunLoopResult,
+        runtimes: &RuntimeTable,
+    ) {
+        info!(
+            parent_id = %parent_id,
+            child_id = %child_id,
+            output_len = result.output.len(),
+            "child result received"
         );
 
-        cancel.cancel();
+        // Persist child result to parent's conversation history.
+        let child_result_text = format!(
+            "[child_agent_result] child_id={child_id} iterations={} tool_calls={}\n\n{}",
+            result.iterations, result.tool_calls, result.output,
+        );
+        let child_msg = crate::channel::types::ChatMessage::system(&child_result_text);
+
+        runtimes.with_mut(&parent_id, |rt| {
+            rt.conversation.push(child_msg.clone());
+        });
+
+        let Some(session_id) = self
+            .process_table()
+            .get(parent_id)
+            .map(|p| p.session_id.clone())
+        else {
+            error!(parent_id = %parent_id, child_id = %child_id, "cannot persist child result: parent process not found");
+            return;
+        };
+
+        {
+            let tape = self.tape_for(&session_id);
+            if let Err(e) = tape
+                .append_message(serde_json::to_value(&child_msg).unwrap_or_default())
+                .await
+            {
+                warn!(%e, "failed to persist child result message to tape");
+            }
+        }
+    }
+
+    /// Clean up a process runtime entry.
+    ///
+    /// Removing the runtime from the table drops the `process_cancel` token
+    /// naturally, so no explicit cancellation-token cleanup is needed.
+    async fn cleanup_process(&self, session_key: SessionKey, runtimes: &RuntimeTable) {
+        if let Some((_, rt)) = runtimes.remove(&session_key) {
+            if let Some(process) = self.process_table().get(session_key) {
+                crate::metrics::SESSION_ACTIVE
+                    .with_label_values(&[&process.manifest.name])
+                    .dec();
+                crate::metrics::SESSION_SUSPENDED
+                    .with_label_values(&[&process.manifest.name, &process.state.to_string()])
+                    .inc();
+            }
+
+            // Notify parent if this is a child process.
+            if let Some(process) = self.process_table().get(session_key) {
+                if let Some(parent_id) = process.parent_id {
+                    let result = rt.last_result.unwrap_or(AgentRunLoopResult {
+                        output:     "process ended".to_string(),
+                        iterations: 0,
+                        tool_calls: 0,
+                    });
+                    let event =
+                        KernelEventEnvelope::child_session_done(parent_id, session_key, result);
+                    if let Err(e) = self.event_queue().try_push(event) {
+                        warn!(%e, "failed to push ChildSessionDone event");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Handle a user message with 3-path routing:
+    ///
+    /// 1. **ID addressing** (`target_agent_id` set): deliver to specific
+    ///    process — error if terminal or not found (A2A Protocol pattern).
+    /// 2. **Session addressing** (session_index match): deliver to bound
+    ///    process — if terminal, clear binding and respawn transparently
+    ///    (AutoGen lazy instantiation pattern).
+    /// 3. **Name addressing** (fallback): lookup AgentRegistry by name, always
+    ///    spawn a new process (Anthropic spawn-new pattern).
+    async fn handle_user_message(&self, msg: InboundMessage, runtimes: &RuntimeTable) {
+        let span = info_span!(
+            "handle_user_message",
+            session_id = %msg.session_key,
+            user_id = %msg.user.0,
+            channel = ?msg.source.channel_type,
+            routing_path = tracing::field::Empty,
+        );
+        let _guard = span.enter();
+
+        let session_id = msg.session_key.clone();
+        let user = msg.user.clone();
+
+        self.delivery().register_stateless_endpoint(&msg);
+
+        // ----- Path 1: ID addressing (agent-to-agent) -----
+        if let Some(target_id) = msg.target_session_key {
+            span.record("routing_path", "id_addressing");
+            match self.process_table().get(target_id) {
+                Some(process) if process.state.is_terminal() => {
+                    let envelope = OutboundEnvelope::error(
+                        msg.id.clone(),
+                        user.clone(),
+                        session_id.clone(),
+                        "process_terminal",
+                        format!("process {} is {}", target_id, process.state),
+                    );
+                    if let Err(e) = self
+                        .event_queue()
+                        .try_push(KernelEventEnvelope::deliver(envelope))
+                    {
+                        error!(%e, "failed to push process-terminal error Deliver");
+                    }
+                    return;
+                }
+                Some(_) => {
+                    self.deliver_to_session(target_id, msg, runtimes).await;
+                    return;
+                }
+                None => {
+                    let envelope = OutboundEnvelope::error(
+                        msg.id.clone(),
+                        user.clone(),
+                        session_id.clone(),
+                        "process_not_found",
+                        format!("process not found: {target_id}"),
+                    );
+                    if let Err(e) = self
+                        .event_queue()
+                        .try_push(KernelEventEnvelope::deliver(envelope))
+                    {
+                        error!(%e, "failed to push process-not-found error Deliver");
+                    }
+                    return;
+                }
+            }
+        }
+
+        // ----- Path 2: Session addressing (external user) -----
+        let mut resume_session_id = None;
+        if let Some(process) = self.process_table().find_by_session(&session_id) {
+            span.record("routing_path", "session_addressing");
+            let aid = process.agent_id;
+
+            if process.state.is_terminal() {
+                // Terminal process — clear session binding, fall through to
+                // Path 3 (Name addressing) to spawn a replacement.
+                // We do NOT remove the process from the table here — the
+                // reaper (lazy cleanup in all_process_stats) handles that
+                // after the TTL expires.
+                info!(
+                    agent_id = %aid,
+                    session_id = %session_id,
+                    state = %process.state,
+                    "session-bound process terminal — clearing binding, will respawn"
+                );
+                if let Some(ref channel_sid) = process.channel_session_id {
+                    self.process_table().session_index_remove(channel_sid, aid);
+                }
+                resume_session_id = Some(process.session_id.clone());
+                // Fall through to Path 3 below.
+            } else {
+                self.deliver_to_session(aid, msg, runtimes).await;
+                return;
+            }
+        }
+
+        // ----- Path 3: Name addressing (always spawn new) -----
+        span.record("routing_path", "name_addressing");
+        let target_name = if let Some(name) = msg.target_session.as_deref() {
+            name.to_string()
+        } else {
+            self.default_agent_for_user(&msg.user).await
+        };
+
+        let manifest = if let Some(m) = self.agent_registry().get(&target_name) {
+            m
+        } else if target_name == Self::ADMIN_AGENT_NAME {
+            match self.resolve_manifest_for_auto_spawn().await {
+                Some(m) => m,
+                None => {
+                    error!(
+                        session_id = %session_id,
+                        "no model configured — cannot spawn root agent"
+                    );
+                    return;
+                }
+            }
+        } else {
+            warn!(
+                target_name = %target_name,
+                session_id = %session_id,
+                "unknown target agent"
+            );
+            let envelope = OutboundEnvelope::error(
+                msg.id.clone(),
+                user.clone(),
+                session_id.clone(),
+                "unknown_agent",
+                format!("unknown target agent: {target_name}"),
+            );
+            if let Err(e) = self
+                .event_queue()
+                .try_push(KernelEventEnvelope::deliver(envelope))
+            {
+                error!(%e, "failed to push unknown-agent error Deliver");
+            }
+            return;
+        };
+
+        let principal = Principal::user(user.0.clone());
+        match self
+            .handle_spawn_agent(
+                manifest,
+                msg.content.as_text(),
+                principal,
+                Some(session_id.clone()),
+                None,
+                resume_session_id,
+                runtimes,
+            )
+            .await
+        {
+            Ok(_aid) => {
+                // handle_spawn_agent pushes a synthetic UserMessage that will
+                // re-enter handle_user_message and be routed via Path 2.
+            }
+            Err(e) => {
+                error!(session_id = %session_id, error = %e, "failed to spawn agent");
+            }
+        }
+    }
+
+    /// Deliver a message to a live process: buffer if the process is paused
+    /// or busy (Running state), otherwise start a new LLM turn.
+    async fn deliver_to_session(
+        &self,
+        session_key: SessionKey,
+        msg: InboundMessage,
+        runtimes: &RuntimeTable,
+    ) {
+        let should_buffer = runtimes.with_mut(&session_key, |rt| {
+            if rt.paused {
+                rt.pause_buffer
+                    .push(KernelEventEnvelope::user_message(msg.clone()));
+                return true;
+            }
+            if let Some(p) = self.process_table().get(&session_key) {
+                if p.state == SessionState::Active {
+                    rt.pause_buffer
+                        .push(KernelEventEnvelope::user_message(msg.clone()));
+                    return true;
+                }
+            }
+            false
+        });
+        if should_buffer == Some(true) {
+            return;
+        }
+        self.start_llm_turn(agent_id, msg, runtimes).await;
+    }
+
+    /// Determine the default agent name for a user based on their role.
+    ///
+    /// - Root / Admin users -> "rara" (full-capability agent)
+    /// - Regular users -> "nana" (chat-only companion)
+    /// - Unknown users -> "nana" (safe default)
+    async fn default_agent_for_user(&self, user: &crate::process::principal::UserId) -> String {
+        use crate::process::principal::Role;
+
+        match self.security().resolve_user_role(user).await {
+            Role::Root | Role::Admin => Self::ADMIN_AGENT_NAME.to_string(),
+            Role::User => Self::USER_AGENT_NAME.to_string(),
+        }
+    }
+
+    /// Resolve a manifest for auto-spawning (when a user message arrives
+    /// with no existing process).
+    /// TODO: what?
+    async fn resolve_manifest_for_auto_spawn(&self) -> Option<crate::process::AgentManifest> {
+        let model = rara_domain_shared::settings::get_default_model(self.settings().as_ref()).await;
+        Some(crate::process::AgentManifest {
+            name: "io-agent".to_string(),
+            role: None,
+            description: "I/O bus agent".to_string(),
+            model,
+            system_prompt: "You are a helpful assistant.".to_string(),
+            soul_prompt: None,
+            provider_hint: None,
+            max_iterations: Some(25),
+            tools: vec![],
+            max_children: None,
+            max_context_tokens: None,
+            priority: crate::process::Priority::default(),
+            metadata: serde_json::Value::Null,
+            sandbox: None,
+        })
+    }
+
+    /// Start an LLM turn for the given agent, spawning the work as an async
+    /// task that pushes `TurnCompleted` back into the EventQueue when done.
+    #[tracing::instrument(skip_all, fields(session_key = %session_key, session_key = %msg.session_key))]
+    async fn start_llm_turn(
+        &self,
+        session_key: SessionKey,
+        msg: InboundMessage,
+        runtimes: &RuntimeTable,
+    ) {
+        /// RAII guard ensuring that `TurnCompleted` is always pushed and the
+        /// stream is always closed, even when the spawned turn task
+        /// panics or is cancelled.
+        ///
+        /// On normal completion the caller sets `completed = true` before the
+        /// guard is dropped; on abnormal exit `Drop` performs the
+        /// cleanup.
+        struct TurnGuard {
+            event_queue:    EventQueueRef,
+            stream_hub:     Arc<crate::io::stream::StreamHub>,
+            stream_id:      StreamId,
+            typing_refresh: Option<tokio::task::JoinHandle<()>>,
+            session_key:    SessionKey,
+            msg_id:         MessageId,
+            user:           crate::process::principal::UserId,
+            completed:      bool,
+        }
+
+        impl Drop for TurnGuard {
+            fn drop(&mut self) {
+                if !self.completed {
+                    // Abort typing refresh if still running.
+                    if let Some(handle) = self.typing_refresh.take() {
+                        handle.abort();
+                    }
+
+                    // Close stream so the forwarder stops.
+                    self.stream_hub.close(&self.stream_id);
+
+                    // Push a failed TurnCompleted so the process exits Running state.
+                    let event = KernelEventEnvelope::turn_completed(
+                        self.session_key,
+                        self.session_key.clone(),
+                        Err("turn task terminated unexpectedly".to_string()),
+                        self.msg_id.clone(),
+                        self.user.clone(),
+                    );
+                    if let Err(e) = self.event_queue.try_push(event) {
+                        error!(
+                            %e,
+                            session_key = %self.session_key,
+                            "TurnGuard: failed to push TurnCompleted on abnormal exit"
+                        );
+                    } else {
+                        warn!(
+                            session_key = %self.session_key,
+                            "TurnGuard: turn task exited abnormally, pushed TurnCompleted(Err)"
+                        );
+                    }
+                }
+            }
+        }
+
+        if !runtimes.contains(&session_key) {
+            warn!(session_key = %session_key, "runtime not found for LLM turn");
+            // Send error back to the user instead of silently dropping.
+            let envelope = OutboundEnvelope::error(
+                msg.id.clone(),
+                msg.user.clone(),
+                msg.session_key.clone(),
+                "runtime_not_found",
+                format!("agent runtime not found: {session_key}"),
+            );
+            if let Err(e) = self
+                .event_queue()
+                .try_push(KernelEventEnvelope::deliver(envelope))
+            {
+                error!(%e, "failed to push runtime-not-found error Deliver");
+            }
+            return;
+        }
+
+        let session_key = msg.session_key.clone();
+        let user = msg.user.clone();
+        let msg_id = msg.id.clone();
+
+        // Set state to Active.
+        let _ = self
+            .process_table()
+            .set_state(session_key, SessionState::Active);
+
+        // Send a typing / progress indicator so the user sees feedback
+        // while the LLM is thinking (e.g. Telegram "typing..." bubble).
+        let egress_session_key = self
+            .process_table()
+            .get(session_key)
+            .and_then(|p| p.channel_session_key.clone())
+            .unwrap_or_else(|| session_key.clone());
+        let _ =
+            self.event_queue()
+                .try_push(KernelEventEnvelope::deliver(OutboundEnvelope::progress(
+                    msg_id.clone(),
+                    user.clone(),
+                    egress_session_key.clone(),
+                    crate::io::types::stages::THINKING,
+                    None,
+                )));
+
+        // Record metrics.
+        if let Some(metrics) = self.process_table().get_metrics(&session_key) {
+            metrics.record_message();
+        }
+
+        // Apply context compaction + build history + append user message
+        // inside a single `with_mut` closure to minimize lock duration.
+        let user_text = msg.content.as_text();
+        let user_msg = ChatMessage::user(&user_text);
+
+        let turn_data = runtimes.with_mut(&session_key, |rt| {
+            // Swap out the conversation for async compaction, then put it
+            // back after compaction completes.
+            let conversation = std::mem::take(&mut rt.conversation);
+            (
+                conversation,
+                rt.max_context_tokens,
+                rt.handle.clone(),
+                rt.turn_cancel.clone(),
+            )
+        });
+
+        let Some((conversation, max_context_tokens, handle, turn_cancel)) = turn_data else {
+            warn!(session_key = %session_key, "runtime disappeared during LLM turn setup");
+            return;
+        };
+
+        // Apply context compaction (async).
+        let compaction_strategy = crate::compaction::SlidingWindowCompaction;
+        let compacted = crate::compaction::maybe_compact(
+            conversation,
+            max_context_tokens,
+            &compaction_strategy,
+        )
+        .await;
+
+        // Convert history to LLM format.
+        let history = {
+            let msgs = crate::agent_loop::build_llm_history(&compacted);
+            if msgs.is_empty() { None } else { Some(msgs) }
+        };
+
+        // Put compacted conversation back and append user message.
+        runtimes.with_mut(&session_key, |rt| {
+            rt.conversation = compacted;
+            rt.conversation.push(user_msg.clone());
+        });
+
+        // Persist in background to avoid blocking event loop.
+        {
+            let tape = self.tape_for(&session_key);
+            let user_msg = user_msg.clone();
+            tokio::spawn(async move {
+                if let Err(e) = tape
+                    .append_message(serde_json::to_value(&user_msg).unwrap_or_default())
+                    .await
+                {
+                    warn!(%e, "failed to persist user message to tape");
+                }
+            });
+        }
+
+        // Open stream.
+        let stream_handle = self.stream_hub().open(session_key.clone());
+
+        // Clone what we need for the spawned task.
+        let event_queue = self.event_queue().clone();
+        let stream_id = stream_handle.stream_id().clone();
+        let typing_session_key = egress_session_key;
+        let stream_hub_ref = Arc::clone(self.stream_hub());
+
+        // Capture parent span for the spawned task.
+        let parent_span = tracing::Span::current();
+
+        // Spawn async task for the LLM turn.
+        tokio::spawn(async move {
+            let turn_span = info_span!(
+                parent: &parent_span,
+                "agent_turn",
+                session_key = %session_key,
+                session_key = %session_key,
+                total_ms = tracing::field::Empty,
+                iterations = tracing::field::Empty,
+                tool_calls = tracing::field::Empty,
+            );
+            let _span_guard = turn_span.enter();
+            let start = std::time::Instant::now();
+
+            // Spawn a background task that refreshes the typing indicator every
+            // 4 seconds.  Telegram's `sendChatAction(typing)` expires after ~5s,
+            // so we re-send it periodically to keep the indicator visible while
+            // the LLM is reasoning.
+            let typing_refresh = {
+                let eq = event_queue.clone();
+                let sid = typing_session_key.clone();
+                let usr = user.clone();
+                let mid = msg_id.clone();
+                tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(4));
+                    interval.tick().await; // skip the immediate first tick
+                    loop {
+                        interval.tick().await;
+                        let _ =
+                            eq.try_push(KernelEventEnvelope::deliver(OutboundEnvelope::progress(
+                                mid.clone(),
+                                usr.clone(),
+                                sid.clone(),
+                                crate::io::types::stages::THINKING,
+                                None,
+                            )));
+                    }
+                })
+            };
+
+            // TurnGuard ensures cleanup on panic or cancellation.
+            let mut turn_guard = TurnGuard {
+                event_queue: event_queue.clone(),
+                stream_hub: Arc::clone(&stream_hub_ref),
+                stream_id: stream_id.clone(),
+                typing_refresh: Some(typing_refresh),
+                session_key,
+                session_key: session_key.clone(),
+                msg_id: msg_id.clone(),
+                user: user.clone(),
+                completed: false,
+            };
+
+            let turn_result = crate::agent_turn::run_inline_agent_loop(
+                &handle,
+                user_text,
+                history,
+                &stream_handle,
+                &turn_cancel,
+            )
+            .await;
+
+            // Stop the typing refresh loop now that the turn is done.
+            if let Some(handle) = turn_guard.typing_refresh.take() {
+                handle.abort();
+            }
+
+            // Record timing and result metrics on the span.
+            let elapsed = start.elapsed();
+            let elapsed_ms = elapsed.as_millis() as u64;
+            turn_span.record("total_ms", elapsed_ms);
+            if let Ok(ref result) = turn_result {
+                turn_span.record("iterations", result.iterations);
+                turn_span.record("tool_calls", result.tool_calls);
+            }
+
+            // Emit turn metrics before closing stream.
+            if let Ok(ref result) = turn_result {
+                stream_handle.emit(crate::io::stream::StreamEvent::TurnMetrics {
+                    duration_ms: elapsed_ms,
+                    iterations:  result.iterations,
+                    tool_calls:  result.tool_calls,
+                    model:       result.model.clone(),
+                });
+            }
+
+            // Close stream.
+            stream_hub_ref.close(&stream_id);
+
+            // Push TurnCompleted back into the event queue.
+            // Convert KernelError -> String at the event boundary because
+            // KernelEvent requires Clone but KernelError does not implement it.
+            let result = turn_result.map_err(|e| e.to_string());
+            let event =
+                KernelEventEnvelope::turn_completed(session_key, session_key, result, msg_id, user);
+            if let Err(e) = event_queue.try_push(event) {
+                error!(%e, session_key = %session_key, "failed to push TurnCompleted");
+            }
+
+            // Normal completion — disarm the guard.
+            turn_guard.completed = true;
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // handle_turn_completed
+    // -----------------------------------------------------------------------
+
+    /// Handle an LLM turn completion — persist result, deliver reply, drain
+    /// pause buffer.
+    #[tracing::instrument(skip_all, fields(session_key = %session_key,  success, iterations, tool_calls, reply_len))]
+    async fn handle_turn_completed(
+        &self,
+        session_key: SessionKey,
+        result: std::result::Result<crate::agent_turn::AgentTurnResult, String>,
+        in_reply_to: MessageId,
+        user: crate::process::principal::UserId,
+        runtimes: &RuntimeTable,
+    ) {
+        let span = tracing::Span::current();
+
+        if self
+            .process_table()
+            .get(session_key)
+            .map(|process| process.state.is_terminal())
+            .unwrap_or(false)
+        {
+            info!(
+                session_key = %session_key,
+                "ignoring turn completion for terminal process"
+            );
+            self.cleanup_process(session_key, runtimes).await;
+            return;
+        }
+
+        // Determine the egress session: use the channel_session_key if this
+        // process has one (root process), otherwise fall back to the
+        // process's own session. Subagents without a channel binding won't
+        // have egress delivery — their results flow back to the parent via
+        // ChildSessionDone.
+        let egress_session_key = self
+            .process_table()
+            .get(session_key)
+            .and_then(|p| p.channel_session_key.clone())
+            .unwrap_or_else(|| session_key.clone());
+
+        // Update metrics.
+        if let Some(metrics) = self.process_table().get_metrics(&session_key) {
+            metrics.touch().await;
+        }
+
+        // Track whether the turn errored so we can choose the right terminal
+        // state below (Completed vs Failed).
+        let mut turn_failed = false;
+
+        let agent_name = self
+            .process_table()
+            .get(session_key)
+            .map(|p| p.manifest.name.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        match result {
+            Ok(turn) if !turn.text.is_empty() => {
+                span.record("success", true);
+                span.record("iterations", turn.iterations);
+                span.record("tool_calls", turn.tool_calls);
+                span.record("reply_len", turn.text.len());
+
+                let estimated_input_tokens = turn
+                    .trace
+                    .input_text
+                    .as_deref()
+                    .map(|text| (text.len() as u64).saturating_div(4).max(1))
+                    .unwrap_or(0);
+                let estimated_output_tokens = (turn.text.len() as u64).saturating_div(4).max(1);
+                crate::metrics::record_turn_metrics(
+                    &agent_name,
+                    &turn.model,
+                    turn.trace.duration_ms,
+                    estimated_input_tokens,
+                    estimated_output_tokens,
+                );
+
+                // Store turn trace for observability.
+                self.process_table()
+                    .push_turn_trace(session_key, turn.trace.clone());
+
+                // Record metrics.
+                if let Some(metrics) = self.process_table().get_metrics(&session_key) {
+                    metrics.record_llm_call();
+                    metrics.record_tool_calls(turn.tool_calls as u64);
+                    let estimated_tokens = (turn.text.len() as u64).saturating_div(4).max(1);
+                    metrics.record_tokens(estimated_tokens);
+                }
+
+                // Persist assistant reply to the process's own session.
+                let assistant_msg = ChatMessage::assistant(&turn.text);
+                runtimes.with_mut(&session_key, |rt| {
+                    rt.conversation.push(assistant_msg.clone());
+                });
+                {
+                    let tape = self.tape_for(&session_key);
+                    if let Err(e) = tape
+                        .append_message(serde_json::to_value(&assistant_msg).unwrap_or_default())
+                        .await
+                    {
+                        warn!(%e, "failed to persist assistant message to tape");
+                    }
+                }
+
+                let result = AgentRunLoopResult {
+                    output:     turn.text.clone(),
+                    iterations: turn.iterations,
+                    tool_calls: turn.tool_calls,
+                };
+                let _ = self.process_table().set_result(session_key, result.clone());
+
+                // Push Deliver event for the reply — use egress session for routing.
+                let envelope = OutboundEnvelope::reply(
+                    in_reply_to,
+                    user.clone(),
+                    egress_session_key.clone(),
+                    crate::channel::types::MessageContent::Text(turn.text),
+                    vec![],
+                );
+                if let Err(e) = self
+                    .event_queue()
+                    .try_push(KernelEventEnvelope::deliver(envelope))
+                {
+                    error!(%e, "failed to push Deliver event");
+                }
+
+                info!(
+                    session_key = %session_key,
+                    iterations = result.iterations,
+                    tool_calls = result.tool_calls,
+                    reply_len = result.output.len(),
+                    "turn completed"
+                );
+
+                runtimes.with_mut(&session_key, |rt| {
+                    rt.last_result = Some(result);
+                });
+            }
+            Ok(turn) => {
+                span.record("success", true);
+                span.record("iterations", turn.iterations);
+                span.record("tool_calls", turn.tool_calls);
+                span.record("reply_len", 0u64);
+                info!(session_key = %session_key, "turn completed (empty result)");
+
+                // Store turn trace for observability.
+                self.process_table()
+                    .push_turn_trace(session_key, turn.trace.clone());
+
+                // Empty result — LLM call was made but produced no text.
+                if let Some(metrics) = self.process_table().get_metrics(&session_key) {
+                    metrics.record_llm_call();
+                    metrics.record_tool_calls(turn.tool_calls as u64);
+                }
+            }
+            Err(err_msg) => {
+                span.record("success", false);
+                turn_failed = err_msg != "interrupted by user";
+                warn!(session_key = %session_key, error = %err_msg, "turn completed (error)");
+
+                // Deliver error — use egress session for routing.
+                let envelope = OutboundEnvelope::error(
+                    in_reply_to,
+                    user.clone(),
+                    egress_session_key.clone(),
+                    "agent_error",
+                    err_msg,
+                );
+                if let Err(e) = self
+                    .event_queue()
+                    .try_push(KernelEventEnvelope::deliver(envelope))
+                {
+                    error!(%e, "failed to push error Deliver event");
+                }
+            }
+        }
+
+        // Session-centric model: sessions are long-lived. After each turn,
+        // the session transitions to Ready (idle) instead of a terminal state.
+        // The next user message will be routed to the same session via Path 2.
+
+        // Drain pause buffer — if the user sent messages while the turn was
+        // running, re-inject them so they start a new turn on this session.
+        let buffered = runtimes.drain_pause_buffer(&session_key);
+
+        // Transition to Ready (idle, awaiting next message).
+        let _ = self
+            .process_table()
+            .set_state(session_key, SessionState::Ready);
+
+        // Re-inject buffered events so they trigger a new turn on this session.
+        for event in buffered {
+            if let Err(e) = self.event_queue().try_push(event) {
+                warn!(%e, "failed to re-inject buffered event");
+            }
+        }
     }
 }

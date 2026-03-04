@@ -794,7 +794,7 @@ async fn handle_update(
         }
     };
 
-    let session_id = msg.session_id;
+    let session_id = msg.session_key;
     match handle.submit_message(msg) {
         Ok(()) => {
             // Spawn stream forwarder for progressive editMessageText.

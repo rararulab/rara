@@ -28,7 +28,7 @@ use crate::{
     audit::{AuditEvent, AuditFilter, AuditRef},
     device::DeviceRegistryRef,
     error::{KernelError, Result},
-    event::KernelEvent,
+    event::KernelEventEnvelope,
     io::{
         egress::EndpointRegistryRef,
         ingress::{IngressPipelineRef, RawPlatformMessage},
@@ -42,6 +42,7 @@ use crate::{
     },
     queue::EventQueueRef,
     security::SecurityRef,
+    session::SessionKey,
     tool::ToolRegistryRef,
 };
 
@@ -150,7 +151,8 @@ impl KernelHandle {
         parent_id: Option<AgentId>,
     ) -> Result<AgentId> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        let event = KernelEvent::spawn_agent(manifest, input, principal, parent_id, reply_tx);
+        let event =
+            KernelEventEnvelope::spawn_agent(manifest, input, principal, parent_id, reply_tx);
         self.event_queue
             .push(event)
             .map_err(|_| KernelError::SpawnFailed {
@@ -188,7 +190,7 @@ impl KernelHandle {
     /// contexts.
     pub fn send_signal(&self, target: AgentId, signal: Signal) -> Result<()> {
         self.event_queue
-            .try_push(KernelEvent::send_signal(target, signal))
+            .try_push(KernelEventEnvelope::send_signal(target, signal))
             .map_err(|_| KernelError::Other {
                 message: "event queue full for signal".into(),
             })
@@ -218,7 +220,7 @@ impl KernelHandle {
     /// contexts.
     pub fn submit_message(&self, msg: InboundMessage) -> Result<()> {
         self.event_queue
-            .try_push(KernelEvent::user_message(msg))
+            .try_push(KernelEventEnvelope::user_message(msg))
             .map_err(|_| KernelError::Other {
                 message: "event queue full for user message".into(),
             })
@@ -230,7 +232,7 @@ impl KernelHandle {
     /// contexts.
     pub fn shutdown(&self) -> Result<()> {
         self.event_queue
-            .try_push(KernelEvent::shutdown())
+            .try_push(KernelEventEnvelope::shutdown())
             .map_err(|_| KernelError::Other {
                 message: "event queue full for shutdown".into(),
             })
@@ -282,7 +284,7 @@ impl KernelHandle {
     ///
     /// Returns `None` if the process does not exist.
     pub async fn process_stats(&self, agent_id: &AgentId) -> Option<crate::process::ProcessStats> {
-        self.process_table.process_stats(*agent_id).await
+        self.process_table.stats(*agent_id).await
     }
 
     /// List detailed runtime statistics for all processes.
@@ -296,12 +298,7 @@ impl KernelHandle {
         let active = pt
             .list()
             .iter()
-            .filter(|p| {
-                matches!(
-                    p.state,
-                    SessionState::Active | SessionState::Ready
-                )
-            })
+            .filter(|p| matches!(p.state, SessionState::Active | SessionState::Ready))
             .count();
 
         let uptime_ms = Timestamp::now()
@@ -322,8 +319,8 @@ impl KernelHandle {
     }
 
     /// Get the detailed turn traces for a specific agent process.
-    pub fn get_process_turns(&self, agent_id: AgentId) -> Vec<crate::agent_turn::TurnTrace> {
-        self.process_table.get_turn_traces(agent_id)
+    pub fn get_process_turns(&self, session_key: SessionKey) -> Vec<crate::agent_turn::TurnTrace> {
+        self.process_table.get_turn_traces(session_key)
     }
 
     /// Query the audit log for events matching the given filter.

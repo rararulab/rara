@@ -114,7 +114,7 @@ impl Default for BootConfig {
                 vec![],
                 rara_paths::data_dir().join("agents"),
             )),
-            user_store:         Arc::new(NoopUserStore) as Arc<dyn UserStore>,
+            user_store:         Arc::new(NoopUserStore) as Arc<dyn UserStore>, // WHY ?
             session_index:      None,
             tape_store:         None,
             settings:           Arc::new(NoopSettingsProvider)

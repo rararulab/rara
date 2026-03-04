@@ -36,6 +36,7 @@ use crate::{
         principal::{Principal, Role, UserId},
         user::{Permission, UserStore, UserStoreRef},
     },
+    session::SessionKey,
 };
 
 // ---------------------------------------------------------------------------
@@ -65,7 +66,7 @@ pub enum ApprovalDecision {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApprovalRequest {
     pub id:           Uuid,
-    pub agent_id:     AgentId,
+    pub session_key:  SessionKey,
     pub tool_name:    String,
     pub tool_args:    serde_json::Value,
     pub summary:      String,

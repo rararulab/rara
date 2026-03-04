@@ -21,10 +21,8 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    channel::types::ChatMessage,
-    event::KernelEvent,
-    handle::process_handle::ProcessHandle,
-    process::{AgentId, AgentResult},
+    channel::types::ChatMessage, event::KernelEventEnvelope, handle::process_handle::ProcessHandle,
+    process::AgentRunLoopResult, session::SessionKey,
 };
 
 // ---------------------------------------------------------------------------
@@ -34,9 +32,12 @@ use crate::{
 /// Mutable runtime state for each agent process, managed by the kernel's
 /// event loop rather than by individual per-process tokio tasks.
 ///
-/// Stored separately from `SessionRuntime` (which lives in SessionTable and must
-/// be Clone) because it contains non-Clone types like `CancellationToken` and
-/// `Vec<KernelEvent>`.
+/// Stored separately from `SessionRuntime` (which lives in SessionTable and
+/// must be Clone) because it contains non-Clone types like `CancellationToken`
+/// and `Vec<KernelEvent>`.
+///
+/// We migration from the per agent process arch to sessionRuntime based
+/// architecture.
 pub(crate) struct ProcessRuntime {
     /// In-memory conversation history (ChatMessage list).
     pub conversation:       Vec<ChatMessage>,
@@ -51,7 +52,7 @@ pub(crate) struct ProcessRuntime {
     /// buffered in `pause_buffer` instead of being processed.
     pub paused:             bool,
     /// Buffered events received while the process was paused or busy.
-    pub pause_buffer:       Vec<KernelEvent>,
+    pub pause_buffer:       Vec<KernelEventEnvelope>,
     /// The ProcessHandle for this process (needed to run LLM turns).
     pub handle:             Arc<ProcessHandle>,
     /// Per-agent semaphore limiting concurrent child processes.
@@ -59,23 +60,23 @@ pub(crate) struct ProcessRuntime {
     /// Maximum context tokens for compaction.
     pub max_context_tokens: usize,
     /// Last successful result (for final output when process ends).
-    pub last_result:        Option<AgentResult>,
+    pub last_result:        Option<AgentRunLoopResult>,
     /// Global semaphore permit — dropped when this runtime is removed,
     /// automatically releasing one slot for new process spawns.
     pub _global_permit:     OwnedSemaphorePermit,
 }
 
 // ---------------------------------------------------------------------------
-// RuntimeTable — domain wrapper around DashMap<AgentId, ProcessRuntime>
+// RuntimeTable — domain wrapper around DashMap<SessionKey, ProcessRuntime>
 // ---------------------------------------------------------------------------
 
 /// Table of per-process runtime state, managed by the kernel event loop.
 ///
-/// Keyed by `AgentId`. Created when a process is spawned, removed when it
+/// Keyed by `SessionKey`. Created when a process is spawned, removed when it
 /// terminates. Wraps a `DashMap` with domain-specific methods for turn
 /// control, pause management, and generic access patterns.
 pub(crate) struct RuntimeTable {
-    inner: DashMap<AgentId, ProcessRuntime>,
+    inner: DashMap<SessionKey, ProcessRuntime>,
 }
 
 impl RuntimeTable {
@@ -87,21 +88,21 @@ impl RuntimeTable {
     }
 
     /// Insert a new process runtime entry.
-    pub fn insert(&self, id: AgentId, rt: ProcessRuntime) { self.inner.insert(id, rt); }
+    pub fn insert(&self, key: SessionKey, rt: ProcessRuntime) { self.inner.insert(key, rt); }
 
     /// Remove a process runtime entry, returning the key-value pair if it
     /// existed.
-    pub fn remove(&self, id: &AgentId) -> Option<(AgentId, ProcessRuntime)> {
-        self.inner.remove(id)
+    pub fn remove(&self, key: &SessionKey) -> Option<(SessionKey, ProcessRuntime)> {
+        self.inner.remove(key)
     }
 
     /// Check whether a runtime exists for the given agent.
-    pub fn contains(&self, id: &AgentId) -> bool { self.inner.contains_key(id) }
+    pub fn contains(&self, key: &SessionKey) -> bool { self.inner.contains_key(key) }
 
     // -- Turn control -------------------------------------------------------
 
     /// Cancel the current LLM turn for the given agent.
-    pub fn cancel_turn(&self, id: &AgentId) {
+    pub fn cancel_turn(&self, id: &SessionKey) {
         if let Some(rt) = self.inner.get(id) {
             rt.turn_cancel.cancel();
         }
@@ -110,7 +111,7 @@ impl RuntimeTable {
     /// Cancel the current turn and replace the token with a fresh one,
     /// returning the old token. Used by Signal::Interrupt so the next turn
     /// gets a fresh cancellation token.
-    pub fn cancel_and_refresh_turn(&self, id: &AgentId) {
+    pub fn cancel_and_refresh_turn(&self, id: &SessionKey) {
         if let Some(mut rt) = self.inner.get_mut(id) {
             rt.turn_cancel.cancel();
             rt.turn_cancel = CancellationToken::new();
@@ -118,35 +119,35 @@ impl RuntimeTable {
     }
 
     /// Cancel the process-level token (kills the entire process).
-    pub fn cancel_process(&self, id: &AgentId) {
+    pub fn cancel_process(&self, id: &SessionKey) {
         if let Some(rt) = self.inner.get(id) {
             rt.process_cancel.cancel();
         }
     }
 
     /// Clone the process-level cancellation token for the given agent.
-    pub fn clone_process_cancel(&self, id: &AgentId) -> Option<CancellationToken> {
+    pub fn clone_process_cancel(&self, id: &SessionKey) -> Option<CancellationToken> {
         self.inner.get(id).map(|rt| rt.process_cancel.clone())
     }
 
     // -- Pause management ---------------------------------------------------
 
     /// Set the paused flag for the given agent.
-    pub fn set_paused(&self, id: &AgentId, paused: bool) {
+    pub fn set_paused(&self, id: &SessionKey, paused: bool) {
         if let Some(mut rt) = self.inner.get_mut(id) {
             rt.paused = paused;
         }
     }
 
     /// Buffer an event for a paused process.
-    pub fn buffer_event(&self, id: &AgentId, event: KernelEvent) {
+    pub fn buffer_event(&self, id: &SessionKey, event: KernelEventEnvelope) {
         if let Some(mut rt) = self.inner.get_mut(id) {
             rt.pause_buffer.push(event);
         }
     }
 
     /// Drain the pause buffer, returning all buffered events.
-    pub fn drain_pause_buffer(&self, id: &AgentId) -> Vec<KernelEvent> {
+    pub fn drain_pause_buffer(&self, id: &SessionKey) -> Vec<KernelEventEnvelope> {
         if let Some(mut rt) = self.inner.get_mut(id) {
             std::mem::take(&mut rt.pause_buffer)
         } else {
@@ -157,7 +158,7 @@ impl RuntimeTable {
     // -- Generic access for complex operations ------------------------------
 
     /// Read-only access to a process runtime via closure.
-    pub fn with<F, R>(&self, id: &AgentId, f: F) -> Option<R>
+    pub fn with<F, R>(&self, id: &SessionKey, f: F) -> Option<R>
     where
         F: FnOnce(&ProcessRuntime) -> R,
     {
@@ -165,7 +166,7 @@ impl RuntimeTable {
     }
 
     /// Mutable access to a process runtime via closure.
-    pub fn with_mut<F, R>(&self, id: &AgentId, f: F) -> Option<R>
+    pub fn with_mut<F, R>(&self, id: &SessionKey, f: F) -> Option<R>
     where
         F: FnOnce(&mut ProcessRuntime) -> R,
     {

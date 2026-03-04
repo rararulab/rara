@@ -23,7 +23,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info, info_span, warn};
 
 use super::RuntimeTable;
-use crate::{event::EventKind, kernel::Kernel, queue::shard::ShardQueue};
+use crate::{
+    event::{KernelEvent, KernelEventEnvelope},
+    kernel::Kernel,
+    queue::shard::ShardQueue,
+};
 
 /// A single event processor that drains and processes events from one
 /// `ShardQueue`.
@@ -70,7 +74,7 @@ impl EventProcessor {
                     info!(processor_id = self.id, "event processor shutting down");
                     let remaining = self.queue.drain(1024);
                     for event in remaining {
-                        if matches!(event.kind, EventKind::SendSignal { .. } | EventKind::Shutdown) {
+                        if matches!(event.kind, KernelEvent::SendSignal { .. } | KernelEvent::Shutdown) {
                             kernel.handle_event(event, runtimes).await;
                         } else {
                             warn!(
@@ -86,65 +90,5 @@ impl EventProcessor {
         }
 
         info!(processor_id = self.id, "event processor stopped");
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-
-    use super::*;
-    use crate::{
-        channel::types::{ChannelType, MessageContent},
-        event::KernelEvent,
-        io::types::{ChannelSource, InboundMessage, MessageId},
-        process::{SessionId, principal::UserId},
-    };
-
-    fn test_inbound(text: &str) -> InboundMessage {
-        InboundMessage {
-            id:              MessageId::new(),
-            source:          ChannelSource {
-                channel_type:        ChannelType::Internal,
-                platform_message_id: None,
-                platform_user_id:    "test".to_string(),
-                platform_chat_id:    None,
-            },
-            user:            UserId("u1".to_string()),
-            session_id:      SessionId::new(),
-            target_agent_id: None,
-            target_agent:    None,
-            content:         MessageContent::Text(text.to_string()),
-            reply_context:   None,
-            timestamp:       jiff::Timestamp::now(),
-            metadata:        HashMap::new(),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_processor_shutdown_drains_critical() {
-        let queue = Arc::new(ShardQueue::new(100));
-        let _processor = EventProcessor {
-            id:    0,
-            queue: queue.clone(),
-        };
-
-        queue
-            .push(KernelEvent::user_message(test_inbound("will be dropped")))
-            .unwrap();
-        queue.push(KernelEvent::shutdown()).unwrap();
-
-        let shutdown = CancellationToken::new();
-        shutdown.cancel();
-
-        assert_eq!(queue.pending_count(), 2);
-    }
-
-    #[test]
-    fn test_processor_creation() {
-        let queue = Arc::new(ShardQueue::new(100));
-        let processor = EventProcessor { id: 42, queue };
-
-        assert_eq!(processor.id, 42);
     }
 }

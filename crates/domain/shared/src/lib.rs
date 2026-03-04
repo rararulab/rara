@@ -17,5 +17,4 @@
 //! Shared cross-domain ID definitions.
 
 pub mod convert;
-pub mod id;
 pub mod settings;

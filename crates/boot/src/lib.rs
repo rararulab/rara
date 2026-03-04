@@ -20,12 +20,10 @@
 //! endpoint registry, ingress pipeline).
 
 pub mod agentfs;
-pub mod audit;
 pub mod bus;
 pub mod components;
 pub mod composio;
 pub mod error;
-pub mod guard;
 pub mod kernel;
 pub mod llm_registry;
 pub mod manifests;

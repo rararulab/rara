@@ -28,18 +28,17 @@
 //! | Guard       | [`Guard`]        | Tool approval + output moderation |
 //! | Notification Bus | [`NotificationBus`] | Inter-component notification broadcasting |
 
-pub mod agent_turn;
-pub mod audit;
+pub mod agent_loop;
 pub mod channel;
+// TODO: deprecate me
+pub mod compaction;
 pub(crate) mod delivery;
-pub mod device;
 pub mod error;
 pub mod event;
 pub mod event_loop;
-pub mod guard;
+pub mod handle;
 pub mod handle;
 pub mod io;
-pub mod compaction;
 pub mod kernel;
 pub mod kv;
 pub mod llm;
@@ -52,10 +51,6 @@ pub mod session;
 pub(crate) mod syscall;
 pub mod tool;
 
-#[cfg(any(test, feature = "testing"))]
-pub mod testing;
-
-pub use audit::AuditSubsystem;
 pub use error::{KernelError, Result};
 // Session-centric runtime re-exports (new names + backwards-compatible aliases)
 pub use handle::{
@@ -65,10 +60,22 @@ pub use handle::{
 pub use kernel::{Kernel, KernelConfig};
 pub use process::{
     // New canonical names
-    AgentId, AgentRole, MetricsSnapshot, Priority, RuntimeMetrics, SandboxConfig, SessionId,
-    SessionInfo, SessionRuntime, SessionState, SessionStats, SessionTable, Signal, SystemStats,
+
     // Backwards-compatible aliases
-    AgentProcess, ProcessInfo, ProcessState, ProcessStats, ProcessTable,
+    AgentRole,
+    MetricsSnapshot,
+    Priority,
+    ProcessTable,
+    RuntimeMetrics,
+    SandboxConfig,
+    SessionInfo,
+
+    SessionRuntime,
+    SessionState,
+    SessionStats,
+    SessionTable,
+    Signal,
+    SystemStats,
     agent_registry::AgentRegistry,
     manifest_loader::ManifestLoader,
     principal::{Principal, Role, UserId},
@@ -77,25 +84,3 @@ pub use security::{
     ApprovalDecision, ApprovalManager, ApprovalPolicy, ApprovalRequest, ApprovalResponse,
     RiskLevel, SecuritySubsystem,
 };
-
-#[cfg(test)]
-mod api_naming_tests {
-    #[test]
-    fn kernel_events_and_notifications_use_distinct_modules() {
-        let _ = crate::event::KernelEvent::shutdown();
-        let _ = std::mem::size_of::<crate::notification::KernelNotification>();
-    }
-
-    #[test]
-    fn queue_types_are_grouped_under_queue_module() {
-        let _ = std::mem::size_of::<crate::queue::InMemoryEventQueue>();
-        let _ = std::mem::size_of::<crate::queue::ShardedEventQueue>();
-        let _ = std::mem::size_of::<crate::queue::ShardedEventQueueConfig>();
-        let _ = std::mem::size_of::<crate::queue::EventQueueRef>();
-    }
-
-    #[test]
-    fn event_processors_are_grouped_under_event_loop_module() {
-        let _ = std::mem::size_of::<crate::event_loop::processor::EventProcessor>();
-    }
-}

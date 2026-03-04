@@ -1,17 +1,3 @@
-// Copyright 2025 Rararulab
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 //! Strongly-typed domain identifiers.
 //!
 //! Each aggregate root gets its own newtype wrapper around [`uuid::Uuid`] so
@@ -20,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[macro_export]
 macro_rules! define_id {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
@@ -52,6 +39,12 @@ macro_rules! define_id {
             pub fn into_inner(self) -> Uuid {
                 self.0
             }
+
+            /// Try to parse an identifier from a string, returning an error on
+            /// invalid UUID.
+            pub fn try_from_raw(raw: &str) -> Result<Self, uuid::Error> {
+                uuid::Uuid::parse_str(raw).map(Self)
+            }
         }
 
         impl Default for $name {
@@ -61,28 +54,3 @@ macro_rules! define_id {
         }
     };
 }
-
-define_id!(
-    /// Unique identifier for a job source (e.g. LinkedIn, Indeed).
-    JobSourceId
-);
-
-define_id!(
-    /// Unique identifier for a resume version.
-    ResumeId
-);
-
-define_id!(
-    /// Unique identifier for a job application.
-    ApplicationId
-);
-
-define_id!(
-    /// Unique identifier for an interview.
-    InterviewId
-);
-
-define_id!(
-    /// Unique identifier for a scheduler task.
-    SchedulerTaskId
-);

@@ -26,20 +26,19 @@ use snafu::ResultExt;
 use tracing::debug_span;
 
 use crate::{
+    SessionInfo,
     audit::{AuditEvent, AuditEventType, AuditRef, MemoryOp},
     error::{KernelError, Result},
-    event::Syscall,
+    event::{Syscall, SyscallEnvelope},
     event_loop::runtime::RuntimeTable,
     io::pipe::{self, PipeEntry, PipeRegistry},
     kernel::KernelConfig,
-    kv::SharedKv,
+    kv::{KvScope, SharedKv},
     llm::DriverRegistryRef,
-    kv::KvScope,
     notification::NotificationBusRef,
-    process::{
-        AgentId, ProcessInfo, ProcessTable, agent_registry::AgentRegistryRef, principal::Principal,
-    },
+    process::{ProcessTable, agent_registry::AgentRegistryRef, principal::Principal},
     security::SecurityRef,
+    session::SessionKey,
     tool::ToolRegistryRef,
 };
 
@@ -85,71 +84,56 @@ impl SyscallDispatcher {
         }
     }
 
-    // -- Accessors for KernelHandle backward compatibility ------------------
-
-    /// Access the shared KV store.
-    pub fn shared_kv(&self) -> &SharedKv { &self.shared_kv }
-
-    /// Access the pipe registry.
-    pub fn pipe_registry(&self) -> &PipeRegistry { &self.pipe_registry }
-
-    /// Access the driver registry.
-    pub fn driver_registry(&self) -> &DriverRegistryRef { &self.driver_registry }
-
-    /// Access the tool registry.
-    pub fn tool_registry(&self) -> &ToolRegistryRef { &self.tool_registry }
-
-    /// Access the event bus.
-    pub fn event_bus(&self) -> &NotificationBusRef { &self.event_bus }
-
-    /// Access the kernel config.
-    pub fn config(&self) -> &KernelConfig { &self.config }
-
     // -- Dispatch -----------------------------------------------------------
 
     /// Handle a syscall from a ProcessHandle.
     ///
     /// All business logic lives here, executed by the kernel event loop.
+    /// TODO: implement dispatch by using `syscallEnvelope` to route to more
+    /// specific handlers (e.g. `handle_mem_syscall`, `handle_pipe_syscall`,
+    /// etc.) for better organization and readability.
     pub async fn dispatch(
         &self,
-        syscall: Syscall,
+        syscall: SyscallEnvelope,
         process_table: &ProcessTable,
         runtimes: &RuntimeTable,
         security: &SecurityRef,
         audit: &AuditRef,
         agent_registry: &AgentRegistryRef,
     ) {
+        let syscall_sender = syscall.session_key();
+        let syscall = syscall.payload;
         let syscall_type: &'static str = (&syscall).into();
         crate::metrics::SYSCALL_TOTAL
             .with_label_values(&[syscall_type])
             .inc();
-        let syscall_agent_id = syscall.agent_id();
+        let syscall_session_key = syscall.session_key();
         let span = debug_span!(
             "handle_syscall",
             syscall_type,
-            agent_id = %syscall_agent_id,
+            session_key = %syscall_session_key,
         );
         let _guard = span.enter();
 
         match syscall {
-            Syscall::QueryStatus { target, reply_tx } => {
+            Syscall::QueryStatus { reply_tx } => {
                 let result = process_table
-                    .get(target)
-                    .map(|p| ProcessInfo::from(&p))
+                    .get(syscall_sender)
+                    .map(|p| SessionInfo::from(&p))
                     .ok_or(KernelError::ProcessNotFound {
-                        id: target.to_string(),
+                        id: syscall_sender.to_string(),
                     });
                 let _ = reply_tx.send(result);
             }
 
-            Syscall::QueryChildren { parent, reply_tx } => {
-                let children = process_table.children_of(parent);
+            Syscall::QueryChildren { reply_tx } => {
+                let children = process_table.children_of(syscall_sender);
                 let _ = reply_tx.send(children);
             }
 
             Syscall::MemStore {
-                agent_id,
-                session_id,
+                session_key,
+                session_key: session_id, // WHAT ?
                 principal,
                 key,
                 value,
@@ -158,8 +142,7 @@ impl SyscallDispatcher {
                 let result = self
                     .do_mem_store(
                         self.config.memory_quota_per_agent,
-                        agent_id,
-                        &session_id,
+                        session_key,
                         &principal,
                         &key,
                         value,
@@ -169,18 +152,13 @@ impl SyscallDispatcher {
                 let _ = reply_tx.send(result);
             }
 
-            Syscall::MemRecall {
-                agent_id,
-                key,
-                reply_tx,
-            } => {
-                let namespaced = format!("agent:{}:{}", agent_id.0, key);
+            Syscall::MemRecall { key, reply_tx } => {
+                let namespaced = format!("session:{}:{}", syscall_sender, key);
                 let result = Ok(self.shared_kv.get(&namespaced).await);
                 let _ = reply_tx.send(result);
             }
 
             Syscall::SharedStore {
-                agent_id,
                 principal,
                 scope,
                 key,
@@ -188,46 +166,37 @@ impl SyscallDispatcher {
                 reply_tx,
             } => {
                 let result = self
-                    .do_shared_store(agent_id, &principal, &scope, &key, value)
+                    .do_shared_store(syscall_sender, &principal, &scope, &key, value)
                     .await;
                 let _ = reply_tx.send(result);
             }
 
             Syscall::SharedRecall {
-                agent_id,
                 principal,
                 scope,
                 key,
                 reply_tx,
             } => {
                 let result = self
-                    .do_shared_recall(agent_id, &principal, &scope, &key)
+                    .do_shared_recall(syscall_sender, &principal, &scope, &key)
                     .await;
                 let _ = reply_tx.send(result);
             }
 
-            Syscall::CreatePipe {
-                owner,
-                target,
-                reply_tx,
-            } => {
+            Syscall::CreatePipe { target, reply_tx } => {
                 let (writer, reader) = pipe::pipe(64);
                 self.pipe_registry.register(
                     writer.pipe_id().clone(),
                     PipeEntry {
-                        owner,
-                        reader: Some(target),
+                        owner:      syscall_sender,
+                        reader:     Some(target),
                         created_at: Timestamp::now(),
                     },
                 );
                 let _ = reply_tx.send(Ok((writer, reader)));
             }
 
-            Syscall::CreateNamedPipe {
-                owner,
-                name,
-                reply_tx,
-            } => {
+            Syscall::CreateNamedPipe { name, reply_tx } => {
                 if self.pipe_registry.resolve_name(&name).is_some() {
                     let _ = reply_tx.send(Err(KernelError::Other {
                         message: format!("named pipe already exists: {name}").into(),
@@ -240,23 +209,19 @@ impl SyscallDispatcher {
                     name,
                     pipe_id,
                     PipeEntry {
-                        owner,
-                        reader: None,
+                        owner:      syscall_sender,
+                        reader:     None,
                         created_at: Timestamp::now(),
                     },
                 );
                 let _ = reply_tx.send(Ok((writer, reader)));
             }
 
-            Syscall::ConnectPipe {
-                connector,
-                name,
-                reply_tx,
-            } => {
+            Syscall::ConnectPipe { name, reply_tx } => {
                 let result = match self.pipe_registry.resolve_name(&name) {
                     Some(pipe_id) => match self.pipe_registry.take_parked_reader(&pipe_id) {
                         Some(reader) => {
-                            self.pipe_registry.set_reader(&pipe_id, connector);
+                            self.pipe_registry.set_reader(&pipe_id, syscall_sender);
                             Ok(reader)
                         }
                         None => Err(KernelError::Other {
@@ -283,7 +248,6 @@ impl SyscallDispatcher {
             }
 
             Syscall::RequestApproval {
-                agent_id,
                 principal: _,
                 tool_name,
                 summary,
@@ -293,7 +257,7 @@ impl SyscallDispatcher {
                 let policy = approval.policy();
                 let req = crate::security::ApprovalRequest {
                     id: uuid::Uuid::new_v4(),
-                    agent_id,
+                    session_key: syscall_sender,
                     tool_name: tool_name.clone(),
                     tool_args: serde_json::json!({"summary": &summary}),
                     summary,
@@ -312,13 +276,12 @@ impl SyscallDispatcher {
             }
 
             Syscall::CheckGuardBatch {
-                agent_id,
                 session_id,
                 checks,
                 reply_tx,
             } => {
                 let (user_id, session_uuid) = process_table
-                    .get(agent_id)
+                    .get(syscall_session_key)
                     .map(|proc| {
                         (
                             proc.principal.user_id.0.clone(),
@@ -328,9 +291,9 @@ impl SyscallDispatcher {
                     .unwrap_or_else(|| (String::new(), session_id.to_string()));
 
                 let ctx = crate::guard::GuardContext {
-                    agent_id:   agent_id.0,
-                    user_id:    uuid::Uuid::parse_str(&user_id).unwrap_or(uuid::Uuid::nil()),
-                    session_id: uuid::Uuid::parse_str(&session_uuid).unwrap_or(uuid::Uuid::nil()),
+                    session_key: syscall_session_key,
+                    user_id:     uuid::Uuid::parse_str(&user_id).unwrap_or(uuid::Uuid::nil()),
+                    session_id:  uuid::Uuid::parse_str(&session_uuid).unwrap_or(uuid::Uuid::nil()),
                 };
 
                 let security = Arc::clone(security);
@@ -340,19 +303,25 @@ impl SyscallDispatcher {
                 });
             }
 
-            Syscall::GetManifest { agent_id, reply_tx } => {
+            Syscall::GetManifest {
+                session_key,
+                reply_tx,
+            } => {
                 let result = process_table
-                    .get(agent_id)
+                    .get(session_key)
                     .map(|p| p.manifest.clone())
                     .ok_or(KernelError::ProcessNotFound {
-                        id: agent_id.to_string(),
+                        id: session_key.to_string(),
                     });
                 let _ = reply_tx.send(result);
             }
 
-            Syscall::GetToolRegistry { agent_id, reply_tx } => {
+            Syscall::GetToolRegistry {
+                session_key,
+                reply_tx,
+            } => {
                 let mut registry = self.tool_registry.as_ref().clone();
-                if let Some(syscall_tool) = runtimes.with(&agent_id, |rt| {
+                if let Some(syscall_tool) = runtimes.with(&session_key, |rt| {
                     crate::handle::syscall_tool::SyscallTool::new(
                         Arc::clone(&rt.handle),
                         Arc::clone(agent_registry),
@@ -363,37 +332,40 @@ impl SyscallDispatcher {
                 let _ = reply_tx.send(Arc::new(registry));
             }
 
-            Syscall::ResolveDriver { agent_id, reply_tx } => {
-                let result = match process_table.get(agent_id) {
+            Syscall::ResolveDriver {
+                session_key,
+                reply_tx,
+            } => {
+                let result = match process_table.get(session_key) {
                     Some(process) => self.driver_registry.resolve(
                         &process.manifest.name,
                         process.manifest.provider_hint.as_deref(),
                         process.manifest.model.as_deref(),
                     ),
                     None => Err(KernelError::ProcessNotFound {
-                        id: agent_id.to_string(),
+                        id: session_key.to_string(),
                     }),
                 };
                 let _ = reply_tx.send(result);
             }
 
             Syscall::PublishEvent {
-                agent_id,
+                session_key,
                 event_type,
                 payload: _,
             } => {
                 self.event_bus
                     .publish(crate::notification::KernelNotification::ToolExecuted {
-                        agent_id:  agent_id.0,
-                        tool_name: format!("event:{event_type}"),
-                        success:   true,
-                        timestamp: Timestamp::now(),
+                        session_key: session_key.0,
+                        tool_name:   format!("event:{event_type}"),
+                        success:     true,
+                        timestamp:   Timestamp::now(),
                     })
                     .await;
             }
 
             Syscall::RecordToolCall {
-                agent_id,
+                session_key,
                 tool_name,
                 args,
                 result,
@@ -401,12 +373,19 @@ impl SyscallDispatcher {
                 duration_ms,
             } => {
                 let agent_name = process_table
-                    .get(agent_id)
+                    .get(session_key)
                     .map(|p| p.manifest.name)
                     .unwrap_or_else(|| "unknown".to_string());
                 crate::metrics::record_turn_tool_call(&agent_name, &tool_name);
                 audit
-                    .record_tool_call(agent_id, &tool_name, &args, &result, success, duration_ms)
+                    .record_tool_call(
+                        session_key,
+                        &tool_name,
+                        &args,
+                        &result,
+                        success,
+                        duration_ms,
+                    )
                     .await;
             }
         }
@@ -420,24 +399,23 @@ impl SyscallDispatcher {
     async fn do_mem_store(
         &self,
         memory_quota: usize,
-        agent_id: AgentId,
-        session_id: &crate::process::SessionId,
+        session_key: SessionKey,
         principal: &Principal,
         key: &str,
         value: serde_json::Value,
         audit: &AuditRef,
     ) -> Result<()> {
-        let namespaced = format!("agent:{}:{}", agent_id.0, key);
+        let namespaced = format!("agent:{}:{}", session_key.0, key);
 
         // Check quota before inserting — only if this is a new key.
         if !self.shared_kv.contains_key(&namespaced).await {
             let max = memory_quota;
             if max > 0 {
-                let prefix = format!("agent:{}:", agent_id.0);
+                let prefix = format!("agent:{}:", session_key.0);
                 let count = self.shared_kv.count_prefix(&prefix).await;
                 if count >= max {
                     return Err(KernelError::MemoryQuotaExceeded {
-                        agent_id: agent_id.to_string(),
+                        session_key: session_key.to_string(),
                         current: count,
                         max,
                     });
@@ -453,8 +431,8 @@ impl SyscallDispatcher {
         // Audit: MemoryAccess (Store)
         audit.record(AuditEvent {
             timestamp: Timestamp::now(),
-            agent_id,
-            session_id: session_id.clone(),
+            session_key,
+            session_key: session_id.clone(),
             user_id: principal.user_id.clone(),
             event_type: AuditEventType::MemoryAccess {
                 operation: MemoryOp::Store,
@@ -468,7 +446,7 @@ impl SyscallDispatcher {
 
     /// Validate scope permissions for shared memory operations.
     fn check_scope_permission(
-        agent_id: AgentId,
+        session_key: SessionKey,
         principal: &Principal,
         scope: &KvScope,
     ) -> Result<()> {
@@ -479,17 +457,17 @@ impl SyscallDispatcher {
                         reason: format!(
                             "agent {} (role {:?}) cannot access {:?} scope — requires Root or \
                              Admin",
-                            agent_id, principal.role, scope,
+                            session_key, principal.role, scope,
                         ),
                     });
                 }
             }
             KvScope::Agent(target_id) => {
-                if *target_id != agent_id.0 && !principal.is_admin() {
+                if *target_id != session_key.0 && !principal.is_admin() {
                     return Err(KernelError::MemoryScopeDenied {
                         reason: format!(
                             "agent {} cannot access agent {}'s scope — not admin",
-                            agent_id, target_id,
+                            session_key, target_id,
                         ),
                     });
                 }
@@ -510,13 +488,13 @@ impl SyscallDispatcher {
     /// Store a value in a shared (scoped) memory namespace.
     async fn do_shared_store(
         &self,
-        agent_id: AgentId,
+        session_key: SessionKey,
         principal: &Principal,
         scope: &KvScope,
         key: &str,
         value: serde_json::Value,
     ) -> Result<()> {
-        Self::check_scope_permission(agent_id, principal, scope)?;
+        Self::check_scope_permission(session_key, principal, scope)?;
         let scoped = Self::scoped_key(scope, key);
         self.shared_kv
             .set(&scoped, value)
@@ -528,12 +506,12 @@ impl SyscallDispatcher {
     /// Recall a value from a shared (scoped) memory namespace.
     async fn do_shared_recall(
         &self,
-        agent_id: AgentId,
+        session_key: SessionKey,
         principal: &Principal,
         scope: &KvScope,
         key: &str,
     ) -> Result<Option<serde_json::Value>> {
-        Self::check_scope_permission(agent_id, principal, scope)?;
+        Self::check_scope_permission(session_key, principal, scope)?;
         let scoped = Self::scoped_key(scope, key);
         Ok(self.shared_kv.get(&scoped).await)
     }

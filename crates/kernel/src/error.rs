@@ -16,12 +16,14 @@ use base::shared_string::SharedString;
 use snafu::Snafu;
 use uuid::Uuid;
 
+use crate::session::SessionKey;
+
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub))]
 pub enum KernelError {
-    /// Agent not found in registry.
-    #[snafu(display("agent not found: {id}"))]
-    AgentNotFound { id: Uuid },
+    /// Session runtime not found.
+    #[snafu(display("session runtime not found: {key}"))]
+    SessionRuntimeNotFound { key: SessionKey },
 
     /// Agent name already registered.
     #[snafu(display("agent already exists: {name}"))]

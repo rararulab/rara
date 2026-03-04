@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use serde::Serialize;
 use tokio::sync::broadcast;
 
-use super::{EventQueue, EventQueueRef, KernelEvent};
+use super::{EventQueue, EventQueueRef, KernelEventEnvelope};
 use crate::{event::KernelEventCommonFields, io::types::BusError};
 
 /// Observable payload derived from the canonical [`KernelEvent`] definition.
@@ -49,7 +49,7 @@ impl ObservableEventQueue {
 
 #[async_trait]
 impl EventQueue for ObservableEventQueue {
-    fn push(&self, event: KernelEvent) -> Result<(), BusError> {
+    fn push(&self, event: KernelEventEnvelope) -> Result<(), BusError> {
         let observed = ObservableKernelEvent::from_event(&event);
         self.inner.push(event)?;
         if let Some(observed) = observed {
@@ -58,7 +58,7 @@ impl EventQueue for ObservableEventQueue {
         Ok(())
     }
 
-    fn try_push(&self, event: KernelEvent) -> Result<(), BusError> {
+    fn try_push(&self, event: KernelEventEnvelope) -> Result<(), BusError> {
         let observed = ObservableKernelEvent::from_event(&event);
         self.inner.try_push(event)?;
         if let Some(observed) = observed {
@@ -67,7 +67,7 @@ impl EventQueue for ObservableEventQueue {
         Ok(())
     }
 
-    fn drain(&self, max: usize) -> Vec<KernelEvent> { self.inner.drain(max) }
+    fn drain(&self, max: usize) -> Vec<KernelEventEnvelope> { self.inner.drain(max) }
 
     async fn wait(&self) { self.inner.wait().await; }
 
@@ -90,7 +90,7 @@ impl std::fmt::Debug for ObservableEventQueue {
 }
 
 impl ObservableKernelEvent {
-    fn from_event(event: &KernelEvent) -> Option<Self> {
+    fn from_event(event: &KernelEventEnvelope) -> Option<Self> {
         let payload = serde_json::to_value(&event.kind).ok()?;
         Some(Self {
             common: event.common_fields(),
@@ -105,7 +105,7 @@ mod tests {
 
     use super::{ObservableEventQueue, ObservableKernelEvent};
     use crate::{
-        event::KernelEvent,
+        event::KernelEventEnvelope,
         process::{AgentId, Signal},
         queue::{EventQueue, InMemoryEventQueue},
     };
@@ -116,7 +116,7 @@ mod tests {
         let queue = ObservableEventQueue::new(inner, 8);
         let mut rx = queue.subscribe().unwrap();
 
-        queue.push(KernelEvent::shutdown()).unwrap();
+        queue.push(KernelEventEnvelope::shutdown()).unwrap();
 
         let received = rx.try_recv().unwrap();
         assert_eq!(received.common.event_type, "shutdown");
@@ -126,7 +126,7 @@ mod tests {
     #[test]
     fn subscribed_event_exposes_common_fields() {
         let agent_id = AgentId::new();
-        let event = KernelEvent::send_signal(agent_id, Signal::Pause);
+        let event = KernelEventEnvelope::send_signal(agent_id, Signal::Pause);
 
         let fields = event.common_fields();
 
@@ -138,7 +138,7 @@ mod tests {
 
     #[test]
     fn observed_event_contains_payload_and_common_fields() {
-        let observed = ObservableKernelEvent::from_event(&KernelEvent::shutdown()).unwrap();
+        let observed = ObservableKernelEvent::from_event(&KernelEventEnvelope::shutdown()).unwrap();
 
         assert_eq!(observed.common.event_type, "shutdown");
         assert_eq!(observed.event, serde_json::json!("Shutdown"));

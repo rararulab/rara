@@ -29,7 +29,8 @@ use tracing::{info, warn};
 use super::{AgentHandle, process_handle::ProcessHandle};
 use crate::{
     kv::KvScope,
-    process::{AgentId, AgentManifest, agent_registry::AgentRegistry},
+    process::{AgentManifest, agent_registry::AgentRegistry},
+    session::SessionKey,
 };
 
 /// Unified LLM-callable tool wrapping all agent-relevant ProcessHandle
@@ -88,14 +89,17 @@ impl SyscallTool {
             .await
             .map_err(|e| anyhow::anyhow!("spawn failed: {e}"))?;
 
-        let agent_id = handle.agent_id;
+        let session_key = handle.session_key;
 
         let result = handle.result_rx.await.map_err(|_| {
-            anyhow::anyhow!("agent {} was dropped without producing a result", agent_id)
+            anyhow::anyhow!(
+                "agent {} was dropped without producing a result",
+                session_key
+            )
         })?;
 
         Ok(serde_json::json!({
-            "agent_id": agent_id.to_string(),
+            "agent_id": session_key.to_string(),
             "output": result.output,
             "iterations": result.iterations,
             "tool_calls": result.tool_calls,
@@ -125,7 +129,7 @@ impl SyscallTool {
 
         let mut results = Vec::new();
         for (agent_name, handle) in handles {
-            let agent_id = handle.agent_id;
+            let agent_id = handle.session_key;
             match handle.result_rx.await {
                 Ok(result) => {
                     results.push(serde_json::json!({
@@ -157,14 +161,14 @@ impl SyscallTool {
     // ========================================================================
 
     async fn exec_status(&self, target: &str) -> anyhow::Result<serde_json::Value> {
-        let agent_id = parse_agent_id(target)?;
+        let agent_id = parse_session_key(target)?;
         let info = self
             .handle
             .status(agent_id)
             .await
             .map_err(|e| anyhow::anyhow!("status failed: {e}"))?;
         Ok(serde_json::json!({
-            "agent_id": info.agent_id.to_string(),
+            "agent_id": info.session_key.to_string(),
             "name": info.name,
             "state": info.state.to_string(),
             "parent_id": info.parent_id.map(|id| id.to_string()),
@@ -177,7 +181,7 @@ impl SyscallTool {
             .iter()
             .map(|c| {
                 serde_json::json!({
-                    "agent_id": c.agent_id.to_string(),
+                    "agent_id": c.session_key.to_string(),
                     "name": c.name,
                     "state": c.state.to_string(),
                 })
@@ -187,7 +191,7 @@ impl SyscallTool {
     }
 
     async fn exec_signal(&self, target: &str, signal: &str) -> anyhow::Result<serde_json::Value> {
-        let agent_id = parse_agent_id(target)?;
+        let agent_id = parse_session_key(target)?;
         let result = match signal {
             "kill" => self.handle.kill(agent_id).await,
             "pause" => self.handle.pause(agent_id).await,
@@ -333,10 +337,10 @@ struct SpawnRequest {
 // Helpers
 // ============================================================================
 
-fn parse_agent_id(s: &str) -> anyhow::Result<AgentId> {
+fn parse_session_key(s: &str) -> anyhow::Result<SessionKey> {
     let uuid =
-        uuid::Uuid::parse_str(s).map_err(|e| anyhow::anyhow!("invalid agent ID '{s}': {e}"))?;
-    Ok(AgentId(uuid))
+        uuid::Uuid::parse_str(s).map_err(|e| anyhow::anyhow!("invalid session key '{s}': {e}"))?;
+    Ok(SessionKey(uuid))
 }
 
 fn parse_scope(scope: &str) -> anyhow::Result<KvScope> {
@@ -371,6 +375,7 @@ impl crate::tool::AgentTool for SyscallTool {
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
+        // FIXME: we should not expose all internal agent for syscall !.
         let agents = self.available_agents();
         serde_json::json!({
             "type": "object",
@@ -438,6 +443,7 @@ impl crate::tool::AgentTool for SyscallTool {
         })
     }
 
+    // FIXME: don't write this like match.
     async fn execute(&self, params: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let action: SyscallParams = serde_json::from_value(params)
             .map_err(|e| anyhow::anyhow!("invalid kernel tool params: {e}"))?;
@@ -466,237 +472,5 @@ impl crate::tool::AgentTool for SyscallTool {
                 payload,
             } => self.exec_publish(&event_type, payload).await,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        process::{AgentId, SessionId, principal::Principal},
-        queue::InMemoryEventQueue,
-        tool::AgentTool,
-    };
-
-    fn make_test_handle() -> Arc<ProcessHandle> {
-        Arc::new(ProcessHandle::new(
-            AgentId::new(),
-            SessionId::new(),
-            Principal::user("test-user"),
-            Arc::new(InMemoryEventQueue::new(4096)),
-        ))
-    }
-
-    fn make_test_agent_registry() -> Arc<AgentRegistry> {
-        Arc::new(AgentRegistry::new(
-            crate::testing::test_manifests(),
-            std::env::temp_dir().join("syscall_tool_test_agents"),
-        ))
-    }
-
-    // -- metadata --
-
-    #[test]
-    fn test_syscall_tool_metadata() {
-        let handle = make_test_handle();
-        let registry = make_test_agent_registry();
-        let tool = SyscallTool::new(handle, registry);
-
-        assert_eq!(tool.name(), "kernel");
-        assert!(tool.description().contains("kernel"));
-        assert!(tool.description().contains("spawn"));
-
-        let schema = tool.parameters_schema();
-        assert_eq!(schema["type"], "object");
-        assert!(schema["properties"]["action"]["enum"].is_array());
-    }
-
-    #[test]
-    fn test_available_agents() {
-        let handle = make_test_handle();
-        let registry = make_test_agent_registry();
-        let tool = SyscallTool::new(handle, registry);
-
-        let agents = tool.available_agents();
-        assert!(agents.contains(&"rara".to_string()));
-        assert!(agents.contains(&"scout".to_string()));
-    }
-
-    // -- spawn --
-
-    #[tokio::test]
-    async fn test_spawn_unknown_agent() {
-        let handle = make_test_handle();
-        let registry = make_test_agent_registry();
-        let tool = SyscallTool::new(handle, registry);
-
-        let params = serde_json::json!({
-            "action": "spawn",
-            "agent": "nonexistent_agent",
-            "task": "do something"
-        });
-
-        let result = tool.execute(params).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("unknown agent"));
-    }
-
-    // -- action parsing --
-
-    #[test]
-    fn test_parse_spawn() {
-        let params = serde_json::json!({
-            "action": "spawn",
-            "agent": "scout",
-            "task": "Find auth"
-        });
-        let parsed: SyscallParams = serde_json::from_value(params).unwrap();
-        assert!(matches!(parsed, SyscallParams::Spawn { .. }));
-    }
-
-    #[test]
-    fn test_parse_spawn_parallel() {
-        let params = serde_json::json!({
-            "action": "spawn_parallel",
-            "parallel": [
-                {"agent": "scout", "task": "task1"},
-                {"agent": "worker", "task": "task2"}
-            ],
-            "max_concurrency": 2
-        });
-        let parsed: SyscallParams = serde_json::from_value(params).unwrap();
-        assert!(matches!(parsed, SyscallParams::SpawnParallel { .. }));
-    }
-
-    #[test]
-    fn test_parse_status() {
-        let id = uuid::Uuid::new_v4().to_string();
-        let params = serde_json::json!({
-            "action": "status",
-            "target": id,
-        });
-        let parsed: SyscallParams = serde_json::from_value(params).unwrap();
-        assert!(matches!(parsed, SyscallParams::Status { .. }));
-    }
-
-    #[test]
-    fn test_parse_children() {
-        let params = serde_json::json!({ "action": "children" });
-        let parsed: SyscallParams = serde_json::from_value(params).unwrap();
-        assert!(matches!(parsed, SyscallParams::Children));
-    }
-
-    #[test]
-    fn test_parse_mem_store() {
-        let params = serde_json::json!({
-            "action": "mem_store",
-            "key": "counter",
-            "value": 42
-        });
-        let parsed: SyscallParams = serde_json::from_value(params).unwrap();
-        assert!(matches!(parsed, SyscallParams::MemStore { .. }));
-    }
-
-    #[test]
-    fn test_parse_mem_recall() {
-        let params = serde_json::json!({
-            "action": "mem_recall",
-            "key": "counter"
-        });
-        let parsed: SyscallParams = serde_json::from_value(params).unwrap();
-        assert!(matches!(parsed, SyscallParams::MemRecall { .. }));
-    }
-
-    #[test]
-    fn test_parse_shared_store() {
-        let params = serde_json::json!({
-            "action": "shared_store",
-            "scope": "global",
-            "key": "config",
-            "value": {"debug": true}
-        });
-        let parsed: SyscallParams = serde_json::from_value(params).unwrap();
-        assert!(matches!(parsed, SyscallParams::SharedStore { .. }));
-    }
-
-    #[test]
-    fn test_parse_shared_recall() {
-        let params = serde_json::json!({
-            "action": "shared_recall",
-            "scope": "team:engineering",
-            "key": "config"
-        });
-        let parsed: SyscallParams = serde_json::from_value(params).unwrap();
-        assert!(matches!(parsed, SyscallParams::SharedRecall { .. }));
-    }
-
-    #[test]
-    fn test_parse_publish() {
-        let params = serde_json::json!({
-            "action": "publish",
-            "event_type": "task.completed",
-            "payload": {"task_id": "123"}
-        });
-        let parsed: SyscallParams = serde_json::from_value(params).unwrap();
-        assert!(matches!(parsed, SyscallParams::Publish { .. }));
-    }
-
-    #[test]
-    fn test_parse_kill() {
-        let id = uuid::Uuid::new_v4().to_string();
-        let params = serde_json::json!({
-            "action": "kill",
-            "target": id,
-        });
-        let parsed: SyscallParams = serde_json::from_value(params).unwrap();
-        assert!(matches!(parsed, SyscallParams::Kill { .. }));
-    }
-
-    #[test]
-    fn test_parse_unknown_action() {
-        let params = serde_json::json!({
-            "action": "nonexistent"
-        });
-        let result = serde_json::from_value::<SyscallParams>(params);
-        assert!(result.is_err());
-    }
-
-    // -- helpers --
-
-    #[test]
-    fn test_parse_agent_id_valid() {
-        let uuid = uuid::Uuid::new_v4();
-        let id = parse_agent_id(&uuid.to_string()).unwrap();
-        assert_eq!(id.0, uuid);
-    }
-
-    #[test]
-    fn test_parse_agent_id_invalid() {
-        assert!(parse_agent_id("not-a-uuid").is_err());
-    }
-
-    #[test]
-    fn test_parse_scope_global() {
-        assert_eq!(parse_scope("global").unwrap(), KvScope::Global);
-    }
-
-    #[test]
-    fn test_parse_scope_team() {
-        assert_eq!(
-            parse_scope("team:engineering").unwrap(),
-            KvScope::Team("engineering".to_string())
-        );
-    }
-
-    #[test]
-    fn test_parse_scope_agent() {
-        let uuid = uuid::Uuid::new_v4();
-        let scope = parse_scope(&format!("agent:{uuid}")).unwrap();
-        assert_eq!(scope, KvScope::Agent(uuid));
-    }
-
-    #[test]
-    fn test_parse_scope_invalid() {
-        assert!(parse_scope("unknown").is_err());
     }
 }

@@ -14,13 +14,13 @@
 
 //! Principal — the identity under which an agent process runs.
 
+use base::define_id;
 use serde::{Deserialize, Serialize};
 
 use super::user::{KernelUser, Permission};
 
 /// User identity.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct UserId(pub String);
+define_id!(UserId);
 
 impl std::fmt::Display for UserId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.0) }

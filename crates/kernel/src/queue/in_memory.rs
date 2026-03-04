@@ -35,7 +35,7 @@ use crate::io::types::BusError;
 /// Shared reference to an [`EventQueue`] implementation.
 pub type EventQueueRef = Arc<dyn EventQueue>;
 // Re-export the kernel event from the sibling module.
-pub use crate::event::{EventKind, EventPriority, KernelEvent};
+pub use crate::event::{KernelEvent, EventPriority, KernelEventEnvelope};
 
 // ---------------------------------------------------------------------------
 // EventQueue trait
@@ -52,13 +52,13 @@ pub use crate::event::{EventKind, EventPriority, KernelEvent};
 #[async_trait]
 pub trait EventQueue: Send + Sync + 'static {
     /// Push an event into the queue. Returns `BusError::Full` if at capacity.
-    fn push(&self, event: KernelEvent) -> Result<(), BusError>;
+    fn push(&self, event: KernelEventEnvelope) -> Result<(), BusError>;
 
     /// Non-async push (identical to `push` for in-memory queues).
-    fn try_push(&self, event: KernelEvent) -> Result<(), BusError>;
+    fn try_push(&self, event: KernelEventEnvelope) -> Result<(), BusError>;
 
     /// Drain up to `max` events from the queue, in priority order.
-    fn drain(&self, max: usize) -> Vec<KernelEvent>;
+    fn drain(&self, max: usize) -> Vec<KernelEventEnvelope>;
 
     /// Wait until events are available.
     async fn wait(&self);
@@ -102,11 +102,11 @@ impl InMemoryEventQueue {
 
 #[async_trait]
 impl EventQueue for InMemoryEventQueue {
-    fn push(&self, event: KernelEvent) -> Result<(), BusError> { self.inner.push(event) }
+    fn push(&self, event: KernelEventEnvelope) -> Result<(), BusError> { self.inner.push(event) }
 
-    fn try_push(&self, event: KernelEvent) -> Result<(), BusError> { self.inner.try_push(event) }
+    fn try_push(&self, event: KernelEventEnvelope) -> Result<(), BusError> { self.inner.try_push(event) }
 
-    fn drain(&self, max: usize) -> Vec<KernelEvent> { self.inner.drain(max) }
+    fn drain(&self, max: usize) -> Vec<KernelEventEnvelope> { self.inner.drain(max) }
 
     async fn wait(&self) { self.inner.wait().await }
 
