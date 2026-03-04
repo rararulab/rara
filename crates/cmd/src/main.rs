@@ -63,7 +63,6 @@ impl ServerArgs {
         // Load config first (Consul KV or env vars) so observability
         // settings are available before initialising the tracing subscriber.
         let config = AppConfig::new()
-            .await
             .whatever_context("Failed to load config")?;
 
         // Priority: Langfuse (OTLP + auth) > general OTLP endpoint > no OTLP.
@@ -137,7 +136,6 @@ struct ChatArgs {
 impl ChatArgs {
     async fn run(self) -> Result<(), Whatever> {
         let config = AppConfig::new()
-            .await
             .whatever_context("Failed to load config")?;
 
         // Minimal telemetry for CLI mode (no OTLP, console only).

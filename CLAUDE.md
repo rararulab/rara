@@ -19,7 +19,7 @@ Layer 1 (Extensions):   rara-git, rara-coding-task, rara-workspace, rara-backend
 Layer 0 (Foundation):   base, rara-error, rara-paths, rara-model, yunara-store
 ```
 
-Cross-cutting integrations: `rara-mcp`, `rara-composio`, `rara-codex-oauth`, `rara-k8s`, `rara-consul`
+Cross-cutting integrations: `rara-mcp`, `rara-composio`, `rara-codex-oauth`, `rara-k8s`
 
 Dependencies flow **downward only**. Never upward.
 
@@ -186,7 +186,7 @@ When user requests involve multiple independent changes, split into separate iss
 - Schema 变更必须创建**新迁移**，即使是修复上一个迁移的错误
 - 使用 `just migrate-add <scope>_<description>` 创建迁移（如 `chat_add_pinned`）
 - 本地数据库损坏时用 `just migrate-reset` 重建
-- **不要在 Rust 代码中硬编码数据库默认值** — 所有配置通过 Consul 或环境变量注入
+- **不要在 Rust 代码中硬编码数据库默认值** — 所有配置通过 YAML 配置文件注入（`~/.config/job/config.yaml`）
 
 ### Commit Style
 - Conventional commits: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`
@@ -230,4 +230,4 @@ When user requests involve multiple independent changes, split into separate iss
 - Do NOT forget to close issues after merge — `gh issue close` explicitly
 - Do NOT leave stale worktrees — clean up after every merge
 - Do NOT modify already-applied migration files — create a new migration instead
-- Do NOT hardcode database URLs or config defaults in Rust code — use Consul/env vars
+- Do NOT hardcode database URLs or config defaults in Rust code — use the YAML config file

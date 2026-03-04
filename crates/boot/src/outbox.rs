@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! PostgreSQL-backed [`OutboxStore`] implementation.
+//! SQLite-backed [`OutboxStore`] implementation.
 //!
 //! Stores [`OutboundEnvelope`]s durably so messages that cannot be delivered
 //! immediately (e.g., user offline) survive restarts and can be retried by a
 //! background drainer.
 //!
-//! The full [`OutboundEnvelope`] is serialized into the `target` JSONB column
+//! The full [`OutboundEnvelope`] is serialized into the `target` JSON column
 //! so that `drain_pending` can reconstruct the exact envelope without losing
 //! any fields. The `payload` column stores just the payload portion for
 //! potential ad-hoc querying. The `channel_type` TEXT column carries a
@@ -29,7 +29,7 @@ use rara_kernel::io::{
     bus::OutboxStore,
     types::{BusError, MessageId, OutboundEnvelope, OutboundRouting},
 };
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use tracing::warn;
 
 // -- DB row type (chrono at DB boundary) --------------------------------------
@@ -73,13 +73,13 @@ fn jiff_to_chrono(ts: jiff::Timestamp) -> chrono::DateTime<chrono::Utc> {
 
 // -- PgOutboxStore ------------------------------------------------------------
 
-/// PostgreSQL-backed durable outbox for [`OutboundEnvelope`]s.
+/// SQLite-backed durable outbox for [`OutboundEnvelope`]s.
 pub struct PgOutboxStore {
-    pool: PgPool,
+    pool: SqlitePool,
 }
 
 impl PgOutboxStore {
-    pub fn new(pool: PgPool) -> Self { Self { pool } }
+    pub fn new(pool: SqlitePool) -> Self { Self { pool } }
 }
 
 #[async_trait]
@@ -101,7 +101,7 @@ impl OutboxStore for PgOutboxStore {
 
         sqlx::query(
             "INSERT INTO kernel_outbox (id, channel_type, target, payload, status, created_at) \
-             VALUES ($1, $2, $3, $4, 0, $5)",
+             VALUES (?1, ?2, ?3, ?4, 0, ?5)",
         )
         .bind(&id)
         .bind(channel_type)
@@ -120,7 +120,7 @@ impl OutboxStore for PgOutboxStore {
     async fn drain_pending(&self, max: usize) -> Vec<OutboundEnvelope> {
         let rows = sqlx::query_as::<_, OutboxRow>(
             "SELECT id, channel_type, target, payload, status, created_at, delivered_at FROM \
-             kernel_outbox WHERE status = 0 ORDER BY created_at ASC LIMIT $1",
+             kernel_outbox WHERE status = 0 ORDER BY created_at ASC LIMIT ?1",
         )
         .bind(max as i64)
         .fetch_all(&self.pool)
@@ -158,7 +158,7 @@ impl OutboxStore for PgOutboxStore {
     }
 
     async fn mark_delivered(&self, id: &MessageId) -> Result<(), BusError> {
-        sqlx::query("UPDATE kernel_outbox SET status = 1, delivered_at = now() WHERE id = $1")
+        sqlx::query("UPDATE kernel_outbox SET status = 1, delivered_at = datetime('now') WHERE id = ?1")
             .bind(&id.0)
             .execute(&self.pool)
             .await

@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! PostgreSQL + JSONL file implementation of
+//! SQLite + JSONL file implementation of
 //! [`SessionRepository`](crate::repository::SessionRepository).
 //!
-//! Session metadata and channel bindings are stored in PostgreSQL.
+//! Session metadata and channel bindings are stored in SQLite.
 //! Messages are stored as append-only JSONL files on the local filesystem,
 //! managed by [`SessionStore`] which provides
 //! binary-indexed O(1) random access by sequence number.
@@ -24,7 +24,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use tracing::instrument;
 
 // ---------------------------------------------------------------------------
@@ -62,7 +62,7 @@ use crate::{
     types::{ChannelBinding, ChatMessage, SessionEntry, SessionKey},
 };
 
-/// Repository backed by PostgreSQL (sessions, bindings) and
+/// Repository backed by SQLite (sessions, bindings) and
 /// [`SessionStore`] (messages).
 ///
 /// # Message storage
@@ -70,7 +70,7 @@ use crate::{
 /// Each session's messages are managed by a [`SessionStore`] that maintains
 /// JSONL files with companion binary index files for efficient random access.
 pub struct PgSessionRepository {
-    pool:  PgPool,
+    pool:  SqlitePool,
     store: SessionStore,
 }
 
@@ -79,7 +79,7 @@ impl PgSessionRepository {
     ///
     /// `sessions_dir` is the directory where JSONL message files are stored.
     /// The directory is created if it does not exist.
-    pub async fn new(pool: PgPool, sessions_dir: impl Into<PathBuf>) -> Result<Self, SessionError> {
+    pub async fn new(pool: SqlitePool, sessions_dir: impl Into<PathBuf>) -> Result<Self, SessionError> {
         let store = SessionStore::new(sessions_dir).await?;
         Ok(Self { pool, store })
     }
@@ -122,11 +122,12 @@ impl From<ChannelBindingRow> for ChannelBinding {
 // Repository implementation
 // ---------------------------------------------------------------------------
 
-/// Check whether a `sqlx::Error` is a PostgreSQL unique-constraint violation
-/// (SQLSTATE 23505).
+/// Check whether a `sqlx::Error` is a SQLite unique-constraint violation
+/// (extended error code 2067).
 fn is_unique_violation(err: &sqlx::Error) -> bool {
     if let sqlx::Error::Database(db_err) = err {
-        return db_err.code().as_deref() == Some("23505");
+        // SQLite UNIQUE constraint violation
+        return db_err.code().as_deref() == Some("2067");
     }
     false
 }
@@ -140,7 +141,7 @@ impl crate::repository::SessionRepository for PgSessionRepository {
         let row = sqlx::query_as::<_, ChatSessionRow>(
             r"INSERT INTO chat_session
                    (key, title, model, system_prompt, message_count, preview, metadata, created_at, updated_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                RETURNING *",
         )
         .bind(entry.key.to_string())
@@ -168,7 +169,7 @@ impl crate::repository::SessionRepository for PgSessionRepository {
 
     #[instrument(skip(self))]
     async fn get_session(&self, key: &SessionKey) -> Result<Option<SessionEntry>, SessionError> {
-        let row = sqlx::query_as::<_, ChatSessionRow>("SELECT * FROM chat_session WHERE key = $1")
+        let row = sqlx::query_as::<_, ChatSessionRow>("SELECT * FROM chat_session WHERE key = ?1")
             .bind(key.to_string())
             .fetch_optional(&self.pool)
             .await?;
@@ -183,7 +184,7 @@ impl crate::repository::SessionRepository for PgSessionRepository {
         offset: i64,
     ) -> Result<Vec<SessionEntry>, SessionError> {
         let rows = sqlx::query_as::<_, ChatSessionRow>(
-            "SELECT * FROM chat_session ORDER BY updated_at DESC LIMIT $1 OFFSET $2",
+            "SELECT * FROM chat_session ORDER BY updated_at DESC LIMIT ?1 OFFSET ?2",
         )
         .bind(limit)
         .bind(offset)
@@ -197,9 +198,9 @@ impl crate::repository::SessionRepository for PgSessionRepository {
     async fn update_session(&self, entry: &SessionEntry) -> Result<SessionEntry, SessionError> {
         let row = sqlx::query_as::<_, ChatSessionRow>(
             r"UPDATE chat_session
-               SET title = $2, model = $3, system_prompt = $4,
-                   message_count = $5, preview = $6, metadata = $7
-               WHERE key = $1
+               SET title = ?2, model = ?3, system_prompt = ?4,
+                   message_count = ?5, preview = ?6, metadata = ?7
+               WHERE key = ?1
                RETURNING *",
         )
         .bind(entry.key.to_string())
@@ -220,7 +221,7 @@ impl crate::repository::SessionRepository for PgSessionRepository {
 
     #[instrument(skip(self))]
     async fn delete_session(&self, key: &SessionKey) -> Result<(), SessionError> {
-        let result = sqlx::query("DELETE FROM chat_session WHERE key = $1")
+        let result = sqlx::query("DELETE FROM chat_session WHERE key = ?1")
             .bind(key.to_string())
             .execute(&self.pool)
             .await?;
@@ -294,7 +295,7 @@ impl crate::repository::SessionRepository for PgSessionRepository {
 
         let now = Utc::now();
 
-        // Create the target session in PG.
+        // Create the target session in SQLite.
         let new_session = SessionEntry {
             key:           target_key.clone(),
             title:         source.title.map(|t| format!("{t} (fork)")),
@@ -318,7 +319,7 @@ impl crate::repository::SessionRepository for PgSessionRepository {
         let row = sqlx::query_as::<_, ChannelBindingRow>(
             r"INSERT INTO channel_binding
                    (channel_type, account, chat_id, session_key, created_at, updated_at)
-               VALUES ($1, $2, $3, $4, $5, $6)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                ON CONFLICT (channel_type, account, chat_id)
                DO UPDATE SET session_key = EXCLUDED.session_key
                RETURNING *",
@@ -344,7 +345,7 @@ impl crate::repository::SessionRepository for PgSessionRepository {
     ) -> Result<Option<ChannelBinding>, SessionError> {
         let row = sqlx::query_as::<_, ChannelBindingRow>(
             r"SELECT * FROM channel_binding
-               WHERE channel_type = $1 AND account = $2 AND chat_id = $3",
+               WHERE channel_type = ?1 AND account = ?2 AND chat_id = ?3",
         )
         .bind(channel_type)
         .bind(account)
@@ -363,7 +364,7 @@ impl crate::repository::SessionRepository for PgSessionRepository {
     ) -> Result<Option<ChannelBinding>, SessionError> {
         let row = sqlx::query_as::<_, ChannelBindingRow>(
             r"SELECT * FROM channel_binding
-               WHERE channel_type = $1 AND chat_id = $2
+               WHERE channel_type = ?1 AND chat_id = ?2
                ORDER BY updated_at DESC
                LIMIT 1",
         )
@@ -382,29 +383,12 @@ impl crate::repository::SessionRepository for PgSessionRepository {
 
 #[cfg(test)]
 mod tests {
-    use sqlx::postgres::PgPoolOptions;
-    use testcontainers::runners::AsyncRunner;
-    use testcontainers_modules::postgres::Postgres;
-
     use super::*;
     use crate::repository::SessionRepository;
 
-    /// Set up a real PostgreSQL container and apply migrations.
-    async fn setup() -> (
-        PgSessionRepository,
-        tempfile::TempDir,
-        testcontainers::ContainerAsync<Postgres>,
-    ) {
-        let container = Postgres::default().start().await.unwrap();
-        let host = container.get_host().await.unwrap();
-        let port = container.get_host_port_ipv4(5432).await.unwrap();
-        let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
-
-        let pool = PgPoolOptions::new()
-            .max_connections(5)
-            .connect(&url)
-            .await
-            .unwrap();
+    /// Set up an in-memory SQLite database and apply migrations.
+    async fn setup() -> (PgSessionRepository, tempfile::TempDir) {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
 
         sqlx::migrate!("../rara-model/migrations")
             .run(&pool)
@@ -416,7 +400,7 @@ mod tests {
             .await
             .unwrap();
 
-        (repo, tmp_dir, container)
+        (repo, tmp_dir)
     }
 
     fn make_session() -> SessionEntry {
@@ -440,7 +424,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_and_get_session() {
-        let (repo, _tmp, _container) = setup().await;
+        let (repo, _tmp) = setup().await;
 
         let entry = make_session();
         let key = entry.key;
@@ -455,7 +439,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_duplicate_session_returns_already_exists() {
-        let (repo, _tmp, _container) = setup().await;
+        let (repo, _tmp) = setup().await;
 
         let entry = make_session();
         repo.create_session(&entry).await.unwrap();
@@ -470,7 +454,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_sessions_ordered_by_updated_at() {
-        let (repo, _tmp, _container) = setup().await;
+        let (repo, _tmp) = setup().await;
 
         repo.create_session(&make_session()).await.unwrap();
         repo.create_session(&make_session()).await.unwrap();
@@ -482,7 +466,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_session() {
-        let (repo, _tmp, _container) = setup().await;
+        let (repo, _tmp) = setup().await;
 
         let entry = make_session();
         let mut created = repo.create_session(&entry).await.unwrap();
@@ -496,7 +480,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_session() {
-        let (repo, _tmp, _container) = setup().await;
+        let (repo, _tmp) = setup().await;
 
         let entry = make_session();
         let key = entry.key;
@@ -509,7 +493,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_nonexistent_session_returns_not_found() {
-        let (repo, _tmp, _container) = setup().await;
+        let (repo, _tmp) = setup().await;
 
         let result = repo.delete_session(&SessionKey::new()).await;
         assert!(matches!(result.unwrap_err(), SessionError::NotFound { .. }));
@@ -521,7 +505,7 @@ mod tests {
 
     #[tokio::test]
     async fn append_and_read_messages() {
-        let (repo, _tmp, _container) = setup().await;
+        let (repo, _tmp) = setup().await;
         let entry = make_session();
         let key = entry.key;
         repo.create_session(&entry).await.unwrap();
@@ -559,7 +543,7 @@ mod tests {
 
     #[tokio::test]
     async fn clear_messages() {
-        let (repo, _tmp, _container) = setup().await;
+        let (repo, _tmp) = setup().await;
         let entry = make_session();
         let key = entry.key;
         repo.create_session(&entry).await.unwrap();
@@ -583,7 +567,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_session_removes_messages() {
-        let (repo, _tmp, _container) = setup().await;
+        let (repo, _tmp) = setup().await;
         let entry = make_session();
         let key = entry.key;
         repo.create_session(&entry).await.unwrap();
@@ -604,7 +588,7 @@ mod tests {
     }
     #[tokio::test]
     async fn fork_invalid_seq_returns_error() {
-        let (repo, _tmp, _container) = setup().await;
+        let (repo, _tmp) = setup().await;
         let entry = make_session();
         let key = entry.key;
         repo.create_session(&entry).await.unwrap();
@@ -625,7 +609,7 @@ mod tests {
 
     #[tokio::test]
     async fn bind_and_get_channel() {
-        let (repo, _tmp, _container) = setup().await;
+        let (repo, _tmp) = setup().await;
         let entry = make_session();
         let key = entry.key;
         repo.create_session(&entry).await.unwrap();
@@ -653,7 +637,7 @@ mod tests {
 
     #[tokio::test]
     async fn bind_channel_upsert() {
-        let (repo, _tmp, _container) = setup().await;
+        let (repo, _tmp) = setup().await;
 
         let entry1 = make_session();
         let key1 = entry1.key;
@@ -694,7 +678,7 @@ mod tests {
 
     #[tokio::test]
     async fn cascade_delete_removes_bindings() {
-        let (repo, _tmp, _container) = setup().await;
+        let (repo, _tmp) = setup().await;
         let entry = make_session();
         let key = entry.key;
         repo.create_session(&entry).await.unwrap();

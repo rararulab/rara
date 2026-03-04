@@ -172,40 +172,28 @@ impl SchedulerService {
 mod tests {
     use std::sync::Arc;
 
-    use sqlx::postgres::PgPoolOptions;
-    use testcontainers::runners::AsyncRunner;
-    use testcontainers_modules::postgres::Postgres;
+    use sqlx::SqlitePool;
 
     use super::{super::pg_repository::PgSchedulerRepository, *};
 
-    async fn setup_pool() -> (sqlx::PgPool, testcontainers::ContainerAsync<Postgres>) {
-        let container = Postgres::default().start().await.unwrap();
-        let host = container.get_host().await.unwrap();
-        let port = container.get_host_port_ipv4(5432).await.unwrap();
-        let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
-        let pool = PgPoolOptions::new()
-            .max_connections(5)
-            .connect(&url)
-            .await
-            .unwrap();
-
+    async fn setup_pool() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         sqlx::migrate!("../../rara-model/migrations")
             .run(&pool)
             .await
             .unwrap();
-
-        (pool, container)
+        pool
     }
 
-    async fn make_service() -> (SchedulerService, testcontainers::ContainerAsync<Postgres>) {
-        let (pool, container) = setup_pool().await;
+    async fn make_service() -> SchedulerService {
+        let pool = setup_pool().await;
         let repo = Arc::new(PgSchedulerRepository::new(pool));
-        (SchedulerService::new(repo), container)
+        SchedulerService::new(repo)
     }
 
     #[tokio::test]
     async fn test_register_task() {
-        let (service, _container) = make_service().await;
+        let service = make_service().await;
 
         let task = service
             .register_task(CreateTaskRequest {
@@ -222,7 +210,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_duplicate_name_fails() {
-        let (service, _container) = make_service().await;
+        let service = make_service().await;
 
         service
             .register_task(CreateTaskRequest {
@@ -243,7 +231,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_enable_disable_task() {
-        let (service, _container) = make_service().await;
+        let service = make_service().await;
 
         let task = service
             .register_task(CreateTaskRequest {
@@ -262,7 +250,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_record_execution() {
-        let (service, _container) = make_service().await;
+        let service = make_service().await;
 
         let task = service
             .register_task(CreateTaskRequest {
@@ -285,7 +273,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_record_failed_execution_increments_failure_count() {
-        let (service, _container) = make_service().await;
+        let service = make_service().await;
 
         let task = service
             .register_task(CreateTaskRequest {
@@ -312,7 +300,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_run_history() {
-        let (service, _container) = make_service().await;
+        let service = make_service().await;
 
         let task = service
             .register_task(CreateTaskRequest {
@@ -342,7 +330,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_tasks_with_filter() {
-        let (service, _container) = make_service().await;
+        let service = make_service().await;
 
         service
             .register_task(CreateTaskRequest {
@@ -375,7 +363,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_task() {
-        let (service, _container) = make_service().await;
+        let service = make_service().await;
 
         let task = service
             .register_task(CreateTaskRequest {

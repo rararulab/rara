@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 /// Create a [`CodingTaskService`](rara_coding_task::service::CodingTaskService).
 pub fn init_coding_task_service(
-    pool: sqlx::PgPool,
+    pool: sqlx::SqlitePool,
     settings: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
     default_repo_url: String,
 ) -> rara_coding_task::service::CodingTaskService {

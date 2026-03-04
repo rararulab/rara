@@ -39,7 +39,7 @@ impl BackendState {
     /// The caller is expected to have loaded `SettingsSvc` already (since the
     /// settings provider is also needed by `RaraState`).
     pub async fn init(
-        pool: sqlx::PgPool,
+        pool: sqlx::SqlitePool,
         session_repo: Arc<dyn rara_sessions::repository::SessionRepository>,
         settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
         settings_svc: crate::settings::SettingsSvc,

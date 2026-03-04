@@ -23,9 +23,9 @@ pub mod types;
 pub use engine::{CronEngine, TaskExecutor};
 pub use router::{HistoryQuery, TaskListQuery, routes};
 
-/// Wire up the scheduler service with a PostgreSQL repository.
+/// Wire up the scheduler service with a SQLite repository.
 #[must_use]
-pub fn wire_scheduler_service(pool: sqlx::PgPool) -> service::SchedulerService {
+pub fn wire_scheduler_service(pool: sqlx::SqlitePool) -> service::SchedulerService {
     let repo: std::sync::Arc<dyn repository::SchedulerRepository> =
         std::sync::Arc::new(pg_repository::PgSchedulerRepository::new(pool));
     service::SchedulerService::new(repo)

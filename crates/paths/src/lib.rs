@@ -262,6 +262,14 @@ pub fn skills_dir() -> &'static PathBuf {
     SKILLS_DIR.get_or_init(|| config_dir().join("skills"))
 }
 
+/// Returns the path to the main YAML configuration file.
+///
+/// Resolves to `<config_dir>/config.yaml`.
+pub fn config_file() -> &'static PathBuf {
+    static CONFIG_FILE: OnceLock<PathBuf> = OnceLock::new();
+    CONFIG_FILE.get_or_init(|| config_dir().join("config.yaml"))
+}
+
 /// Returns the path to the git workspaces directory for coding tasks.
 pub fn workspaces_dir() -> &'static PathBuf {
     static WORKSPACES_DIR: OnceLock<PathBuf> = OnceLock::new();

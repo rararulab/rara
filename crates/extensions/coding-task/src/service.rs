@@ -370,7 +370,7 @@ fn truncate(s: &str, max: usize) -> String {
 
 /// Convenience constructor for wiring in the app composition root.
 pub fn wire(
-    pool: sqlx::PgPool,
+    pool: sqlx::SqlitePool,
     workspace_manager: WorkspaceManager,
     settings: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
     default_repo_url: String,

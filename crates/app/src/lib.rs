@@ -503,7 +503,7 @@ impl AppConfig {
     async fn try_build_telegram(
         settings_svc: &rara_backend_admin::settings::SettingsSvc,
         contact_repo: &rara_channels::telegram::contacts::repository::ContactRepository,
-        pool: sqlx::PgPool,
+        pool: sqlx::SqlitePool,
         main_service_http_base: &str,
     ) -> Result<Option<Arc<rara_channels::telegram::TelegramAdapter>>, Whatever> {
         use rara_domain_shared::settings::{SettingsProvider, keys};
@@ -663,7 +663,7 @@ async fn shutdown_signal(shutdown_rx: oneshot::Receiver<()>) {
 // ---------------------------------------------------------------------------
 
 /// Bridges [`ContactTracker`](rara_channels::telegram::contacts::ContactTracker)
-/// to the PostgreSQL-backed [`ContactRepository`].
+/// to the SQLite-backed [`ContactRepository`].
 struct ContactRepoTracker {
     repo: rara_channels::telegram::contacts::repository::ContactRepository,
 }
@@ -685,7 +685,7 @@ mod tests {
         AppConfig::builder()
             .database(
                 DatabaseConfig::builder()
-                    .database_url("postgres://postgres:postgres@localhost:5432/rara_test")
+                    .database_url("sqlite::memory:")
                     .migration_dir("crates/rara-model/migrations")
                     .build(),
             )

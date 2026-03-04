@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! PostgreSQL implementation of [`CodingTaskRepository`].
+//! SQLite implementation of [`CodingTaskRepository`].
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::{
@@ -51,14 +51,14 @@ pub(crate) struct CodingTaskRow {
     pub completed_at:   Option<DateTime<Utc>>,
 }
 
-/// PostgreSQL-backed repository for coding tasks.
+/// SQLite-backed repository for coding tasks.
 #[derive(Clone)]
 pub struct PgCodingTaskRepository {
-    pool: PgPool,
+    pool: SqlitePool,
 }
 
 impl PgCodingTaskRepository {
-    pub fn new(pool: PgPool) -> Self { Self { pool } }
+    pub fn new(pool: SqlitePool) -> Self { Self { pool } }
 }
 
 #[async_trait]
@@ -67,7 +67,7 @@ impl CodingTaskRepository for PgCodingTaskRepository {
         let row = sqlx::query_as::<_, CodingTaskRow>(
             r#"
             INSERT INTO coding_task (id, status, agent_type, repo_url, branch, prompt, session_key, tmux_session, workspace_path)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
             RETURNING *
             "#,
         )
@@ -87,7 +87,7 @@ impl CodingTaskRepository for PgCodingTaskRepository {
     }
 
     async fn get(&self, id: Uuid) -> Result<CodingTask, CodingTaskError> {
-        let row = sqlx::query_as::<_, CodingTaskRow>("SELECT * FROM coding_task WHERE id = $1")
+        let row = sqlx::query_as::<_, CodingTaskRow>("SELECT * FROM coding_task WHERE id = ?1")
             .bind(id)
             .fetch_optional(&self.pool)
             .await
@@ -121,7 +121,7 @@ impl CodingTaskRepository for PgCodingTaskRepository {
         status: CodingTaskStatus,
     ) -> Result<Vec<CodingTask>, CodingTaskError> {
         let rows = sqlx::query_as::<_, CodingTaskRow>(
-            "SELECT * FROM coding_task WHERE status = $1 ORDER BY created_at DESC",
+            "SELECT * FROM coding_task WHERE status = ?1 ORDER BY created_at DESC",
         )
         .bind(status as u8 as i16)
         .fetch_all(&self.pool)
@@ -140,7 +140,7 @@ impl CodingTaskRepository for PgCodingTaskRepository {
         id: Uuid,
         status: CodingTaskStatus,
     ) -> Result<(), CodingTaskError> {
-        let result = sqlx::query("UPDATE coding_task SET status = $1 WHERE id = $2")
+        let result = sqlx::query("UPDATE coding_task SET status = ?1 WHERE id = ?2")
             .bind(status as u8 as i16)
             .bind(id)
             .execute(&self.pool)
@@ -163,7 +163,7 @@ impl CodingTaskRepository for PgCodingTaskRepository {
         workspace_path: &str,
         tmux_session: &str,
     ) -> Result<(), CodingTaskError> {
-        sqlx::query("UPDATE coding_task SET workspace_path = $1, tmux_session = $2 WHERE id = $3")
+        sqlx::query("UPDATE coding_task SET workspace_path = ?1, tmux_session = ?2 WHERE id = ?3")
             .bind(workspace_path)
             .bind(tmux_session)
             .bind(id)
@@ -184,7 +184,7 @@ impl CodingTaskRepository for PgCodingTaskRepository {
         pr_url: &str,
         pr_number: i32,
     ) -> Result<(), CodingTaskError> {
-        sqlx::query("UPDATE coding_task SET pr_url = $1, pr_number = $2 WHERE id = $3")
+        sqlx::query("UPDATE coding_task SET pr_url = ?1, pr_number = ?2 WHERE id = ?3")
             .bind(pr_url)
             .bind(pr_number)
             .bind(id)
@@ -205,7 +205,7 @@ impl CodingTaskRepository for PgCodingTaskRepository {
         output: &str,
         exit_code: Option<i32>,
     ) -> Result<(), CodingTaskError> {
-        sqlx::query("UPDATE coding_task SET output = $1, exit_code = $2 WHERE id = $3")
+        sqlx::query("UPDATE coding_task SET output = ?1, exit_code = ?2 WHERE id = ?3")
             .bind(output)
             .bind(exit_code)
             .bind(id)
@@ -221,7 +221,7 @@ impl CodingTaskRepository for PgCodingTaskRepository {
     }
 
     async fn update_error(&self, id: Uuid, error: &str) -> Result<(), CodingTaskError> {
-        sqlx::query("UPDATE coding_task SET error = $1 WHERE id = $2")
+        sqlx::query("UPDATE coding_task SET error = ?1 WHERE id = ?2")
             .bind(error)
             .bind(id)
             .execute(&self.pool)
@@ -236,7 +236,7 @@ impl CodingTaskRepository for PgCodingTaskRepository {
     }
 
     async fn set_started(&self, id: Uuid) -> Result<(), CodingTaskError> {
-        sqlx::query("UPDATE coding_task SET started_at = NOW() WHERE id = $1")
+        sqlx::query("UPDATE coding_task SET started_at = datetime('now') WHERE id = ?1")
             .bind(id)
             .execute(&self.pool)
             .await
@@ -250,7 +250,7 @@ impl CodingTaskRepository for PgCodingTaskRepository {
     }
 
     async fn set_completed(&self, id: Uuid) -> Result<(), CodingTaskError> {
-        sqlx::query("UPDATE coding_task SET completed_at = NOW() WHERE id = $1")
+        sqlx::query("UPDATE coding_task SET completed_at = datetime('now') WHERE id = ?1")
             .bind(id)
             .execute(&self.pool)
             .await

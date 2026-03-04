@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! PostgreSQL-backed skill metadata cache.
+//! SQLite-backed skill metadata cache.
 //!
 //! Provides fast startup by caching parsed skill metadata in the database.
 //! Filesystem remains the source of truth; the cache is updated on hash
@@ -22,7 +22,7 @@ use std::{collections::HashMap, path::PathBuf};
 
 use chrono::{DateTime, Utc};
 use snafu::ResultExt;
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 
 use crate::{
     error::{InvalidInputSnafu, Result, SqlxSnafu},
@@ -41,7 +41,7 @@ pub(crate) struct SkillCacheRow {
     pub homepage:      Option<String>,
     pub license:       Option<String>,
     pub compatibility: Option<String>,
-    pub allowed_tools: Vec<String>,
+    pub allowed_tools: String,
     pub dockerfile:    Option<String>,
     pub requires:      serde_json::Value,
     pub path:          String,
@@ -50,9 +50,9 @@ pub(crate) struct SkillCacheRow {
     pub cached_at:     DateTime<Utc>,
 }
 
-/// PostgreSQL-backed skill cache (backing store, not a SkillRegistry).
-pub struct PgSkillCache {
-    pool: PgPool,
+/// SQLite-backed skill cache (backing store, not a SkillRegistry).
+pub struct SqliteSkillCache {
+    pool: SqlitePool,
 }
 
 /// Cached skill with hash for change detection.
@@ -62,8 +62,8 @@ pub struct CachedSkill {
     pub content_hash: String,
 }
 
-impl PgSkillCache {
-    pub fn new(pool: PgPool) -> Self { Self { pool } }
+impl SqliteSkillCache {
+    pub fn new(pool: SqlitePool) -> Self { Self { pool } }
 
     /// Load all cached skill metadata from the database.
     pub async fn load_all(&self) -> Result<HashMap<String, CachedSkill>> {
@@ -89,13 +89,20 @@ impl PgSkillCache {
             .build()
         })?;
 
+        let allowed_tools_json = serde_json::to_string(&meta.allowed_tools).map_err(|e| {
+            InvalidInputSnafu {
+                message: format!("failed to serialize allowed_tools: {e}"),
+            }
+            .build()
+        })?;
+
         let source_i16: i16 = meta.source.map(|s| s as u8 as i16).unwrap_or(-1);
 
         sqlx::query(
             r#"INSERT INTO skill_cache
                (name, description, homepage, license, compatibility, allowed_tools,
                 dockerfile, requires, path, source, content_hash, cached_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, datetime('now'))
                ON CONFLICT (name) DO UPDATE SET
                  description   = EXCLUDED.description,
                  homepage      = EXCLUDED.homepage,
@@ -107,7 +114,7 @@ impl PgSkillCache {
                  path          = EXCLUDED.path,
                  source        = EXCLUDED.source,
                  content_hash  = EXCLUDED.content_hash,
-                 cached_at     = NOW()
+                 cached_at     = datetime('now')
             "#,
         )
         .bind(&meta.name)
@@ -115,7 +122,7 @@ impl PgSkillCache {
         .bind(&meta.homepage)
         .bind(&meta.license)
         .bind(&meta.compatibility)
-        .bind(&meta.allowed_tools)
+        .bind(&allowed_tools_json)
         .bind(&meta.dockerfile)
         .bind(&requires_json)
         .bind(meta.path.to_string_lossy().as_ref())
@@ -130,7 +137,7 @@ impl PgSkillCache {
 
     /// Remove a skill from the cache by name.
     pub async fn remove(&self, name: &str) -> Result<()> {
-        sqlx::query("DELETE FROM skill_cache WHERE name = $1")
+        sqlx::query("DELETE FROM skill_cache WHERE name = ?1")
             .bind(name)
             .execute(&self.pool)
             .await
@@ -150,13 +157,13 @@ impl PgSkillCache {
 
 // ── Background sync ─────────────────────────────────────────────────────────
 
-/// Spawn a background task that populates `registry` from the PG cache,
+/// Spawn a background task that populates `registry` from the SQLite cache,
 /// then incrementally syncs with the filesystem using content hashing.
 ///
 /// 1. **Phase 1** — load cached metadata from DB → fill registry (fast).
 /// 2. **Phase 2** — FS scan + SHA-256 hash comparison → upsert changed skills.
 /// 3. **Phase 3** — garbage-collect stale cache entries no longer on disk.
-pub fn spawn_background_sync(pool: PgPool, registry: crate::registry::InMemoryRegistry) {
+pub fn spawn_background_sync(pool: SqlitePool, registry: crate::registry::InMemoryRegistry) {
     use std::collections::HashSet;
 
     use tracing::{info, warn};
@@ -164,10 +171,10 @@ pub fn spawn_background_sync(pool: PgPool, registry: crate::registry::InMemoryRe
     use crate::discover::{FsSkillDiscoverer, SkillDiscoverer};
 
     tokio::spawn(async move {
-        let cache = PgSkillCache::new(pool);
+        let cache = SqliteSkillCache::new(pool);
         let discoverer = FsSkillDiscoverer::new(FsSkillDiscoverer::default_paths());
 
-        // Phase 1: load from PG cache (fast startup)
+        // Phase 1: load from SQLite cache (fast startup)
         let cached = match cache.load_all().await {
             Ok(c) => {
                 let count = c.len();
@@ -258,6 +265,14 @@ impl CachedSkill {
             .build()
         })?;
 
+        let allowed_tools: Vec<String> =
+            serde_json::from_str(&row.allowed_tools).map_err(|e| {
+                InvalidInputSnafu {
+                    message: format!("failed to deserialize allowed_tools: {e}"),
+                }
+                .build()
+            })?;
+
         Ok(Self {
             metadata:     SkillMetadata {
                 name: row.name,
@@ -265,7 +280,7 @@ impl CachedSkill {
                 homepage: row.homepage,
                 license: row.license,
                 compatibility: row.compatibility,
-                allowed_tools: row.allowed_tools,
+                allowed_tools,
                 dockerfile: row.dockerfile,
                 requires,
                 path: PathBuf::from(row.path),

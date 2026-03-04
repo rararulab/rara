@@ -15,11 +15,11 @@
 //! Skill registry initialization.
 
 use rara_skills::registry::InMemoryRegistry;
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use tracing::info;
 
 /// Create a skill registry and spawn PostgreSQL cache background sync.
-pub fn init_skill_registry(pool: PgPool) -> InMemoryRegistry {
+pub fn init_skill_registry(pool: SqlitePool) -> InMemoryRegistry {
     let registry = InMemoryRegistry::new();
     rara_skills::cache::spawn_background_sync(pool, registry.clone());
     info!("skill registry initialized with background sync");

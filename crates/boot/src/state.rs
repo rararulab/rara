@@ -53,7 +53,7 @@ impl RaraState {
     /// This mirrors the kernel-related initialization that was previously in
     /// `AppState::init()` in the workers crate.
     pub async fn init(
-        pool: sqlx::PgPool,
+        pool: sqlx::SqlitePool,
         object_store: Operator,
         settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
         mem0_base_url: String,

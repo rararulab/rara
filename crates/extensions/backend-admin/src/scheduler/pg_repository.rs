@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! PostgreSQL-backed implementation of
+//! SQLite-backed implementation of
 //! [`super::repository::SchedulerRepository`].
 
 use std::fmt::Write;
@@ -20,7 +20,7 @@ use std::fmt::Write;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use rara_domain_shared::id::SchedulerTaskId;
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 
 use super::{
     error::SchedulerError,
@@ -63,15 +63,15 @@ pub(super) struct TaskRunHistoryRow {
     pub created_at:  DateTime<Utc>,
 }
 
-/// PostgreSQL implementation of the scheduler repository.
+/// SQLite implementation of the scheduler repository.
 pub struct PgSchedulerRepository {
-    pool: PgPool,
+    pool: SqlitePool,
 }
 
 impl PgSchedulerRepository {
     /// Create a new repository backed by the given connection pool.
     #[must_use]
-    pub fn new(pool: PgPool) -> Self { Self { pool } }
+    pub fn new(pool: SqlitePool) -> Self { Self { pool } }
 }
 
 /// Map a `sqlx::Error` into a `SchedulerError::RepositoryError`.
@@ -91,8 +91,8 @@ impl super::repository::SchedulerRepository for PgSchedulerRepository {
                    (id, name, cron_expr, enabled, last_run_at, last_status,
                     last_error, run_count, failure_count, is_deleted, created_at, updated_at)
                VALUES
-                   ($1, $2, $3, $4, $5, $6,
-                    $7, $8, $9, $10, $11, $12)
+                   (?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?)
                RETURNING *"#,
         )
         .bind(store.id)
@@ -119,7 +119,7 @@ impl super::repository::SchedulerRepository for PgSchedulerRepository {
         id: SchedulerTaskId,
     ) -> Result<Option<ScheduledTask>, SchedulerError> {
         let row = sqlx::query_as::<_, SchedulerTaskRow>(
-            "SELECT * FROM scheduler_task WHERE id = $1 AND is_deleted = FALSE",
+            "SELECT * FROM scheduler_task WHERE id = ? AND is_deleted = FALSE",
         )
         .bind(id.into_inner())
         .fetch_optional(&self.pool)
@@ -131,7 +131,7 @@ impl super::repository::SchedulerRepository for PgSchedulerRepository {
 
     async fn find_task_by_name(&self, name: &str) -> Result<Option<ScheduledTask>, SchedulerError> {
         let row = sqlx::query_as::<_, SchedulerTaskRow>(
-            "SELECT * FROM scheduler_task WHERE name = $1 AND is_deleted = FALSE",
+            "SELECT * FROM scheduler_task WHERE name = ? AND is_deleted = FALSE",
         )
         .bind(name)
         .fetch_optional(&self.pool)
@@ -168,13 +168,12 @@ impl super::repository::SchedulerRepository for PgSchedulerRepository {
 
         let row = sqlx::query_as::<_, SchedulerTaskRow>(
             r#"UPDATE scheduler_task
-               SET name = $2, cron_expr = $3, enabled = $4, last_run_at = $5,
-                   last_status = $6, last_error = $7,
-                   run_count = $8, failure_count = $9
-               WHERE id = $1 AND is_deleted = FALSE
+               SET name = ?, cron_expr = ?, enabled = ?, last_run_at = ?,
+                   last_status = ?, last_error = ?,
+                   run_count = ?, failure_count = ?
+               WHERE id = ? AND is_deleted = FALSE
                RETURNING *"#,
         )
-        .bind(store.id)
         .bind(&store.name)
         .bind(&store.cron_expr)
         .bind(store.enabled)
@@ -183,6 +182,7 @@ impl super::repository::SchedulerRepository for PgSchedulerRepository {
         .bind(&store.last_error)
         .bind(store.run_count)
         .bind(store.failure_count)
+        .bind(store.id)
         .fetch_one(&self.pool)
         .await
         .map_err(map_err)?;
@@ -192,8 +192,8 @@ impl super::repository::SchedulerRepository for PgSchedulerRepository {
 
     async fn delete_task(&self, id: SchedulerTaskId) -> Result<(), SchedulerError> {
         let result = sqlx::query(
-            "UPDATE scheduler_task SET is_deleted = TRUE, deleted_at = now() WHERE id = $1 AND \
-             is_deleted = FALSE",
+            "UPDATE scheduler_task SET is_deleted = TRUE, deleted_at = datetime('now') WHERE id = \
+             ? AND is_deleted = FALSE",
         )
         .bind(id.into_inner())
         .execute(&self.pool)
@@ -214,7 +214,7 @@ impl super::repository::SchedulerRepository for PgSchedulerRepository {
         sqlx::query(
             r#"INSERT INTO task_run_history
                    (id, task_id, status, started_at, finished_at, duration_ms, error, output, created_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#,
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         )
         .bind(store.id)
         .bind(store.task_id)
@@ -239,9 +239,9 @@ impl super::repository::SchedulerRepository for PgSchedulerRepository {
     ) -> Result<Vec<TaskRunRecord>, SchedulerError> {
         let rows = sqlx::query_as::<_, TaskRunHistoryRow>(
             r#"SELECT * FROM task_run_history
-               WHERE task_id = $1
+               WHERE task_id = ?
                ORDER BY started_at DESC
-               LIMIT $2"#,
+               LIMIT ?"#,
         )
         .bind(task_id.into_inner())
         .bind(limit)
@@ -262,20 +262,20 @@ impl super::repository::SchedulerRepository for PgSchedulerRepository {
 
         let sql = if status == TaskRunStatus::Failed {
             r#"UPDATE scheduler_task
-               SET last_run_at = now(), last_status = $2, last_error = $3,
+               SET last_run_at = datetime('now'), last_status = ?, last_error = ?,
                    run_count = run_count + 1, failure_count = failure_count + 1
-               WHERE id = $1 AND is_deleted = FALSE"#
+               WHERE id = ? AND is_deleted = FALSE"#
         } else {
             r#"UPDATE scheduler_task
-               SET last_run_at = now(), last_status = $2, last_error = $3,
+               SET last_run_at = datetime('now'), last_status = ?, last_error = ?,
                    run_count = run_count + 1
-               WHERE id = $1 AND is_deleted = FALSE"#
+               WHERE id = ? AND is_deleted = FALSE"#
         };
 
         let result = sqlx::query(sql)
-            .bind(id.into_inner())
             .bind(status_code)
             .bind(error)
+            .bind(id.into_inner())
             .execute(&self.pool)
             .await
             .map_err(map_err)?;

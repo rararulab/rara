@@ -58,6 +58,7 @@ impl Kernel {
         principal: Principal,
         channel_session_id: Option<SessionId>,
         parent_id: Option<AgentId>,
+        resume_session_id: Option<SessionId>,
         runtimes: &RuntimeTable,
     ) -> Result<AgentId> {
         // Validate principal.
@@ -75,16 +76,21 @@ impl Kernel {
         let agent_id = AgentId::new();
         tracing::Span::current().record("agent_id", tracing::field::display(&agent_id));
 
-        // Each process gets its own session — context isolation.
-        let session = self
-            .session_repo()
-            .create()
-            .await
-            .whatever_context::<_, KernelError>("failed to create session")?;
-        let session_id = session.key;
-        // Clean start: no loaded history. Task input arrives as synthetic
-        // message (below) or is injected directly into the conversation.
-        let initial_messages = vec![];
+        let (session_id, initial_messages) = if let Some(session_id) = resume_session_id {
+            let messages = self
+                .session_repo()
+                .read_messages(&session_id, None, None)
+                .await
+                .whatever_context::<_, KernelError>("failed to load resumed session history")?;
+            (session_id, messages)
+        } else {
+            let session = self
+                .session_repo()
+                .create()
+                .await
+                .whatever_context::<_, KernelError>("failed to create session")?;
+            (session.key, vec![])
+        };
 
         // Audit: ProcessSpawned
         self.audit().record(AuditEvent {
@@ -265,6 +271,14 @@ impl Kernel {
             }
             Signal::Terminate => {
                 info!(agent_id = %target, "terminate signal — graceful shutdown");
+                let was_running = self
+                    .process_table()
+                    .get(target)
+                    .map(|p| p.state == ProcessState::Running)
+                    .unwrap_or(false);
+                let _ = self
+                    .process_table()
+                    .set_state(target, ProcessState::Cancelled);
                 runtimes.cancel_turn(&target);
                 // Grace period then force-kill via process_cancel token.
                 if let Some(token) = runtimes.clone_process_cancel(&target) {
@@ -273,8 +287,9 @@ impl Kernel {
                         token.cancel();
                     });
                 }
-                // Clean up runtime.
-                self.cleanup_process(target, runtimes).await;
+                if !was_running {
+                    self.cleanup_process(target, runtimes).await;
+                }
             }
             Signal::Kill => {
                 info!(agent_id = %target, "kill signal");
@@ -346,17 +361,16 @@ impl Kernel {
     /// Removing the runtime from the table drops the `process_cancel` token
     /// naturally, so no explicit cancellation-token cleanup is needed.
     pub(crate) async fn cleanup_process(&self, agent_id: AgentId, runtimes: &RuntimeTable) {
-        if let Some(process) = self.process_table().get(agent_id) {
-            crate::metrics::PROCESS_ACTIVE
-                .with_label_values(&[&process.manifest.name])
-                .dec();
-            crate::metrics::PROCESS_COMPLETED
-                .with_label_values(&[&process.manifest.name, &process.state.to_string()])
-                .inc();
-        }
+        if let Some((_, rt)) = runtimes.remove(&agent_id) {
+            if let Some(process) = self.process_table().get(agent_id) {
+                crate::metrics::PROCESS_ACTIVE
+                    .with_label_values(&[&process.manifest.name])
+                    .dec();
+                crate::metrics::PROCESS_COMPLETED
+                    .with_label_values(&[&process.manifest.name, &process.state.to_string()])
+                    .inc();
+            }
 
-        let rt = runtimes.remove(&agent_id);
-        if let Some((_, rt)) = rt {
             // Notify parent if this is a child process.
             if let Some(process) = self.process_table().get(agent_id) {
                 if let Some(parent_id) = process.parent_id {
@@ -376,5 +390,373 @@ impl Kernel {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, sync::Arc};
+
+    use async_trait::async_trait;
+    use chrono::Utc;
+    use tokio::sync::{Mutex, Semaphore};
+
+    use super::*;
+    use crate::{
+        agent_turn::{AgentTurnResult, TurnTrace},
+        channel::types::ChatMessage,
+        device::DeviceRegistry,
+        event_loop::runtime::ProcessRuntime,
+        io::{pipe::PipeRegistry, stream::StreamHub},
+        kernel::{KernelConfig, NoopSettingsProvider},
+        llm::DriverRegistryBuilder,
+        memory::NoopMemory,
+        notification::NoopNotificationBus,
+        process::{
+            AgentEnv, AgentProcess, RuntimeMetrics, agent_registry::AgentRegistry,
+            principal::Principal,
+        },
+        session::{
+            ChannelBinding, SessionEntry, SessionError, SessionKey, SessionRepoRef,
+            SessionRepository,
+        },
+        tool::ToolRegistry,
+    };
+
+    #[derive(Default)]
+    struct MemorySessionRepository {
+        sessions:  Mutex<HashMap<SessionKey, SessionEntry>>,
+        messages:  Mutex<HashMap<SessionKey, Vec<ChatMessage>>>,
+        bindings:  Mutex<HashMap<(String, String, String), ChannelBinding>>,
+    }
+
+    #[async_trait]
+    impl SessionRepository for MemorySessionRepository {
+        async fn create_session(
+            &self,
+            entry: &SessionEntry,
+        ) -> std::result::Result<SessionEntry, SessionError> {
+            self.sessions
+                .lock()
+                .await
+                .insert(entry.key.clone(), entry.clone());
+            self.messages
+                .lock()
+                .await
+                .entry(entry.key.clone())
+                .or_default();
+            Ok(entry.clone())
+        }
+
+        async fn get_session(
+            &self,
+            key: &SessionKey,
+        ) -> std::result::Result<Option<SessionEntry>, SessionError> {
+            Ok(self.sessions.lock().await.get(key).cloned())
+        }
+
+        async fn list_sessions(
+            &self,
+            _limit: i64,
+            _offset: i64,
+        ) -> std::result::Result<Vec<SessionEntry>, SessionError> {
+            Ok(self.sessions.lock().await.values().cloned().collect())
+        }
+
+        async fn update_session(
+            &self,
+            entry: &SessionEntry,
+        ) -> std::result::Result<SessionEntry, SessionError> {
+            self.sessions
+                .lock()
+                .await
+                .insert(entry.key.clone(), entry.clone());
+            Ok(entry.clone())
+        }
+
+        async fn delete_session(
+            &self,
+            key: &SessionKey,
+        ) -> std::result::Result<(), SessionError> {
+            self.sessions.lock().await.remove(key);
+            self.messages.lock().await.remove(key);
+            Ok(())
+        }
+
+        async fn append_message(
+            &self,
+            session_key: &SessionKey,
+            message: &ChatMessage,
+        ) -> std::result::Result<ChatMessage, SessionError> {
+            let mut stored = message.clone();
+            let mut messages = self.messages.lock().await;
+            let entry = messages.entry(session_key.clone()).or_default();
+            stored.seq = entry.len() as i64 + 1;
+            entry.push(stored.clone());
+            Ok(stored)
+        }
+
+        async fn read_messages(
+            &self,
+            session_key: &SessionKey,
+            after_seq: Option<i64>,
+            limit: Option<i64>,
+        ) -> std::result::Result<Vec<ChatMessage>, SessionError> {
+            let messages = self
+                .messages
+                .lock()
+                .await
+                .get(session_key)
+                .cloned()
+                .unwrap_or_default();
+            let filtered = messages
+                .into_iter()
+                .filter(|msg| match after_seq {
+                    Some(seq) => msg.seq > seq,
+                    None => true,
+                })
+                .take(limit.unwrap_or(i64::MAX) as usize)
+                .collect();
+            Ok(filtered)
+        }
+
+        async fn clear_messages(
+            &self,
+            session_key: &SessionKey,
+        ) -> std::result::Result<(), SessionError> {
+            self.messages
+                .lock()
+                .await
+                .insert(session_key.clone(), Vec::new());
+            Ok(())
+        }
+
+        async fn fork_session(
+            &self,
+            source_key: &SessionKey,
+            _fork_at_seq: i64,
+        ) -> std::result::Result<SessionEntry, SessionError> {
+            let now = Utc::now();
+            let entry = SessionEntry {
+                key:           SessionKey::new(),
+                title:         None,
+                model:         None,
+                system_prompt: None,
+                message_count: 0,
+                preview:       None,
+                metadata:      None,
+                created_at:    now,
+                updated_at:    now,
+            };
+            self.create_session(&entry).await?;
+            let messages = self.read_messages(source_key, None, None).await?;
+            for msg in messages {
+                let _ = self.append_message(&entry.key, &msg).await?;
+            }
+            Ok(entry)
+        }
+
+        async fn bind_channel(
+            &self,
+            binding: &ChannelBinding,
+        ) -> std::result::Result<ChannelBinding, SessionError> {
+            self.bindings.lock().await.insert(
+                (
+                    binding.channel_type.clone(),
+                    binding.account.clone(),
+                    binding.chat_id.clone(),
+                ),
+                binding.clone(),
+            );
+            Ok(binding.clone())
+        }
+
+        async fn get_channel_binding(
+            &self,
+            channel_type: &str,
+            account: &str,
+            chat_id: &str,
+        ) -> std::result::Result<Option<ChannelBinding>, SessionError> {
+            Ok(self
+                .bindings
+                .lock()
+                .await
+                .get(&(channel_type.to_string(), account.to_string(), chat_id.to_string()))
+                .cloned())
+        }
+    }
+
+    fn test_kernel(session_repo: SessionRepoRef) -> Kernel {
+        let config = KernelConfig {
+            max_concurrency: 4,
+            default_child_limit: 2,
+            default_max_iterations: 5,
+            memory_quota_per_agent: 1000,
+            ..Default::default()
+        };
+        let driver_registry = Arc::new(DriverRegistryBuilder::new("test", "test-model").build());
+        Kernel::for_testing(
+            config,
+            Arc::new(crate::process::ProcessTable::new()),
+            Arc::new(Semaphore::new(4)),
+            driver_registry,
+            Arc::new(ToolRegistry::new()),
+            Arc::new(NoopMemory),
+            Arc::new(NoopNotificationBus),
+            Arc::new(crate::security::SecuritySubsystem::noop()),
+            Arc::new(AgentRegistry::new(
+                crate::testing::test_manifests(),
+                std::env::temp_dir().join("kernel_lifecycle_tests"),
+            )),
+            Arc::new(crate::audit::AuditSubsystem::noop()),
+            session_repo,
+            Arc::new(NoopSettingsProvider),
+            Arc::new(StreamHub::new(16)),
+            PipeRegistry::new(),
+            Arc::new(DeviceRegistry::new()),
+        )
+    }
+
+    async fn insert_runtime(kernel: &Kernel, runtimes: &RuntimeTable, state: ProcessState) -> AgentId {
+        let manifest = crate::testing::test_manifests()
+            .into_iter()
+            .next()
+            .expect("test manifest");
+        let agent_id = AgentId::new();
+        let session_id = SessionId::new();
+
+        kernel.process_table().insert(AgentProcess {
+            agent_id,
+            parent_id: None,
+            session_id: session_id.clone(),
+            channel_session_id: Some(SessionId::new()),
+            manifest,
+            principal: Principal::user("user"),
+            env: AgentEnv::default(),
+            state,
+            created_at: jiff::Timestamp::now(),
+            finished_at: None,
+            result: None,
+            created_files: vec![],
+            metrics: Arc::new(RuntimeMetrics::new()),
+            turn_traces: vec![],
+        });
+
+        let permit = Arc::new(Semaphore::new(1))
+            .try_acquire_owned()
+            .expect("permit");
+        let handle = Arc::new(ProcessHandle::new(
+            agent_id,
+            session_id,
+            Principal::user("user"),
+            kernel.event_queue().clone(),
+        ));
+        runtimes.insert(
+            agent_id,
+            ProcessRuntime {
+                conversation: vec![],
+                turn_cancel: CancellationToken::new(),
+                process_cancel: CancellationToken::new(),
+                paused: false,
+                pause_buffer: vec![],
+                handle,
+                child_semaphore: Arc::new(Semaphore::new(1)),
+                max_context_tokens: 1024,
+                last_result: None,
+                _global_permit: permit,
+            },
+        );
+
+        agent_id
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_reuses_existing_session_history() {
+        let session_repo = Arc::new(MemorySessionRepository::default());
+        let kernel = test_kernel(session_repo.clone());
+        let runtimes = RuntimeTable::new();
+        let resumed_session = session_repo.create().await.expect("create session").key;
+        session_repo
+            .append_message(&resumed_session, &ChatMessage::user("hello"))
+            .await
+            .expect("append user");
+        session_repo
+            .append_message(&resumed_session, &ChatMessage::assistant("world"))
+            .await
+            .expect("append assistant");
+
+        let agent_id = kernel
+            .handle_spawn_agent(
+                crate::testing::test_manifests()
+                    .into_iter()
+                    .next()
+                    .expect("test manifest"),
+                "next".to_string(),
+                Principal::user("user"),
+                Some(SessionId::new()),
+                None,
+                Some(resumed_session.clone()),
+                &runtimes,
+            )
+            .await
+            .expect("spawn");
+
+        let process = kernel.process_table().get(agent_id).expect("process");
+        assert_eq!(process.session_id, resumed_session);
+        let conversation = runtimes
+            .with(&agent_id, |rt| rt.conversation.clone())
+            .expect("runtime conversation");
+        assert_eq!(conversation.len(), 2);
+        assert_eq!(conversation[0].content.as_text(), "hello");
+        assert_eq!(conversation[1].content.as_text(), "world");
+    }
+
+    #[tokio::test]
+    async fn terminate_marks_running_process_terminal_and_defers_cleanup() {
+        let kernel = test_kernel(Arc::new(crate::session::NoopSessionRepository));
+        let runtimes = RuntimeTable::new();
+        let agent_id = insert_runtime(&kernel, &runtimes, ProcessState::Running).await;
+
+        kernel
+            .handle_signal(agent_id, Signal::Terminate, &runtimes)
+            .await;
+
+        assert_eq!(
+            kernel.process_table().get(agent_id).expect("process").state,
+            ProcessState::Cancelled
+        );
+        assert!(runtimes.contains(&agent_id));
+
+        kernel
+            .handle_turn_completed(
+                agent_id,
+                SessionId::new(),
+                Ok(AgentTurnResult {
+                    text:       "ignored".to_string(),
+                    iterations: 1,
+                    tool_calls: 0,
+                    model:      "test".to_string(),
+                    trace:      TurnTrace {
+                        duration_ms:      0,
+                        model:            "test".to_string(),
+                        input_text:       None,
+                        iterations:       vec![],
+                        final_text_len:   0,
+                        total_tool_calls: 0,
+                        success:          true,
+                        error:            None,
+                    },
+                }),
+                crate::io::types::MessageId::new(),
+                crate::process::principal::UserId("user".to_string()),
+                &runtimes,
+            )
+            .await;
+
+        assert_eq!(
+            kernel.process_table().get(agent_id).expect("process").state,
+            ProcessState::Cancelled
+        );
+        assert!(!runtimes.contains(&agent_id));
     }
 }

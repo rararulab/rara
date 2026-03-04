@@ -168,7 +168,7 @@ impl TapeService {
             .await?;
         Ok(())
     }
-
+    
     /// Append a system entry.
     pub async fn append_system(&self, content: &str) -> TapResult<()> {
         self.store

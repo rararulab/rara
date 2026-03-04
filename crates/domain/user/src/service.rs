@@ -19,7 +19,7 @@ use argon2::{
     password_hash::{SaltString, rand_core::OsRng},
 };
 use rand::{Rng, distr::Alphanumeric};
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use tracing::info;
 
 use crate::{
@@ -120,12 +120,12 @@ fn row_to_link_code(row: LinkCodeRow) -> LinkCode {
 /// 认证服务
 #[derive(Clone)]
 pub struct AuthService {
-    pool:       PgPool,
+    pool:       SqlitePool,
     jwt_config: JwtConfig,
 }
 
 impl AuthService {
-    pub fn new(pool: PgPool, jwt_config: JwtConfig) -> Self { Self { pool, jwt_config } }
+    pub fn new(pool: SqlitePool, jwt_config: JwtConfig) -> Self { Self { pool, jwt_config } }
 
     pub fn jwt_config(&self) -> &JwtConfig { &self.jwt_config }
 
@@ -133,7 +133,7 @@ impl AuthService {
     pub async fn login(&self, req: LoginRequest) -> Result<AuthResponse, AuthError> {
         let row = sqlx::query_as::<_, UserRow>(
             "SELECT id, name, role, permissions, enabled, password_hash, created_at, updated_at \
-             FROM kernel_users WHERE name = $1",
+             FROM kernel_users WHERE name = ?1",
         )
         .bind(&req.username)
         .fetch_optional(&self.pool)
@@ -172,7 +172,7 @@ impl AuthService {
     pub async fn register(&self, req: RegisterRequest) -> Result<AuthResponse, AuthError> {
         // 检查用户名是否已存在
         let exists = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM kernel_users WHERE name = $1)",
+            "SELECT EXISTS(SELECT 1 FROM kernel_users WHERE name = ?1)",
         )
         .bind(&req.username)
         .fetch_one(&self.pool)
@@ -189,7 +189,7 @@ impl AuthService {
 
         // 验证邀请码
         let invite =
-            sqlx::query_as::<_, InviteCodeRow>("SELECT * FROM invite_codes WHERE code = $1")
+            sqlx::query_as::<_, InviteCodeRow>("SELECT * FROM invite_codes WHERE code = ?1")
                 .bind(&req.invite_code)
                 .fetch_optional(&self.pool)
                 .await
@@ -211,7 +211,7 @@ impl AuthService {
 
         sqlx::query(
             "INSERT INTO kernel_users (id, name, role, permissions, enabled, password_hash) \
-             VALUES ($1, $2, 2, '[]', true, $3)",
+             VALUES (?1, ?2, 2, '[]', true, ?3)",
         )
         .bind(user_id)
         .bind(&req.username)
@@ -223,7 +223,7 @@ impl AuthService {
         })?;
 
         // 标记邀请码已使用
-        sqlx::query("UPDATE invite_codes SET used_by = $1 WHERE id = $2")
+        sqlx::query("UPDATE invite_codes SET used_by = ?1 WHERE id = ?2")
             .bind(user_id)
             .bind(invite.id)
             .execute(&self.pool)
@@ -266,7 +266,7 @@ impl AuthService {
         // 查询用户最新信息
         let row = sqlx::query_as::<_, UserRow>(
             "SELECT id, name, role, permissions, enabled, password_hash, created_at, updated_at \
-             FROM kernel_users WHERE id = $1",
+             FROM kernel_users WHERE id = ?1",
         )
         .bind(user_id)
         .fetch_optional(&self.pool)
@@ -301,7 +301,7 @@ impl AuthService {
     ) -> Result<(), AuthError> {
         let row = sqlx::query_as::<_, UserRow>(
             "SELECT id, name, role, permissions, enabled, password_hash, created_at, updated_at \
-             FROM kernel_users WHERE id = $1",
+             FROM kernel_users WHERE id = ?1",
         )
         .bind(user_id)
         .fetch_optional(&self.pool)
@@ -320,7 +320,7 @@ impl AuthService {
         verify_password(&req.old_password, hash)?;
 
         let new_hash = hash_password(&req.new_password)?;
-        sqlx::query("UPDATE kernel_users SET password_hash = $1, updated_at = now() WHERE id = $2")
+        sqlx::query("UPDATE kernel_users SET password_hash = ?1, updated_at = datetime('now') WHERE id = ?2")
             .bind(&new_hash)
             .bind(user_id)
             .execute(&self.pool)
@@ -337,7 +337,7 @@ impl AuthService {
     pub async fn get_profile(&self, user_id: uuid::Uuid) -> Result<UserProfile, AuthError> {
         let row = sqlx::query_as::<_, UserRow>(
             "SELECT id, name, role, permissions, enabled, password_hash, created_at, updated_at \
-             FROM kernel_users WHERE id = $1",
+             FROM kernel_users WHERE id = ?1",
         )
         .bind(user_id)
         .fetch_optional(&self.pool)
@@ -350,7 +350,7 @@ impl AuthService {
         })?;
 
         let platform_rows = sqlx::query_as::<_, PlatformRow>(
-            "SELECT * FROM user_platform_identities WHERE user_id = $1 ORDER BY linked_at",
+            "SELECT * FROM user_platform_identities WHERE user_id = ?1 ORDER BY linked_at",
         )
         .bind(user_id)
         .fetch_all(&self.pool)
@@ -384,7 +384,7 @@ impl AuthService {
         let expires_at = chrono::Utc::now() + chrono::Duration::days(7);
 
         let row = sqlx::query_as::<_, InviteCodeRow>(
-            "INSERT INTO invite_codes (code, created_by, expires_at) VALUES ($1, $2, $3) \
+            "INSERT INTO invite_codes (code, created_by, expires_at) VALUES (?1, ?2, ?3) \
              RETURNING *",
         )
         .bind(&code)
@@ -424,8 +424,8 @@ impl AuthService {
         let expires_at = chrono::Utc::now() + chrono::Duration::minutes(5);
 
         let row = sqlx::query_as::<_, LinkCodeRow>(
-            "INSERT INTO link_codes (code, user_id, direction, expires_at) VALUES ($1, $2, $3, \
-             $4) RETURNING *",
+            "INSERT INTO link_codes (code, user_id, direction, expires_at) VALUES (?1, ?2, ?3, \
+             ?4) RETURNING *",
         )
         .bind(&code)
         .bind(user_id)
@@ -443,7 +443,7 @@ impl AuthService {
 
     /// 验证链接码
     pub async fn verify_link_code(&self, code: &str) -> Result<LinkCodeInfo, AuthError> {
-        let row = sqlx::query_as::<_, LinkCodeRow>("SELECT * FROM link_codes WHERE code = $1")
+        let row = sqlx::query_as::<_, LinkCodeRow>("SELECT * FROM link_codes WHERE code = ?1")
             .bind(code)
             .fetch_optional(&self.pool)
             .await
@@ -493,8 +493,8 @@ impl AuthService {
         let identity_id = uuid::Uuid::new_v4();
         sqlx::query(
             "INSERT INTO user_platform_identities (id, user_id, platform, platform_user_id, \
-             display_name) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (platform, platform_user_id) \
-             DO UPDATE SET user_id = $2, display_name = $5",
+             display_name) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT (platform, platform_user_id) \
+             DO UPDATE SET user_id = ?2, display_name = ?5",
         )
         .bind(identity_id)
         .bind(link_info.user_id)
@@ -508,7 +508,7 @@ impl AuthService {
         })?;
 
         // 3. 删除已使用的链接码
-        sqlx::query("DELETE FROM link_codes WHERE code = $1")
+        sqlx::query("DELETE FROM link_codes WHERE code = ?1")
             .bind(code)
             .execute(&self.pool)
             .await
@@ -528,7 +528,7 @@ impl AuthService {
 
         let row = sqlx::query_as::<_, LinkCodeRow>(
             "INSERT INTO link_codes (code, user_id, direction, platform_data, expires_at) VALUES \
-             ($1, (SELECT id FROM kernel_users WHERE name = 'system'), $2, $3, $4) RETURNING *",
+             (?1, (SELECT id FROM kernel_users WHERE name = 'system'), ?2, ?3, ?4) RETURNING *",
         )
         .bind(&code)
         .bind("tg_to_web")
@@ -569,8 +569,8 @@ impl AuthService {
         let identity_id = uuid::Uuid::new_v4();
         sqlx::query(
             "INSERT INTO user_platform_identities (id, user_id, platform, platform_user_id, \
-             display_name) VALUES ($1, $2, 'telegram', $3, NULL) ON CONFLICT (platform, \
-             platform_user_id) DO UPDATE SET user_id = $2",
+             display_name) VALUES (?1, ?2, 'telegram', ?3, NULL) ON CONFLICT (platform, \
+             platform_user_id) DO UPDATE SET user_id = ?2",
         )
         .bind(identity_id)
         .bind(user_id)
@@ -582,7 +582,7 @@ impl AuthService {
         })?;
 
         // 删除已使用的链接码
-        sqlx::query("DELETE FROM link_codes WHERE code = $1")
+        sqlx::query("DELETE FROM link_codes WHERE code = ?1")
             .bind(code)
             .execute(&self.pool)
             .await
@@ -596,7 +596,7 @@ impl AuthService {
 
     /// 禁用用户
     pub async fn disable_user(&self, user_id: uuid::Uuid) -> Result<(), AuthError> {
-        sqlx::query("UPDATE kernel_users SET enabled = false, updated_at = now() WHERE id = $1")
+        sqlx::query("UPDATE kernel_users SET enabled = false, updated_at = datetime('now') WHERE id = ?1")
             .bind(user_id)
             .execute(&self.pool)
             .await

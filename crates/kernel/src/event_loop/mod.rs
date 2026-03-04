@@ -127,7 +127,15 @@ impl Kernel {
                 // SpawnAgent from ProcessHandle::spawn() — subagent, no
                 // channel binding.
                 let result = self
-                    .handle_spawn_agent(manifest, input, principal, None, parent_id, runtimes)
+                    .handle_spawn_agent(
+                        manifest,
+                        input,
+                        principal,
+                        None,
+                        parent_id,
+                        None,
+                        runtimes,
+                    )
                     .await;
                 let _ = reply_tx.send(result);
             }

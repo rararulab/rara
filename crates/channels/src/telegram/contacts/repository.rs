@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! PostgreSQL repository for telegram contacts.
+//! SQLite repository for telegram contacts.
 
 use snafu::{IntoError, ResultExt};
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::telegram::contacts::{
@@ -25,11 +25,11 @@ use crate::telegram::contacts::{
 
 #[derive(Clone)]
 pub struct ContactRepository {
-    pool: PgPool,
+    pool: SqlitePool,
 }
 
 impl ContactRepository {
-    pub fn new(pool: PgPool) -> Self { Self { pool } }
+    pub fn new(pool: SqlitePool) -> Self { Self { pool } }
 
     pub async fn list(&self) -> Result<Vec<TelegramContact>, ContactError> {
         sqlx::query_as::<_, TelegramContact>(
@@ -44,7 +44,7 @@ impl ContactRepository {
     pub async fn get(&self, id: Uuid) -> Result<TelegramContact, ContactError> {
         sqlx::query_as::<_, TelegramContact>(
             "SELECT id, name, telegram_username, chat_id, notes, enabled, created_at, updated_at \
-             FROM telegram_contact WHERE id = $1",
+             FROM telegram_contact WHERE id = ?1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -70,7 +70,7 @@ impl ContactRepository {
 
         sqlx::query_as::<_, TelegramContact>(
             "INSERT INTO telegram_contact (name, telegram_username, chat_id, notes, enabled) \
-             VALUES ($1, $2, $3, $4, $5) RETURNING id, name, telegram_username, chat_id, notes, \
+             VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id, name, telegram_username, chat_id, notes, \
              enabled, created_at, updated_at",
         )
         .bind(req.name.trim())
@@ -107,8 +107,8 @@ impl ContactRepository {
         let enabled = req.enabled.unwrap_or(existing.enabled);
 
         sqlx::query_as::<_, TelegramContact>(
-            "UPDATE telegram_contact SET name = $2, telegram_username = $3, chat_id = $4, notes = \
-             $5, enabled = $6 WHERE id = $1 RETURNING id, name, telegram_username, chat_id, \
+            "UPDATE telegram_contact SET name = ?2, telegram_username = ?3, chat_id = ?4, notes = \
+             ?5, enabled = ?6 WHERE id = ?1 RETURNING id, name, telegram_username, chat_id, \
              notes, enabled, created_at, updated_at",
         )
         .bind(id)
@@ -129,7 +129,7 @@ impl ContactRepository {
     }
 
     pub async fn delete(&self, id: Uuid) -> Result<(), ContactError> {
-        let rows = sqlx::query("DELETE FROM telegram_contact WHERE id = $1")
+        let rows = sqlx::query("DELETE FROM telegram_contact WHERE id = ?1")
             .bind(id)
             .execute(&self.pool)
             .await
@@ -150,7 +150,7 @@ impl ContactRepository {
         let normalized = username.trim_start_matches('@').to_lowercase();
         sqlx::query_as::<_, TelegramContact>(
             "SELECT id, name, telegram_username, chat_id, notes, enabled, created_at, updated_at \
-             FROM telegram_contact WHERE telegram_username = $1",
+             FROM telegram_contact WHERE telegram_username = ?1",
         )
         .bind(&normalized)
         .fetch_optional(&self.pool)
@@ -163,8 +163,8 @@ impl ContactRepository {
     pub async fn set_chat_id(&self, username: &str, chat_id: i64) -> Result<(), ContactError> {
         let normalized = username.trim_start_matches('@').to_lowercase();
         sqlx::query(
-            "UPDATE telegram_contact SET chat_id = $2 WHERE telegram_username = $1 AND (chat_id \
-             IS NULL OR chat_id != $2)",
+            "UPDATE telegram_contact SET chat_id = ?2 WHERE telegram_username = ?1 AND (chat_id \
+             IS NULL OR chat_id != ?2)",
         )
         .bind(&normalized)
         .bind(chat_id)
@@ -177,8 +177,8 @@ impl ContactRepository {
 
 fn is_unique_violation(e: &sqlx::Error) -> bool {
     if let sqlx::Error::Database(db_err) = e {
-        // PostgreSQL unique violation code
-        return db_err.code().as_deref() == Some("23505");
+        // SQLite UNIQUE constraint violation code
+        return db_err.code().as_deref() == Some("2067");
     }
     false
 }

@@ -88,6 +88,7 @@ impl Kernel {
         }
 
         // ----- Path 2: Session addressing (external user) -----
+        let mut resume_session_id = None;
         if let Some(process) = self.process_table().find_by_session(&session_id) {
             span.record("routing_path", "session_addressing");
             let aid = process.agent_id;
@@ -107,6 +108,7 @@ impl Kernel {
                 if let Some(ref channel_sid) = process.channel_session_id {
                     self.process_table().session_index_remove(channel_sid, aid);
                 }
+                resume_session_id = Some(process.session_id.clone());
                 // Fall through to Path 3 below.
             } else {
                 self.deliver_to_process(aid, msg, runtimes).await;
@@ -162,6 +164,7 @@ impl Kernel {
                 principal,
                 Some(session_id.clone()),
                 None,
+                resume_session_id,
                 runtimes,
             )
             .await

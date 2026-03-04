@@ -21,20 +21,20 @@
 //!   verify on web
 
 use rand::{Rng, distr::Alphanumeric};
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use tracing::info;
 
 /// Service for handling Telegram account linking operations.
 ///
-/// Uses raw PgPool to avoid circular dependencies with the user domain crate.
+/// Uses raw SqlitePool to avoid circular dependencies with the user domain crate.
 #[derive(Clone)]
 pub struct TelegramLinkService {
-    pool:     PgPool,
+    pool:     SqlitePool,
     base_url: String,
 }
 
 impl TelegramLinkService {
-    pub fn new(pool: PgPool, base_url: String) -> Self { Self { pool, base_url } }
+    pub fn new(pool: SqlitePool, base_url: String) -> Self { Self { pool, base_url } }
 
     /// Handle `/link <code>` — web_to_tg direction.
     ///
@@ -47,7 +47,7 @@ impl TelegramLinkService {
         display_name: Option<&str>,
     ) -> Result<String, String> {
         // Verify link code exists and is not expired.
-        let row = sqlx::query_as::<_, LinkCodeRow>("SELECT * FROM link_codes WHERE code = $1")
+        let row = sqlx::query_as::<_, LinkCodeRow>("SELECT * FROM link_codes WHERE code = ?1")
             .bind(code)
             .fetch_optional(&self.pool)
             .await
@@ -66,8 +66,8 @@ impl TelegramLinkService {
         let identity_id = uuid::Uuid::new_v4();
         sqlx::query(
             "INSERT INTO user_platform_identities (id, user_id, platform, platform_user_id, \
-             display_name) VALUES ($1, $2, 'telegram', $3, $4) ON CONFLICT (platform, \
-             platform_user_id) DO UPDATE SET user_id = $2, display_name = $4",
+             display_name) VALUES (?1, ?2, 'telegram', ?3, ?4) ON CONFLICT (platform, \
+             platform_user_id) DO UPDATE SET user_id = ?2, display_name = ?4",
         )
         .bind(identity_id)
         .bind(row.user_id)
@@ -78,7 +78,7 @@ impl TelegramLinkService {
         .map_err(|e| format!("failed to create platform identity: {e}"))?;
 
         // Delete the used link code.
-        sqlx::query("DELETE FROM link_codes WHERE code = $1")
+        sqlx::query("DELETE FROM link_codes WHERE code = ?1")
             .bind(code)
             .execute(&self.pool)
             .await
@@ -100,7 +100,7 @@ impl TelegramLinkService {
 
         sqlx::query(
             "INSERT INTO link_codes (code, user_id, direction, platform_data, expires_at) VALUES \
-             ($1, (SELECT id FROM kernel_users WHERE name = 'system'), $2, $3, $4)",
+             (?1, (SELECT id FROM kernel_users WHERE name = 'system'), ?2, ?3, ?4)",
         )
         .bind(&code)
         .bind("tg_to_web")
@@ -160,7 +160,7 @@ mod tests {
     #[test]
     fn link_service_new() {
         // Verify construction doesn't panic (no real pool needed for unit test).
-        let pool = PgPool::connect_lazy("postgres://localhost/test").unwrap();
+        let pool = SqlitePool::connect_lazy("sqlite::memory:").unwrap();
         let svc = TelegramLinkService::new(pool, "https://example.com".to_string());
         assert_eq!(svc.base_url, "https://example.com");
     }

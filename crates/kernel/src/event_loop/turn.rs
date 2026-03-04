@@ -256,6 +256,20 @@ impl Kernel {
     ) {
         let span = tracing::Span::current();
 
+        if self
+            .process_table()
+            .get(agent_id)
+            .map(|process| process.state.is_terminal())
+            .unwrap_or(false)
+        {
+            info!(
+                agent_id = %agent_id,
+                "ignoring turn completion for terminal process"
+            );
+            self.cleanup_process(agent_id, runtimes).await;
+            return;
+        }
+
         // Determine the egress session: use the channel_session_id if this
         // process has one (root process), otherwise fall back to the
         // process's own session. Subagents without a channel binding won't

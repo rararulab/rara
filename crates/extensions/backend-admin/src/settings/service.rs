@@ -20,7 +20,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use snafu::{ResultExt, Whatever};
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use tokio::sync::watch;
 use tracing::info;
 use yunara_store::KVStore;
@@ -38,14 +38,14 @@ const LEGACY_KV_KEY: &str = "runtime_settings.v1";
 #[derive(Clone)]
 pub struct SettingsSvc {
     kv:   KVStore,
-    pool: PgPool,
+    pool: SqlitePool,
     tx:   Arc<watch::Sender<()>>,
 }
 
 impl SettingsSvc {
     /// Load settings and perform one-time migration from the legacy
     /// nested format (if the old key still exists).
-    pub async fn load(kv: KVStore, pool: PgPool) -> Result<Self, Whatever> {
+    pub async fn load(kv: KVStore, pool: SqlitePool) -> Result<Self, Whatever> {
         let (tx, _rx) = watch::channel(());
         let svc = Self {
             kv,
@@ -126,7 +126,7 @@ impl rara_domain_shared::settings::SettingsProvider for SettingsSvc {
     async fn list(&self) -> HashMap<String, String> {
         // Query all rows with the settings prefix.
         let rows: Vec<(String, String)> =
-            sqlx::query_as("SELECT key, value FROM kv_table WHERE key LIKE $1")
+            sqlx::query_as("SELECT key, value FROM kv_table WHERE key LIKE ?1")
                 .bind(format!("{PREFIX}%"))
                 .fetch_all(&self.pool)
                 .await

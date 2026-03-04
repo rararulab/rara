@@ -23,10 +23,7 @@
 //!
 //! Shard index is computed as `agent_id.0.as_u128() as usize % num_shards`.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
@@ -106,11 +103,9 @@ fn num_cpus() -> usize {
 /// hold references to them independently.
 pub struct ShardedEventQueue {
     /// Per-agent shards. Events are routed by `agent_id % num_shards`.
-    shards:        Vec<Arc<ShardQueue>>,
+    shards: Vec<Arc<ShardQueue>>,
     /// Global queue for non-agent-scoped events.
-    global:        Arc<ShardQueue>,
-    /// Total pending events across all shards + global (aggregated).
-    total_pending: AtomicUsize,
+    global: Arc<ShardQueue>,
 }
 
 impl ShardedEventQueue {
@@ -122,7 +117,6 @@ impl ShardedEventQueue {
         Self {
             shards,
             global: Arc::new(ShardQueue::new(config.global_capacity)),
-            total_pending: AtomicUsize::new(0),
         }
     }
 
@@ -151,6 +145,15 @@ impl ShardedEventQueue {
 
     /// Number of agent shards.
     pub(crate) fn num_shards(&self) -> usize { self.shards.len() }
+
+    fn total_pending(&self) -> usize {
+        self.global.pending_count()
+            + self
+                .shards
+                .iter()
+                .map(|shard| shard.pending_count())
+                .sum::<usize>()
+    }
 }
 
 #[async_trait]
@@ -158,15 +161,10 @@ impl EventQueue for ShardedEventQueue {
     fn push(&self, event: KernelEvent) -> Result<(), BusError> { self.try_push(event) }
 
     fn try_push(&self, event: KernelEvent) -> Result<(), BusError> {
-        let target = self.classify(&event);
-        let result = match target {
+        match self.classify(&event) {
             ShardTarget::Global => self.global.push(event),
             ShardTarget::Shard(idx) => self.shards[idx].push(event),
-        };
-        if result.is_ok() {
-            self.total_pending.fetch_add(1, Ordering::Release);
         }
-        result
     }
 
     fn drain(&self, max: usize) -> Vec<KernelEvent> {
@@ -189,17 +187,12 @@ impl EventQueue for ShardedEventQueue {
             result.extend(shard_events);
         }
 
-        let drained = result.len();
-        if drained > 0 {
-            self.total_pending.fetch_sub(drained, Ordering::Release);
-        }
-
         result
     }
 
     async fn wait(&self) {
         // Fast path: if anything is pending, return immediately.
-        if self.total_pending.load(Ordering::Acquire) > 0 {
+        if self.pending_count() > 0 {
             return;
         }
 
@@ -208,7 +201,7 @@ impl EventQueue for ShardedEventQueue {
         self.global.wait().await;
     }
 
-    fn pending_count(&self) -> usize { self.total_pending.load(Ordering::Acquire) }
+    fn pending_count(&self) -> usize { self.total_pending() }
 
     fn is_sharded(&self) -> bool { !self.shards.is_empty() }
 }
@@ -217,7 +210,7 @@ impl std::fmt::Debug for ShardedEventQueue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ShardedEventQueue")
             .field("num_shards", &self.shards.len())
-            .field("total_pending", &self.pending_count())
+            .field("total_pending", &self.total_pending())
             .finish()
     }
 }
@@ -430,6 +423,24 @@ mod tests {
         .unwrap();
 
         assert_eq!(q.pending_count(), 3);
+    }
+
+    #[test]
+    fn pending_count_tracks_direct_shard_drains() {
+        let q = make_queue(4);
+        let target = AgentId::new();
+        let expected_shard = target.0.as_u128() as usize % 4;
+
+        q.push(KernelEvent::SendSignal {
+            target,
+            signal: Signal::Kill,
+        })
+        .unwrap();
+
+        assert_eq!(q.pending_count(), 1);
+        let events = q.shard(expected_shard).drain(10);
+        assert_eq!(events.len(), 1);
+        assert_eq!(q.pending_count(), 0);
     }
 
     #[test]

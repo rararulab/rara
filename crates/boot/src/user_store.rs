@@ -29,7 +29,7 @@ use rara_kernel::{
         },
     },
 };
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use tracing::info;
 
 // -- DB row types (chrono at DB boundary) ------------------------------------
@@ -110,17 +110,17 @@ fn row_to_platform(row: PlatformRow) -> PlatformIdentity {
 
 /// PostgreSQL-backed user store.
 pub struct PgUserStore {
-    pool: PgPool,
+    pool: SqlitePool,
 }
 
 impl PgUserStore {
-    pub fn new(pool: PgPool) -> Self { Self { pool } }
+    pub fn new(pool: SqlitePool) -> Self { Self { pool } }
 }
 
 #[async_trait]
 impl UserStore for PgUserStore {
     async fn get_by_id(&self, id: uuid::Uuid) -> Result<Option<KernelUser>> {
-        let row = sqlx::query_as::<_, UserRow>("SELECT * FROM kernel_users WHERE id = $1")
+        let row = sqlx::query_as::<_, UserRow>("SELECT * FROM kernel_users WHERE id = ?1")
             .bind(id)
             .fetch_optional(&self.pool)
             .await
@@ -131,7 +131,7 @@ impl UserStore for PgUserStore {
     }
 
     async fn get_by_name(&self, name: &str) -> Result<Option<KernelUser>> {
-        let row = sqlx::query_as::<_, UserRow>("SELECT * FROM kernel_users WHERE name = $1")
+        let row = sqlx::query_as::<_, UserRow>("SELECT * FROM kernel_users WHERE name = ?1")
             .bind(name)
             .fetch_optional(&self.pool)
             .await
@@ -148,7 +148,7 @@ impl UserStore for PgUserStore {
     ) -> Result<Option<KernelUser>> {
         let row = sqlx::query_as::<_, UserRow>(
             "SELECT u.* FROM kernel_users u JOIN user_platform_identities p ON u.id = p.user_id \
-             WHERE p.platform = $1 AND p.platform_user_id = $2",
+             WHERE p.platform = ?1 AND p.platform_user_id = ?2",
         )
         .bind(platform)
         .bind(platform_user_id)
@@ -165,7 +165,7 @@ impl UserStore for PgUserStore {
             serde_json::to_value(&user.permissions).unwrap_or(serde_json::Value::Array(vec![]));
         sqlx::query(
             "INSERT INTO kernel_users (id, name, role, permissions, enabled, created_at, \
-             updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+             updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )
         .bind(user.id)
         .bind(&user.name)
@@ -186,8 +186,8 @@ impl UserStore for PgUserStore {
         let perms =
             serde_json::to_value(&user.permissions).unwrap_or(serde_json::Value::Array(vec![]));
         sqlx::query(
-            "UPDATE kernel_users SET name = $1, role = $2, permissions = $3, enabled = $4, \
-             updated_at = now() WHERE id = $5",
+            "UPDATE kernel_users SET name = ?1, role = ?2, permissions = ?3, enabled = ?4, \
+             updated_at = datetime('now') WHERE id = ?5",
         )
         .bind(&user.name)
         .bind(role_to_i16(user.role))
@@ -203,7 +203,7 @@ impl UserStore for PgUserStore {
     }
 
     async fn delete(&self, id: uuid::Uuid) -> Result<()> {
-        sqlx::query("DELETE FROM kernel_users WHERE id = $1")
+        sqlx::query("DELETE FROM kernel_users WHERE id = ?1")
             .bind(id)
             .execute(&self.pool)
             .await
@@ -226,7 +226,7 @@ impl UserStore for PgUserStore {
     async fn link_platform(&self, identity: &PlatformIdentity) -> Result<()> {
         sqlx::query(
             "INSERT INTO user_platform_identities (id, user_id, platform, platform_user_id, \
-             display_name, linked_at) VALUES ($1, $2, $3, $4, $5, $6)",
+             display_name, linked_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )
         .bind(identity.id)
         .bind(identity.user_id)
@@ -243,7 +243,7 @@ impl UserStore for PgUserStore {
     }
 
     async fn unlink_platform(&self, id: uuid::Uuid) -> Result<()> {
-        sqlx::query("DELETE FROM user_platform_identities WHERE id = $1")
+        sqlx::query("DELETE FROM user_platform_identities WHERE id = ?1")
             .bind(id)
             .execute(&self.pool)
             .await
@@ -255,7 +255,7 @@ impl UserStore for PgUserStore {
 
     async fn list_platforms(&self, user_id: uuid::Uuid) -> Result<Vec<PlatformIdentity>> {
         let rows = sqlx::query_as::<_, PlatformRow>(
-            "SELECT * FROM user_platform_identities WHERE user_id = $1 ORDER BY linked_at",
+            "SELECT * FROM user_platform_identities WHERE user_id = ?1 ORDER BY linked_at",
         )
         .bind(user_id)
         .fetch_all(&self.pool)
@@ -278,7 +278,7 @@ impl UserStore for PgUserStore {
 /// If the root user has no password set, generates a random password and prints
 /// it to stdout once.
 pub async fn ensure_default_users(
-    pool: &PgPool,
+    pool: &SqlitePool,
 ) -> std::result::Result<(), crate::error::BootError> {
     let store = PgUserStore::new(pool.clone());
 
@@ -321,7 +321,7 @@ pub async fn ensure_default_users(
 }
 
 /// 确保 root 用户有密码。如果没有，生成一个随机密码并打印。
-async fn ensure_root_password(pool: &PgPool) -> std::result::Result<(), crate::error::BootError> {
+async fn ensure_root_password(pool: &SqlitePool) -> std::result::Result<(), crate::error::BootError> {
     let hash: Option<String> =
         sqlx::query_scalar("SELECT password_hash FROM kernel_users WHERE name = 'root'")
             .fetch_optional(pool)
@@ -348,7 +348,7 @@ async fn ensure_root_password(pool: &PgPool) -> std::result::Result<(), crate::e
         })?
         .to_string();
 
-    sqlx::query("UPDATE kernel_users SET password_hash = $1 WHERE name = 'root'")
+    sqlx::query("UPDATE kernel_users SET password_hash = ?1 WHERE name = 'root'")
         .bind(&password_hash)
         .execute(pool)
         .await
