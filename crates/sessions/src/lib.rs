@@ -44,6 +44,7 @@
 //! original history.
 
 pub mod error;
+pub mod file_index;
 pub mod pg_repository;
 pub mod repository;
 pub mod store;

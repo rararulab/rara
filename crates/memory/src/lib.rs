@@ -94,6 +94,7 @@ pub mod manager;
 pub mod mem0_client;
 pub mod memos_client;
 pub mod recall_engine;
+pub mod tape;
 
 pub use error::{MemoryError, MemoryResult};
 pub use hindsight_client::HindsightClient;

@@ -417,8 +417,8 @@ mod tests {
             principal::Principal,
         },
         session::{
-            ChannelBinding, SessionEntry, SessionError, SessionKey, SessionRepoRef,
-            SessionRepository,
+            ChannelBinding, NoopSessionIndex, SessionEntry, SessionError, SessionIndexRef,
+            SessionKey, SessionRepoRef, SessionRepository,
         },
         tool::ToolRegistry,
     };
@@ -610,6 +610,7 @@ mod tests {
             )),
             Arc::new(crate::audit::AuditSubsystem::noop()),
             session_repo,
+            Arc::new(NoopSessionIndex) as SessionIndexRef,
             Arc::new(NoopSettingsProvider),
             Arc::new(StreamHub::new(16)),
             PipeRegistry::new(),

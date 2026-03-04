@@ -45,7 +45,7 @@ use crate::{
     memory::NoopMemory,
     notification::NoopNotificationBus,
     process::{AgentManifest, ProcessTable, agent_registry::AgentRegistry},
-    session::{NoopSessionRepository, SessionRepoRef},
+    session::{NoopSessionIndex, NoopSessionRepository, SessionIndexRef, SessionRepoRef},
     tool::{AgentToolRef, ToolRegistry},
 };
 
@@ -136,6 +136,7 @@ impl TestKernelBuilder {
             Arc::new(self.agent_registry),
             Arc::new(crate::audit::AuditSubsystem::noop()),
             Arc::new(NoopSessionRepository) as SessionRepoRef,
+            Arc::new(NoopSessionIndex) as SessionIndexRef,
             Arc::new(NoopSettingsProvider) as SettingsRef,
             Arc::new(StreamHub::new(16)),
             PipeRegistry::new(),
