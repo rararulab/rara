@@ -25,8 +25,8 @@ use jiff::Timestamp;
 use tokio::sync::Semaphore;
 
 use crate::{
-    audit::{AuditEvent, AuditFilter, subsystem::AuditRef},
-    device::registry::DeviceRegistryRef,
+    audit::{AuditEvent, AuditFilter, AuditRef},
+    device::DeviceRegistryRef,
     error::{KernelError, Result},
     event::KernelEvent,
     io::{

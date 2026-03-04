@@ -26,7 +26,7 @@ use snafu::ResultExt;
 use tracing::debug_span;
 
 use crate::{
-    audit::{AuditEvent, AuditEventType, MemoryOp, subsystem::AuditRef},
+    audit::{AuditEvent, AuditEventType, MemoryOp, AuditRef},
     error::{KernelError, Result},
     event::Syscall,
     event_loop::runtime::RuntimeTable,
@@ -290,13 +290,13 @@ impl SyscallDispatcher {
             } => {
                 let approval = Arc::clone(security.approval());
                 let policy = approval.policy();
-                let req = crate::security::approval::ApprovalRequest {
+                let req = crate::security::ApprovalRequest {
                     id: uuid::Uuid::new_v4(),
                     agent_id,
                     tool_name: tool_name.clone(),
                     tool_args: serde_json::json!({"summary": &summary}),
                     summary,
-                    risk_level: crate::security::approval::ApprovalManager::classify_risk(
+                    risk_level: crate::security::ApprovalManager::classify_risk(
                         &tool_name,
                     ),
                     requested_at: Timestamp::now(),
@@ -309,7 +309,7 @@ impl SyscallDispatcher {
                     let decision = approval.request_approval(req).await;
                     let approved = matches!(
                         decision,
-                        crate::security::approval::ApprovalDecision::Approved
+                        crate::security::ApprovalDecision::Approved
                     );
                     let _ = reply_tx.send(Ok(approved));
                 });

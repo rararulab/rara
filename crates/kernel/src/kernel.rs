@@ -40,21 +40,18 @@
 //! Each spawned agent receives a [`ProcessHandle`] — a thin event pusher that
 //! sends [`Syscall`] variants through the unified event queue.
 
-pub mod config;
-
 use std::sync::Arc;
 
-pub use config::{KernelConfig, SettingsRef};
 use jiff::Timestamp;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::{
-    audit::{AuditEvent, AuditFilter, AuditLog, subsystem::AuditRef},
+    audit::{AuditEvent, AuditFilter, AuditLog, AuditRef},
     channel::types::ChannelType,
     delivery::DeliverySubsystem,
-    device::registry::{DeviceRegistry, DeviceRegistryRef},
+    device::{DeviceRegistry, DeviceRegistryRef},
     io::{
         egress::{EgressAdapterRef, EndpointRegistry, EndpointRegistryRef},
         ingress::{IdentityResolverRef, IngressPipeline, IngressPipelineRef, SessionResolverRef},
@@ -66,12 +63,84 @@ use crate::{
     memory::MemoryRef,
     notification::NotificationBusRef,
     process::{AgentId, ProcessState, ProcessTable, agent_registry::AgentRegistryRef},
-    queue::{EventQueueRef, ShardedQueueRef},
+    queue::{EventQueueRef, ShardedEventQueueConfig, ShardedQueueRef},
     security::SecurityRef,
     session::SessionRepoRef,
     syscall::SyscallDispatcher,
     tool::ToolRegistryRef,
 };
+
+// ---------------------------------------------------------------------------
+// KernelConfig
+// ---------------------------------------------------------------------------
+
+/// Kernel configuration.
+#[derive(Debug, Clone, smart_default::SmartDefault)]
+pub struct KernelConfig {
+    /// Maximum number of concurrent agent processes globally.
+    #[default = 16]
+    pub max_concurrency:        usize,
+    /// Default maximum number of children per agent.
+    #[default = 8]
+    pub default_child_limit:    usize,
+    /// Default max LLM iterations for spawned agents.
+    #[default = 25]
+    pub default_max_iterations: usize,
+    /// Maximum number of KV entries per agent (0 = unlimited).
+    /// Applies to the agent-scoped namespace only.
+    #[default = 1000]
+    pub memory_quota_per_agent: usize,
+    /// Event queue configuration. Controls whether the kernel uses a single
+    /// global queue (`num_shards = 0`) or sharded parallel processing.
+    #[default(ShardedEventQueueConfig::single())]
+    pub event_queue:            ShardedEventQueueConfig,
+}
+
+/// Shared reference to a
+/// [`SettingsProvider`](rara_domain_shared::settings::SettingsProvider).
+pub type SettingsRef = Arc<dyn rara_domain_shared::settings::SettingsProvider>;
+
+// ---------------------------------------------------------------------------
+// NoopSettingsProvider
+// ---------------------------------------------------------------------------
+
+mod noop {
+    use async_trait::async_trait;
+
+    /// A no-op settings provider for testing — always returns `None`.
+    pub struct NoopSettingsProvider;
+
+    #[async_trait]
+    impl rara_domain_shared::settings::SettingsProvider for NoopSettingsProvider {
+        async fn get(&self, _key: &str) -> Option<String> { None }
+
+        async fn set(&self, _key: &str, _value: &str) -> anyhow::Result<()> { Ok(()) }
+
+        async fn delete(&self, _key: &str) -> anyhow::Result<()> { Ok(()) }
+
+        async fn list(&self) -> std::collections::HashMap<String, String> {
+            std::collections::HashMap::new()
+        }
+
+        async fn batch_update(
+            &self,
+            _patches: std::collections::HashMap<String, Option<String>>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn subscribe(&self) -> tokio::sync::watch::Receiver<()> {
+            let (_tx, rx) = tokio::sync::watch::channel(());
+            rx
+        }
+    }
+}
+
+pub use noop::NoopSettingsProvider;
+
+// ---------------------------------------------------------------------------
+// Kernel
+// ---------------------------------------------------------------------------
 
 /// The unified agent orchestrator.
 ///
@@ -281,7 +350,7 @@ impl Kernel {
     pub fn audit(&self) -> &AuditRef { &self.audit }
 
     /// Access the approval manager.
-    pub fn approval(&self) -> &Arc<crate::security::approval::ApprovalManager> {
+    pub fn approval(&self) -> &Arc<crate::security::ApprovalManager> {
         self.security.approval()
     }
 
@@ -471,7 +540,6 @@ mod tests {
     use crate::{
         handle::kernel_handle::KernelHandle,
         io::stream::StreamHub,
-        kernel::config::NoopSettingsProvider,
         llm::DriverRegistryBuilder,
         memory::NoopMemory,
         notification::NoopNotificationBus,
@@ -512,7 +580,7 @@ mod tests {
             Arc::new(StreamHub::new(16)),
             Arc::new(crate::io::ingress::NoopIdentityResolver) as IdentityResolverRef,
             Arc::new(crate::io::ingress::NoopSessionResolver) as SessionResolverRef,
-            Arc::new(crate::audit::subsystem::AuditSubsystem::noop()),
+            Arc::new(crate::audit::AuditSubsystem::noop()),
             opendal::Operator::new(opendal::services::Memory::default())
                 .expect("memory operator")
                 .finish(),
@@ -1020,8 +1088,8 @@ mod tests {
         let security = Arc::new(crate::security::SecuritySubsystem::new(
             Arc::new(NoopUserStore),
             Arc::new(DenyDangerousGuard),
-            Arc::new(crate::security::approval::ApprovalManager::new(
-                crate::security::approval::ApprovalPolicy::default(),
+            Arc::new(crate::security::ApprovalManager::new(
+                crate::security::ApprovalPolicy::default(),
             )),
         ));
 
@@ -1038,7 +1106,7 @@ mod tests {
             Arc::new(StreamHub::new(16)),
             Arc::new(crate::io::ingress::NoopIdentityResolver) as IdentityResolverRef,
             Arc::new(crate::io::ingress::NoopSessionResolver) as SessionResolverRef,
-            Arc::new(crate::audit::subsystem::AuditSubsystem::noop()),
+            Arc::new(crate::audit::AuditSubsystem::noop()),
             opendal::Operator::new(opendal::services::Memory::default())
                 .expect("memory operator")
                 .finish(),

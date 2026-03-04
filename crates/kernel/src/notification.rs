@@ -14,12 +14,11 @@
 
 //! Kernel notifications — inter-component event broadcasting.
 
-pub mod broadcast;
-
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use jiff::Timestamp;
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -89,6 +88,39 @@ pub trait NotificationBus: Send + Sync {
 
     /// Subscribe to notifications matching the given filter.
     async fn subscribe(&self, filter: NotificationFilter) -> NotificationStream;
+}
+
+// ---------------------------------------------------------------------------
+// BroadcastNotificationBus
+// ---------------------------------------------------------------------------
+
+/// Notification bus backed by `tokio::sync::broadcast`.
+pub struct BroadcastNotificationBus {
+    sender: broadcast::Sender<KernelNotification>,
+}
+
+impl BroadcastNotificationBus {
+    /// Create a new broadcast notification bus with the given channel capacity.
+    pub fn new(capacity: usize) -> Self {
+        let (sender, _) = broadcast::channel(capacity);
+        Self { sender }
+    }
+}
+
+impl Default for BroadcastNotificationBus {
+    fn default() -> Self { Self::new(256) }
+}
+
+#[async_trait]
+impl NotificationBus for BroadcastNotificationBus {
+    async fn publish(&self, event: KernelNotification) {
+        // Ignore send errors (no active subscribers).
+        let _ = self.sender.send(event);
+    }
+
+    async fn subscribe(&self, _filter: NotificationFilter) -> NotificationStream {
+        self.sender.subscribe()
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -21,8 +21,6 @@
 //! [`InMemoryAuditLog`] provides a bounded, lock-free default implementation
 //! suitable for development and testing.
 
-pub mod subsystem;
-
 use std::{collections::VecDeque, sync::Arc};
 
 use async_trait::async_trait;
@@ -277,6 +275,69 @@ impl ToolCallRecorder for NoopToolCallRecorder {
     ) {
     }
 }
+
+// ---------------------------------------------------------------------------
+// AuditSubsystem
+// ---------------------------------------------------------------------------
+
+/// Shared reference to the [`AuditSubsystem`].
+pub type AuditRef = Arc<AuditSubsystem>;
+
+/// Unified audit subsystem — event logging and tool call recording.
+pub struct AuditSubsystem {
+    audit_log:          Arc<dyn AuditLog>,
+    tool_call_recorder: Arc<dyn ToolCallRecorder>,
+}
+
+impl AuditSubsystem {
+    pub fn new(
+        audit_log: Arc<dyn AuditLog>,
+        tool_call_recorder: Arc<dyn ToolCallRecorder>,
+    ) -> Self {
+        Self {
+            audit_log,
+            tool_call_recorder,
+        }
+    }
+
+    /// Record a structured audit event (fire-and-forget).
+    pub fn record(&self, event: AuditEvent) { record_async(&self.audit_log, event); }
+
+    /// Record a tool call invocation.
+    pub async fn record_tool_call(
+        &self,
+        agent_id: AgentId,
+        tool_name: &str,
+        args: &serde_json::Value,
+        result: &serde_json::Value,
+        success: bool,
+        duration_ms: u64,
+    ) {
+        self.tool_call_recorder
+            .record_tool_call(agent_id, tool_name, args, result, success, duration_ms)
+            .await;
+    }
+
+    /// Query the audit log for events matching the filter.
+    pub async fn query(&self, filter: AuditFilter) -> Vec<AuditEvent> {
+        self.audit_log.query(filter).await
+    }
+
+    /// Access the raw audit log.
+    pub fn audit_log(&self) -> &Arc<dyn AuditLog> { &self.audit_log }
+
+    /// Access the tool call recorder.
+    pub fn tool_call_recorder(&self) -> &Arc<dyn ToolCallRecorder> { &self.tool_call_recorder }
+
+    /// Create a no-op audit subsystem for testing.
+    pub fn noop() -> Self {
+        Self {
+            audit_log:          Arc::new(InMemoryAuditLog::default()),
+            tool_call_recorder: Arc::new(NoopToolCallRecorder),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

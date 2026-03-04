@@ -19,7 +19,7 @@ use std::sync::Arc;
 use rara_kernel::{
     guard::{Guard, noop::NoopGuard},
     memory::{Memory, NoopMemory},
-    notification::{NotificationBus, broadcast::BroadcastNotificationBus},
+    notification::{BroadcastNotificationBus, NotificationBus},
 };
 
 /// Default Memory implementation — `NoopMemory` (kernel layer does not persist;

@@ -55,7 +55,7 @@ pub mod tool;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
-pub use audit::subsystem::AuditSubsystem;
+pub use audit::AuditSubsystem;
 pub use error::{KernelError, Result};
 // New process model re-exports
 pub use handle::{
@@ -71,11 +71,8 @@ pub use process::{
     principal::{Principal, Role, UserId},
 };
 pub use security::{
-    SecuritySubsystem,
-    approval::{
-        ApprovalDecision, ApprovalManager, ApprovalPolicy, ApprovalRequest, ApprovalResponse,
-        RiskLevel,
-    },
+    ApprovalDecision, ApprovalManager, ApprovalPolicy, ApprovalRequest, ApprovalResponse,
+    RiskLevel, SecuritySubsystem,
 };
 
 #[cfg(test)]

@@ -32,7 +32,7 @@ use rara_kernel::{
     kernel::{Kernel, KernelConfig},
     llm::DriverRegistry,
     process::{agent_registry::AgentRegistry, user::UserStore},
-    security::approval::{ApprovalManager, ApprovalPolicy},
+    security::{ApprovalManager, ApprovalPolicy},
     session::SessionRepository,
     tool::ToolRegistry,
 };
@@ -98,7 +98,7 @@ pub struct BootConfig {
 impl Default for BootConfig {
     fn default() -> Self {
         use rara_kernel::{
-            kernel::config::NoopSettingsProvider, llm::DriverRegistryBuilder,
+            kernel::NoopSettingsProvider, llm::DriverRegistryBuilder,
             process::noop_user_store::NoopUserStore, session::NoopSessionRepository,
         };
 
@@ -168,7 +168,7 @@ pub fn boot(config: BootConfig) -> Kernel {
     let tool_call_recorder: Arc<dyn rara_kernel::audit::ToolCallRecorder> = config
         .tool_call_recorder
         .unwrap_or_else(|| Arc::new(rara_kernel::audit::NoopToolCallRecorder));
-    let audit = Arc::new(rara_kernel::audit::subsystem::AuditSubsystem::new(
+    let audit = Arc::new(rara_kernel::audit::AuditSubsystem::new(
         audit_log,
         tool_call_recorder,
     ));
