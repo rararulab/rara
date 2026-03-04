@@ -28,10 +28,6 @@ pub mod keys {
     pub const LLM_PROVIDERS_OPENROUTER_API_KEY: &str = "llm.providers.openrouter.api_key";
     pub const LLM_PROVIDERS_OLLAMA_API_KEY: &str = "llm.providers.ollama.api_key";
     pub const LLM_PROVIDERS_OLLAMA_BASE_URL: &str = "llm.providers.ollama.base_url";
-    pub const LLM_MODELS_DEFAULT: &str = "llm.models.default";
-    pub const LLM_MODELS_CHAT: &str = "llm.models.chat";
-    pub const LLM_MODELS_JOB: &str = "llm.models.job";
-    pub const LLM_FALLBACK_MODELS: &str = "llm.fallback_models";
     pub const LLM_FAVORITE_MODELS: &str = "llm.favorite_models";
     pub const TELEGRAM_BOT_TOKEN: &str = "telegram.bot_token";
     pub const TELEGRAM_CHAT_ID: &str = "telegram.chat_id";
@@ -92,13 +88,17 @@ pub trait SettingsProvider: Send + Sync {
     fn subscribe(&self) -> tokio::sync::watch::Receiver<()>;
 }
 
-/// Resolve the model for the given key, falling back to `llm.models.default`.
-pub async fn get_model(settings: &dyn SettingsProvider, key: &str) -> Option<String> {
-    let specific = format!("llm.models.{key}");
-    if let Some(v) = settings.get(&specific).await {
-        return Some(v);
-    }
-    settings.get(keys::LLM_MODELS_DEFAULT).await
+/// Resolve the default model for the default provider from settings.
+///
+/// Looks up `llm.default_provider`, then reads
+/// `llm.providers.{provider}.default_model`.
+pub async fn get_default_model(settings: &dyn SettingsProvider) -> Option<String> {
+    let provider = settings
+        .get_first(&[keys::LLM_DEFAULT_PROVIDER, keys::LLM_PROVIDER])
+        .await?;
+    settings
+        .get(&format!("llm.providers.{provider}.default_model"))
+        .await
 }
 
 /// Test utilities for settings.

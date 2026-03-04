@@ -21,7 +21,7 @@
 //!
 //! ```text
 //! Driver: agent_overrides > manifest.provider_hint > default_driver
-//! Model:  agent_overrides > manifest.model          > default_model
+//! Model:  agent_overrides > manifest.model          > provider_models[driver].default_model
 //! ```
 
 use std::{
@@ -37,11 +37,20 @@ use crate::error;
 /// Shared reference to the [`DriverRegistry`].
 pub type DriverRegistryRef = Arc<DriverRegistry>;
 
+/// Per-provider model configuration (default + fallbacks).
+#[derive(Debug, Clone)]
+pub struct ProviderModelConfig {
+    /// The default model for this provider.
+    pub default_model:   String,
+    /// Fallback models to try when the default is unavailable.
+    pub fallback_models: Vec<String>,
+}
+
 #[derive(Clone)]
 struct DriverRegistryState {
     drivers:         HashMap<String, LlmDriverRef>,
     default_driver:  String,
-    default_model:   String,
+    provider_models: HashMap<String, ProviderModelConfig>,
     agent_overrides: HashMap<String, AgentDriverConfig>,
 }
 
@@ -69,7 +78,7 @@ impl DriverRegistry {
     /// - **Driver**: `agent_overrides[name].driver` > `manifest_provider_hint`
     ///   > `default_driver`
     /// - **Model**: `agent_overrides[name].model` > `manifest_model` >
-    ///   `default_model`
+    ///   `provider_models[driver].default_model`
     pub fn resolve(
         &self,
         agent_name: &str,
@@ -84,10 +93,16 @@ impl DriverRegistry {
             .or(manifest_provider_hint)
             .unwrap_or(&state.default_driver);
 
+        let provider_default = state
+            .provider_models
+            .get(driver_name)
+            .map(|c| c.default_model.as_str());
+
         let model_name = override_cfg
             .and_then(|c| c.model.as_deref())
             .or(manifest_model)
-            .unwrap_or(&state.default_model);
+            .or(provider_default)
+            .unwrap_or("unknown");
 
         let driver = state
             .drivers
@@ -106,13 +121,37 @@ impl DriverRegistry {
             .clone()
     }
 
-    /// Get the default model name.
-    pub fn default_model(&self) -> String {
+    /// Get the default model for the given provider, if configured.
+    pub fn default_model_for(&self, provider: &str) -> Option<String> {
         self.state
             .read()
             .unwrap_or_else(|e| e.into_inner())
-            .default_model
-            .clone()
+            .provider_models
+            .get(provider)
+            .map(|c| c.default_model.clone())
+    }
+
+    /// Get the default model for the default provider.
+    ///
+    /// Convenience shorthand equivalent to
+    /// `default_model_for(&self.default_driver())`.
+    pub fn default_model(&self) -> Option<String> {
+        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        state
+            .provider_models
+            .get(&state.default_driver)
+            .map(|c| c.default_model.clone())
+    }
+
+    /// Get the fallback models for the given provider, if configured.
+    pub fn fallback_models_for(&self, provider: &str) -> Vec<String> {
+        self.state
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .provider_models
+            .get(provider)
+            .map(|c| c.fallback_models.clone())
+            .unwrap_or_default()
     }
 
     /// List all registered driver names.
@@ -139,17 +178,17 @@ impl DriverRegistry {
 pub struct DriverRegistryBuilder {
     drivers:         HashMap<String, LlmDriverRef>,
     default_driver:  String,
-    default_model:   String,
+    provider_models: HashMap<String, ProviderModelConfig>,
     agent_overrides: HashMap<String, AgentDriverConfig>,
 }
 
 impl DriverRegistryBuilder {
-    /// Create a new builder with the given default driver and model names.
-    pub fn new(default_driver: impl Into<String>, default_model: impl Into<String>) -> Self {
+    /// Create a new builder with the given default driver name.
+    pub fn new(default_driver: impl Into<String>) -> Self {
         Self {
             drivers:         HashMap::new(),
             default_driver:  default_driver.into(),
-            default_model:   default_model.into(),
+            provider_models: HashMap::new(),
             agent_overrides: HashMap::new(),
         }
     }
@@ -157,6 +196,23 @@ impl DriverRegistryBuilder {
     /// Register a named driver instance.
     pub fn driver(mut self, name: impl Into<String>, driver: LlmDriverRef) -> Self {
         self.drivers.insert(name.into(), driver);
+        self
+    }
+
+    /// Register model configuration for a specific provider.
+    pub fn provider_model(
+        mut self,
+        name: impl Into<String>,
+        default_model: impl Into<String>,
+        fallback_models: Vec<String>,
+    ) -> Self {
+        self.provider_models.insert(
+            name.into(),
+            ProviderModelConfig {
+                default_model:   default_model.into(),
+                fallback_models,
+            },
+        );
         self
     }
 
@@ -176,7 +232,7 @@ impl DriverRegistryBuilder {
             state: RwLock::new(DriverRegistryState {
                 drivers:         self.drivers,
                 default_driver:  self.default_driver,
-                default_model:   self.default_model,
+                provider_models: self.provider_models,
                 agent_overrides: self.agent_overrides,
             }),
         }
@@ -220,13 +276,15 @@ mod tests {
     #[test]
     fn update_replaces_default_driver_and_registered_drivers() {
         let registry = Arc::new(
-            DriverRegistryBuilder::new("openrouter", "model-a")
+            DriverRegistryBuilder::new("openrouter")
                 .driver("openrouter", Arc::new(TestDriver))
+                .provider_model("openrouter", "model-a", vec![])
                 .build(),
         );
 
-        let updated = DriverRegistryBuilder::new("ollama", "model-b")
+        let updated = DriverRegistryBuilder::new("ollama")
             .driver("ollama", Arc::new(TestDriver))
+            .provider_model("ollama", "model-b", vec!["model-c".into()])
             .build();
 
         registry.update(&updated);
@@ -235,8 +293,12 @@ mod tests {
             .resolve("agent", None, None)
             .expect("driver should resolve");
         assert_eq!(registry.default_driver(), "ollama");
-        assert_eq!(registry.default_model(), "model-b");
+        assert_eq!(registry.default_model(), Some("model-b".to_string()));
         assert_eq!(model, "model-b");
+        assert_eq!(
+            registry.fallback_models_for("ollama"),
+            vec!["model-c".to_string()]
+        );
         assert_eq!(registry.driver_names(), vec!["ollama".to_string()]);
     }
 }

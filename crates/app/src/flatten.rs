@@ -32,41 +32,39 @@ use super::AppConfig;
 /// ```yaml
 /// llm:
 ///   default_provider: "ollama"
-///   models:
-///     default: "qwen3:32b"
-///     chat: "qwen3:32b"
 ///   providers:
 ///     ollama:
 ///       base_url: "http://localhost:11434/v1"
 ///       api_key: "ollama"
+///       default_model: "qwen3:32b"
+///       fallback_models:
+///         - "qwen3:14b"
+///         - "llama3:8b"
 /// ```
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct LlmConfig {
     pub default_provider: Option<String>,
-    pub models:           LlmModelsConfig,
     pub providers:        HashMap<String, ProviderConfig>,
-}
-
-/// Default model configuration.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
-pub struct LlmModelsConfig {
-    pub default: Option<String>,
 }
 
 /// Configuration for a single LLM provider (OpenAI-compatible).
 ///
-/// Both fields are required at runtime by `OpenAiDriver::resolve_config()`.
-/// For local providers like Ollama that don't validate API keys,
-/// set `api_key` to any non-empty placeholder (e.g. `"ollama"`).
+/// Both fields `base_url` and `api_key` are required at runtime by
+/// `OpenAiDriver::resolve_config()`. For local providers like Ollama
+/// that don't validate API keys, set `api_key` to any non-empty
+/// placeholder (e.g. `"ollama"`).
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ProviderConfig {
-    pub base_url: Option<String>,
+    pub base_url:        Option<String>,
     /// Required for all providers. For Ollama, use any placeholder value (e.g.
     /// `"ollama"`).
-    pub api_key:  Option<String>,
+    pub api_key:         Option<String>,
+    /// Default model for this provider.
+    pub default_model:   Option<String>,
+    /// Fallback models to try when the default is unavailable.
+    pub fallback_models: Option<Vec<String>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -103,15 +101,23 @@ fn flatten_llm(llm: &LlmConfig, out: &mut Vec<(String, String)>) {
     if let Some(ref v) = llm.default_provider {
         out.push(("llm.default_provider".into(), v.clone()));
     }
-    if let Some(ref v) = llm.models.default {
-        out.push(("llm.models.default".into(), v.clone()));
-    }
     for (name, provider) in &llm.providers {
         if let Some(ref v) = provider.base_url {
             out.push((format!("llm.providers.{name}.base_url"), v.clone()));
         }
         if let Some(ref v) = provider.api_key {
             out.push((format!("llm.providers.{name}.api_key"), v.clone()));
+        }
+        if let Some(ref v) = provider.default_model {
+            out.push((format!("llm.providers.{name}.default_model"), v.clone()));
+        }
+        if let Some(ref models) = provider.fallback_models {
+            if !models.is_empty() {
+                out.push((
+                    format!("llm.providers.{name}.fallback_models"),
+                    models.join(","),
+                ));
+            }
         }
     }
 }
@@ -143,14 +149,13 @@ mod tests {
     fn flatten_llm_full() {
         let llm = LlmConfig {
             default_provider: Some("ollama".into()),
-            models:           LlmModelsConfig {
-                default: Some("qwen3:32b".into()),
-            },
             providers:        HashMap::from([(
                 "ollama".into(),
                 ProviderConfig {
-                    base_url: Some("http://localhost:11434/v1".into()),
-                    api_key:  Some("ollama".into()),
+                    base_url:        Some("http://localhost:11434/v1".into()),
+                    api_key:         Some("ollama".into()),
+                    default_model:   Some("qwen3:32b".into()),
+                    fallback_models: Some(vec!["qwen3:14b".into(), "llama3:8b".into()]),
                 },
             )]),
         };
@@ -164,12 +169,16 @@ mod tests {
             .collect();
 
         assert_eq!(map["llm.default_provider"], "ollama");
-        assert_eq!(map["llm.models.default"], "qwen3:32b");
         assert_eq!(
             map["llm.providers.ollama.base_url"],
             "http://localhost:11434/v1"
         );
         assert_eq!(map["llm.providers.ollama.api_key"], "ollama");
+        assert_eq!(map["llm.providers.ollama.default_model"], "qwen3:32b");
+        assert_eq!(
+            map["llm.providers.ollama.fallback_models"],
+            "qwen3:14b,llama3:8b"
+        );
     }
 
     #[test]

@@ -591,7 +591,11 @@ mod tests {
             memory_quota_per_agent: 1000,
             ..Default::default()
         };
-        let driver_registry = Arc::new(DriverRegistryBuilder::new("test", "test-model").build());
+        let driver_registry = Arc::new(
+            DriverRegistryBuilder::new("test")
+                .provider_model("test", "test-model", vec![])
+                .build(),
+        );
         Kernel::for_testing(
             config,
             Arc::new(crate::process::ProcessTable::new()),

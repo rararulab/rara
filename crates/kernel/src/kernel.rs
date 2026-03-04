@@ -576,7 +576,11 @@ mod tests {
             std::env::temp_dir().join("kernel_test_agents"),
         ));
 
-        let driver_registry = Arc::new(DriverRegistryBuilder::new("test", "test-model").build());
+        let driver_registry = Arc::new(
+            DriverRegistryBuilder::new("test")
+                .provider_model("test", "test-model", vec![])
+                .build(),
+        );
 
         Kernel::new(
             config,
@@ -1095,7 +1099,11 @@ mod tests {
             std::env::temp_dir().join("kernel_guard_test_agents"),
         ));
 
-        let driver_registry = Arc::new(DriverRegistryBuilder::new("test", "test-model").build());
+        let driver_registry = Arc::new(
+            DriverRegistryBuilder::new("test")
+                .provider_model("test", "test-model", vec![])
+                .build(),
+        );
 
         let security = Arc::new(crate::security::SecuritySubsystem::new(
             Arc::new(NoopUserStore),

@@ -29,6 +29,8 @@ pub mod types;
 
 pub use driver::{LlmDriver, LlmDriverRef};
 pub use openai::OpenAiDriver;
-pub use registry::{DriverRegistry, DriverRegistryBuilder, DriverRegistryRef};
+pub use registry::{
+    DriverRegistry, DriverRegistryBuilder, DriverRegistryRef, ProviderModelConfig,
+};
 pub use stream::StreamDelta;
 pub use types::*;

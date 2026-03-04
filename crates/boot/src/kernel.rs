@@ -108,7 +108,9 @@ impl Default for BootConfig {
         Self {
             kernel_config:      KernelConfig::default(),
             driver_registry:    Arc::new(
-                DriverRegistryBuilder::new("default", "openai/gpt-4o-mini").build(),
+                DriverRegistryBuilder::new("default")
+                    .provider_model("default", "openai/gpt-4o-mini", vec![])
+                    .build(),
             ),
             tool_registry:      Arc::new(ToolRegistry::new()),
             agent_registry:     Arc::new(AgentRegistry::new(
