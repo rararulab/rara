@@ -620,6 +620,7 @@ impl KernelEvent {
                 EventPriority::Low => "low".to_string(),
             },
             agent_id:   observable_agent_id.map(|id| id.to_string()),
+            session_id: self.base.session_id.map(|id| id.to_string()),
             summary:    self.summary(),
         }
     }
@@ -648,6 +649,7 @@ pub struct KernelEventCommonFields {
     pub event_type: String,
     pub priority:   String,
     pub agent_id:   Option<String>,
+    pub session_id: Option<String>,
     pub summary:    String,
 }
 

@@ -484,8 +484,11 @@ fn render_gantt(
         .bg(Color::DarkGray)
         .add_modifier(Modifier::BOLD);
 
+    // Reserve last row for time axis.
+    let chart_height = inner.height.saturating_sub(1);
+
     for (i, agent_id) in ordered.iter().enumerate() {
-        if i as u16 >= inner.height {
+        if i as u16 >= chart_height {
             break;
         }
         let y = inner.y + i as u16;
@@ -506,7 +509,7 @@ fn render_gantt(
         // Separator.
         let sep_area = Rect::new(inner.x + label_width, y, 1, 1);
         frame.render_widget(
-            Paragraph::new(Span::styled("|", Style::default().fg(Color::DarkGray))),
+            Paragraph::new(Span::styled("\u{2502}", Style::default().fg(Color::DarkGray))),
             sep_area,
         );
 
@@ -526,13 +529,34 @@ fn render_gantt(
         let bar_color = match timeline.state.as_str() {
             "Running" | "running" => Color::Green,
             "Failed" | "failed" => Color::Red,
+            "Idle" | "idle" => Color::Cyan,
             _ => Color::Gray,
         };
+
+        // Build bar with inline metrics overlay.
+        let bar_len = bar_end - bar_start;
+        let duration_secs = match timeline.end {
+            Some(end) => end.duration_since(timeline.start).as_secs(),
+            None => now.duration_since(timeline.start).as_secs(),
+        };
+        let overlay = format!(
+            " {}  {}tok  {}llm ",
+            format_uptime(duration_secs * 1000),
+            format_tokens(timeline.metrics.tokens_consumed),
+            timeline.metrics.llm_calls,
+        );
+        let overlay_len = overlay.len();
 
         let mut bar_chars = String::with_capacity(bar_width);
         for col in 0..bar_width {
             if col >= bar_start && col < bar_end {
-                bar_chars.push('\u{2588}'); // Full block
+                let offset = col - bar_start;
+                if offset < overlay_len && bar_len >= overlay_len {
+                    // Overlay metrics text on the bar.
+                    bar_chars.push(overlay.as_bytes()[offset] as char);
+                } else {
+                    bar_chars.push('\u{2588}'); // Full block
+                }
             } else {
                 bar_chars.push(' ');
             }
@@ -548,6 +572,46 @@ fn render_gantt(
         frame.render_widget(
             Paragraph::new(Span::styled(bar_chars, bar_style)),
             bar_area,
+        );
+    }
+
+    // Time axis on the last row.
+    if inner.height > 1 {
+        let axis_y = inner.y + inner.height - 1;
+
+        // Label area: empty padding.
+        let axis_label_area = Rect::new(inner.x, axis_y, label_width + 1, 1);
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                format!("{:<width$}\u{2502}", "", width = label_width as usize),
+                Style::default().fg(Color::DarkGray),
+            )),
+            axis_label_area,
+        );
+
+        // Build time axis marks.
+        let num_marks = 5usize;
+        let mut axis = vec!['\u{2500}'; bar_width]; // ─
+        for m in 0..=num_marks {
+            let pos = (m as f64 / num_marks as f64 * (bar_width - 1) as f64).round() as usize;
+            if pos < bar_width {
+                axis[pos] = '\u{253C}'; // ┼
+                let t = session_duration * m as f64 / num_marks as f64;
+                let label = format_uptime((t * 1000.0) as u64);
+                // Write label starting at mark position.
+                for (j, ch) in label.chars().enumerate() {
+                    if pos + j + 1 < bar_width {
+                        axis[pos + j + 1] = ch;
+                    }
+                }
+            }
+        }
+
+        let axis_str: String = axis.into_iter().collect();
+        let axis_area = Rect::new(inner.x + label_width + 1, axis_y, bar_width as u16, 1);
+        frame.render_widget(
+            Paragraph::new(Span::styled(axis_str, Style::default().fg(Color::DarkGray))),
+            axis_area,
         );
     }
 }

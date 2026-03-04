@@ -347,15 +347,24 @@ impl App {
         for p in &self.processes {
             let ss = &mut self.session_state;
 
+            // Use uptime_ms to compute the actual start time of this process.
+            let agent_start = now - Duration::from_millis(p.uptime_ms);
+
             let session_view =
                 ss.sessions
                     .entry(p.session_id.clone())
                     .or_insert_with(|| SessionView {
                         session_id: p.session_id.clone(),
                         agents:     indexmap::IndexMap::new(),
-                        first_seen: now,
+                        first_seen: agent_start,
                         last_event: now,
                     });
+
+            // Update session first_seen if this agent started earlier.
+            if agent_start < session_view.first_seen {
+                session_view.first_seen = agent_start;
+            }
+            session_view.last_event = now;
 
             let timeline =
                 session_view
@@ -365,7 +374,7 @@ impl App {
                         agent_id:  p.agent_id.clone(),
                         name:      p.name.clone(),
                         parent_id: p.parent_id.clone(),
-                        start:     now,
+                        start:     agent_start,
                         end:       None,
                         state:     p.state.clone(),
                         metrics:   p.metrics.clone(),
@@ -377,6 +386,7 @@ impl App {
             timeline.parent_id = p.parent_id.clone();
             timeline.state = p.state.clone();
             timeline.metrics = p.metrics.clone();
+            timeline.start = agent_start;
 
             // Mark completed/failed agents.
             match p.state.as_str() {
