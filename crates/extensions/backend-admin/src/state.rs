@@ -39,7 +39,6 @@ impl BackendState {
     /// settings provider is also needed by `RaraState`).
     pub async fn init(
         pool: sqlx::SqlitePool,
-        session_repo: Arc<dyn rara_sessions::repository::SessionRepository>,
         session_index: Arc<dyn rara_kernel::session::SessionIndex>,
         tape_store: Arc<rara_memory::tape::FileTapeStore>,
         settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
@@ -52,7 +51,6 @@ impl BackendState {
         // -- session service (renamed from ChatService) ----------------------
 
         let session_service = crate::chat::service::SessionService::new(
-            session_repo,
             session_index,
             tape_store,
             settings_provider,

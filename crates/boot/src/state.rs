@@ -17,7 +17,7 @@
 //!
 //! [`RaraState`] is the kernel-dependency half of the old `AppState` god
 //! object.  It initializes LLM providers, tools, skills, MCP, and the
-//! session repository / tape store but does **not** create a `Kernel`
+//! session index / tape store but does **not** create a `Kernel`
 //! itself — the caller does that in the app crate using the fields exposed
 //! here.
 
@@ -29,7 +29,7 @@ use tracing::info;
 /// Kernel-side application state.
 ///
 /// Owns everything the kernel needs to run: provider registry, tool registry,
-/// skills, MCP, user store, session repository, session index, and tape store.
+/// skills, MCP, user store, session index, and tape store.
 ///
 /// Does NOT hold a `Kernel` — the app crate builds one from these fields.
 #[derive(Clone)]
@@ -38,8 +38,6 @@ pub struct RaraState {
     pub driver_registry:   Arc<rara_kernel::llm::DriverRegistry>,
     pub tool_registry:     Arc<rara_kernel::tool::ToolRegistry>,
     pub user_store:        Arc<dyn rara_kernel::process::user::UserStore>,
-    /// Legacy session repository (kept during gradual migration).
-    pub session_repo:      Arc<dyn rara_sessions::repository::SessionRepository>,
     /// Lightweight file-based session metadata index (tape-centric replacement).
     pub session_index:     Arc<dyn rara_kernel::session::SessionIndex>,
     /// File-backed tape store for append-only conversation history.
@@ -96,17 +94,6 @@ impl RaraState {
                 }
             });
         }
-
-        // -- session repository (legacy) --------------------------------------
-
-        let session_repo: Arc<dyn rara_sessions::repository::SessionRepository> = Arc::new(
-            rara_sessions::pg_repository::PgSessionRepository::new(
-                pool.clone(),
-                rara_paths::sessions_dir(),
-            )
-            .await
-            .whatever_context("Failed to initialize session repository")?,
-        );
 
         // -- session index (tape-centric) -------------------------------------
 
@@ -186,7 +173,6 @@ impl RaraState {
             driver_registry,
             tool_registry: tools,
             user_store,
-            session_repo,
             session_index,
             tape_store,
             skill_registry,

@@ -29,9 +29,6 @@
 //! | `GET`    | `/api/v1/chat/sessions/{key}`                        | Get a session          |
 //! | `PATCH`  | `/api/v1/chat/sessions/{key}`                        | Update session fields  |
 //! | `DELETE` | `/api/v1/chat/sessions/{key}`                        | Delete a session       |
-//! | `GET`    | `/api/v1/chat/sessions/{key}/messages`               | Get message history    |
-//! | `DELETE` | `/api/v1/chat/sessions/{key}/messages`               | Clear messages         |
-//! | `POST`   | `/api/v1/chat/sessions/{key}/fork`                   | Fork a session         |
 //! | `PUT`    | `/api/v1/chat/channel-bindings`                      | Bind a channel         |
 //! | `GET`    | `/api/v1/chat/channel-bindings/{type}/{account}/{id}`| Get channel binding    |
 
@@ -40,7 +37,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
-use rara_sessions::types::{ChannelBinding, ChatMessage, SessionEntry, SessionKey};
+use rara_sessions::types::{ChannelBinding, SessionEntry, SessionKey};
 use serde::Deserialize;
 use tracing::instrument;
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -77,22 +74,6 @@ pub struct ListSessionsQuery {
     pub limit:  Option<i64>,
     /// Number of sessions to skip (default: 0).
     pub offset: Option<i64>,
-}
-
-/// Query parameters for `GET /sessions/{key}/messages`.
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub struct GetMessagesQuery {
-    /// Only return messages with `seq > after_seq` (cursor-based pagination).
-    pub after_seq: Option<i64>,
-    /// Maximum number of messages to return.
-    pub limit:     Option<i64>,
-}
-
-/// Request body for `POST /sessions/{key}/fork`.
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub struct ForkSessionRequest {
-    /// Fork point — messages with `seq <= fork_at_seq` are copied.
-    pub fork_at_seq: i64,
 }
 
 /// Request body for `PATCH /sessions/{key}`.
@@ -147,8 +128,6 @@ fn session_routes(service: SessionService) -> OpenApiRouter {
     OpenApiRouter::new()
         .routes(routes!(create_session, list_sessions))
         .routes(routes!(get_session, update_session, delete_session))
-        .routes(routes!(get_messages, clear_messages))
-        .routes(routes!(fork_session))
         .routes(routes!(bind_channel))
         .routes(routes!(get_channel_binding))
         .with_state(service)
@@ -305,77 +284,6 @@ async fn delete_session(
 ) -> Result<StatusCode, ChatError> {
     service.delete_session(&parse_session_key(&key)?).await?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-/// `GET /api/v1/chat/sessions/{key}/messages` — retrieve conversation
-/// history with optional cursor-based pagination.
-#[utoipa::path(
-    get,
-    path = "/api/v1/chat/sessions/{key}/messages",
-    tag = "chat",
-    params(
-        ("key" = String, Path, description = "Session key"),
-        ("after_seq" = Option<i64>, Query, description = "Only return messages with seq > after_seq"),
-        ("limit" = Option<i64>, Query, description = "Maximum number of messages to return"),
-    ),
-    responses(
-        (status = 200, description = "Message history", body = Vec<Object>),
-    )
-)]
-#[instrument(skip(service))]
-async fn get_messages(
-    State(service): State<SessionService>,
-    Path(key): Path<String>,
-    Query(q): Query<GetMessagesQuery>,
-) -> Result<Json<Vec<ChatMessage>>, ChatError> {
-    let messages = service
-        .get_messages(&parse_session_key(&key)?, q.after_seq, q.limit)
-        .await?;
-    Ok(Json(messages))
-}
-
-/// `DELETE /api/v1/chat/sessions/{key}/messages` — clear all messages for a
-/// session (keeps the session itself).
-#[utoipa::path(
-    delete,
-    path = "/api/v1/chat/sessions/{key}/messages",
-    tag = "chat",
-    params(("key" = String, Path, description = "Session key")),
-    responses(
-        (status = 204, description = "Messages cleared"),
-    )
-)]
-#[instrument(skip(service))]
-async fn clear_messages(
-    State(service): State<SessionService>,
-    Path(key): Path<String>,
-) -> Result<StatusCode, ChatError> {
-    service.clear_messages(&parse_session_key(&key)?).await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-/// `POST /api/v1/chat/sessions/{key}/fork` — fork a session at a specific
-/// message sequence number.
-#[utoipa::path(
-    post,
-    path = "/api/v1/chat/sessions/{key}/fork",
-    tag = "chat",
-    params(("key" = String, Path, description = "Session key to fork from")),
-    request_body = ForkSessionRequest,
-    responses(
-        (status = 201, description = "Forked session created", body = Object),
-    )
-)]
-#[instrument(skip(service, req))]
-async fn fork_session(
-    State(service): State<SessionService>,
-    Path(key): Path<String>,
-    Json(req): Json<ForkSessionRequest>,
-) -> Result<(StatusCode, Json<SessionEntry>), ChatError> {
-    let forked = service
-        .fork_session(&parse_session_key(&key)?, req.fork_at_seq)
-        .await?;
-    Ok((StatusCode::CREATED, Json(forked)))
 }
 
 /// `PUT /api/v1/chat/channel-bindings` — bind an external channel to a

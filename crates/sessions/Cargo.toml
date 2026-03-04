@@ -9,23 +9,20 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Chat session persistence — sessions, messages, and channel bindings"
+description = "Session metadata persistence — file-based session index"
 
 [dependencies]
 async-trait.workspace = true
-chrono.workspace = true
 rara-kernel = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
-sqlx = { workspace = true }
 tokio = { workspace = true }
 tracing.workspace = true
 
 [dev-dependencies]
+chrono = { workspace = true }
 tempfile = { workspace = true }
-testcontainers = { workspace = true }
-testcontainers-modules = { workspace = true, features = ["postgres"] }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["test-util", "macros"] }
 
 [lints]
 workspace = true

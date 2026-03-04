@@ -23,8 +23,8 @@
 //! |-------------|------------------|----------------------------------|
 //! | LLM         | [`LlmDriver`]    | Chat completion requests         |
 //! | Tool        | [`ToolRegistry`] | Tool registration + dispatch     |
-//! | Memory      | [`Memory`]       | 3-layer memory (State/Knowledge/Learning) |
-//! | Session     | [`SessionRepository`] | Conversation history persistence |
+//! | Memory      | [`Memory`]       | Agent memory subsystem            |
+//! | Session     | [`SessionIndex`] | Session metadata persistence      |
 //! | Guard       | [`Guard`]        | Tool approval + output moderation |
 //! | Notification Bus | [`NotificationBus`] | Inter-component notification broadcasting |
 

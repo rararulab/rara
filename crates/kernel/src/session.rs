@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Unified session types and repository trait.
+//! Unified session types and traits.
 //!
 //! This module is the canonical source of truth for session-related types
 //! used across the kernel and downstream crates (rara-sessions, rara-boot,
-//! etc.). All session persistence goes through [`SessionRepository`].
+//! etc.). Session metadata is managed via [`SessionIndex`]; the legacy
+//! [`SessionRepository`] trait is retained for internal kernel event-loop
+//! use only and will be removed in a future release.
 
 use std::sync::Arc;
 

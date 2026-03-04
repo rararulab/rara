@@ -34,7 +34,7 @@ use rara_kernel::{
     memory::{Memory, NoopMemory},
     process::{agent_registry::AgentRegistry, user::UserStore},
     security::{ApprovalManager, ApprovalPolicy},
-    session::{SessionIndex, SessionRepository},
+    session::SessionIndex,
     tool::ToolRegistry,
 };
 
@@ -61,8 +61,6 @@ pub struct BootConfig {
     pub agent_registry:  Arc<AgentRegistry>,
     /// User store for permission checks.
     pub user_store:      Arc<dyn UserStore>,
-    /// Session repository for conversation history (legacy).
-    pub session_repo:    Arc<dyn SessionRepository>,
     /// Lightweight session metadata index (tape-centric replacement).
     pub session_index:   Option<Arc<dyn SessionIndex>>,
     /// File-backed tape store (tape-centric session storage).
@@ -102,7 +100,7 @@ impl Default for BootConfig {
     fn default() -> Self {
         use rara_kernel::{
             kernel::NoopSettingsProvider, llm::DriverRegistryBuilder,
-            process::noop_user_store::NoopUserStore, session::NoopSessionRepository,
+            process::noop_user_store::NoopUserStore,
         };
 
         Self {
@@ -116,7 +114,6 @@ impl Default for BootConfig {
                 rara_paths::data_dir().join("agents"),
             )),
             user_store:         Arc::new(NoopUserStore) as Arc<dyn UserStore>,
-            session_repo:       Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
             session_index:      None,
             tape_store:         None,
             settings:           Arc::new(NoopSettingsProvider)
@@ -155,9 +152,13 @@ pub fn boot(config: BootConfig) -> Kernel {
                 rara_kernel::process::principal::UserId("root".to_string()),
             ))
         });
+    let session_index_for_resolver: Arc<dyn SessionIndex> = config
+        .session_index
+        .clone()
+        .unwrap_or_else(|| Arc::new(rara_kernel::session::NoopSessionIndex));
     let session_resolver: Arc<dyn SessionResolver> = config
         .session_resolver
-        .unwrap_or_else(|| Arc::new(DefaultSessionResolver::new(config.session_repo.clone())));
+        .unwrap_or_else(|| Arc::new(DefaultSessionResolver::new(session_index_for_resolver)));
 
     // Components (use overrides or boot defaults)
     let memory: Arc<dyn Memory> = Arc::new(NoopMemory);
@@ -205,6 +206,12 @@ pub fn boot(config: BootConfig) -> Kernel {
         .session_index
         .unwrap_or_else(|| Arc::new(rara_kernel::session::NoopSessionIndex));
 
+    // The kernel event loop still uses SessionRepository internally for
+    // message persistence during agent turns. Pass a NoopSessionRepository
+    // since message persistence has moved to the tape subsystem.
+    let session_repo: Arc<dyn rara_kernel::session::SessionRepository> =
+        Arc::new(rara_kernel::session::NoopSessionRepository);
+
     Kernel::new(
         kernel_config,
         config.driver_registry,
@@ -213,7 +220,7 @@ pub fn boot(config: BootConfig) -> Kernel {
         event_bus,
         security,
         config.agent_registry,
-        config.session_repo,
+        session_repo,
         session_index,
         config.settings,
         stream_hub,

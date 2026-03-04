@@ -9,17 +9,14 @@ homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Unified memory layer: mem0 (facts) + Memos (notes) + Hindsight (4-network recall)"
+description = "Tape-based memory layer for append-only conversation recording"
 
 [dependencies]
-async-trait.workspace = true
-common-worker.workspace = true
 derive_more = { workspace = true }
 jiff.workspace = true
 md5.workspace = true
 rara-kernel.workspace = true
 regex.workspace = true
-reqwest.workspace = true
 rustix = { workspace = true, features = ["fs"] }
 serde.workspace = true
 serde_json.workspace = true
@@ -28,12 +25,9 @@ strum = { workspace = true, features = ["derive"] }
 tokio.workspace = true
 tracing.workspace = true
 urlencoding.workspace = true
-uuid.workspace = true
 
 [dev-dependencies]
-testcontainers = { workspace = true, features = ["http_wait_plain"] }
 tokio = { workspace = true, features = ["test-util", "macros"] }
-uuid = { workspace = true, features = ["v4"] }
 
 [lints]
 workspace = true

@@ -55,8 +55,6 @@ pub struct AppConfig {
     pub http:        RestServerConfig,
     /// gRPC server bind / limits.
     pub grpc:        GrpcServerConfig,
-    /// Memory backend configuration.
-    pub memory:      MemoryConfig,
     /// General OTLP telemetry (Alloy/Tempo).
     #[serde(default)]
     pub telemetry:   TelemetryConfig,
@@ -68,16 +66,6 @@ pub struct AppConfig {
     /// Telegram bot configuration (seeded to settings store at startup).
     #[serde(default)]
     pub telegram:    Option<flatten::TelegramConfig>,
-}
-
-#[derive(Debug, Clone, bon::Builder, Deserialize)]
-#[builder(on(String, into))]
-pub struct MemoryConfig {
-    pub mem0_base_url:      String,
-    pub memos_base_url:     String,
-    pub memos_token:        String,
-    pub hindsight_base_url: String,
-    pub hindsight_bank_id:  String,
 }
 
 /// General OTLP telemetry configuration.
@@ -201,7 +189,6 @@ impl AppConfig {
 
         let backend = rara_backend_admin::state::BackendState::init(
             pool.clone(),
-            rara.session_repo.clone(),
             rara.session_index.clone(),
             rara.tape_store.clone(),
             settings_provider.clone(),
@@ -266,7 +253,6 @@ impl AppConfig {
             tool_registry: rara.tool_registry.clone(),
             agent_registry: Arc::new(rara_boot::manifests::load_default_registry()),
             user_store: rara.user_store.clone(),
-            session_repo: rara.session_repo.clone(),
             session_index: Some(rara.session_index.clone()),
             settings: settings_provider.clone(),
             guard: Some(path_guard as Arc<dyn rara_kernel::guard::Guard>),
@@ -639,15 +625,6 @@ mod tests {
             .database(DatabaseConfig::builder().build())
             .http(RestServerConfig::default())
             .grpc(GrpcServerConfig::default())
-            .memory(
-                MemoryConfig::builder()
-                    .mem0_base_url("http://localhost:8080")
-                    .memos_base_url("http://localhost:5230")
-                    .memos_token("")
-                    .hindsight_base_url("http://localhost:8888")
-                    .hindsight_bank_id("default")
-                    .build(),
-            )
             .telemetry(TelemetryConfig::builder().build())
             .build()
     }
