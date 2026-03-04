@@ -228,7 +228,7 @@ impl Kernel {
     pub(crate) async fn resolve_manifest_for_auto_spawn(
         &self,
     ) -> Option<crate::process::AgentManifest> {
-        let model = rara_domain_shared::settings::get_model(self.settings().as_ref(), "chat").await;
+        let model = rara_domain_shared::settings::get_default_model(self.settings().as_ref()).await;
         Some(crate::process::AgentManifest {
             name: "io-agent".to_string(),
             role: None,

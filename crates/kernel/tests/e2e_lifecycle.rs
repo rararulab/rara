@@ -108,8 +108,9 @@ fn build_kernel(tools: Vec<Arc<dyn AgentTool>>) -> (KernelHandle, CancellationTo
     let base_url = std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| OLLAMA_BASE_URL.to_string());
     let driver = Arc::new(OpenAiDriver::new(base_url, "ollama"));
     let registry = Arc::new(
-        DriverRegistryBuilder::new("ollama", &model)
+        DriverRegistryBuilder::new("ollama")
             .driver("ollama", driver)
+            .provider_model("ollama", &model, vec![])
             .build(),
     );
     let mut builder = TestKernelBuilder::new()
@@ -507,8 +508,9 @@ async fn test_global_concurrency_limit() {
     let base_url = std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| OLLAMA_BASE_URL.to_string());
     let driver = Arc::new(OpenAiDriver::new(base_url, "ollama"));
     let registry = Arc::new(
-        DriverRegistryBuilder::new("ollama", &model)
+        DriverRegistryBuilder::new("ollama")
             .driver("ollama", driver)
+            .provider_model("ollama", &model, vec![])
             .build(),
     );
     let kernel = TestKernelBuilder::new()

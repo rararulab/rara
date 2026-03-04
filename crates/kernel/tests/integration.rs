@@ -57,7 +57,11 @@ impl AgentTool for EchoTool {
 
 #[tokio::test]
 async fn test_kernel_builder_creates_kernel() {
-    let registry = Arc::new(DriverRegistryBuilder::new("test", "test-model").build());
+    let registry = Arc::new(
+        DriverRegistryBuilder::new("test")
+            .provider_model("test", "test-model", vec![])
+            .build(),
+    );
 
     let kernel = TestKernelBuilder::new()
         .driver_registry(registry)

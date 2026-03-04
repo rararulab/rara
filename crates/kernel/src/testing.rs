@@ -23,8 +23,9 @@
 //! use rara_kernel::llm::DriverRegistryBuilder;
 //!
 //! let registry = Arc::new(
-//!     DriverRegistryBuilder::new("test", "test-model")
+//!     DriverRegistryBuilder::new("test")
 //!         .driver("test", Arc::new(my_driver))
+//!         .provider_model("test", "test-model", vec![])
 //!         .build(),
 //! );
 //! let kernel = TestKernelBuilder::new()

@@ -922,8 +922,9 @@ mod tests {
         driver: LlmDriverRef,
     ) -> (Arc<Kernel>, AgentId, CancellationToken) {
         let driver_registry = Arc::new(
-            DriverRegistryBuilder::new("test", "test-model")
+            DriverRegistryBuilder::new("test")
                 .driver("test", driver)
+                .provider_model("test", "test-model", vec![])
                 .build(),
         );
 
@@ -957,8 +958,9 @@ mod tests {
         tool: crate::tool::AgentToolRef,
     ) -> (Arc<Kernel>, AgentId, CancellationToken) {
         let driver_registry = Arc::new(
-            DriverRegistryBuilder::new("test", "test-model")
+            DriverRegistryBuilder::new("test")
                 .driver("test", driver)
+                .provider_model("test", "test-model", vec![])
                 .build(),
         );
 
