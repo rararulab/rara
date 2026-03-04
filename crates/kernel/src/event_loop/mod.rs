@@ -36,7 +36,7 @@ pub(crate) use runtime::RuntimeTable;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
-use crate::{event::KernelEvent, kernel::Kernel};
+use crate::{event::{EventKind, KernelEvent}, kernel::Kernel};
 
 impl Kernel {
     /// Agent name for admin/root users.
@@ -113,11 +113,13 @@ impl Kernel {
             .with_label_values(&[event_type])
             .inc();
 
-        match event {
-            KernelEvent::UserMessage(msg) => {
+        let KernelEvent { base, kind } = event;
+
+        match kind {
+            EventKind::UserMessage(msg) => {
                 self.handle_user_message(msg, runtimes).await;
             }
-            KernelEvent::SpawnAgent {
+            EventKind::SpawnAgent {
                 manifest,
                 input,
                 principal,
@@ -131,16 +133,17 @@ impl Kernel {
                     .await;
                 let _ = reply_tx.send(result);
             }
-            KernelEvent::SendSignal { target, signal } => {
+            EventKind::SendSignal { signal } => {
+                let target = base.agent_id.expect("SendSignal requires agent_id");
                 self.handle_signal(target, signal, runtimes).await;
             }
-            KernelEvent::TurnCompleted {
-                agent_id,
-                session_id,
+            EventKind::TurnCompleted {
                 result,
                 in_reply_to,
                 user,
             } => {
+                let agent_id = base.agent_id.expect("TurnCompleted requires agent_id");
+                let session_id = base.session_id.expect("TurnCompleted requires session_id");
                 self.handle_turn_completed(
                     agent_id,
                     session_id,
@@ -151,18 +154,18 @@ impl Kernel {
                 )
                 .await;
             }
-            KernelEvent::ChildCompleted {
-                parent_id,
+            EventKind::ChildCompleted {
                 child_id,
                 result,
             } => {
+                let parent_id = base.agent_id.expect("ChildCompleted requires agent_id");
                 self.handle_child_completed(parent_id, child_id, result, runtimes)
                     .await;
             }
-            KernelEvent::Deliver(envelope) => {
+            EventKind::Deliver(envelope) => {
                 self.delivery().deliver(envelope);
             }
-            KernelEvent::Syscall(syscall) => {
+            EventKind::Syscall(syscall) => {
                 self.syscall_dispatcher()
                     .dispatch(
                         syscall,
@@ -175,7 +178,7 @@ impl Kernel {
                     )
                     .await;
             }
-            KernelEvent::Shutdown => {
+            EventKind::Shutdown => {
                 info!("shutdown event received");
             }
         }

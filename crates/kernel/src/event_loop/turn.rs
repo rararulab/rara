@@ -48,7 +48,7 @@ impl Kernel {
                 "runtime_not_found",
                 format!("agent runtime not found: {agent_id}"),
             );
-            if let Err(e) = self.event_queue().try_push(KernelEvent::Deliver(envelope)) {
+            if let Err(e) = self.event_queue().try_push(KernelEvent::deliver(envelope)) {
                 error!(%e, "failed to push runtime-not-found error Deliver");
             }
             return;
@@ -72,7 +72,7 @@ impl Kernel {
             .unwrap_or_else(|| session_id.clone());
         let _ = self
             .event_queue()
-            .try_push(KernelEvent::Deliver(OutboundEnvelope::progress(
+            .try_push(KernelEvent::deliver(OutboundEnvelope::progress(
                 msg_id.clone(),
                 user.clone(),
                 egress_session_id.clone(),
@@ -181,7 +181,7 @@ impl Kernel {
                     interval.tick().await; // skip the immediate first tick
                     loop {
                         interval.tick().await;
-                        let _ = eq.try_push(KernelEvent::Deliver(OutboundEnvelope::progress(
+                        let _ = eq.try_push(KernelEvent::deliver(OutboundEnvelope::progress(
                             mid.clone(),
                             usr.clone(),
                             sid.clone(),
@@ -230,13 +230,7 @@ impl Kernel {
             // Convert KernelError -> String at the event boundary because
             // KernelEvent requires Clone but KernelError does not implement it.
             let result = turn_result.map_err(|e| e.to_string());
-            let event = KernelEvent::TurnCompleted {
-                agent_id,
-                session_id,
-                result,
-                in_reply_to: msg_id,
-                user,
-            };
+            let event = KernelEvent::turn_completed(agent_id, session_id, result, msg_id, user);
             if let Err(e) = event_queue.try_push(event) {
                 error!(%e, agent_id = %agent_id, "failed to push TurnCompleted");
             }
@@ -363,7 +357,7 @@ impl Kernel {
                     crate::channel::types::MessageContent::Text(turn.text),
                     vec![],
                 );
-                if let Err(e) = self.event_queue().try_push(KernelEvent::Deliver(envelope)) {
+                if let Err(e) = self.event_queue().try_push(KernelEvent::deliver(envelope)) {
                     error!(%e, "failed to push Deliver event");
                 }
 
@@ -437,7 +431,7 @@ impl Kernel {
                     "agent_error",
                     err_msg,
                 );
-                if let Err(e) = self.event_queue().try_push(KernelEvent::Deliver(envelope)) {
+                if let Err(e) = self.event_queue().try_push(KernelEvent::deliver(envelope)) {
                     error!(%e, "failed to push error Deliver event");
                 }
             }

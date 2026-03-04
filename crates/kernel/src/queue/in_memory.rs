@@ -35,7 +35,7 @@ use crate::io::types::BusError;
 /// Shared reference to an [`EventQueue`] implementation.
 pub type EventQueueRef = Arc<dyn EventQueue>;
 // Re-export the kernel event from the sibling module.
-pub use crate::event::{EventPriority, KernelEvent};
+pub use crate::event::{EventKind, EventPriority, KernelEvent};
 
 // ---------------------------------------------------------------------------
 // EventQueue trait

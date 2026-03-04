@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info, info_span, warn};
 
 use super::RuntimeTable;
-use crate::{event::KernelEvent, kernel::Kernel, queue::shard::ShardQueue};
+use crate::{event::EventKind, kernel::Kernel, queue::shard::ShardQueue};
 
 /// A single event processor that drains and processes events from one
 /// `ShardQueue`.
@@ -70,7 +70,7 @@ impl EventProcessor {
                     info!(processor_id = self.id, "event processor shutting down");
                     let remaining = self.queue.drain(1024);
                     for event in remaining {
-                        if matches!(event, KernelEvent::SendSignal { .. } | KernelEvent::Shutdown) {
+                        if matches!(event.kind, EventKind::SendSignal { .. } | EventKind::Shutdown) {
                             kernel.handle_event(event, runtimes).await;
                         } else {
                             warn!(
@@ -96,6 +96,7 @@ mod tests {
     use super::*;
     use crate::{
         channel::types::{ChannelType, MessageContent},
+        event::KernelEvent,
         io::types::{ChannelSource, InboundMessage, MessageId},
         process::{SessionId, principal::UserId},
     };
@@ -129,9 +130,9 @@ mod tests {
         };
 
         queue
-            .push(KernelEvent::UserMessage(test_inbound("will be dropped")))
+            .push(KernelEvent::user_message(test_inbound("will be dropped")))
             .unwrap();
-        queue.push(KernelEvent::Shutdown).unwrap();
+        queue.push(KernelEvent::shutdown()).unwrap();
 
         let shutdown = CancellationToken::new();
         shutdown.cancel();

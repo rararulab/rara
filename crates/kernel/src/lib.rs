@@ -79,7 +79,7 @@ pub use security::{
 mod api_naming_tests {
     #[test]
     fn kernel_events_and_notifications_use_distinct_modules() {
-        let _ = crate::event::KernelEvent::Shutdown;
+        let _ = crate::event::KernelEvent::shutdown();
         let _ = std::mem::size_of::<crate::notification::KernelNotification>();
     }
 

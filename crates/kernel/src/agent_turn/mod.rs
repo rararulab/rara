@@ -142,7 +142,7 @@ pub(crate) async fn run_inline_agent_loop(
     };
 
     // Check model tool support
-    let tool_defs = if tools.is_empty() {
+    let mut tool_defs = if tools.is_empty() {
         vec![]
     } else {
         if !capabilities.supports_tools {
@@ -162,6 +162,7 @@ pub(crate) async fn run_inline_agent_loop(
     let mut last_accumulated_text = String::new();
     let turn_start = Instant::now();
     let mut iteration_traces: Vec<IterationTrace> = Vec::new();
+    let mut llm_error_recovery_used = false;
 
     for iteration in 0..max_iterations {
         messages = sanitize_messages_for_llm(&messages);
@@ -299,6 +300,21 @@ pub(crate) async fn run_inline_agent_loop(
         };
 
         if let Err(ref e) = driver_result {
+            if !llm_error_recovery_used && crate::error::is_retryable_provider_error(e) {
+                warn!(
+                    iteration,
+                    model = model.as_str(),
+                    error = %e,
+                    "LLM stream error, attempting recovery without tools"
+                );
+                llm_error_recovery_used = true;
+                messages.push(llm::Message::user(format!(
+                    "[系统提示] 上一次请求遇到了服务端错误（{e}），请直接回复用户的问题，不要使用工具。"
+                )));
+                tool_defs = vec![];
+                continue;
+            }
+
             error!(
                 iteration,
                 model = model.as_str(),
@@ -313,8 +329,8 @@ pub(crate) async fn run_inline_agent_loop(
         iter_span.record("stream_ms", stream_start.elapsed().as_millis() as u64);
         iter_span.record("has_tools", has_tool_calls);
 
-        // Terminal response (no tool calls)
-        if !has_tool_calls {
+        // Terminal response (no tool calls, or recovery iteration must exit)
+        if !has_tool_calls || llm_error_recovery_used {
             let first_token_ms =
                 first_token_at.map(|t| t.duration_since(stream_start).as_millis() as u64);
             let stream_ms = stream_start.elapsed().as_millis() as u64;
@@ -1205,6 +1221,94 @@ mod tests {
             !request.parallel_tool_calls,
             "ollama-compatible requests should disable parallel tool calls"
         );
+
+        cancel.cancel();
+    }
+
+    /// A driver that fails with a retryable Provider error on the first call,
+    /// then succeeds on the second.
+    struct RetryableErrorDriver {
+        calls: Mutex<usize>,
+    }
+
+    #[async_trait]
+    impl LlmDriver for RetryableErrorDriver {
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> crate::error::Result<CompletionResponse> {
+            unreachable!("stream is used in tests")
+        }
+
+        async fn stream(
+            &self,
+            _request: CompletionRequest,
+            tx: mpsc::Sender<StreamDelta>,
+        ) -> crate::error::Result<CompletionResponse> {
+            let call_index = {
+                let mut calls = self.calls.lock().unwrap();
+                *calls += 1;
+                *calls
+            };
+
+            if call_index == 1 {
+                return Err(crate::KernelError::Provider {
+                    message: "HTTP 500 Internal Server Error: Internal Server Error".into(),
+                });
+            }
+
+            let _ = tx
+                .send(StreamDelta::TextDelta {
+                    text: "recovered from error".to_string(),
+                })
+                .await;
+            let _ = tx
+                .send(StreamDelta::Done {
+                    stop_reason: StopReason::Stop,
+                    usage:       None,
+                })
+                .await;
+
+            Ok(CompletionResponse {
+                content:           Some("recovered from error".to_string()),
+                reasoning_content: None,
+                tool_calls:        vec![],
+                stop_reason:       StopReason::Stop,
+                usage:             None,
+                model:             "test-model".to_string(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_run_inline_agent_loop_recovers_from_retryable_error() {
+        let driver: LlmDriverRef = Arc::new(RetryableErrorDriver {
+            calls: Mutex::new(0),
+        });
+        let (kernel, agent_id, cancel) = setup_test_kernel_with_driver(driver).await;
+
+        let session_id = SessionId::new();
+        let handle = ProcessHandle::new(
+            agent_id,
+            session_id.clone(),
+            Principal::user("test-user"),
+            kernel.event_queue().clone(),
+        );
+
+        let stream_handle = kernel.stream_hub().open(session_id);
+        let turn_cancel = CancellationToken::new();
+
+        let result = run_inline_agent_loop(
+            &handle,
+            "hello".to_string(),
+            None,
+            &stream_handle,
+            &turn_cancel,
+        )
+        .await;
+
+        assert!(result.is_ok(), "expected recovery, got: {:?}", result);
+        assert_eq!(result.unwrap().text, "recovered from error");
 
         cancel.cancel();
     }

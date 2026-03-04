@@ -23,7 +23,6 @@ use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
-use snafu::ResultExt;
 use tokio::sync::mpsc;
 
 use super::{
@@ -144,6 +143,14 @@ impl OpenAiDriver {
         let config = self.resolve_config().await?;
         let body = ChatRequest::from_completion(request, stream);
 
+        tracing::debug!(
+            model = request.model.as_str(),
+            messages = request.messages.len(),
+            tools = request.tools.len(),
+            stream,
+            "sending LLM request"
+        );
+
         let response = self
             .client
             .post(format!("{}/chat/completions", config.base_url))
@@ -151,11 +158,23 @@ impl OpenAiDriver {
             .json(&body)
             .send()
             .await
-            .whatever_context::<_, KernelError>("LLM provider request failed")?;
+            .map_err(|e| KernelError::Provider {
+                message: format!("LLM provider request failed: {e}").into(),
+            })?;
 
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
+
+            if let Ok(request_body) = serde_json::to_string(&body) {
+                tracing::warn!(
+                    %status,
+                    response_body = %text,
+                    request_body = %request_body,
+                    "LLM provider returned error"
+                );
+            }
+
             return Err(KernelError::Provider {
                 message: format!("HTTP {status}: {text}").into(),
             });
@@ -177,7 +196,9 @@ impl LlmDriver for OpenAiDriver {
         let raw: RawCompletionResponse = response
             .json()
             .await
-            .whatever_context::<_, KernelError>("failed to parse LLM response")?;
+            .map_err(|e| KernelError::Provider {
+                message: format!("failed to parse LLM response: {e}").into(),
+            })?;
 
         let choice = raw
             .choices
@@ -228,7 +249,9 @@ impl LlmDriver for OpenAiDriver {
         let mut acc = StreamAccumulator::new();
 
         while let Some(event_result) = event_stream.next().await {
-            let event = event_result.whatever_context::<_, KernelError>("SSE stream error")?;
+            let event = event_result.map_err(|e| KernelError::Provider {
+                message: format!("SSE stream error: {e}").into(),
+            })?;
 
             if event.data == "[DONE]" {
                 break;

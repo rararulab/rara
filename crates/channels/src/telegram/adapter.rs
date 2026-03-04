@@ -354,12 +354,23 @@ impl EgressAdapter for TelegramAdapter {
                         if last_msg_id != MessageId(0) {
                             // Edit the last streaming message with the first chunk.
                             let first_chunk = chunks.first().map(|s| s.as_str()).unwrap_or("");
-                            let edit_ok = self
+                            let edit_result = self
                                 .bot
                                 .edit_message_text(ChatId(chat_id), last_msg_id, first_chunk)
                                 .parse_mode(ParseMode::Html)
-                                .await
-                                .is_ok();
+                                .await;
+
+                            let edit_ok = match &edit_result {
+                                Ok(_) => true,
+                                // "message is not modified" means the stream forwarder
+                                // already delivered the final content — treat as success.
+                                Err(teloxide::RequestError::Api(api_err))
+                                    if format!("{api_err}").contains("message is not modified") =>
+                                {
+                                    true
+                                }
+                                Err(_) => false,
+                            };
 
                             if edit_ok {
                                 // Send remaining chunks as new messages.

@@ -12,16 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Unified kernel event — all kernel interactions as a single enum.
+//! Unified kernel event — struct with base metadata and a kind discriminator.
 //!
-//! Replaces the separate message types (InboundMessage via bus,
-//! ProcessMessage via mailbox, OutboundEnvelope via outbound bus) with
-//! a single unified event type processed by `Kernel::run()`.
+//! Every interaction with the kernel is represented as a [`KernelEvent`]
+//! (`EventBase` + `EventKind`) and processed by `Kernel::run()`.
 
 use std::sync::Arc;
 
 use jiff::Timestamp;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
 use crate::{
@@ -37,6 +36,62 @@ use crate::{
     },
     tool::ToolRegistry,
 };
+
+// ---------------------------------------------------------------------------
+// EventId
+// ---------------------------------------------------------------------------
+
+/// ULID-based event identifier (time-sortable, unique).
+///
+/// Every kernel event gets a unique `EventId` for correlation, tracing,
+/// and deduplication.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct EventId(pub String);
+
+impl EventId {
+    /// Generate a new ULID-based event ID.
+    pub fn new() -> Self { Self(ulid::Ulid::new().to_string()) }
+}
+
+impl Default for EventId {
+    fn default() -> Self { Self::new() }
+}
+
+impl std::fmt::Display for EventId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(&self.0) }
+}
+
+// ---------------------------------------------------------------------------
+// EventBase
+// ---------------------------------------------------------------------------
+
+/// Common base fields for every kernel event.
+///
+/// Carries identity, timing, and scope metadata that applies uniformly
+/// to all event kinds.
+#[derive(Debug, Clone, Serialize)]
+pub struct EventBase {
+    /// Unique event identifier.
+    pub id:         EventId,
+    /// When the event was created.
+    pub timestamp:  Timestamp,
+    /// Primary agent scope (for routing and observability).
+    pub agent_id:   Option<AgentId>,
+    /// Session scope (when the event is session-bound).
+    pub session_id: Option<SessionId>,
+}
+
+impl EventBase {
+    /// Create a new event base with the given agent and session context.
+    pub fn new(agent_id: Option<AgentId>, session_id: Option<SessionId>) -> Self {
+        Self {
+            id: EventId::new(),
+            timestamp: Timestamp::now(),
+            agent_id,
+            session_id,
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // EventPriority
@@ -282,17 +337,16 @@ impl Syscall {
 }
 
 // ---------------------------------------------------------------------------
-// KernelEvent
+// EventKind — variant discriminator
 // ---------------------------------------------------------------------------
 
-/// Unified event type for all kernel interactions.
+/// Discriminator for kernel event variants.
 ///
-/// Every interaction with the kernel — user messages, process control,
-/// internal callbacks, output delivery — is represented as a `KernelEvent`
-/// and processed by the single `Kernel::run()` event loop.
+/// Each variant carries only its unique business fields. Common metadata
+/// (event id, timestamp, agent id, session id) lives in [`EventBase`].
 #[derive(derive_more::Debug, Serialize, strum::IntoStaticStr)]
 #[strum(serialize_all = "snake_case")]
-pub enum KernelEvent {
+pub enum EventKind {
     // === Input: from external sources ===
     /// A new user message from a channel adapter (via IngressPipeline).
     #[debug("UserMessage(session={})", _0.session_id)]
@@ -316,13 +370,13 @@ pub enum KernelEvent {
     },
 
     /// Send a control signal to an agent process.
-    SendSignal { target: AgentId, signal: Signal },
+    /// The target agent is in [`EventBase::agent_id`].
+    SendSignal { signal: Signal },
 
     // === Internal callbacks: from async task completion ===
     /// An LLM turn completed (success or failure).
+    /// Agent and session are in [`EventBase`].
     TurnCompleted {
-        agent_id:    AgentId,
-        session_id:  SessionId,
         #[debug("{}", if result.is_ok() { "Ok(..)" } else { "Err(..)" })]
         #[serde(skip_serializing)]
         result:      Result<AgentTurnResult, String>,
@@ -331,10 +385,10 @@ pub enum KernelEvent {
     },
 
     /// A child agent process completed.
+    /// The parent agent is in [`EventBase::agent_id`].
     ChildCompleted {
-        parent_id: AgentId,
-        child_id:  AgentId,
-        result:    AgentResult,
+        child_id: AgentId,
+        result:   AgentResult,
     },
 
     // === Output ===
@@ -353,38 +407,10 @@ pub enum KernelEvent {
     Shutdown,
 }
 
-/// Stable common fields exposed for any observed kernel event.
-#[derive(Debug, Clone, Serialize)]
-pub struct KernelEventCommonFields {
-    pub timestamp:  Timestamp,
-    pub event_type: String,
-    pub priority:   String,
-    pub agent_id:   Option<String>,
-    pub summary:    String,
-}
-
-impl KernelEvent {
-    /// Extract the primary `AgentId` associated with this event, if any.
+impl EventKind {
+    /// Determine the priority tier for this event kind.
     ///
-    /// Returns `None` for global events that are not agent-scoped
-    /// (UserMessage, SpawnAgent, Timer, Shutdown, Deliver).
-    /// Returns `Some(agent_id)` for events that target a specific agent.
-    pub fn agent_id(&self) -> Option<AgentId> {
-        match self {
-            Self::SendSignal { target, .. } => Some(*target),
-            Self::TurnCompleted { agent_id, .. } => Some(*agent_id),
-            Self::ChildCompleted { parent_id, .. } => Some(*parent_id),
-            Self::Syscall(syscall) => Some(syscall.agent_id()),
-            // Global events — no specific agent affinity.
-            Self::UserMessage(_) | Self::SpawnAgent { .. } | Self::Deliver(_) | Self::Shutdown => {
-                None
-            }
-        }
-    }
-
-    /// Determine the priority tier for this event.
-    ///
-    /// Priority is auto-inferred from the event variant — callers never
+    /// Priority is auto-inferred from the variant — callers never
     /// specify it manually.
     pub fn priority(&self) -> EventPriority {
         match self {
@@ -407,64 +433,222 @@ impl KernelEvent {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// KernelEvent — unified event struct
+// ---------------------------------------------------------------------------
+
+/// Unified event type for all kernel interactions.
+///
+/// Every interaction with the kernel — user messages, process control,
+/// internal callbacks, output delivery — is represented as a `KernelEvent`
+/// and processed by the single `Kernel::run()` event loop.
+///
+/// `base` carries common metadata (id, timestamp, agent scope, session scope).
+/// `kind` carries the variant-specific payload.
+#[derive(Serialize)]
+pub struct KernelEvent {
+    /// Common metadata for this event.
+    pub base: EventBase,
+    /// Variant-specific payload.
+    pub kind: EventKind,
+}
+
+// -- Named constructors ---------------------------------------------------
+
+impl KernelEvent {
+    /// Create a `UserMessage` event.
+    pub fn user_message(msg: InboundMessage) -> Self {
+        let session_id = Some(msg.session_id.clone());
+        Self {
+            base: EventBase::new(None, session_id),
+            kind: EventKind::UserMessage(msg),
+        }
+    }
+
+    /// Create a `SpawnAgent` event.
+    pub fn spawn_agent(
+        manifest: AgentManifest,
+        input: String,
+        principal: Principal,
+        parent_id: Option<AgentId>,
+        reply_tx: oneshot::Sender<crate::error::Result<AgentId>>,
+    ) -> Self {
+        Self {
+            base: EventBase::new(None, None),
+            kind: EventKind::SpawnAgent {
+                manifest,
+                input,
+                principal,
+                parent_id,
+                reply_tx,
+            },
+        }
+    }
+
+    /// Create a `SendSignal` event.
+    pub fn send_signal(target: AgentId, signal: Signal) -> Self {
+        Self {
+            base: EventBase::new(Some(target), None),
+            kind: EventKind::SendSignal { signal },
+        }
+    }
+
+    /// Create a `TurnCompleted` event.
+    pub fn turn_completed(
+        agent_id: AgentId,
+        session_id: SessionId,
+        result: Result<AgentTurnResult, String>,
+        in_reply_to: MessageId,
+        user: UserId,
+    ) -> Self {
+        Self {
+            base: EventBase::new(Some(agent_id), Some(session_id)),
+            kind: EventKind::TurnCompleted {
+                result,
+                in_reply_to,
+                user,
+            },
+        }
+    }
+
+    /// Create a `ChildCompleted` event.
+    pub fn child_completed(parent_id: AgentId, child_id: AgentId, result: AgentResult) -> Self {
+        Self {
+            base: EventBase::new(Some(parent_id), None),
+            kind: EventKind::ChildCompleted { child_id, result },
+        }
+    }
+
+    /// Create a `Deliver` event.
+    pub fn deliver(envelope: OutboundEnvelope) -> Self {
+        let session_id = Some(envelope.session_id.clone());
+        Self {
+            base: EventBase::new(None, session_id),
+            kind: EventKind::Deliver(envelope),
+        }
+    }
+
+    /// Create a `Syscall` event.
+    pub fn syscall(syscall: Syscall) -> Self {
+        let agent_id = Some(syscall.agent_id());
+        Self {
+            base: EventBase::new(agent_id, None),
+            kind: EventKind::Syscall(syscall),
+        }
+    }
+
+    /// Create a `Shutdown` event.
+    pub fn shutdown() -> Self {
+        Self {
+            base: EventBase::new(None, None),
+            kind: EventKind::Shutdown,
+        }
+    }
+}
+
+// -- Accessor / observability methods --------------------------------------
+
+impl KernelEvent {
+    /// The primary agent scope for this event.
+    pub fn agent_id(&self) -> Option<AgentId> { self.base.agent_id }
+
+    /// The session scope for this event.
+    pub fn session_id(&self) -> Option<&SessionId> { self.base.session_id.as_ref() }
+
+    /// The priority tier for this event.
+    pub fn priority(&self) -> EventPriority { self.kind.priority() }
+
+    /// Stable event type label for observability.
+    pub fn event_type(&self) -> String { self.kind.event_type() }
 
     /// Human-readable summary for observability.
     pub fn summary(&self) -> String {
-        match self {
-            Self::UserMessage(msg) => {
+        match &self.kind {
+            EventKind::UserMessage(msg) => {
                 format!("user message queued for session {}", msg.session_id)
             }
-            Self::SpawnAgent { manifest, .. } => format!("spawn agent {}", manifest.name),
-            Self::SendSignal { target, signal } => {
-                format!("send {signal:?} to {target}")
-            }
-            Self::TurnCompleted {
-                agent_id, result, ..
-            } => {
+            EventKind::SpawnAgent { manifest, .. } => format!("spawn agent {}", manifest.name),
+            EventKind::SendSignal { signal } => match self.base.agent_id {
+                Some(target) => format!("send {signal:?} to {target}"),
+                None => format!("send {signal:?}"),
+            },
+            EventKind::TurnCompleted { result, .. } => {
                 let status = if result.is_ok() {
                     "completed"
                 } else {
                     "failed"
                 };
-                format!("turn {status} for {agent_id}")
+                match self.base.agent_id {
+                    Some(agent_id) => format!("turn {status} for {agent_id}"),
+                    None => format!("turn {status}"),
+                }
             }
-            Self::ChildCompleted {
-                parent_id,
-                child_id,
-                ..
-            } => {
-                format!("child {child_id} completed for parent {parent_id}")
-            }
-            Self::Deliver(envelope) => {
+            EventKind::ChildCompleted { child_id, .. } => match self.base.agent_id {
+                Some(parent_id) => {
+                    format!("child {child_id} completed for parent {parent_id}")
+                }
+                None => format!("child {child_id} completed"),
+            },
+            EventKind::Deliver(envelope) => {
                 format!(
                     "deliver outbound message for session {}",
                     envelope.session_id
                 )
             }
-            Self::Syscall(syscall) => syscall.summary(),
-            Self::Shutdown => "shutdown requested".to_string(),
+            EventKind::Syscall(syscall) => syscall.summary(),
+            EventKind::Shutdown => "shutdown requested".to_string(),
         }
     }
 
-    /// Common observability fields derived from the event itself.
+    /// Common observability fields derived from the event.
     pub fn common_fields(&self) -> KernelEventCommonFields {
-        let agent_id = match self {
-            Self::Syscall(syscall) => syscall.observable_agent_id(),
-            _ => self.agent_id(),
+        // For syscalls, hide the nil sentinel in observability.
+        let observable_agent_id = match &self.kind {
+            EventKind::Syscall(syscall) => syscall.observable_agent_id(),
+            _ => self.base.agent_id,
         };
 
         KernelEventCommonFields {
-            timestamp:  Timestamp::now(),
-            event_type: self.event_type(),
-            priority:   match self.priority() {
+            id:         self.base.id.clone(),
+            timestamp:  self.base.timestamp,
+            event_type: self.kind.event_type(),
+            priority:   match self.kind.priority() {
                 EventPriority::Critical => "critical".to_string(),
                 EventPriority::Normal => "normal".to_string(),
                 EventPriority::Low => "low".to_string(),
             },
-            agent_id:   agent_id.map(|id| id.to_string()),
+            agent_id:   observable_agent_id.map(|id| id.to_string()),
             summary:    self.summary(),
         }
     }
+}
+
+/// Allow `&KernelEvent` → `&'static str` for metrics labels.
+impl<'a> From<&'a KernelEvent> for &'static str {
+    fn from(event: &'a KernelEvent) -> Self { (&event.kind).into() }
+}
+
+impl std::fmt::Debug for KernelEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "KernelEvent({}, {:?})", self.base.id, self.kind)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// KernelEventCommonFields — stable observability contract
+// ---------------------------------------------------------------------------
+
+/// Stable common fields exposed for any observed kernel event.
+#[derive(Debug, Clone, Serialize)]
+pub struct KernelEventCommonFields {
+    pub id:         EventId,
+    pub timestamp:  Timestamp,
+    pub event_type: String,
+    pub priority:   String,
+    pub agent_id:   Option<String>,
+    pub summary:    String,
 }
 
 #[cfg(test)]
@@ -498,45 +682,28 @@ mod tests {
         }
     }
 
-    // -- KernelEvent::agent_id() tests ------------------------------------
+    // -- EventId tests ------------------------------------------------------
+
+    #[test]
+    fn event_id_is_unique() {
+        let a = EventId::new();
+        let b = EventId::new();
+        assert_ne!(a, b);
+    }
+
+    // -- KernelEvent::agent_id() tests --------------------------------------
 
     #[test]
     fn agent_id_for_user_message_is_none() {
-        let event = KernelEvent::UserMessage(test_inbound("hello"));
+        let event = KernelEvent::user_message(test_inbound("hello"));
         assert!(event.agent_id().is_none());
-    }
-
-    #[test]
-    fn common_fields_and_serialization_use_kernel_event_contract() {
-        let agent_id = AgentId::new();
-        let event = KernelEvent::SendSignal {
-            target: agent_id,
-            signal: Signal::Pause,
-        };
-
-        let fields = event.common_fields();
-        let json = serde_json::to_value(&event).unwrap();
-
-        assert_eq!(fields.event_type, "send_signal");
-        assert_eq!(fields.priority, "critical");
-        assert_eq!(fields.agent_id, Some(agent_id.to_string()));
-        assert!(fields.summary.contains("Pause"));
-        assert_eq!(
-            json,
-            serde_json::json!({
-                "SendSignal": {
-                    "target": agent_id,
-                    "signal": "Pause"
-                }
-            })
-        );
     }
 
     #[test]
     fn agent_id_for_spawn_agent_is_none() {
         let (tx, _rx) = oneshot::channel();
-        let event = KernelEvent::SpawnAgent {
-            manifest:  AgentManifest {
+        let event = KernelEvent::spawn_agent(
+            AgentManifest {
                 name:               "test".to_string(),
                 role:               None,
                 description:        "test".to_string(),
@@ -552,36 +719,33 @@ mod tests {
                 metadata:           Default::default(),
                 sandbox:            None,
             },
-            input:     "hello".to_string(),
-            principal: Principal::user("test"),
-            parent_id: None,
-            reply_tx:  tx,
-        };
+            "hello".to_string(),
+            Principal::user("test"),
+            None,
+            tx,
+        );
         assert!(event.agent_id().is_none());
     }
 
     #[test]
     fn agent_id_for_shutdown_is_none() {
-        assert!(KernelEvent::Shutdown.agent_id().is_none());
+        assert!(KernelEvent::shutdown().agent_id().is_none());
     }
 
     #[test]
     fn agent_id_for_send_signal_is_target() {
         let target = AgentId::new();
-        let event = KernelEvent::SendSignal {
-            target,
-            signal: Signal::Interrupt,
-        };
+        let event = KernelEvent::send_signal(target, Signal::Interrupt);
         assert_eq!(event.agent_id(), Some(target));
     }
 
     #[test]
     fn agent_id_for_turn_completed_is_agent_id() {
         let agent_id = AgentId::new();
-        let event = KernelEvent::TurnCompleted {
+        let event = KernelEvent::turn_completed(
             agent_id,
-            session_id: SessionId::new(),
-            result: Ok(crate::agent_turn::AgentTurnResult {
+            SessionId::new(),
+            Ok(crate::agent_turn::AgentTurnResult {
                 text:       "done".to_string(),
                 iterations: 1,
                 tool_calls: 0,
@@ -597,30 +761,30 @@ mod tests {
                     error:            None,
                 },
             }),
-            in_reply_to: MessageId::new(),
-            user: UserId("u1".to_string()),
-        };
+            MessageId::new(),
+            UserId("u1".to_string()),
+        );
         assert_eq!(event.agent_id(), Some(agent_id));
     }
 
     #[test]
     fn agent_id_for_child_completed_is_parent_id() {
         let parent_id = AgentId::new();
-        let event = KernelEvent::ChildCompleted {
+        let event = KernelEvent::child_completed(
             parent_id,
-            child_id: AgentId::new(),
-            result: crate::process::AgentResult {
+            AgentId::new(),
+            crate::process::AgentResult {
                 output:     "done".to_string(),
                 iterations: 1,
                 tool_calls: 0,
             },
-        };
+        );
         assert_eq!(event.agent_id(), Some(parent_id));
     }
 
     #[test]
     fn agent_id_for_deliver_is_none() {
-        let event = KernelEvent::Deliver(crate::io::types::OutboundEnvelope {
+        let event = KernelEvent::deliver(crate::io::types::OutboundEnvelope {
             id:          MessageId::new(),
             in_reply_to: MessageId::new(),
             user:        UserId("u1".to_string()),
@@ -635,7 +799,30 @@ mod tests {
         assert!(event.agent_id().is_none());
     }
 
-    // -- Syscall::agent_id() tests ----------------------------------------
+    // -- common_fields tests ------------------------------------------------
+
+    #[test]
+    fn common_fields_include_event_id_and_timestamp() {
+        let agent_id = AgentId::new();
+        let event = KernelEvent::send_signal(agent_id, Signal::Pause);
+
+        let fields = event.common_fields();
+
+        assert_eq!(fields.id, event.base.id);
+        assert_eq!(fields.event_type, "send_signal");
+        assert_eq!(fields.priority, "critical");
+        assert_eq!(fields.agent_id, Some(agent_id.to_string()));
+        assert!(fields.summary.contains("Pause"));
+    }
+
+    #[test]
+    fn event_base_has_unique_id_and_timestamp() {
+        let e1 = KernelEvent::shutdown();
+        let e2 = KernelEvent::shutdown();
+        assert_ne!(e1.base.id, e2.base.id);
+    }
+
+    // -- Syscall::agent_id() tests ------------------------------------------
 
     #[test]
     fn syscall_agent_id_for_query_status() {

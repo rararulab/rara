@@ -19,7 +19,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crate::top::{
     client::KernelClient,
     types::{
-        AgentInfo, ApprovalRequest, AuditEvent, KernelEventCommonFields, ProcessStats, SystemStats,
+        AgentInfo, ApprovalRequest, AuditEvent, KernelEventEnvelope, ProcessStats, SystemStats,
     },
 };
 
@@ -53,33 +53,39 @@ impl Tab {
 }
 
 pub struct App {
-    pub tab:           Tab,
-    pub scroll_offset: usize,
-    pub stats:         Option<SystemStats>,
-    pub processes:     Vec<ProcessStats>,
-    pub agents:        Vec<AgentInfo>,
-    pub approvals:     Vec<ApprovalRequest>,
-    pub audit:         Vec<AuditEvent>,
-    pub kernel_events: Vec<KernelEventCommonFields>,
-    pub connected:     bool,
-    pub error:         Option<String>,
-    pub should_quit:   bool,
+    pub tab:               Tab,
+    pub scroll_offset:     usize,
+    pub stats:             Option<SystemStats>,
+    pub processes:         Vec<ProcessStats>,
+    pub agents:            Vec<AgentInfo>,
+    pub approvals:         Vec<ApprovalRequest>,
+    pub audit:             Vec<AuditEvent>,
+    pub kernel_events:     Vec<KernelEventEnvelope>,
+    pub connected:         bool,
+    pub error:             Option<String>,
+    pub should_quit:       bool,
+    /// Selected row index in the Events tab (index into the reversed view).
+    pub selected_row:      usize,
+    /// Whether the event detail popup is visible.
+    pub show_event_detail: bool,
 }
 
 impl App {
     pub fn new() -> Self {
         Self {
-            tab:           Tab::Processes,
-            scroll_offset: 0,
-            stats:         None,
-            processes:     Vec::new(),
-            agents:        Vec::new(),
-            approvals:     Vec::new(),
-            audit:         Vec::new(),
-            kernel_events: Vec::new(),
-            connected:     false,
-            error:         None,
-            should_quit:   false,
+            tab:               Tab::Processes,
+            scroll_offset:     0,
+            stats:             None,
+            processes:         Vec::new(),
+            agents:            Vec::new(),
+            approvals:         Vec::new(),
+            audit:             Vec::new(),
+            kernel_events:     Vec::new(),
+            connected:         false,
+            error:             None,
+            should_quit:       false,
+            selected_row:      0,
+            show_event_detail: false,
         }
     }
 
@@ -95,6 +101,16 @@ impl App {
     }
 
     fn handle_key(&mut self, code: KeyCode) {
+        // When the detail popup is open, only Esc/Enter/q are handled.
+        if self.show_event_detail {
+            match code {
+                KeyCode::Esc | KeyCode::Enter => self.show_event_detail = false,
+                KeyCode::Char('q') | KeyCode::Char('Q') => self.should_quit = true,
+                _ => {}
+            }
+            return;
+        }
+
         match code {
             KeyCode::Char('q') | KeyCode::Char('Q') => {
                 self.should_quit = true;
@@ -120,12 +136,28 @@ impl App {
                 self.scroll_offset = 0;
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                self.scroll_offset = self.scroll_offset.saturating_sub(1);
+                if self.tab == Tab::Events {
+                    self.selected_row = self.selected_row.saturating_sub(1);
+                } else {
+                    self.scroll_offset = self.scroll_offset.saturating_sub(1);
+                }
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                let max = self.current_row_count().saturating_sub(1);
-                if self.scroll_offset < max {
-                    self.scroll_offset += 1;
+                if self.tab == Tab::Events {
+                    let max = self.kernel_events.len().saturating_sub(1);
+                    if self.selected_row < max {
+                        self.selected_row += 1;
+                    }
+                } else {
+                    let max = self.current_row_count().saturating_sub(1);
+                    if self.scroll_offset < max {
+                        self.scroll_offset += 1;
+                    }
+                }
+            }
+            KeyCode::Enter => {
+                if self.tab == Tab::Events && !self.kernel_events.is_empty() {
+                    self.show_event_detail = true;
                 }
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
@@ -135,16 +167,15 @@ impl App {
         }
     }
 
-    pub fn push_kernel_event(&mut self, event: KernelEventCommonFields) {
+    pub fn push_kernel_event(&mut self, event: KernelEventEnvelope) {
         const MAX_KERNEL_EVENTS: usize = 200;
 
         self.kernel_events.push(event);
         let overflow = self.kernel_events.len().saturating_sub(MAX_KERNEL_EVENTS);
         if overflow > 0 {
             self.kernel_events.drain(..overflow);
-            self.scroll_offset = self
-                .scroll_offset
-                .saturating_sub(overflow.min(self.scroll_offset));
+            // Adjust selected_row so it keeps pointing at the same event.
+            self.selected_row = self.selected_row.saturating_sub(overflow);
         }
     }
 
@@ -261,24 +292,31 @@ async fn poll_crossterm_event() -> Option<Event> {
 #[cfg(test)]
 mod tests {
     use super::App;
-    use crate::top::types::KernelEventCommonFields;
+    use crate::top::types::{KernelEventCommonFields, KernelEventEnvelope};
+
+    fn make_envelope(idx: usize) -> KernelEventEnvelope {
+        KernelEventEnvelope {
+            common: KernelEventCommonFields {
+                timestamp:  format!("2026-03-04T00:00:{idx:02}Z"),
+                event_type: format!("event_{idx}"),
+                priority:   "normal".to_string(),
+                agent_id:   Some(format!("agent-{idx}")),
+                summary:    format!("summary {idx}"),
+            },
+            event: serde_json::json!({"idx": idx}),
+        }
+    }
 
     #[test]
     fn push_kernel_event_keeps_latest_entries() {
         let mut app = App::new();
 
         for idx in 0..205 {
-            app.push_kernel_event(KernelEventCommonFields {
-                timestamp:  format!("2026-03-04T00:00:{idx:02}Z"),
-                event_type: format!("event_{idx}"),
-                priority:   "normal".to_string(),
-                agent_id:   Some(format!("agent-{idx}")),
-                summary:    format!("summary {idx}"),
-            });
+            app.push_kernel_event(make_envelope(idx));
         }
 
         assert_eq!(app.kernel_events.len(), 200);
-        assert_eq!(app.kernel_events.first().unwrap().event_type, "event_5");
-        assert_eq!(app.kernel_events.last().unwrap().event_type, "event_204");
+        assert_eq!(app.kernel_events.first().unwrap().common.event_type, "event_5");
+        assert_eq!(app.kernel_events.last().unwrap().common.event_type, "event_204");
     }
 }

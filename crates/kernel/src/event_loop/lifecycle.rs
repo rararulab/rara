@@ -206,7 +206,7 @@ impl Kernel {
         );
         if let Err(e) = self
             .event_queue()
-            .try_push(KernelEvent::UserMessage(inbound))
+            .try_push(KernelEvent::user_message(inbound))
         {
             error!(%e, "failed to push initial UserMessage for spawned agent");
         }
@@ -249,7 +249,7 @@ impl Kernel {
                         "message": "Agent interrupted by user",
                     }),
                 );
-                if let Err(e) = self.event_queue().try_push(KernelEvent::Deliver(envelope)) {
+                if let Err(e) = self.event_queue().try_push(KernelEvent::deliver(envelope)) {
                     error!(%e, "failed to push interrupt notification");
                 }
             }
@@ -379,11 +379,7 @@ impl Kernel {
                         iterations: 0,
                         tool_calls: 0,
                     });
-                    let event = KernelEvent::ChildCompleted {
-                        parent_id,
-                        child_id: agent_id,
-                        result,
-                    };
+                    let event = KernelEvent::child_completed(parent_id, agent_id, result);
                     if let Err(e) = self.event_queue().try_push(event) {
                         warn!(%e, "failed to push ChildCompleted event");
                     }

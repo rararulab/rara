@@ -98,7 +98,7 @@ impl ProcessHandle {
     /// Send a signal to a target process (fire-and-forget).
     fn push_signal(&self, target: AgentId, signal: Signal) -> Result<()> {
         self.event_queue
-            .try_push(KernelEvent::SendSignal { target, signal })
+            .try_push(KernelEvent::send_signal(target, signal))
             .map_err(|_| KernelError::Other {
                 message: "event queue full for signal".into(),
             })
@@ -114,13 +114,13 @@ impl ProcessHandle {
     /// NOT inherit this process's session.
     pub async fn spawn(&self, manifest: AgentManifest, input: String) -> Result<AgentHandle> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        let event = KernelEvent::SpawnAgent {
+        let event = KernelEvent::spawn_agent(
             manifest,
             input,
-            principal: self.principal.clone(),
-            parent_id: Some(self.agent_id),
+            self.principal.clone(),
+            Some(self.agent_id),
             reply_tx,
-        };
+        );
         self.syscall_push(event).await?;
 
         let agent_id = reply_rx.await.map_err(|_| KernelError::SpawnFailed {
@@ -144,7 +144,7 @@ impl ProcessHandle {
     /// Query process state.
     pub async fn status(&self, target: AgentId) -> Result<ProcessInfo> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.syscall_push(KernelEvent::Syscall(Syscall::QueryStatus {
+        self.syscall_push(KernelEvent::syscall(Syscall::QueryStatus {
             target,
             reply_tx,
         }))
@@ -176,7 +176,7 @@ impl ProcessHandle {
     pub async fn children(&self) -> Vec<ProcessInfo> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         if self
-            .syscall_push(KernelEvent::Syscall(Syscall::QueryChildren {
+            .syscall_push(KernelEvent::syscall(Syscall::QueryChildren {
                 parent: self.agent_id,
                 reply_tx,
             }))
@@ -195,7 +195,7 @@ impl ProcessHandle {
     /// Store a value in this agent's private namespace.
     pub async fn mem_store(&self, key: &str, value: serde_json::Value) -> Result<()> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.syscall_push(KernelEvent::Syscall(Syscall::MemStore {
+        self.syscall_push(KernelEvent::syscall(Syscall::MemStore {
             agent_id: self.agent_id,
             session_id: self.session_id.clone(),
             principal: self.principal.clone(),
@@ -210,7 +210,7 @@ impl ProcessHandle {
     /// Recall a value from this agent's private namespace.
     pub async fn mem_recall(&self, key: &str) -> Result<Option<serde_json::Value>> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.syscall_push(KernelEvent::Syscall(Syscall::MemRecall {
+        self.syscall_push(KernelEvent::syscall(Syscall::MemRecall {
             agent_id: self.agent_id,
             key: key.to_string(),
             reply_tx,
@@ -227,7 +227,7 @@ impl ProcessHandle {
         value: serde_json::Value,
     ) -> Result<()> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.syscall_push(KernelEvent::Syscall(Syscall::SharedStore {
+        self.syscall_push(KernelEvent::syscall(Syscall::SharedStore {
             agent_id: self.agent_id,
             principal: self.principal.clone(),
             scope,
@@ -246,7 +246,7 @@ impl ProcessHandle {
         key: &str,
     ) -> Result<Option<serde_json::Value>> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.syscall_push(KernelEvent::Syscall(Syscall::SharedRecall {
+        self.syscall_push(KernelEvent::syscall(Syscall::SharedRecall {
             agent_id: self.agent_id,
             principal: self.principal.clone(),
             scope,
@@ -264,7 +264,7 @@ impl ProcessHandle {
     /// Create an anonymous pipe targeting a specific agent.
     pub async fn create_pipe(&self, target: AgentId) -> Result<(PipeWriter, PipeReader)> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.syscall_push(KernelEvent::Syscall(Syscall::CreatePipe {
+        self.syscall_push(KernelEvent::syscall(Syscall::CreatePipe {
             owner: self.agent_id,
             target,
             reply_tx,
@@ -276,7 +276,7 @@ impl ProcessHandle {
     /// Create a named pipe that any agent can connect to.
     pub async fn create_named_pipe(&self, name: &str) -> Result<(PipeWriter, PipeReader)> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.syscall_push(KernelEvent::Syscall(Syscall::CreateNamedPipe {
+        self.syscall_push(KernelEvent::syscall(Syscall::CreateNamedPipe {
             owner: self.agent_id,
             name: name.to_string(),
             reply_tx,
@@ -288,7 +288,7 @@ impl ProcessHandle {
     /// Connect to a named pipe as a reader.
     pub async fn connect_pipe(&self, name: &str) -> Result<PipeReader> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.syscall_push(KernelEvent::Syscall(Syscall::ConnectPipe {
+        self.syscall_push(KernelEvent::syscall(Syscall::ConnectPipe {
             connector: self.agent_id,
             name: name.to_string(),
             reply_tx,
@@ -305,7 +305,7 @@ impl ProcessHandle {
     pub async fn requires_approval(&self, tool_name: &str) -> bool {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         if self
-            .syscall_push(KernelEvent::Syscall(Syscall::RequiresApproval {
+            .syscall_push(KernelEvent::syscall(Syscall::RequiresApproval {
                 tool_name: tool_name.to_string(),
                 reply_tx,
             }))
@@ -320,7 +320,7 @@ impl ProcessHandle {
     /// Request approval for a tool execution.
     pub async fn request_approval(&self, tool_name: &str, summary: &str) -> Result<bool> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.syscall_push(KernelEvent::Syscall(Syscall::RequestApproval {
+        self.syscall_push(KernelEvent::syscall(Syscall::RequestApproval {
             agent_id: self.agent_id,
             principal: self.principal.clone(),
             tool_name: tool_name.to_string(),
@@ -337,7 +337,7 @@ impl ProcessHandle {
         checks: Vec<(String, serde_json::Value)>,
     ) -> Result<Vec<crate::guard::Verdict>> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.syscall_push(KernelEvent::Syscall(Syscall::CheckGuardBatch {
+        self.syscall_push(KernelEvent::syscall(Syscall::CheckGuardBatch {
             agent_id: self.agent_id,
             session_id: self.session_id.clone(),
             checks,
@@ -354,7 +354,7 @@ impl ProcessHandle {
     /// Get the manifest for this agent.
     pub async fn manifest(&self) -> Result<AgentManifest> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.syscall_push(KernelEvent::Syscall(Syscall::GetManifest {
+        self.syscall_push(KernelEvent::syscall(Syscall::GetManifest {
             agent_id: self.agent_id,
             reply_tx,
         }))
@@ -366,7 +366,7 @@ impl ProcessHandle {
     /// SyscallTool).
     pub async fn tool_registry(&self) -> Result<Arc<ToolRegistry>> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.syscall_push(KernelEvent::Syscall(Syscall::GetToolRegistry {
+        self.syscall_push(KernelEvent::syscall(Syscall::GetToolRegistry {
             agent_id: self.agent_id,
             reply_tx,
         }))
@@ -378,7 +378,7 @@ impl ProcessHandle {
     /// via the kernel's `DriverRegistry`. Returns `(driver, model_name)`.
     pub async fn resolve_driver(&self) -> Result<(crate::llm::LlmDriverRef, String)> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.syscall_push(KernelEvent::Syscall(Syscall::ResolveDriver {
+        self.syscall_push(KernelEvent::syscall(Syscall::ResolveDriver {
             agent_id: self.agent_id,
             reply_tx,
         }))
@@ -392,7 +392,7 @@ impl ProcessHandle {
 
     /// Publish an event to the kernel event bus.
     pub async fn publish(&self, event_type: &str, payload: serde_json::Value) -> Result<()> {
-        self.syscall_push(KernelEvent::Syscall(Syscall::PublishEvent {
+        self.syscall_push(KernelEvent::syscall(Syscall::PublishEvent {
             agent_id: self.agent_id,
             event_type: event_type.to_string(),
             payload,
@@ -409,7 +409,7 @@ impl ProcessHandle {
         success: bool,
         duration_ms: u64,
     ) -> Result<()> {
-        self.syscall_push(KernelEvent::Syscall(Syscall::RecordToolCall {
+        self.syscall_push(KernelEvent::syscall(Syscall::RecordToolCall {
             agent_id: self.agent_id,
             tool_name,
             args,

@@ -175,7 +175,7 @@ impl AppConfig {
             rara_backend_admin::settings::SettingsSvc::load(db_store.kv_store(), pool.clone())
                 .await
                 .whatever_context("Failed to initialize runtime settings")?;
-        // Seed config-file defaults into settings store (won't overwrite existing).
+        // Apply config-file values to settings store (overwrites existing).
         let config_defaults = flatten::flatten_config_sections(&self);
         if !config_defaults.is_empty() {
             settings_svc

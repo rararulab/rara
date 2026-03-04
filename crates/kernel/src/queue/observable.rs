@@ -91,7 +91,7 @@ impl std::fmt::Debug for ObservableEventQueue {
 
 impl ObservableKernelEvent {
     fn from_event(event: &KernelEvent) -> Option<Self> {
-        let payload = serde_json::to_value(event).ok()?;
+        let payload = serde_json::to_value(&event.kind).ok()?;
         Some(Self {
             common: event.common_fields(),
             event:  payload,
@@ -116,7 +116,7 @@ mod tests {
         let queue = ObservableEventQueue::new(inner, 8);
         let mut rx = queue.subscribe().unwrap();
 
-        queue.push(KernelEvent::Shutdown).unwrap();
+        queue.push(KernelEvent::shutdown()).unwrap();
 
         let received = rx.try_recv().unwrap();
         assert_eq!(received.common.event_type, "shutdown");
@@ -126,10 +126,7 @@ mod tests {
     #[test]
     fn subscribed_event_exposes_common_fields() {
         let agent_id = AgentId::new();
-        let event = KernelEvent::SendSignal {
-            target: agent_id,
-            signal: Signal::Pause,
-        };
+        let event = KernelEvent::send_signal(agent_id, Signal::Pause);
 
         let fields = event.common_fields();
 
@@ -141,7 +138,7 @@ mod tests {
 
     #[test]
     fn observed_event_contains_payload_and_common_fields() {
-        let observed = ObservableKernelEvent::from_event(&KernelEvent::Shutdown).unwrap();
+        let observed = ObservableKernelEvent::from_event(&KernelEvent::shutdown()).unwrap();
 
         assert_eq!(observed.common.event_type, "shutdown");
         assert_eq!(observed.event, serde_json::json!("Shutdown"));

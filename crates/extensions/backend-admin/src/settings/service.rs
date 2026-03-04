@@ -89,26 +89,19 @@ impl SettingsSvc {
         Ok(())
     }
 
-    /// Seed default values from a config file. Only inserts keys that
-    /// don't already exist in the store. Does NOT trigger change
-    /// notification (these are startup defaults, not runtime mutations).
+    /// Apply config-file values to the settings store, overwriting any
+    /// existing values. Does NOT trigger change notification (these are
+    /// startup defaults, not runtime mutations).
     pub async fn seed_defaults(&self, defaults: Vec<(String, String)>) -> Result<(), Whatever> {
-        use rara_domain_shared::settings::SettingsProvider;
-
-        let existing = self.list().await;
-        let mut seeded = 0u32;
-        for (key, value) in defaults {
-            if !existing.contains_key(&key) {
-                let prefixed = format!("{PREFIX}{key}");
-                self.kv
-                    .set(&prefixed, &value)
-                    .await
-                    .whatever_context("failed to seed setting")?;
-                seeded += 1;
-            }
+        for (key, value) in &defaults {
+            let prefixed = format!("{PREFIX}{key}");
+            self.kv
+                .set(&prefixed, value)
+                .await
+                .whatever_context("failed to seed setting")?;
         }
-        if seeded > 0 {
-            info!(seeded, "config defaults seeded to settings store");
+        if !defaults.is_empty() {
+            info!(count = defaults.len(), "config values applied to settings store");
         }
         Ok(())
     }

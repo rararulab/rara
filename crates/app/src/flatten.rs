@@ -14,8 +14,8 @@
 
 //! Flatten typed config sections into settings key-value pairs.
 //!
-//! At startup, the values produced here are seeded into the settings
-//! store as defaults (existing values are never overwritten).
+//! At startup, the values produced here are applied to the settings
+//! store, overwriting any existing values.
 
 use std::collections::HashMap;
 

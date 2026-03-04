@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn classify_user_message_is_global() {
         let q = make_queue(4);
-        let event = KernelEvent::UserMessage(test_inbound("hello"));
+        let event = KernelEvent::user_message(test_inbound("hello"));
         assert_eq!(q.classify(&event), ShardTarget::Global);
     }
 
@@ -267,8 +267,8 @@ mod tests {
     fn classify_spawn_agent_is_global() {
         let q = make_queue(4);
         let (tx, _rx) = tokio::sync::oneshot::channel();
-        let event = KernelEvent::SpawnAgent {
-            manifest:  crate::process::AgentManifest {
+        let event = KernelEvent::spawn_agent(
+            crate::process::AgentManifest {
                 name:               "test".to_string(),
                 role:               None,
                 description:        "test".to_string(),
@@ -284,24 +284,24 @@ mod tests {
                 metadata:           Default::default(),
                 sandbox:            None,
             },
-            input:     "hello".to_string(),
-            principal: crate::process::principal::Principal::user("test"),
-            parent_id: None,
-            reply_tx:  tx,
-        };
+            "hello".to_string(),
+            crate::process::principal::Principal::user("test"),
+            None,
+            tx,
+        );
         assert_eq!(q.classify(&event), ShardTarget::Global);
     }
 
     #[test]
     fn classify_shutdown_is_global() {
         let q = make_queue(4);
-        assert_eq!(q.classify(&KernelEvent::Shutdown), ShardTarget::Global);
+        assert_eq!(q.classify(&KernelEvent::shutdown()), ShardTarget::Global);
     }
 
     #[test]
     fn classify_deliver_is_global() {
         let q = make_queue(4);
-        let event = KernelEvent::Deliver(crate::io::types::OutboundEnvelope {
+        let event = KernelEvent::deliver(crate::io::types::OutboundEnvelope {
             id:          MessageId::new(),
             in_reply_to: MessageId::new(),
             user:        UserId("u1".to_string()),
@@ -320,10 +320,7 @@ mod tests {
     fn classify_send_signal_is_sharded() {
         let q = make_queue(4);
         let target = AgentId::new();
-        let event = KernelEvent::SendSignal {
-            target,
-            signal: Signal::Interrupt,
-        };
+        let event = KernelEvent::send_signal(target, Signal::Interrupt);
         let expected_shard = target.0.as_u128() as usize % 4;
         assert_eq!(q.classify(&event), ShardTarget::Shard(expected_shard));
     }
@@ -332,10 +329,10 @@ mod tests {
     fn classify_turn_completed_is_sharded() {
         let q = make_queue(4);
         let agent_id = AgentId::new();
-        let event = KernelEvent::TurnCompleted {
+        let event = KernelEvent::turn_completed(
             agent_id,
-            session_id: SessionId::new(),
-            result: Ok(crate::agent_turn::AgentTurnResult {
+            SessionId::new(),
+            Ok(crate::agent_turn::AgentTurnResult {
                 text:       "done".to_string(),
                 iterations: 1,
                 tool_calls: 0,
@@ -351,9 +348,9 @@ mod tests {
                     error:            None,
                 },
             }),
-            in_reply_to: MessageId::new(),
-            user: UserId("u1".to_string()),
-        };
+            MessageId::new(),
+            UserId("u1".to_string()),
+        );
         let expected_shard = agent_id.0.as_u128() as usize % 4;
         assert_eq!(q.classify(&event), ShardTarget::Shard(expected_shard));
     }
@@ -362,15 +359,15 @@ mod tests {
     fn classify_child_completed_is_sharded() {
         let q = make_queue(4);
         let parent_id = AgentId::new();
-        let event = KernelEvent::ChildCompleted {
+        let event = KernelEvent::child_completed(
             parent_id,
-            child_id: AgentId::new(),
-            result: crate::process::AgentResult {
+            AgentId::new(),
+            crate::process::AgentResult {
                 output:     "done".to_string(),
                 iterations: 1,
                 tool_calls: 0,
             },
-        };
+        );
         let expected_shard = parent_id.0.as_u128() as usize % 4;
         assert_eq!(q.classify(&event), ShardTarget::Shard(expected_shard));
     }
@@ -380,7 +377,7 @@ mod tests {
     #[test]
     fn push_routes_global_to_global_queue() {
         let q = make_queue(4);
-        q.push(KernelEvent::UserMessage(test_inbound("hello")))
+        q.push(KernelEvent::user_message(test_inbound("hello")))
             .unwrap();
 
         assert_eq!(q.global().pending_count(), 1);
@@ -396,11 +393,8 @@ mod tests {
         let target = AgentId::new();
         let expected_shard = target.0.as_u128() as usize % 4;
 
-        q.push(KernelEvent::SendSignal {
-            target,
-            signal: Signal::Interrupt,
-        })
-        .unwrap();
+        q.push(KernelEvent::send_signal(target, Signal::Interrupt))
+            .unwrap();
 
         assert_eq!(q.shard(expected_shard).pending_count(), 1);
         assert_eq!(q.global().pending_count(), 0);
@@ -412,15 +406,12 @@ mod tests {
         let q = make_queue(4);
 
         // Push 2 global events
-        q.push(KernelEvent::UserMessage(test_inbound("a"))).unwrap();
-        q.push(KernelEvent::UserMessage(test_inbound("b"))).unwrap();
+        q.push(KernelEvent::user_message(test_inbound("a"))).unwrap();
+        q.push(KernelEvent::user_message(test_inbound("b"))).unwrap();
 
         // Push 1 sharded event
-        q.push(KernelEvent::SendSignal {
-            target: AgentId::new(),
-            signal: Signal::Kill,
-        })
-        .unwrap();
+        q.push(KernelEvent::send_signal(AgentId::new(), Signal::Kill))
+            .unwrap();
 
         assert_eq!(q.pending_count(), 3);
     }
@@ -431,11 +422,8 @@ mod tests {
         let target = AgentId::new();
         let expected_shard = target.0.as_u128() as usize % 4;
 
-        q.push(KernelEvent::SendSignal {
-            target,
-            signal: Signal::Kill,
-        })
-        .unwrap();
+        q.push(KernelEvent::send_signal(target, Signal::Kill))
+            .unwrap();
 
         assert_eq!(q.pending_count(), 1);
         let events = q.shard(expected_shard).drain(10);
@@ -448,15 +436,12 @@ mod tests {
         let q = make_queue(4);
 
         // Push 1 global event
-        q.push(KernelEvent::UserMessage(test_inbound("global")))
+        q.push(KernelEvent::user_message(test_inbound("global")))
             .unwrap();
 
         // Push 1 sharded event
-        q.push(KernelEvent::SendSignal {
-            target: AgentId::new(),
-            signal: Signal::Kill,
-        })
-        .unwrap();
+        q.push(KernelEvent::send_signal(AgentId::new(), Signal::Kill))
+            .unwrap();
 
         assert_eq!(q.pending_count(), 2);
 
@@ -476,22 +461,13 @@ mod tests {
         let target = AgentId::new();
 
         // Fill the single shard
-        q.push(KernelEvent::SendSignal {
-            target,
-            signal: Signal::Interrupt,
-        })
-        .unwrap();
-        q.push(KernelEvent::SendSignal {
-            target,
-            signal: Signal::Interrupt,
-        })
-        .unwrap();
+        q.push(KernelEvent::send_signal(target, Signal::Interrupt))
+            .unwrap();
+        q.push(KernelEvent::send_signal(target, Signal::Interrupt))
+            .unwrap();
 
         // Third should fail
-        let result = q.push(KernelEvent::SendSignal {
-            target,
-            signal: Signal::Interrupt,
-        });
+        let result = q.push(KernelEvent::send_signal(target, Signal::Interrupt));
         assert!(result.is_err());
     }
 
@@ -502,10 +478,7 @@ mod tests {
         let q = make_queue(0);
         // Agent-scoped event should still go to Global in single mode.
         let target = AgentId::new();
-        let event = KernelEvent::SendSignal {
-            target,
-            signal: Signal::Interrupt,
-        };
+        let event = KernelEvent::send_signal(target, Signal::Interrupt);
         assert_eq!(q.classify(&event), ShardTarget::Global);
     }
 
@@ -520,13 +493,10 @@ mod tests {
         let q = make_queue(0);
         let target = AgentId::new();
 
-        q.push(KernelEvent::UserMessage(test_inbound("hello")))
+        q.push(KernelEvent::user_message(test_inbound("hello")))
             .unwrap();
-        q.push(KernelEvent::SendSignal {
-            target,
-            signal: Signal::Interrupt,
-        })
-        .unwrap();
+        q.push(KernelEvent::send_signal(target, Signal::Interrupt))
+            .unwrap();
 
         assert_eq!(q.pending_count(), 2);
         let events = q.drain(10);

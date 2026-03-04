@@ -911,10 +911,10 @@ mod tests {
         assert!(process.is_some(), "process should exist after spawn");
 
         // Push a Pause signal via event queue.
-        let event = crate::event::KernelEvent::SendSignal {
-            target: agent_id,
-            signal: crate::process::Signal::Pause,
-        };
+        let event = crate::event::KernelEvent::send_signal(
+            agent_id,
+            crate::process::Signal::Pause,
+        );
         kernel.event_queue().push(event).unwrap();
 
         // Allow time for the event loop to process.
@@ -930,10 +930,10 @@ mod tests {
         );
 
         // Push Resume signal.
-        let event = crate::event::KernelEvent::SendSignal {
-            target: agent_id,
-            signal: crate::process::Signal::Resume,
-        };
+        let event = crate::event::KernelEvent::send_signal(
+            agent_id,
+            crate::process::Signal::Resume,
+        );
         kernel.event_queue().push(event).unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1158,7 +1158,7 @@ mod tests {
         ];
 
         let process = handle.process_table().get(agent_id).unwrap();
-        let event = crate::event::KernelEvent::Syscall(crate::event::Syscall::CheckGuardBatch {
+        let event = crate::event::KernelEvent::syscall(crate::event::Syscall::CheckGuardBatch {
             agent_id,
             session_id: process.session_id.clone(),
             checks,
@@ -1216,7 +1216,7 @@ mod tests {
         ];
 
         let process = handle.process_table().get(agent_id).unwrap();
-        let event = crate::event::KernelEvent::Syscall(crate::event::Syscall::CheckGuardBatch {
+        let event = crate::event::KernelEvent::syscall(crate::event::Syscall::CheckGuardBatch {
             agent_id,
             session_id: process.session_id.clone(),
             checks,
@@ -1259,7 +1259,7 @@ mod tests {
         let checks = vec![];
 
         let process = handle.process_table().get(agent_id).unwrap();
-        let event = crate::event::KernelEvent::Syscall(crate::event::Syscall::CheckGuardBatch {
+        let event = crate::event::KernelEvent::syscall(crate::event::Syscall::CheckGuardBatch {
             agent_id,
             session_id: process.session_id.clone(),
             checks,

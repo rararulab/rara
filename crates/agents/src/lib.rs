@@ -21,6 +21,7 @@
 //! Currently defines:
 //! - `rara` — the root conversational agent with full tool access
 //! - `nana` — a friendly chat-only companion (rara's sister)
+//! - `worker` — lightweight task-execution agent for sub-agent spawning
 
 use std::sync::LazyLock;
 
@@ -69,6 +70,32 @@ static NANA_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
 
 /// Build the **nana** agent manifest — a chat-only companion for regular users.
 pub fn nana() -> &'static AgentManifest { &NANA_MANIFEST }
+
+// ---------------------------------------------------------------------------
+// Worker — lightweight task-execution agent
+// ---------------------------------------------------------------------------
+
+static WORKER_MANIFEST: LazyLock<AgentManifest> = LazyLock::new(|| AgentManifest {
+    name:               "worker".to_string(),
+    role:               Some(AgentRole::Worker),
+    description:        "Worker — lightweight task-execution agent for sub-agent spawning"
+        .to_string(),
+    model:              None,
+    system_prompt:      WORKER_SYSTEM_PROMPT.to_string(),
+    soul_prompt:        None,
+    provider_hint:      None,
+    max_iterations:     Some(15),
+    tools:              vec![],
+    max_children:       Some(0),
+    max_context_tokens: None,
+    priority:           Priority::default(),
+    metadata:           serde_json::Value::Null,
+    sandbox:            None,
+});
+
+/// Build the **worker** agent manifest — a lightweight sub-agent for task
+/// execution.
+pub fn worker() -> &'static AgentManifest { &WORKER_MANIFEST }
 
 // ---------------------------------------------------------------------------
 // Rara soul prompt (personality/mood/voice)
@@ -209,6 +236,21 @@ You are also self-evolving. Your own source code is the project you run inside. 
 "#;
 
 // ---------------------------------------------------------------------------
+// Worker system prompt
+// ---------------------------------------------------------------------------
+
+const WORKER_SYSTEM_PROMPT: &str = r#"You are a task-execution agent. You receive a specific task and complete it using the tools available to you.
+
+Rules:
+1. Focus exclusively on the assigned task. Do not deviate.
+2. Use tools immediately — do not explain what you plan to do.
+3. Return results concisely. Include only the information requested.
+4. If a tool call fails, retry with adjusted parameters. Report failure only after 3 attempts.
+5. Do not ask for confirmation. Execute the task directly.
+6. Respond in the same language as the task description.
+"#;
+
+// ---------------------------------------------------------------------------
 // Nana soul prompt (personality/voice)
 // ---------------------------------------------------------------------------
 
@@ -334,4 +376,5 @@ mod tests {
         let m = nana();
         assert_eq!(m.model, None);
     }
+
 }

@@ -62,7 +62,7 @@ impl Kernel {
                         "process_terminal",
                         format!("process {} is {}", target_id, process.state),
                     );
-                    if let Err(e) = self.event_queue().try_push(KernelEvent::Deliver(envelope)) {
+                    if let Err(e) = self.event_queue().try_push(KernelEvent::deliver(envelope)) {
                         error!(%e, "failed to push process-terminal error Deliver");
                     }
                     return;
@@ -79,7 +79,7 @@ impl Kernel {
                         "process_not_found",
                         format!("process not found: {target_id}"),
                     );
-                    if let Err(e) = self.event_queue().try_push(KernelEvent::Deliver(envelope)) {
+                    if let Err(e) = self.event_queue().try_push(KernelEvent::deliver(envelope)) {
                         error!(%e, "failed to push process-not-found error Deliver");
                     }
                     return;
@@ -150,7 +150,7 @@ impl Kernel {
                 "unknown_agent",
                 format!("unknown target agent: {target_name}"),
             );
-            if let Err(e) = self.event_queue().try_push(KernelEvent::Deliver(envelope)) {
+            if let Err(e) = self.event_queue().try_push(KernelEvent::deliver(envelope)) {
                 error!(%e, "failed to push unknown-agent error Deliver");
             }
             return;
@@ -189,12 +189,12 @@ impl Kernel {
     ) {
         let should_buffer = runtimes.with_mut(&agent_id, |rt| {
             if rt.paused {
-                rt.pause_buffer.push(KernelEvent::UserMessage(msg.clone()));
+                rt.pause_buffer.push(KernelEvent::user_message(msg.clone()));
                 return true;
             }
             if let Some(p) = self.process_table().get(agent_id) {
                 if p.state == ProcessState::Running {
-                    rt.pause_buffer.push(KernelEvent::UserMessage(msg.clone()));
+                    rt.pause_buffer.push(KernelEvent::user_message(msg.clone()));
                     return true;
                 }
             }

@@ -19,8 +19,7 @@ use futures::StreamExt;
 use tokio::{sync::mpsc::UnboundedSender, time::Duration};
 
 use crate::top::types::{
-    AgentInfo, ApprovalRequest, AuditEvent, KernelEventCommonFields, KernelEventEnvelope,
-    ProcessStats, SystemStats,
+    AgentInfo, ApprovalRequest, AuditEvent, KernelEventEnvelope, ProcessStats, SystemStats,
 };
 
 #[derive(Debug)]
@@ -85,7 +84,7 @@ impl KernelClient {
         self.get_json(&url).await
     }
 
-    pub async fn stream_events(&self, tx: UnboundedSender<KernelEventCommonFields>) {
+    pub async fn stream_events(&self, tx: UnboundedSender<KernelEventEnvelope>) {
         let url = format!("{}/api/v1/kernel/events/stream", self.base_url);
 
         loop {
@@ -115,7 +114,7 @@ impl KernelClient {
 
                         match serde_json::from_str::<KernelEventEnvelope>(&event.data) {
                             Ok(envelope) => {
-                                if tx.send(envelope.common).is_err() {
+                                if tx.send(envelope).is_err() {
                                     return;
                                 }
                             }

@@ -17,10 +17,11 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
+    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap},
 };
 
 use crate::top::app::{App, Tab};
+use crate::top::types::KernelEventEnvelope;
 
 /// Render the full TUI.
 pub fn render(frame: &mut Frame, app: &App) {
@@ -36,6 +37,13 @@ pub fn render(frame: &mut Frame, app: &App) {
     render_tab_bar(frame, tab_area, app);
     render_content(frame, content_area, app);
     render_help(frame, help_area);
+
+    // Event detail popup (rendered on top of everything).
+    if app.show_event_detail && app.tab == Tab::Events {
+        if let Some(envelope) = app.kernel_events.iter().rev().nth(app.selected_row) {
+            render_event_detail_popup(frame, frame.area(), envelope);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -297,6 +305,7 @@ fn render_audit_table(frame: &mut Frame, area: Rect, app: &App) {
     let rows: Vec<Row> = app
         .audit
         .iter()
+        .rev()
         .skip(app.scroll_offset)
         .map(|e| {
             let details_str = match &e.details {
@@ -345,24 +354,46 @@ fn render_events_table(frame: &mut Frame, area: Rect, app: &App) {
             .add_modifier(Modifier::BOLD),
     );
 
+    // Visible height excluding border (top+bottom) and header row.
+    let visible_rows = area.height.saturating_sub(3) as usize;
+
+    // Compute scroll_offset so that selected_row is always visible.
+    let scroll = if app.selected_row < visible_rows {
+        0
+    } else {
+        app.selected_row - visible_rows + 1
+    };
+
+    let selected_style = Style::default()
+        .bg(Color::DarkGray)
+        .add_modifier(Modifier::BOLD);
+
     let rows: Vec<Row> = app
         .kernel_events
         .iter()
-        .skip(app.scroll_offset)
-        .map(|event| {
-            Row::new(vec![
-                Cell::from(event.timestamp.as_str()),
-                Cell::from(event.event_type.as_str()),
-                Cell::from(priority_styled(&event.priority)),
+        .rev()
+        .enumerate()
+        .skip(scroll)
+        .take(visible_rows)
+        .map(|(i, envelope)| {
+            let c = &envelope.common;
+            let row = Row::new(vec![
+                Cell::from(c.timestamp.as_str()),
+                Cell::from(c.event_type.as_str()),
+                Cell::from(priority_styled(&c.priority)),
                 Cell::from(
-                    event
-                        .agent_id
+                    c.agent_id
                         .as_deref()
                         .map(short_id)
                         .unwrap_or_else(|| "-".to_string()),
                 ),
-                Cell::from(event.summary.chars().take(80).collect::<String>()),
-            ])
+                Cell::from(c.summary.chars().take(80).collect::<String>()),
+            ]);
+            if i == app.selected_row {
+                row.style(selected_style)
+            } else {
+                row
+            }
         })
         .collect();
 
@@ -461,4 +492,82 @@ fn priority_styled(priority: &str) -> Span<'_> {
         _ => Color::White,
     };
     Span::styled(priority, Style::default().fg(color))
+}
+
+// ---------------------------------------------------------------------------
+// Event detail popup
+// ---------------------------------------------------------------------------
+
+fn render_event_detail_popup(frame: &mut Frame, area: Rect, envelope: &KernelEventEnvelope) {
+    let popup_area = centered_rect(70, 60, area);
+
+    // Clear the background behind the popup.
+    frame.render_widget(Clear, popup_area);
+
+    let c = &envelope.common;
+    let event_json = serde_json::to_string_pretty(&envelope.event).unwrap_or_default();
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("Timestamp: ", Style::default().fg(Color::Yellow)),
+            Span::raw(&c.timestamp),
+        ]),
+        Line::from(vec![
+            Span::styled("Event:     ", Style::default().fg(Color::Yellow)),
+            Span::raw(&c.event_type),
+        ]),
+        Line::from(vec![
+            Span::styled("Priority:  ", Style::default().fg(Color::Yellow)),
+            priority_styled(&c.priority),
+        ]),
+        Line::from(vec![
+            Span::styled("Agent:     ", Style::default().fg(Color::Yellow)),
+            Span::raw(c.agent_id.as_deref().unwrap_or("-")),
+        ]),
+        Line::from(vec![
+            Span::styled("Summary:   ", Style::default().fg(Color::Yellow)),
+            Span::raw(&c.summary),
+        ]),
+        Line::raw(""),
+        Line::from(Span::styled(
+            "Details:",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+    ];
+
+    for json_line in event_json.lines() {
+        lines.push(Line::raw(json_line.to_string()));
+    }
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Event Detail (Enter/Esc to close) ")
+                .border_style(Style::default().fg(Color::Cyan)),
+        )
+        .wrap(Wrap { trim: false });
+
+    frame.render_widget(paragraph, popup_area);
+}
+
+/// Return a centered `Rect` of `percent_x`% width and `percent_y`% height.
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let [_, v_center, _] = Layout::vertical([
+        Constraint::Percentage((100 - percent_y) / 2),
+        Constraint::Percentage(percent_y),
+        Constraint::Percentage((100 - percent_y) / 2),
+    ])
+    .areas(area);
+
+    let [_, h_center, _] = Layout::horizontal([
+        Constraint::Percentage((100 - percent_x) / 2),
+        Constraint::Percentage(percent_x),
+        Constraint::Percentage((100 - percent_x) / 2),
+    ])
+    .areas(v_center);
+
+    h_center
 }

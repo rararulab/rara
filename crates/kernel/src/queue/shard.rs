@@ -162,9 +162,9 @@ mod tests {
     fn test_push_and_drain() {
         let q = ShardQueue::new(100);
 
-        q.push(KernelEvent::UserMessage(test_inbound("hello")))
+        q.push(KernelEvent::user_message(test_inbound("hello")))
             .unwrap();
-        q.push(KernelEvent::UserMessage(test_inbound("world")))
+        q.push(KernelEvent::user_message(test_inbound("world")))
             .unwrap();
 
         assert_eq!(q.pending_count(), 2);
@@ -179,9 +179,9 @@ mod tests {
         let q = ShardQueue::new(100);
 
         // Push in reverse priority order: Low, Normal, Critical
-        q.push(KernelEvent::UserMessage(test_inbound("low")))
+        q.push(KernelEvent::user_message(test_inbound("low")))
             .unwrap();
-        q.push(KernelEvent::Deliver(crate::io::types::OutboundEnvelope {
+        q.push(KernelEvent::deliver(crate::io::types::OutboundEnvelope {
             id:          MessageId::new(),
             in_reply_to: MessageId::new(),
             user:        UserId("u1".to_string()),
@@ -194,31 +194,28 @@ mod tests {
             timestamp:   jiff::Timestamp::now(),
         }))
         .unwrap();
-        q.push(KernelEvent::SendSignal {
-            target: AgentId::new(),
-            signal: Signal::Interrupt,
-        })
-        .unwrap();
+        q.push(KernelEvent::send_signal(AgentId::new(), Signal::Interrupt))
+            .unwrap();
 
         let events = q.drain(10);
         assert_eq!(events.len(), 3);
 
         // First should be Critical (SendSignal)
-        assert!(matches!(events[0], KernelEvent::SendSignal { .. }));
+        assert!(matches!(events[0].kind, crate::event::EventKind::SendSignal { .. }));
         // Second should be Normal (Deliver)
-        assert!(matches!(events[1], KernelEvent::Deliver(_)));
+        assert!(matches!(events[1].kind, crate::event::EventKind::Deliver(_)));
         // Third should be Low (UserMessage)
-        assert!(matches!(events[2], KernelEvent::UserMessage(_)));
+        assert!(matches!(events[2].kind, crate::event::EventKind::UserMessage(_)));
     }
 
     #[test]
     fn test_capacity_full() {
         let q = ShardQueue::new(2);
 
-        q.push(KernelEvent::UserMessage(test_inbound("a"))).unwrap();
-        q.push(KernelEvent::UserMessage(test_inbound("b"))).unwrap();
+        q.push(KernelEvent::user_message(test_inbound("a"))).unwrap();
+        q.push(KernelEvent::user_message(test_inbound("b"))).unwrap();
 
-        let result = q.push(KernelEvent::UserMessage(test_inbound("c")));
+        let result = q.push(KernelEvent::user_message(test_inbound("c")));
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), BusError::Full));
     }
@@ -235,7 +232,7 @@ mod tests {
         });
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        q.push(KernelEvent::UserMessage(test_inbound("wake")))
+        q.push(KernelEvent::user_message(test_inbound("wake")))
             .unwrap();
 
         handle.await.unwrap();
@@ -246,7 +243,7 @@ mod tests {
         let q = ShardQueue::new(100);
 
         for i in 0..5 {
-            q.push(KernelEvent::UserMessage(test_inbound(&format!("msg{i}"))))
+            q.push(KernelEvent::user_message(test_inbound(&format!("msg{i}"))))
                 .unwrap();
         }
 
@@ -259,7 +256,7 @@ mod tests {
     fn test_try_push_sync() {
         let q = ShardQueue::new(100);
 
-        q.try_push(KernelEvent::UserMessage(test_inbound("sync")))
+        q.try_push(KernelEvent::user_message(test_inbound("sync")))
             .unwrap();
 
         assert_eq!(q.pending_count(), 1);
@@ -271,10 +268,10 @@ mod tests {
     fn test_try_push_sync_full() {
         let q = ShardQueue::new(1);
 
-        q.try_push(KernelEvent::UserMessage(test_inbound("a")))
+        q.try_push(KernelEvent::user_message(test_inbound("a")))
             .unwrap();
 
-        let result = q.try_push(KernelEvent::UserMessage(test_inbound("b")));
+        let result = q.try_push(KernelEvent::user_message(test_inbound("b")));
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), BusError::Full));
     }
@@ -290,7 +287,7 @@ mod tests {
     #[tokio::test]
     async fn test_wait_returns_immediately_when_pending() {
         let q = ShardQueue::new(100);
-        q.push(KernelEvent::UserMessage(test_inbound("already")))
+        q.push(KernelEvent::user_message(test_inbound("already")))
             .unwrap();
 
         // wait() should return immediately because there's a pending event
@@ -304,10 +301,10 @@ mod tests {
         let q = ShardQueue::new(100);
         assert_eq!(q.pending_count(), 0);
 
-        q.push(KernelEvent::UserMessage(test_inbound("a"))).unwrap();
+        q.push(KernelEvent::user_message(test_inbound("a"))).unwrap();
         assert_eq!(q.pending_count(), 1);
 
-        q.push(KernelEvent::UserMessage(test_inbound("b"))).unwrap();
+        q.push(KernelEvent::user_message(test_inbound("b"))).unwrap();
         assert_eq!(q.pending_count(), 2);
 
         // Drain 1
@@ -326,15 +323,15 @@ mod tests {
         let q = ShardQueue::new(100);
 
         // Push a Low event first, then Shutdown (Critical)
-        q.push(KernelEvent::UserMessage(test_inbound("low")))
+        q.push(KernelEvent::user_message(test_inbound("low")))
             .unwrap();
-        q.push(KernelEvent::Shutdown).unwrap();
+        q.push(KernelEvent::shutdown()).unwrap();
 
         let events = q.drain(10);
         assert_eq!(events.len(), 2);
         // Shutdown should come first (Critical priority)
-        assert!(matches!(events[0], KernelEvent::Shutdown));
-        assert!(matches!(events[1], KernelEvent::UserMessage(_)));
+        assert!(matches!(events[0].kind, crate::event::EventKind::Shutdown));
+        assert!(matches!(events[1].kind, crate::event::EventKind::UserMessage(_)));
     }
 
     #[test]

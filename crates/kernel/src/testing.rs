@@ -184,5 +184,21 @@ pub fn test_manifests() -> Vec<AgentManifest> {
             metadata:           Default::default(),
             sandbox:            None,
         },
+        AgentManifest {
+            name:               "worker".to_string(),
+            role:               None,
+            description:        "Test worker agent".to_string(),
+            model:              None,
+            system_prompt:      "You are a task-execution agent.".to_string(),
+            soul_prompt:        None,
+            provider_hint:      None,
+            max_iterations:     Some(15),
+            tools:              vec![],
+            max_children:       Some(0),
+            max_context_tokens: None,
+            priority:           Default::default(),
+            metadata:           Default::default(),
+            sandbox:            None,
+        },
     ]
 }

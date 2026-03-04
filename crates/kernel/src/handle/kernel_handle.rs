@@ -150,13 +150,7 @@ impl KernelHandle {
         parent_id: Option<AgentId>,
     ) -> Result<AgentId> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        let event = KernelEvent::SpawnAgent {
-            manifest,
-            input,
-            principal,
-            parent_id,
-            reply_tx,
-        };
+        let event = KernelEvent::spawn_agent(manifest, input, principal, parent_id, reply_tx);
         self.event_queue
             .push(event)
             .map_err(|_| KernelError::SpawnFailed {
@@ -194,7 +188,7 @@ impl KernelHandle {
     /// contexts.
     pub fn send_signal(&self, target: AgentId, signal: Signal) -> Result<()> {
         self.event_queue
-            .try_push(KernelEvent::SendSignal { target, signal })
+            .try_push(KernelEvent::send_signal(target, signal))
             .map_err(|_| KernelError::Other {
                 message: "event queue full for signal".into(),
             })
@@ -224,7 +218,7 @@ impl KernelHandle {
     /// contexts.
     pub fn submit_message(&self, msg: InboundMessage) -> Result<()> {
         self.event_queue
-            .try_push(KernelEvent::UserMessage(msg))
+            .try_push(KernelEvent::user_message(msg))
             .map_err(|_| KernelError::Other {
                 message: "event queue full for user message".into(),
             })
@@ -236,7 +230,7 @@ impl KernelHandle {
     /// contexts.
     pub fn shutdown(&self) -> Result<()> {
         self.event_queue
-            .try_push(KernelEvent::Shutdown)
+            .try_push(KernelEvent::shutdown())
             .map_err(|_| KernelError::Other {
                 message: "event queue full for shutdown".into(),
             })
