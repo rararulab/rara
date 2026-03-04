@@ -16,9 +16,10 @@
 //! needed to boot a [`Kernel`](rara_kernel::Kernel).
 //!
 //! [`RaraState`] is the kernel-dependency half of the old `AppState` god
-//! object.  It initializes LLM providers, tools, memory, skills, MCP, and
-//! the session repository but does **not** create a `Kernel` itself — the
-//! caller does that in the app crate using the fields exposed here.
+//! object.  It initializes LLM providers, tools, skills, MCP, and the
+//! session repository / tape store but does **not** create a `Kernel`
+//! itself — the caller does that in the app crate using the fields exposed
+//! here.
 
 use std::sync::Arc;
 
@@ -28,19 +29,23 @@ use tracing::info;
 /// Kernel-side application state.
 ///
 /// Owns everything the kernel needs to run: provider registry, tool registry,
-/// memory, skills, MCP, user store, and session repository.
+/// skills, MCP, user store, session repository, session index, and tape store.
 ///
 /// Does NOT hold a `Kernel` — the app crate builds one from these fields.
 #[derive(Clone)]
 pub struct RaraState {
-    pub credential_store:    rara_keyring_store::KeyringStoreRef,
-    pub driver_registry:     Arc<rara_kernel::llm::DriverRegistry>,
-    pub tool_registry:       Arc<rara_kernel::tool::ToolRegistry>,
-    pub user_store:          Arc<dyn rara_kernel::process::user::UserStore>,
-    pub session_repo:        Arc<dyn rara_sessions::repository::SessionRepository>,
-    pub memory_manager:      Arc<rara_memory::MemoryManager>,
-    pub skill_registry:      rara_skills::registry::InMemoryRegistry,
-    pub mcp_manager:         rara_mcp::manager::mgr::McpManager,
+    pub credential_store:  rara_keyring_store::KeyringStoreRef,
+    pub driver_registry:   Arc<rara_kernel::llm::DriverRegistry>,
+    pub tool_registry:     Arc<rara_kernel::tool::ToolRegistry>,
+    pub user_store:        Arc<dyn rara_kernel::process::user::UserStore>,
+    /// Legacy session repository (kept during gradual migration).
+    pub session_repo:      Arc<dyn rara_sessions::repository::SessionRepository>,
+    /// Lightweight file-based session metadata index (tape-centric replacement).
+    pub session_index:     Arc<dyn rara_kernel::session::SessionIndex>,
+    /// File-backed tape store for append-only conversation history.
+    pub tape_store:        Arc<rara_memory::tape::FileTapeStore>,
+    pub skill_registry:    rara_skills::registry::InMemoryRegistry,
+    pub mcp_manager:       rara_mcp::manager::mgr::McpManager,
     pub settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
 }
 
@@ -52,11 +57,6 @@ impl RaraState {
     pub async fn init(
         pool: sqlx::SqlitePool,
         settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
-        mem0_base_url: String,
-        memos_base_url: String,
-        memos_token: String,
-        hindsight_base_url: String,
-        hindsight_bank_id: String,
     ) -> Result<Self, Whatever> {
         // -- credential store --------------------------------------------------
 
@@ -97,7 +97,7 @@ impl RaraState {
             });
         }
 
-        // -- session repository -----------------------------------------------
+        // -- session repository (legacy) --------------------------------------
 
         let session_repo: Arc<dyn rara_sessions::repository::SessionRepository> = Arc::new(
             rara_sessions::pg_repository::PgSessionRepository::new(
@@ -107,6 +107,31 @@ impl RaraState {
             .await
             .whatever_context("Failed to initialize session repository")?,
         );
+
+        // -- session index (tape-centric) -------------------------------------
+
+        let session_index: Arc<dyn rara_kernel::session::SessionIndex> = Arc::new(
+            rara_sessions::file_index::FileSessionIndex::new(
+                rara_paths::sessions_dir().join("index"),
+            )
+            .await
+            .whatever_context("Failed to initialize file session index")?,
+        );
+        info!("FileSessionIndex initialized");
+
+        // -- tape store -------------------------------------------------------
+
+        let workspace_path = std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let tape_store = Arc::new(
+            rara_memory::tape::FileTapeStore::new(
+                rara_paths::home_dir(),
+                &workspace_path,
+            )
+            .await
+            .whatever_context("Failed to initialize FileTapeStore")?,
+        );
+        info!("FileTapeStore initialized");
 
         // -- Composio auth provider -------------------------------------------
 
@@ -124,17 +149,6 @@ impl RaraState {
             tool_registry.register_primitive(tool);
         }
 
-        // -- memory -----------------------------------------------------------
-
-        let memory_manager = crate::memory::init_memory_manager(
-            mem0_base_url,
-            memos_base_url,
-            memos_token,
-            hindsight_base_url,
-            hindsight_bank_id,
-        );
-        let recall_engine = crate::memory::init_recall_engine();
-
         // -- skills registry --------------------------------------------------
 
         let skill_registry = crate::skills::init_skill_registry(pool.clone());
@@ -150,8 +164,6 @@ impl RaraState {
         crate::tools::register_service_tools(
             &mut tool_registry,
             crate::tools::ServiceToolDeps {
-                memory_manager: memory_manager.clone(),
-                recall_engine,
                 skill_registry: skill_registry.clone(),
                 mcp_manager: mcp_manager.clone(),
             },
@@ -175,7 +187,8 @@ impl RaraState {
             tool_registry: tools,
             user_store,
             session_repo,
-            memory_manager,
+            session_index,
+            tape_store,
             skill_registry,
             mcp_manager,
             settings_provider,

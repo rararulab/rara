@@ -30,7 +30,6 @@ pub mod kernel;
 pub mod llm_registry;
 pub mod manifests;
 pub mod mcp;
-pub mod memory;
 pub mod outbox;
 pub mod resolvers;
 pub mod skills;

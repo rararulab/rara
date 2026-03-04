@@ -18,13 +18,8 @@ use std::sync::Arc;
 
 use rara_kernel::{
     guard::{Guard, noop::NoopGuard},
-    memory::{Memory, NoopMemory},
     notification::{BroadcastNotificationBus, NotificationBus},
 };
-
-/// Default Memory implementation — `NoopMemory` (kernel layer does not persist;
-/// agents access memory through tools).
-pub fn default_memory() -> Arc<dyn Memory> { Arc::new(NoopMemory) }
 
 /// Default NotificationBus — `BroadcastNotificationBus` (tokio broadcast
 /// channel).
