@@ -12,27 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use sqlx::{PgPool, Postgres, postgres::PgPoolOptions};
+use sqlx::{Sqlite, SqlitePool, sqlite::SqlitePoolOptions};
 
 use crate::{err::*, kv::KVStore};
 
-/// Database store that manages the PostgreSQL connection pool
+/// Database store that manages the SQLite connection pool.
 #[derive(Clone)]
 pub struct DBStore {
-    pool: PgPool,
+    pool: SqlitePool,
 }
 
 impl DBStore {
-    pub(crate) fn new(pool: PgPool) -> Self { Self { pool } }
+    pub(crate) fn new(pool: SqlitePool) -> Self { Self { pool } }
 
-    /// Get a KV store instance
+    /// Get a KV store instance.
     pub fn kv_store(&self) -> KVStore { KVStore::new(self.pool.clone()) }
 
-    /// Get the underlying PostgreSQL pool
-    pub fn pool(&self) -> &PgPool { &self.pool }
+    /// Get the underlying SQLite pool.
+    pub fn pool(&self) -> &SqlitePool { &self.pool }
 
-    /// Acquire a connection from the pool
-    pub async fn acquire(&self) -> Result<sqlx::pool::PoolConnection<Postgres>> {
+    /// Acquire a connection from the pool.
+    pub async fn acquire(&self) -> Result<sqlx::pool::PoolConnection<Sqlite>> {
         Ok(self.pool.acquire().await?)
     }
 
@@ -41,13 +41,13 @@ impl DBStore {
     /// Intended for tests where the DB might not be queried.
     #[doc(hidden)]
     pub fn new_lazy(database_url: &str) -> Result<Self> {
-        let pool = PgPoolOptions::new()
+        let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect_lazy(database_url)?;
         Ok(Self { pool })
     }
 }
 
-impl Into<PgPool> for DBStore {
-    fn into(self) -> PgPool { self.pool }
+impl From<DBStore> for SqlitePool {
+    fn from(store: DBStore) -> Self { store.pool }
 }

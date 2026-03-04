@@ -135,7 +135,6 @@ members = [
     "crates/extensions/coding-task",
     "crates/extensions/backend-admin",
     "crates/extensions/rara-git",
-    "crates/common/rara-consul",
 ]
 
 [workspace.dependencies]
@@ -152,7 +151,7 @@ bon = "^3.6"
 bytes = "^1.11"
 chrono = { version = "^0.4", features = ["serde"] }
 clap = { version = "4.4", features = ["derive"] }
-config = { version = "0.15", features = ["async"] }
+config = { version = "0.15", features = ["yaml"] }
 croner = "3"
 crossterm = "0.28"
 derive_more = { version = "2.0", features = ["full"] }
@@ -191,7 +190,7 @@ sha2 = "0.10"
 shadow-rs = "1.2"
 smart-default = "0.7"
 snafu = "^0.8"
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "macros", "migrate", "chrono", "uuid"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "macros", "migrate", "chrono", "uuid"] }
 strum = "^0.27"
 strum_macros = "^0.27"
 teloxide = { version = "^0.17", features = ["macros"] }
@@ -240,7 +239,6 @@ rara-cli = { path = "crates/cmd" }
 rara-codex-oauth = { path = "crates/integrations/codex-oauth" }
 rara-coding-task = { path = "crates/extensions/coding-task" }
 rara-composio = { path = "crates/integrations/composio" }
-rara-consul = { path = "crates/common/rara-consul" }
 rara-domain-shared = { path = "crates/domain/shared" }
 rara-domain-user = { path = "crates/domain/user" }
 rara-error = { path = "crates/common/error" }
