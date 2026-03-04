@@ -825,7 +825,7 @@ fn spawn_stream_forwarder(
     active_streams: Arc<DashMap<i64, StreamingMessage>>,
     bot: teloxide::Bot,
     chat_id: i64,
-    session_id: rara_kernel::process::SessionId,
+    session_id: rara_kernel::SessionId,
 ) {
     use rara_kernel::io::stream::StreamEvent;
 
@@ -1840,8 +1840,8 @@ mod tests {
     #[tokio::test]
     async fn test_stream_state_lifecycle() {
         use rara_kernel::{
+            SessionId,
             io::stream::{StreamEvent, StreamHub},
-            process::SessionId,
         };
 
         let hub = Arc::new(StreamHub::new(64));
@@ -1883,7 +1883,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_stream_forwarder_uses_internal_session_id() {
-        use rara_kernel::{io::stream::StreamHub, process::SessionId};
+        use rara_kernel::{SessionId, io::stream::StreamHub};
 
         let hub = Arc::new(StreamHub::new(64));
         let stream_hub: Arc<RwLock<Option<StreamHubRef>>> =

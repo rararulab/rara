@@ -526,7 +526,7 @@ async fn handle_ws(socket: WebSocket, params: SessionQuery, state: WebAdapterSta
 /// Spawn a background task that subscribes to StreamHub for the given session
 /// and forwards `StreamEvent`s as `WebEvent`s through the session broadcast.
 ///
-/// The process_loop opens streams asynchronously, so we poll
+/// The session runtime opens streams asynchronously, so we poll
 /// `subscribe_session()` with a short delay until streams appear.
 fn spawn_stream_forwarder(
     stream_hub: Arc<RwLock<Option<Arc<rara_kernel::io::stream::StreamHub>>>>,
@@ -544,7 +544,7 @@ fn spawn_stream_forwarder(
             }
         };
 
-        let session_id = match rara_kernel::process::SessionId::try_from_raw(&session_key) {
+        let session_id = match rara_kernel::SessionId::try_from_raw(&session_key) {
             Ok(id) => id,
             Err(_) => {
                 tracing::warn!(session_key = %session_key, "invalid session key for stream forwarder");
@@ -552,7 +552,7 @@ fn spawn_stream_forwarder(
             }
         };
 
-        // Poll until stream appears (process_loop opens it asynchronously).
+        // Poll until stream appears (session runtime opens it asynchronously).
         let mut attempts = 0;
         let subs = loop {
             let s = hub.subscribe_session(&session_id);
