@@ -23,10 +23,66 @@ use crate::{
     audit::{AuditEvent, AuditEventType},
     channel::types::ChatMessage,
     event::KernelEvent,
-    io::types::{InboundMessage, MessageId, OutboundEnvelope},
+    io::{
+        stream::StreamId,
+        types::{InboundMessage, MessageId, OutboundEnvelope},
+    },
     kernel::Kernel,
     process::{AgentId, AgentResult, ProcessState, SessionId},
+    queue::EventQueueRef,
 };
+
+/// RAII guard ensuring that `TurnCompleted` is always pushed and the stream is
+/// always closed, even when the spawned turn task panics or is cancelled.
+///
+/// On normal completion the caller sets `completed = true` before the guard is
+/// dropped; on abnormal exit `Drop` performs the cleanup.
+struct TurnGuard {
+    event_queue:    EventQueueRef,
+    stream_hub:     Arc<crate::io::stream::StreamHub>,
+    stream_id:      StreamId,
+    typing_refresh: Option<tokio::task::JoinHandle<()>>,
+    agent_id:       AgentId,
+    session_id:     SessionId,
+    msg_id:         MessageId,
+    user:           crate::process::principal::UserId,
+    completed:      bool,
+}
+
+impl Drop for TurnGuard {
+    fn drop(&mut self) {
+        if !self.completed {
+            // Abort typing refresh if still running.
+            if let Some(handle) = self.typing_refresh.take() {
+                handle.abort();
+            }
+
+            // Close stream so the forwarder stops.
+            self.stream_hub.close(&self.stream_id);
+
+            // Push a failed TurnCompleted so the process exits Running state.
+            let event = KernelEvent::turn_completed(
+                self.agent_id,
+                self.session_id.clone(),
+                Err("turn task terminated unexpectedly".to_string()),
+                self.msg_id.clone(),
+                self.user.clone(),
+            );
+            if let Err(e) = self.event_queue.try_push(event) {
+                error!(
+                    %e,
+                    agent_id = %self.agent_id,
+                    "TurnGuard: failed to push TurnCompleted on abnormal exit"
+                );
+            } else {
+                warn!(
+                    agent_id = %self.agent_id,
+                    "TurnGuard: turn task exited abnormally, pushed TurnCompleted(Err)"
+                );
+            }
+        }
+    }
+}
 
 impl Kernel {
     /// Start an LLM turn for the given agent, spawning the work as an async
@@ -164,7 +220,7 @@ impl Kernel {
                 iterations = tracing::field::Empty,
                 tool_calls = tracing::field::Empty,
             );
-            let _guard = turn_span.enter();
+            let _span_guard = turn_span.enter();
             let start = std::time::Instant::now();
 
             // Spawn a background task that refreshes the typing indicator every
@@ -192,6 +248,19 @@ impl Kernel {
                 })
             };
 
+            // TurnGuard ensures cleanup on panic or cancellation.
+            let mut turn_guard = TurnGuard {
+                event_queue:    event_queue.clone(),
+                stream_hub:     Arc::clone(&stream_hub_ref),
+                stream_id:      stream_id.clone(),
+                typing_refresh: Some(typing_refresh),
+                agent_id,
+                session_id:     session_id.clone(),
+                msg_id:         msg_id.clone(),
+                user:           user.clone(),
+                completed:      false,
+            };
+
             let turn_result = crate::agent_turn::run_inline_agent_loop(
                 &handle,
                 user_text,
@@ -202,7 +271,9 @@ impl Kernel {
             .await;
 
             // Stop the typing refresh loop now that the turn is done.
-            typing_refresh.abort();
+            if let Some(handle) = turn_guard.typing_refresh.take() {
+                handle.abort();
+            }
 
             // Record timing and result metrics on the span.
             let elapsed = start.elapsed();
@@ -234,6 +305,9 @@ impl Kernel {
             if let Err(e) = event_queue.try_push(event) {
                 error!(%e, agent_id = %agent_id, "failed to push TurnCompleted");
             }
+
+            // Normal completion — disarm the guard.
+            turn_guard.completed = true;
         });
     }
 

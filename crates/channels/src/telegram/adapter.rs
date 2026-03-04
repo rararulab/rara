@@ -349,48 +349,95 @@ impl EgressAdapter for TelegramAdapter {
                 let chunks = crate::telegram::markdown::chunk_message(&html, 4096);
 
                 // Check if there's an active streaming state to replace.
-                if let Some((_, stream_state)) = self.active_streams.remove(&chat_id) {
-                    if let Some(&last_msg_id) = stream_state.message_ids.last() {
-                        if last_msg_id != MessageId(0) {
-                            // Edit the last streaming message with the first chunk.
-                            let first_chunk = chunks.first().map(|s| s.as_str()).unwrap_or("");
-                            let edit_result = self
-                                .bot
-                                .edit_message_text(ChatId(chat_id), last_msg_id, first_chunk)
-                                .parse_mode(ParseMode::Html)
-                                .await;
+                //
+                // Race-condition guard: the stream forwarder may still be
+                // performing its first `flush_edit` (send_message) when the
+                // Reply arrives.  If we remove the entry while message_ids
+                // is still empty we would fall through to the normal send
+                // path, causing a duplicate message.
+                //
+                // Strategy: if the entry exists but has no message IDs yet,
+                // wait briefly for the forwarder to complete its first flush,
+                // then re-check.
+                if self.active_streams.contains_key(&chat_id) {
+                    // Give the forwarder time to flush if it hasn't yet.
+                    {
+                        let has_msg_id = self
+                            .active_streams
+                            .get(&chat_id)
+                            .map(|s| {
+                                s.message_ids
+                                    .last()
+                                    .map_or(false, |id| *id != MessageId(0))
+                            })
+                            .unwrap_or(false);
 
-                            let edit_ok = match &edit_result {
-                                Ok(_) => true,
-                                // "message is not modified" means the stream forwarder
-                                // already delivered the final content — treat as success.
-                                Err(teloxide::RequestError::Api(api_err))
-                                    if format!("{api_err}").contains("message is not modified") =>
-                                {
-                                    true
+                        if !has_msg_id {
+                            // Wait up to 3s (in 100ms steps) for the forwarder
+                            // to complete its first send_message.
+                            for _ in 0..30 {
+                                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                                let ready = self
+                                    .active_streams
+                                    .get(&chat_id)
+                                    .map(|s| {
+                                        s.message_ids
+                                            .last()
+                                            .map_or(false, |id| *id != MessageId(0))
+                                    })
+                                    .unwrap_or(true); // entry gone → forwarder never ran
+                                if ready {
+                                    break;
                                 }
-                                Err(_) => false,
-                            };
-
-                            if edit_ok {
-                                // Send remaining chunks as new messages.
-                                for chunk in chunks.iter().skip(1) {
-                                    let _ = self
-                                        .bot
-                                        .send_message(ChatId(chat_id), chunk)
-                                        .parse_mode(ParseMode::Html)
-                                        .await;
-                                }
-                                return Ok(());
                             }
-                            // Edit failed — fall through to normal send path below.
-                            warn!(
-                                chat_id,
-                                "telegram: edit streaming message failed, falling back to send"
-                            );
                         }
                     }
-                    // Fallthrough if no valid message ID.
+
+                    if let Some((_, stream_state)) = self.active_streams.remove(&chat_id) {
+                        if let Some(&last_msg_id) = stream_state.message_ids.last() {
+                            if last_msg_id != MessageId(0) {
+                                // Edit the last streaming message with the first chunk.
+                                let first_chunk =
+                                    chunks.first().map(|s| s.as_str()).unwrap_or("");
+                                let edit_result = self
+                                    .bot
+                                    .edit_message_text(ChatId(chat_id), last_msg_id, first_chunk)
+                                    .parse_mode(ParseMode::Html)
+                                    .await;
+
+                                let edit_ok = match &edit_result {
+                                    Ok(_) => true,
+                                    // "message is not modified" means the stream forwarder
+                                    // already delivered the final content — treat as success.
+                                    Err(teloxide::RequestError::Api(api_err))
+                                        if format!("{api_err}")
+                                            .contains("message is not modified") =>
+                                    {
+                                        true
+                                    }
+                                    Err(_) => false,
+                                };
+
+                                if edit_ok {
+                                    // Send remaining chunks as new messages.
+                                    for chunk in chunks.iter().skip(1) {
+                                        let _ = self
+                                            .bot
+                                            .send_message(ChatId(chat_id), chunk)
+                                            .parse_mode(ParseMode::Html)
+                                            .await;
+                                    }
+                                    return Ok(());
+                                }
+                                // Edit failed — fall through to normal send path below.
+                                warn!(
+                                    chat_id,
+                                    "telegram: edit streaming message failed, falling back to send"
+                                );
+                            }
+                        }
+                        // Fallthrough if no valid message ID after waiting.
+                    }
                 }
 
                 // No active stream — normal send path.
