@@ -28,7 +28,7 @@ use crate::{
         types::{InboundMessage, MessageId, OutboundEnvelope},
     },
     kernel::Kernel,
-    process::{AgentId, AgentResult, ProcessState, SessionId},
+    process::{AgentId, AgentResult, SessionState, SessionId},
     queue::EventQueueRef,
 };
 
@@ -114,10 +114,10 @@ impl Kernel {
         let user = msg.user.clone();
         let msg_id = msg.id.clone();
 
-        // Set state to Running.
+        // Set state to Active.
         let _ = self
             .process_table()
-            .set_state(agent_id, ProcessState::Running);
+            .set_state(agent_id, SessionState::Active);
 
         // Send a typing / progress indicator so the user sees feedback
         // while the LLM is thinking (e.g. Telegram "typing..." bubble).
@@ -347,7 +347,7 @@ impl Kernel {
         // process has one (root process), otherwise fall back to the
         // process's own session. Subagents without a channel binding won't
         // have egress delivery — their results flow back to the parent via
-        // ChildCompleted.
+        // ChildSessionDone.
         let egress_session_id = self
             .process_table()
             .get(agent_id)
@@ -511,32 +511,20 @@ impl Kernel {
             }
         }
 
-        // Short-lived process model: complete the process after each turn.
-        // The next user message will trigger a respawn via Path 2 (session
-        // addressing detects terminal state, clears binding, falls through
-        // to Path 3 which spawns a new process). Session history is loaded
-        // from SessionRepo on respawn.
+        // Session-centric model: sessions are long-lived. After each turn,
+        // the session transitions to Ready (idle) instead of a terminal state.
+        // The next user message will be routed to the same session via Path 2.
 
-        // Drain pause buffer before completing — if the user sent messages
-        // while the turn was running, we need to re-inject them so they
-        // trigger a new process spawn via the session addressing path.
+        // Drain pause buffer — if the user sent messages while the turn was
+        // running, re-inject them so they start a new turn on this session.
         let buffered = runtimes.drain_pause_buffer(&agent_id);
 
-        // Set terminal state (sets finished_at, increments counter).
-        let terminal_state = if turn_failed {
-            ProcessState::Failed
-        } else {
-            ProcessState::Completed
-        };
-        let _ = self.process_table().set_state(agent_id, terminal_state);
+        // Transition to Ready (idle, awaiting next message).
+        let _ = self
+            .process_table()
+            .set_state(agent_id, SessionState::Ready);
 
-        // Remove runtime — drops global semaphore permit, cancellation
-        // tokens, and conversation buffer. The process entry stays in
-        // ProcessTable for observability (TTL reaper handles cleanup).
-        // Also notifies parent if this is a subagent (via ChildCompleted).
-        self.cleanup_process(agent_id, runtimes).await;
-
-        // Re-inject buffered events so they trigger respawn via Path 2.
+        // Re-inject buffered events so they trigger a new turn on this session.
         for event in buffered {
             if let Err(e) = self.event_queue().try_push(event) {
                 warn!(%e, "failed to re-inject buffered event");

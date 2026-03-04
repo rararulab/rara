@@ -19,7 +19,7 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct SystemStats {
-    pub active_processes:           usize,
+    pub active_sessions:            usize,
     pub total_spawned:              u64,
     pub total_completed:            u64,
     pub total_failed:               u64,

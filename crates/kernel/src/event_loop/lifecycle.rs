@@ -31,7 +31,7 @@ use crate::{
     io::types::{InboundMessage, MessageId, OutboundEnvelope},
     kernel::Kernel,
     process::{
-        AgentEnv, AgentId, AgentManifest, AgentProcess, AgentResult, ProcessState, SessionId,
+        AgentEnv, AgentId, AgentManifest, AgentResult, SessionId, SessionRuntime, SessionState,
         Signal, principal::Principal,
     },
 };
@@ -110,7 +110,7 @@ impl Kernel {
 
         // Register process in table.
         let metrics = std::sync::Arc::new(crate::process::RuntimeMetrics::new());
-        let process = AgentProcess {
+        let process = SessionRuntime {
             agent_id,
             parent_id,
             session_id: session_id.clone(),
@@ -118,7 +118,7 @@ impl Kernel {
             manifest: manifest.clone(),
             principal: principal.clone(),
             env: AgentEnv::default(),
-            state: ProcessState::Idle,
+            state: SessionState::Ready,
             created_at: jiff::Timestamp::now(),
             finished_at: None,
             result: None,
@@ -128,10 +128,10 @@ impl Kernel {
         };
         self.process_table().insert(process);
 
-        crate::metrics::PROCESS_SPAWNED
+        crate::metrics::SESSION_CREATED
             .with_label_values(&[&manifest.name])
             .inc();
-        crate::metrics::PROCESS_ACTIVE
+        crate::metrics::SESSION_ACTIVE
             .with_label_values(&[&manifest.name])
             .inc();
 
@@ -256,13 +256,13 @@ impl Kernel {
             Signal::Pause => {
                 info!(agent_id = %target, "pause signal");
                 runtimes.set_paused(&target, true);
-                let _ = self.process_table().set_state(target, ProcessState::Paused);
+                let _ = self.process_table().set_state(target, SessionState::Paused);
             }
             Signal::Resume => {
                 info!(agent_id = %target, "resume signal");
                 runtimes.set_paused(&target, false);
                 let buffered = runtimes.drain_pause_buffer(&target);
-                let _ = self.process_table().set_state(target, ProcessState::Idle);
+                let _ = self.process_table().set_state(target, SessionState::Ready);
                 for event in buffered {
                     if let Err(e) = self.event_queue().try_push(event) {
                         warn!(%e, "failed to re-inject buffered event on resume");
@@ -271,14 +271,14 @@ impl Kernel {
             }
             Signal::Terminate => {
                 info!(agent_id = %target, "terminate signal — graceful shutdown");
-                let was_running = self
+                let was_active = self
                     .process_table()
                     .get(target)
-                    .map(|p| p.state == ProcessState::Running)
+                    .map(|p| p.state == SessionState::Active)
                     .unwrap_or(false);
                 let _ = self
                     .process_table()
-                    .set_state(target, ProcessState::Cancelled);
+                    .set_state(target, SessionState::Suspended);
                 runtimes.cancel_turn(&target);
                 // Grace period then force-kill via process_cancel token.
                 if let Some(token) = runtimes.clone_process_cancel(&target) {
@@ -287,7 +287,7 @@ impl Kernel {
                         token.cancel();
                     });
                 }
-                if !was_running {
+                if !was_active {
                     self.cleanup_process(target, runtimes).await;
                 }
             }
@@ -296,7 +296,7 @@ impl Kernel {
                 runtimes.cancel_process(&target);
                 let _ = self
                     .process_table()
-                    .set_state(target, ProcessState::Cancelled);
+                    .set_state(target, SessionState::Suspended);
                 self.cleanup_process(target, runtimes).await;
             }
         }
@@ -363,10 +363,10 @@ impl Kernel {
     pub(crate) async fn cleanup_process(&self, agent_id: AgentId, runtimes: &RuntimeTable) {
         if let Some((_, rt)) = runtimes.remove(&agent_id) {
             if let Some(process) = self.process_table().get(agent_id) {
-                crate::metrics::PROCESS_ACTIVE
+                crate::metrics::SESSION_ACTIVE
                     .with_label_values(&[&process.manifest.name])
                     .dec();
-                crate::metrics::PROCESS_COMPLETED
+                crate::metrics::SESSION_SUSPENDED
                     .with_label_values(&[&process.manifest.name, &process.state.to_string()])
                     .inc();
             }
@@ -379,9 +379,9 @@ impl Kernel {
                         iterations: 0,
                         tool_calls: 0,
                     });
-                    let event = KernelEvent::child_completed(parent_id, agent_id, result);
+                    let event = KernelEvent::child_session_done(parent_id, agent_id, result);
                     if let Err(e) = self.event_queue().try_push(event) {
-                        warn!(%e, "failed to push ChildCompleted event");
+                        warn!(%e, "failed to push ChildSessionDone event");
                     }
                 }
             }
@@ -409,8 +409,8 @@ mod tests {
         memory::NoopMemory,
         notification::NoopNotificationBus,
         process::{
-            AgentEnv, AgentProcess, RuntimeMetrics, agent_registry::AgentRegistry,
-            principal::Principal,
+            AgentEnv, RuntimeMetrics, SessionRuntime, SessionState,
+            agent_registry::AgentRegistry, principal::Principal,
         },
         session::{
             ChannelBinding, NoopSessionIndex, SessionEntry, SessionError, SessionIndexRef,
@@ -598,7 +598,7 @@ mod tests {
         );
         Kernel::for_testing(
             config,
-            Arc::new(crate::process::ProcessTable::new()),
+            Arc::new(crate::process::SessionTable::new()),
             Arc::new(Semaphore::new(4)),
             driver_registry,
             Arc::new(ToolRegistry::new()),
@@ -622,7 +622,7 @@ mod tests {
     async fn insert_runtime(
         kernel: &Kernel,
         runtimes: &RuntimeTable,
-        state: ProcessState,
+        state: SessionState,
     ) -> AgentId {
         let manifest = crate::testing::test_manifests()
             .into_iter()
@@ -631,7 +631,7 @@ mod tests {
         let agent_id = AgentId::new();
         let session_id = SessionId::new();
 
-        kernel.process_table().insert(AgentProcess {
+        kernel.process_table().insert(SessionRuntime {
             agent_id,
             parent_id: None,
             session_id: session_id.clone(),
@@ -718,10 +718,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn terminate_marks_running_process_terminal_and_defers_cleanup() {
+    async fn terminate_marks_active_session_suspended_and_defers_cleanup() {
         let kernel = test_kernel(Arc::new(crate::session::NoopSessionRepository));
         let runtimes = RuntimeTable::new();
-        let agent_id = insert_runtime(&kernel, &runtimes, ProcessState::Running).await;
+        let agent_id = insert_runtime(&kernel, &runtimes, SessionState::Active).await;
 
         kernel
             .handle_signal(agent_id, Signal::Terminate, &runtimes)
@@ -729,7 +729,7 @@ mod tests {
 
         assert_eq!(
             kernel.process_table().get(agent_id).expect("process").state,
-            ProcessState::Cancelled
+            SessionState::Suspended
         );
         assert!(runtimes.contains(&agent_id));
 
@@ -761,7 +761,7 @@ mod tests {
 
         assert_eq!(
             kernel.process_table().get(agent_id).expect("process").state,
-            ProcessState::Cancelled
+            SessionState::Suspended
         );
         assert!(!runtimes.contains(&agent_id));
     }

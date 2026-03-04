@@ -36,30 +36,30 @@ pub const CHANNEL_TYPE_LABEL: &str = "channel_type";
 /// Exit state label.
 pub const EXIT_STATE_LABEL: &str = "exit_state";
 
-// -- Process lifecycle -------------------------------------------------------
+// -- Session lifecycle -------------------------------------------------------
 
 lazy_static! {
-    /// Total agent processes spawned.
-    pub static ref PROCESS_SPAWNED: IntCounterVec =
+    /// Total agent sessions created.
+    pub static ref SESSION_CREATED: IntCounterVec =
         register_int_counter_vec!(
-            "kernel_process_spawned_total",
-            "Total agent processes spawned",
+            "kernel_session_created_total",
+            "Total agent sessions created",
             &[AGENT_NAME_LABEL]
         ).unwrap();
 
-    /// Total agent processes completed.
-    pub static ref PROCESS_COMPLETED: IntCounterVec =
+    /// Total agent sessions suspended (idle timeout / done).
+    pub static ref SESSION_SUSPENDED: IntCounterVec =
         register_int_counter_vec!(
-            "kernel_process_completed_total",
-            "Total agent processes completed",
+            "kernel_session_suspended_total",
+            "Total agent sessions suspended",
             &[AGENT_NAME_LABEL, EXIT_STATE_LABEL]
         ).unwrap();
 
-    /// Currently active agent processes.
-    pub static ref PROCESS_ACTIVE: IntGaugeVec =
+    /// Currently active agent sessions.
+    pub static ref SESSION_ACTIVE: IntGaugeVec =
         register_int_gauge_vec!(
-            "kernel_process_active",
-            "Currently active agent processes",
+            "kernel_session_active",
+            "Currently active agent sessions",
             &[AGENT_NAME_LABEL]
         ).unwrap();
 }
@@ -152,9 +152,9 @@ lazy_static! {
 /// Force-initialize all metrics so they appear in `/metrics` output
 /// immediately.
 pub fn init() {
-    lazy_static::initialize(&PROCESS_SPAWNED);
-    lazy_static::initialize(&PROCESS_COMPLETED);
-    lazy_static::initialize(&PROCESS_ACTIVE);
+    lazy_static::initialize(&SESSION_CREATED);
+    lazy_static::initialize(&SESSION_SUSPENDED);
+    lazy_static::initialize(&SESSION_ACTIVE);
     lazy_static::initialize(&TURN_TOTAL);
     lazy_static::initialize(&TURN_DURATION_SECONDS);
     lazy_static::initialize(&TURN_TOOL_CALLS);
@@ -210,13 +210,13 @@ mod tests {
     #[test]
     fn test_metrics_gatherable_after_use() {
         // Metrics only appear in gather() after at least one sample is recorded.
-        PROCESS_SPAWNED.with_label_values(&["test"]).inc();
+        SESSION_CREATED.with_label_values(&["test"]).inc();
         TURN_TOTAL.with_label_values(&["test", "gpt-4"]).inc();
         MESSAGE_INBOUND.with_label_values(&["web"]).inc();
 
         let families = prometheus::gather();
         let names: Vec<&str> = families.iter().map(|f| f.name()).collect();
-        assert!(names.contains(&"kernel_process_spawned_total"));
+        assert!(names.contains(&"kernel_session_created_total"));
         assert!(names.contains(&"kernel_turn_total"));
         assert!(names.contains(&"kernel_message_inbound_total"));
     }

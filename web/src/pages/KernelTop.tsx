@@ -53,7 +53,7 @@ import {
 // ---------------------------------------------------------------------------
 
 interface SystemStats {
-  active_processes: number;
+  active_sessions: number;
   total_spawned: number;
   total_completed: number;
   total_failed: number;
@@ -359,7 +359,7 @@ export default function KernelTop() {
               <Skeleton className="h-8 w-16" />
             ) : (
               <div className="text-2xl font-bold">
-                {stats?.active_processes ?? 0}
+                {stats?.active_sessions ?? 0}
               </div>
             )}
             <p className="mt-1 text-xs text-muted-foreground">

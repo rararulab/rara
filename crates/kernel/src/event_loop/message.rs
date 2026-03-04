@@ -22,7 +22,7 @@ use crate::{
     event::KernelEvent,
     io::types::{InboundMessage, OutboundEnvelope},
     kernel::Kernel,
-    process::{AgentId, ProcessState, principal::Principal},
+    process::{AgentId, SessionState, principal::Principal},
 };
 
 impl Kernel {
@@ -193,7 +193,7 @@ impl Kernel {
                 return true;
             }
             if let Some(p) = self.process_table().get(agent_id) {
-                if p.state == ProcessState::Running {
+                if p.state == SessionState::Active {
                     rt.pause_buffer.push(KernelEvent::user_message(msg.clone()));
                     return true;
                 }

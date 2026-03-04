@@ -119,15 +119,15 @@ impl Kernel {
             EventKind::UserMessage(msg) => {
                 self.handle_user_message(msg, runtimes).await;
             }
-            EventKind::SpawnAgent {
+            EventKind::CreateSession {
                 manifest,
                 input,
                 principal,
                 parent_id,
                 reply_tx,
             } => {
-                // SpawnAgent from ProcessHandle::spawn() — subagent, no
-                // channel binding.
+                // CreateSession from SessionHandle::create_child() — subagent,
+                // no channel binding.
                 let result = self
                     .handle_spawn_agent(manifest, input, principal, None, parent_id, None, runtimes)
                     .await;
@@ -154,18 +154,18 @@ impl Kernel {
                 )
                 .await;
             }
-            EventKind::ChildCompleted {
+            EventKind::ChildSessionDone {
                 child_id,
                 result,
             } => {
-                let parent_id = base.agent_id.expect("ChildCompleted requires agent_id");
+                let parent_id = base.agent_id.expect("ChildSessionDone requires agent_id");
                 self.handle_child_completed(parent_id, child_id, result, runtimes)
                     .await;
             }
             EventKind::Deliver(envelope) => {
                 self.delivery().deliver(envelope);
             }
-            EventKind::Syscall(syscall) => {
+            EventKind::SessionCommand(syscall) => {
                 self.syscall_dispatcher()
                     .dispatch(
                         syscall,
@@ -177,6 +177,12 @@ impl Kernel {
                         self.memory(),
                     )
                     .await;
+            }
+            EventKind::IdleCheck => {
+                // Periodic idle check — handled by session table reaping.
+                self.process_table().reap_terminal(
+                    std::time::Duration::from_secs(300),
+                );
             }
             EventKind::Shutdown => {
                 info!("shutdown event received");

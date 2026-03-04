@@ -57,15 +57,18 @@ pub mod testing;
 
 pub use audit::AuditSubsystem;
 pub use error::{KernelError, Result};
-// New process model re-exports
+// Session-centric runtime re-exports (new names + backwards-compatible aliases)
 pub use handle::{
     AgentHandle, kernel_handle::KernelHandle, process_handle::ProcessHandle,
     syscall_tool::SyscallTool,
 };
 pub use kernel::{Kernel, KernelConfig};
 pub use process::{
-    AgentId, AgentProcess, AgentRole, MetricsSnapshot, Priority, ProcessInfo, ProcessState,
-    ProcessStats, ProcessTable, RuntimeMetrics, SandboxConfig, SessionId, Signal, SystemStats,
+    // New canonical names
+    AgentId, AgentRole, MetricsSnapshot, Priority, RuntimeMetrics, SandboxConfig, SessionId,
+    SessionInfo, SessionRuntime, SessionState, SessionStats, SessionTable, Signal, SystemStats,
+    // Backwards-compatible aliases
+    AgentProcess, ProcessInfo, ProcessState, ProcessStats, ProcessTable,
     agent_registry::AgentRegistry,
     manifest_loader::ManifestLoader,
     principal::{Principal, Role, UserId},

@@ -57,8 +57,8 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
 
     let stats_text = if let Some(ref s) = app.stats {
         format!(
-            "  Processes:{}  Tokens:{}  Spawned:{}  Completed:{}  Failed:{}  Up:{}",
-            s.active_processes,
+            "  Sessions:{}  Tokens:{}  Spawned:{}  Completed:{}  Failed:{}  Up:{}",
+            s.active_sessions,
             format_tokens(s.total_tokens_consumed),
             s.total_spawned,
             s.total_completed,

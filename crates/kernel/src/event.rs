@@ -102,9 +102,9 @@ impl EventBase {
 pub enum EventPriority {
     /// Signal, Shutdown — processed first.
     Critical = 0,
-    /// TurnCompleted, ChildCompleted, Deliver, Syscall — processed second.
+    /// TurnCompleted, ChildSessionDone, Deliver, SessionCommand — processed second.
     Normal = 1,
-    /// UserMessage, SpawnAgent — processed last.
+    /// UserMessage, CreateSession, IdleCheck — processed last.
     Low = 2,
 }
 
@@ -352,13 +352,12 @@ pub enum EventKind {
     #[debug("UserMessage(session={})", _0.session_id)]
     UserMessage(InboundMessage),
 
-    // === Process control ===
-    /// Request to spawn a new agent process.
+    // === Session control ===
+    /// Request to create (or reactivate) a session.
     ///
-    /// The kernel generates a fresh `agent:{id}` session for the new process.
-    /// Callers no longer specify a session — this ensures each process gets
-    /// context isolation (subagent session isolation).
-    SpawnAgent {
+    /// The kernel generates a fresh session for the new runtime, or
+    /// reactivates an existing suspended session.
+    CreateSession {
         #[debug("{}", manifest.name)]
         manifest:  AgentManifest,
         input:     String,
@@ -384,9 +383,9 @@ pub enum EventKind {
         user:        UserId,
     },
 
-    /// A child agent process completed.
+    /// A child session completed its work.
     /// The parent agent is in [`EventBase::agent_id`].
-    ChildCompleted {
+    ChildSessionDone {
         child_id: AgentId,
         result:   AgentResult,
     },
@@ -396,13 +395,16 @@ pub enum EventKind {
     #[debug("Deliver(session={})", _0.session_id)]
     Deliver(OutboundEnvelope),
 
-    // === Syscall: ProcessHandle → kernel event loop ===
-    /// A syscall from a ProcessHandle. All handle interactions go through
+    // === SessionCommand: SessionHandle → kernel event loop ===
+    /// A command from a SessionHandle. All handle interactions go through
     /// here so that the kernel event loop is the single owner of mutable
     /// state.
-    Syscall(Syscall),
+    SessionCommand(Syscall),
 
     // === System ===
+    /// Periodic idle check — transitions Ready sessions to Suspended.
+    IdleCheck,
+
     /// Graceful shutdown request.
     Shutdown,
 }
@@ -416,17 +418,19 @@ impl EventKind {
         match self {
             Self::SendSignal { .. } | Self::Shutdown => EventPriority::Critical,
             Self::TurnCompleted { .. }
-            | Self::ChildCompleted { .. }
+            | Self::ChildSessionDone { .. }
             | Self::Deliver(_)
-            | Self::Syscall(_) => EventPriority::Normal,
-            Self::UserMessage(_) | Self::SpawnAgent { .. } => EventPriority::Low,
+            | Self::SessionCommand(_) => EventPriority::Normal,
+            Self::UserMessage(_) | Self::CreateSession { .. } | Self::IdleCheck => {
+                EventPriority::Low
+            }
         }
     }
 
     /// Stable event type label for observability.
     pub fn event_type(&self) -> String {
         match self {
-            Self::Syscall(syscall) => syscall.event_type(),
+            Self::SessionCommand(syscall) => syscall.event_type(),
             _ => {
                 let kind: &'static str = self.into();
                 kind.to_string()
@@ -467,8 +471,8 @@ impl KernelEvent {
         }
     }
 
-    /// Create a `SpawnAgent` event.
-    pub fn spawn_agent(
+    /// Create a `CreateSession` event.
+    pub fn create_session(
         manifest: AgentManifest,
         input: String,
         principal: Principal,
@@ -477,7 +481,7 @@ impl KernelEvent {
     ) -> Self {
         Self {
             base: EventBase::new(None, None),
-            kind: EventKind::SpawnAgent {
+            kind: EventKind::CreateSession {
                 manifest,
                 input,
                 principal,
@@ -485,6 +489,17 @@ impl KernelEvent {
                 reply_tx,
             },
         }
+    }
+
+    /// Backwards-compatible alias for `create_session`.
+    pub fn spawn_agent(
+        manifest: AgentManifest,
+        input: String,
+        principal: Principal,
+        parent_id: Option<AgentId>,
+        reply_tx: oneshot::Sender<crate::error::Result<AgentId>>,
+    ) -> Self {
+        Self::create_session(manifest, input, principal, parent_id, reply_tx)
     }
 
     /// Create a `SendSignal` event.
@@ -513,12 +528,17 @@ impl KernelEvent {
         }
     }
 
-    /// Create a `ChildCompleted` event.
-    pub fn child_completed(parent_id: AgentId, child_id: AgentId, result: AgentResult) -> Self {
+    /// Create a `ChildSessionDone` event.
+    pub fn child_session_done(parent_id: AgentId, child_id: AgentId, result: AgentResult) -> Self {
         Self {
             base: EventBase::new(Some(parent_id), None),
-            kind: EventKind::ChildCompleted { child_id, result },
+            kind: EventKind::ChildSessionDone { child_id, result },
         }
+    }
+
+    /// Backwards-compatible alias for `child_session_done`.
+    pub fn child_completed(parent_id: AgentId, child_id: AgentId, result: AgentResult) -> Self {
+        Self::child_session_done(parent_id, child_id, result)
     }
 
     /// Create a `Deliver` event.
@@ -530,12 +550,23 @@ impl KernelEvent {
         }
     }
 
-    /// Create a `Syscall` event.
-    pub fn syscall(syscall: Syscall) -> Self {
+    /// Create a `SessionCommand` event.
+    pub fn session_command(syscall: Syscall) -> Self {
         let agent_id = Some(syscall.agent_id());
         Self {
             base: EventBase::new(agent_id, None),
-            kind: EventKind::Syscall(syscall),
+            kind: EventKind::SessionCommand(syscall),
+        }
+    }
+
+    /// Backwards-compatible alias for `session_command`.
+    pub fn syscall(syscall: Syscall) -> Self { Self::session_command(syscall) }
+
+    /// Create an `IdleCheck` event.
+    pub fn idle_check() -> Self {
+        Self {
+            base: EventBase::new(None, None),
+            kind: EventKind::IdleCheck,
         }
     }
 
@@ -569,7 +600,9 @@ impl KernelEvent {
             EventKind::UserMessage(msg) => {
                 format!("user message queued for session {}", msg.session_id)
             }
-            EventKind::SpawnAgent { manifest, .. } => format!("spawn agent {}", manifest.name),
+            EventKind::CreateSession { manifest, .. } => {
+                format!("create session for {}", manifest.name)
+            }
             EventKind::SendSignal { signal } => match self.base.agent_id {
                 Some(target) => format!("send {signal:?} to {target}"),
                 None => format!("send {signal:?}"),
@@ -585,11 +618,11 @@ impl KernelEvent {
                     None => format!("turn {status}"),
                 }
             }
-            EventKind::ChildCompleted { child_id, .. } => match self.base.agent_id {
+            EventKind::ChildSessionDone { child_id, .. } => match self.base.agent_id {
                 Some(parent_id) => {
-                    format!("child {child_id} completed for parent {parent_id}")
+                    format!("child session {child_id} done for parent {parent_id}")
                 }
-                None => format!("child {child_id} completed"),
+                None => format!("child session {child_id} done"),
             },
             EventKind::Deliver(envelope) => {
                 format!(
@@ -597,16 +630,17 @@ impl KernelEvent {
                     envelope.session_id
                 )
             }
-            EventKind::Syscall(syscall) => syscall.summary(),
+            EventKind::SessionCommand(syscall) => syscall.summary(),
+            EventKind::IdleCheck => "periodic idle check".to_string(),
             EventKind::Shutdown => "shutdown requested".to_string(),
         }
     }
 
     /// Common observability fields derived from the event.
     pub fn common_fields(&self) -> KernelEventCommonFields {
-        // For syscalls, hide the nil sentinel in observability.
+        // For session commands, hide the nil sentinel in observability.
         let observable_agent_id = match &self.kind {
-            EventKind::Syscall(syscall) => syscall.observable_agent_id(),
+            EventKind::SessionCommand(syscall) => syscall.observable_agent_id(),
             _ => self.base.agent_id,
         };
 
@@ -702,9 +736,9 @@ mod tests {
     }
 
     #[test]
-    fn agent_id_for_spawn_agent_is_none() {
+    fn agent_id_for_create_session_is_none() {
         let (tx, _rx) = oneshot::channel();
-        let event = KernelEvent::spawn_agent(
+        let event = KernelEvent::create_session(
             AgentManifest {
                 name:               "test".to_string(),
                 role:               None,

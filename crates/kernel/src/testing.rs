@@ -45,7 +45,7 @@ use crate::{
     llm::DriverRegistryRef,
     memory::NoopMemory,
     notification::NoopNotificationBus,
-    process::{AgentManifest, ProcessTable, agent_registry::AgentRegistry},
+    process::{AgentManifest, SessionTable, agent_registry::AgentRegistry},
     session::{NoopSessionIndex, NoopSessionRepository, SessionIndexRef, SessionRepoRef},
     tool::{AgentToolRef, ToolRegistry},
 };
@@ -127,7 +127,7 @@ impl TestKernelBuilder {
         let max_concurrency = self.config.max_concurrency;
         Kernel::for_testing(
             self.config,
-            Arc::new(ProcessTable::new()),
+            Arc::new(SessionTable::new()),
             Arc::new(Semaphore::new(max_concurrency)),
             driver_registry,
             Arc::new(self.tool_registry),

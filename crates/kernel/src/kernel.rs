@@ -62,7 +62,7 @@ use crate::{
     llm::DriverRegistryRef,
     memory::MemoryRef,
     notification::NotificationBusRef,
-    process::{AgentId, ProcessState, ProcessTable, agent_registry::AgentRegistryRef},
+    process::{AgentId, SessionState, SessionTable, agent_registry::AgentRegistryRef},
     queue::{EventQueueRef, ObservableEventQueue, ShardedEventQueueConfig, ShardedQueueRef},
     security::SecurityRef,
     session::{SessionIndexRef, SessionRepoRef},
@@ -160,7 +160,7 @@ pub struct Kernel {
     config:           KernelConfig,
     // -- Core subsystems (previously in KernelInner) -----------------------
     /// The global process table tracking all running agents.
-    process_table:    Arc<ProcessTable>,
+    process_table:    Arc<SessionTable>,
     /// Global semaphore limiting total concurrent agent processes.
     global_semaphore: Arc<Semaphore>,
     /// 3-layer memory (not used for cross-agent KV — see shared_kv).
@@ -258,7 +258,7 @@ impl Kernel {
 
         Self {
             config,
-            process_table: Arc::new(ProcessTable::new()),
+            process_table: Arc::new(SessionTable::new()),
             global_semaphore,
             memory,
             security,
@@ -279,7 +279,7 @@ impl Kernel {
     }
 
     /// Access the process table for querying.
-    pub fn process_table(&self) -> &ProcessTable { &self.process_table }
+    pub fn process_table(&self) -> &SessionTable { &self.process_table }
 
     /// Access the agent registry for looking up named manifests.
     pub fn agent_registry(&self) -> &AgentRegistryRef { &self.agent_registry }
@@ -320,7 +320,7 @@ impl Kernel {
             .filter(|p| {
                 matches!(
                     p.state,
-                    ProcessState::Running | ProcessState::Idle | ProcessState::Waiting
+                    SessionState::Active | SessionState::Ready
                 )
             })
             .count();
@@ -332,7 +332,7 @@ impl Kernel {
             .unwrap_or(0);
 
         crate::process::SystemStats {
-            active_processes: active,
+            active_sessions: active,
             total_spawned: pt.total_spawned(),
             total_completed: pt.total_completed(),
             total_failed: pt.total_failed(),
@@ -399,7 +399,7 @@ impl Kernel {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn for_testing(
         config: KernelConfig,
-        process_table: Arc<ProcessTable>,
+        process_table: Arc<SessionTable>,
         global_semaphore: Arc<Semaphore>,
         driver_registry: DriverRegistryRef,
         tool_registry: ToolRegistryRef,
@@ -859,7 +859,7 @@ mod tests {
     fn test_kernel_system_stats_initial() {
         let kernel = make_test_kernel(10, 5);
         let stats = kernel.system_stats();
-        assert_eq!(stats.active_processes, 0);
+        assert_eq!(stats.active_sessions, 0);
         assert_eq!(stats.total_spawned, 0);
         assert_eq!(stats.total_completed, 0);
         assert_eq!(stats.total_failed, 0);
@@ -928,7 +928,7 @@ mod tests {
         let process = kernel.process_table().get(agent_id).unwrap();
         assert_eq!(
             process.state,
-            ProcessState::Paused,
+            SessionState::Paused,
             "expected Paused after signal, got {:?}",
             process.state
         );
@@ -945,7 +945,7 @@ mod tests {
         let process = kernel.process_table().get(agent_id).unwrap();
         assert_ne!(
             process.state,
-            ProcessState::Paused,
+            SessionState::Paused,
             "process should not be Paused after Resume"
         );
 
@@ -957,7 +957,7 @@ mod tests {
         let kernel = make_test_kernel(10, 5);
         let stats = kernel.system_stats();
         let json = serde_json::to_string(&stats).unwrap();
-        assert!(json.contains("\"active_processes\":0"));
+        assert!(json.contains("\"active_sessions\":0"));
         assert!(json.contains("\"global_semaphore_available\":10"));
     }
 

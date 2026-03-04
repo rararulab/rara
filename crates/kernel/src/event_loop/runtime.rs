@@ -34,7 +34,7 @@ use crate::{
 /// Mutable runtime state for each agent process, managed by the kernel's
 /// event loop rather than by individual per-process tokio tasks.
 ///
-/// Stored separately from `AgentProcess` (which lives in ProcessTable and must
+/// Stored separately from `SessionRuntime` (which lives in SessionTable and must
 /// be Clone) because it contains non-Clone types like `CancellationToken` and
 /// `Vec<KernelEvent>`.
 pub(crate) struct ProcessRuntime {

@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! OS process model — core types for the unified agent lifecycle.
+//! Session-centric runtime model — core types for the unified agent lifecycle.
 //!
-//! This module implements an OS-inspired process model where:
+//! This module implements a session-centric runtime model where:
 //! - [`AgentManifest`] = the "binary" (static definition, YAML-loadable)
-//! - [`AgentProcess`] = a running instance in the [`ProcessTable`]
-//! - [`AgentId`] = unique per-execution identifier (like a PID)
-//! - [`SessionId`] = persistent conversation identifier (survives restarts)
+//! - [`SessionRuntime`] = a running session instance in the [`SessionTable`]
+//! - [`AgentId`] = unique per-execution identifier (kept for audit/security compatibility)
+//! - [`SessionId`] = persistent conversation identifier (the primary identifier)
 //!
-//! The [`ProcessTable`] is a concurrent in-memory table (backed by `DashMap`)
-//! that tracks all running agent processes, supporting process tree queries
+//! The [`SessionTable`] is a concurrent in-memory table (backed by `DashMap`)
+//! that tracks all active session runtimes, supporting session tree queries
 //! (parent/children) and state transitions.
 
 pub mod agent_registry;
@@ -246,31 +246,29 @@ pub struct AgentManifest {
     pub sandbox:            Option<SandboxConfig>,
 }
 
-/// Runtime state of an agent process.
+/// Runtime state of a session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, strum::Display)]
 #[strum(serialize_all = "snake_case")]
-pub enum ProcessState {
-    /// Agent is actively running (LLM loop in progress).
-    Running,
-    /// Turn done, waiting for next user message (no pending work).
-    Idle,
-    /// Agent is waiting for child agent results (has pending work).
-    Waiting,
-    /// Agent is suspended by a Pause signal. Messages are buffered.
+pub enum SessionState {
+    /// Session is actively processing a message (LLM call in flight).
+    Active,
+    /// Session is idle, awaiting next message.
+    Ready,
+    /// Session has been suspended (timed out, resources released).
+    Suspended,
+    /// Session is manually paused, rejects incoming messages.
     Paused,
-    /// Agent completed successfully.
-    Completed,
-    /// Agent failed with an error.
-    Failed,
-    /// Agent was cancelled (killed by parent or timeout).
-    Cancelled,
 }
 
-impl ProcessState {
-    /// Whether this state is terminal (process no longer accepts messages).
-    pub fn is_terminal(self) -> bool {
-        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
-    }
+/// Backwards-compatible alias during migration.
+pub type ProcessState = SessionState;
+
+impl SessionState {
+    /// Whether this state is terminal (session no longer accepts messages).
+    ///
+    /// In the session-centric model, sessions are never truly terminal —
+    /// they transition to Suspended instead. This always returns false.
+    pub fn is_terminal(self) -> bool { false }
 }
 
 /// Result of a completed agent process.
@@ -326,63 +324,69 @@ pub enum Signal {
     Resume,
 }
 
-/// A running agent instance in the process table.
+/// A running session instance in the session table.
 ///
-/// This is the runtime counterpart to [`AgentManifest`]. Each time an agent
-/// is spawned, a new `AgentProcess` is created with a unique [`AgentId`],
+/// This is the runtime counterpart to [`AgentManifest`]. Each session
+/// is created with a unique [`AgentId`] (for audit/security compatibility),
 /// the spawning principal, and the manifest that defines its behavior.
+/// Sessions are long-lived — they transition between Active/Ready/Suspended/Paused
+/// rather than being created and destroyed per message.
 #[derive(Debug, Clone)]
-pub struct AgentProcess {
-    /// Unique identifier for this process.
+pub struct SessionRuntime {
+    /// Unique identifier for this session runtime (kept for audit compatibility).
     pub agent_id:           AgentId,
-    /// Parent process (None for root-level agents).
+    /// Parent session (None for root-level sessions).
     pub parent_id:          Option<AgentId>,
-    /// The process's own session (always `agent:{agent_id}`), used for
-    /// conversation storage. Each process gets an isolated session so
-    /// subagents never load or pollute the parent's history.
+    /// The session's conversation storage key.
     pub session_id:         SessionId,
     /// External channel binding (e.g., `web:chat123`). Only set for root
-    /// processes that entered via an external channel adapter. Used by
-    /// `session_index` for routing inbound messages to the correct process.
-    /// Subagents have `None` — they are only reachable via `AgentHandle`.
+    /// sessions that entered via an external channel adapter. Used by
+    /// `session_index` for routing inbound messages to the correct session.
+    /// Child sessions have `None` — they are only reachable via `SessionHandle`.
     pub channel_session_id: Option<SessionId>,
-    /// The agent definition driving this process.
+    /// The agent definition driving this session.
     pub manifest:           AgentManifest,
-    /// The identity under which this process runs.
+    /// The identity under which this session runs.
     pub principal:          principal::Principal,
-    /// Per-process environment.
+    /// Per-session environment.
     pub env:                AgentEnv,
     /// Current lifecycle state.
-    pub state:              ProcessState,
-    /// When this process was created.
+    pub state:              SessionState,
+    /// When this session was created.
     pub created_at:         Timestamp,
-    /// When this process finished (if terminal).
+    /// When this session was last active (for idle timeout).
     pub finished_at:        Option<Timestamp>,
-    /// Result of execution (set on completion/failure).
+    /// Result of last execution (set on turn completion).
     pub result:             Option<AgentResult>,
     /// Files created or modified by this agent (for resource tracking).
     pub created_files:      Vec<PathBuf>,
-    /// Per-process runtime metrics (atomic counters for lock-free updates).
+    /// Per-session runtime metrics (atomic counters for lock-free updates).
     pub metrics:            Arc<RuntimeMetrics>,
     /// Detailed turn traces for observability (most recent 50 turns).
     pub turn_traces:        Vec<crate::agent_turn::TurnTrace>,
 }
 
-/// Summary info for listing processes.
+/// Backwards-compatible alias during migration.
+pub type AgentProcess = SessionRuntime;
+
+/// Summary info for listing sessions.
 ///
-/// A lightweight view of an [`AgentProcess`] suitable for display in
-/// process listings without exposing full internal state.
+/// A lightweight view of a [`SessionRuntime`] suitable for display in
+/// session listings without exposing full internal state.
 #[derive(Debug, Clone, Serialize)]
-pub struct ProcessInfo {
+pub struct SessionInfo {
     pub agent_id:   AgentId,
     pub parent_id:  Option<AgentId>,
     pub name:       String,
-    pub state:      ProcessState,
+    pub state:      SessionState,
     pub created_at: Timestamp,
 }
 
-impl From<&AgentProcess> for ProcessInfo {
-    fn from(p: &AgentProcess) -> Self {
+/// Backwards-compatible alias during migration.
+pub type ProcessInfo = SessionInfo;
+
+impl From<&SessionRuntime> for SessionInfo {
+    fn from(p: &SessionRuntime) -> Self {
         Self {
             agent_id:   p.agent_id,
             parent_id:  p.parent_id,
@@ -496,32 +500,32 @@ pub struct MetricsSnapshot {
 // ProcessStats — rich per-process introspection (like /proc/<pid>/status)
 // ---------------------------------------------------------------------------
 
-/// Extended runtime statistics for a single agent process.
+/// Extended runtime statistics for a single session.
 ///
-/// Combines static metadata from [`AgentProcess`] with live counters from
+/// Combines static metadata from [`SessionRuntime`] with live counters from
 /// [`RuntimeMetrics`]. This is the `/proc/<pid>/status` equivalent.
 #[derive(Debug, Clone, Serialize)]
-pub struct ProcessStats {
-    /// Unique process identifier.
+pub struct SessionStats {
+    /// Unique session runtime identifier.
     pub agent_id:          AgentId,
-    /// Session this process belongs to.
+    /// Session conversation key.
     pub session_id:        SessionId,
     /// The manifest name (agent definition name).
     pub manifest_name:     String,
     /// Current lifecycle state.
-    pub state:             ProcessState,
-    /// Parent process, if any.
+    pub state:             SessionState,
+    /// Parent session, if any.
     pub parent_id:         Option<AgentId>,
-    /// IDs of child processes.
+    /// IDs of child sessions.
     pub children:          Vec<AgentId>,
-    /// When this process was created.
+    /// When this session was created.
     pub created_at:        Timestamp,
-    /// When this process finished (if terminal).
+    /// When this session was last active.
     pub finished_at:       Option<Timestamp>,
-    /// How long this process has been alive (milliseconds).
+    /// How long this session has been alive (milliseconds).
     pub uptime_ms:         u64,
     // -- Runtime metrics --
-    /// Number of messages received by this process.
+    /// Number of messages received by this session.
     pub messages_received: u64,
     /// Number of LLM completion calls made.
     pub llm_calls:         u64,
@@ -533,6 +537,9 @@ pub struct ProcessStats {
     pub last_activity:     Option<Timestamp>,
 }
 
+/// Backwards-compatible alias during migration.
+pub type ProcessStats = SessionStats;
+
 // ---------------------------------------------------------------------------
 // SystemStats — kernel-wide aggregate metrics (like /proc/stat)
 // ---------------------------------------------------------------------------
@@ -543,32 +550,32 @@ pub struct ProcessStats {
 /// to `/proc/stat` or `/proc/meminfo` in Linux.
 #[derive(Debug, Clone, Serialize)]
 pub struct SystemStats {
-    /// Number of currently active (Running or Waiting) processes.
-    pub active_processes:           usize,
-    /// Total number of processes ever spawned.
+    /// Number of currently active sessions.
+    pub active_sessions:            usize,
+    /// Total number of sessions ever created.
     pub total_spawned:              u64,
-    /// Total number of processes that completed successfully.
+    /// Total number of sessions that completed successfully (legacy counter).
     pub total_completed:            u64,
-    /// Total number of processes that failed.
+    /// Total number of sessions that failed (legacy counter).
     pub total_failed:               u64,
     /// Number of global semaphore permits currently available.
     pub global_semaphore_available: usize,
-    /// Sum of tokens consumed across all tracked processes.
+    /// Sum of tokens consumed across all tracked sessions.
     pub total_tokens_consumed:      u64,
     /// Kernel uptime in milliseconds.
     pub uptime_ms:                  u64,
 }
 
-/// In-memory process table — the kernel's view of all running agents.
+/// In-memory session table — the kernel's view of all active sessions.
 ///
 /// Thread-safe via `DashMap`. Supports concurrent reads and writes from
 /// multiple tokio tasks (e.g., kernel spawn + agent tool calls).
 ///
 /// Includes a session index for fast `SessionId -> AgentId` lookups,
 /// a name index for fast agent name -> `AgentId` lookups, and
-/// a mailbox registry for sending messages to long-lived processes.
-pub struct ProcessTable {
-    processes:       DashMap<AgentId, AgentProcess>,
+/// a mailbox registry for sending messages to long-lived sessions.
+pub struct SessionTable {
+    processes:       DashMap<AgentId, SessionRuntime>,
     /// Maps a session to its currently active agent process.
     session_index:   DashMap<SessionId, AgentId>,
     /// Parent → Children index, O(1) child lookup.
@@ -583,7 +590,10 @@ pub struct ProcessTable {
     total_failed:    AtomicU64,
 }
 
-impl ProcessTable {
+/// Backwards-compatible alias during migration.
+pub type ProcessTable = SessionTable;
+
+impl SessionTable {
     /// Maximum number of turn traces retained per process.
     const MAX_TURN_TRACES: usize = 50;
     /// How long terminal processes remain visible before being reaped.
@@ -632,42 +642,19 @@ impl ProcessTable {
         self.processes.get(&id).map(|p| p.value().clone())
     }
 
-    /// Transition a process to a new state.
+    /// Transition a session to a new state.
     ///
-    /// Automatically sets `finished_at` when transitioning to a terminal state
-    /// and increments aggregate completed/failed counters.
+    /// Sessions are long-lived and never reach a terminal state. State
+    /// transitions are: Active (processing), Ready (idle), Suspended
+    /// (timed-out), Paused (manual hold).
     #[tracing::instrument(skip(self), fields(new_state = %state))]
-    pub fn set_state(&self, id: AgentId, state: ProcessState) -> Result<()> {
+    pub fn set_state(&self, id: AgentId, state: SessionState) -> Result<()> {
         let mut entry = self
             .processes
             .get_mut(&id)
             .ok_or(crate::error::KernelError::AgentNotFound { id: id.0 })?;
-        let prev_state = entry.state;
         entry.state = state;
-        match state {
-            ProcessState::Completed => {
-                entry.finished_at = Some(Timestamp::now());
-                // Only count transition once (guard against double-set).
-                if prev_state != ProcessState::Completed {
-                    self.total_completed.fetch_add(1, Ordering::Relaxed);
-                }
-            }
-            ProcessState::Failed => {
-                entry.finished_at = Some(Timestamp::now());
-                if prev_state != ProcessState::Failed {
-                    self.total_failed.fetch_add(1, Ordering::Relaxed);
-                }
-            }
-            ProcessState::Cancelled => {
-                entry.finished_at = Some(Timestamp::now());
-            }
-            ProcessState::Running
-            | ProcessState::Idle
-            | ProcessState::Waiting
-            | ProcessState::Paused => {
-                // Non-terminal states: do not set finished_at.
-            }
-        }
+        // Sessions are long-lived — no terminal states, no finished_at.
         Ok(())
     }
 
@@ -746,13 +733,16 @@ impl ProcessTable {
             .unwrap_or_default()
     }
 
-    /// Count running processes.
-    pub fn running_count(&self) -> usize {
+    /// Count active sessions (those currently processing a message).
+    pub fn active_count(&self) -> usize {
         self.processes
             .iter()
-            .filter(|p| p.state == ProcessState::Running)
+            .filter(|p| p.state == SessionState::Active)
             .count()
     }
+
+    /// Backwards-compatible alias.
+    pub fn running_count(&self) -> usize { self.active_count() }
 
     // ----- Session index methods -----
 
@@ -796,7 +786,7 @@ impl ProcessTable {
         self.processes.get(id).map(|p| Arc::clone(&p.metrics))
     }
 
-    /// Build a [`ProcessStats`] snapshot for a single process.
+    /// Build a [`SessionStats`] snapshot for a single session.
     pub async fn process_stats(&self, id: AgentId) -> Option<ProcessStats> {
         let process = self.get(id)?;
         let metrics_snapshot = process.metrics.snapshot().await;
@@ -829,9 +819,9 @@ impl ProcessTable {
         })
     }
 
-    /// Build [`ProcessStats`] for all processes currently in the table.
+    /// Build [`SessionStats`] for all sessions currently in the table.
     ///
-    /// Also performs lazy reaping of terminal processes older than the TTL.
+    /// Also performs lazy reaping of suspended sessions older than the TTL.
     pub async fn all_process_stats(&self) -> Vec<ProcessStats> {
         // Lazy reap: remove stale terminal processes on observation.
         self.reap_terminal(Self::TERMINAL_TTL);
@@ -846,9 +836,11 @@ impl ProcessTable {
         stats
     }
 
-    /// Remove terminal processes whose `finished_at` is older than `max_age`.
+    /// Remove suspended sessions whose last activity is older than `max_age`.
     ///
-    /// Returns the number of processes reaped.
+    /// In the session-centric model sessions are never terminal, so this
+    /// reaps long-idle *suspended* sessions instead.  Returns the number of
+    /// sessions reaped.
     pub fn reap_terminal(&self, max_age: std::time::Duration) -> usize {
         let now = Timestamp::now();
         let max_age_ms = max_age.as_millis() as i128;
@@ -857,17 +849,16 @@ impl ProcessTable {
             .iter()
             .filter(|entry| {
                 let p = entry.value();
-                if !p.state.is_terminal() {
+                if p.state != SessionState::Suspended {
                     return false;
                 }
                 match p.finished_at {
                     Some(finished) => {
-                        // Use raw nanosecond difference for precision.
                         let elapsed_ns = now.as_nanosecond() - finished.as_nanosecond();
                         let elapsed_ms = elapsed_ns / 1_000_000;
                         elapsed_ms > max_age_ms
                     }
-                    None => false, // No finished_at — keep it (shouldn't happen)
+                    None => false,
                 }
             })
             .map(|entry| entry.agent_id)
@@ -898,7 +889,7 @@ impl ProcessTable {
     }
 }
 
-impl Default for ProcessTable {
+impl Default for SessionTable {
     fn default() -> Self { Self::new() }
 }
 
@@ -927,15 +918,15 @@ mod tests {
         }
     }
 
-    fn test_process(name: &str, parent_id: Option<AgentId>) -> AgentProcess {
+    fn test_process(name: &str, parent_id: Option<AgentId>) -> SessionRuntime {
         test_process_with_session(name, parent_id, "test-session")
     }
 
     /// Helper to create a test process simulating a subagent (no channel
     /// session).
-    fn test_subagent(name: &str, parent_id: AgentId) -> AgentProcess {
+    fn test_subagent(name: &str, parent_id: AgentId) -> SessionRuntime {
         let agent_id = AgentId::new();
-        AgentProcess {
+        SessionRuntime {
             agent_id,
             parent_id: Some(parent_id),
             session_id: SessionId::new(),
@@ -943,7 +934,7 @@ mod tests {
             manifest: test_manifest(name),
             principal: Principal::user("test-user"),
             env: AgentEnv::default(),
-            state: ProcessState::Running,
+            state: SessionState::Active,
             created_at: Timestamp::now(),
             finished_at: None,
             result: None,
@@ -958,9 +949,9 @@ mod tests {
         name: &str,
         parent_id: Option<AgentId>,
         _channel_session: &str,
-    ) -> AgentProcess {
+    ) -> SessionRuntime {
         let agent_id = AgentId::new();
-        AgentProcess {
+        SessionRuntime {
             agent_id,
             parent_id,
             session_id: SessionId::new(),
@@ -968,7 +959,7 @@ mod tests {
             manifest: test_manifest(name),
             principal: Principal::user("test-user"),
             env: AgentEnv::default(),
-            state: ProcessState::Running,
+            state: SessionState::Active,
             created_at: Timestamp::now(),
             finished_at: None,
             result: None,
@@ -1006,34 +997,33 @@ mod tests {
         let retrieved = table.get(id).unwrap();
         assert_eq!(retrieved.agent_id, id);
         assert_eq!(retrieved.manifest.name, "scout");
-        assert_eq!(retrieved.state, ProcessState::Running);
+        assert_eq!(retrieved.state, SessionState::Active);
     }
 
     #[test]
-    fn test_process_table_get_nonexistent() {
-        let table = ProcessTable::new();
+    fn test_session_table_get_nonexistent() {
+        let table = SessionTable::new();
         assert!(table.get(AgentId::new()).is_none());
     }
 
     #[test]
-    fn test_process_table_set_state() {
-        let table = ProcessTable::new();
+    fn test_session_table_set_state() {
+        let table = SessionTable::new();
         let process = test_process("scout", None);
         let id = process.agent_id;
         table.insert(process);
 
-        // Transition to Completed
-        table.set_state(id, ProcessState::Completed).unwrap();
+        // Transition to Ready (idle)
+        table.set_state(id, SessionState::Ready).unwrap();
 
         let p = table.get(id).unwrap();
-        assert_eq!(p.state, ProcessState::Completed);
-        assert!(p.finished_at.is_some());
+        assert_eq!(p.state, SessionState::Ready);
     }
 
     #[test]
-    fn test_process_table_set_state_nonexistent() {
-        let table = ProcessTable::new();
-        let result = table.set_state(AgentId::new(), ProcessState::Failed);
+    fn test_session_table_set_state_nonexistent() {
+        let table = SessionTable::new();
+        let result = table.set_state(AgentId::new(), SessionState::Suspended);
         assert!(result.is_err());
     }
 
@@ -1120,9 +1110,9 @@ mod tests {
     }
 
     #[test]
-    fn test_process_table_running_count() {
-        let table = ProcessTable::new();
-        assert_eq!(table.running_count(), 0);
+    fn test_session_table_active_count() {
+        let table = SessionTable::new();
+        assert_eq!(table.active_count(), 0);
 
         let p1 = test_process("a", None);
         let p1_id = p1.agent_id;
@@ -1131,21 +1121,21 @@ mod tests {
         let p2 = test_process("b", None);
         table.insert(p2);
 
-        assert_eq!(table.running_count(), 2);
+        assert_eq!(table.active_count(), 2);
 
-        table.set_state(p1_id, ProcessState::Completed).unwrap();
-        assert_eq!(table.running_count(), 1);
+        table.set_state(p1_id, SessionState::Ready).unwrap();
+        assert_eq!(table.active_count(), 1);
     }
 
     #[test]
-    fn test_process_info_from_agent_process() {
+    fn test_session_info_from_session_runtime() {
         let process = test_process("scout", None);
-        let info = ProcessInfo::from(&process);
+        let info = SessionInfo::from(&process);
 
         assert_eq!(info.agent_id, process.agent_id);
         assert_eq!(info.parent_id, None);
         assert_eq!(info.name, "scout");
-        assert_eq!(info.state, ProcessState::Running);
+        assert_eq!(info.state, SessionState::Active);
     }
 
     #[test]
@@ -1197,81 +1187,89 @@ system_prompt: "Hello"
     }
 
     #[test]
-    fn test_process_state_terminal_sets_finished_at() {
-        let table = ProcessTable::new();
+    fn test_session_state_transitions() {
+        let table = SessionTable::new();
 
-        // Test Failed
+        // Active -> Ready
         let p = test_process("a", None);
         let id = p.agent_id;
         table.insert(p);
-        table.set_state(id, ProcessState::Failed).unwrap();
-        assert!(table.get(id).unwrap().finished_at.is_some());
+        table.set_state(id, SessionState::Ready).unwrap();
+        assert_eq!(table.get(id).unwrap().state, SessionState::Ready);
 
-        // Test Cancelled
-        let p = test_process("b", None);
-        let id = p.agent_id;
-        table.insert(p);
-        table.set_state(id, ProcessState::Cancelled).unwrap();
-        assert!(table.get(id).unwrap().finished_at.is_some());
+        // Ready -> Suspended
+        table.set_state(id, SessionState::Suspended).unwrap();
+        assert_eq!(table.get(id).unwrap().state, SessionState::Suspended);
+
+        // Suspended -> Active (reactivation)
+        table.set_state(id, SessionState::Active).unwrap();
+        assert_eq!(table.get(id).unwrap().state, SessionState::Active);
     }
 
     #[test]
-    fn test_process_state_idle_does_not_set_finished_at() {
-        let table = ProcessTable::new();
+    fn test_session_state_ready_does_not_set_finished_at() {
+        let table = SessionTable::new();
         let p = test_process("idler", None);
         let id = p.agent_id;
         table.insert(p);
 
-        table.set_state(id, ProcessState::Idle).unwrap();
+        table.set_state(id, SessionState::Ready).unwrap();
 
-        let process = table.get(id).unwrap();
-        assert_eq!(process.state, ProcessState::Idle);
+        let session = table.get(id).unwrap();
+        assert_eq!(session.state, SessionState::Ready);
         assert!(
-            process.finished_at.is_none(),
-            "Idle state should not set finished_at"
+            session.finished_at.is_none(),
+            "Ready state should not set finished_at"
         );
     }
 
     #[test]
-    fn test_process_state_idle_is_not_terminal() {
-        assert!(!ProcessState::Idle.is_terminal());
+    fn test_session_state_none_is_terminal() {
+        // All session states are non-terminal.
+        assert!(!SessionState::Active.is_terminal());
+        assert!(!SessionState::Ready.is_terminal());
+        assert!(!SessionState::Suspended.is_terminal());
+        assert!(!SessionState::Paused.is_terminal());
     }
 
     #[test]
-    fn test_process_state_idle_display() {
-        assert_eq!(ProcessState::Idle.to_string(), "idle");
+    fn test_session_state_display() {
+        assert_eq!(SessionState::Active.to_string(), "active");
+        assert_eq!(SessionState::Ready.to_string(), "ready");
+        assert_eq!(SessionState::Suspended.to_string(), "suspended");
+        assert_eq!(SessionState::Paused.to_string(), "paused");
     }
 
     #[test]
-    fn test_process_state_waiting_does_not_set_finished_at() {
-        let table = ProcessTable::new();
+    fn test_session_state_suspended_does_not_set_finished_at() {
+        let table = SessionTable::new();
         let p = test_process("waiter", None);
         let id = p.agent_id;
         table.insert(p);
 
-        table.set_state(id, ProcessState::Waiting).unwrap();
+        table.set_state(id, SessionState::Suspended).unwrap();
 
-        let process = table.get(id).unwrap();
-        assert_eq!(process.state, ProcessState::Waiting);
+        let session = table.get(id).unwrap();
+        assert_eq!(session.state, SessionState::Suspended);
         assert!(
-            process.finished_at.is_none(),
-            "Waiting state should not set finished_at"
+            session.finished_at.is_none(),
+            "Suspended state should not set finished_at"
         );
     }
 
     #[test]
-    fn test_process_state_paused_does_not_set_finished_at() {
-        let table = ProcessTable::new();
+    fn test_session_state_paused_does_not_set_finished_at() {
+        let table = SessionTable::new();
         let p = test_process("paused-agent", None);
         let id = p.agent_id;
         table.insert(p);
 
-        table.set_state(id, ProcessState::Paused).unwrap();
+        table.set_state(id, SessionState::Paused).unwrap();
 
-        let process = table.get(id).unwrap();
-        assert_eq!(process.state, ProcessState::Paused);
+        let session = table.get(id).unwrap();
+        assert_eq!(session.state, SessionState::Paused);
         assert!(
-            process.finished_at.is_none(),
+            session.finished_at.is_none(),
             "Paused state should not set finished_at"
         );
     }
@@ -1305,7 +1303,7 @@ system_prompt: "Hello"
 
         // bind_session overwrites
         let new_id = AgentId::new();
-        let new_process = AgentProcess {
+        let new_process = SessionRuntime {
             agent_id:           new_id,
             parent_id:          None,
             session_id:         SessionId::new(),
@@ -1313,7 +1311,7 @@ system_prompt: "Hello"
             manifest:           test_manifest("agent-b"),
             principal:          Principal::user("test-user"),
             env:                AgentEnv::default(),
-            state:              ProcessState::Running,
+            state:              SessionState::Active,
             created_at:         Timestamp::now(),
             finished_at:        None,
             result:             None,
@@ -1408,36 +1406,25 @@ system_prompt: "Hello"
     }
 
     #[test]
-    fn test_set_state_increments_completed_and_failed() {
-        let table = ProcessTable::new();
+    fn test_set_state_cycles_through_session_states() {
+        let table = SessionTable::new();
 
-        let p1 = test_process("ok", None);
-        let id1 = p1.agent_id;
-        table.insert(p1);
-
-        let p2 = test_process("fail", None);
-        let id2 = p2.agent_id;
-        table.insert(p2);
-
-        table.set_state(id1, ProcessState::Completed).unwrap();
-        assert_eq!(table.total_completed(), 1);
-        assert_eq!(table.total_failed(), 0);
-
-        table.set_state(id2, ProcessState::Failed).unwrap();
-        assert_eq!(table.total_completed(), 1);
-        assert_eq!(table.total_failed(), 1);
-    }
-
-    #[test]
-    fn test_set_state_does_not_double_count() {
-        let table = ProcessTable::new();
-        let p = test_process("double", None);
+        let p = test_process("lifecycle", None);
         let id = p.agent_id;
         table.insert(p);
 
-        table.set_state(id, ProcessState::Completed).unwrap();
-        table.set_state(id, ProcessState::Completed).unwrap();
-        assert_eq!(table.total_completed(), 1, "should not double-count");
+        // Active -> Ready -> Suspended -> Active -> Paused
+        table.set_state(id, SessionState::Ready).unwrap();
+        assert_eq!(table.get(id).unwrap().state, SessionState::Ready);
+
+        table.set_state(id, SessionState::Suspended).unwrap();
+        assert_eq!(table.get(id).unwrap().state, SessionState::Suspended);
+
+        table.set_state(id, SessionState::Active).unwrap();
+        assert_eq!(table.get(id).unwrap().state, SessionState::Active);
+
+        table.set_state(id, SessionState::Paused).unwrap();
+        assert_eq!(table.get(id).unwrap().state, SessionState::Paused);
     }
 
     #[test]
@@ -1476,7 +1463,7 @@ system_prompt: "Hello"
         let stats = table.process_stats(parent_id).await.unwrap();
         assert_eq!(stats.agent_id, parent_id);
         assert_eq!(stats.manifest_name, "planner");
-        assert_eq!(stats.state, ProcessState::Running);
+        assert_eq!(stats.state, SessionState::Active);
         assert!(stats.parent_id.is_none());
         assert_eq!(stats.children, vec![child_id]);
         assert_eq!(stats.messages_received, 1);
@@ -1697,10 +1684,10 @@ system_prompt: "Hello"
         let csid_b = p2.channel_session_id.clone().unwrap();
         table.insert(p2);
 
-        // Complete session-a's process. Session-b's process should be unaffected.
-        table.set_state(id1, ProcessState::Completed).unwrap();
-        assert_eq!(table.get(id1).unwrap().state, ProcessState::Completed);
-        assert_eq!(table.get(id2).unwrap().state, ProcessState::Running);
+        // Suspend session-a. Session-b should be unaffected.
+        table.set_state(id1, SessionState::Suspended).unwrap();
+        assert_eq!(table.get(id1).unwrap().state, SessionState::Suspended);
+        assert_eq!(table.get(id2).unwrap().state, SessionState::Active);
 
         // Remove session-a's process. Session-b still exists.
         table.remove(id1);
@@ -1871,12 +1858,12 @@ system_prompt: "Hello"
     }
 
     // -----------------------------------------------------------------------
-    // Idle state + running_count tests
+    // Active count tests
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_running_count_excludes_idle() {
-        let table = ProcessTable::new();
+    fn test_active_count_excludes_ready() {
+        let table = SessionTable::new();
 
         let p1 = test_process("a", None);
         let p1_id = p1.agent_id;
@@ -1885,28 +1872,27 @@ system_prompt: "Hello"
         let p2 = test_process("b", None);
         table.insert(p2);
 
-        assert_eq!(table.running_count(), 2);
+        assert_eq!(table.active_count(), 2);
 
-        // Transition p1 to Idle — should NOT count as running.
-        table.set_state(p1_id, ProcessState::Idle).unwrap();
-        assert_eq!(table.running_count(), 1);
+        // Transition p1 to Ready — should NOT count as active.
+        table.set_state(p1_id, SessionState::Ready).unwrap();
+        assert_eq!(table.active_count(), 1);
     }
 
     // -----------------------------------------------------------------------
-    // Terminal TTL / reap tests
+    // Suspended session reap tests
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_reap_terminal_removes_old_processes() {
-        let table = ProcessTable::new();
+    fn test_reap_suspended_removes_old_sessions() {
+        let table = SessionTable::new();
 
         let p = test_process("reap-me", None);
         let id = p.agent_id;
         table.insert(p);
 
-        // Complete the process with finished_at far in the past.
-        table.set_state(id, ProcessState::Completed).unwrap();
-        // Manually backdate finished_at to ensure reaping works.
+        // Suspend the session and backdate finished_at to simulate old suspension.
+        table.set_state(id, SessionState::Suspended).unwrap();
         {
             let mut entry = table.processes.get_mut(&id).unwrap();
             let past = Timestamp::from_second(Timestamp::now().as_second() - 120).unwrap();
@@ -1917,57 +1903,65 @@ system_prompt: "Hello"
         let p = table.get(id).unwrap();
         assert!(p.finished_at.is_some(), "finished_at should be set");
 
-        // Reap with 60s TTL — process finished 120s ago, should be removed.
+        // Reap with 60s TTL — session suspended 120s ago, should be removed.
         let reaped = table.reap_terminal(std::time::Duration::from_secs(60));
         assert_eq!(reaped, 1);
         assert!(table.get(id).is_none());
     }
 
     #[test]
-    fn test_reap_terminal_keeps_recent_processes() {
-        let table = ProcessTable::new();
+    fn test_reap_keeps_recently_suspended() {
+        let table = SessionTable::new();
 
         let p = test_process("keep-me", None);
         let id = p.agent_id;
         table.insert(p);
 
-        table.set_state(id, ProcessState::Completed).unwrap();
+        table.set_state(id, SessionState::Suspended).unwrap();
+        // Set finished_at to now.
+        {
+            let mut entry = table.processes.get_mut(&id).unwrap();
+            entry.finished_at = Some(Timestamp::now());
+        }
 
-        // Reap with 60s TTL — process just finished, should be kept.
+        // Reap with 60s TTL — session just suspended, should be kept.
         let reaped = table.reap_terminal(std::time::Duration::from_secs(60));
         assert_eq!(reaped, 0);
         assert!(table.get(id).is_some());
     }
 
     #[test]
-    fn test_reap_terminal_ignores_non_terminal() {
-        let table = ProcessTable::new();
+    fn test_reap_ignores_active_sessions() {
+        let table = SessionTable::new();
 
-        let p = test_process("running-agent", None);
+        let p = test_process("active-session", None);
         let id = p.agent_id;
         table.insert(p);
 
-        // Even with zero TTL, Running processes should not be reaped.
+        // Even with zero TTL, Active sessions should not be reaped.
         let reaped = table.reap_terminal(std::time::Duration::ZERO);
         assert_eq!(reaped, 0);
         assert!(table.get(id).is_some());
     }
 
     #[tokio::test]
-    async fn test_process_stats_includes_finished_at() {
-        let table = ProcessTable::new();
+    async fn test_session_stats_finished_at_stays_none() {
+        let table = SessionTable::new();
 
         let p = test_process("fin-test", None);
         let id = p.agent_id;
         table.insert(p);
 
-        // Before completing — finished_at should be None.
+        // Sessions never set finished_at via set_state.
         let stats = table.process_stats(id).await.unwrap();
         assert!(stats.finished_at.is_none());
 
-        // After completing — finished_at should be Some.
-        table.set_state(id, ProcessState::Completed).unwrap();
+        table.set_state(id, SessionState::Ready).unwrap();
         let stats = table.process_stats(id).await.unwrap();
-        assert!(stats.finished_at.is_some());
+        assert!(stats.finished_at.is_none());
+
+        table.set_state(id, SessionState::Suspended).unwrap();
+        let stats = table.process_stats(id).await.unwrap();
+        assert!(stats.finished_at.is_none());
     }
 }

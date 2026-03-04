@@ -37,7 +37,7 @@ use crate::{
     },
     kernel::{KernelConfig, SettingsRef},
     process::{
-        AgentId, AgentManifest, ProcessState, ProcessTable, Signal,
+        AgentId, AgentManifest, SessionState, SessionTable, Signal,
         agent_registry::AgentRegistryRef, principal::Principal,
     },
     queue::EventQueueRef,
@@ -72,7 +72,7 @@ pub struct KernelHandle {
     /// Agent registry for resolving named agents to manifests.
     agent_registry:    AgentRegistryRef,
     /// The global process table tracking all running agents.
-    process_table:     Arc<ProcessTable>,
+    process_table:     Arc<SessionTable>,
     /// Ingress pipeline for adapters to push inbound messages.
     ingress_pipeline:  IngressPipelineRef,
     /// Ephemeral stream hub for real-time token deltas.
@@ -103,7 +103,7 @@ impl KernelHandle {
     pub(crate) fn new(
         event_queue: EventQueueRef,
         agent_registry: AgentRegistryRef,
-        process_table: Arc<ProcessTable>,
+        process_table: Arc<SessionTable>,
         ingress_pipeline: IngressPipelineRef,
         stream_hub: StreamHubRef,
         endpoint_registry: EndpointRegistryRef,
@@ -239,7 +239,7 @@ impl KernelHandle {
     // -- Read-only accessors ------------------------------------------------
 
     /// Access the process table for querying.
-    pub fn process_table(&self) -> &Arc<ProcessTable> { &self.process_table }
+    pub fn process_table(&self) -> &Arc<SessionTable> { &self.process_table }
 
     /// Access the ingress pipeline (resolution layer).
     pub fn ingress_pipeline(&self) -> &IngressPipelineRef { &self.ingress_pipeline }
@@ -299,7 +299,7 @@ impl KernelHandle {
             .filter(|p| {
                 matches!(
                     p.state,
-                    ProcessState::Running | ProcessState::Idle | ProcessState::Waiting
+                    SessionState::Active | SessionState::Ready
                 )
             })
             .count();
@@ -311,7 +311,7 @@ impl KernelHandle {
             .unwrap_or(0);
 
         crate::process::SystemStats {
-            active_processes: active,
+            active_sessions: active,
             total_spawned: pt.total_spawned(),
             total_completed: pt.total_completed(),
             total_failed: pt.total_failed(),
