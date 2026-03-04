@@ -179,8 +179,8 @@ mod tests {
 
     use super::*;
     use crate::telegram::commands::client::{
-        BotServiceError, ChannelBinding, CodingTask, CodingTaskSummary, DiscoveryJob,
-        McpServerInfo, SessionDetail, SessionListItem,
+        BotServiceError, ChannelBinding, DiscoveryJob, McpServerInfo, SessionDetail,
+        SessionListItem,
     };
 
     struct MockCallbackClient;
@@ -281,20 +281,6 @@ mod tests {
         async fn start_mcp_server(&self, _: &str) -> Result<(), BotServiceError> { Ok(()) }
 
         async fn remove_mcp_server(&self, _: &str) -> Result<(), BotServiceError> { Ok(()) }
-
-        async fn dispatch_coding_task(
-            &self,
-            _: &str,
-            _: &str,
-        ) -> Result<CodingTask, BotServiceError> {
-            Err(BotServiceError::Service {
-                message: "n/a".into(),
-            })
-        }
-
-        async fn list_coding_tasks(&self) -> Result<Vec<CodingTaskSummary>, BotServiceError> {
-            Ok(vec![])
-        }
     }
 
     fn make_callback_context(data: &str) -> CallbackContext {

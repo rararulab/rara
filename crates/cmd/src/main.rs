@@ -65,16 +65,8 @@ impl ServerArgs {
         let config = AppConfig::new()
             .whatever_context("Failed to load config")?;
 
-        // Priority: Langfuse (OTLP + auth) > general OTLP endpoint > no OTLP.
-        // TODO: can't we just use the general OTLP?
         let logging_opts =
-            if config.langfuse.public_key.is_some() && config.langfuse.secret_key.is_some() {
-                common_telemetry::logging::build_langfuse_logging_options(
-                    Some(&config.langfuse.host),
-                    config.langfuse.public_key.as_deref(),
-                    config.langfuse.secret_key.as_deref(),
-                )
-            } else if let Some(ref endpoint) = config
+            if let Some(ref endpoint) = config
                 .telemetry
                 .otlp_endpoint
                 .as_deref()

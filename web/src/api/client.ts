@@ -28,50 +28,15 @@ class ApiError extends Error {
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 
-/** Paths that should never carry an Authorization header. */
-const AUTH_EXCLUDED_PATHS = ['/api/v1/auth/login', '/api/v1/auth/register', '/api/v1/auth/refresh'];
-
-let isRefreshing = false;
-let refreshPromise: Promise<boolean> | null = null;
-
-async function tryRefreshToken(): Promise<boolean> {
-  if (isRefreshing && refreshPromise) return refreshPromise;
-  isRefreshing = true;
-  refreshPromise = (async () => {
-    const refreshToken = localStorage.getItem('refresh_token');
-    if (!refreshToken) return false;
-    try {
-      const res = await fetch(`${BASE_URL}/api/v1/auth/refresh`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: refreshToken }),
-      });
-      if (!res.ok) return false;
-      const data = await res.json();
-      localStorage.setItem('access_token', data.access_token);
-      localStorage.setItem('refresh_token', data.refresh_token);
-      return true;
-    } catch {
-      return false;
-    } finally {
-      isRefreshing = false;
-      refreshPromise = null;
-    }
-  })();
-  return refreshPromise;
-}
-
 function clearAuthAndRedirect() {
   localStorage.removeItem('access_token');
-  localStorage.removeItem('refresh_token');
-  localStorage.removeItem('user');
   if (window.location.pathname !== '/login') {
     window.location.href = '/login';
   }
 }
 
-async function request<T>(path: string, options?: RequestInit & { timeoutMs?: number; _retry?: boolean }): Promise<T> {
-  const { timeoutMs = DEFAULT_TIMEOUT_MS, _retry, ...fetchOptions } = options ?? {};
+async function request<T>(path: string, options?: RequestInit & { timeoutMs?: number }): Promise<T> {
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, ...fetchOptions } = options ?? {};
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -80,7 +45,7 @@ async function request<T>(path: string, options?: RequestInit & { timeoutMs?: nu
     'Content-Type': 'application/json',
     ...(fetchOptions?.headers as Record<string, string>),
   };
-  if (token && !AUTH_EXCLUDED_PATHS.includes(path)) {
+  if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
@@ -91,14 +56,9 @@ async function request<T>(path: string, options?: RequestInit & { timeoutMs?: nu
       signal: controller.signal,
     });
 
-    // Handle 401: try refresh once, then retry the original request
-    if (res.status === 401 && !_retry && !AUTH_EXCLUDED_PATHS.includes(path)) {
-      const refreshed = await tryRefreshToken();
-      if (refreshed) {
-        return request<T>(path, { ...options, _retry: true });
-      }
+    if (res.status === 401) {
       clearAuthAndRedirect();
-      throw new ApiError(401, 'Session expired');
+      throw new ApiError(401, 'Unauthorized');
     }
 
     if (!res.ok) {
@@ -144,9 +104,6 @@ async function requestBlob(path: string, options?: RequestInit & { timeoutMs?: n
 
 import type {
   SettingsMap, SettingValue, SettingsPatch,
-  LoginRequest, RegisterRequest, RefreshRequest,
-  AuthResponse, UserProfile, UserInfo, PlatformInfo,
-  InviteCode, ChangePasswordRequest, LinkCodeResponse,
 } from './types';
 
 export const api = {
@@ -159,27 +116,6 @@ export const api = {
     request<T>(path, { method: 'PATCH', body: body ? JSON.stringify(body) : undefined }),
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
   blob: (path: string) => requestBlob(path),
-};
-
-export const authApi = {
-  login: (data: LoginRequest) =>
-    request<AuthResponse>('/api/v1/auth/login', { method: 'POST', body: JSON.stringify(data) }),
-  register: (data: RegisterRequest) =>
-    request<AuthResponse>('/api/v1/auth/register', { method: 'POST', body: JSON.stringify(data) }),
-  refresh: (data: RefreshRequest) =>
-    request<AuthResponse>('/api/v1/auth/refresh', { method: 'POST', body: JSON.stringify(data) }),
-  me: () => request<UserProfile>('/api/v1/users/me'),
-  changePassword: (data: ChangePasswordRequest) =>
-    request<void>('/api/v1/users/me/password', { method: 'PUT', body: JSON.stringify(data) }),
-  generateLinkCode: (direction: string) =>
-    request<LinkCodeResponse>('/api/v1/users/me/link-code', { method: 'POST', body: JSON.stringify({ direction }) }),
-};
-
-export const adminApi = {
-  listUsers: () => request<(UserInfo & { platforms?: PlatformInfo[] })[]>('/api/v1/admin/users'),
-  disableUser: (id: string) => request<void>(`/api/v1/admin/users/${id}`, { method: 'DELETE' }),
-  createInviteCode: () => request<InviteCode>('/api/v1/admin/invite-codes', { method: 'POST' }),
-  listInviteCodes: () => request<InviteCode[]>('/api/v1/admin/invite-codes'),
 };
 
 export const settingsApi = {

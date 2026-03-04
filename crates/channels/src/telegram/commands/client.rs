@@ -77,6 +77,7 @@ pub struct DiscoveryJob {
 }
 
 /// Information about a configured MCP server.
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct McpServerInfo {
     pub name:   String,
@@ -91,26 +92,6 @@ pub enum McpServerStatus {
     Connecting,
     Disconnected,
     Error { message: String },
-}
-
-/// Response from dispatching a coding task.
-#[derive(Debug, Clone, Deserialize)]
-pub struct CodingTask {
-    pub id:           String,
-    pub branch:       String,
-    pub tmux_session: String,
-    pub status:       String,
-}
-
-/// Summary of a coding task (used in list views).
-#[derive(Debug, Clone, Deserialize)]
-pub struct CodingTaskSummary {
-    pub id:         String,
-    pub status:     String,
-    pub agent_type: String,
-    pub branch:     String,
-    pub prompt:     String,
-    pub pr_url:     Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -194,16 +175,4 @@ pub trait BotServiceClient: Send + Sync {
 
     /// Remove an MCP server configuration.
     async fn remove_mcp_server(&self, name: &str) -> Result<(), BotServiceError>;
-
-    // -- Coding tasks --------------------------------------------------------
-
-    /// Dispatch a new coding task.
-    async fn dispatch_coding_task(
-        &self,
-        prompt: &str,
-        agent: &str,
-    ) -> Result<CodingTask, BotServiceError>;
-
-    /// List all coding tasks.
-    async fn list_coding_tasks(&self) -> Result<Vec<CodingTaskSummary>, BotServiceError>;
 }

@@ -18,8 +18,7 @@
 //! This module defines the OS-level user model for the kernel:
 //! - [`KernelUser`] — a user record (like `/etc/passwd`)
 //! - [`Permission`] — fine-grained capabilities
-//! - [`PlatformIdentity`] — external platform identity bindings
-//! - [`UserStore`] — persistence trait for user CRUD + platform lookups
+//! - [`UserStore`] — persistence trait for user CRUD
 
 use std::sync::Arc;
 
@@ -61,21 +60,6 @@ pub struct KernelUser {
     pub enabled:     bool,
     pub created_at:  jiff::Timestamp,
     pub updated_at:  jiff::Timestamp,
-}
-
-/// Platform identity binding — one kernel user can have multiple platform
-/// identities (e.g. Telegram, Web, CLI).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlatformIdentity {
-    pub id:               uuid::Uuid,
-    pub user_id:          uuid::Uuid,
-    /// Platform name: "telegram", "web", "cli", etc.
-    pub platform:         String,
-    /// Platform-specific user identifier.
-    pub platform_user_id: String,
-    /// Human-readable display name, if available.
-    pub display_name:     Option<String>,
-    pub linked_at:        jiff::Timestamp,
 }
 
 /// Well-known user name for the root superuser.
@@ -134,18 +118,10 @@ pub type UserStoreRef = Arc<dyn UserStore>;
 pub trait UserStore: Send + Sync {
     async fn get_by_id(&self, id: uuid::Uuid) -> Result<Option<KernelUser>>;
     async fn get_by_name(&self, name: &str) -> Result<Option<KernelUser>>;
-    async fn get_by_platform(
-        &self,
-        platform: &str,
-        platform_user_id: &str,
-    ) -> Result<Option<KernelUser>>;
     async fn create(&self, user: &KernelUser) -> Result<()>;
     async fn update(&self, user: &KernelUser) -> Result<()>;
     async fn delete(&self, id: uuid::Uuid) -> Result<()>;
     async fn list(&self) -> Result<Vec<KernelUser>>;
-    async fn link_platform(&self, identity: &PlatformIdentity) -> Result<()>;
-    async fn unlink_platform(&self, id: uuid::Uuid) -> Result<()>;
-    async fn list_platforms(&self, user_id: uuid::Uuid) -> Result<Vec<PlatformIdentity>>;
 }
 
 #[cfg(test)]

@@ -28,7 +28,6 @@ use crate::{
         egress::{EgressAdapterRef, EndpointRegistryRef},
         types::{InboundMessage, OutboundEnvelope, OutboundPayload},
     },
-    security::SecurityRef,
 };
 
 /// Manages egress adapters and the endpoint registry for outbound message
@@ -72,11 +71,9 @@ impl DeliverySubsystem {
 
     /// Spawn a Deliver event as an independent task so that egress I/O
     /// (Telegram API, WebSocket send, etc.) does not block the event loop.
-    pub fn deliver(&self, envelope: OutboundEnvelope, security: &SecurityRef) {
+    pub fn deliver(&self, envelope: OutboundEnvelope) {
         let adapters = self.egress_adapters.clone();
         let endpoints = Arc::clone(&self.endpoint_registry);
-        let user_store = Arc::clone(security.user_store());
-
         let payload_type = match &envelope.payload {
             OutboundPayload::Reply { .. } => "reply",
             OutboundPayload::Progress { .. } => "progress",
@@ -94,7 +91,6 @@ impl DeliverySubsystem {
                 crate::io::egress::Egress::deliver(
                     &adapters,
                     &endpoints,
-                    Some(user_store.as_ref()),
                     envelope,
                 )
                 .await;

@@ -18,7 +18,6 @@ k8s = ["rara-k8s"]
 [dependencies]
 agentfs-sdk = { workspace = true }
 anyhow.workspace = true
-argon2.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
 jiff.workspace = true
@@ -27,7 +26,6 @@ opendal.workspace = true
 rand.workspace = true
 rara-agents.workspace = true
 rara-codex-oauth = { workspace = true }
-rara-coding-task = { workspace = true }
 rara-composio.workspace = true
 rara-domain-shared.workspace = true
 rara-k8s = { workspace = true, optional = true }
@@ -39,7 +37,6 @@ rara-paths.workspace = true
 rara-pg-credential-store.workspace = true
 rara-sessions.workspace = true
 rara-skills.workspace = true
-rara-workspace = { workspace = true }
 reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

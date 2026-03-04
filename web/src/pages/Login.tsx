@@ -15,7 +15,7 @@
  */
 
 import { useState, useCallback, type FormEvent } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { useNavigate } from 'react-router';
 import { Loader2 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -24,10 +24,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
 export default function Login() {
-  const { login } = useAuth();
+  const { authenticate } = useAuth();
   const navigate = useNavigate();
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
+  const [token, setToken] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -36,31 +35,32 @@ export default function Login() {
       e.preventDefault();
       setError(null);
 
-      if (!username.trim() || !password) {
-        setError('Please fill in all fields.');
+      const trimmed = token.trim();
+      if (!trimmed) {
+        setError('Please enter your access token.');
         return;
       }
 
       setIsSubmitting(true);
       try {
-        await login({ username: username.trim(), password });
+        authenticate(trimmed);
         navigate('/agent', { replace: true });
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Login failed';
+        const message = err instanceof Error ? err.message : 'Authentication failed';
         setError(message);
       } finally {
         setIsSubmitting(false);
       }
     },
-    [username, password, login, navigate],
+    [token, authenticate, navigate],
   );
 
   return (
     <div className="flex min-h-screen items-center justify-center px-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl">Sign In</CardTitle>
-          <CardDescription>Enter your credentials to continue</CardDescription>
+          <CardTitle className="text-2xl">Rara</CardTitle>
+          <CardDescription>Enter your owner token to continue</CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit}>
           <CardContent className="space-y-4">
@@ -70,41 +70,23 @@ export default function Login() {
               </div>
             )}
             <div className="space-y-2">
-              <Label htmlFor="username">Username</Label>
+              <Label htmlFor="token">Access Token</Label>
               <Input
-                id="username"
-                type="text"
-                autoComplete="username"
-                placeholder="your username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                disabled={isSubmitting}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
+                id="token"
                 type="password"
-                autoComplete="current-password"
-                placeholder="your password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="off"
+                placeholder="your owner token"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
                 disabled={isSubmitting}
               />
             </div>
           </CardContent>
-          <CardFooter className="flex flex-col gap-3">
+          <CardFooter>
             <Button type="submit" className="w-full" disabled={isSubmitting}>
               {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Sign In
             </Button>
-            <p className="text-center text-sm text-muted-foreground">
-              Don&apos;t have an account?{' '}
-              <Link to="/register" className="font-medium text-primary hover:underline">
-                Register
-              </Link>
-            </p>
           </CardFooter>
         </form>
       </Card>

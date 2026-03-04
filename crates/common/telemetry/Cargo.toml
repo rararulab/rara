@@ -17,7 +17,6 @@ deadlock_detection = ["parking_lot/deadlock_detection"]
 
 [dependencies]
 backtrace = "0.3"
-base64 = { workspace = true }
 bon = { workspace = true }
 console-subscriber = { version = "0.5", optional = true }
 derive_more = { workspace = true }

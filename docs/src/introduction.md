@@ -57,13 +57,7 @@ job/
 └── examples/              # Usage examples
 ```
 
-## Deployment
-
-- **Docker Compose** -- start infrastructure services locally with `docker compose up -d`. See [Docker Compose (Local Dev)](deployment/docker-compose.md).
-- **Kubernetes + Helm** -- deploy the full `rara-infra` chart for a production-like environment with observability, ingress, and TLS. See [Kubernetes (Helm)](deployment/kubernetes.md).
-
 ## Next Steps
 
 - [API Guide](api-guide.md) - Learn about the gRPC API structure
 - [Buf Integration](buf-integration.md) - Multi-language code generation setup
-- [Deployment](deployment/docker-compose.md) - Run the platform locally or on Kubernetes

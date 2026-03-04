@@ -21,7 +21,7 @@ use crate::{
     error::Result,
     process::{
         principal::Role,
-        user::{KernelUser, Permission, PlatformIdentity, UserStore},
+        user::{KernelUser, Permission, UserStore},
     },
 };
 
@@ -47,14 +47,6 @@ impl UserStore for NoopUserStore {
         }))
     }
 
-    async fn get_by_platform(
-        &self,
-        _platform: &str,
-        _platform_user_id: &str,
-    ) -> Result<Option<KernelUser>> {
-        Ok(None)
-    }
-
     async fn create(&self, _user: &KernelUser) -> Result<()> { Ok(()) }
 
     async fn update(&self, _user: &KernelUser) -> Result<()> { Ok(()) }
@@ -62,12 +54,4 @@ impl UserStore for NoopUserStore {
     async fn delete(&self, _id: uuid::Uuid) -> Result<()> { Ok(()) }
 
     async fn list(&self) -> Result<Vec<KernelUser>> { Ok(vec![]) }
-
-    async fn link_platform(&self, _identity: &PlatformIdentity) -> Result<()> { Ok(()) }
-
-    async fn unlink_platform(&self, _id: uuid::Uuid) -> Result<()> { Ok(()) }
-
-    async fn list_platforms(&self, _user_id: uuid::Uuid) -> Result<Vec<PlatformIdentity>> {
-        Ok(vec![])
-    }
 }

@@ -26,14 +26,14 @@ static CUSTOM_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 /// The resolved data directory, combining custom override or platform defaults.
 /// This is set once and cached for subsequent calls.
-/// On macOS, this is `~/Library/Application Support/job`.
-/// On Linux/FreeBSD, this is `$XDG_DATA_HOME/job`.
+/// On macOS, this is `~/Library/Application Support/rara`.
+/// On Linux/FreeBSD, this is `$XDG_DATA_HOME/rara`.
 static CURRENT_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 /// The resolved config directory, combining custom override or platform
 /// defaults. This is set once and cached for subsequent calls.
-/// On macOS, this is `~/.config/job`.
-/// On Linux/FreeBSD, this is `$XDG_CONFIG_HOME/job`.
+/// On macOS, this is `~/.config/rara`.
+/// On Linux/FreeBSD, this is `$XDG_CONFIG_HOME/rara`.
 static CONFIG_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 /// Returns the path to the user's home directory.
@@ -45,7 +45,7 @@ pub fn home_dir() -> &'static PathBuf {
     HOME_DIR.get_or_init(|| dirs::home_dir().expect("failed to determine home directory"))
 }
 
-/// Returns the path to the configuration directory used by job.
+/// Returns the path to the configuration directory used by rara.
 ///
 /// # Panics
 ///
@@ -57,7 +57,7 @@ pub fn config_dir() -> &'static PathBuf {
                 if cfg!(target_os = "windows") {
                     dirs::config_dir()
                         .expect("failed to determine RoamingAppData directory")
-                        .join("job")
+                        .join("rara")
                 } else if cfg!(any(target_os = "linux", target_os = "freebsd")) {
                     std::env::var("FLATPAK_XDG_CONFIG_HOME")
                         .map_or_else(
@@ -67,9 +67,9 @@ pub fn config_dir() -> &'static PathBuf {
                             },
                             PathBuf::from,
                         )
-                        .join("job")
+                        .join("rara")
                 } else {
-                    home_dir().join(".config").join("job")
+                    home_dir().join(".config").join("rara")
                 }
             },
             |custom_dir| custom_dir.join("config"),
@@ -77,7 +77,7 @@ pub fn config_dir() -> &'static PathBuf {
     })
 }
 
-/// Returns the path to the data directory used by job.
+/// Returns the path to the data directory used by rara.
 ///
 /// # Panics
 ///
@@ -95,11 +95,11 @@ pub fn data_dir() -> &'static PathBuf {
                             },
                             PathBuf::from,
                         )
-                        .join("job")
+                        .join("rara")
                 } else {
                     dirs::data_local_dir()
                         .expect("failed to determine LocalAppData directory")
-                        .join("job")
+                        .join("rara")
                 }
             },
             Clone::clone,
@@ -157,7 +157,7 @@ pub fn set_custom_data_dir<P: ?Sized + AsRef<Path>>(dir: &P) -> &'static PathBuf
     })
 }
 
-/// Returns the path to the temp directory used by job.
+/// Returns the path to the temp directory used by rara.
 ///
 /// # Panics
 ///
@@ -168,13 +168,13 @@ pub fn temp_dir() -> &'static PathBuf {
         if cfg!(target_os = "macos") {
             return dirs::cache_dir()
                 .expect("failed to determine cachesDirectory directory")
-                .join("job");
+                .join("rara");
         }
 
         if cfg!(target_os = "windows") {
             return dirs::cache_dir()
                 .expect("failed to determine LocalAppData directory")
-                .join("job");
+                .join("rara");
         }
 
         if cfg!(any(target_os = "linux", target_os = "freebsd")) {
@@ -183,10 +183,10 @@ pub fn temp_dir() -> &'static PathBuf {
                     |_| dirs::cache_dir().expect("failed to determine XDG_CACHE_HOME directory"),
                     PathBuf::from,
                 )
-                .join("job");
+                .join("rara");
         }
 
-        home_dir().join(".cache").join("job")
+        home_dir().join(".cache").join("rara")
     })
 }
 
@@ -195,17 +195,17 @@ pub fn logs_dir() -> &'static PathBuf {
     static LOGS_DIR: OnceLock<PathBuf> = OnceLock::new();
     LOGS_DIR.get_or_init(|| {
         if cfg!(target_os = "macos") {
-            home_dir().join("Library/Logs/job")
+            home_dir().join("Library/Logs/rara")
         } else {
             data_dir().join("logs")
         }
     })
 }
 
-/// Returns the path to the `job.log` file.
+/// Returns the path to the `rara.log` file.
 pub fn log_file() -> &'static PathBuf {
     static LOG_FILE: OnceLock<PathBuf> = OnceLock::new();
-    LOG_FILE.get_or_init(|| logs_dir().join("job.log"))
+    LOG_FILE.get_or_init(|| logs_dir().join("rara.log"))
 }
 
 /// Returns the path to the database directory.
@@ -250,10 +250,10 @@ pub fn memory_sessions_dir() -> &'static PathBuf {
     DIR.get_or_init(|| memory_dir().join("sessions"))
 }
 
-/// Returns the path to the agent scheduled jobs JSON file.
-pub fn agent_jobs_file() -> &'static PathBuf {
-    static AGENT_JOBS: OnceLock<PathBuf> = OnceLock::new();
-    AGENT_JOBS.get_or_init(|| data_dir().join("agent_jobs.json"))
+/// Returns the path to the agent scheduled raras JSON file.
+pub fn agent_raras_file() -> &'static PathBuf {
+    static AGENT_raraS: OnceLock<PathBuf> = OnceLock::new();
+    AGENT_raraS.get_or_init(|| data_dir().join("agent_raras.json"))
 }
 
 /// Returns the path to the user skills directory.
@@ -270,8 +270,3 @@ pub fn config_file() -> &'static PathBuf {
     CONFIG_FILE.get_or_init(|| config_dir().join("config.yaml"))
 }
 
-/// Returns the path to the git workspaces directory for coding tasks.
-pub fn workspaces_dir() -> &'static PathBuf {
-    static WORKSPACES_DIR: OnceLock<PathBuf> = OnceLock::new();
-    WORKSPACES_DIR.get_or_init(|| data_dir().join("workspaces"))
-}

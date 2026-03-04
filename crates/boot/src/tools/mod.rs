@@ -35,7 +35,6 @@ mod list_directory;
 pub mod pod;
 mod read_file;
 mod send_email;
-mod storage_read;
 mod write_file;
 
 pub use bash::BashTool;
@@ -49,13 +48,11 @@ pub use list_directory::ListDirectoryTool;
 pub use pod::PodTool;
 pub use read_file::ReadFileTool;
 pub use send_email::SendEmailTool;
-pub use storage_read::StorageReadTool;
 pub use write_file::WriteFileTool;
 
 /// Dependencies required to construct primitive tools.
 pub struct PrimitiveDeps {
     pub settings:               Arc<dyn rara_domain_shared::settings::SettingsProvider>,
-    pub object_store:           opendal::Operator,
     pub composio_auth_provider: Arc<dyn rara_composio::ComposioAuthProvider>,
 }
 
@@ -73,7 +70,6 @@ pub fn default_primitives(deps: PrimitiveDeps) -> Vec<AgentToolRef> {
         Arc::new(HttpFetchTool::new()),
         // Domain primitives
         Arc::new(SendEmailTool::new(deps.settings.clone())),
-        Arc::new(StorageReadTool::new(deps.object_store)),
     ];
     tools.push(Arc::new(ComposioTool::from_auth_provider(
         deps.composio_auth_provider,
@@ -87,11 +83,10 @@ pub fn default_primitives(deps: PrimitiveDeps) -> Vec<AgentToolRef> {
 
 /// Dependencies required to construct Layer 2 service tools.
 pub struct ServiceToolDeps {
-    pub memory_manager:      Arc<rara_memory::MemoryManager>,
-    pub recall_engine:       Arc<rara_memory::RecallStrategyEngine>,
-    pub coding_task_service: rara_coding_task::service::CodingTaskService,
-    pub skill_registry:      rara_skills::registry::InMemoryRegistry,
-    pub mcp_manager:         rara_mcp::manager::mgr::McpManager,
+    pub memory_manager: Arc<rara_memory::MemoryManager>,
+    pub recall_engine:  Arc<rara_memory::RecallStrategyEngine>,
+    pub skill_registry: rara_skills::registry::InMemoryRegistry,
+    pub mcp_manager:    rara_mcp::manager::mgr::McpManager,
 }
 
 /// Register all Layer 2 service tools into the given [`ToolRegistry`].
@@ -111,17 +106,6 @@ pub fn register_service_tools(registry: &mut ToolRegistry, deps: ServiceToolDeps
     registry.register_service(Arc::new(services::MemoryAddFactTool::new(Arc::clone(
         &deps.memory_manager,
     ))));
-
-    // Codex tools
-    registry.register_service(Arc::new(services::CodexRunTool::new(
-        deps.coding_task_service.clone(),
-    )));
-    registry.register_service(Arc::new(services::CodexStatusTool::new(
-        deps.coding_task_service.clone(),
-    )));
-    registry.register_service(Arc::new(services::CodexListTool::new(
-        deps.coding_task_service,
-    )));
 
     // Screenshot
     registry.register_service(Arc::new(services::ScreenshotTool::new(project_root)));

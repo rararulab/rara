@@ -14,13 +14,11 @@
 
 //! Layer 2 service tools: complex business workflows.
 
-mod codex;
 mod mcp_tools;
 mod memory_tools;
 mod screenshot;
 mod skill_tools;
 
-pub use codex::{CodexListTool, CodexRunTool, CodexStatusTool};
 pub use mcp_tools::{InstallMcpServerTool, ListMcpServersTool, RemoveMcpServerTool};
 pub use memory_tools::{
     MemoryAddFactTool, MemoryDeepRecallTool, MemorySearchTool, MemoryWriteTool,

@@ -26,13 +26,11 @@
 //! - [`session`]: `/new`, `/clear`, `/sessions`, `/usage`, `/model` commands.
 //! - [`job`]: `/search` and `/jd` commands.
 //! - [`mcp`]: `/mcp` command.
-//! - [`coding`]: `/code` and `/tasks` commands.
 //! - [`callbacks`]: Inline keyboard callback handlers.
 
 pub mod basic;
 pub mod callbacks;
 pub mod client;
-pub mod coding;
 pub mod job;
 pub mod mcp;
 pub mod session;
@@ -40,7 +38,6 @@ pub mod session;
 pub use basic::BasicCommandHandler;
 pub use callbacks::{SearchPaginationCallbackHandler, SessionSwitchCallbackHandler};
 pub use client::BotServiceClient;
-pub use coding::CodingCommandHandler;
 pub use job::JobCommandHandler;
 pub use mcp::McpCommandHandler;
 pub use session::SessionCommandHandler;

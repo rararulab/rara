@@ -19,14 +19,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from '@/contexts/AuthContext';
 import { ServerStatusProvider } from '@/components/ServerStatusProvider';
 import ProtectedRoute from '@/components/ProtectedRoute';
-import AdminRoute from '@/components/AdminRoute';
 import DashboardLayout from '@/layouts/DashboardLayout';
 import Login from '@/pages/Login';
-import Register from '@/pages/Register';
 import AgentConsole from '@/pages/AgentConsole';
 import Docs from '@/pages/Docs';
 import Settings from '@/pages/Settings';
-import AdminUsers from '@/pages/AdminUsers';
 import KernelTop from '@/pages/KernelTop';
 
 const queryClient = new QueryClient();
@@ -40,7 +37,6 @@ export default function App() {
             <Routes>
               {/* Public routes */}
               <Route path="/login" element={<Login />} />
-              <Route path="/register" element={<Register />} />
 
               {/* Protected routes */}
               <Route element={<ProtectedRoute />}>
@@ -55,11 +51,6 @@ export default function App() {
                   <Route path="chat" element={<Navigate to="/agent?tab=chat" replace />} />
                   <Route path="skills" element={<Navigate to="/settings?section=skills" replace />} />
                   <Route path="mcp" element={<Navigate to="/settings?section=mcp" replace />} />
-
-                  {/* Admin routes */}
-                  <Route element={<AdminRoute />}>
-                    <Route path="admin/users" element={<AdminUsers />} />
-                  </Route>
                 </Route>
               </Route>
             </Routes>

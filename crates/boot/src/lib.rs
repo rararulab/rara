@@ -22,7 +22,6 @@
 pub mod agentfs;
 pub mod audit;
 pub mod bus;
-pub mod coding_task;
 pub mod components;
 pub mod composio;
 pub mod error;

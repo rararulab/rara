@@ -655,56 +655,6 @@ pub fn init_global_logging(
     guards
 }
 
-/// Build [`LoggingOptions`] with Langfuse OTLP configuration.
-///
-/// When both `public_key` and `secret_key` are provided, OTLP tracing is
-/// configured to export to the Langfuse OTLP endpoint.  Falls back to default
-/// options (OTLP disabled) when either key is missing.
-pub fn build_langfuse_logging_options(
-    host: Option<&str>,
-    public_key: Option<&str>,
-    secret_key: Option<&str>,
-) -> LoggingOptions {
-    match (public_key, secret_key) {
-        (Some(pk), Some(sk)) => {
-            use base64::Engine;
-            let host = host.unwrap_or("http://localhost:3000");
-            let endpoint = format!("{host}/api/public/otel/v1/traces");
-            let auth = base64::engine::general_purpose::STANDARD.encode(format!("{pk}:{sk}"));
-            let mut headers = HashMap::new();
-            headers.insert("Authorization".to_owned(), format!("Basic {auth}"));
-
-            println!("Langfuse OTLP tracing enabled → {endpoint}");
-
-            LoggingOptions {
-                enable_otlp_tracing: true,
-                otlp_endpoint: Some(endpoint),
-                otlp_export_protocol: Some(OtlpExportProtocol::Http),
-                otlp_headers: headers,
-                ..Default::default()
-            }
-        }
-        _ => LoggingOptions::default(),
-    }
-}
-
-/// Initialize tracing with Langfuse OTLP export.
-///
-/// When both `public_key` and `secret_key` are provided, OTLP tracing is
-/// enabled pointing to the Langfuse endpoint. Otherwise falls back to default
-/// stdout-only logging.
-#[must_use]
-pub fn init_tracing_with_langfuse(
-    app_name: &str,
-    host: Option<&str>,
-    public_key: Option<&str>,
-    secret_key: Option<&str>,
-) -> Vec<WorkerGuard> {
-    let logging_opts = build_langfuse_logging_options(host, public_key, secret_key);
-    let tracing_opts = TracingOptions::default();
-    init_global_logging(app_name, &logging_opts, &tracing_opts, None)
-}
-
 /// Build an OpenTelemetry span exporter based on configuration.
 ///
 /// Creates and configures an OTLP span exporter using the specified protocol

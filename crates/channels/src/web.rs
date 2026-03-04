@@ -180,8 +180,8 @@ pub struct WebAdapter {
     stream_hub:        Arc<RwLock<Option<Arc<rara_kernel::io::stream::StreamHub>>>>,
     /// EndpointRegistry for tracking connected users (set during startup).
     endpoint_registry: Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
-    /// JWT secret for verifying WebSocket auth tokens.
-    jwt_secret:        Arc<RwLock<Option<String>>>,
+    /// Owner token for verifying WebSocket auth tokens.
+    owner_token:       Arc<RwLock<Option<String>>>,
     /// Shutdown signal sender.
     shutdown_tx:       watch::Sender<bool>,
     /// Shutdown signal receiver (cloneable).
@@ -197,7 +197,7 @@ impl WebAdapter {
             sink: Arc::new(RwLock::new(None)),
             stream_hub: Arc::new(RwLock::new(None)),
             endpoint_registry: Arc::new(RwLock::new(None)),
-            jwt_secret: Arc::new(RwLock::new(None)),
+            owner_token: Arc::new(RwLock::new(None)),
             shutdown_tx,
             shutdown_rx,
         }
@@ -215,10 +215,10 @@ impl WebAdapter {
         *guard = Some(registry);
     }
 
-    /// Set the JWT secret for verifying WebSocket auth tokens.
-    pub async fn set_jwt_secret(&self, secret: String) {
-        let mut guard = self.jwt_secret.write().await;
-        *guard = Some(secret);
+    /// Set the owner token for verifying WebSocket auth tokens.
+    pub async fn set_owner_token(&self, token: String) {
+        let mut guard = self.owner_token.write().await;
+        *guard = Some(token);
     }
 
     /// Returns an [`axum::Router`] with WebSocket, SSE, and message endpoints.
@@ -233,7 +233,7 @@ impl WebAdapter {
             sink:              Arc::clone(&self.sink),
             stream_hub:        Arc::clone(&self.stream_hub),
             endpoint_registry: Arc::clone(&self.endpoint_registry),
-            jwt_secret:        Arc::clone(&self.jwt_secret),
+            owner_token:       Arc::clone(&self.owner_token),
             shutdown_rx:       self.shutdown_rx.clone(),
         };
 
@@ -289,7 +289,7 @@ struct WebAdapterState {
     sink:              Arc<RwLock<Option<KernelHandle>>>,
     stream_hub:        Arc<RwLock<Option<Arc<rara_kernel::io::stream::StreamHub>>>>,
     endpoint_registry: Arc<RwLock<Option<Arc<EndpointRegistry>>>>,
-    jwt_secret:        Arc<RwLock<Option<String>>>,
+    owner_token:       Arc<RwLock<Option<String>>>,
     shutdown_rx:       watch::Receiver<bool>,
 }
 
@@ -297,33 +297,9 @@ struct WebAdapterState {
 // Helper: build endpoint for a Web connection
 // ---------------------------------------------------------------------------
 
-/// Decode a JWT token and extract the username claim.
-///
-/// Only accepts `"access"` tokens. Returns the `name` field from the claims.
-fn decode_jwt_username(secret: &str, token: &str) -> Result<String, String> {
-    use jsonwebtoken::{Algorithm, DecodingKey, Validation};
-
-    #[derive(Deserialize)]
-    struct MinimalClaims {
-        name:       String,
-        token_type: String,
-    }
-
-    let mut validation = Validation::new(Algorithm::HS256);
-    validation.validate_exp = true;
-
-    let data = jsonwebtoken::decode::<MinimalClaims>(
-        token,
-        &DecodingKey::from_secret(secret.as_bytes()),
-        &validation,
-    )
-    .map_err(|e| format!("{e}"))?;
-
-    if data.claims.token_type != "access" {
-        return Err("not an access token".to_owned());
-    }
-
-    Ok(data.claims.name)
+/// Verify that the provided token matches the expected owner token.
+fn verify_owner_token(expected: &str, provided: &str) -> bool {
+    expected == provided
 }
 
 /// Build a Web endpoint and its associated UserId for endpoint registration.
@@ -398,29 +374,25 @@ fn build_raw_platform_message(
 
 async fn ws_handler(
     ws: WebSocketUpgrade,
-    Query(mut params): Query<SessionQuery>,
+    Query(params): Query<SessionQuery>,
     State(state): State<WebAdapterState>,
 ) -> Response {
-    // If a JWT token is provided, decode it to extract the real user identity.
+    // If an owner token is provided, verify it.
     if let Some(ref token) = params.token {
         if !token.is_empty() {
-            let guard = state.jwt_secret.read().await;
-            if let Some(ref secret) = *guard {
-                match decode_jwt_username(secret, token) {
-                    Ok(name) => {
-                        info!(session_key = %params.session_key, user = %name, "WebSocket auth via JWT");
-                        params.user_id = name;
-                    }
-                    Err(e) => {
-                        warn!(session_key = %params.session_key, error = %e, "JWT decode failed, rejecting");
-                        return axum::response::Response::builder()
-                            .status(axum::http::StatusCode::UNAUTHORIZED)
-                            .body(axum::body::Body::from("invalid or expired token"))
-                            .unwrap();
-                    }
+            let guard = state.owner_token.read().await;
+            if let Some(ref expected) = *guard {
+                if verify_owner_token(expected, token) {
+                    info!(session_key = %params.session_key, "WebSocket auth via owner token");
+                } else {
+                    warn!(session_key = %params.session_key, "invalid owner token, rejecting");
+                    return axum::response::Response::builder()
+                        .status(axum::http::StatusCode::UNAUTHORIZED)
+                        .body(axum::body::Body::from("invalid token"))
+                        .unwrap();
                 }
             } else {
-                warn!("JWT secret not configured, ignoring token");
+                warn!("owner token not configured, ignoring token");
             }
         }
     }

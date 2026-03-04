@@ -1,11 +1,11 @@
 -- Consolidated SQLite init migration for Rara.
--- All UUID columns are TEXT (generated Rust-side via Uuid::new_v4()).
+-- All UUID columns are TEXT (generated Rust-side or via randomblob default).
 -- All timestamp columns are TEXT in ISO 8601 format.
--- All JSONB columns are TEXT (JSON strings).
+-- All JSON columns are TEXT (JSON strings).
 -- Boolean columns are INTEGER (0/1).
 
 --------------------------------------------------------------------------------
--- kv_table: Key-value storage
+-- kv_table: key-value storage
 --------------------------------------------------------------------------------
 
 CREATE TABLE kv_table (
@@ -66,7 +66,6 @@ CREATE TABLE kernel_users (
     role          INTEGER NOT NULL DEFAULT 2,
     permissions   TEXT NOT NULL DEFAULT '[]',
     enabled       INTEGER NOT NULL DEFAULT 1,
-    password_hash TEXT,
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -75,20 +74,6 @@ CREATE TRIGGER set_kernel_users_updated_at AFTER UPDATE ON kernel_users
 BEGIN
     UPDATE kernel_users SET updated_at = datetime('now') WHERE id = NEW.id;
 END;
-
---------------------------------------------------------------------------------
--- user_platform_identities: multi-platform identity linking
---------------------------------------------------------------------------------
-
-CREATE TABLE user_platform_identities (
-    id               TEXT NOT NULL PRIMARY KEY,
-    user_id          TEXT NOT NULL REFERENCES kernel_users(id) ON DELETE CASCADE,
-    platform         TEXT NOT NULL,
-    platform_user_id TEXT NOT NULL,
-    display_name     TEXT,
-    linked_at        TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(platform, platform_user_id)
-);
 
 --------------------------------------------------------------------------------
 -- kernel_audit_events: persistent audit trail
@@ -179,7 +164,7 @@ CREATE INDEX idx_coding_task_created ON coding_task(created_at DESC);
 --------------------------------------------------------------------------------
 
 CREATE TABLE telegram_contact (
-    id                TEXT NOT NULL PRIMARY KEY,
+    id                TEXT NOT NULL PRIMARY KEY DEFAULT (lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' || substr(hex(randomblob(2)),2) || '-a' || substr(hex(randomblob(2)),2) || '-' || hex(randomblob(6)))),
     name              TEXT NOT NULL,
     telegram_username TEXT NOT NULL UNIQUE,
     chat_id           INTEGER,
@@ -193,33 +178,6 @@ CREATE TRIGGER set_telegram_contact_updated_at AFTER UPDATE ON telegram_contact
 BEGIN
     UPDATE telegram_contact SET updated_at = datetime('now') WHERE id = NEW.id;
 END;
-
---------------------------------------------------------------------------------
--- invite_codes: registration invite codes
---------------------------------------------------------------------------------
-
-CREATE TABLE invite_codes (
-    id         TEXT NOT NULL PRIMARY KEY,
-    code       TEXT NOT NULL UNIQUE,
-    created_by TEXT NOT NULL REFERENCES kernel_users(id),
-    used_by    TEXT REFERENCES kernel_users(id),
-    expires_at TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
---------------------------------------------------------------------------------
--- link_codes: TG binding link codes
---------------------------------------------------------------------------------
-
-CREATE TABLE link_codes (
-    id            TEXT NOT NULL PRIMARY KEY,
-    code          TEXT NOT NULL UNIQUE,
-    user_id       TEXT NOT NULL REFERENCES kernel_users(id),
-    direction     TEXT NOT NULL CHECK (direction IN ('web_to_tg', 'tg_to_web')),
-    platform_data TEXT,
-    expires_at    TEXT NOT NULL,
-    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
-);
 
 --------------------------------------------------------------------------------
 -- credential_store: encrypted credential storage
@@ -282,47 +240,3 @@ CREATE TABLE task_run_history (
 
 CREATE INDEX idx_task_run_history_task_id ON task_run_history(task_id);
 CREATE INDEX idx_task_run_history_started_at ON task_run_history(started_at DESC);
-
---------------------------------------------------------------------------------
--- memory_files: file metadata for memory indexing
---------------------------------------------------------------------------------
-
-CREATE TABLE memory_files (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    path       TEXT NOT NULL UNIQUE,
-    hash       TEXT NOT NULL,
-    mtime      INTEGER NOT NULL,
-    size       INTEGER NOT NULL,
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
---------------------------------------------------------------------------------
--- memory_chunks: content chunks with optional embeddings
---------------------------------------------------------------------------------
-
-CREATE TABLE memory_chunks (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    file_id     INTEGER NOT NULL REFERENCES memory_files(id) ON DELETE CASCADE,
-    chunk_index INTEGER NOT NULL,
-    content     TEXT NOT NULL,
-    embedding   BLOB,
-    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(file_id, chunk_index)
-);
-
-CREATE INDEX idx_memory_chunks_file_idx ON memory_chunks(file_id, chunk_index);
-
---------------------------------------------------------------------------------
--- memory_embedding_cache: cached embeddings
---------------------------------------------------------------------------------
-
-CREATE TABLE memory_embedding_cache (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    provider   TEXT NOT NULL,
-    model      TEXT NOT NULL,
-    text_hash  TEXT NOT NULL,
-    dim        INTEGER NOT NULL,
-    embedding  BLOB NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(provider, model, text_hash)
-);

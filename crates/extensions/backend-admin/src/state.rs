@@ -71,14 +71,13 @@ impl BackendState {
     ///
     /// Kernel-dependent routes (`agents`, `kernel`) use the `KernelHandle`
     /// for read-only access and mutation through the event queue.
-    /// Skill, MCP, and coding-task routes need their respective service
+    /// Skill and MCP routes need their respective service
     /// handles from [`RaraState`](rara_boot::state::RaraState).
     pub fn routes(
         &self,
         kernel_handle: &rara_kernel::KernelHandle,
         skill_registry: &rara_skills::registry::InMemoryRegistry,
         mcp_manager: &rara_mcp::manager::mgr::McpManager,
-        coding_task_service: &rara_coding_task::service::CodingTaskService,
     ) -> (axum::Router, utoipa::openapi::OpenApi) {
         let mut api = Self::api_doc();
 
@@ -110,9 +109,6 @@ impl BackendState {
 
         // MCP admin routes (plain axum::Router, no OpenAPI metadata).
         router = router.merge(crate::mcp::mcp_router(mcp_manager.clone()));
-
-        // Coding task routes (plain axum::Router, no OpenAPI metadata).
-        router = router.merge(crate::coding_task::routes(coding_task_service.clone()));
 
         // Agent registry routes (plain axum::Router, no OpenAPI metadata).
         router = router.merge(crate::agents::agent_routes(kernel_handle.clone()));

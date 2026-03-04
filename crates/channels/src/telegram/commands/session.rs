@@ -383,8 +383,8 @@ mod tests {
 
     use super::*;
     use crate::telegram::commands::client::{
-        BotServiceError, ChannelBinding, CodingTask, CodingTaskSummary, DiscoveryJob,
-        McpServerInfo, SessionDetail, SessionListItem,
+        BotServiceError, ChannelBinding, DiscoveryJob, McpServerInfo, SessionDetail,
+        SessionListItem,
     };
 
     // -----------------------------------------------------------------------
@@ -508,20 +508,6 @@ mod tests {
         async fn start_mcp_server(&self, _name: &str) -> Result<(), BotServiceError> { Ok(()) }
 
         async fn remove_mcp_server(&self, _name: &str) -> Result<(), BotServiceError> { Ok(()) }
-
-        async fn dispatch_coding_task(
-            &self,
-            _prompt: &str,
-            _agent: &str,
-        ) -> Result<CodingTask, BotServiceError> {
-            Err(BotServiceError::Service {
-                message: "not implemented".to_owned(),
-            })
-        }
-
-        async fn list_coding_tasks(&self) -> Result<Vec<CodingTaskSummary>, BotServiceError> {
-            Ok(vec![])
-        }
     }
 
     // -----------------------------------------------------------------------

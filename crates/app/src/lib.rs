@@ -20,7 +20,6 @@ use std::{
     time::Duration,
 };
 
-use opendal::Operator;
 use rara_server::{
     grpc::{GrpcServerConfig, hello::HelloService, start_grpc_server},
     http::{RestServerConfig, health_routes, start_rest_server},
@@ -47,26 +46,22 @@ use yunara_store::{config::DatabaseConfig, db::DBStore};
 #[derive(Debug, Clone, bon::Builder, Deserialize)]
 #[builder(on(String, into))]
 pub struct AppConfig {
-    /// Database connection pool.
+    /// Database connection pool (optional — defaults to max_connections=5).
+    #[serde(default = "default_database_config")]
     pub database:               DatabaseConfig,
     /// HTTP server bind / limits.
     pub http:                   RestServerConfig,
     /// gRPC server bind / limits.
     pub grpc:                   GrpcServerConfig,
-    /// S3-compatible object store.
-    #[serde(alias = "minio")]
-    pub object_store:           object_store::ObjectStoreConfig,
     /// Main service HTTP base URL (for telegram bot → main service calls).
     pub main_service_http_base: String,
     /// Memory backend configuration.
     pub memory:                 MemoryConfig,
-    /// Langfuse observability (host, API keys).
-    pub langfuse:               LangfuseConfig,
     /// General OTLP telemetry (Alloy/Tempo).
     #[serde(default)]
     pub telemetry:              TelemetryConfig,
-    /// JWT signing secret.
-    pub jwt_secret:             Option<String>,
+    /// Static bearer token for owner authentication (Web UI).
+    pub owner_token:            Option<String>,
 }
 
 #[derive(Debug, Clone, bon::Builder, Deserialize)]
@@ -79,17 +74,7 @@ pub struct MemoryConfig {
     pub hindsight_bank_id:  String,
 }
 
-#[derive(Debug, Clone, bon::Builder, Deserialize)]
-#[builder(on(String, into))]
-pub struct LangfuseConfig {
-    pub host:       String,
-    #[serde(default)]
-    pub public_key: Option<String>,
-    #[serde(default)]
-    pub secret_key: Option<String>,
-}
-
-/// General OTLP telemetry configuration (non-Langfuse).
+/// General OTLP telemetry configuration.
 #[derive(Debug, Clone, Default, bon::Builder, Deserialize)]
 pub struct TelemetryConfig {
     /// OTLP endpoint URL (e.g. `http://alloy:4318/v1/traces`).
@@ -99,6 +84,8 @@ pub struct TelemetryConfig {
     #[serde(default)]
     pub otlp_protocol: Option<String>,
 }
+
+fn default_database_config() -> DatabaseConfig { DatabaseConfig::builder().build() }
 
 // ---------------------------------------------------------------------------
 // StartOptions
@@ -123,12 +110,10 @@ impl AppConfig {
     /// All required fields must be present; missing keys cause
     /// a deserialization error at startup.
     pub fn new() -> Result<Self, config::ConfigError> {
-        let path = rara_paths::config_file();
-        println!("Loading configuration from {}", path.display());
-
         let cfg = config::Config::builder()
             .add_source(
-                config::File::from(path.as_path()).format(config::FileFormat::Yaml),
+                config::File::from(rara_paths::config_file().as_path())
+                    .format(config::FileFormat::Yaml),
             )
             .build()?;
 
@@ -159,7 +144,7 @@ impl AppConfig {
 
         // -- infrastructure --------------------------------------------------
 
-        let (object_store, db_store) = self
+        let db_store = self
             .init_infra()
             .await
             .whatever_context("Failed to initialize infrastructure services")?;
@@ -180,7 +165,6 @@ impl AppConfig {
 
         let rara = rara_boot::state::RaraState::init(
             pool.clone(),
-            object_store,
             settings_provider.clone(),
             self.memory.mem0_base_url.clone(),
             self.memory.memos_base_url.clone(),
@@ -276,8 +260,6 @@ impl AppConfig {
         let telegram_adapter = match Self::try_build_telegram(
             &backend.settings_svc,
             &backend.contact_repo,
-            pool.clone(),
-            &self.main_service_http_base,
         )
         .await
         {
@@ -335,30 +317,19 @@ impl AppConfig {
             &kernel_handle,
             &rara.skill_registry,
             &rara.mcp_manager,
-            &rara.coding_task_service,
         );
         let swagger_ui =
             utoipa_swagger_ui::SwaggerUi::new("/swagger-ui").url("/api/openapi.json", openapi);
 
-        // -- Auth service + routes -------------------------------------------
-        let jwt_secret = self.jwt_secret.clone().unwrap_or_else(|| {
-            warn!("JWT_SECRET not configured, using default secret 'rara'");
-            "rara".to_string()
-        });
-        let jwt_config = rara_domain_user::jwt::JwtConfig::new(jwt_secret.clone());
-        let auth_service =
-            rara_domain_user::service::AuthService::new(pool.clone(), jwt_config.clone());
-        let auth_routes =
-            rara_domain_user::router::auth_routes(auth_service).layer(axum::Extension(jwt_config));
-
-        // Inject JWT secret into WebAdapter for WebSocket auth.
-        web_adapter.set_jwt_secret(jwt_secret).await;
+        // -- Owner token (Web UI auth) ----------------------------------------
+        if let Some(ref token) = self.owner_token {
+            web_adapter.set_owner_token(token.clone()).await;
+        }
 
         let routes_fn: Box<dyn Fn(axum::Router) -> axum::Router + Send + Sync> =
             Box::new(move |router| {
                 health_routes(router)
                     .merge(domain_routes.clone())
-                    .merge(auth_routes.clone())
                     .merge(swagger_ui.clone())
                     .nest("/api/v1/kernel/chat", web_router.clone())
             });
@@ -503,8 +474,6 @@ impl AppConfig {
     async fn try_build_telegram(
         settings_svc: &rara_backend_admin::settings::SettingsSvc,
         contact_repo: &rara_channels::telegram::contacts::repository::ContactRepository,
-        pool: sqlx::SqlitePool,
-        main_service_http_base: &str,
     ) -> Result<Option<Arc<rara_channels::telegram::TelegramAdapter>>, Whatever> {
         use rara_domain_shared::settings::{SettingsProvider, keys};
 
@@ -543,18 +512,11 @@ impl AppConfig {
                 repo: contact_repo.clone(),
             });
 
-        // Build link service for /link command handling.
-        let link_service = rara_channels::telegram::TelegramLinkService::new(
-            pool,
-            main_service_http_base.to_string(),
-        );
-
         let adapter = Arc::new(
             rara_channels::telegram::TelegramAdapter::with_proxy(&token, vec![], proxy.as_deref())
                 .whatever_context("failed to build telegram adapter")?
                 .with_config(tg_config)
-                .with_contact_tracker(contact_tracker)
-                .with_link_service(link_service),
+                .with_contact_tracker(contact_tracker),
         );
 
         // Spawn a background task to hot-reload config from settings.
@@ -579,21 +541,22 @@ impl AppConfig {
         Ok(Some(adapter))
     }
 
-    async fn init_infra(&self) -> Result<(Operator, DBStore), Whatever> {
-        let object_store = self
-            .object_store
-            .open()
-            .whatever_context("Failed to initialize object store")?;
-        info!("Object store (MinIO) configured");
-
+    async fn init_infra(&self) -> Result<DBStore, Whatever> {
+        let db_dir = rara_paths::database_dir();
+        std::fs::create_dir_all(db_dir).whatever_context("Failed to create database directory")?;
+        let database_url = format!("sqlite:{}/rara.db?mode=rwc", db_dir.display());
         let db_store = self
             .database
-            .open()
+            .open(&database_url)
             .await
             .whatever_context("Failed to initialize database")?;
+        sqlx::migrate!("../rara-model/migrations")
+            .run(db_store.pool())
+            .await
+            .whatever_context("Failed to run database migrations")?;
         info!("Database initialized");
 
-        Ok((object_store, db_store))
+        Ok(db_store)
     }
 }
 
@@ -683,15 +646,9 @@ mod tests {
 
     fn test_config() -> AppConfig {
         AppConfig::builder()
-            .database(
-                DatabaseConfig::builder()
-                    .database_url("sqlite::memory:")
-                    .migration_dir("crates/rara-model/migrations")
-                    .build(),
-            )
+            .database(DatabaseConfig::builder().build())
             .http(RestServerConfig::default())
             .grpc(GrpcServerConfig::default())
-            .object_store(object_store::ObjectStoreConfig::default())
             .main_service_http_base("http://127.0.0.1:25555")
             .memory(
                 MemoryConfig::builder()
@@ -700,11 +657,6 @@ mod tests {
                     .memos_token("")
                     .hindsight_base_url("http://localhost:8888")
                     .hindsight_bank_id("default")
-                    .build(),
-            )
-            .langfuse(
-                LangfuseConfig::builder()
-                    .host("http://localhost:3000")
                     .build(),
             )
             .telemetry(TelemetryConfig::builder().build())

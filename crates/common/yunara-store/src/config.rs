@@ -12,30 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::Path;
-
-use serde::Deserialize;
 use sqlx::sqlite::SqlitePoolOptions;
 
 use crate::{db::DBStore, err::Result};
 
 /// Database configuration for SQLite.
 ///
-/// `database_url` and `migration_dir` are **required** — they must be supplied
-/// via config file or environment variables.
-#[derive(Debug, Clone, bon::Builder, Deserialize)]
-#[builder(on(String, into))]
+/// The database URL is determined by the caller (typically from
+/// `rara_paths::database_dir()`).  Migrations are embedded at compile time.
+#[derive(Debug, Clone, bon::Builder, serde::Deserialize)]
 pub struct DatabaseConfig {
-    /// SQLite database URL, e.g. `sqlite:path/to/rara.db?mode=rwc`.
-    /// **Required** — must come from config or env.
-    #[builder(getter)]
-    pub database_url: String,
-
-    /// SQLx migration directory path.
-    /// **Required** — must come from config or env.
-    #[builder(getter)]
-    pub migration_dir: String,
-
     /// Maximum number of connections in the pool.
     #[serde(default = "default_max_connections")]
     #[builder(default = 5, getter)]
@@ -45,16 +31,20 @@ pub struct DatabaseConfig {
 fn default_max_connections() -> u32 { 5 }
 
 impl DatabaseConfig {
+    /// Open a SQLite database at the given URL.
+    ///
+    /// Sets WAL mode, busy timeout and foreign key pragmas.
+    /// The caller is responsible for running migrations afterwards.
     #[tracing::instrument(
         level = "trace",
         skip(self),
-        fields(database_url = %self.database_url, migration_dir = %self.migration_dir),
+        fields(%database_url),
         err
     )]
-    pub async fn open(&self) -> Result<DBStore> {
+    pub async fn open(&self, database_url: &str) -> Result<DBStore> {
         let pool = SqlitePoolOptions::new()
             .max_connections(self.max_connections)
-            .connect(&self.database_url)
+            .connect(database_url)
             .await?;
 
         // Set recommended SQLite pragmas for WAL mode and concurrency.
@@ -68,13 +58,7 @@ impl DatabaseConfig {
             .execute(&pool)
             .await?;
 
-        tracing::info!(
-            "Initialized DBStore with database_url: {}",
-            self.database_url
-        );
-
-        let migrator = sqlx::migrate::Migrator::new(Path::new(&self.migration_dir)).await?;
-        migrator.run(&pool).await?;
+        tracing::info!("SQLite database initialized: {database_url}");
 
         Ok(DBStore::new(pool))
     }

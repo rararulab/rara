@@ -37,7 +37,7 @@ use snafu::Snafu;
 use crate::{
     channel::types::ChannelType,
     io::types::{Attachment, OutboundEnvelope, OutboundPayload, OutboundRouting, ReplyContext},
-    process::{principal::UserId, user::UserStore},
+    process::principal::UserId,
 };
 
 // ---------------------------------------------------------------------------
@@ -241,7 +241,7 @@ impl Egress {
     /// Also used directly by `Kernel::spawn_deliver()` in the unified
     /// event loop, bypassing the outbound bus subscribe loop.
     #[tracing::instrument(
-        skip(adapters, endpoints, user_store, envelope),
+        skip(adapters, endpoints, envelope),
         fields(
             user_id = %envelope.user.0,
             session_id = %envelope.session_id,
@@ -250,10 +250,9 @@ impl Egress {
     pub async fn deliver(
         adapters: &HashMap<ChannelType, Arc<dyn EgressAdapter>>,
         endpoints: &Arc<EndpointRegistry>,
-        user_store: Option<&dyn UserStore>,
         envelope: OutboundEnvelope,
     ) {
-        let targets = Self::resolve_targets(endpoints, user_store, &envelope).await;
+        let targets = Self::resolve_targets(endpoints, &envelope);
 
         // Parallel delivery with per-endpoint timeout
         let futs = targets.into_iter().map(|endpoint| {
@@ -286,47 +285,12 @@ impl Egress {
     }
 
     /// Resolve which endpoints should receive this envelope.
-    ///
-    /// For stateless channels (Telegram), falls back to querying
-    /// `UserStore` for persisted platform identities when no ephemeral
-    /// endpoint is found in the `EndpointRegistry`. Connection-oriented
-    /// channels (Web, CLI) are never synthesised from the database.
-    async fn resolve_targets(
+    fn resolve_targets(
         endpoints: &EndpointRegistry,
-        user_store: Option<&dyn UserStore>,
         envelope: &OutboundEnvelope,
     ) -> Vec<Endpoint> {
-        let mut connected = endpoints.get_endpoints(&envelope.user);
+        let connected = endpoints.get_endpoints(&envelope.user);
 
-        // Check whether routing permits Telegram delivery.
-        let telegram_wanted = match &envelope.routing {
-            OutboundRouting::BroadcastAll => true,
-            OutboundRouting::BroadcastExcept { exclude } => *exclude != ChannelType::Telegram,
-            OutboundRouting::Targeted { channels } => channels.contains(&ChannelType::Telegram),
-        };
-
-        // Fallback: if no Telegram endpoint is registered but Telegram
-        // delivery is desired, query persistent platform identities.
-        let has_telegram = connected
-            .iter()
-            .any(|e| e.channel_type == ChannelType::Telegram);
-
-        if telegram_wanted && !has_telegram {
-            if let Some(store) = user_store {
-                match Self::fallback_telegram_endpoints(store, &envelope.user).await {
-                    Ok(eps) => connected.extend(eps),
-                    Err(e) => {
-                        tracing::warn!(
-                            user_id = %envelope.user.0,
-                            error = %e,
-                            "egress fallback: failed to query platform identities"
-                        );
-                    }
-                }
-            }
-        }
-
-        // Apply routing filter on the (possibly augmented) endpoint list.
         match &envelope.routing {
             OutboundRouting::BroadcastAll => connected,
             OutboundRouting::BroadcastExcept { exclude } => connected
@@ -338,47 +302,6 @@ impl Egress {
                 .filter(|e| channels.contains(&e.channel_type))
                 .collect(),
         }
-    }
-
-    /// Query `UserStore` for Telegram platform identities and convert them
-    /// into [`Endpoint`]s.
-    async fn fallback_telegram_endpoints(
-        store: &dyn UserStore,
-        user_id: &UserId,
-    ) -> std::result::Result<Vec<Endpoint>, Box<dyn std::error::Error + Send + Sync>> {
-        let user = store.get_by_name(&user_id.0).await?;
-        let user = match user {
-            Some(u) => u,
-            None => return Ok(vec![]),
-        };
-
-        let platforms = store.list_platforms(user.id).await?;
-        let endpoints: Vec<Endpoint> = platforms
-            .into_iter()
-            .filter(|p| p.platform == "telegram")
-            .filter_map(|p| {
-                p.platform_user_id
-                    .parse::<i64>()
-                    .ok()
-                    .map(|chat_id| Endpoint {
-                        channel_type: ChannelType::Telegram,
-                        address:      EndpointAddress::Telegram {
-                            chat_id,
-                            thread_id: None,
-                        },
-                    })
-            })
-            .collect();
-
-        if !endpoints.is_empty() {
-            tracing::debug!(
-                user_id = %user_id.0,
-                count = endpoints.len(),
-                "egress fallback: resolved Telegram endpoints from platform identities"
-            );
-        }
-
-        Ok(endpoints)
     }
 
     /// Convert an [`OutboundPayload`] into a [`PlatformOutbound`] for
@@ -528,7 +451,7 @@ mod tests {
 
         let envelope = test_envelope(OutboundRouting::BroadcastAll);
 
-        let targets = Egress::resolve_targets(&registry, None, &envelope).await;
+        let targets = Egress::resolve_targets(&registry, &envelope);
         assert_eq!(targets.len(), 2);
     }
 
@@ -543,7 +466,7 @@ mod tests {
             exclude: ChannelType::Telegram,
         });
 
-        let targets = Egress::resolve_targets(&registry, None, &envelope).await;
+        let targets = Egress::resolve_targets(&registry, &envelope);
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].channel_type, ChannelType::Web);
     }
@@ -568,7 +491,7 @@ mod tests {
             channels: vec![ChannelType::Telegram, ChannelType::Cli],
         });
 
-        let targets = Egress::resolve_targets(&registry, None, &envelope).await;
+        let targets = Egress::resolve_targets(&registry, &envelope);
         assert_eq!(targets.len(), 2);
         let types: Vec<ChannelType> = targets.iter().map(|e| e.channel_type).collect();
         assert!(types.contains(&ChannelType::Telegram));
@@ -622,7 +545,7 @@ mod tests {
         adapters.insert(ChannelType::Telegram, tg_adapter.clone());
 
         let envelope = test_envelope(OutboundRouting::BroadcastAll);
-        Egress::deliver(&adapters, &registry, None, envelope).await;
+        Egress::deliver(&adapters, &registry, envelope).await;
 
         assert_eq!(tg_adapter.sent_count(), 1);
     }
@@ -638,7 +561,7 @@ mod tests {
         adapters.insert(ChannelType::Telegram, tg_adapter.clone());
 
         let envelope = test_envelope(OutboundRouting::BroadcastAll);
-        Egress::deliver(&adapters, &registry, None, envelope).await;
+        Egress::deliver(&adapters, &registry, envelope).await;
 
         let sent = tg_adapter.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
@@ -677,7 +600,7 @@ mod tests {
             },
             timestamp:   jiff::Timestamp::now(),
         };
-        Egress::deliver(&adapters, &registry, None, envelope).await;
+        Egress::deliver(&adapters, &registry, envelope).await;
 
         let sent = tg_adapter.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);

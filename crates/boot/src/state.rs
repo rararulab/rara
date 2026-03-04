@@ -22,14 +22,13 @@
 
 use std::sync::Arc;
 
-use opendal::Operator;
 use snafu::{ResultExt, Whatever};
 use tracing::info;
 
 /// Kernel-side application state.
 ///
 /// Owns everything the kernel needs to run: provider registry, tool registry,
-/// memory, skills, MCP, coding tasks, user store, and session repository.
+/// memory, skills, MCP, user store, and session repository.
 ///
 /// Does NOT hold a `Kernel` — the app crate builds one from these fields.
 #[derive(Clone)]
@@ -42,9 +41,7 @@ pub struct RaraState {
     pub memory_manager:      Arc<rara_memory::MemoryManager>,
     pub skill_registry:      rara_skills::registry::InMemoryRegistry,
     pub mcp_manager:         rara_mcp::manager::mgr::McpManager,
-    pub coding_task_service: rara_coding_task::service::CodingTaskService,
-    pub object_store:        Operator,
-    pub settings_provider:   Arc<dyn rara_domain_shared::settings::SettingsProvider>,
+    pub settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
 }
 
 impl RaraState {
@@ -54,7 +51,6 @@ impl RaraState {
     /// `AppState::init()` in the workers crate.
     pub async fn init(
         pool: sqlx::SqlitePool,
-        object_store: Operator,
         settings_provider: Arc<dyn rara_domain_shared::settings::SettingsProvider>,
         mem0_base_url: String,
         memos_base_url: String,
@@ -123,7 +119,6 @@ impl RaraState {
         let mut tool_registry = rara_kernel::tool::ToolRegistry::new();
         for tool in crate::tools::default_primitives(crate::tools::PrimitiveDeps {
             settings: settings_provider.clone(),
-            object_store: object_store.clone(),
             composio_auth_provider,
         }) {
             tool_registry.register_primitive(tool);
@@ -139,16 +134,6 @@ impl RaraState {
             hindsight_bank_id,
         );
         let recall_engine = crate::memory::init_recall_engine();
-
-        // -- coding task service ----------------------------------------------
-
-        let default_repo_url = std::env::var("RARA_DEFAULT_REPO_URL")
-            .unwrap_or_else(|_| "https://github.com/rararulab/rara".to_owned());
-        let coding_task_service = crate::coding_task::init_coding_task_service(
-            pool.clone(),
-            settings_provider.clone(),
-            default_repo_url,
-        );
 
         // -- skills registry --------------------------------------------------
 
@@ -167,7 +152,6 @@ impl RaraState {
             crate::tools::ServiceToolDeps {
                 memory_manager: memory_manager.clone(),
                 recall_engine,
-                coding_task_service: coding_task_service.clone(),
                 skill_registry: skill_registry.clone(),
                 mcp_manager: mcp_manager.clone(),
             },
@@ -178,7 +162,7 @@ impl RaraState {
         // -- user store -------------------------------------------------------
 
         let user_store: Arc<dyn rara_kernel::process::user::UserStore> =
-            Arc::new(crate::user_store::PgUserStore::new(pool.clone()));
+            Arc::new(crate::user_store::SqliteUserStore::new(pool.clone()));
         crate::user_store::ensure_default_users(&pool)
             .await
             .whatever_context("Failed to ensure default users")?;
@@ -194,8 +178,6 @@ impl RaraState {
             memory_manager,
             skill_registry,
             mcp_manager,
-            coding_task_service,
-            object_store,
             settings_provider,
         })
     }

@@ -14,10 +14,8 @@
 
 //! Default identity and session resolvers for the I/O Bus pipeline.
 //!
-//! The [`DefaultIdentityResolver`] looks up platform identities in the
-//! [`UserStore`] so that linked Telegram (and other) accounts resolve to
-//! their real kernel user instead of a synthetic `"telegram:<chat_id>"` ID
-//! that would fail `validate_principal`.
+//! The [`DefaultIdentityResolver`] always resolves to the single owner
+//! user, regardless of channel or platform identity.
 
 use std::sync::Arc;
 
@@ -28,7 +26,7 @@ use rara_kernel::{
         ingress::{IdentityResolver, SessionResolver},
         types::IngestError,
     },
-    process::{SessionId, principal::UserId, user::UserStore},
+    process::{SessionId, principal::UserId},
     session::SessionRepository,
 };
 use tracing::debug;
@@ -37,27 +35,17 @@ use tracing::debug;
 // DefaultIdentityResolver
 // ---------------------------------------------------------------------------
 
-/// Identity resolver backed by a [`UserStore`].
+/// Identity resolver that always returns the single owner user.
 ///
-/// Resolution strategy per channel:
-///
-/// 1. Look up `user_store.get_by_platform(channel, platform_user_id)`.
-/// 2. If a linked user is found, return `UserId(user.name)` — the real kernel
-///    username (e.g. `"root"`).
-/// 3. If **not** found:
-///    - **Web** channel: fall through to the old synthetic format
-///      `"web:<platform_user_id>"` for backward compatibility (the Web adapter
-///      already sends the real username from JWT).
-///    - All other channels (Telegram, CLI, …): return
-///      `IdentityResolutionFailed` — the user must link their platform account
-///      first.
+/// In single-owner mode, all channels (Web, Telegram, CLI) resolve to the
+/// same kernel user.
 pub struct DefaultIdentityResolver {
-    user_store: Arc<dyn UserStore>,
+    owner_user_id: UserId,
 }
 
 impl DefaultIdentityResolver {
-    /// Create a new resolver backed by the given user store.
-    pub fn new(user_store: Arc<dyn UserStore>) -> Self { Self { user_store } }
+    /// Create a new resolver for the given owner.
+    pub fn new(owner_user_id: UserId) -> Self { Self { owner_user_id } }
 }
 
 #[async_trait]
@@ -68,50 +56,13 @@ impl IdentityResolver for DefaultIdentityResolver {
         platform_user_id: &str,
         _platform_chat_id: Option<&str>,
     ) -> Result<UserId, IngestError> {
-        // 1. Try platform identity lookup.
-        let platform_label = channel_type.to_string();
-        match self
-            .user_store
-            .get_by_platform(&platform_label, platform_user_id)
-            .await
-        {
-            Ok(Some(user)) => {
-                debug!(
-                    channel = %channel_type,
-                    platform_user_id,
-                    resolved_user = %user.name,
-                    "identity resolved via platform link"
-                );
-                return Ok(UserId(user.name));
-            }
-            Ok(None) => {
-                // Not linked — fall through to channel-specific handling.
-            }
-            Err(e) => {
-                // DB error — log and treat as "not found" for Web, error for
-                // others.
-                tracing::warn!(
-                    error = %e,
-                    channel = %channel_type,
-                    platform_user_id,
-                    "platform identity lookup failed"
-                );
-            }
-        }
-
-        // 2. Channel-specific fallback.
-        match channel_type {
-            // Web channel: the platform_user_id comes from JWT and is
-            // already the real kernel username (e.g. "root").
-            ChannelType::Web => Ok(UserId(platform_user_id.to_string())),
-            // Non-web channels require a linked platform identity.
-            _ => Err(IngestError::IdentityResolutionFailed {
-                message: format!(
-                    "no linked user for platform {}:{}  — link your account first",
-                    channel_type, platform_user_id
-                ),
-            }),
-        }
+        debug!(
+            channel = %channel_type,
+            platform_user_id,
+            resolved_user = %self.owner_user_id.0,
+            "identity resolved to owner"
+        );
+        Ok(self.owner_user_id.clone())
     }
 }
 
@@ -205,83 +156,37 @@ impl SessionResolver for DefaultSessionResolver {
 mod tests {
     use rara_kernel::{
         channel::types::ChatMessage,
-        error::Result as KResult,
-        process::user::{KernelUser, PlatformIdentity},
         session::{ChannelBinding, SessionEntry, SessionError, SessionKey},
     };
 
     use super::*;
 
-    // -- In-memory UserStore for unit tests ---------------------------------
+    // -- Tests: IdentityResolver ----------------------------------------------
 
-    struct FakeUserStore {
-        users:     Vec<KernelUser>,
-        platforms: Vec<(String, String, String)>, // (platform, platform_user_id, user_name)
+    #[tokio::test]
+    async fn test_all_channels_resolve_to_owner() {
+        let resolver = DefaultIdentityResolver::new(UserId("root".to_string()));
+
+        let uid = resolver
+            .resolve(ChannelType::Telegram, "12345", Some("chat-1"))
+            .await
+            .unwrap();
+        assert_eq!(uid.0, "root");
+
+        let uid = resolver
+            .resolve(ChannelType::Web, "some-web-id", None)
+            .await
+            .unwrap();
+        assert_eq!(uid.0, "root");
+
+        let uid = resolver
+            .resolve(ChannelType::Cli, "cli-user", None)
+            .await
+            .unwrap();
+        assert_eq!(uid.0, "root");
     }
 
-    impl FakeUserStore {
-        fn empty() -> Self {
-            Self {
-                users:     vec![],
-                platforms: vec![],
-            }
-        }
-
-        fn with_linked(platform: &str, platform_uid: &str, user_name: &str) -> Self {
-            let user = KernelUser {
-                name: user_name.to_string(),
-                ..KernelUser::root()
-            };
-            Self {
-                users:     vec![user],
-                platforms: vec![(
-                    platform.to_string(),
-                    platform_uid.to_string(),
-                    user_name.to_string(),
-                )],
-            }
-        }
-    }
-
-    #[async_trait]
-    impl UserStore for FakeUserStore {
-        async fn get_by_id(&self, _id: uuid::Uuid) -> KResult<Option<KernelUser>> { Ok(None) }
-
-        async fn get_by_name(&self, name: &str) -> KResult<Option<KernelUser>> {
-            Ok(self.users.iter().find(|u| u.name == name).cloned())
-        }
-
-        async fn get_by_platform(
-            &self,
-            platform: &str,
-            platform_user_id: &str,
-        ) -> KResult<Option<KernelUser>> {
-            for (p, puid, uname) in &self.platforms {
-                if p == platform && puid == platform_user_id {
-                    return Ok(self.users.iter().find(|u| u.name == *uname).cloned());
-                }
-            }
-            Ok(None)
-        }
-
-        async fn create(&self, _user: &KernelUser) -> KResult<()> { Ok(()) }
-
-        async fn update(&self, _user: &KernelUser) -> KResult<()> { Ok(()) }
-
-        async fn delete(&self, _id: uuid::Uuid) -> KResult<()> { Ok(()) }
-
-        async fn list(&self) -> KResult<Vec<KernelUser>> { Ok(vec![]) }
-
-        async fn link_platform(&self, _identity: &PlatformIdentity) -> KResult<()> { Ok(()) }
-
-        async fn unlink_platform(&self, _id: uuid::Uuid) -> KResult<()> { Ok(()) }
-
-        async fn list_platforms(&self, _user_id: uuid::Uuid) -> KResult<Vec<PlatformIdentity>> {
-            Ok(vec![])
-        }
-    }
-
-    // -- Fake SessionRepository for unit tests ------------------------------
+    // -- Fake SessionRepository for unit tests --------------------------------
 
     struct FakeSessionRepo {
         bindings: Vec<ChannelBinding>,
@@ -374,66 +279,17 @@ mod tests {
         }
     }
 
-    // -- Tests --------------------------------------------------------------
-
-    #[tokio::test]
-    async fn test_telegram_linked_resolves_to_real_user() {
-        let store = Arc::new(FakeUserStore::with_linked("telegram", "12345", "root"));
-        let resolver = DefaultIdentityResolver::new(store);
-        let uid = resolver
-            .resolve(ChannelType::Telegram, "12345", Some("chat-1"))
-            .await
-            .unwrap();
-        assert_eq!(uid.0, "root");
-    }
-
-    #[tokio::test]
-    async fn test_telegram_unlinked_returns_error() {
-        let store = Arc::new(FakeUserStore::empty());
-        let resolver = DefaultIdentityResolver::new(store);
-        let result = resolver
-            .resolve(ChannelType::Telegram, "99999", Some("chat-1"))
-            .await;
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            IngestError::IdentityResolutionFailed { .. }
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_web_unlinked_falls_through() {
-        let store = Arc::new(FakeUserStore::empty());
-        let resolver = DefaultIdentityResolver::new(store);
-        let uid = resolver
-            .resolve(ChannelType::Web, "root", None)
-            .await
-            .unwrap();
-        // Web channel uses the JWT username directly (no prefix).
-        assert_eq!(uid.0, "root");
-    }
-
-    #[tokio::test]
-    async fn test_web_linked_resolves_to_real_user() {
-        let store = Arc::new(FakeUserStore::with_linked("web", "user-abc", "alice"));
-        let resolver = DefaultIdentityResolver::new(store);
-        let uid = resolver
-            .resolve(ChannelType::Web, "user-abc", None)
-            .await
-            .unwrap();
-        assert_eq!(uid.0, "alice");
-    }
+    // -- Tests: SessionResolver -----------------------------------------------
 
     #[tokio::test]
     async fn test_session_resolver_no_binding_creates_session() {
         let repo = Arc::new(FakeSessionRepo::empty());
         let resolver = DefaultSessionResolver::new(repo);
-        let user = UserId("telegram:12345".to_string());
+        let user = UserId("root".to_string());
         let session_id = resolver
             .resolve(&user, ChannelType::Telegram, Some("chat-1"))
             .await
             .unwrap();
-        // No binding → a new session is created (valid UUID)
         let _parsed: uuid::Uuid = session_id.uuid();
     }
 
@@ -449,7 +305,6 @@ mod tests {
             .resolve(&user, ChannelType::Telegram, Some("12345"))
             .await
             .unwrap();
-        // Binding found → bound session key used
         assert_eq!(session_id, bound_key);
     }
 
@@ -457,12 +312,11 @@ mod tests {
     async fn test_session_resolver_default_chat_id() {
         let repo = Arc::new(FakeSessionRepo::empty());
         let resolver = DefaultSessionResolver::new(repo);
-        let user = UserId("web:user-abc".to_string());
+        let user = UserId("root".to_string());
         let session_id = resolver
             .resolve(&user, ChannelType::Web, None)
             .await
             .unwrap();
-        // No chat_id → new session created (valid UUID)
         let _parsed: uuid::Uuid = session_id.uuid();
     }
 }

@@ -17,10 +17,10 @@
 import { useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { Activity, LogOut, ShieldCheck, User } from 'lucide-react';
+import { Activity, LogOut } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
-import { authApi, settingsApi } from '@/api/client';
+import { settingsApi } from '@/api/client';
 import { Button } from '@/components/ui/button';
 import OnboardingModal, { isOnboardingDismissed } from '@/components/OnboardingModal';
 
@@ -72,29 +72,15 @@ function hasConfiguredLlmProvider(settings: Record<string, string> | undefined):
 export default function DashboardLayout() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { user, isRoot, logout } = useAuth();
+  const { logout } = useAuth();
   const isFullBleed = FULL_BLEED_ROUTES.has(location.pathname) || FULL_BLEED_PREFIXES.some(p => location.pathname.startsWith(p));
-
-  // 获取用户 profile（含 platforms）以判断是否需要引导
-  const profileQuery = useQuery({
-    queryKey: ['profile'],
-    queryFn: () => authApi.me(),
-    enabled: isRoot,
-  });
 
   const settingsQuery = useQuery({
     queryKey: ['settings'],
     queryFn: () => settingsApi.list(),
-    enabled: isRoot,
   });
 
-  // 判断是否显示引导弹窗：root 用户 + 无已关联平台 + 未跳过引导
-  const shouldShowOnboarding =
-    isRoot &&
-    profileQuery.isSuccess &&
-    profileQuery.data.platforms.length === 0 &&
-    !isOnboardingDismissed();
-
+  const shouldShowOnboarding = !isOnboardingDismissed();
   const [onboardingOpen, setOnboardingOpen] = useState(true);
 
   const handleOnboardingDismiss = () => {
@@ -108,7 +94,6 @@ export default function DashboardLayout() {
 
   return (
     <div className="flex h-screen bg-transparent">
-      {/* 首次登录引导弹窗 */}
       {shouldShowOnboarding && (
         <OnboardingModal
           open={onboardingOpen}
@@ -118,7 +103,7 @@ export default function DashboardLayout() {
       )}
 
       <main className={cn('relative flex min-w-0 flex-1 flex-col', isFullBleed ? 'overflow-hidden' : 'overflow-auto')}>
-        {/* Top bar with user info */}
+        {/* Top bar */}
         <div className="flex shrink-0 items-center justify-end gap-2 border-b border-border/40 bg-background/30 px-4 py-1.5 backdrop-blur-sm">
           <Button
             variant="ghost"
@@ -129,21 +114,6 @@ export default function DashboardLayout() {
             <Activity className="h-3.5 w-3.5" />
             Kernel
           </Button>
-          {isRoot && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
-              onClick={() => navigate('/admin/users')}
-            >
-              <ShieldCheck className="h-3.5 w-3.5" />
-              Admin
-            </Button>
-          )}
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <User className="h-3.5 w-3.5" />
-            <span>{user?.name ?? 'Unknown'}</span>
-          </div>
           <Button
             variant="ghost"
             size="sm"

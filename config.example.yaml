@@ -1,11 +1,6 @@
 # Rara Configuration
 # Copy this file to ~/.config/job/config.yaml and adjust values.
 
-database:
-  database_url: "postgres://postgres:postgres@localhost:5432/rara"
-  migration_dir: "crates/rara-model/migrations"
-  # max_connections: 20
-
 http:
   bind_address: "127.0.0.1:25555"
   # max_body_size: "10MB"
@@ -18,13 +13,6 @@ grpc:
   # max_recv_message_size: "4MB"
   # max_send_message_size: "4MB"
 
-object_store:
-  endpoint: "http://localhost:9000"
-  bucket: "rara"
-  access_key: "minioadmin"
-  secret_key: "minioadmin"
-  region: "us-east-1"
-
 main_service_http_base: "http://127.0.0.1:25555"
 
 memory:
@@ -34,13 +22,8 @@ memory:
   hindsight_base_url: "http://localhost:8888"
   hindsight_bank_id: "default"
 
-langfuse:
-  host: "http://localhost:3000"
-  # public_key: ""
-  # secret_key: ""
-
 telemetry: {}
   # otlp_endpoint: ""
   # otlp_protocol: ""
 
-# jwt_secret: ""
+# owner_token: ""

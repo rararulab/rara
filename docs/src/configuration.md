@@ -83,12 +83,7 @@ rara/config/object_store/secret_access_key = minioadmin
 rara/config/object_store/bucket            = rara
 rara/config/memory/chroma_url              = http://rara-infra-chromadb:8000
 rara/config/crawl4ai/base_url              = http://rara-infra-crawl4ai:11235
-rara/config/langfuse/host                  = http://rara-infra-langfuse-web:3000
-rara/config/langfuse/public_key            = (from consulSeed.langfuse.publicKey)
-rara/config/langfuse/secret_key            = (from consulSeed.langfuse.secretKey)
 ```
-
-All service URLs default to cluster-internal DNS. When the rara app runs outside the cluster, override them in `values.yaml` via `consulSeed.overrides.*`. See [Kubernetes deployment](deployment/kubernetes.md#url-override-out-of-cluster-app) for details.
 
 #### Fail-Open Behavior
 
@@ -169,16 +164,6 @@ just consul-keys   # list current keys
 |-----|---------|---------|-------------|
 | `otlp_endpoint` | `RARA__TELEMETRY__OTLP_ENDPOINT` | — | Generic OTLP endpoint (e.g. `http://alloy:4318/v1/traces`) |
 | `otlp_protocol` | `RARA__TELEMETRY__OTLP_PROTOCOL` | `http` | Export protocol: `http` or `grpc` |
-
-> **Priority**: If Langfuse keys are set, traces go to Langfuse; otherwise the generic OTLP endpoint is used.
-
-#### Langfuse (`langfuse.*`)
-
-| Key | Env Var | Default | Description |
-|-----|---------|---------|-------------|
-| `host` | `RARA__LANGFUSE__HOST` | `http://localhost:3000` | Langfuse web service URL (OTLP endpoint base) |
-| `public_key` | `RARA__LANGFUSE__PUBLIC_KEY` | — | Langfuse project public key |
-| `secret_key` | `RARA__LANGFUSE__SECRET_KEY` | — | Langfuse project secret key |
 
 #### Other
 

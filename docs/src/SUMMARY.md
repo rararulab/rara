@@ -18,12 +18,6 @@
 - [Buf Integration](buf-integration.md)
 - [OpenTelemetry Integration](opentelemetry.md)
 
-# Deployment
-
-- [Docker Compose (Local Dev)](deployment/docker-compose.md)
-- [Kubernetes (Helm)](deployment/kubernetes.md)
-- [Infrastructure Components](deployment/infrastructure.md)
-
 # Diary
 
 - [Rara's Diary](diary/README.md)

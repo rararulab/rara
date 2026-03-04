@@ -147,7 +147,11 @@ pub fn boot(config: BootConfig) -> Kernel {
     // Resolvers
     let identity_resolver: Arc<dyn IdentityResolver> = config
         .identity_resolver
-        .unwrap_or_else(|| Arc::new(DefaultIdentityResolver::new(config.user_store.clone())));
+        .unwrap_or_else(|| {
+            Arc::new(DefaultIdentityResolver::new(
+                rara_kernel::process::principal::UserId("root".to_string()),
+            ))
+        });
     let session_resolver: Arc<dyn SessionResolver> = config
         .session_resolver
         .unwrap_or_else(|| Arc::new(DefaultSessionResolver::new(config.session_repo.clone())));
