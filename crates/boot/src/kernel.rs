@@ -33,7 +33,7 @@ use rara_kernel::{
     llm::DriverRegistry,
     process::{agent_registry::AgentRegistry, user::UserStore},
     security::{ApprovalManager, ApprovalPolicy},
-    session::SessionRepository,
+    session::{SessionIndex, SessionRepository},
     tool::ToolRegistry,
 };
 
@@ -60,8 +60,10 @@ pub struct BootConfig {
     pub agent_registry:  Arc<AgentRegistry>,
     /// User store for permission checks.
     pub user_store:      Arc<dyn UserStore>,
-    /// Session repository for conversation history.
+    /// Session repository for conversation history (legacy).
     pub session_repo:    Arc<dyn SessionRepository>,
+    /// Lightweight session metadata index (tape-centric replacement).
+    pub session_index:   Option<Arc<dyn SessionIndex>>,
     /// Flat KV settings provider.
     pub settings:        Arc<dyn rara_domain_shared::settings::SettingsProvider>,
 
@@ -99,7 +101,8 @@ impl Default for BootConfig {
     fn default() -> Self {
         use rara_kernel::{
             kernel::NoopSettingsProvider, llm::DriverRegistryBuilder,
-            process::noop_user_store::NoopUserStore, session::NoopSessionRepository,
+            process::noop_user_store::NoopUserStore,
+            session::NoopSessionRepository,
         };
 
         Self {
@@ -114,6 +117,7 @@ impl Default for BootConfig {
             )),
             user_store:         Arc::new(NoopUserStore) as Arc<dyn UserStore>,
             session_repo:       Arc::new(NoopSessionRepository) as Arc<dyn SessionRepository>,
+            session_index:      None,
             settings:           Arc::new(NoopSettingsProvider)
                 as Arc<dyn rara_domain_shared::settings::SettingsProvider>,
             stream_capacity:    64,
@@ -200,6 +204,10 @@ pub fn boot(config: BootConfig) -> Kernel {
         kernel_config.event_queue = eq_config;
     }
 
+    let session_index: Arc<dyn SessionIndex> = config.session_index.unwrap_or_else(|| {
+        Arc::new(rara_kernel::session::NoopSessionIndex)
+    });
+
     Kernel::new(
         kernel_config,
         config.driver_registry,
@@ -209,6 +217,7 @@ pub fn boot(config: BootConfig) -> Kernel {
         security,
         config.agent_registry,
         config.session_repo,
+        session_index,
         config.settings,
         stream_hub,
         identity_resolver,

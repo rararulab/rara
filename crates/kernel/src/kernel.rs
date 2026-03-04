@@ -65,7 +65,7 @@ use crate::{
     process::{AgentId, ProcessState, ProcessTable, agent_registry::AgentRegistryRef},
     queue::{EventQueueRef, ShardedEventQueueConfig, ShardedQueueRef},
     security::SecurityRef,
-    session::SessionRepoRef,
+    session::{SessionIndexRef, SessionRepoRef},
     syscall::SyscallDispatcher,
     tool::ToolRegistryRef,
 };
@@ -171,8 +171,12 @@ pub struct Kernel {
     agent_registry: AgentRegistryRef,
     /// Unified audit subsystem (logging + tool call recording).
     audit: AuditRef,
-    /// Session repository for conversation history.
+    /// Session repository for conversation history (legacy — being replaced by
+    /// tape + session_index).
     session_repo: SessionRepoRef,
+    /// Lightweight session metadata index (tape-centric replacement for the
+    /// session CRUD subset of `SessionRepository`).
+    session_index: SessionIndexRef,
     /// Flat KV settings provider for runtime configuration.
     settings: SettingsRef,
     /// Device registry for hot-pluggable devices (MCP servers, APIs, etc.).
@@ -216,6 +220,7 @@ impl Kernel {
         security: SecurityRef,
         agent_registry: AgentRegistryRef,
         session_repo: SessionRepoRef,
+        session_index: SessionIndexRef,
         settings: SettingsRef,
         stream_hub: StreamHubRef,
         identity_resolver: IdentityResolverRef,
@@ -259,6 +264,7 @@ impl Kernel {
             agent_registry,
             audit,
             session_repo,
+            session_index,
             settings,
             device_registry: Arc::new(DeviceRegistry::new()),
             syscall,
@@ -371,6 +377,9 @@ impl Kernel {
     /// Access the session repository (used by event loop).
     pub(crate) fn session_repo(&self) -> &SessionRepoRef { &self.session_repo }
 
+    /// Access the session index (lightweight metadata-only interface).
+    pub fn session_index(&self) -> &SessionIndexRef { &self.session_index }
+
     /// Access the pipe registry (used by event loop).
     pub(crate) fn pipe_registry(&self) -> &PipeRegistry { self.syscall.pipe_registry() }
 
@@ -401,6 +410,7 @@ impl Kernel {
         agent_registry: AgentRegistryRef,
         audit: AuditRef,
         session_repo: SessionRepoRef,
+        session_index: SessionIndexRef,
         settings: SettingsRef,
         stream_hub: StreamHubRef,
         pipe_registry: PipeRegistry,
@@ -437,6 +447,7 @@ impl Kernel {
             agent_registry,
             audit,
             session_repo,
+            session_index,
             settings,
             device_registry,
             syscall,
@@ -547,7 +558,7 @@ mod tests {
             AgentManifest, agent_registry::AgentRegistry, noop_user_store::NoopUserStore,
             principal::Principal,
         },
-        session::NoopSessionRepository,
+        session::{NoopSessionIndex, NoopSessionRepository, SessionIndexRef},
         tool::ToolRegistry,
     };
 
@@ -576,6 +587,7 @@ mod tests {
             Arc::new(crate::security::SecuritySubsystem::noop()),
             registry,
             Arc::new(NoopSessionRepository) as SessionRepoRef,
+            Arc::new(NoopSessionIndex) as SessionIndexRef,
             Arc::new(NoopSettingsProvider) as SettingsRef,
             Arc::new(StreamHub::new(16)),
             Arc::new(crate::io::ingress::NoopIdentityResolver) as IdentityResolverRef,
@@ -1102,6 +1114,7 @@ mod tests {
             security,
             registry,
             Arc::new(NoopSessionRepository) as SessionRepoRef,
+            Arc::new(NoopSessionIndex) as SessionIndexRef,
             Arc::new(NoopSettingsProvider) as SettingsRef,
             Arc::new(StreamHub::new(16)),
             Arc::new(crate::io::ingress::NoopIdentityResolver) as IdentityResolverRef,
