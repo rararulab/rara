@@ -29,7 +29,7 @@ pub struct SystemStats {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ProcessStats {
+pub struct SessionStats {
     pub agent_id:   String,
     pub name:       String,
     pub state:      String,
@@ -107,7 +107,7 @@ pub struct KernelEventEnvelope {
 pub enum PanelFocus {
     SessionList,
     Gantt,
-    ProcessTree,
+    SessionTree,
 }
 
 pub struct SessionState {

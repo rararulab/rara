@@ -105,7 +105,7 @@ impl BackendState {
         // Agent registry routes (plain axum::Router, no OpenAPI metadata).
         router = router.merge(crate::agents::agent_routes(kernel_handle.clone()));
 
-        // Kernel observability routes (stats, processes, approvals, audit).
+        // Kernel observability routes (stats, sessions, approvals, audit).
         router = router.merge(crate::kernel::router::kernel_routes(kernel_handle.clone()));
 
         (router, api)

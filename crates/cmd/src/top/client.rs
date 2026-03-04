@@ -19,7 +19,7 @@ use futures::StreamExt;
 use tokio::{sync::mpsc::UnboundedSender, time::Duration};
 
 use crate::top::types::{
-    AgentInfo, ApprovalRequest, AuditEvent, KernelEventEnvelope, ProcessStats, SystemStats,
+    AgentInfo, ApprovalRequest, AuditEvent, KernelEventEnvelope, SessionStats, SystemStats,
 };
 
 #[derive(Debug)]
@@ -64,8 +64,8 @@ impl KernelClient {
         self.get_json(&url).await
     }
 
-    pub async fn processes(&self) -> Result<Vec<ProcessStats>, ClientError> {
-        let url = format!("{}/api/v1/kernel/processes", self.base_url);
+    pub async fn sessions(&self) -> Result<Vec<SessionStats>, ClientError> {
+        let url = format!("{}/api/v1/kernel/sessions", self.base_url);
         self.get_json(&url).await
     }
 
